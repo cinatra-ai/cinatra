@@ -23,7 +23,7 @@ import {
 import { toast } from "@/lib/cinatra-toast";
 
 import { format } from "date-fns";
-import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
@@ -422,14 +422,6 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // Always-visible bottom prompt that auto-fills RHF fields when the LLM returns
   // structured trigger suggestions. Pattern copied from
   // orchestrator-stepper-panel.tsx — same fetch shape, same error handling.
-  // ---------------------------------------------------------------------------
-  // THE WINDOW'S OWN MOUNT (cinatra#3188 item 3). The target used to be
-  // `document.querySelector("main")` — the page frame — which put the window at
-  // the end of the page and docked it across the whole frame. The ratified
-  // drawing puts it under the step's own work, in the same column, so the target
-  // is a node rendered exactly there: the composition
-  // `schedule-prompt-window.tsx` already uses.
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
   // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION. What is typed
   // here is kept with the run: read on mount, appended server-side per turn,
@@ -1054,6 +1046,35 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // inert too. It carries the form's own layout classes so the reading is drawn
   // exactly as the editable form is, which is what the spec's "the form stays"
   // means.
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14: "every step screen, the review route and every
+  // lifecycle card stop mounting one; the current screen registers with the page
+  // through a React context which surface it is, the run/step/gate identity, how
+  // a result is applied, and whether it has anything to manipulate". The
+  // schedule screen used to render its own mount under the form; it publishes
+  // instead, and the page's chrome draws the one window below the scheduler —
+  // which is where `app-artifact-review.html` §I already put it.
+  //
+  // THE RULE FOR WHEN THERE IS A WINDOW IS UNTOUCHED, only moved: the read-only
+  // reading carries no box at all (cinatra#2980 — the box exists to FILL IN this
+  // form, and a fired schedule takes no filling), an embedded renderer's parent
+  // owns the prompt, and the run's own access decides (cinatra#2933).
+  useRunWindowScreen({
+    surface: "schedule",
+    runId: props.runId ?? null,
+    stepId: "schedule",
+    canManipulate:
+      !readOnly &&
+      !props.embeddedAsRenderer &&
+      !!props.templateId &&
+      props.canRespondInWindow !== false,
+    storageKey: `cinatra_trigger_assist_${props.templateId}`,
+    conversation: runWindow.entries,
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handlePromptSubmit,
+  });
+
   const formBody = readOnly ? (
     <fieldset
       disabled
@@ -1077,34 +1098,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         </Card>
       )}
     </form>
-    {/* The window under the form — no toggle (by design).
-        resetSignal omitted — trigger form has no renderer transitions.
-        NOT in the read-only reading (cinatra#2980): the panel exists to FILL IN
-        this form from a sentence, which is a control like any other. */}
-    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-      // `app-artifact-review.html` §X): the mount names its surface and the
-      // window reads the drawing's own sentence for it.
-      surface="schedule"
-      // cinatra#2933 — the schedule screen used to HIDE its box from anyone who
-      // was not a platform administrator; the run's own access decides now.
-      // The read-only reading (cinatra#2980) still carries no box at all: the
-      // box exists to FILL IN this form, and a fired schedule takes no filling.
-      visible={
-        !readOnly &&
-        !props.embeddedAsRenderer &&
-        !!props.templateId &&
-        !!portalTarget &&
-        props.canRespondInWindow !== false
-      }
-      conversation={runWindow.entries}
-      promptPending={promptPending || runWindow.pending}
-      storageKey={`cinatra_trigger_assist_${props.templateId}`}
-      onSubmit={handlePromptSubmit}
-    />
-    </div>
+    {/* NO WINDOW HERE (cinatra#3487): the page's chrome draws the one window
+        below this screen; this screen registered what it is and what it lends
+        above. */}
     </>
   );
 }

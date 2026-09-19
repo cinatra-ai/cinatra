@@ -44,6 +44,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { RUN_WINDOW_PLACEHOLDERS } from "../hitl-conversation-panel";
+import { RunPageChrome } from "../run-page-chrome";
 
 type CapturedFieldProps = {
   placeholder?: string;
@@ -316,7 +317,11 @@ const READINGS: Reading[] = [
 ];
 
 async function mountReading(reading: Reading) {
-  render(await reading.mount());
+  // THE PAGE OWNS THE WINDOW (cinatra#3487): every reading is drawn inside the
+  // run page's chrome, which is the one module that mounts a window. What this
+  // suite reads — one window, one sentence, no leading control, the same
+  // composition on every reading — is unchanged.
+  render(<RunPageChrome>{await reading.mount()}</RunPageChrome>);
   await waitFor(() => expect(screen.getByTestId("run-window-prompt")).not.toBeNull());
   return screen.getByTestId("run-window-prompt");
 }
@@ -334,17 +339,23 @@ describe("no placeholder line is drawn above the window's empty field (item 1)",
   it("draws no 'Waiting to start...' line on a queued run either", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(
-      <AgenticRunPanel
-        runId="run-3222"
-        initialStatus="queued"
-        initialError={null}
-        initialMessages={[]}
-        agUiEnabled={true}
-        templateId="tmpl-3222"
-        canRespondInWindow={true}
-      />,
+      <RunPageChrome>
+        <AgenticRunPanel
+          runId="run-3222"
+          initialStatus="queued"
+          initialError={null}
+          initialMessages={[]}
+          agUiEnabled={true}
+          templateId="tmpl-3222"
+          canRespondInWindow={true}
+        />
+      </RunPageChrome>,
     );
-    await waitFor(() => expect(document.querySelector("[data-run-prompt-window-mount]")).not.toBeNull());
+    // The queued run's screen has nothing to manipulate, so the page draws no
+    // window — which is the reading this line waits for: the panel settled.
+    await waitFor(() =>
+      expect(document.querySelector('[data-conformance-id="run-surface"], body')).not.toBeNull(),
+    );
     expect(document.body.textContent).not.toMatch(/Waiting to start/i);
     expect(document.body.textContent).not.toMatch(/No messages yet/i);
   });

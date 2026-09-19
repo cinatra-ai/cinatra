@@ -244,7 +244,18 @@ export function HitlConversationPanel({
   // nothing passes under it now. The inset it keeps is the window's own
   // breathing room inside the column it stands in.
   return createPortal(
-    <div data-conv-open={convOpen} className="px-5 pb-4 pt-6">
+    // THE WINDOW'S OWN ANCHOR (cinatra#3487). The ruling's conformance reading
+    // is that the window's anchor is a descendant of the page chrome and never
+    // of `[data-lifecycle-card-host]`; the anchor itself is the id the drawing
+    // declares and the staged manifest carries, `review-prompt-window`,
+    // so the anchor rides the window's own markup: it exists exactly when a
+    // window is drawn, which is what makes "count the windows on this page" an
+    // answerable question.
+    <div
+      data-conv-open={convOpen}
+      data-conformance-id="review-prompt-window"
+      className="px-5 pb-4 pt-6"
+    >
       <div ref={convContainerRef} className="mx-auto max-w-3xl">
         {(conversation.length > 0 || promptPending) && convOpen && (
           <div className="mb-3 rounded-panel border border-line bg-surface p-3 shadow-sm">

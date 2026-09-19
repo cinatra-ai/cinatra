@@ -183,9 +183,9 @@ import {
   ReviewGateSettled,
 } from "./review-gate-states";
 import {
-  HitlConversationPanel,
-  type HitlConversationEntry,
-} from "./hitl-conversation-panel";
+  useRunWindowScreen,
+  type RunWindowConversationEntry,
+} from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 // Re-exported so a HOST that mounts the card does not have to reach into the
@@ -2003,12 +2003,6 @@ export function ReviewGatePromptWindow({
   boundCardRef?: string | null;
 }) {
   const router = useRouter();
-  // THE SLOT IS THE WINDOW'S OWN ELEMENT, held in state rather than a ref so the
-  // first commit that creates it re-renders the panel into it. The panel is a
-  // portal by construction (it was written to escape a scrolling document), and
-  // portalling into the element it is declared inside keeps its markup exactly
-  // as it shipped while landing it inside the gate's frame.
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // cinatra#2933 (lifecycle-b W5b) — the exchange is the RUN's, stored server
   // side per turn and read on mount, so it is there after a reload.
   const runWindow = useRunWindowConversation({
@@ -2023,7 +2017,7 @@ export function ReviewGatePromptWindow({
   // filing itself onto the card's Comment control, where the outcome becomes
   // part of the answer. Until then it is shown after the stored exchange so the
   // reviewer still sees what happened to their request.
-  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
+  const [outcomeLines, setOutcomeLines] = useState<RunWindowConversationEntry[]>([]);
   const [promptPending, setPromptPending] = useState(false);
   // Monotonic id source for conversation entries — a ref (not state) so two
   // appends in one handler can never collide on a stale counter (which would
@@ -2036,13 +2030,6 @@ export function ReviewGatePromptWindow({
     const id = 1_000_000 + ++idRef.current;
     setOutcomeLines((prev) => [...prev, { id, role: "assistant", content }]);
   };
-
-  // NO CHANNEL AT ALL FOR A READER WHO MAY NOT COMMENT. The window is the one
-  // road to requesting changes, so an anchor drawn with nothing inside it would
-  // put the drawing's affordance on screen for a reader whose message the server
-  // would refuse — a control that fails on press. The permission is the SERVER's
-  // own answer for this reader and this gate, carried through unchanged.
-  if (!canComment) return null;
 
   const handleSubmit = async (prompt: string) => {
     // THE ONE ROAD: what was typed goes to the run's conversation with the
@@ -2071,32 +2058,39 @@ export function ReviewGatePromptWindow({
     }
   };
 
-  return (
-    // The conversational prompt window (cinatra#2063): the
-    // typed change request IS how changes are requested — there is no dedicated
-    // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
-    <div
-      data-conformance-id="review-prompt-window"
-      data-action="request-changes -> changes-requested"
-      ref={setPortalTarget}
-    >
-      <HitlConversationPanel
-        portalTarget={portalTarget}
-        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-        // `app-artifact-review.html` §X): the mount names its surface and the
-        // window reads the drawing's own sentence for it.
-        surface="review"
-        visible={!!portalTarget}
-        conversation={[...runWindow.entries, ...outcomeLines]}
-        promptPending={promptPending || runWindow.pending}
-        storageKey={storageKey}
-        onSubmit={handleSubmit}
-      />
-    </div>
-  );
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14 reads the drawing the other way round from what
+  // shipped here: "THE PROMPT WINDOW IS NEVER PART OF A LIFECYCLE SCREEN AND
+  // NEVER INSIDE A LIFECYCLE CARD, IN ANY HOST." So this component draws NOTHING
+  // — no anchor, no field, no send control — and instead hands the run page's
+  // chrome what the screen is and what it lends. The chrome mounts the one
+  // window, below the screen, in the page's own column.
+  //
+  // THE APPLYING ROAD IS UNCHANGED: `handleSubmit` above is still the one road —
+  // the run's conversation plus the EXISTING Comment path, which on a fenced
+  // single-target lifecycle gate resolves as `changes_requested`. Nothing new is
+  // reachable and no parallel endpoint exists; only the box moved.
+  //
+  // NO CHANNEL AT ALL FOR A READER WHO MAY NOT COMMENT, unchanged in substance:
+  // the permission is the SERVER's own answer for this reader and this gate, and
+  // it is what the screen publishes as "nothing to manipulate" — so the page
+  // draws no window rather than a control that fails on press.
+  //
+  // AND NO WINDOW WHERE THERE IS NO CHROME: a card drawn inside a chat thread or
+  // inside the third-party island registers with nothing, so nothing appears.
+  useRunWindowScreen({
+    surface: "review",
+    runId,
+    gateRef: boundCardRef ?? null,
+    canManipulate: canComment,
+    storageKey,
+    conversation: [...runWindow.entries, ...outcomeLines],
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handleSubmit,
+  });
+
+  return null;
 }
 
 /** Map the review submit outcome to a conversational reply + whether the surface

@@ -707,8 +707,11 @@ describe("a marked review gate never feeds the field-assist LLM path", () => {
     // The panel exists to help fill a gate's FIELDS. A review gate has none, and
     // leaving it visible fed the gate's interrupt values — including the opaque
     // card ref — into a prompt the assist route serializes for the model.
+    // The branch is unchanged by cinatra#3487; it is read off the screen's own
+    // registration (`canManipulate`) now that the page's chrome draws the one
+    // window and the screen draws none.
     expect(PANEL).toMatch(
-      /visible=\{[\s\S]*?xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID[\s\S]*?\}/,
+      /canManipulate:[\s\S]*?xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID[\s\S]*?,/,
     );
   });
 

@@ -36,6 +36,7 @@ import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-proto
 
 import { RunScheduleTab } from "../run-schedule-tab";
 import { ScheduleStepSurface } from "../schedule-rail-step";
+import { RunPageChrome } from "../run-page-chrome";
 
 afterEach(() => {
   cleanup();
@@ -130,10 +131,14 @@ function mockResolve(body: TriggerScheduleProposalViewBody) {
   ) as unknown as typeof fetch;
 }
 
-/** The composer, as a reader would find it: the panel itself, not its mount. */
+/**
+ * The composer, as a reader would find it: the window the PAGE draws
+ * (cinatra#3487). The schedule screen mounts none of its own any more — it
+ * registers — so the reading is taken on the page chrome's one window, which is
+ * exactly what a reader sees under the form.
+ */
 function composerIsDrawn(root: HTMLElement): boolean {
-  const mount = root.querySelector('[data-schedule-prompt-window=""]');
-  return !!mount && mount.childElementCount > 0;
+  return root.querySelectorAll('[data-conformance-id="review-prompt-window"]').length > 0;
 }
 
 /** The card's controls floor — what "the schedule can still be changed" IS. */
@@ -145,7 +150,9 @@ describe("the run's schedule surface — the composer follows the form's state",
   it("a live recurring schedule keeps the composer, under a form that can still change", async () => {
     mockResolve(RECURRING_BODY);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome>
+        <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />
+      </RunPageChrome>,
     );
     await waitFor(() => expect(floorIsDrawn(container)).toBe(true));
     await waitFor(() => expect(composerIsDrawn(container)).toBe(true));
@@ -154,7 +161,9 @@ describe("the run's schedule surface — the composer follows the form's state",
   it("a fired one-off draws no composer — the fields above it cannot be edited", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome>
+        <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />
+      </RunPageChrome>,
     );
     // The form IS drawn — this is the read-only reading, not an absence.
     await waitFor(() =>
@@ -167,7 +176,9 @@ describe("the run's schedule surface — the composer follows the form's state",
   it("a recurring schedule cancelled after a fire draws no composer either", async () => {
     mockResolve(STOPPED_RECURRING);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome>
+        <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />
+      </RunPageChrome>,
     );
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).toBeTruthy(),
@@ -181,7 +192,9 @@ describe("the run page's schedule step reads it the same way", () => {
   it("keeps the composer while the schedule can still change", async () => {
     mockResolve(RECURRING_BODY);
     const { container } = render(
-      <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome>
+        <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />
+      </RunPageChrome>,
     );
     await waitFor(() => expect(floorIsDrawn(container)).toBe(true));
     await waitFor(() => expect(composerIsDrawn(container)).toBe(true));
@@ -190,7 +203,9 @@ describe("the run page's schedule step reads it the same way", () => {
   it("withdraws it once the run is over", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
-      <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome>
+        <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />
+      </RunPageChrome>,
     );
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).toBeTruthy(),

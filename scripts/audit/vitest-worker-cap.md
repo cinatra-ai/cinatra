@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 16 workflow files carry a test-runner step;
-10 of them are governed. 135 invocations:
-94 governed, 13 hosted-pinned,
+10 of them are governed. 136 invocations:
+95 governed, 13 hosted-pinned,
 20 node:test, 7 playwright,
 1 extension-suite-gate.
 
@@ -120,22 +120,22 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | agents-integration-db | 1296 | CI_RUNNER_E2E | vitest | governed | 3 |
 | build-image.yml | auth-schema-drift | 568 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | auth-schema-drift | 571 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3599 | ubuntu-latest | playwright | playwright | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3748 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3753 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3758 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3763 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3621 | ubuntu-latest | playwright | playwright | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3770 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | 3775 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3787 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3801 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3816 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3834 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3850 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | 3864 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3780 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3785 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3797 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3809 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3823 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3838 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3856 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3872 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | 3886 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | context-resolve-route-shape | 520 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | devperf-invariants | 1775 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | devperf-invariants | 1778 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | e2e-rbac | 3273 | CI_RUNNER_E2E | playwright | playwright | 3 |
+| build-image.yml | e2e-rbac | 3295 | CI_RUNNER_E2E | playwright | playwright | 3 |
 | build-image.yml | execution-plane-unit | 409 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | build-image.yml | extension-lifecycle-db-tests | 729 | CI_RUNNER_E2E | vitest | governed | 3 |
 | build-image.yml | extension-lifecycle-db-tests | 739 | CI_RUNNER_E2E | vitest | governed | 3 |
@@ -213,8 +213,9 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | perpetual-core | 2849 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | 2858 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | 2863 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-extension-suites | 2968 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
-| build-image.yml | presence-degraded-build | 4725 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | perpetual-core | 2882 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-extension-suites | 2990 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
+| build-image.yml | presence-degraded-build | 4747 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | build-image.yml | rbac-authz-unit | 485 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | schema-migration-gate | 670 | CI_RUNNER_GATE | node:test | node:test | 3 |
 | build-image.yml | skills-unit | 303 | CI_RUNNER_HEAVY | vitest | governed | 3 |

@@ -84,6 +84,8 @@ import {
   runMomentCardIsOpen,
   ScheduleReadingReport,
   useRunMomentCard,
+  useLifecycleCardHost,
+  runMomentCardDrawsAReview,
   type RunMomentCardReader,
   type ScheduleCardReading,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -574,6 +576,34 @@ function AgentRunTurnSlot({
   const runCardStandsDown =
     momentIsOpen || (turnCarriesMomentCard && stillLooking);
 
+  // AND A REVIEW IS NEVER STOOD DOWN (cinatra#3080).
+  //
+  // The settled-schedule rule below takes the run's panel out of the picture,
+  // and what it was written to take away is named exactly: "its heading, its
+  // status pill and its 'No messages yet.' line are three of the things the
+  // section's turn does not draw, and this panel is where all three come from".
+  // A pending review is none of the three. It is the one thing in a turn a
+  // reader OWES an answer to, it is drawn in the panel's own slot
+  // (`data-run-review-slot`), and inside a conversation that slot is the only
+  // mount of the run's review at all — the injected `artifact_review_gate` part
+  // is suppressed for a turn that draws the run card. So a turn that hid the
+  // panel here hid the decision: the fifth proof round of cinatra#3080 read the
+  // card in the thread at state pending, with Comment, Regenerate and Continue
+  // on it, measuring 0 by 0 inside this wrapper.
+  //
+  // IT IS THE ROW'S OWN ANSWER, not a second reading: the same run row this
+  // container already reads for the moment card carries the review slot, and
+  // the question asked of it is the panel's own (`inPlaceReviewRef`).
+  //
+  // ASKED OF THE HOST TOO, because the panel's own reading is: the completed
+  // run's review is withheld on the site widget, and a container that did not
+  // ask would open the wrapper there for a review that is never drawn.
+  const ambientLifecycleHost = useLifecycleCardHost();
+  const runCardDrawsAReview = runMomentCardDrawsAReview(
+    momentCard,
+    ambientLifecycleHost,
+  );
+
   // THE SENTENCE ABOVE THE CARD MAY NOT CONTRADICT IT (cinatra#3044).
   //
   // The line that introduces this card was written when the run was dispatched
@@ -721,6 +751,23 @@ function AgentRunTurnSlot({
       recommendationDecided={decided}
     />
   );
+
+  // A TURN THAT OWES THE READER A REVIEW — the one reading the stand-down below
+  // is written on and taken off, and it has TWO sources that answer the same
+  // question over different windows.
+  //
+  // `panelDrawsReview` is the LIVE reading the panel itself publishes
+  // (cinatra#3484): the slot it selected from the run's own gate and slot rows,
+  // which is the authority for whatever the panel is drawing right now.
+  // `runCardDrawsAReview` is this container's own answer, read off the run's
+  // moment card and the ambient host (cinatra#3080).
+  //
+  // BOTH ARE ASKED because the row covers the settle window the report cannot:
+  // the run has finished, its gate row has not arrived yet and the panel is
+  // still drawing its working placeholder, so it reports no review while a
+  // decision is already owed — the case cinatra#3080's own suite pins with a
+  // review gate read as `ref: null, awaiting: true`.
+  const turnOwesTheReaderAReview = panelDrawsReview || runCardDrawsAReview;
 
   const turn = (
     // THE REGISTER THIS CONTAINER LISTENS ON (cinatra#3174), around the whole
@@ -902,9 +949,11 @@ function AgentRunTurnSlot({
           down. */}
       {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule ? (
         <div
-          hidden={!panelDrawsReview}
-          aria-hidden={panelDrawsReview ? undefined : true}
-          data-inline-run-panel-stood-down={panelDrawsReview ? undefined : runId}
+          hidden={!turnOwesTheReaderAReview}
+          aria-hidden={turnOwesTheReaderAReview ? undefined : true}
+          data-inline-run-panel-stood-down={
+            turnOwesTheReaderAReview ? undefined : runId
+          }
         >
           {runPanel}
         </div>
