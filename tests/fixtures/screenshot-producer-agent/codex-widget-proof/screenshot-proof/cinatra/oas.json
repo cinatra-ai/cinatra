@@ -1,0 +1,171 @@
+{
+  "component_type": "Flow",
+  "id": "screenshot-proof-screenshot-proof",
+  "name": "screenshot-proof",
+  "description": "Deterministic no-model run for the development screenshot producer.",
+  "metadata": {
+    "cinatra": {
+      "packageName": "@codex-widget-proof/screenshot-proof",
+      "packageVersion": "0.0.0",
+      "type": "flow"
+    }
+  },
+  "inputs": [
+    {
+      "description": "The nonce to echo back.",
+      "title": "capture_url",
+      "type": "string"
+    }
+  ],
+  "outputs": [
+    {
+      "description": "The echoed nonce output.",
+      "title": "capture_url",
+      "type": "string"
+    }
+  ],
+  "start_node": {
+    "$component_ref": "screenshot-proof-start"
+  },
+  "nodes": [
+    {
+      "$component_ref": "screenshot-proof-start"
+    },
+    {
+      "$component_ref": "screenshot-proof-echo"
+    },
+    {
+      "$component_ref": "screenshot-proof-end"
+    }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "screenshot-proof-start->echo",
+      "name": "start->echo",
+      "description": null,
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "screenshot-proof-start"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "screenshot-proof-echo"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "screenshot-proof-echo->end",
+      "name": "echo->end",
+      "description": null,
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "screenshot-proof-echo"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "screenshot-proof-end"
+      }
+    }
+  ],
+  "data_flow_connections": [
+    {
+      "component_type": "DataFlowEdge",
+      "id": "screenshot-proof-nonce:start->echo",
+      "name": "nonce:start->echo",
+      "description": null,
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "screenshot-proof-start"
+      },
+      "source_output": "capture_url",
+      "destination_node": {
+        "$component_ref": "screenshot-proof-echo"
+      },
+      "destination_input": "capture_url"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "id": "screenshot-proof-nonce:start->end",
+      "name": "nonce:start->end",
+      "description": null,
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "screenshot-proof-start"
+      },
+      "source_output": "capture_url",
+      "destination_node": {
+        "$component_ref": "screenshot-proof-end"
+      },
+      "destination_input": "capture_url"
+    }
+  ],
+  "$referenced_components": {
+    "screenshot-proof-start": {
+      "component_type": "StartNode",
+      "id": "screenshot-proof-start",
+      "name": "start",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The nonce to echo back.",
+          "title": "capture_url",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The nonce to echo back.",
+          "title": "capture_url",
+          "type": "string"
+        }
+      ],
+      "branches": [
+        "next"
+      ]
+    },
+    "screenshot-proof-echo": {
+      "component_type": "OutputMessageNode",
+      "id": "screenshot-proof-echo",
+      "name": "echo",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "title": "capture_url",
+          "type": "string"
+        }
+      ],
+      "outputs": [],
+      "branches": [
+        "next"
+      ],
+      "message": "Screenshot fixture target: {{capture_url}}"
+    },
+    "screenshot-proof-end": {
+      "component_type": "EndNode",
+      "id": "screenshot-proof-end",
+      "name": "end",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The echoed nonce output.",
+          "title": "capture_url",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The echoed nonce output.",
+          "title": "capture_url",
+          "type": "string"
+        }
+      ],
+      "branches": [],
+      "branch_name": "next"
+    }
+  },
+  "agentspec_version": "26.1.0"
+}
