@@ -642,6 +642,49 @@ export function runInDispatchHandoff(params: {
 }
 
 /**
+ * IS THE RUN INSIDE ITS EXECUTION WITH NOTHING PRODUCED YET? (cinatra#3246.)
+ *
+ * The issue, in the product's own words: right after a person answers the run's
+ * skills question and the run starts working, the list of steps beside it
+ * "briefly drops down to showing only the Skills entry -- the schedule, review
+ * and other steps that were listed a moment ago disappear until the run has
+ * actually produced something."
+ *
+ * `running` is answered from the status above, deliberately and unchanged: the
+ * table that decides "has this run run?" is the one cinatra#3184 left, and the
+ * step the run detail opens on and the tab the strip lights are still computed
+ * from it. But the RAIL asks a narrower question -- may the rows the run has
+ * not reached yet still ride? -- and for that question the first render at
+ * `running` with no step result, no message and no streamed text behind it is
+ * the dispatch handoff one status later: the run is in its execution and its
+ * own rows do not exist yet, so stopping the still-to-come rows there takes
+ * away entries the reader was shown a moment earlier and puts nothing in their
+ * place. The ratified drawing's own loading example -- the run progress card as
+ * a placeholder, captioned "Before -- the output has not been generated" --
+ * draws a rail whose last entry is an upcoming Review row beside that spinner.
+ *
+ * THE RUN'S OWN HISTORY STILL STOPS THEM: the moment any of the three counts is
+ * non-zero this reads false, the rail's argument is the plain record answer
+ * again, and the later rows are the run's real ones.
+ *
+ * Exported so the regression test can pin it without a DB, a session or a
+ * Next.js render.
+ */
+export function runInExecutionWithoutRecord(params: {
+  runStatus: string | null | undefined;
+  stepResultCount: number;
+  runMessageCount: number;
+  streamedTextLength: number;
+}): boolean {
+  return (
+    runHasExecutionRecord(params) &&
+    params.stepResultCount === 0 &&
+    params.runMessageCount === 0 &&
+    params.streamedTextLength === 0
+  );
+}
+
+/**
  * DO THE RUN'S STILL-TO-COME ROWS RIDE ON THE RAIL? (cinatra#3068 fix leg 3)
  *
  * The ratified drawing: "A resolved gate stays on the rail as read-only history
@@ -712,14 +755,44 @@ export type UpcomingRunRailStepKey = (typeof UPCOMING_RUN_RAIL_STEP_KEYS)[number
  * NEVER TWICE: a key the rail already drew -- a live recommendation hold, an
  * armed schedule -- keeps the row it has, so the de-duplication is part of this
  * answer rather than a guard at the call site that a later caller could forget.
+ *
+ * AND THE LOADING MOMENT KEEPS THEM (cinatra#3246). The issue, in the product's
+ * own words: right after a person answers the run's skills question and the run
+ * starts working, the list of steps beside it "briefly drops down to showing
+ * only the Skills entry -- the schedule, review and other steps that were
+ * listed a moment ago disappear until the run has actually produced something."
+ * `runHasExecutionRecord` answers `running` from the status alone, so the rail's
+ * own answer above turns off at that render while the run's REAL rows do not
+ * exist yet, and the reader is left with the settled entry alone.
+ *
+ * `runCarries` is the run's own answer to both halves of that: whether the rows
+ * ride on through that one moment, and -- because a forecast row for a step the
+ * run will never take is a row the rail invents, which cinatra#3478's ratified
+ * acceptance forbids at every moment -- WHICH of the three this run actually
+ * carries, read from its trigger row, its gate list and its recommendation
+ * park. Those rows do not change between the render before and the render
+ * after, so the two renders filter the same list and the rail's entry count
+ * cannot fall between them.
+ *
+ * ABSENT, THE ANSWER IS WHAT IT HAS ALWAYS BEEN: every existing caller, and
+ * every moment the rail already drew, are byte-identical.
  */
 export function upcomingRunRailStepKeys(params: {
   drawUpcoming: boolean;
   drawnKeys: readonly string[];
+  runCarries?: {
+    keys: readonly UpcomingRunRailStepKey[];
+    throughTheLoadingMoment: boolean;
+  };
 }): UpcomingRunRailStepKey[] {
-  if (!params.drawUpcoming) return [];
+  const carried = params.runCarries;
+  const ridesThroughTheLoadingMoment = carried?.throughTheLoadingMoment === true;
+  if (!params.drawUpcoming && !ridesThroughTheLoadingMoment) return [];
   const drawn = new Set(params.drawnKeys);
-  return UPCOMING_RUN_RAIL_STEP_KEYS.filter((key) => !drawn.has(key));
+  const carriedKeys = carried ? new Set<string>(carried.keys) : null;
+  return UPCOMING_RUN_RAIL_STEP_KEYS.filter(
+    (key) => !drawn.has(key) && (carriedKeys === null || carriedKeys.has(key)),
+  );
 }
 
 /**
@@ -1615,6 +1688,15 @@ export async function SetupScreen({
     runStatus: run?.status ?? null,
     hasExecutionRecord: runHasExecution,
   });
+  // AND THE SAME MOMENT ONE STATUS LATER -- the run picked up, working, and
+  // with none of its own rows written yet (cinatra#3246). Read here, beside the
+  // other two, because it is a question about the same one fact.
+  const runInsideExecutionWithNothingYet = runInExecutionWithoutRecord({
+    runStatus: run?.status ?? null,
+    stepResultCount: run?.stepResults?.length ?? 0,
+    runMessageCount: completedRunMessages.length,
+    streamedTextLength: (run?.streamedText ?? "").length,
+  });
 
   // THE GATE, DERIVED BEFORE THE PAGE IS SERVED (cinatra#2729 defect 2).
   //
@@ -1964,6 +2046,42 @@ export async function SetupScreen({
     recommendationHeld,
     openInputStepKey,
   });
+  // WHICH STILL-TO-COME STEPS THIS RUN ACTUALLY CARRIES (cinatra#3246), read
+  // ONCE, from the run's own rows and from nothing else -- and only for the one
+  // moment that needs the answer: the run inside its execution with none of its
+  // own rows written yet. The schedule is the run's trigger row, or the gate it
+  // is stopped at; the review is a gate still pending, or the outbox window
+  // still awaiting; the skills question is the run's own recommendation park,
+  // and in the issue's own moment that row is already ON the rail, so the
+  // de-duplication above leaves the reader the real row rather than a forecast
+  // of it. None of these three changes when the status does, which is what
+  // makes the rail's count monotone across the transition by construction.
+  //
+  // AND THE RIDE LIFTS ONLY THE EXECUTION SUPPRESSION (convergence). The rail's
+  // own answer above turns the still-to-come rows off for TWO different
+  // reasons: because the run is inside its execution, and because this rail
+  // carries neither the run's input steps nor its gate row at all. This fix is
+  // about the first reason only -- a rail that was never eligible for a
+  // forecast row must not grow one at the loading moment -- so the ride is
+  // asked for only when the rail's own two eligibility facts, the same two the
+  // call below hands `railDrawsUpcomingRunSteps`, say the rows could ride.
+  const runCarriesStillToComeKeys =
+    runInsideExecutionWithNothingYet &&
+    (inputStepsInRail || hasRecommendationStep)
+      ? {
+          keys: [
+            ...(hasRecommendationStep ? (["recommendation"] as const) : []),
+            ...(runCarriesScheduleStep || parkedScheduleStep
+              ? (["schedule"] as const)
+              : []),
+            ...(railGates.some((gate) => gate.status === "pending") ||
+            initialReviewGate?.awaiting === true
+              ? (["review"] as const)
+              : []),
+          ],
+          throughTheLoadingMoment: true,
+        }
+      : undefined;
   const railFramesTheRunDetail =
     inputStepsInRail ||
     hasRecommendationStep ||
@@ -2661,6 +2779,13 @@ export async function SetupScreen({
                   hasExecution: runHasExecution,
                 }),
                 drawnKeys: railSteps.map((step) => step.key),
+                // AND THE ROWS RIDE THROUGH THE LOADING MOMENT, FILTERED TO
+                // WHAT THIS RUN CARRIES (cinatra#3246). The rail's own answer
+                // above is untouched -- its four arguments, its rule and the
+                // plain execution reading it takes all stand, and so do the
+                // other two readings of `runHasExecution`, the step the detail
+                // opens on and the tab the strip lights.
+                runCarries: runCarriesStillToComeKeys,
               });
               // AND THE SKILLS PLACEHOLDER KEEPS THE HEAD OF THE RAIL, LIKE
               // THE STEP IT STANDS FOR (cinatra#3047 fix leg 8, convergence).
