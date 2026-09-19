@@ -21,10 +21,17 @@ import "server-only";
 //     `runtime-package-loader`'s serverEntry import is held to: a link inside
 //     the tree that resolves outside it is refused before anything is imported.
 //
+// A SECOND ROAD, and only where the first cannot exist (cinatra#3602): where
+// the writable store holds NO record for the package at all, a development
+// installation reads the package's own SOURCE DIRECTORY off the generated
+// static manifest, bound on both sides to the pinned version. Wherever a store
+// record exists the store stays the only road, and both path gates above apply
+// to the source directory exactly as they do to a store directory.
+//
 // Nothing here names a package, a table, a type or a state.
 
 import path from "node:path";
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 
 import { declaredToolModulePathIssue } from "@cinatra-ai/sdk-extensions/manifest";
 
@@ -68,6 +75,60 @@ export function resolveDeclaredToolModulePath(
 }
 
 /**
+ * The package's own SOURCE DIRECTORY at the pinned version, as the GENERATED
+ * static manifest records it — the second road, and it exists because on a
+ * development installation nothing ever materializes a package that lives in
+ * the source tree, so the store road below can only ever refuse it.
+ *
+ * IT IS LIMITED TO A DEVELOPMENT INSTALLATION, and the limit is the narrow
+ * rule the evidence supports: the record's own field documentation says that
+ * directory is repo-relative in development and a package-store path in
+ * production, so the field does not mean the same thing in both modes; the
+ * manifest's mere presence is no evidence of a development installation, since
+ * an image build regenerates that file too; and the directory is not carried
+ * into a production runtime image anyway, so the limit costs nothing there and
+ * keeps a directory a deployment might later mount at that path from becoming
+ * an import road.
+ *
+ * THE PIN BINDS ON BOTH SIDES, exactly as it does on the store road: the
+ * generated record's own version and the package.json actually lying in that
+ * directory must both carry the version the run is bound to, and a record
+ * carrying no version is a refusal rather than a pass.
+ */
+const sourceDirPackageRoot = async (
+  packageName: string,
+  packageVersion: string,
+): Promise<string | null> => {
+  const { isAppDevelopmentMode } = await import("@/lib/runtime-mode");
+  if (!isAppDevelopmentMode()) return null;
+  const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+  const manifest: Record<string, { version?: unknown; sourceDir?: unknown } | undefined> =
+    STATIC_EXTENSION_MANIFEST;
+  const record = manifest[packageName];
+  if (!record) return null;
+  // EXACT equality and no normalisation: the record's own string IS the
+  // version it pins, so a padded one is not the pinned version either.
+  const generatedVersion = typeof record.version === "string" ? record.version : "";
+  if (generatedVersion.trim() === "" || generatedVersion !== packageVersion) return null;
+  const sourceDir = typeof record.sourceDir === "string" ? record.sourceDir.trim() : "";
+  if (sourceDir === "") return null;
+  // The repo-root-relative convention the host already resolves a package's own
+  // files by: the directory is taken against the process's working directory.
+  const root = path.resolve(process.cwd(), sourceDir);
+  let parsed: { name?: unknown; version?: unknown };
+  try {
+    parsed = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+  } catch {
+    return null;
+  }
+  if (parsed.name !== packageName || parsed.version !== packageVersion) return null;
+  return root;
+};
+
+/**
  * The materialized package at the pinned version, read off the store itself.
  *
  * THE PIN IS CHECKED AGAINST THE PACKAGE ON DISK, not against a record field:
@@ -98,10 +159,17 @@ const defaultPackageRootResolver: PinnedPackageRootResolver = async ({
   const resolveAnchors = await makeDefaultInstallAnchorsResolver(orgId);
   const anchors = await resolveAnchors(packageName);
   const anchor = anchors.find((a) => (a.version ?? null) === packageVersion);
-  if (!anchor) return null;
   const records = (await discoverStoreRecordsV2(resolveExtensionDataRoot(), realStoreFs)).filter(
     (record) => record.packageName === packageName,
   );
+  // A STORE RECORD, WHEREVER THERE IS ONE, REMAINS THE ONLY ROAD: with one or
+  // more records for this package the anchor and digest bindings below decide
+  // alone and every refusal of theirs stands, so no running flow can ever be
+  // moved off a materialized install onto a source tree. ONLY a store holding
+  // no record for it at all — what a development installation always reads —
+  // reaches the second road.
+  if (records.length === 0) return sourceDirPackageRoot(packageName, packageVersion);
+  if (!anchor) return null;
   // Anchor KIND binding: the canonical row's kind against the store path's kind.
   const kindBound = records.filter((record) =>
     anchor.kind == null ? true : anchor.kind === record.kind,
