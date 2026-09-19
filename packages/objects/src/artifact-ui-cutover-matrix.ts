@@ -17,6 +17,13 @@
 // cross-applied selection (a viewer resolved as a semantic winner, or vice
 // versa) is always a failure — that is how a losing claimant's module would leak.
 //
+// NO CORE FLOOR IS REQUIRED ANY MORE. Two of the required outcomes used to name
+// host-owned drawings of the artifact — a first-party viewer under a disabled or
+// uninstalled provider, and an explicit query escape to the generic view. While
+// they stood, an arm could only pass this matrix by KEEPING the core arms the
+// ownership boundary retires. What the matrix requires now is what the boundary
+// allows: an extension display, a requires-rebuild diagnostic, or the floor.
+//
 // Usage (a wave):
 //   const report = evaluateArmCutover({
 //     system: "representation-viewer",
@@ -47,9 +54,7 @@ export type CutoverOutcome =
   | "extension"
   /** a resolved-but-unbuilt claimant degraded to generic + "requires rebuild" */
   | "requires-rebuild"
-  /** the always-effective first-party host default (representation floor) */
-  | "first-party-floor"
-  /** the generic read-only structured-data view (terminal floor) */
+  /** the terminal floor: a host diagnostic and no core artifact content */
   | "generic-floor"
   /** the arm was selected through the WRONG system (viewer↔semantic) — a leak */
   | "cross-applied"
@@ -93,13 +98,13 @@ export const ARTIFACT_UI_CUTOVER_MATRIX: readonly CutoverCase[] = [
     id: "disabled",
     title: "Disabled provider",
     requirement:
-      "With the provider present but DISABLED for the org, the row falls to the always-effective first-party host default (viewer) / generic floor (semantic) — never blank.",
+      "With the provider present but DISABLED for the org, the row falls to the terminal floor — a host diagnostic, never blank and never a core rendering of the artifact.",
   },
   {
     id: "uninstalled",
     title: "Uninstalled provider",
     requirement:
-      "With no provider installed, the row falls deterministically to the floor (first-party host default or generic).",
+      "With no provider installed, the row falls deterministically to the terminal floor.",
   },
   {
     id: "incompatible",
@@ -117,7 +122,7 @@ export const ARTIFACT_UI_CUTOVER_MATRIX: readonly CutoverCase[] = [
     id: "floor-recovery",
     title: "Deterministic floor recovery",
     requirement:
-      "The explicit generic-floor escape (e.g. ?renderer=generic / the route-segment error boundary) always yields the generic read-only view.",
+      "A render-time failure is contained by the route-segment error boundary and always yields the terminal floor. There is no query escape that forces a core rendering — the host owns no viewer to escape to.",
   },
   {
     id: "single-module-executes",
@@ -145,7 +150,11 @@ export function requiredOutcome(system: CutoverSystem, caseId: CutoverCaseId): C
       return "extension";
     case "disabled":
     case "uninstalled":
-      return system === "representation-viewer" ? "first-party-floor" : "generic-floor";
+      // ONE ANSWER FOR BOTH SYSTEMS now. The representation tier used to fall to
+      // an always-effective host viewer underneath it; that viewer retired with
+      // the core content arms, so an uncovered representation lands where an
+      // unclaimed type lands — the terminal floor.
+      return "generic-floor";
     case "incompatible":
       return "requires-rebuild";
     case "failing":

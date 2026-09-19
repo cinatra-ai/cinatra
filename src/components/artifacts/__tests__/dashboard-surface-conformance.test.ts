@@ -132,7 +132,7 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     // a dashboard artifact never reaches `pickArtifactRenderer(...)` (the CALL,
     // not the import).
     const branchIdx = DETAIL.indexOf("isDashboardArtifactType(artifact.objectType)");
-    const dispatchCallIdx = DETAIL.indexOf("pickArtifactRenderer(");
+    const dispatchCallIdx = DETAIL.indexOf("resolveArtifactDisplayMount(");
     expect(branchIdx).toBeGreaterThan(-1);
     expect(dispatchCallIdx).toBeGreaterThan(branchIdx);
   });

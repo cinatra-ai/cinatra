@@ -34,8 +34,11 @@ describe("G2 artifact-UI cutover matrix", () => {
     ]);
   });
 
-  it("required outcomes differ by system for the floor cases (never cross-applied)", () => {
-    expect(requiredOutcome("representation-viewer", "disabled")).toBe("first-party-floor");
+  it("the floor cases require the SAME terminal floor on both systems (never cross-applied)", () => {
+    // The representation tier used to require a host-owned viewer under it. That
+    // viewer retired with the core content arms, so a disabled provider lands
+    // where an unclaimed type lands: the terminal floor.
+    expect(requiredOutcome("representation-viewer", "disabled")).toBe("generic-floor");
     expect(requiredOutcome("semantic-renderer", "disabled")).toBe("generic-floor");
     expect(requiredOutcome("representation-viewer", "incompatible")).toBe("requires-rebuild");
     expect(requiredOutcome("representation-viewer", "enabled-and-selected")).toBe("extension");

@@ -101,7 +101,12 @@ describe("cinatra#2044 S6 L-A — resolveMount representation fallback", () => {
 
   it("no semantic renderer AND no representation provider → floor UNCHANGED (no-semantic-renderer)", async () => {
     const mount = await mountFor(CMS_TYPE, { kind: "no-primary" }, CMS_MIME);
-    expect(mount).toEqual({ kind: "floor", packageName: null, reason: "no-semantic-renderer" });
+    // THE FLOOR NOW NAMES ITS TYPE'S PACKAGE, and the heading above still holds:
+    // this row reaches the FLOOR rather than a display. `specs/app-artifact-review.html`
+    // §V words the diagnostic as "package · slot · reason", and the package is
+    // known at the terminal arm — the row's own type id is `@cinatra-ai/objects:cms-content-snapshot`,
+    // which the host's one normalization reduces to the package below.
+    expect(mount).toEqual({ kind: "floor", slot: "detail", packageName: "@cinatra-ai/objects", reason: "no-semantic-renderer" });
   });
 
   it("a representation provider present but NOT built in this build → requires-rebuild floor (never blank)", async () => {
@@ -113,7 +118,7 @@ describe("cinatra#2044 S6 L-A — resolveMount representation fallback", () => {
       generation: 1,
     });
     const mount = await mountFor(CMS_TYPE, { kind: "no-primary" }, CMS_MIME);
-    expect(mount).toEqual({ kind: "floor", packageName: REP_PKG, reason: "requires-rebuild" });
+    expect(mount).toEqual({ kind: "floor", slot: "detail", packageName: REP_PKG, reason: "requires-rebuild" });
   });
 
   it("SEMANTIC precedence holds — a winning semantic renderer is used, the representation provider is NOT consulted", async () => {
