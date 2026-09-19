@@ -189,5 +189,8 @@ widget frame authorization, all six media kinds and the CMS picture pair
 through the byte capability, card/page and matched-upload cases for the two new
 displays, embedded deck rendering, and no blank widget displays. Capture both
 palettes through product navigation, attest the actual run IDs and grade against
-design main. Store screenshots on an evidence branch, never in this product
-tree. Do not close #3459 based only on the two prerequisite tools.
+design main. Capture screenshots in the organisation's working area outside
+every repository. Retained proof belongs only in the designated proof repository,
+with the owner's visibility restrictions applied. Never commit proof media or
+run-evidence bundles to any branch of this product repository. Do not close #3459
+based only on the two prerequisite tools.
