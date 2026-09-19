@@ -220,6 +220,34 @@ describe("the repository intake, one per kind (criteria 6, 7, 8 — criterion 30
       ).rejects.toThrow(/submodule/i);
     });
   }
+
+  it("resolves an ARTIFACT whose package.json declares cinatra.artifact INLINE, with no descriptor file and no entrypoint (cinatra#3600)", async () => {
+    // The shipped shape. The repository road resolves through the same reader as
+    // the file road, so it must accept the same package.
+    const client = makeClient({
+      entries: [
+        {
+          path: "package.json",
+          content: JSON.stringify({
+            name: "@acme/thing-artifact",
+            version: "1.0.0",
+            cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } } },
+          }),
+        },
+        { path: "README.md", content: "an artifact package" },
+      ],
+      tags: { "release-a": { type: "commit", sha: COMMIT } },
+    });
+    const preview = await previewGitHubSuppliedPackage({
+      client,
+      owner: "owner",
+      repo: "repo",
+      ref: "release-a",
+    });
+    expect(preview.kind).toBe("artifact");
+    expect(preview.packageName).toBe("@acme/thing-artifact");
+    expect([...preview.payload.keys()]).toEqual(["package.json"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
