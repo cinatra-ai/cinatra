@@ -1,6 +1,6 @@
 import "server-only";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { parseSemanticArtifactManifest } from "@cinatra-ai/objects";
+import { parseSemanticArtifactManifest } from "@cinatra-ai/objects/semantic-manifest";
 import {
   resolveClaimWinner,
   claimWinnerProjectionDisposition,
