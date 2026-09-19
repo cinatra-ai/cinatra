@@ -514,6 +514,109 @@ async function installAtScope(
       throw installErr;
     }
 
+    // THE AGENT KIND'S TEMPLATE, WHICH NOTHING ON THIS ROAD REGISTERED
+    // (cinatra#3534). The dispatcher installs the PACKAGE; for an agent pack it
+    // does not register the agent TEMPLATE, so a pack supplied here landed as a
+    // live row with no runnable agent behind it — its Run wizard answered 404
+    // and the run screen's search found no agent — while the very same pack
+    // loaded by the development fleet sync was runnable. The access read below
+    // was this road's only response to the missing row, and it can only throw.
+    //
+    // The registration is the fleet sync's OWN entry point called over the pack
+    // the dispatcher has just FINALIZED in the extension package store, never a
+    // copy of its body: the template import and the package-identity write both
+    // happen inside that function, with its own options. The store dir holds the
+    // pack itself (`package.json` at its top), so `cinatra/oas.json` under it is
+    // the canonical layout that loader reads and the sibling manifest it resolves
+    // one directory up is the pack's own.
+    //
+    // Entered ONLY when there is no template row, so nothing is anchored twice:
+    // the loader's canonical-record seam refuses to write while a live platform
+    // row is present, and this install's canonical row IS live by the time it
+    // runs.
+    if (candidate.kind === "agent") {
+      // The whole registration step sits inside ONE compensated boundary: the
+      // template read is part of it, because a read that rejects after the
+      // dispatcher has already installed would otherwise escape this function
+      // and leave a fresh install standing with neither an agent behind it nor
+      // a rollback (convergence finding, cinatra#3534).
+      let refusal: string | null = null;
+      let refusalDetail: string | null = null;
+      try {
+        const { readAgentTemplateByPackageName } = await import("./store");
+        const registered = await readAgentTemplateByPackageName(candidate.packageName);
+        if (!registered) {
+          const { resolveFinalizedStorePayload } = await import(
+            "@/lib/extension-store-payload"
+          );
+          const finalized = await resolveFinalizedStorePayload({
+            packageName: candidate.packageName,
+            expectedKind: "agent",
+            orgId: identity.organizationId,
+          });
+          if (!finalized) {
+            throw new Error(
+              `${candidate.packageName} installed, but the finalized package bytes for it could not be found, so its agent could not be registered.`,
+            );
+          }
+          const { join } = await import("node:path");
+          const { ensureAgentPackageFromGitFile } = await import("./ensure-agent-package");
+          const outcome = await ensureAgentPackageFromGitFile({
+            oasSourcePath: join(finalized.storeDir, "cinatra", "oas.json"),
+          });
+          // THE LOADER REFUSES WITHOUT THROWING. Its skip contract answers
+          // `{ templateId: "", skipped: true }` for a pack it will not register
+          // — an unreadable sibling manifest, no package name, a reserved slug.
+          // Reading only the exception would let that refusal fall through to
+          // the access read below, which can only report a missing row as an
+          // ACCESS failure: the operator would be told the scope could not be
+          // saved when the truth is that the pack declares no agent this
+          // application can register (convergence finding, cinatra#3534).
+          if (!outcome.templateId) {
+            throw new Error(
+              `${candidate.packageName} installed, but it declares no agent this application can register, so there is nothing to run. The server log carries the reason.`,
+            );
+          }
+        }
+      } catch (registerErr) {
+        // The refusal travels in the words of whatever refused it — the same
+        // rule the install failure above follows — but the operator's answer
+        // never carries a server filesystem path: the loader reads the pack by
+        // absolute path, so its own failures quote one.
+        refusalDetail = registerErr instanceof Error ? registerErr.message : String(registerErr);
+        refusal = withoutServerPaths(refusalDetail);
+      }
+      if (refusal) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[supplied-install-actions] agent template registration failed:",
+          refusalDetail,
+        );
+        // A row that was already live before this install is never rolled
+        // back — this road's existing rule, unchanged. What is NOT said is
+        // that the previous version survived: the dispatcher has already run,
+        // so the bytes on disk are this upload's (convergence finding).
+        if (hadLiveRowBefore) {
+          return {
+            ok: false,
+            error: `${refusal} A version of it was already installed, so nothing was uninstalled — check it on the installed-extensions list before retrying.`,
+          };
+        }
+        const rolledBack = await rollbackFreshSuppliedInstall({
+          identity,
+          packageName: candidate.packageName,
+          version: candidate.version,
+          workspaceAnchored: isWorkspaceRowAnchor(scope.rowOwnership),
+        });
+        return {
+          ok: false,
+          error: rolledBack
+            ? `${refusal} The install was rolled back, so nothing was left installed.`
+            : `${refusal} The install could not be rolled back — this needs recovery. Check the installed-extensions list before retrying.`,
+        };
+      }
+    }
+
     try {
       const { accessKind, resourceId } = await resolveAccessResourceId({
         kind: candidate.kind,
@@ -618,6 +721,16 @@ async function installAtScope(
  * the package-scoped uninstall, a workspace-anchored (org-NULL) row through the
  * row-scoped inverse the org-pinned resolver cannot address.
  */
+/**
+ * An operator's answer never carries a server filesystem path (convergence
+ * finding, cinatra#3534). The agent loader reads a pack by absolute path, so
+ * its own refusals — a missing document, an unreadable one — quote that path in
+ * the message this road passes on. The full text still goes to the server log.
+ */
+function withoutServerPaths(message: string): string {
+  return message.replace(/(?:\/[\w.@+-]+){2,}\/?/g, "a path on the server");
+}
+
 async function rollbackFreshSuppliedInstall(input: {
   identity: {
     organizationId: string | null;

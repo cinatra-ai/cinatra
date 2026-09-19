@@ -103,7 +103,7 @@ describe("the agent handler anchors its native row at the CHOSEN scope", () => {
     });
   });
 
-  it("carries a WORKSPACE-anchored install to the template's workspace owner tier", async () => {
+  it("carries a WORKSPACE-anchored install to the determinate ORGANIZATION owner tier", async () => {
     const handler = createAgentExtensionHandler();
     await handler.install(
       { packageName: "@scope/ext", version: "1.2.3" } as never,
@@ -116,10 +116,16 @@ describe("the agent handler anchors its native row at the CHOSEN scope", () => {
         },
       } as never,
     );
+    // cinatra#3534: the CHOSEN scope still decides the native anchor rather than a
+    // re-derivation from the actor — but the workspace owner level the run-scope
+    // evaluator does not recognise is translated to the determinate organization
+    // anchor. `anchorOrgId` stays null (the store-payload resolution scope is a
+    // separate thing), so this still reads differently from the team case below.
     expect(installAgentPackageWithDependencies).toHaveBeenCalledWith(
       expect.objectContaining({
         anchorOrgId: null,
-        ownerLevel: "workspace",
+        ownerLevel: "organization",
+        ownerId: "org-1",
       }),
       expect.anything(),
     );
@@ -192,7 +198,8 @@ describe("a SUPPLIED package is installed root-only — there is no registry clo
       expect.objectContaining({
         packageName: "@scope/ext",
         requireStorePayload: true,
-        ownerLevel: "workspace",
+        // cinatra#3534: translated to the determinate organization anchor.
+        ownerLevel: "organization",
       }),
       expect.anything(),
     );
