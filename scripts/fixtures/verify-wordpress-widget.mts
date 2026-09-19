@@ -28,10 +28,12 @@ try {
   const signedOut = '[data-embed-state="signin"]';
   await frame.locator(`${signedOut}, ${active}`).first().waitFor();
   console.log("The real CMS mounted the widget frame.");
+  let signInPopupObserved = false;
   if (await frame.locator(signedOut).isVisible()) {
     const [popup] = await Promise.all([
       page.waitForEvent("popup"), frame.locator("[data-embed-signin]").click(),
     ]);
+    signInPopupObserved = true;
     // The existing first-party app session authorizes the popup. If it has
     // expired, fail here and refresh that session normally before retrying.
     if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 90_000 });
@@ -42,10 +44,16 @@ try {
   await chmod(state, 0o600);
   await writeFile(values.evidence, JSON.stringify({
     capturedAt: new Date().toISOString(), wordpressOrigin: wordpress.origin,
-    widgetFrame: "passed", evidence: "Real CMS mount, frame-owned sign-in popup, active assistant and visible composer",
+    widgetFrame: "passed", signInPopupObserved,
+    authentication: signInPopupObserved ? "frame-owned-sign-in-popup" : "existing-frame-session",
+    evidence: signInPopupObserved
+      ? "Real CMS mount, frame-owned sign-in popup, active assistant and visible composer"
+      : "Real CMS mount, existing authenticated frame session, active assistant and visible composer",
     mediaRows: "not_checked",
   }, null, 2), { mode: 0o600 });
-  console.log("The frame completed authentication and mounted its active composer.");
+  console.log(signInPopupObserved
+    ? "The frame completed popup authentication and mounted its active composer."
+    : "The frame reused its authenticated session and mounted its active composer.");
 } finally {
   await browser.close();
 }

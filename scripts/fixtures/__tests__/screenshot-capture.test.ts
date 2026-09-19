@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { chromium } from "@playwright/test";
+import { chromium, type Browser } from "@playwright/test";
 import { assertScreenshotFixtureRuntime, captureScreenshot } from "../lib/screenshot-capture.ts";
 
 test("capture records the browser's redirected URL, viewport, time and actual PNG", async () => {
@@ -11,10 +11,11 @@ test("capture records the browser's redirected URL, viewport, time and actual PN
     res.end('<html><body style="background:#284b63;color:white"><h1 data-ready>Screenshot producer proof</h1></body></html>');
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-  const browser = await chromium.launch({ headless: true });
+  let browser: Browser | undefined;
   try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 640, height: 480 }, deviceScaleFactor: 1 });
     await page.goto(`http://127.0.0.1:${address.port}/redirect`);
     const before = Date.now();
@@ -34,8 +35,11 @@ test("capture records the browser's redirected URL, viewport, time and actual PN
     };
     await assert.rejects(captureScreenshot(page, "[data-ready]"), /navigated or resized/);
   } finally {
-    await browser.close();
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    try {
+      await browser?.close();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   }
 });
 

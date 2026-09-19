@@ -90,8 +90,10 @@ CINATRA_RUNTIME_MODE=development node --import tsx scripts/fixtures/verify-wordp
   --evidence /outside-the-product-tree/widget-frame.json
 ```
 
-This waits for the real CMS mount, the frame's own sign-in popup, the active
-assistant and its composer. Warm the app's frame routes before a cold dev boot's
+This waits for the real CMS mount, the active assistant and its composer. When
+the frame starts signed out, it also observes the frame's own sign-in popup.
+The evidence distinguishes that path from an existing authenticated session;
+a warm session does not prove the popup flow. Warm the app's frame routes before a cold dev boot's
 first popup, as the existing widget UAT setup does. An `instance_unresolved`
 audit means the connector registration/selection is missing; it is not repaired
 by reissuing a site credential. Refresh the first-party app session normally if
@@ -126,7 +128,7 @@ write endpoint. Start it with `CINATRA_RUNTIME_MODE=development`, and use
 It is a test package source, not proof of marketplace installation.
 
 ```sh
-node --env-file=.env.local --import tsx scripts/fixtures/seed-screenshot-run.mts \
+CINATRA_RUNTIME_MODE=development node --env-file=.env.local --import tsx scripts/fixtures/seed-screenshot-run.mts \
   --org ORGANIZATION_ID --user FIXTURE_ADMIN_USER_ID --url http://localhost:8087/
 ```
 
@@ -137,7 +139,7 @@ the returned run ID below. The capture is then performed by this development
 command and attached to that run; the no-model flow itself does not take pixels.
 
 ```sh
-node --env-file=.env.local scripts/fixtures/capture-screenshot.mjs \
+CINATRA_RUNTIME_MODE=development node --env-file=.env.local scripts/fixtures/capture-screenshot.mjs \
   --org ORGANIZATION_ID --run RUN_ID --output capture-light \
   --url http://localhost:8087/ --ready 'main h1' \
   --title 'WordPress screenshot' --palette light --width 1440 --height 1000
