@@ -738,7 +738,7 @@ export function getArtifact(input: {
  *     the detail route renders the not-authorized panel, NOT a 404.
  */
 export type ArtifactDetailAccess =
-  | { kind: "ok"; artifact: ArtifactSummary }
+  | { kind: "ok"; artifact: ArtifactSummary; liveObjectData?: unknown }
   | { kind: "not-found" }
   | { kind: "denied" };
 
@@ -754,7 +754,7 @@ export function readArtifactForDetail(input: {
   orgId: string | null;
   actor?: ActorContext;
 }): ArtifactDetailAccess {
-  return readArtifactAccess(input, { allowDeleted: false });
+  return readArtifactAccess(input, { allowDeleted: false, includeLiveObjectData: true });
 }
 
 /**
@@ -792,7 +792,7 @@ export function readArtifactForSettledReview(input: {
  *  rung could be dropped. `allowDeleted` is the ONLY thing that varies. */
 function readArtifactAccess(
   input: { artifactId: string; orgId: string | null; actor?: ActorContext },
-  options: { allowDeleted: boolean },
+  options: { allowDeleted: boolean; includeLiveObjectData?: boolean },
 ): ArtifactDetailAccess {
   const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor, {
     allowDeleted: options.allowDeleted,
@@ -821,7 +821,12 @@ function readArtifactAccess(
           baseType: rec.type,
         })
       : undefined;
-  return { kind: "ok", artifact: toSummary(rec, enrichment, presentation) };
+  return {
+    kind: "ok", artifact: toSummary(rec, enrichment, presentation),
+    // Only the live detail reader carries this authorized row. A settled
+    // review must read its immutable pin, never the row's current metadata.
+    ...(options.includeLiveObjectData && !options.allowDeleted ? { liveObjectData: rec.data } : {}),
+  };
 }
 
 /**
