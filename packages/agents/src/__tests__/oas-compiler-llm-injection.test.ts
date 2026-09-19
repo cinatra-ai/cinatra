@@ -39,7 +39,7 @@ type Node = Record<string, unknown>;
 
 const SAMPLE_LLM: OasCinatraLlm = {
   preferredProvider: "gemini",
-  preferredModel: "gemini-2.5-flash",
+  preferredModel: "gemini-3.5-flash",
   capabilityRequired: "media_input",
 };
 

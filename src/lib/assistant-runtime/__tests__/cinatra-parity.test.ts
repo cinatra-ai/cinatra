@@ -291,7 +291,7 @@ describe("the self-MCP toolbox pins native_mcp on the stream input (cinatra#2776
   it("Gemini: NO self-MCP toolbox ⇒ NO requirement (the field is absent, not undefined)", async () => {
     vi.mocked(resolveBoundDefaultAdapter).mockResolvedValueOnce({
       provider: "gemini",
-      defaultModel: "gemini-2.5-flash",
+      defaultModel: "gemini-3.5-flash",
     } as never);
     const send = vi.fn();
     await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));

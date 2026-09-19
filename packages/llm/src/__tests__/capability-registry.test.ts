@@ -48,7 +48,7 @@ describe("resolveAttachmentCapability", () => {
   it("Gemini ingests audio/video; nativeKind gemini_file_data", () => {
     const v = resolveAttachmentCapability({
       provider: "gemini",
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       mime: "video/mp4",
     });
     expect(v).toMatchObject({ ingestible: true, nativeKind: "gemini_file_data" });
@@ -63,7 +63,7 @@ describe("resolveAttachmentCapability", () => {
             ? "gpt-5.5"
             : provider === "anthropic"
               ? "claude-sonnet-4-6"
-              : "gemini-2.5-flash",
+              : "gemini-3.5-flash",
         mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       });
       expect(d.ingestible).toBe(false);
