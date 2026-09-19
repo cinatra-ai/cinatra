@@ -351,6 +351,7 @@
     { "alias": "@cinatra-ai/extensions/screens/extension-settings-view", "target": "./packages/extensions/src/screens/extension-settings-view.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/extension-access-control", "target": "./packages/extensions/src/screens/extension-access-control.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/installed-rows", "target": "./packages/extensions/src/screens/installed-rows.ts" },
+    { "alias": "@cinatra-ai/extensions/screens/installed-visibility", "target": "./packages/extensions/src/screens/installed-visibility.ts" },
     { "alias": "@cinatra-ai/extensions/mcp-handlers", "target": "./packages/extensions/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/extensions/mcp-module", "target": "./packages/extensions/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/extensions/actions", "target": "./packages/extensions/src/actions.ts" },

@@ -74,8 +74,14 @@ export {
   parsePackageId,
   isSafePathSegment,
   assertSafePathSegment,
+  // The vendor BYLINE resolver and its declared-scope step (cinatra#948
+  // reopen / cinatra#3047 / cinatra#3447) — pure and dependency-free, so the
+  // stub re-exports the real implementations: the §V settings render tests
+  // resolve their props through the very chain the loader runs.
+  resolveInstalledVendorName,
+  declaredVendorNameForScope,
 } from "../../packages/registries/src/scope";
-export type { PackageId } from "../../packages/registries/src/scope";
+export type { PackageId, DeclaredVendorEntry } from "../../packages/registries/src/scope";
 
 // Version primitives for the dependency planner (#180). Pure semver wrappers
 // — re-export the real implementations (no pacote/native chain).
