@@ -78,6 +78,9 @@ export function trialJob(workload, text) {
     const name = named(step);
     if (/uses: actions\/(?:upload-artifact|download-artifact|cache)@/.test(step)) continue;
     if (name === "Guard — detect must have succeeded" || name === "Skip stub (no dashboard-surface changes)") continue;
+    // Both cohorts intentionally run without buildx caches. Drop the matching
+    // local-only preparer as well; retaining its export leaves an orphan cache.
+    if (name === "Prepare the runner-local buildx cache directory (self-hosted only)") continue;
     // Source selectors only choose whether a real workload is necessary. The
     // trial explicitly requests it and never substitutes a skipped green job.
     step = step.replaceAll("needs.detect.outputs.run_real == 'true' && ", "")
@@ -124,6 +127,7 @@ export function trialJob(workload, text) {
   require(!/\$\{\{[^}]*needs\./.test(result), "unadapted source dependency in " + workload);
   require(!/uses: actions\/(?:upload-artifact|download-artifact|cache)@/.test(result), "trial artifact/cache transfer forbidden");
   require(!/^\s+push:\s*true/m.test(result), "trial publication forbidden");
+  require(!/LOCAL_BUILDX_CACHE_DIR|^\s+cache-(?:from|to):/m.test(result), "unadapted trial buildx cache state");
   require(result.includes("timeout-minutes: " + rule.cap), "source timeout changed");
   return "  # Source job SHA256: " + sourceDigest + "\n" + result;
 }

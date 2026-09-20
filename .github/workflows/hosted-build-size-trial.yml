@@ -1040,38 +1040,6 @@ jobs:
       # A local cache is PER MACHINE: a job landing on a different self-hosted
       # runner than the one that populated it finds an empty directory, warns,
       # and rebuilds — slower on a cold machine, never wrong.
-      - name: Prepare the runner-local buildx cache directory (self-hosted only)
-        if: ${{ runner.environment != 'github-hosted' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          dir="$HOME/.cache/buildx/buildkit"
-          # ONE cleanup line, self-hosted only, and BEFORE the build rather than
-          # after: buildx writes this cache with mode=max, so it grows without
-          # bound across jobs on this machine. Past 10 GiB, drop the directory
-          # and let this build repopulate it — one cold build costs far less
-          # than a full runner disk, and deleting AFTER the build would throw
-          # away exactly the cache the downstream re-export jobs read.
-          size_mb="$(du -sm "$dir" 2>/dev/null | cut -f1 || true)"
-          if [ "${size_mb:-0}" -gt 10240 ]; then rm -rf "${dir:?}"; fi
-          mkdir -p "$dir"
-          echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
-
-      # Build → boot-gate (issue #81). The image is FIRST built and loaded into
-      # the local docker daemon, then booted by the prod-boot e2e below. This
-      # `build` job is now PUBLISH-FREE: it logs in to nothing and pushes
-      # nothing. It runs on EVERY trigger (PR / merge_group / push / dispatch)
-      # to prove the boots-without-private-extensions path before merge, and its
-      # `cache-to` below populates the shared build cache (`type=gha` on a
-      # GitHub-hosted runner, the runner-local `type=local` directory on a
-      # self-hosted one) so the downstream publish jobs re-export from cache
-      # instead of rebuilding. The
-      # GHCR push and the prod-deploy dispatch moved OUT of this job (the
-      # build-image e2e-split) — see the `publish-nonrelease-image`,
-      # `publish-release-image`, and `release-dispatch` jobs below. Keeping
-      # build+e2e here ungated means ordinary PR/merge_group/branch builds never
-      # pause for approval; only the release publish + prod-deploy pause behind
-      # the `release-approval` Environment.
       - name: Build image (load for prod-boot e2e)
         id: trial_build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0

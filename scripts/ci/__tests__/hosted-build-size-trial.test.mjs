@@ -10,6 +10,8 @@ import {
   summarizeSamples, trialComparison, trialJob, verifyWorkflow, collectComparison, stopSampler,
 } from "../hosted-build-size-trial.mjs";
 
+import { checkWorkflow } from "../build-push-cache-branching.mjs";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const HEAD = "a".repeat(40);
 const folders = [];
@@ -78,6 +80,15 @@ describe("isolated generated job cut", () => {
     expect(yaml).not.toContain("publish-nonrelease-image:");
     expect(yaml).not.toMatch(/\$\{\{[^}]*needs\./);
     expect(yaml.match(/timeout-minutes: (70|45)\n/g)).toHaveLength(3);
+  });
+  it("removes cache consumers and their preparer while preserving the live cache guard", () => {
+    const yaml = renderWorkflow(sourceFiles(ROOT));
+    expect(yaml).not.toMatch(/LOCAL_BUILDX_CACHE_DIR|cache-(?:from|to):/);
+    expect(checkWorkflow({ file: WORKFLOW, text: yaml })).toEqual([]);
+    const source = sourceFiles(ROOT).image.replace(
+      "Prepare the runner-local buildx cache directory (self-hosted only)", "Changed cache preparer",
+    );
+    expect(() => trialJob("image", source)).toThrow(/unadapted trial buildx cache state/);
   });
   it("binds the source body, so changed production commands cannot silently keep a stale trial", () => {
     const root = temporary();
