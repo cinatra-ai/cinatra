@@ -64,6 +64,8 @@ env:
 
 jobs:
   gate:
+    permissions:
+      contents: read
     name: Extension README gate
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     steps:
@@ -131,6 +133,8 @@ jobs:
         run: node scripts/audit/extension-readme-gate.mjs
 
   tests:
+    permissions:
+      contents: read
     name: Extension README gate — parser tests
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     steps:
