@@ -18,7 +18,9 @@ import {
   EXPECTED_VALUE,
   auditVitestWorkerCap,
   deriveInventory,
+  inventoryKey,
   inventoryRow,
+  parseInventoryDoc,
   literalRunner,
   reachesPlaywright,
   runnerClass,
@@ -447,6 +449,58 @@ describe("a cap is a MAXIMUM, so a narrowing override keeps the contract", () =>
   });
 });
 
+
+describe("inventory table serialization", () => {
+  const trialRunsOn = "${{ inputs.cohort == 'large' && fromJSON('{\"group\":\"ci-build-trial-3316\",\"labels\":\"ci-build-trial-3316-8core\"}') || 'ubuntu-24.04' }}";
+
+  it("round-trips the derived conditional trial runner without adding table columns", () => {
+    const root = makeRoot({
+      workflows: { "trial.yml": workflow({ runsOn: trialRunsOn, run: "pnpm test:e2e:dashboards" }) },
+      rootScripts: { "test:e2e:dashboards": "playwright test -c dashboard.config.ts" },
+    });
+    const { entries, errors } = deriveInventory(root);
+    expect(errors).toEqual([]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].cls).toContain("||");
+    expect(entries[0].disposition).toBe("playwright");
+    const row = inventoryRow(entries[0]);
+    expect(row.split("|")).toHaveLength(10);
+    expect(parseInventoryDoc(row)).toEqual([row]);
+    expect(decodeURIComponent(row.split("|")[5].trim())).toBe(entries[0].cls);
+    const docPath = join(root, "inventory.md");
+    writeFileSync(docPath, row + "\n");
+    expect(auditVitestWorkerCap({ repoRoot: root, docPath, suiteGatePath: null }).failures).toEqual([]);
+  });
+
+  it.each([
+    "left|right||tail",
+    "back\\slash\\|pipe",
+    "line\r\nbreak\tspace ",
+    "`code` <tag> &entity; [link](target) ![image](target)",
+    "*bold* _emphasis_ ~~strike~~ # heading",
+    "literal%7C percent% and café",
+  ])("preserves a runner cell containing %j", (cls) => {
+    const entry = { file: "fixture.yml", job: "unit", step: "name:Run the suite", line: 12, cls, runner: "vitest", disposition: "governed", effective: "3" };
+    const row = inventoryRow(entry);
+    expect(row.split("\n")).toHaveLength(1);
+    expect(row.split("|")).toHaveLength(10);
+    expect(parseInventoryDoc(row)).toEqual([row]);
+    expect(decodeURIComponent(row.split("|")[5].trim())).toBe(cls);
+    expect(inventoryKey(row)).toBe(inventoryKey(inventoryRow({ ...entry, line: 999 })));
+    expect(inventoryKey(row)).not.toBe(inventoryKey(inventoryRow({ ...entry, cls: cls + "-changed" })));
+  });
+
+  it("keeps a conditional vitest job governed and refuses its missing cap", () => {
+    const root = makeRoot({ workflows: { "trial.yml": workflow({ runsOn: trialRunsOn }) } });
+    const { entries } = deriveInventory(root);
+    expect(entries[0].disposition).toBe("governed");
+    const docPath = join(root, "inventory.md");
+    writeFileSync(docPath, entries.map(inventoryRow).join("\n"));
+    const { failures } = auditVitestWorkerCap({ repoRoot: root, docPath, suiteGatePath: null });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain("carries NO workflow-level");
+  });
+});
 
 describe("stable inventory identities", () => {
   function recorded(text) {

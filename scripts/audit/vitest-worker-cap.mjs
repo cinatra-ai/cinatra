@@ -579,9 +579,9 @@ export function deriveInventory(repoRoot = REPO_ROOT, workflowDir = join(repoRoo
   return { entries: [...entries.values()], errors, files };
 }
 
-/** One inventory row, exactly as it is written in the inventory document. */
+/** One inventory row; URI encoding keeps runner expressions inside one table cell. */
 export function inventoryRow(e) {
-  return `| ${e.file} | ${e.job} | ${encodeURIComponent(e.step)} | ${e.line} | ${e.cls} | ${e.runner} | ${e.disposition} | ${e.effective} |`;
+  return `| ${e.file} | ${e.job} | ${encodeURIComponent(e.step)} | ${e.line} | ${encodeURIComponent(e.cls)} | ${e.runner} | ${e.disposition} | ${e.effective} |`;
 }
 
 /** Exclude only the informational line column from the comparison. */
