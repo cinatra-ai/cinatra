@@ -45,7 +45,17 @@
 name: Trusted-Read Scale Smoke
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Consecutive complete harness executions on one fixture boot
+        type: choice
+        options: ["1", "20"]
+        default: "1"
+      expected_head:
+        description: Exact checkout SHA (required for 20 executions)
+        type: string
+        default: ""
   schedule:
     - cron: "10 6 * * 1" # weekly Monday 06:10 UTC — offset from the S1 capture's 05:23 slot
   pull_request:
@@ -101,6 +111,38 @@ jobs:
           # docker build, no pushes) — don't leave it in .git/config while
           # building and running an image from repository content.
           persist-credentials: false
+      - name: Bind the hosted proof series before setup
+        id: series
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_REPETITIONS: ${{ inputs.repetitions }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request|schedule) count=1; expected="" ;;
+            workflow_dispatch)
+              count="${REQUESTED_REPETITIONS:-1}"
+              expected="${EXPECTED_HEAD:-}"
+              case "$count" in 1|20) ;; *) echo "::error::Repetitions must be 1 or 20"; exit 1 ;; esac
+              if [ "$count" = 20 ] && [ -z "$expected" ]; then
+                echo "::error::Twenty executions require an exact expected head"; exit 1
+              fi
+              ;;
+            *) echo "::error::Unsupported proof-series event"; exit 1 ;;
+          esac
+          head=$(git rev-parse HEAD)
+          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid checkout head"; exit 1; }
+          if [ -n "$expected" ]; then
+            [[ "$expected" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "$expected" ] || {
+              echo "::error::Checkout does not match the expected head"; exit 1;
+            }
+          fi
+          git diff --quiet && git diff --cached --quiet || {
+            echo "::error::Tracked checkout is dirty before fixture setup"; exit 1;
+          }
+          printf 'repetitions=%s\nhead=%s\n' "$count" "$head" >> "$GITHUB_OUTPUT"
       - name: Set up pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - name: Set up Node.js
@@ -144,20 +186,39 @@ jobs:
           BASIC_B64=$(printf 'admin:%s' "$APPPW" | base64 -w0)
           echo "::add-mask::$BASIC_B64"
           echo "WP_MCP_BASIC_AUTH=$BASIC_B64" >> "$GITHUB_ENV"
-      - name: Run the live provider-scale proof
+      - name: Run the bounded hosted live proof series
+        shell: bash
         env:
           WP_BASE_URL: http://localhost:8080
           WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
-        run: >-
-          pnpm exec vitest run --config vitest.config.ts --no-coverage
-          src/lib/__tests__/connector-instance-native-read-injection-live-scale-smoke.test.ts
-      - name: Run the live M1 governed-invoker provider-scale proof (cinatra#2024 S9 item A)
-        env:
-          WP_BASE_URL: http://localhost:8080
-          WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
-        run: >-
-          pnpm exec vitest run --config vitest.config.ts --no-coverage
-          src/lib/__tests__/connector-instance-invoker-live-scale-smoke.test.ts
+          SERIES_REPETITIONS: ${{ steps.series.outputs.repetitions }}
+          SERIES_HEAD: ${{ steps.series.outputs.head }}
+        run: |
+          set -euo pipefail
+          count="$SERIES_REPETITIONS"
+          case "$count" in 1|20) ;; *) echo "::error::Invalid bound series count"; exit 1 ;; esac
+          [[ "$SERIES_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Invalid bound head"; exit 1; }
+          check_source() {
+            [ "$(git rev-parse HEAD)" = "$SERIES_HEAD" ] || { echo "::error::Source head changed during proof series"; return 1; }
+            git diff --quiet && git diff --cached --quiet || { echo "::error::Tracked source changed during proof series"; return 1; }
+          }
+          iteration=0
+          trap 'status=$?; echo "::error::Hosted series stopped at ${iteration}/${count} head=${SERIES_HEAD}; no complete-series pass"; exit "$status"' ERR
+          for ((iteration=1; iteration<=count; iteration++)); do
+            check_source
+            started=$(date +%s)
+            echo "SERIES START ${iteration}/${count} head=${SERIES_HEAD} utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            # Keep separate fresh processes and the existing M2 then M1 order.
+            pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/connector-instance-native-read-injection-live-scale-smoke.test.ts
+            pnpm exec vitest run --config vitest.config.ts --no-coverage src/lib/__tests__/connector-instance-invoker-live-scale-smoke.test.ts
+            check_source
+            duration=$(( $(date +%s) - started ))
+            echo "SERIES PASS ${iteration}/${count} head=${SERIES_HEAD} utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) duration_seconds=${duration}"
+          done
+          printf '%s\n' \
+            "Completed ${count}/${count} hosted harness executions at ${SERIES_HEAD}." \
+            "One unchanged checkout and one fixture boot; each execution used two fresh sequential Vitest processes." \
+            >> "$GITHUB_STEP_SUMMARY"
       - name: Compose logs (always)
         if: ${{ always() }}
         run: |

@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 17 workflow files carry a test-runner step;
-11 of them are governed. 135 invocations:
-94 governed, 13 hosted-pinned,
+11 of them are governed. 134 invocations:
+94 governed, 12 hosted-pinned,
 20 node:test, 7 playwright,
 1 extension-suite-gate.
 
@@ -245,8 +245,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | org-write-boundary-gate.yml | org-write-boundary-gate | name%3AOrg-write%20resolver%2C%20registry%20and%20gate%20self-tests | 124 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | skill-match-eval.yml | live-eval | name%3ARun%20live%20golden-set%20calibration | 119 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | skill-packaging-gate.yml | tests | name%3ARun%20verdict%20%2B%20agreement-pin%20tests | 122 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| trusted-read-scale-smoke.yml | scale-smoke | name%3ARun%20the%20live%20provider-scale%20proof | 151 | ubuntu-latest | vitest | hosted-pinned | none |
-| trusted-read-scale-smoke.yml | scale-smoke | name%3ARun%20the%20live%20M1%20governed-invoker%20provider-scale%20proof%20(cinatra%232024%20S9%20item%20A) | 158 | ubuntu-latest | vitest | hosted-pinned | none |
+| trusted-read-scale-smoke.yml | scale-smoke | name%3ARun%20the%20bounded%20hosted%20live%20proof%20series | 196 | ubuntu-latest | vitest | hosted-pinned | none |
 | validate-agents.yml | validate-runtime-invariants | name%3ARun%20hermetic%20runtime-invariants%20vitest | 153 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | works-after-proof.yml | proof | name%3AUnit%20tests%20(works-after%20static%20invariants) | 320 | CI_RUNNER_E2E | node:test | node:test | none |
 | wp-mcp-gateway-capture.yml | capture | name%3ARun%20equivalence%20suite%20(four%20VERIFY%20verdicts) | 212 | CI_RUNNER_E2E | node:test | node:test | none |
