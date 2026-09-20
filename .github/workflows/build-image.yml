@@ -86,6 +86,13 @@ concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
 
+# Execution jobs use !cancelled(): prerequisite failures still reach their red
+# guards, while a newer PR head can stop old builds and suites. Job-level
+# always() would keep those jobs running despite workflow cancellation and
+# hold the shared concurrency slot. Only the short result fan-ins retain it
+# so selected failed/cancelled prerequisites cannot become a green aggregate.
+# Step-level cleanup and evidence conditions remain independent.
+
 # cinatra#3355 — the committed worker cap for every vitest invocation in this
 # workflow (a workflow-level `env:` is in scope for the steps of every job in
 # the file). The value is the INTERIM worker count cinatra#3355 records, now
@@ -181,7 +188,7 @@ jobs:
     # successful — so the build runs `if: always()` and the guard turns a failed
     # `test` into a definitive RED build, never a passing skip.) A green
     # "Build and publish image" result therefore provably implies a green `test`.
-    # The two e2e jobs intentionally run independently (`if: always()`, decoupled
+    # The two e2e jobs run independently (`if: !cancelled()`, decoupled
     # from publish cadence); they validate RUNTIME, so a type error there either
     # breaks runtime (e2e fails) or is caught here (and the build guard fails).
     # The merge gate is the build result. `needs: detect` is mandatory — without it
@@ -416,13 +423,13 @@ jobs:
   # tests deliberately RED until run.orgId is wired to actor.organizationId.
   # Drop the --exclude once those tests should gate CI.
   #
-  # REQUIRED status check on `main`. Always runs (`if: always()`) so the check
-  # always reports; the `detect` guard fails it RED if detection broke; a
-  # docs-only PR green-stubs in seconds.
+  # REQUIRED status check on `main`. Runs unless the workflow is cancelled,
+  # including after a prerequisite failure. The `detect` guard fails it RED
+  # if detection broke; a docs-only PR green-stubs in seconds.
   rbac-authz-unit:
     name: RBAC authz unit tests
     needs: detect
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 24
     steps:
@@ -588,7 +595,7 @@ jobs:
     # job closes with this exact pattern). Docs-only and draft PRs (detect
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
@@ -1291,11 +1298,10 @@ jobs:
   # `needs:` lists every job a manifest row's ciDependency currently names,
   # so this job structurally depends on each of them — the hard CI-graph
   # edge Decision 1's `--strict` mode looks for when it parses this workflow
-  # file's own YAML. `always()` below no longer means this job's own result
-  # is unhooked from those jobs' pass/fail — see DEPENDENCY-HONEST below for
-  # why that used to be true, why it was a bug, and the fix. `always()` now
-  # exists only so a FAILED prerequisite produces a definitive job FAILURE
-  # here rather than a silent SKIP, the same reason the `build` job uses it.
+  # file's own YAML. `!cancelled()` admits a FAILED prerequisite so its guard
+  # produces a definitive RED rather than a silent SKIP. It also prevents
+  # this dependent job from starting fresh work after workflow cancellation.
+  # The short `build` fan-in separately checks every selected result.
   #
   # `agents-integration-db` (cinatra#1943 P1-CI follow-up) — added so a row
   # whose ciDependency names that job (the two live-Postgres acceptance rows
@@ -1366,7 +1372,7 @@ jobs:
     # required check as successful (the same hole `build`'s own comment
     # names). Docs-only and draft PRs (`detect` succeeds with `skip: true`)
     # still skip this job.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
@@ -1748,7 +1754,7 @@ jobs:
     # job closes with this exact pattern). Docs-only and draft PRs (detect
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
@@ -2822,20 +2828,20 @@ jobs:
   # covering permissions, role, and extension authorization surfaces in a real
   # hydrated browser.
   # Intentionally NOT a `needs:` of `build` — image publish stays decoupled from
-  # browser-test cadence. This is a REQUIRED status check on `main`: it always
-  # runs (`if: always()`) so the check reports on every PR, the `detect` guard
+  # browser-test cadence. This is a REQUIRED status check on `main`: it runs
+  # unless the workflow is cancelled, including after failure. The `detect` guard
   # fails it RED if detection broke, and a docs-only PR green-stubs in seconds
   # with no service containers started.
   perpetual-extension-suites:
     name: Perpetual extension suites (discovery gate shard)
     needs: detect
-    # Same always()+guard shape as every required-adjacent job here: a failed
+    # Same cancellation-aware guard shape as execution jobs here: a failed
     # `detect` yields a definitive RED via the guard, never a silent skip;
     # docs-only/draft PRs skip. Split out of perpetual-core so the ~5-minute
     # suite battery (44 companion suites, 2,149 tests — see the step's comment)
     # runs beside the ratchet gates instead of after them; the REQUIRED context
     # is the `perpetual-loops-invariants` fan-in below, which needs both shards.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
@@ -2911,7 +2917,7 @@ jobs:
       # Rides THIS job for the reason already recorded above for the seed-pack
       # tier: it already has the PINNED extension tree on disk
       # (clone-extensions) and node_modules installed, and it is a REQUIRED
-      # status check whose `always()` + hard-fail guard shape means this gate
+      # status check whose `!cancelled()` + hard-fail guard shape means this gate
       # inherits "definitive, never a silent skip" rather than needing a new
       # required context.
       - name: Extension suites — discovery gate (every materialized suite)
@@ -2944,7 +2950,7 @@ jobs:
   e2e-rbac:
     name: RBAC browser e2e
     needs: detect
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     # Opt-in larger-runner lever — same mechanism the `build` job already uses.
     # Unset keeps `ubuntu-latest` (zero-risk default). Set the org/repo variable
     # CI_BUILD_RUNNER (e.g. `ubuntu-latest-4-cores`, 16GB) AFTER confirming
@@ -3268,7 +3274,7 @@ jobs:
   chat-hitl-held-turn-e2e:
     name: Chat-HITL held-turn dev-runtime e2e
     needs: detect
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     # HOSTED, not the E2E class the sibling e2e jobs take: this flow's web
     # server does not start on the shared self-hosted pool — its boot log ends on
     # an extension migration the pool's database role refuses — while it starts
@@ -3876,7 +3882,7 @@ jobs:
     # unit job still blocks every image publish including `latest`; the only
     # new cost is a discarded image build on a push whose unit tier fails.
     needs: [detect]
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip_runtime != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip_runtime != 'true') }}
     # HOSTED, not the E2E class: the prod-boot e2e step below RUNS the image this
     # job builds a step earlier. The build step already asks for `load: true`,
     # and on the self-hosted pool's docker-container buildx driver the image
