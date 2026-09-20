@@ -5,7 +5,7 @@
   "regeneration": {
     "write": "node scripts/ci/merge-readiness-inventory.mjs --write",
     "check": "node scripts/ci/merge-readiness-inventory.mjs --check",
-    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
+    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
     "generator": "scripts/ci/merge-readiness-inventory.mjs"
   },
   "excluded": [
