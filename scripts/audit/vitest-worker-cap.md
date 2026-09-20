@@ -7,7 +7,7 @@ reach the test runner with no committed worker cap) · gate
 
 This file is the *documented* half of that issue's criterion 1: every
 test-runner invocation under `.github/workflows/**` is listed below with the
-job it sits in, the stable step id/name (URI-encoded), its informational line, the job's runner class, the runner the
+job it sits in, the stable step id/name (URI-encoded), its informational line, the job's runner class (URI-encoded), the runner the
 invocation actually resolves to, and its disposition. It is documentation of the
 CI configuration — nothing else lives here.
 
@@ -98,10 +98,10 @@ the cap's effect on that hosted job is unmeasured here.
 
 ## The inventory
 
-17 workflow files carry a test-runner step;
-11 of them are governed. 134 invocations:
+18 workflow files carry a test-runner step;
+11 of them are governed. 135 invocations:
 94 governed, 12 hosted-pinned,
-20 node:test, 7 playwright,
+20 node:test, 8 playwright,
 1 extension-suite-gate.
 
 The gate holds this table to its FULL derived entry set, so an added or removed
@@ -117,112 +117,112 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | workflow | job | Stable step | step line | runner class | runner | disposition | effective cap |
 |----------|-----|-------------|-----------|--------------|--------|-------------|---------------|
 | agents-integration-diagnostic.yml | full-tier | name%3AAgents%20integration%20tests%20%E2%80%94%20WHOLE%20tier%20incl.%20known-red%20files%20(informational%3B%20never%20blocking) | 203 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | actions-pin-gate | name%3AParser%20and%20impact-selection%20tests | 164 | CI_RUNNER_GATE | node:test | node:test | 3 |
-| build-image.yml | test | name%3AUnit%20tests%20(packages%2Fagents) | 242 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | skills-unit | name%3ASkills%20unit%20tests%20(full%20packages%2Fskills%20suite) | 281 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | a2a-unit | name%3AA2A%20unit%20tests%20(full%20packages%2Fa2a%20suite) | 324 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | execution-plane-unit | name%3AExecution-plane%20unit%20tests%20(full%20packages%2Fexecution-plane%20suite) | 387 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | rbac-authz-unit | name%3ARBAC%20authz%20unit%20tests%20(incl.%20resolver%20matrix) | 463 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | context-resolve-route-shape | name%3A%2Fapi%2Fcontext-resolve%20response-shape%20regression | 498 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | auth-schema-drift | name%3ASchema%20parity%20test%20(runtime%20%E2%86%94%20migration) | 546 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | auth-schema-drift | name%3AMCP%20auth-plugins%20pure%20builder%20test | 549 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | schema-migration-gate | name%3AGate%20classifier%20tests%20(labelled%20fixture%20corpus%20%2B%20unit%20edges) | 648 | CI_RUNNER_GATE | node:test | node:test | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3ALifecycle%20DB%20tests%20(demotion%20migration%20%2B%20fresh-prod%20seeding) | 707 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3ASkill-injection%20drop-ledger%20DB%20test%20(cinatra%232091) | 717 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3ABatch-compensation%20scope%20DB%20test%20(cinatra%232415) | 731 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3ABlog-pipeline%20install-record%20heal%20DB%20test%20(cinatra%232536) | 748 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3ADev-boot%20declared-tables%20activation%20DB%20test%20(cinatra%233462) | 765 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3AUpload-on-install%20outbox%20%2B%20consent%20projection%20DB%20test%20(cinatra%232092) | 779 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3ADashboards%20actor%20team-roles%20regression%20(cinatra%231988) | 791 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3AArchive-race%20adversarial%20acceptance%20integration%20tests%20(cinatra%231943) | 814 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3AExecution%20run-seam%20declared-environment%20integration%20tests%20(cinatra%231705%20AC9) | 845 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3AMemory%20promotion%20atomic-apply%20DB%20test%20(cinatra%231381) | 864 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3AArtifact%20promotion%20approvals%20DB%20test%20(cinatra%231437) | 869 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | extension-lifecycle-db-tests | name%3AAsync%20notification-delete%20seam%20%E2%80%94%20real-DB%20tier%20(cinatra%232882) | 899 | CI_RUNNER_E2E | vitest | governed | 1 |
-| build-image.yml | agents-integration-db | name%3AAgents%20integration%20tests%20%E2%80%94%20gated%20set%20(packages%2Fagents) | 1196 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | agents-integration-db | name%3AAG-UI%20durable-resume%20%E2%80%94%20real-Redis%20tier%20(cinatra%233067) | 1228 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | v64-invariants | name%3AExtension%20invariants%20(packages%2Fextensions%20%E2%80%94%20whole%20suite) | 1462 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Allm%20unit%20suite%20(56%20files%20%2F%20656%20tests%2C%201.4s) | 1555 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aobjects%20unit%20suite%20(59%20files%20%2F%20692%20tests%2C%201.5s) | 1558 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Achat%20unit%20suite%20(40%20files%20%2F%20412%20tests%2C%203.0s) | 1561 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aagent-ui-protocol%20unit%20suite%20(13%20files%20%2F%20153%20tests%2C%200.7s) | 1564 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aregistries%20unit%20suite%20(16%20files%20%2F%20142%20tests%2C%201.4s) | 1567 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Ametric-cost-api%20unit%20suite%20(7%20files%20%2F%2030%20tests%2C%200.7s) | 1570 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Amemory%20unit%20suite%20(7%20files%20%2F%2061%20tests%2C%201.9s) | 1573 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Amarketplace-mcp-client%20unit%20suite%20(5%20files%20%2F%2079%20tests%2C%200.6s) | 1576 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Awebhooks%20unit%20suite%20(4%20files%20%2F%20138%20tests%2C%200.6s) | 1579 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Astreams%20unit%20suite%20(4%20files%20%2F%2049%20tests%2C%201.0s) | 1582 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aextension-types%20unit%20suite%20(2%20files%20%2F%2019%20tests%2C%200.6s) | 1585 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aartifacts%20unit%20suite%20(1%20file%20%2F%203%20tests%2C%200.5s) | 1588 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aconnectors-catalog%20unit%20suite%20(1%20file%20%2F%206%20tests%2C%200.5s) | 1591 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Amarketplace-application-reconcile%20unit%20suite%20(1%20file%20%2F%208%20tests%2C%200.6s) | 1594 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Amarketplace-sync%20unit%20suite%20(1%20file%20%2F%2020%20tests%2C%200.5s) | 1597 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Ametric-contracts%20unit%20suite%20(1%20file%20%2F%204%20tests%2C%200.5s) | 1600 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Apm-schedule-reconcile%20unit%20suite%20(1%20file%20%2F%2012%20tests%2C%200.6s) | 1603 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | package-unit-suites | name%3Aprojects%20unit%20suite%20(1%20file%20%2F%2024%20tests%2C%200.8s) | 1606 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | hosted-mcp-wire-gate | name%3AHosted-MCP%20wire%20gate%20(chat%20%2B%20both%20widget%20kinds%2C%20all%20providers) | 1667 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | hosted-mcp-wire-gate | name%3AAssistant-runtime%20suite%20(the%20gate's%20runtime-side%20companions) | 1673 | CI_RUNNER_HEAVY | vitest | governed | 3 |
-| build-image.yml | devperf-invariants | name%3Adevperf%20invariants%20(scripts%2F__tests__%2F) | 1707 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | devperf-invariants | name%3ADocker%20host-port%20drift%20guard%20(scripts%2Flib%2F) | 1710 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3APerpetual%20system%20loops%20gate%20tests | 1841 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AExtension%20license-field%20gate%20tests | 1853 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AWP%20MCP%20gateway%20fixture%20pin-integrity%20gate%20tests | 1870 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AWP%20MCP%20gateway%20capture-freshness%20gate%20tests | 1886 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AProduced-artifact%20dependency%20gate%20tests | 1915 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AExtension%20import-ban%20gate%20tests | 1940 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AVitest%20worker-cap%20gate%20tests | 1951 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AExtension%20node%3Afs%20import-ban%20gate%20tests | 1968 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AHost-peer%20value-import%20ban%20gate%20tests | 1985 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ACore%20-%3E%20extension%20import-ban%20gate%20tests | 2002 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AArtifact-UI%20type-identity%20boundary%20gate%20tests | 2018 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AArtifact-review%20floor%20gate%20tests | 2040 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AVariable-URL%20dynamic-import%20ratchet%20tests | 2053 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AEXDEV-safe%20rename%20gate%20tests | 2072 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ADiscovery-dispatcher%20bypass%20gate%20tests | 2090 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ACore%20-%3E%20extension%20instance-coupling%20gate%20tests | 2111 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AVendor-token%20core%20gate%20tests | 2131 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AIdentity-surface%20coupling%20gate%20tests | 2146 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ASelf-rendering%20extensions%20border%20gate%20tests | 2172 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ARequired-extensions%20cover%20host%20imports%20gate%20tests | 2197 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ASkill-store%20canonicality%20gate%20tests | 2214 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ARoute-graph%20ratchet%20gate%20tests | 2237 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3ASkill%20frontmatter%20%2B%20mirror-ban%20gate%20tests | 2253 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AExtension%20dev-fixtures%20gate%20tests | 2262 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AConnector%20access-config%20gate%20tests | 2274 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AVerdaccio%20publish-execution%20ban%20gate%20tests | 2293 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AWorkspace%20phantom-dependency%20gate%20tests | 2310 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AWorkspace%20dependency-cycle%20gate%20tests | 2328 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AFile-size%20ratchet%20gate%20tests | 2348 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3AExecution-plane%20compose%20scoping%20gate%20tests | 2366 | CI_RUNNER_POOL | node:test | node:test | 3 |
-| build-image.yml | perpetual-core | name%3APinned-test%20existence%20gate%20tests | 2388 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ASDK%20ABI%20%2B%20CLI%20%2B%20inventory%2Fmanifest%20unit%20tests | 2415 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ARoot%20Vitest%20suite%20(wholesale%20%E2%80%94%20gate%20of%20record) | 2455 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ARuntime%20installer%20unit%20tests | 2463 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ARuntime%20installer%20package-scoped%20unit%20tests | 2520 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ASeed-pack%20manifest%20parity%20tier%20(packages%2Fobjects) | 2568 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AAnthropic%20connector%20tests | 2634 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AGemini%20connector%20tests | 2637 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AObject-history%20writer%20drift%20gate%20tests | 2752 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3ARetention%20policy%20gate%20tests | 2764 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AMutationResult%20rollout%20gate%20tests | 2774 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AObject-history%20unit%20tests | 2781 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AData-safety%20UI%20unit%20tests | 2790 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-core | name%3AAuthz%20inventory%20drift%20gate | 2795 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-extension-suites | name%3AExtension%20suites%20%E2%80%94%20discovery%20gate%20(every%20materialized%20suite) | 2900 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
-| build-image.yml | e2e-rbac | id%3Ae2e | 3205 | CI_RUNNER_E2E | playwright | playwright | 3 |
-| build-image.yml | chat-hitl-held-turn-e2e | id%3Ae2e | 3531 | ubuntu-latest | playwright | playwright | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ALifecycle-moment%20triple%20%E2%80%94%20real-DB%20tier%20(cinatra%232928%2C%20W2a) | 3680 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ALent-action%20grant%20ledger%20%E2%80%94%20real-DB%20tier%20(cinatra%232932%2C%20W5a) | 3685 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ANamed-agent%20start%20%E2%80%94%20real-DB%20tier%20(cinatra%232935%2C%20W5d) | 3690 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun-window%20conversation%20%E2%80%94%20real-DB%20tier%20(cinatra%232933%2C%20W5b) | 3695 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ANon-file%20revision%20reader%20%E2%80%94%20real-DB%20tier%20(cinatra%233027%2C%20lifecycle-c%20W3) | 3707 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20editor's%20save%20with%20an%20expected%20base%20%E2%80%94%20real-DB%20tier%20(cinatra%233026%2C%20lifecycle-c%20W2) | 3719 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AExtension%20tables%2C%20data%20tool%20and%20artifact%20reads%20%E2%80%94%20real-DB%20tier%20(cinatra%233031%2C%20W7) | 3733 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AObject-backed%20contract%20%2B%20typed%20promotion%20%E2%80%94%20real-DB%20tier%20(cinatra%233028%2C%20lifecycle-c%20W4) | 3748 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun%20folder%20pickup%20%2B%20file%20bindings%20%2B%20mid-run%20revision%20%E2%80%94%20real-DB%20tier%20(cinatra%233030%2C%20lifecycle-c%20W6) | 3766 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20image%20tool%20%E2%80%94%20real-DB%20tier%20(cinatra%233032%2C%20lifecycle-c%20W8) | 3782 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AWidget%20schedule%20grant%20%E2%80%94%20real-DB%20tier%20(cinatra%233052) | 3796 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | presence-degraded-build | name%3ADegradation%20suites%20(guard%20%2B%20consumers%20%2B%20generated%20classification%20%2B%20readiness%20fail-soft) | 4715 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | actions-pin-gate | name%3AParser%20and%20impact-selection%20tests | 171 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| build-image.yml | test | name%3AUnit%20tests%20(packages%2Fagents) | 249 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | skills-unit | name%3ASkills%20unit%20tests%20(full%20packages%2Fskills%20suite) | 288 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | a2a-unit | name%3AA2A%20unit%20tests%20(full%20packages%2Fa2a%20suite) | 331 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | execution-plane-unit | name%3AExecution-plane%20unit%20tests%20(full%20packages%2Fexecution-plane%20suite) | 394 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | rbac-authz-unit | name%3ARBAC%20authz%20unit%20tests%20(incl.%20resolver%20matrix) | 470 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | context-resolve-route-shape | name%3A%2Fapi%2Fcontext-resolve%20response-shape%20regression | 505 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | auth-schema-drift | name%3ASchema%20parity%20test%20(runtime%20%E2%86%94%20migration) | 553 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | auth-schema-drift | name%3AMCP%20auth-plugins%20pure%20builder%20test | 556 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | schema-migration-gate | name%3AGate%20classifier%20tests%20(labelled%20fixture%20corpus%20%2B%20unit%20edges) | 655 | CI_RUNNER_GATE | node:test | node:test | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3ALifecycle%20DB%20tests%20(demotion%20migration%20%2B%20fresh-prod%20seeding) | 714 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3ASkill-injection%20drop-ledger%20DB%20test%20(cinatra%232091) | 724 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3ABatch-compensation%20scope%20DB%20test%20(cinatra%232415) | 738 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3ABlog-pipeline%20install-record%20heal%20DB%20test%20(cinatra%232536) | 755 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3ADev-boot%20declared-tables%20activation%20DB%20test%20(cinatra%233462) | 772 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3AUpload-on-install%20outbox%20%2B%20consent%20projection%20DB%20test%20(cinatra%232092) | 786 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3ADashboards%20actor%20team-roles%20regression%20(cinatra%231988) | 798 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3AArchive-race%20adversarial%20acceptance%20integration%20tests%20(cinatra%231943) | 821 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3AExecution%20run-seam%20declared-environment%20integration%20tests%20(cinatra%231705%20AC9) | 852 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3AMemory%20promotion%20atomic-apply%20DB%20test%20(cinatra%231381) | 871 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3AArtifact%20promotion%20approvals%20DB%20test%20(cinatra%231437) | 876 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | extension-lifecycle-db-tests | name%3AAsync%20notification-delete%20seam%20%E2%80%94%20real-DB%20tier%20(cinatra%232882) | 906 | CI_RUNNER_E2E | vitest | governed | 1 |
+| build-image.yml | agents-integration-db | name%3AAgents%20integration%20tests%20%E2%80%94%20gated%20set%20(packages%2Fagents) | 1204 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | agents-integration-db | name%3AAG-UI%20durable-resume%20%E2%80%94%20real-Redis%20tier%20(cinatra%233067) | 1255 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | v64-invariants | name%3AExtension%20invariants%20(packages%2Fextensions%20%E2%80%94%20whole%20suite) | 1488 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Allm%20unit%20suite%20(56%20files%20%2F%20656%20tests%2C%201.4s) | 1581 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aobjects%20unit%20suite%20(59%20files%20%2F%20692%20tests%2C%201.5s) | 1584 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Achat%20unit%20suite%20(40%20files%20%2F%20412%20tests%2C%203.0s) | 1587 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aagent-ui-protocol%20unit%20suite%20(13%20files%20%2F%20153%20tests%2C%200.7s) | 1590 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aregistries%20unit%20suite%20(16%20files%20%2F%20142%20tests%2C%201.4s) | 1593 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Ametric-cost-api%20unit%20suite%20(7%20files%20%2F%2030%20tests%2C%200.7s) | 1596 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Amemory%20unit%20suite%20(7%20files%20%2F%2061%20tests%2C%201.9s) | 1599 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Amarketplace-mcp-client%20unit%20suite%20(5%20files%20%2F%2079%20tests%2C%200.6s) | 1602 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Awebhooks%20unit%20suite%20(4%20files%20%2F%20138%20tests%2C%200.6s) | 1605 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Astreams%20unit%20suite%20(4%20files%20%2F%2049%20tests%2C%201.0s) | 1608 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aextension-types%20unit%20suite%20(2%20files%20%2F%2019%20tests%2C%200.6s) | 1611 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aartifacts%20unit%20suite%20(1%20file%20%2F%203%20tests%2C%200.5s) | 1614 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aconnectors-catalog%20unit%20suite%20(1%20file%20%2F%206%20tests%2C%200.5s) | 1617 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Amarketplace-application-reconcile%20unit%20suite%20(1%20file%20%2F%208%20tests%2C%200.6s) | 1620 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Amarketplace-sync%20unit%20suite%20(1%20file%20%2F%2020%20tests%2C%200.5s) | 1623 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Ametric-contracts%20unit%20suite%20(1%20file%20%2F%204%20tests%2C%200.5s) | 1626 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Apm-schedule-reconcile%20unit%20suite%20(1%20file%20%2F%2012%20tests%2C%200.6s) | 1629 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | package-unit-suites | name%3Aprojects%20unit%20suite%20(1%20file%20%2F%2024%20tests%2C%200.8s) | 1632 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | hosted-mcp-wire-gate | name%3AHosted-MCP%20wire%20gate%20(chat%20%2B%20both%20widget%20kinds%2C%20all%20providers) | 1693 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | hosted-mcp-wire-gate | name%3AAssistant-runtime%20suite%20(the%20gate's%20runtime-side%20companions) | 1699 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | devperf-invariants | name%3Adevperf%20invariants%20(scripts%2F__tests__%2F) | 1733 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | devperf-invariants | name%3ADocker%20host-port%20drift%20guard%20(scripts%2Flib%2F) | 1736 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3APerpetual%20system%20loops%20gate%20tests | 1867 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AExtension%20license-field%20gate%20tests | 1879 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AWP%20MCP%20gateway%20fixture%20pin-integrity%20gate%20tests | 1896 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AWP%20MCP%20gateway%20capture-freshness%20gate%20tests | 1912 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AProduced-artifact%20dependency%20gate%20tests | 1941 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AExtension%20import-ban%20gate%20tests | 1966 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AVitest%20worker-cap%20gate%20tests | 1977 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AExtension%20node%3Afs%20import-ban%20gate%20tests | 1994 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AHost-peer%20value-import%20ban%20gate%20tests | 2011 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ACore%20-%3E%20extension%20import-ban%20gate%20tests | 2028 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AArtifact-UI%20type-identity%20boundary%20gate%20tests | 2044 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AArtifact-review%20floor%20gate%20tests | 2066 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AVariable-URL%20dynamic-import%20ratchet%20tests | 2079 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AEXDEV-safe%20rename%20gate%20tests | 2098 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ADiscovery-dispatcher%20bypass%20gate%20tests | 2116 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ACore%20-%3E%20extension%20instance-coupling%20gate%20tests | 2137 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AVendor-token%20core%20gate%20tests | 2157 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AIdentity-surface%20coupling%20gate%20tests | 2172 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ASelf-rendering%20extensions%20border%20gate%20tests | 2198 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ARequired-extensions%20cover%20host%20imports%20gate%20tests | 2223 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ASkill-store%20canonicality%20gate%20tests | 2240 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ARoute-graph%20ratchet%20gate%20tests | 2263 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3ASkill%20frontmatter%20%2B%20mirror-ban%20gate%20tests | 2279 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AExtension%20dev-fixtures%20gate%20tests | 2288 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AConnector%20access-config%20gate%20tests | 2300 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AVerdaccio%20publish-execution%20ban%20gate%20tests | 2319 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AWorkspace%20phantom-dependency%20gate%20tests | 2336 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AWorkspace%20dependency-cycle%20gate%20tests | 2354 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AFile-size%20ratchet%20gate%20tests | 2374 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3AExecution-plane%20compose%20scoping%20gate%20tests | 2392 | CI_RUNNER_POOL | node:test | node:test | 3 |
+| build-image.yml | perpetual-core | name%3APinned-test%20existence%20gate%20tests | 2414 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ASDK%20ABI%20%2B%20CLI%20%2B%20inventory%2Fmanifest%20unit%20tests | 2441 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ARoot%20Vitest%20suite%20(wholesale%20%E2%80%94%20gate%20of%20record) | 2481 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ARuntime%20installer%20unit%20tests | 2489 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ARuntime%20installer%20package-scoped%20unit%20tests | 2546 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ASeed-pack%20manifest%20parity%20tier%20(packages%2Fobjects) | 2594 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AAnthropic%20connector%20tests | 2660 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AGemini%20connector%20tests | 2663 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AObject-history%20writer%20drift%20gate%20tests | 2778 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3ARetention%20policy%20gate%20tests | 2790 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AMutationResult%20rollout%20gate%20tests | 2800 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AObject-history%20unit%20tests | 2807 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AData-safety%20UI%20unit%20tests | 2816 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AAuthz%20inventory%20drift%20gate | 2821 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-extension-suites | name%3AExtension%20suites%20%E2%80%94%20discovery%20gate%20(every%20materialized%20suite) | 2926 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
+| build-image.yml | e2e-rbac | id%3Ae2e | 3231 | CI_RUNNER_E2E | playwright | playwright | 3 |
+| build-image.yml | chat-hitl-held-turn-e2e | id%3Ae2e | 3557 | ubuntu-latest | playwright | playwright | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ALifecycle-moment%20triple%20%E2%80%94%20real-DB%20tier%20(cinatra%232928%2C%20W2a) | 3706 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ALent-action%20grant%20ledger%20%E2%80%94%20real-DB%20tier%20(cinatra%232932%2C%20W5a) | 3711 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ANamed-agent%20start%20%E2%80%94%20real-DB%20tier%20(cinatra%232935%2C%20W5d) | 3716 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun-window%20conversation%20%E2%80%94%20real-DB%20tier%20(cinatra%232933%2C%20W5b) | 3721 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ANon-file%20revision%20reader%20%E2%80%94%20real-DB%20tier%20(cinatra%233027%2C%20lifecycle-c%20W3) | 3733 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20editor's%20save%20with%20an%20expected%20base%20%E2%80%94%20real-DB%20tier%20(cinatra%233026%2C%20lifecycle-c%20W2) | 3745 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AExtension%20tables%2C%20data%20tool%20and%20artifact%20reads%20%E2%80%94%20real-DB%20tier%20(cinatra%233031%2C%20W7) | 3759 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AObject-backed%20contract%20%2B%20typed%20promotion%20%E2%80%94%20real-DB%20tier%20(cinatra%233028%2C%20lifecycle-c%20W4) | 3774 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun%20folder%20pickup%20%2B%20file%20bindings%20%2B%20mid-run%20revision%20%E2%80%94%20real-DB%20tier%20(cinatra%233030%2C%20lifecycle-c%20W6) | 3792 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20image%20tool%20%E2%80%94%20real-DB%20tier%20(cinatra%233032%2C%20lifecycle-c%20W8) | 3808 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AWidget%20schedule%20grant%20%E2%80%94%20real-DB%20tier%20(cinatra%233052) | 3822 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | presence-degraded-build | name%3ADegradation%20suites%20(guard%20%2B%20consumers%20%2B%20generated%20classification%20%2B%20readiness%20fail-soft) | 4741 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3AOAS%20banned-primitives%20gate%20tests | 152 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3ACRM%20pointer-row%20gate%20tests | 155 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
 | dashboard-live-verify.yml | smoke | id%3Ae2e | 440 | CI_RUNNER_E2E | playwright | playwright | none |
@@ -231,7 +231,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | e2e-app-suites.yml | notifications-e2e | id%3Ae2e | 541 | CI_RUNNER_E2E | playwright | playwright | none |
 | e2e-app-suites.yml | agents-run-invariants | name%3ARun%20agents-run%20tunnel-wiring%20invariant | 610 | CI_RUNNER_E2E | playwright | playwright | none |
 | execution-plane-e2e.yml | batteries | name%3ARun%20battery%20%E2%80%94%20%24%7B%7B%20matrix.name%20%7D%7D%20(%24%7B%7B%20matrix.file%20%7D%7D) | 301 | CI_RUNNER_E2E | vitest | governed | 3 |
-| extension-readme-gate.yml | tests | name%3ARun%20parser%20tests | 155 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| extension-readme-gate.yml | tests | name%3ARun%20parser%20tests | 159 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | gates.yml | gates | name%3AWorkspace%20Integrity%20Gate | 104 | CI_RUNNER_GATE | node:test | node:test | 3 |
 | gates.yml | gates | name%3AGatekept%20Install%20No%20Direct%20Registry | 200 | CI_RUNNER_GATE | node:test | node:test | 3 |
 | gates.yml | gates | name%3ASDK%20ABI%20Doc%20Gate%20%E2%80%94%20extractor%20tests | 272 | CI_RUNNER_GATE | node:test | node:test | 3 |
@@ -240,13 +240,14 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | gates.yml | gates-pnpm | name%3AToolbar%20design-system%20gate%20%E2%80%94%20parser%20tests | 315 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | gates.yml | gates-pnpm | name%3AVendor-byline%20%E2%80%94%20%C2%A7I%20%2F%20%C2%A7II%20byline%20tests%20(packages%2Fextensions) | 318 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | gates.yml | gates-pnpm | name%3AVendor-byline%20%E2%80%94%20resolver%20%2B%20%C2%A7III%2F%C2%A7IV%20byline%20%2B%20parser%20tests%20(root) | 325 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| hosted-build-size-trial.yml | dashboard | id%3Ae2e | 802 | %24%7B%7B%2C%20inputs.cohort%2C%20%3D%3D%2C%20large%2C%20%26%26%2C%20fromJSON(%7Bgroup%3Aci-build-trial-3316%2C%20labels%3Aci-build-trial-3316-8core%7D)%2C%20%7C%7C%2C%20ubuntu-24.04%2C%20%7D%7D | playwright | playwright | none |
 | mcp-route-gate.yml | mcp-route-gate | name%3AMCP%20advertised-URL%20route%20shape%20test | 126 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | org-write-boundary-gate.yml | org-write-boundary-gate | name%3AKernel%20test%20suite | 122 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | org-write-boundary-gate.yml | org-write-boundary-gate | name%3AOrg-write%20resolver%2C%20registry%20and%20gate%20self-tests | 124 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | skill-match-eval.yml | live-eval | name%3ARun%20live%20golden-set%20calibration | 119 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | skill-packaging-gate.yml | tests | name%3ARun%20verdict%20%2B%20agreement-pin%20tests | 122 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | trusted-read-scale-smoke.yml | scale-smoke | name%3ARun%20the%20bounded%20hosted%20live%20proof%20series | 196 | ubuntu-latest | vitest | hosted-pinned | none |
-| validate-agents.yml | validate-runtime-invariants | name%3ARun%20hermetic%20runtime-invariants%20vitest | 153 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| validate-agents.yml | validate-runtime-invariants | name%3ARun%20hermetic%20runtime-invariants%20vitest | 157 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | works-after-proof.yml | proof | name%3AUnit%20tests%20(works-after%20static%20invariants) | 320 | CI_RUNNER_E2E | node:test | node:test | none |
 | wp-mcp-gateway-capture.yml | capture | name%3ARun%20equivalence%20suite%20(four%20VERIFY%20verdicts) | 212 | CI_RUNNER_E2E | node:test | node:test | none |
 | wp-mcp-gateway-capture.yml | capture | name%3ARun%20repair%20round-trip%20suite%20(cinatra%232286%20S10%20deliverable%207) | 227 | CI_RUNNER_E2E | node:test | node:test | none |

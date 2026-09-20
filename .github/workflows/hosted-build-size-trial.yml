@@ -26,11 +26,13 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: 873f8114f96e6a17932ad75f6ef982c223ddcb36752070e7251f3e05b9d0ce8c
+  # Source job SHA256: 952d72acbc9df8aa9696cb9552574f3b144243e3446ef097d8f73700e62c4302
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
     runs-on: ${{ inputs.cohort == 'large' && fromJSON('{"group":"ci-build-trial-3316","labels":"ci-build-trial-3316-8core"}') || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
     # The whole point of the job above: a change that renders nothing does not
     # pay the install, the build and the boot. A skipped job reports success,
     # and this context is not a required one today (only design-pin-drift is,
@@ -884,7 +886,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: f3dac9f830d2b78a406dc1a85f8f4a95f9b97ed163af16a7c6473da430f1bd32
+  # Source job SHA256: 60478d7f605273a176b23a36f59659211ccced22fdd63af0f03b469380f56b4a
   image:
     name: trial / image / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'image' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
