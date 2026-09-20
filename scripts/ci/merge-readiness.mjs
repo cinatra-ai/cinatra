@@ -202,7 +202,7 @@ export function resolveCandidateShas({ eventName, githubSha, headSha, payload })
 }
 
 /* Queue authority comes only from the immutable, separately checked-out engine. */
-export const QUEUE_ENGINE_PIN = "38baa80557c3875142789e384331b6a4b1aa7f8c";
+export const QUEUE_ENGINE_PIN = "a98900151e992c0a499cf03a8fe320d99c6bc14c";
 export const QUEUE_ENGINE_DIRECTORY = ".merge-readiness-engine";
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
