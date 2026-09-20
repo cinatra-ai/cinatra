@@ -194,3 +194,109 @@ export const HOST_DESIGN_PRIMITIVES = Object.freeze({
  * bundle's `builtAgainst` against. Re-exported here so the host runtime reads
  * one place. */
 export const HOST_DESIGN_PRIMITIVES_SERVED_VERSION = HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION;
+
+/**
+ * THE BUILD-TIME SURFACE (cinatra#3512, slice 2b of #3471): the frozen list
+ * re-exported under the contract's OWN names. A SOURCE-COMPILED package — a
+ * connector's setup page, an artifact package's server parts, compiled into the
+ * host's own build through the `@cinatra-ai/design-primitives` tsconfig path —
+ * writes `import { Alert } from "@cinatra-ai/design-primitives"` and gets the
+ * HOST's binding. Each name below is the SAME binding the frozen object above
+ * carries, so the build-time road and the run-time road can never serve two
+ * different components.
+ *
+ * EXACTLY the frozen export list and nothing else: the surface is pinned
+ * against `HOST_DESIGN_PRIMITIVES_EXPORTS` in
+ * `__tests__/design-primitives-build-time-road.test.ts`, so a name added here
+ * without the contract, or the other way round, is a red.
+ */
+export {
+  // alert
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  // badge
+  Badge,
+  badgeVariants,
+  // button
+  Button,
+  buttonVariants,
+  // card
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  // checkbox
+  Checkbox,
+  // dialog
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
+  // field
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+  FieldTitle,
+  // input
+  Input,
+  // input-group
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  InputGroupText,
+  InputGroupTextarea,
+  // label
+  Label,
+  // paginated-table
+  PaginatedTable,
+  // pagination
+  Pagination,
+  PaginationCaption,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+  // select
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectScrollDownButton,
+  SelectScrollUpButton,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+  // separator
+  Separator,
+  // table
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+  // textarea
+  Textarea,
+};

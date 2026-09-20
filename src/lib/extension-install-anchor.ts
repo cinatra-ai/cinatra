@@ -69,6 +69,13 @@ export type InstallAnchorRow = {
     closureHash?: string;
     /** The DB-authoritative active tarball digest (cinatra#792), if recorded. */
     activeDigest?: string;
+    /**
+     * The SUPPLIED-package content digest (cinatra#3204) — present only on a
+     * `local` / `github` source written by the supplied install entry. It is
+     * what tells a supplied row apart from a pre-#3204 one: a row without it
+     * was never driven through the real-integrity pipeline and never anchors.
+     */
+    contentDigest?: string;
   } | null;
 };
 
@@ -373,8 +380,19 @@ export async function resolveInstallAnchor(
 ): Promise<InstallTrustAnchor | null> {
   const row = await deps.readActiveInstall(packageName, deps.orgId ?? null);
   // Accept `active` OR `locked` (locked = removal-protected, still a live install).
-  if (!row || (row.status !== "active" && row.status !== "locked") || !row.source || row.source.type !== "verdaccio")
-    return null;
+  if (!row || (row.status !== "active" && row.status !== "locked") || !row.source) return null;
+  // THE TWO ROADS THAT ANCHOR (cinatra#3204). A registry row anchors on its
+  // recorded registry identity; an OPERATOR-SUPPLIED row — an archive an admin
+  // uploaded, or a repository this instance resolved and pinned — anchors on the
+  // content digest the supplied install entry recorded over the delivered tree.
+  // Nothing else is relaxed: both roads then pass the SAME integrity, journal,
+  // digest-binding and grant gates below, and a supplied row written before that
+  // entry existed (no content digest) still resolves NO anchor, exactly as
+  // before. Without this the loader can never import a supplied package, so the
+  // one kind whose install exists to run `register(ctx)` could never complete.
+  const operatorSupplied = row.source.type === "local" || row.source.type === "github";
+  if (row.source.type !== "verdaccio" && !operatorSupplied) return null;
+  if (operatorSupplied && !row.source.contentDigest) return null;
 
   const integrity = row.source.integrity ?? "";
   const contentHash = row.source.contentHash ?? "";
@@ -423,6 +441,11 @@ export async function resolveInstallAnchor(
     // The active + finalized + real-pipeline install record IS the persisted host
     // trust decision. Decoupled from `portsApproved`.
     trustDecision: true,
+    // The ORIGIN factor the classifier asks for: this row's bytes were supplied
+    // by an admin with install rights rather than fetched from a registry host,
+    // so the road answers the factor the deployment's host allowlist answers for
+    // a store install. Absent on a registry anchor.
+    ...(operatorSupplied ? { operatorSuppliedOrigin: true } : {}),
     approvedPorts: portsApproved ? grantForScope!.approvedPorts : [],
     version: row.source.version ?? null,
     // cinatra#1040 S4: the canonical row's default flag rides the anchor so the

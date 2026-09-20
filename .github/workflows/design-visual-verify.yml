@@ -45,70 +45,8 @@ name: design-visual-verify
 
 on:
   pull_request:
-    paths:
-      - "src/components/ui/**"
-      - "src/components/extension-card.tsx"
-      - "src/components/brand-mark.tsx"
-      - "src/components/status-pill.tsx"
-      - "src/components/page-header.tsx"
-      - "src/components/page-content.tsx"
-      - "src/components/layout/**"
-      - "src/lib/cinatra-toast.ts"
-      - "src/lib/extension-accent.ts"
-      - "src/lib/status-adapter.ts"
-      - "src/app/globals.css"
-      - "src/app/design-fixtures/**"
-      # Conformance-covered real surfaces + manifest consumption (cinatra#985):
-      # the listing-card/CTA screens family, the compat verdict feeding the
-      # six-state CTA, the banner icon fallback, and the deep-export map the
-      # harness imports through. The manifest pins, allowlist, contract and
-      # suite all live under tests/e2e/design/** (already matched below).
-      - "packages/extensions/src/screens/**"
-      - "packages/extensions/package.json"
-      # Pure semver helper feeding resolveMarketplaceCardCta's update
-      # detection (the update -> installed-latest conformance behavior).
-      - "packages/registries/src/version-compare.ts"
-      - "src/lib/extension-compat-badge.ts"
-      # Route-guard allowlist carrying the fixture routes' CI reachability.
-      - "src/lib/auth-route-guard.ts"
-      # The seed endpoint's AUTHORIZATION contract (the presented capability)
-      # and the primitives it is built on. Reachability and authorization are
-      # different gates, and this job is the only place the second one is
-      # exercised end to end — a change to either must run it.
-      - "src/lib/test-support/conformance-seed-fence.ts"
-      - "src/lib/test-support/seed-capability.ts"
-      - "src/components/extension-card-icon-image.tsx"
-      - "src/components/extension-kind-emblem.tsx"
-      # Seeded data-contract surfaces (cinatra#986): the §VI installed card +
-      # URL-driven status filter, and the /connectors client/badge family.
-      - "src/components/extensions/installed-extension-card.tsx"
-      - "src/components/extensions/extensions-tab-select.tsx"
-      - "packages/connectors/src/**"
-      - "packages/connectors/package.json"
-      # §II connector-setup surfaces (cinatra#2354): the schema-config host
-      # renderer + the right-column status card, and the sdk-ui components that
-      # OWN the connector-setup / connector-multi-setup / connector-connections
-      # conformance ids and their state variants. A rename here breaks the
-      # functional-acceptance contract by design, so the gate must see it.
-      - "src/components/extensions/schema-config-connector-form.tsx"
-      - "src/components/extensions/connector-status-probe-card.tsx"
-      - "packages/sdk-ui/src/connector-setup-columns.tsx"
-      - "packages/sdk-ui/src/connections-list.tsx"
-      - "packages/sdk-ui/src/connection-status-card.tsx"
-      - "packages/sdk-ui/src/connection-status-badge.tsx"
-      - "scripts/design/**"
-      - "tests/e2e/config/design.config.ts"
-      - "tests/e2e/config/base.ts"
-      - "tests/e2e/design/**"
-      # The selector that decides WHETHER this workflow's expensive job runs
-      # and WHICH families it runs (cinatra#3268), and the suites that prove
-      # it. A change to any of them must be judged by the whole suite, so the
-      # workflow has to be triggered by it in the first place.
-      - "scripts/ci/design-select.mjs"
-      - "scripts/ci/__tests__/design-select.test.mjs"
-      - "scripts/ci/__tests__/design-select-workflow.test.mjs"
-      - "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs"
-      - ".github/workflows/design-visual-verify.yml"
+    # Always reach the cheap selector: its dependency graph and widening rules
+    # are authoritative. An outer allowlist previously hid shared/global inputs.
   # THE QUEUE EVENT CARRIES NO `paths:` FILTER (engineering#658 item 1).
   # GitHub fires every merge_group-triggered workflow on every candidate,
   # so the path question is answered INSIDE the workflow, over the
@@ -143,6 +81,8 @@ jobs:
   # run's event froze — rather than a second selection below that could
   # disagree with the first.
   select:
+    permissions:
+      contents: read
     name: design suite selection
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
@@ -300,6 +240,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   pixel-diff:
+    permissions:
+      contents: read
     name: /design-fixtures pixel-diff + axe
     needs: select
     # The whole point of the job above: a change that renders nothing does not
@@ -819,6 +761,7 @@ jobs:
   # including a selection that could not be taken at all.
   # -------------------------------------------------------------------------
   verdict:
+    permissions: {}
     name: design suite verdict
     needs: [select, pixel-diff]
     if: ${{ always() }}
