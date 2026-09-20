@@ -75,7 +75,7 @@ jobs:
     # run's referenced_workflows[] entry against the suite's pinned SHA
     # EXACTLY, so the caller `uses:@`, the `ref:` below and
     # gate-suite.json requiredContexts[].pinned must move in one commit.
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@bf50cd9533d5f284961cc4760fc21c3fb297902d # v0.3.0-next.bf50cd9
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@bf50cd9533d5f284961cc4760fc21c3fb297902d # v0.1.4-next.bf50cd9
     with:
       mode: enforce
       ref: bf50cd9533d5f284961cc4760fc21c3fb297902d # same SHA as the workflow @ref
