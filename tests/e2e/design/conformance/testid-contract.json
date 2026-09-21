@@ -172,7 +172,7 @@
     },
     "extension-install-panel": {
       "manifest": "app-extensions",
-      "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
+      "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here)",
       "requires": [
         {
           "file": "packages/extensions/src/screens/marketplace-listing-card.tsx",
@@ -193,7 +193,6 @@
             "data-availability={availability.state}",
             "data-testid=\"extension-install-panel-picker\"",
             "data-testid=\"extension-install-panel-submit\"",
-            "data-testid=\"extension-install-panel-error\"",
             "data-pending={pending ? \"\" : undefined}"
           ]
         },
@@ -289,6 +288,85 @@
             "data-field=\"manifest.displayName\"",
             "data-slot=\"installed-extension-card\"",
             "data-needs-review=\"\""
+          ]
+        }
+      ]
+    },
+    "upload-extension-screen": {
+      "manifest": "app-extensions",
+      "selector": "[data-conformance-id=\"upload-extension-screen\"] (the §VIII Upload Extension screen's own JSX body — the component the /configuration/extensions/upload route renders — mounted on the conformance harness under [data-surface-id=\"upload-extension-screen\"]). back-to-marketplace action: [data-conformance-id=\"back-to-marketplace\"], the single outline control in the header, resolving to /configuration/marketplace. name field: the §VIII example is the GitHub tab with a package resolved, and its one name reading is the resolved package's, [data-testid=\"upload-resolved-name\"], drawn inside the panel that tab mounts",
+      "requires": [
+        {
+          "file": "packages/agents/src/upload-extension-screen-body.tsx",
+          "literals": [
+            "data-conformance-id=\"upload-extension-screen\"",
+            "data-conformance-id=\"back-to-marketplace\""
+          ]
+        },
+        {
+          "file": "packages/agents/src/screens.tsx",
+          "literals": ["<UploadExtensionScreenBody"]
+        },
+        {
+          "file": "packages/agents/src/upload-repository-link-form.tsx",
+          "literals": ["data-testid=\"upload-resolved-name\""]
+        }
+      ]
+    },
+    "upload-github-form": {
+      "manifest": "app-extensions",
+      "selector": "[data-conformance-id=\"upload-github-form\"] (the repository form of the §VIII GitHub tab; the loading variant is [data-state=\"loading\"] on that same node, present only while the lookup is in flight). resolve-reference action: [data-conformance-id=\"resolve-reference\"], beside the shipped [data-testid=\"github-upload-submit\"]. Fields: #github-repo-url and #github-ref, each with its drawn placeholder",
+      "requires": [
+        {
+          "file": "packages/agents/src/upload-repository-link-form.tsx",
+          "literals": [
+            "data-conformance-id=\"upload-github-form\"",
+            "data-state={isLooking ? \"loading\" : undefined}",
+            "data-conformance-id=\"resolve-reference\"",
+            "data-testid=\"github-upload-submit\"",
+            "id=\"github-repo-url\"",
+            "id=\"github-ref\""
+          ]
+        }
+      ]
+    },
+    "upload-resolved-install-panel": {
+      "manifest": "app-extensions",
+      "selector": "[data-conformance-id=\"upload-resolved-install-panel\"] (the §I.1 install panel the resolve step mounts in place, without a card; beside the shipped [data-testid=\"upload-install-scope\"]). The four readings on three rows: [data-testid=\"upload-resolved-kind\"], name [data-testid=\"upload-resolved-name\"], version [data-testid=\"upload-resolved-version\"], [data-testid=\"upload-pinned-sha\"], [data-testid=\"upload-resolved-source\"]. Beneath them the store's OWN §I.1 panel: body [data-testid=\"extension-install-panel-body\"], picker [data-testid=\"extension-install-panel-picker\"], cancel [data-testid=\"extension-install-panel-cancel\"], submit [data-testid=\"extension-install-panel-submit\"] — the loading state variant is the submit's own [data-pending], because this mounting has no card header band and so no corner cross for a close to sit in",
+      "requires": [
+        {
+          "file": "packages/agents/src/upload-install-scope-panel.tsx",
+          "literals": [
+            "data-conformance-id=\"upload-resolved-install-panel\"",
+            "data-testid=\"upload-install-scope\"",
+            "<StandaloneInstallPanelFace",
+            "<ExtensionInstallScopePanel"
+          ]
+        },
+        {
+          "file": "packages/agents/src/upload-repository-link-form.tsx",
+          "literals": [
+            "data-testid=\"upload-resolved-kind\"",
+            "data-testid=\"upload-resolved-name\"",
+            "data-testid=\"upload-resolved-version\"",
+            "data-testid=\"upload-pinned-sha\"",
+            "data-testid=\"upload-resolved-source\""
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/extension-install-scope-panel.tsx",
+          "literals": [
+            "data-testid=\"extension-install-panel-body\"",
+            "data-testid=\"extension-install-panel-picker\"",
+            "data-testid=\"extension-install-panel-submit\"",
+            "data-pending={pending ? \"\" : undefined}"
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/card-face-switcher.tsx",
+          "literals": [
+            "data-testid=\"extension-install-panel-cancel\"",
+            "StandaloneInstallPanelFace"
           ]
         }
       ]

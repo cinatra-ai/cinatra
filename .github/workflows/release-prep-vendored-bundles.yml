@@ -29,6 +29,8 @@ on:
 
 jobs:
   pack-bundle:
+    permissions:
+      contents: read
     name: Pack vendored bundle tarball
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
