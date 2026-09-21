@@ -163,25 +163,98 @@ const headers = (token) => ({
 });
 
 /**
- * Every artifact of the repository, paged. The listing is the ledger, so this
- * reads names and creation instants only.
+ * Every artifact of the repository, paged. A safety budget is a refusal, never
+ * permission to publish a partial count. The repository-wide listing includes
+ * unrelated artifacts, so twenty pages can contain none of last week's ledger.
+ * GitHub pagination is not a transactional snapshot: new artifacts may appear
+ * during the read. Deduplicate IDs, require coverage of the first total, and
+ * re-read the first page before accepting. Visible movement refuses the report.
+ * This detects drift, but does not turn GitHub's offset API into a snapshot.
  */
-export async function listArtifacts(token, doFetch = fetch) {
+export async function listArtifacts(token, doFetch = fetch, clock = () => performance.now()) {
   const out = [];
-  for (let page = 1; page <= 20; page += 1) {
+  const seen = new Map();
+  const controller = new AbortController();
+  const started = clock();
+  const remaining = () => {
+    const milliseconds = 210_000 - (clock() - started);
+    if (milliseconds <= 0) throw new Error("Incomplete artifact listing: exceeded the 210-second read budget; no count may be published");
+    return Math.min(30_000, Math.ceil(milliseconds));
+  };
+  const readPage = async (page) => {
     const url = `${API}/repos/${REPOSITORY}/actions/artifacts?per_page=100&page=${page}`;
-    const res = await doFetch(url, { headers: headers(token) });
+    const res = await doFetch(url, {
+      headers: headers(token),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(remaining())]),
+    });
     if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
     const body = await res.json();
-    const batch = Array.isArray(body.artifacts) ? body.artifacts : [];
-    for (const artifact of batch) {
-      if (typeof artifact.name === "string" && artifact.name.startsWith(LEDGER_NAME_PREFIX)) {
-        out.push({ name: artifact.name, created_at: artifact.created_at });
+    remaining();
+    if (!body || !Array.isArray(body.artifacts) || body.artifacts.length > 100 ||
+        !Number.isSafeInteger(body.total_count) || body.total_count < 0) {
+      throw new Error(`Invalid artifact listing on page ${page}`);
+    }
+    return body;
+  };
+  const fingerprint = (body) => JSON.stringify([body.total_count, body.artifacts.map(
+    (artifact) => [artifact.id, artifact.name, artifact.created_at],
+  )]);
+  let initialTotal;
+  let firstPage;
+  try {
+    for (let page = 1; page <= 1000;) {
+      // Only prefetch pages the initial total says exist. The unknown tail stays
+      // serial; never infer completion merely from that initial total.
+      const width = initialTotal === undefined ? 1 : Math.min(
+        4, 1001 - page, Math.max(1, Math.ceil(initialTotal / 100) - page + 1),
+      );
+      const pages = Array.from({ length: width }, (_, offset) => page + offset);
+      const bodies = await Promise.all(pages.map((number) => readPage(number).catch((error) => {
+        controller.abort(error);
+        throw error;
+      })));
+      for (const body of bodies) {
+        initialTotal ??= body.total_count;
+        const batch = body.artifacts;
+        const before = seen.size;
+        for (const artifact of batch) {
+          if (!artifact || !Number.isSafeInteger(artifact.id) || artifact.id < 1 || typeof artifact.name !== "string") {
+            throw new Error(`Invalid artifact record on page ${page}`);
+          }
+          const identity = JSON.stringify([artifact.name, artifact.created_at]);
+          if (seen.has(artifact.id)) {
+            if (seen.get(artifact.id) !== identity) throw new Error(`Conflicting artifact record on page ${page}`);
+            continue;
+          }
+          seen.set(artifact.id, identity);
+          if (artifact.name.startsWith(LEDGER_NAME_PREFIX)) {
+            if (!parseLedgerArtifactName(artifact.name) || typeof artifact.created_at !== "string" ||
+                Number.isNaN(new Date(artifact.created_at).getTime())) {
+              throw new Error(`Invalid reclaim record on page ${page}`);
+            }
+            out.push({ name: artifact.name, created_at: artifact.created_at });
+          }
+        }
+        if (batch.length > 0 && seen.size === before) {
+          throw new Error(`Artifact pagination made no progress on page ${page}`);
+        }
+        if (page === 1) firstPage = fingerprint(body);
+        if (batch.length < 100) {
+          if (seen.size < initialTotal) {
+            throw new Error(`Incomplete artifact listing: read ${seen.size} of at least ${initialTotal}`);
+          }
+          if (fingerprint(await readPage(1)) !== firstPage) {
+            throw new Error("Artifact listing changed during collection; no count may be published");
+          }
+          return out;
+        }
+        page += 1;
       }
     }
-    if (batch.length < 100) break;
+    throw new Error("Incomplete artifact listing: exceeded the 1,000-page safety budget; no count may be published");
+  } finally {
+    controller.abort();
   }
-  return out;
 }
 
 export async function main({ now = new Date(), doFetch = fetch } = {}) {

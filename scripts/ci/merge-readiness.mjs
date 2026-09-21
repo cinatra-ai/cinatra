@@ -22,11 +22,10 @@
 //   otherwise ignored: an unknown check never joins the wait set, so the job
 //   can never wait on itself (a self-dependency would deadlock the queue).
 //
-//   On the `merge_group` event it additionally revalidates
-//     - the approved head (the queue candidate must descend from the exact
-//       head the approval was given on: a moved head fails), and
-//     - the verification-boundary predicate (the LAST boundary record for the
-//       head is `candidate` or `promoted`).
+//   On `merge_group`, immutable engine entrypoints authenticate the exact
+//   queued PR/head/base/tree and current candidate/promoted boundary. Complete
+//   file inventory and both receipts must remain identical across the wait.
+//   Editable body records and queue-ref guesses cannot supply authority.
 //
 //   Its wait is bounded by the LONGEST JOB BUDGET of the workflows it
 //   evaluates — each expected entry carries the `timeout-minutes` of the job
@@ -46,6 +45,7 @@
 // only part that talks to the GitHub API.
 
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -147,7 +147,7 @@ export function loadInventory(repoRoot) {
 }
 
 /* ------------------------------------------------------------------ *
- * Candidate SHA + approved head
+ * Candidate SHA + authenticated queue identity
  * ------------------------------------------------------------------ */
 
 /**
@@ -201,73 +201,135 @@ export function resolveCandidateShas({ eventName, githubSha, headSha, payload })
   return { lookupSha: headSha, recordedSha };
 }
 
-/**
- * Queue-arm revalidation of the approved head: the pull request's head must
- * still be the exact commit the approval was given on. A head that moved
- * after the approval invalidates the queue entry.
- */
-export function validateApprovedHead({ approvedHead, pullRequestHead }) {
-  if (typeof approvedHead !== "string" || approvedHead === "") {
-    return { ok: false, reason: "no approved head could be resolved for the queued pull request (failing closed)" };
-  }
-  if (typeof pullRequestHead !== "string" || pullRequestHead === "") {
-    return { ok: false, reason: "the queued pull request reports no head sha (failing closed)" };
-  }
-  if (approvedHead !== pullRequestHead) {
-    return {
-      ok: false,
-      reason: `the approved head moved: approval is bound to ${approvedHead} but the pull request head is now ${pullRequestHead} — a new approval is required`,
-    };
-  }
-  return { ok: true, reason: null };
+/* Queue authority comes only from the immutable, separately checked-out engine. */
+export const QUEUE_ENGINE_PIN = "1e40675e1642dcc32d195f27b3deb285b4d3d6fc";
+export const QUEUE_ENGINE_DIRECTORY = ".merge-readiness-engine";
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const DIGEST = /^[0-9a-f]{64}$/;
+const positive = value => Number.isSafeInteger(value) && value > 0;
+const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const requireQueue = (condition, message) => { if (!condition) throw new Error(`merge-readiness: queue ${message}`); };
+const exactKeys = (value, keys) => object(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+
+export function validateQueueBinding(report, expected) {
+  requireQueue(object(report) && report.arm === "merge-group" && report.mode === "enforce" && report.repo === expected.repository
+    && report.apiSkippedReason === null && report.findingCount === 0 && Array.isArray(report.findings) && report.findings.length === 0,
+  "engine did not return an authenticated enforce result");
+  const q = report.queueBinding;
+  requireQueue(exactKeys(q, ["schema", "repository", "repositoryId", "pullRequest", "headSha", "headRepositoryId", "baseRef", "baseSha", "groupHeadSha", "parents", "groupTree", "authority"]), "binding shape is invalid");
+  requireQueue(q.schema === "cinatra.queue-binding/v1" && q.repository === expected.repository
+    && positive(q.repositoryId) && positive(q.headRepositoryId) && positive(q.pullRequest)
+    && FULL_SHA.test(q.headSha) && FULL_SHA.test(q.baseSha) && FULL_SHA.test(q.groupHeadSha) && FULL_SHA.test(q.groupTree)
+    && q.groupHeadSha === expected.groupHeadSha && q.baseSha === expected.baseSha && q.baseRef === expected.baseRef
+    && Array.isArray(q.parents) && q.parents.length === 2 && q.parents[0] === q.baseSha && q.parents[1] === q.headSha
+    && ["review", "delegated-v1"].includes(q.authority), "binding does not match the event and exact candidate");
+  requireQueue(q.authority !== "delegated-v1" || q.headRepositoryId === q.repositoryId, "delegated head repository differs");
+  return Object.fromEntries(["schema", "repository", "repositoryId", "pullRequest", "headSha", "headRepositoryId", "baseRef", "baseSha", "groupHeadSha", "parents", "groupTree", "authority"].map(key => [key, q[key]]));
 }
 
-/* ------------------------------------------------------------------ *
- * Verification-boundary predicate
- * ------------------------------------------------------------------ */
-
-const BOUNDARY_RE = /^Verification boundary:\s*([A-Za-z][A-Za-z-]*)\s+at\s+([0-9a-f]{7,40})/;
-
-/**
- * Parse the column-0 `Verification boundary: <state> at <sha>` records out of
- * a record text (a pull-request body, a record file). Returns the records in
- * document order as { state, sha }.
- */
-export function parseBoundaryRecords(text) {
-  if (typeof text !== "string") return [];
-  const out = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(BOUNDARY_RE);
-    if (m) out.push({ state: m[1], sha: m[2] });
-  }
-  return out;
+export function validateBoundaryBinding(value, q) {
+  requireQueue(exactKeys(value, ["schema", "repository", "repositoryId", "pullRequest", "headSha", "state", "commentId", "digest"]), "boundary shape is invalid");
+  requireQueue(value.schema === "cinatra.verification-boundary-current/v1" && value.repository === q.repository
+    && value.repositoryId === q.repositoryId && value.pullRequest === q.pullRequest && value.headSha === q.headSha
+    && ["candidate", "promoted"].includes(value.state) && positive(value.commentId) && DIGEST.test(value.digest),
+  "boundary is not authenticated for the exact queued head");
+  return Object.fromEntries(["schema", "repository", "repositoryId", "pullRequest", "headSha", "state", "commentId", "digest"].map(key => [key, value[key]]));
 }
 
-/** The states a boundary record may carry that mean "verified for merge". */
-export const BOUNDARY_MERGEABLE_STATES = ["candidate", "promoted"];
+function engineEnvironment(token) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("GIT_") || key.startsWith("PYTHON") || ["NODE_OPTIONS", "NODE_PATH", "GH_DEBUG"].includes(key)) delete env[key];
+  return { ...env, GH_HOST: "github.com", GH_TOKEN: token, GITHUB_TOKEN: token,
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", PYTHONDONTWRITEBYTECODE: "1" };
+}
 
-/**
- * The boundary predicate: the LAST record for `head` must be `candidate` or
- * `promoted`. No record for the head, or a later non-mergeable state (for
- * example `candidate-pending-ci` or `proof-failed`), fails closed.
- */
-export function verificationBoundaryVerdict(text, head) {
-  if (typeof head !== "string" || head === "") {
-    return { ok: false, state: null, reason: "no head sha to evaluate the verification boundary against (failing closed)" };
+export function createQueueEngineReader(repoRoot, token, execute = execFileSync) {
+  const root = path.resolve(repoRoot), engine = path.join(root, QUEUE_ENGINE_DIRECTORY);
+  const options = { cwd: root, env: engineEnvironment(token), encoding: "utf8", timeout: 90_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] };
+  const git = (cwd, ...args) => execute("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", cwd, ...args], { ...options, timeout: 3000 }).trim();
+  const verify = () => {
+    requireQueue(FULL_SHA.test(QUEUE_ENGINE_PIN), "engine merge pin is not selected");
+    requireQueue(fs.realpathSync(engine) === engine && !fs.lstatSync(engine).isSymbolicLink(), "engine path is not the fixed checkout");
+    requireQueue(git(engine, "rev-parse", "--show-toplevel") === engine && git(engine, "rev-parse", "HEAD") === QUEUE_ENGINE_PIN, "engine checkout does not match the pinned source");
+    requireQueue(git(engine, "status", "--porcelain", "--untracked-files=all", "--ignored") === "", "engine checkout is not clean");
+  };
+  return (kind, args, groupHead) => {
+    verify();
+    requireQueue(git(root, "rev-parse", "HEAD") === groupHead, "checkout is not the event candidate");
+    const script = kind === "attribution" ? "truthful-attribution-gate.mjs" : kind === "boundary" ? "verification-boundary.py" : null;
+    requireQueue(script !== null, "unknown engine operation");
+    let raw;
+    try { raw = execute(kind === "attribution" ? process.execPath : "python3", [path.join(engine, "scripts", script), ...args], options); }
+    catch { throw new Error(`merge-readiness: queue ${kind} engine refused or could not complete`); }
+    verify();
+    requireQueue(git(root, "rev-parse", "HEAD") === groupHead, "checkout changed during engine read");
+    try { return JSON.parse(raw); } catch { throw new Error(`merge-readiness: queue ${kind} result is not one JSON document`); }
+  };
+}
+
+function queuedPullIdentity(pr, q) {
+  requireQueue(object(pr) && pr.number === q.pullRequest && pr.state === "open" && pr.merged === false && pr.draft === false
+    && pr.head?.sha === q.headSha && pr.head?.repo?.id === q.headRepositoryId
+    && typeof pr.head?.ref === "string" && pr.head.ref !== ""
+    && typeof pr.head?.repo?.full_name === "string" && pr.head.repo.full_name !== ""
+    && pr.base?.ref === q.baseRef && pr.base?.repo?.id === q.repositoryId && pr.base?.repo?.full_name === q.repository
+    && Number.isSafeInteger(pr.changed_files) && pr.changed_files >= 0 && pr.changed_files <= 3000,
+  "pull identity or file count differs from verified engine binding");
+  return [pr.number, pr.state, pr.merged, pr.draft, pr.head.sha, pr.head.ref, pr.head.repo.id, pr.head.repo.full_name,
+    pr.base.ref, pr.base.repo.id, pr.base.repo.full_name, pr.changed_files];
+}
+
+export async function readQueuedFiles(get, q) {
+  const endpoint = `/repos/${q.repository}/pulls/${q.pullRequest}`;
+  const identity = queuedPullIdentity(await get(endpoint), q);
+  const files = [], seen = new Set(); let complete = false;
+  const validPath = name => typeof name === "string" && name !== "" && !name.startsWith("/") && !name.split("/").some(x => x === ".." || x === "") && !/[\x00-\x1f]/.test(name);
+  for (let page = 1; page <= 31; page++) {
+    const rows = await get(`${endpoint}/files?per_page=100&page=${page}`);
+    requireQueue(Array.isArray(rows) && rows.length <= 100, "file page is malformed");
+    for (const f of rows) {
+      requireQueue(object(f) && validPath(f.filename) && !seen.has(f.filename) && FULL_SHA.test(f.sha)
+        && ["added", "removed", "modified", "renamed", "copied", "changed", "unchanged"].includes(f.status)
+        && [f.additions, f.deletions, f.changes].every(n => Number.isSafeInteger(n) && n >= 0)
+        && (f.previous_filename == null || validPath(f.previous_filename))
+        && (f.status !== "renamed" || validPath(f.previous_filename)), "file inventory is incomplete or malformed");
+      seen.add(f.filename);
+      files.push({ filename: f.filename, previous_filename: f.previous_filename ?? null, status: f.status, sha: f.sha,
+        additions: f.additions, deletions: f.deletions, changes: f.changes });
+      requireQueue(files.length <= 3000, "file inventory exceeds API limit");
+    }
+    if (rows.length < 100) { complete = true; break; }
   }
-  const forHead = parseBoundaryRecords(text).filter((r) => head.startsWith(r.sha) || r.sha.startsWith(head));
-  if (forHead.length === 0) {
-    return { ok: false, state: null, reason: `no verification-boundary record names the head ${head} (failing closed)` };
+  requireQueue(complete && files.length === identity.at(-1), "file pagination or count is incomplete");
+  requireQueue(JSON.stringify(queuedPullIdentity(await get(endpoint), q)) === JSON.stringify(identity), "pull changed during file inventory");
+  files.sort((a, b) => a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0);
+  return { identity, files, changedPaths: [...new Set(files.flatMap(f => [f.filename, f.previous_filename].filter(Boolean)))].sort() };
+}
+
+export async function readQueueEvidence({ repo, payload, lookupSha, recordedSha, get, engine }) {
+  const group = payload?.merge_group;
+  requireQueue(typeof repo === "string" && /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo) && !repo.includes("..")
+    && FULL_SHA.test(group?.head_sha) && FULL_SHA.test(group?.base_sha)
+    && typeof group?.base_ref === "string" && group.base_ref.startsWith("refs/heads/") && group.base_ref.length > 11
+    && lookupSha === group.head_sha && recordedSha === group.head_sha, "event does not bind full candidate/base identity");
+  const expected = { repository: repo, groupHeadSha: group.head_sha, baseSha: group.base_sha, baseRef: group.base_ref.slice(11) };
+  const binding = validateQueueBinding(engine("attribution", ["--arm", "merge-group", "--mode", "enforce", "--format", "json", "--repo", repo,
+    "--merge-group-head", expected.groupHeadSha, "--merge-group-base", expected.baseSha, "--gate-arm-wait-ms", "0"], expected.groupHeadSha), expected);
+  const boundary = validateBoundaryBinding(engine("boundary", ["--repo", repo, "--pr", String(binding.pullRequest), "--head", binding.headSha], expected.groupHeadSha), binding);
+  const inventory = await readQueuedFiles(get, binding);
+  return { binding, boundary, ...inventory };
+}
+
+export function validateQueueEvidencePair(queue) {
+  requireQueue(object(queue?.before) && object(queue?.after), "authenticated before/after evidence is missing");
+  for (const snapshot of [queue.before, queue.after]) {
+    const q = snapshot.binding;
+    validateQueueBinding({ arm: "merge-group", mode: "enforce", repo: q?.repository, apiSkippedReason: null, findingCount: 0, findings: [], queueBinding: q },
+      { repository: q?.repository, groupHeadSha: q?.groupHeadSha, baseSha: q?.baseSha, baseRef: q?.baseRef });
+    validateBoundaryBinding(snapshot.boundary, q);
+    requireQueue(Array.isArray(snapshot.files) && Array.isArray(snapshot.identity) && Array.isArray(snapshot.changedPaths), "file snapshot is missing");
   }
-  const last = forHead[forHead.length - 1];
-  if (!BOUNDARY_MERGEABLE_STATES.includes(last.state)) {
-    return {
-      ok: false,
-      state: last.state,
-      reason: `the last verification-boundary record for ${head} is '${last.state}', not one of ${BOUNDARY_MERGEABLE_STATES.join(" / ")}`,
-    };
-  }
-  return { ok: true, state: last.state, reason: null };
+  requireQueue(JSON.stringify(queue.before) === JSON.stringify(queue.after), "authority, receipt or file inventory changed while waiting");
 }
 
 /* ------------------------------------------------------------------ *
@@ -395,7 +457,7 @@ const CONCLUSION_FAIL_LABEL = {
  * @param {Array}  args.checks      [{ id, name, status, conclusion, completedAt, app, workflow }]
  * @param {Array|null} args.changedPaths  paths changed by the candidate (null = unknown)
  * @param {string} args.eventName
- * @param {object} [args.queue]     merge_group arm: { approvedHead, pullRequestHead, recordText }
+ * @param {object} [args.queue]     merge_group arm: authenticated { before, after } snapshots
  * @param {number} [args.waitedMinutes] the wait this run actually spent, named
  *                 in the pending text (defaults to the inventory's fallback).
  * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[]}}
@@ -479,13 +541,8 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
   }
 
   if (eventName === "merge_group") {
-    const head = validateApprovedHead({
-      approvedHead: queue?.approvedHead,
-      pullRequestHead: queue?.pullRequestHead,
-    });
-    if (!head.ok) failures.push(`approved-head: ${head.reason}`);
-    const boundary = verificationBoundaryVerdict(queue?.recordText, queue?.pullRequestHead);
-    if (!boundary.ok) failures.push(`verification-boundary: ${boundary.reason}`);
+    try { validateQueueEvidencePair(queue); }
+    catch (error) { failures.push(`queue-authority: ${error.message}`); }
   }
 
   // A real red outranks an unfinished run: a FAIL stays a FAIL.
@@ -620,20 +677,6 @@ async function listChangedPaths(token, repo, prNumber) {
   return out;
 }
 
-/** The head sha the latest APPROVED review was given on. */
-async function resolveApprovedHead(token, repo, prNumber) {
-  const reviews = await api(token, `/repos/${repo}/pulls/${prNumber}/reviews?per_page=100`);
-  const approvals = (reviews ?? []).filter((r) => r.state === "APPROVED");
-  if (approvals.length === 0) return null;
-  return approvals[approvals.length - 1].commit_id ?? null;
-}
-
-/** The merge-group's pull request number, from the queue branch ref. */
-export function pullNumberFromQueueRef(ref) {
-  const m = /gh-readonly-queue\/[^/]+\/pr-(\d+)-/.exec(ref ?? "");
-  return m ? Number(m[1]) : null;
-}
-
 async function main() {
   const repoRoot = process.env.GITHUB_WORKSPACE ?? path.resolve(fileURLToPath(import.meta.url), "..", "..", "..");
   const repo = process.env.GITHUB_REPOSITORY;
@@ -655,10 +698,11 @@ async function main() {
     payload,
   });
 
-  let prNumber = payload?.pull_request?.number ?? null;
-  if (eventName === "merge_group") prNumber = pullNumberFromQueueRef(payload?.merge_group?.head_ref);
-
-  const changedPaths = prNumber ? await listChangedPaths(token, repo, prNumber) : null;
+  const prNumber = payload?.pull_request?.number ?? null;
+  const queueArgs = eventName === "merge_group" ? { repo, payload, lookupSha, recordedSha,
+    get: endpoint => api(token, endpoint), engine: createQueueEngineReader(repoRoot, token) } : null;
+  const before = queueArgs ? await readQueueEvidence(queueArgs) : null;
+  const changedPaths = before ? before.changedPaths : prNumber ? await listChangedPaths(token, repo, prNumber) : null;
 
   const budgetMinutes = waitBudgetMinutes({ inventory, changedPaths });
   const startedAt = Date.now();
@@ -676,19 +720,7 @@ async function main() {
   // of this head to workflows before the sources are judged.
   checks = resolveCheckWorkflows(checks, await listWorkflowPaths(token, repo, lookupSha));
 
-  let queue;
-  if (eventName === "merge_group") {
-    if (!prNumber) {
-      console.error("::error::merge-readiness: could not resolve the queued pull request from merge_group.head_ref (failing closed).");
-      process.exit(1);
-    }
-    const pr = await api(token, `/repos/${repo}/pulls/${prNumber}`);
-    queue = {
-      approvedHead: await resolveApprovedHead(token, repo, prNumber),
-      pullRequestHead: pr.head?.sha ?? null,
-      recordText: pr.body ?? "",
-    };
-  }
+  const queue = queueArgs ? { before, after: await readQueueEvidence(queueArgs) } : undefined;
 
   const waitedMinutes = Math.max(1, Math.round((Date.now() - startedAt) / 60_000));
   const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes });

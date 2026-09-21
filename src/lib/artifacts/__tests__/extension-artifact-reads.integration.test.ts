@@ -79,6 +79,7 @@ async function admissionFor(deps: unknown[]) {
   return resolveArtifactDependencyAdmission({
     packageName: CALLER,
     packageVersion: "1.0.0",
+    orgId: ORG,
     cinatra: { dependencies: deps },
   });
 }
@@ -203,6 +204,27 @@ describeDb("dependency-scoped artifact reads (cinatra#3031 acceptance 3 and 4)",
       }) as never;
     objectTypeRegistry.register(def(IDEA_TYPE), IDEA_PKG);
     objectTypeRegistry.register(def(POST_TYPE), POST_PKG);
+
+    // The REGISTRATIONS the admission reads an owner from (cinatra#3597): each
+    // pack's claim on its own type, reserved and activated through the claim
+    // store's own road, exactly as an installation registers them.
+    const { reserveArtifactTypeClaim, activateArtifactTypeClaim } = await import(
+      "@/lib/objects/artifact-claim-store"
+    );
+    for (const [objectTypeId, extensionPackage] of [
+      [IDEA_TYPE, IDEA_PKG],
+      [POST_TYPE, POST_PKG],
+    ] as const) {
+      const claimId = reserveArtifactTypeClaim({
+        scope: `org:${ORG}`,
+        objectTypeId,
+        claimKind: "dedicated",
+        extensionPackage,
+        extensionVersion: "1.0.0",
+        actor: "system",
+      });
+      activateArtifactTypeClaim({ claimId, actor: "system" });
+    }
 
     // Five ideas, one post, and one idea in ANOTHER organisation.
     for (let i = 1; i <= 5; i += 1) {
