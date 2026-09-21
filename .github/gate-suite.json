@@ -16,7 +16,7 @@
     {
       "context": "truthful-attribution-gate / truthful-attribution-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml",
-      "pinned": "a98900151e992c0a499cf03a8fe320d99c6bc14c",
+      "pinned": "1e40675e1642dcc32d195f27b3deb285b4d3d6fc",
       "callerPath": ".github/workflows/truthful-attribution-gate.yml",
       "allowedEvents": ["pull_request", "push", "merge_group"]
     }
