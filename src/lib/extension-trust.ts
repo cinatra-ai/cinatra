@@ -18,6 +18,20 @@
 //      (`trusted-bootstrap`, transition/dev only). Default (no opt-in): unsigned
 //      marketplace code stays untrusted and is NOT imported in-process.
 //
+// THE OPERATOR-SUPPLIED ACTIVATION ORIGIN (cinatra#3204). Factor 3 asks WHERE the
+// bytes came from, and a registry host is only ONE answer to it. The upload road
+// — an archive an admin supplied, or a repository this instance resolved and
+// pinned to one commit — is the other, and it is an activation origin of the SAME
+// standing as the store: an admin with install rights chose those bytes, the road
+// recomputes the content digest over what actually materialized, and the install
+// row is the persisted decision. So `operatorSuppliedOrigin` answers factor 3 in
+// place of the host allowlist, and NOTHING ELSE moves: a revoked decision,
+// unverified integrity and a signature that did not verify each still refuse, and
+// an unsigned supplied package reaches `trusted-bootstrap` — import-only, never
+// the privileged tier. The input is opt-IN per call and absent by default, so no
+// registry-road classification can reach it: only the supplied pipeline entry
+// passes it.
+//
 // A signed marketplace artifact verified against a host-configured key is NOT
 // untrusted code — the signature is the boundary that lets ANY marketplace vendor
 // activate in-process WITHOUT container isolation. Isolation remains required only
@@ -74,6 +88,17 @@ export type TrustInput = {
    * verified signature trusts).
    */
   allowMarketplaceBootstrapTrust?: boolean;
+  /**
+   * Whether the bytes came from the OPERATOR-SUPPLIED install road (an uploaded
+   * archive, or a repository resolved and pinned by this instance) — the road's
+   * own activation standing, which the supplied pipeline entry passes and no
+   * registry road ever does. It answers the ORIGIN factor in place of the host
+   * allowlist and nothing else: integrity, the persisted decision and the
+   * signature factor are judged exactly as they are for a store install, and an
+   * unsigned supplied package reaches `trusted-bootstrap` (import-only, no
+   * privileged capability). Omitted → `false` (fail-closed).
+   */
+  operatorSuppliedOrigin?: boolean;
 };
 
 export type TrustVerdict = {
@@ -104,9 +129,11 @@ const untrusted = (reason: string): TrustVerdict => ({ tier: "untrusted", truste
  *   persistedTrustDecision === false                 → untrusted (revoked — wins)
  *   !integrityVerified                               → untrusted
  *   persistedTrustDecision !== true                  → untrusted (before host/sig)
- *   host ∉ trustedActivationHosts                    → untrusted (config-driven; local host absent → denied)
+ *   host ∉ trustedActivationHosts && !operatorSuppliedOrigin
+ *                                                    → untrusted (config-driven; local host absent → denied)
  *   signatureVerified === false                      → untrusted (tampered / wrong key)
  *   signatureVerified === true                       → trusted-signed
+ *   else && operatorSuppliedOrigin                   → trusted-bootstrap (the supplied road's own standing)
  *   else && allowMarketplaceBootstrapTrust           → trusted-bootstrap (Window-1 parity)
  *   else                                             → untrusted ('signature required')
  */
@@ -126,8 +153,14 @@ export function classifyExtensionTrust(input: TrustInput): TrustVerdict {
   if (input.persistedTrustDecision !== true) {
     return untrusted("no persisted host trust decision");
   }
+  // THE ORIGIN FACTOR. A store install answers it with a registry host on the
+  // deployment's allowlist; the operator-supplied road answers it with the supply
+  // act itself (an admin with install rights chose these bytes and the road
+  // re-verified their content digest). Both are activation origins; neither is a
+  // shortcut past any OTHER factor below.
   const host = registryHostOf(input.registryUrl);
-  if (!host || !allow.includes(host)) {
+  const operatorSupplied = input.operatorSuppliedOrigin === true;
+  if (!operatorSupplied && (!host || !allow.includes(host))) {
     return untrusted(
       `registry ${host ?? "(unknown)"} is not a trusted activation host (${allow.join(", ") || "none configured"})`,
     );
@@ -144,6 +177,18 @@ export function classifyExtensionTrust(input: TrustInput): TrustVerdict {
       tier: "trusted-signed",
       trusted: true,
       reason: "verified signature from a trusted activation host (integrity + persisted decision)",
+    };
+  }
+  // No signature present, and the bytes came from the operator-supplied road: the
+  // admin who supplied them is the activation standing, so the package imports as
+  // `trusted-bootstrap` — never `trusted-signed`, so it self-grants no privileged
+  // host port and runs no host DDL (the caller's capability split enforces that).
+  if (operatorSupplied) {
+    return {
+      tier: "trusted-bootstrap",
+      trusted: true,
+      reason:
+        "operator-supplied activation origin (verified content digest + persisted decision; unsigned — import only, no privileged capability)",
     };
   }
   // No signature present. During the pre-signature transition window a package

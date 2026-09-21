@@ -106,6 +106,8 @@ env:
 
 jobs:
   validate-shape:
+    permissions:
+      contents: read
     name: Validate agent.json shape (legacy schema check)
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
 
@@ -125,6 +127,8 @@ jobs:
         run: node scripts/ci-validate-agents.mjs
 
   validate-runtime-invariants:
+    permissions:
+      contents: read
     name: Validate OAS runtime invariants
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
@@ -153,6 +157,8 @@ jobs:
         run: pnpm --filter @cinatra-ai/agents exec vitest run __tests__/oas-runtime-invariants.test.ts
 
   validate-wayflow-mount:
+    permissions:
+      contents: read
     name: WayFlow mount guard (standalone + orchestrated, pinned tree)
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # cinatra#2140. Until now NOTHING in CI mounted the pinned extension tree:

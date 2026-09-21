@@ -431,6 +431,29 @@ describe("createLocalDiskBlobStore", () => {
     });
     return rec.mimeDetected;
   }
+  // Sibling of `sniffOf` for the head-window arms below. `sniffOf` takes a
+  // `number[]` and caps `maxBytes` at 64, and its calls above stay
+  // byte-identical; these arms need buffers LARGER than the head window, so
+  // they stream the bytes as they are under a maxBytes that admits them.
+  async function sniffOfBytes(buf: Uint8Array, declaredMime?: string) {
+    const store = createLocalDiskBlobStore();
+    async function* one() {
+      yield buf;
+    }
+    const rec = await store.put({
+      orgId: "o",
+      artifactId: "a",
+      representationRevisionId: "v",
+      stream: one(),
+      declaredMime,
+      maxBytes: 8192,
+    });
+    return rec.mimeDetected;
+  }
+  /** `n` bytes all in 0x80–0xbf: UTF-8 CONTINUATION bytes with no lead byte, so
+   *  the buffer is invalid UTF-8 at ANY window size, and no byte is a NUL. */
+  const continuationOnly = (n: number) =>
+    Uint8Array.from({ length: n }, (_, i) => 0x80 + (i % 0x40));
   const ftypHead = [
     0x18, 0x18, 0x18, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d,
     0x18, 0x18, 0x18, 0x18,
@@ -476,8 +499,10 @@ describe("createLocalDiskBlobStore", () => {
     // trap. Declared-confirmed only (same weak-signature rule as MP3).
     const adtsHead = [0xff, 0xf1, 0x4c, 0x80, 0x20, 0x20, 0x20, 0x20];
     expect(await sniffOf(adtsHead, "audio/aac")).toBe("audio/aac");
-    // Without the declared confirmation the weak sync stays heuristic text.
-    expect(await sniffOf(adtsHead)).toBe("text/plain");
+    // Without the declared confirmation the weak sync still names NO media
+    // type — that is what this arm guards. The head is not valid UTF-8 (0xff is
+    // no lead byte), so it now reads as the binary base rather than as text.
+    expect(await sniffOf(adtsHead)).toBe("application/octet-stream");
   });
 
   it("sniffs EBML as webm (not text/plain) and honours audio/webm", async () => {
@@ -561,9 +586,11 @@ describe("createLocalDiskBlobStore", () => {
     expect(await sniffOf(id3Head, "text/plain")).toBe("audio/mpeg");
     const frameHead = [0xff, 0xfb, 0x90, 0x64, 0x20, 0x20, 0x20, 0x20];
     expect(await sniffOf(frameHead, "audio/mpeg")).toBe("audio/mpeg");
-    // Bare frame sync WITHOUT the declared confirmation stays heuristic
-    // text (too weak a signature to overrule the declaration path).
-    expect(await sniffOf(frameHead)).toBe("text/plain");
+    // Bare frame sync WITHOUT the declared confirmation still names NO media
+    // type (too weak a signature to overrule the declaration path) — that is
+    // what this arm guards. The head is not valid UTF-8 (0xff is no lead
+    // byte), so it now reads as the binary base rather than as text.
+    expect(await sniffOf(frameHead)).toBe("application/octet-stream");
   });
 
   it("sniffs fLaC and OggS containers", async () => {
@@ -572,5 +599,70 @@ describe("createLocalDiskBlobStore", () => {
     const oggHead = [0x4f, 0x67, 0x67, 0x53, 0x02, 0x20, 0x20, 0x20];
     expect(await sniffOf(oggHead)).toBe("audio/ogg");
     expect(await sniffOf(oggHead, "video/ogg")).toBe("video/ogg");
+  });
+
+  // The head window is read as TEXT only when it is valid UTF-8 (cinatra#3601).
+  // Before, a window without a NUL was called text whatever its bytes were, so
+  // a binary file was stored as text/plain and the write boundary's accepts
+  // check refused it against the binary artifact type. These arms pin the new
+  // reading and, just as importantly, pin that a genuinely textual buffer is
+  // read exactly as it was before.
+
+  it("reads a NUL-free binary head window declared application/octet-stream as application/octet-stream", async () => {
+    const buf = continuationOnly(2048);
+    expect(buf.includes(0)).toBe(false);
+    expect(await sniffOfBytes(buf, "application/octet-stream")).toBe("application/octet-stream");
+  });
+
+  it("reads the same NUL-free binary bytes with NO declaration as the binary base", async () => {
+    // The undeclared case: honouring a declared octet-stream inside the text
+    // branch would leave this one reading text/plain; validating the window
+    // carries it to the fallback's binary base.
+    expect(await sniffOfBytes(continuationOnly(2048))).toBe("application/octet-stream");
+  });
+
+  it("reads a binary file whose first 16 bytes are printable ASCII as binary (the window is wider than 16 bytes)", async () => {
+    // A 16-byte window would pass the UTF-8 check on this buffer and store it
+    // as text: this arm is what pins the WIDER window.
+    const buf = new Uint8Array(2048);
+    buf.set(new TextEncoder().encode("BINARYish HEADER"), 0);
+    buf.set(continuationOnly(2032), 16);
+    expect(buf.subarray(0, 16).every((byte) => byte >= 0x20 && byte < 0x7f)).toBe(true);
+    expect(buf.includes(0)).toBe(false);
+    expect(await sniffOfBytes(buf, "application/octet-stream")).toBe("application/octet-stream");
+  });
+
+  it("still reads a real UTF-8 text buffer with multi-byte characters declared application/octet-stream as text/plain", async () => {
+    const text = "naïve café — Grüße, 世界! ".repeat(64);
+    const buf = new TextEncoder().encode(text);
+    expect(buf.byteLength).toBeGreaterThan(512);
+    expect(await sniffOfBytes(buf, "application/octet-stream")).toBe("text/plain");
+  });
+
+  it("still reads text as text when the head window ends INSIDE a multi-byte character", async () => {
+    // 511 ASCII bytes then a 3-byte character: the window's last byte is that
+    // character's LEAD byte, an incomplete trailing sequence a streaming fatal
+    // decoder must hold back rather than refuse.
+    const buf = new TextEncoder().encode(`${"a".repeat(511)}—more text after the window`);
+    expect(buf[511]).toBe(0xe2);
+    expect(await sniffOfBytes(buf)).toBe("text/plain");
+  });
+
+  it("still honours a declared text-like type for a window that is NOT valid UTF-8", async () => {
+    // The declared-honouring reading is identical above and below the branch,
+    // so a text-like declaration is untouched by the validation.
+    expect(await sniffOfBytes(continuationOnly(2048), "text/csv")).toBe("text/csv");
+  });
+
+  it("keeps today's fallback for a window that holds a NUL", async () => {
+    // A NUL in the window never entered the text branch and still does not.
+    // The whole window is valid UTF-8 — a NUL is itself a valid UTF-8 byte and
+    // every other byte here is printable ASCII — so this arm rests on the NUL
+    // guard alone: drop `!b.includes(0)` from the branch and it reads
+    // text/plain again.
+    const buf = new TextEncoder().encode("plain ascii around one nul ".repeat(76));
+    expect(buf.byteLength).toBeGreaterThan(512);
+    buf[3] = 0;
+    expect(await sniffOfBytes(buf, "application/octet-stream")).toBe("application/octet-stream");
   });
 });
