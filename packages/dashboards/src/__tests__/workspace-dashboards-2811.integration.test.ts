@@ -741,6 +741,50 @@ describe.skipIf(!RUN_IT)("cinatra#2811 workspace dashboards (real Postgres)", ()
       ]);
     });
 
+    it("never references a default Overview (organization deletion removes those without the delete writer)", async () => {
+      await pool.query(
+        `INSERT INTO ${T()} (id, name, config_json, owner_level, owner_id, organization_id, created_by, entity_type, entity_id, is_default)
+         VALUES ('a-overview', 'Overview', ${CFG}, 'user', 'u-2811', $1, 'u-2811', 'personal', $1, true)`,
+        [ORG_A],
+      );
+      expect(
+        await addWorkspaceReferenceLink({ dashboardId: "a-overview", homeOrgId: ORG_A, createdBy: "u" }),
+      ).toEqual({ created: false });
+    });
+
+    it("a grant racing a dashboard delete is still revoked on the record", async () => {
+      await pool.query(
+        `INSERT INTO ${T()} (id, name, config_json, owner_level, owner_id, organization_id, created_by, entity_type, entity_id)
+         VALUES ('a-race', 'Racing', ${CFG}, 'user', 'u-2811', $1, 'u-2811', 'personal', $1)`,
+        [ORG_A],
+      );
+      await addWorkspaceReferenceLink({ dashboardId: "a-race", homeOrgId: ORG_A, createdBy: "u" });
+      // A platform administrator's grant is mid-flight: its link row is locked
+      // and updated, not yet committed, when the delete starts.
+      const granter = await pool.connect();
+      try {
+        await granter.query("BEGIN");
+        await granter.query(
+          `SELECT id FROM ${L()} WHERE dashboard_id = 'a-race' AND entity_type = 'workspace' FOR UPDATE`,
+        );
+        await granter.query(
+          `UPDATE ${L()} SET workspace_read_granted = true, workspace_read_granted_by = 'u-p', workspace_read_granted_at = now()
+            WHERE dashboard_id = 'a-race' AND entity_type = 'workspace'`,
+        );
+        const deleting = deleteEntityDashboard("a-race", underA);
+        await new Promise((r) => setTimeout(r, 300));
+        await granter.query("COMMIT");
+        await deleting;
+      } finally {
+        granter.release();
+      }
+      const audit = await pool.query(
+        `SELECT operation, metadata FROM "${SCHEMA}".audit_events
+          WHERE resource_id = 'a-race' AND operation = 'dashboard.workspace_read_revoked'`,
+      );
+      expect(audit.rows.map((r) => r.metadata.reason)).toEqual(["dashboard-deleted"]);
+    });
+
     it("the tenant listing writers refuse a workspace link at runtime", async () => {
       await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
       await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true }, "u-p");

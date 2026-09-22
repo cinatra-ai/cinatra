@@ -370,10 +370,16 @@ async function recordWorkspaceGrantRevocationsForDelete(
   dashboardId: string,
   actorUserId: string,
 ): Promise<void> {
-  const granted = await tx
+  // Lock EVERY workspace link of the dashboard, granted or not: a grant that
+  // commits while this delete runs then either finishes first (and is read
+  // here, granted, after the lock wait) or waits behind this transaction and
+  // finds its link gone. Selecting only the granted links would let a racing
+  // grant slip in between and be cascaded away with no revocation.
+  const links = await tx
     .select({
       id: dashboardEntityLinks.id,
       organizationId: dashboardEntityLinks.organizationId,
+      granted: dashboardEntityLinks.workspaceReadGranted,
       grantedBy: dashboardEntityLinks.workspaceReadGrantedBy,
       grantedAt: dashboardEntityLinks.workspaceReadGrantedAt,
     })
@@ -382,12 +388,11 @@ async function recordWorkspaceGrantRevocationsForDelete(
       and(
         eq(dashboardEntityLinks.dashboardId, dashboardId),
         eq(dashboardEntityLinks.entityType, "workspace"),
-        eq(dashboardEntityLinks.workspaceReadGranted, true),
       ),
     )
     .for("update");
   const at = new Date();
-  for (const link of granted) {
+  for (const link of links.filter((l) => l.granted)) {
     await tx.insert(auditEvents).values({
       id: randomUUID(),
       organizationId: link.organizationId,

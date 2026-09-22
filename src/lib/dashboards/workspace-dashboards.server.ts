@@ -261,6 +261,8 @@ export async function listWorkspaceReferenceCandidates(
     ]);
     for (const row of rows) {
       if (present.has(row.id)) continue;
+      // A default Overview is a per-user shell default, never a target.
+      if (row.isDefault) continue;
       if (row.isTemplate || isProjectTemplate(row)) continue;
       if (!isDashboardRowRenderable(row, isLive)) continue;
       if (!viewerPassesHomeAccess(viewer, row)) continue;
@@ -278,7 +280,8 @@ export async function listWorkspaceReferenceCandidates(
 
 /**
  * Reference a dashboard in the workspace. RE-AUTHORIZED on the live row: it
- * must be a live, non-template organization dashboard (never a workspace row),
+ * must be a live, non-template organization dashboard (never a workspace row,
+ * never a default Overview),
  * the viewer must pass its home access, and the viewer must curate its home
  * organization. The link is filed under the target's own organization.
  */
@@ -288,7 +291,7 @@ export async function addWorkspaceReference(
 ): Promise<ScopeListingMutation> {
   const row = await readDashboardRowById(dashboardId);
   if (!row) return { ok: false, reason: "not-found" };
-  if (!row.organizationId || row.isTemplate || isProjectTemplate(row)) {
+  if (!row.organizationId || row.isDefault || row.isTemplate || isProjectTemplate(row)) {
     return { ok: false, reason: "invalid" };
   }
   if (!mayCurateWorkspaceReference(viewer.curator, row.organizationId)) {

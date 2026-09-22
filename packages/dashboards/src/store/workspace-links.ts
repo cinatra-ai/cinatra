@@ -113,8 +113,11 @@ export async function listWorkspaceReferencedDashboardIds(): Promise<Set<string>
  * row itself (an INSERT ... SELECT keyed on the id AND the claimed home
  * organization), so a caller can never file a link under an organization that
  * is not the target's home, and a workspace row (org-NULL) can never be
- * referenced. IDEMPOTENT: the (dashboard, kind, scope) unique index turns a
- * re-add into a no-op. The caller has already authorized the add.
+ * referenced. A default Overview is never a target either: it is a per-user
+ * shell default, not a shareable dashboard, and organization deletion removes
+ * those rows directly (without the delete writer that records a revocation).
+ * IDEMPOTENT: the (dashboard, kind, scope) unique index turns a re-add into a
+ * no-op. The caller has already authorized the add.
  */
 export async function addWorkspaceReferenceLink(input: {
   readonly dashboardId: string;
@@ -131,6 +134,7 @@ export async function addWorkspaceReferenceLink(input: {
      WHERE d.id = ${input.dashboardId}
        AND d.organization_id IS NOT NULL
        AND d.organization_id = ${input.homeOrgId}
+       AND d.is_default = false
     ON CONFLICT (dashboard_id, entity_type, entity_id) DO NOTHING
     RETURNING id
   `);

@@ -214,6 +214,14 @@ describe("the reference picker", () => {
     expect(text).not.toContain("Bolt KPIs");
   });
 
+  it("never offers a default Overview", async () => {
+    reads.orgRows["org-a"].push(
+      dash({ id: "a-ov", name: "Overview", ownerLevel: "user", ownerId: "u1", entityType: "personal", entityId: "org-a", isDefault: true }),
+    );
+    const candidates = await listWorkspaceReferenceCandidates(await viewer());
+    expect(candidates.map((c) => c.dashboardId)).not.toContain("a-ov");
+  });
+
   it("offers nothing to a viewer who curates no organization", async () => {
     reads.roles = { "org-a": "member", "org-b": "member" };
     expect(await listWorkspaceReferenceCandidates(await viewer())).toEqual([]);
@@ -233,6 +241,12 @@ describe("addWorkspaceReference", () => {
 
   it("refuses a target the viewer cannot see, even in a curated organization", async () => {
     expect(await addWorkspaceReference(await viewer(), "a-hidden-team")).toEqual({ ok: false, reason: "denied" });
+    expect(reads.calls).toEqual([]);
+  });
+
+  it("refuses a default Overview: a per-user shell default is not a shareable dashboard", async () => {
+    reads.byId["a-ov"] = dash({ id: "a-ov", name: "Overview", ownerLevel: "user", ownerId: "u1", entityType: "personal", entityId: "org-a", isDefault: true });
+    expect(await addWorkspaceReference(await viewer(), "a-ov")).toEqual({ ok: false, reason: "invalid" });
     expect(reads.calls).toEqual([]);
   });
 
