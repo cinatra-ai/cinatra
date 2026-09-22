@@ -24,33 +24,29 @@
 // SECRETS. The key arrives as an in-memory argument from the caller. It is
 // never an argv value, never written to a file, and never logged — the only
 // thing this module says about it is whether one was supplied.
+//
+// LOADING. A ROAD'S OWN MODULES ARE NOT IMPORTED AT LOAD TIME. This file is
+// reached from a plain Node process running under `--conditions=react-server`,
+// and the anthropic road's writers pull in the skills barrel, which re-exports
+// route-level modules that cannot be evaluated under that condition: imported
+// at the top of this file they took the OPENAI road down too, before either
+// road had run, in a module-load failure that named React and nothing else. So
+// each road's modules are `await import`ed at the point of use — the same shape
+// the boot phase and the caller one level up already use, for the same reason.
+// What stays static is what is shared and safe to evaluate anywhere: the
+// runtime gate, the fingerprint reader, the boot phase's own list (whose module
+// is deliberately import-safe), and TYPES, which `import type` erases.
 // -----------------------------------------------------------------------------
 
 import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 
-import { updateDefaultLlmProviderAtBoot } from "@/lib/admin/default-llm-provider-mutation";
-import { grantSetupConsentWithWorkspaceOptInInDatabase } from "@/lib/anthropic-setup-consent-store";
 import { assertDevelopmentRuntime } from "@/lib/dev-instance-provisioning/runtime-gate";
 import {
   readLiveCredentialFingerprint,
   type LiveCredentialFingerprint,
 } from "@/lib/llm-credential-fingerprint";
 import { providerConnectionBootstrapPhases } from "@/lib/boot/phases/provider-connection-bootstrap";
-import {
-  beginSetupProviderClaim,
-  commitSetupProviderClaim,
-  compensateOwnedSetupCommitment,
-  deriveSetupAiStepState,
-  readSetupProviderCommitState,
-  releaseSetupProviderClaim,
-} from "@/lib/setup-provider-commit";
-import {
-  clearSetupReadinessReceipt,
-  readAnthropicMcpMode,
-  runSetupReadinessSaga,
-  writeAnthropicMcpMode,
-  type SetupReadinessPorts,
-} from "@/lib/setup-readiness-saga";
+import type { SetupReadinessPorts } from "@/lib/setup-readiness-saga";
 import type { SetupConnectionSaveResult } from "@/lib/setup-provider-connection-writer";
 
 export type ProvisionProviderConnectionInput = {
@@ -102,7 +98,10 @@ export async function provisionProviderConnection(
   const readFingerprint = deps?.readCredentialFingerprint ?? readLiveCredentialFingerprint;
 
   // Already provisioned? The wizard's own derivation is the authority, so a
-  // second run asks it rather than guessing from the rows.
+  // second run asks it rather than guessing from the rows. BOTH roads ask, so
+  // this is the one place the machine is reached outside a road — and it is
+  // still reached here, after the gates, rather than at load time.
+  const { deriveSetupAiStepState } = await import("@/lib/setup-provider-commit");
   const before = await deriveSetupAiStepState({ readCredentialFingerprint: readFingerprint });
   if (
     before.ready &&
@@ -118,8 +117,18 @@ export async function provisionProviderConnection(
 
   if (input.provider === "anthropic") {
     await provisionAnthropicConnection(input, deps, readFingerprint);
-  } else {
-    await provisionThroughEnvironmentBootstrap(input);
+    return { provider: input.provider, written: true, note: null };
+  }
+
+  // The bootstrap phase reports its OWN no-ops, and a second run meets one:
+  // the sealed row wins over the environment, so the phase writes nothing and
+  // says so. Reporting that as a write would claim something the phase did not
+  // do — and on this road the pre-flight derivation above cannot tell the two
+  // apart, because the credential fingerprint it compares is read through the
+  // connector surface, which no plain Node process has.
+  const skipped = await provisionThroughEnvironmentBootstrap(input);
+  if (skipped !== null) {
+    return { provider: input.provider, written: false, note: skipped };
   }
 
   return { provider: input.provider, written: true, note: null };
@@ -133,7 +142,7 @@ export async function provisionProviderConnection(
  */
 async function provisionThroughEnvironmentBootstrap(
   input: ProvisionProviderConnectionInput,
-): Promise<void> {
+): Promise<string | null> {
   // SERIALIZED. `process.env` is process-global, so two overlapping calls could
   // otherwise read each other's key or restore a stale value. The CLI gets a
   // private process, but this is an exported in-process API and has to be safe
@@ -145,7 +154,12 @@ async function provisionThroughEnvironmentBootstrap(
     if (input.organizationId) process.env[OPENAI_ORG_ENV] = input.organizationId;
     try {
       const [phase] = providerConnectionBootstrapPhases();
-      await phase.run();
+      // `{ skipped }` is the phase's own word for "this was a deliberate
+      // no-op"; anything else is a run that did the work.
+      const outcome = await phase.run();
+      return outcome && typeof outcome === "object" && "skipped" in outcome
+        ? outcome.skipped
+        : null;
     } finally {
       restore();
     }
@@ -202,6 +216,29 @@ async function provisionAnthropicConnection(
   const saveConnection =
     deps?.saveConnection ??
     (await import("@/lib/setup-provider-connection-writer")).saveSetupProviderConnection;
+
+  // The rest of this road's modules, on the same terms and for the same reason:
+  // they are this road's, the other road must never load them, and one of them
+  // failing to load is then this road's failure alone.
+  const { updateDefaultLlmProviderAtBoot } = await import(
+    "@/lib/admin/default-llm-provider-mutation"
+  );
+  const { grantSetupConsentWithWorkspaceOptInInDatabase } = await import(
+    "@/lib/anthropic-setup-consent-store"
+  );
+  const {
+    beginSetupProviderClaim,
+    commitSetupProviderClaim,
+    compensateOwnedSetupCommitment,
+    readSetupProviderCommitState,
+    releaseSetupProviderClaim,
+  } = await import("@/lib/setup-provider-commit");
+  const {
+    clearSetupReadinessReceipt,
+    readAnthropicMcpMode,
+    runSetupReadinessSaga,
+    writeAnthropicMcpMode,
+  } = await import("@/lib/setup-readiness-saga");
 
   // ---- THE FENCE FIRST, exactly as the wizard takes it --------------------
   // The wizard reads the fence and ACQUIRES the claim BEFORE the credential is

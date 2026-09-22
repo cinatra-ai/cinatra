@@ -66,11 +66,9 @@ import {
   isGlobalDefaultLlmProviderEligible,
   readSkillCatalogFromDatabase,
 } from "@/lib/database";
-// ONE derivation for the credential fingerprint, shared with the sync service:
-// two different derivations would let a key rotation invalidate the sync
-// namespace and NOT the readiness receipt (or vice versa), which is exactly the
-// drift this fingerprint exists to prevent.
-import { deriveApiKeyFingerprint } from "@/lib/anthropic-skill-sync-service";
+// (The credential fingerprint comes from the sync service — see
+// `readAnthropicCredentialFingerprint` below, which imports it where it is
+// used rather than here.)
 
 // ===========================================================================
 // Receipt
@@ -240,13 +238,27 @@ export async function computeReadinessFingerprint(provider: LlmProvider): Promis
 /**
  * Non-reversible fingerprint of the stored Anthropic key.
  *
+ * ONE derivation for the credential fingerprint, shared with the sync service:
+ * two different derivations would let a key rotation invalidate the sync
+ * namespace and NOT the readiness receipt (or vice versa), which is exactly the
+ * drift this fingerprint exists to prevent. The sync service is IMPORTED HERE
+ * rather than at the top of the file, and that placement is load-bearing: this
+ * module is on the path of BOTH providers (the provider-commit machine imports
+ * it, and the boot-time bootstrap and the development provisioning command both
+ * drive that machine from a plain Node process under
+ * `--conditions=react-server`), while the sync service reaches the skills
+ * barrel, whose route-level re-exports cannot be evaluated under that
+ * condition. Imported at the top it made this module — and therefore the
+ * openai path — unloadable outside a rendering server.
+ *
  * Fail-safe rather than fail-open: a throwing derivation (no key, unreadable
- * config) yields `null`, which is a DISTINCT fingerprint input from any real
- * key — so a receipt earned with a key never keeps matching once the key
- * becomes unreadable.
+ * config, a module that will not load) yields `null`, which is a DISTINCT
+ * fingerprint input from any real key — so a receipt earned with a key never
+ * keeps matching once the key becomes unreadable.
  */
 async function readAnthropicCredentialFingerprint(): Promise<string | null> {
   try {
+    const { deriveApiKeyFingerprint } = await import("@/lib/anthropic-skill-sync-service");
     return await deriveApiKeyFingerprint();
   } catch {
     return null;
