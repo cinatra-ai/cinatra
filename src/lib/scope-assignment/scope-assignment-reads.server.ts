@@ -330,11 +330,15 @@ export async function searchScopeArtifactCandidates(
   );
   const byId = new Map<string, ScopeAssignmentArtifactCandidate>();
   for (const extension of accepted) {
+    // Listed with no project: the listing's own project narrowing is the
+    // sealed-room filter (`project_id = $projectId`), which would drop the
+    // unbound artifacts a project page may take. The project rule is applied
+    // below instead, by the same predicate the write path uses.
     const listed = await deps.listArtifacts({
       orgId: vantage.orgId,
       actor: vantage.actor,
       extensionPackageName: extension,
-      projectId: vantage.projectId,
+      projectId: null,
     });
     for (const artifact of listed) {
       if (chosen.has(artifact.artifactId) || byId.has(artifact.artifactId)) continue;

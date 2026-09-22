@@ -375,6 +375,27 @@ describe("the Artifacts pane", () => {
     ).toBeTruthy();
   });
 
+  it("takes no other edit on a slot while its reorder is in flight", async () => {
+    let settle: ((v: { ok: false; reason: "stale-order" }) => void) | null = null;
+    actions.reorderScopeContextArtifactsAction.mockImplementation(
+      () => new Promise((resolve) => {
+        settle = resolve;
+      }),
+    );
+    render(<ScopeAssignmentPage model={artifacts({ sections: [section({ scope: { kind: "team", id: TEAM }, key: `team:${TEAM}`, skills: null, slots: [{ ...BRAND, maxItems: 5 }] })] })} />);
+    const slot = document.querySelector('[data-slot-id="brand-voice"]') as HTMLElement;
+    fireEvent.click(within(slot).getByRole("button", { name: "Move Brand Kit 2026 up" }));
+    await waitFor(() => expect(actions.reorderScopeContextArtifactsAction).toHaveBeenCalled());
+    expect((within(slot).getByRole("combobox") as HTMLInputElement).disabled).toBe(true);
+    for (const button of within(slot).getAllByRole("button", { name: /^Remove / })) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+    await act(async () => {
+      settle?.({ ok: false, reason: "stale-order" });
+    });
+    await waitFor(() => expect((within(slot).getByRole("combobox") as HTMLInputElement).disabled).toBe(false));
+  });
+
   it("never names an artifact the reader can't see, and keeps its remove control", () => {
     render(
       <ScopeAssignmentPage

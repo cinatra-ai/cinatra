@@ -84,6 +84,10 @@ export function ScopeAssignmentSlot({
   const [rows, setRows] = useState<ScopeAssignmentArtifactRow[]>(group.rows);
   const [savingIds, setSavingIds] = useState<readonly string[]>([]);
   const [failures, setFailures] = useState<readonly { key: string; message: string }[]>([]);
+  // A reorder rewrites the whole slot's order, so while one is in flight the
+  // slot takes no other edit: a rollback to the order before it can then never
+  // hide an addition or bring back a removal made in the meantime.
+  const [reordering, setReordering] = useState(false);
   const [, startTransition] = useTransition();
 
   const atBound = group.maxItems !== null && rows.length >= group.maxItems;
@@ -103,7 +107,7 @@ export function ScopeAssignmentSlot({
 
   const handlePick = (item: ArtifactPickerItem) => {
     const { candidate } = item;
-    if (atBound || rows.some((r) => r.artifactId === candidate.artifactId)) return;
+    if (reordering || atBound || rows.some((r) => r.artifactId === candidate.artifactId)) return;
     setRows((prev) => [
       ...prev,
       { artifactId: candidate.artifactId, title: candidate.title, kindLabel: candidate.kindLabel, status: "ok" },
@@ -126,7 +130,7 @@ export function ScopeAssignmentSlot({
   };
 
   const handleRemove = (row: ScopeAssignmentArtifactRow) => {
-    if (busy(row.artifactId)) return;
+    if (reordering || busy(row.artifactId)) return;
     const title = scopeArtifactRowTitle(row);
     setSavingIds((prev) => [...prev, row.artifactId]);
     clearFailure(row.artifactId);
@@ -148,13 +152,12 @@ export function ScopeAssignmentSlot({
 
   const handleMove = (index: number, delta: -1 | 1) => {
     const to = index + delta;
-    if (to < 0 || to >= rows.length || savingIds.length > 0) return;
+    if (to < 0 || to >= rows.length || reordering || savingIds.length > 0) return;
     const before = rows;
     const next = [...rows];
     [next[index], next[to]] = [next[to], next[index]];
     setRows(next);
-    const moved = before[index].artifactId;
-    setSavingIds([moved]);
+    setReordering(true);
     clearFailure("order");
     startTransition(async () => {
       const result = await run(() =>
@@ -164,7 +167,7 @@ export function ScopeAssignmentSlot({
           next.map((r) => r.artifactId),
         ),
       );
-      setSavingIds([]);
+      setReordering(false);
       if (!result.ok) {
         setRows(before);
         recordFailure(
@@ -196,7 +199,7 @@ export function ScopeAssignmentSlot({
             id={fieldId}
             placeholder={group.placeholder}
             emptyText="No matches."
-            disabled={atBound}
+            disabled={atBound || reordering}
             clearQueryOnPick
             excludeIds={rows.map((r) => r.artifactId)}
             onSearch={async (query, page) => {
@@ -283,7 +286,7 @@ export function ScopeAssignmentSlot({
                       size="icon"
                       aria-label={`Move ${title} up`}
                       onClick={() => handleMove(index, -1)}
-                      disabled={index === 0 || savingIds.length > 0}
+                      disabled={index === 0 || reordering || savingIds.length > 0}
                       className="size-8 rounded-control text-muted-foreground disabled:opacity-40"
                     >
                       <ArrowUp className="size-4" />
@@ -295,7 +298,7 @@ export function ScopeAssignmentSlot({
                       size="icon"
                       aria-label={`Move ${title} down`}
                       onClick={() => handleMove(index, 1)}
-                      disabled={isLast || savingIds.length > 0}
+                      disabled={isLast || reordering || savingIds.length > 0}
                       className="size-8 rounded-control text-muted-foreground disabled:opacity-40"
                     >
                       <ArrowDown className="size-4" />
@@ -307,7 +310,7 @@ export function ScopeAssignmentSlot({
                       size="icon"
                       aria-label={`Remove ${title}`}
                       onClick={() => handleRemove(row)}
-                      disabled={saving}
+                      disabled={saving || reordering}
                       className="size-8 rounded-control text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
                     >
                       {saving ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}

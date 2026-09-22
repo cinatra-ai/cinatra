@@ -415,10 +415,14 @@ export async function reorderAssignedContext(
     await tx(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
       assignmentScopeLockKey(ADVISORY_LOCK_NAMESPACE, input.agentPackageName, scope),
     ]);
+    // FOR UPDATE: a remove takes no advisory lock, so the slot's rows are
+    // locked for this transaction instead. A delete that lands first is seen
+    // (the order is then stale and refused); one that comes later waits.
     const rows = await tx<{ artifact_id: string; position: number | string }>(
       `SELECT artifact_id, "position" FROM ${table}
         WHERE agent_package_name = $1 AND slot_id = $2 AND scope_kind = $3 AND scope_id = $4
-        ORDER BY "position" ASC, artifact_id ASC`,
+        ORDER BY "position" ASC, artifact_id ASC
+        FOR UPDATE`,
       [input.agentPackageName, input.slotId, scope.scopeKind, scope.scopeId],
     );
     const currentIds = rows.map((r) => r.artifact_id);

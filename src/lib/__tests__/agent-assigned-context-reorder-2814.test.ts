@@ -58,9 +58,12 @@ describe("reorderAssignedContext", () => {
     expect(calls[0]!.values).toEqual([`agent_assigned_context|${PKG}|team|team_growth`]);
 
     expect(calls[1]!.text).toMatch(/SELECT artifact_id, "position"/);
+    // The slot's rows are locked for the transaction: a remove (which takes
+    // no advisory lock) cannot delete one between the check and the write.
+    expect(calls[1]!.text).toMatch(/FOR UPDATE/);
     expect(calls[1]!.values).toEqual([PKG, SLOT, "team", "team_growth"]);
 
-    expect(calls[2]!.text).toMatch(/UPDATE/);
+    expect(calls[2]!.text.trimStart().startsWith("UPDATE")).toBe(true);
     expect(calls[2]!.values).toEqual([
       PKG,
       SLOT,
@@ -85,7 +88,7 @@ describe("reorderAssignedContext", () => {
         { query },
       );
       expect(result).toEqual({ outcome: "stale-order" });
-      expect(calls.some((c) => /UPDATE/.test(c.text))).toBe(false);
+      expect(calls.some((c) => c.text.trimStart().startsWith("UPDATE"))).toBe(false);
     }
   });
 
@@ -101,7 +104,7 @@ describe("reorderAssignedContext", () => {
       { query },
     );
     expect(result).toEqual({ outcome: "reordered" });
-    expect(calls.some((c) => /UPDATE/.test(c.text))).toBe(false);
+    expect(calls.some((c) => c.text.trimStart().startsWith("UPDATE"))).toBe(false);
   });
 
   it("keys the workspace tier on the sentinel and refuses a malformed tuple before any statement", async () => {

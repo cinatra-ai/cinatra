@@ -505,6 +505,20 @@ describe("the Artifacts pane's writes (agents only)", () => {
     ).toEqual({ ok: true });
   });
 
+  it("offers a project page its own project's artifacts AND unbound ones, even where the listing applies the sealed-room filter", async () => {
+    const bound = { artifactId: "res_sealed", title: "Sealed Brief", eligibleExtensions: ["@cinatra-ai/brand-kit-artifact"], primaryExtension: null, projectId: PROJECT };
+    const unbound = { artifactId: "res_open", title: "Open Kit", eligibleExtensions: ["@cinatra-ai/brand-kit-artifact"], primaryExtension: null, projectId: null };
+    const other = { artifactId: "res_other", title: "Other Project", eligibleExtensions: ["@cinatra-ai/brand-kit-artifact"], primaryExtension: null, projectId: "proj_other" };
+    const proj = harness({ grants: { teamIds: [], projectGrants: [{ projectId: PROJECT, effectiveRole: "admin", accessSource: "user" }] } });
+    // The production listing narrows to `project_id = $projectId` when handed
+    // a project; handed none it lists every visible row.
+    proj.deps.reads.listArtifacts = vi.fn(async ({ projectId }: { projectId: string | null }) =>
+      projectId ? [bound, unbound, other].filter((a) => a.projectId === projectId) : [bound, unbound, other],
+    );
+    const offered = await searchScopeContextArtifacts(agentAt({ kind: "project", id: PROJECT }), SLOT.slotId, "", { offset: 0, limit: 20 }, proj.deps);
+    expect(offered.ok && offered.results.map((r) => r.artifactId).sort()).toEqual(["res_open", "res_sealed"]);
+  });
+
   it("refuses every artifact action on an assistant", async () => {
     const { deps } = harness({});
     const assistant: ScopeAssignmentActionTarget = { surface: "assistant", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "support" };
