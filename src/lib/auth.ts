@@ -42,18 +42,27 @@ const authBaseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 const authSecret = process.env.BETTER_AUTH_SECRET;
 const betterAuthConsoleUrl = process.env.BETTER_AUTH_CONSOLE_URL;
 
-// This module-level value is read via a TOP-LEVEL await, which runs on every
-// module load. Crucially, `auth.ts` is pulled into the Next.js instrumentation
-// hook at boot (instrumentation.node.ts → register-host-connector-services /
-// register-extension-action-guard → auth-session → auth), so an UNGUARDED
-// rejection here propagates out of the hook's module load as
-// "An error occurred while loading instrumentation hook: connect ECONNREFUSED …"
-// and crashes the dev/prod server (webServer exit 1). That breaks every boot
-// without a live DB — `next build` page-data collection, a fresh install before
-// the setup wizard, and the design-visual-verify e2e suite (placeholder DB on
-// :65535). Skip in build phase; on any DB-unavailable error fall back to empty
-// settings. Auth still constructs (just without Google OAuth pre-configured)
-// and the value is re-read at runtime via the normal request path.
+// These boot settings are read ONCE, lazily: the social-provider factory in the
+// options below asks for them while Better Auth builds the auth context, and
+// every request handler awaits that context before it serves anything — so the
+// settings are in hand before their first use. Keeping the read out of module
+// evaluation also keeps this module free of a top-level `await`, so it compiles
+// in this package's CommonJS form and loads under the TypeScript loader the
+// product's own scripts run (`node --import tsx`).
+//
+// Crucially, `auth.ts` is pulled into the Next.js instrumentation hook at boot
+// (instrumentation.node.ts → register-host-connector-services /
+// register-extension-action-guard → auth-session → auth), and Better Auth starts
+// building its context as soon as this module evaluates. The BOOT WAITS for that
+// context — `@/lib/boot/start-boot` awaits it before the boot sequence starts, in
+// every runtime — so a read that raises here rejects the context and fails the
+// boot, exactly as a failed module load did. A boot without a live DB must still
+// come up (`next build` page-data collection, a fresh install before the setup
+// wizard, the design-visual-verify e2e suite on the placeholder DB at :65535),
+// so the read below skips the build phase and RESOLVES with empty settings on
+// the DB-unavailable class. Auth still constructs there (just without Google
+// OAuth pre-configured) and the value is re-read at runtime via the normal
+// request path. Any other failure is raised, and the boot fails with it.
 const emptyGoogleOAuthSettings = {
   clientId: undefined,
   clientSecret: undefined,
@@ -97,7 +106,15 @@ async function readBootGoogleOAuthSettings() {
   }
 }
 
-const googleOAuthSettings = await readBootGoogleOAuthSettings();
+// Memoised so the boot settings are read exactly once per process, whoever asks
+// first and however often Better Auth (or a plugin) consults the factory below.
+let bootGoogleOAuthSettingsPromise: ReturnType<typeof readBootGoogleOAuthSettings> | null = null;
+
+function bootGoogleOAuthSettings() {
+  bootGoogleOAuthSettingsPromise ??= readBootGoogleOAuthSettings();
+  return bootGoogleOAuthSettingsPromise;
+}
+
 // Base advertised scopes (OIDC + the MCP / A2A admission scopes). The CLI
 // control-plane scopes (CLI Class-A) are appended so the AS can ISSUE them; they
 // are bound to the dedicated `/api/cli` audience (extraAudienceBasePaths) and
@@ -439,15 +456,23 @@ export const auth = betterAuth({
       });
     },
   },
-  socialProviders:
-    googleOAuthSettings.clientId && googleOAuthSettings.clientSecret
-      ? {
-          google: {
-            clientId: googleOAuthSettings.clientId,
-            clientSecret: googleOAuthSettings.clientSecret,
-          },
-        }
-      : undefined,
+  // A FUNCTION, not a literal: Better Auth awaits each social-provider entry
+  // while it builds the auth context, which is where this module's boot-time
+  // Google OAuth read happens. `enabled: false` is Better Auth's own way of
+  // declaring a provider absent — its context builder drops the entry before it
+  // reads the credentials — so an install with no saved Google client registers
+  // exactly no social provider, and one with a saved client registers Google
+  // with the same id and secret as ever.
+  socialProviders: {
+    google: async () => {
+      const { clientId, clientSecret } = await bootGoogleOAuthSettings();
+      return {
+        enabled: Boolean(clientId && clientSecret),
+        clientId: clientId ?? "",
+        clientSecret: clientSecret ?? "",
+      };
+    },
+  },
   databaseHooks: {
     user: {
       create: {
