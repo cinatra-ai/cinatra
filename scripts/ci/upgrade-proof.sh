@@ -201,10 +201,10 @@ detect_candidate_cli_surface() {
      || [ -z "$probe_out" ]; then
     fail "candidate CLI surface probe failed or printed nothing — refusing to guess a command form (fail-closed; mirrors ops deploy-instance.sh)."
   fi
-  if printf '%s' "$probe_out" | grep -q 'Cinatra instance —'; then
+  if grep -q 'Cinatra instance —' <<<"$probe_out"; then
     CAND_CLI_NS="instance"
     echo "    candidate CLI probe: namespaced surface (cinatra instance <cmd>)"
-  elif printf '%s' "$probe_out" | grep -q 'Cinatra setup CLI'; then
+  elif grep -q 'Cinatra setup CLI' <<<"$probe_out"; then
     CAND_CLI_NS=""
     echo "    candidate CLI probe: legacy top-level surface (cinatra <cmd>)"
   else
@@ -489,7 +489,7 @@ fi
 NEW_EXPECTED_COUNT=0
 while IFS= read -r expected; do
   [ -n "$expected" ] || continue
-  if ! printf '%s\n' "$PRE_LEDGER_CORE" | grep -qxF "$expected"; then
+  if ! grep -qxF "$expected" <<<"$PRE_LEDGER_CORE"; then
     NEW_EXPECTED_COUNT=$((NEW_EXPECTED_COUNT + 1))
   fi
 done <<< "$EXPECTED_CORE"
@@ -498,9 +498,9 @@ ABSENT_THEN_APPLIED=""
 while IFS= read -r expected; do
   [ -n "$expected" ] || continue
   # absent before?
-  if ! printf '%s\n' "$PRE_LEDGER_CORE" | grep -qxF "$expected"; then
+  if ! grep -qxF "$expected" <<<"$PRE_LEDGER_CORE"; then
     # present after?
-    if printf '%s\n' "$LEDGER_CORE" | grep -qxF "$expected"; then
+    if grep -qxF "$expected" <<<"$LEDGER_CORE"; then
       ABSENT_THEN_APPLIED="$expected"
       break
     fi
@@ -560,7 +560,7 @@ REMIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
   node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance db migrate 2>&1)"
 fi
 printf '%s\n' "$REMIGRATE_OUT" | tail -2
-if ! printf '%s' "$REMIGRATE_OUT" | grep -qiE 'No migrations to run|up to date'; then
+if ! grep -qiE 'No migrations to run|up to date' <<<"$REMIGRATE_OUT"; then
   fail "re-running the migration chain was NOT a no-op — idempotency broken."
 fi
 echo "    idempotent — second run applied nothing"
