@@ -255,7 +255,7 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
     ).toBe("workspace");
   });
 
-  it("draws the owner scope and no line once the owner has saved a decline", async () => {
+  it("regression guard (passes without the #3408 fix too): draws the owner scope and no line once the owner has saved a decline", async () => {
     storedPolicyRow(SAVED_OWNER);
 
     const panel = panelsOf(await drawTab())?.[0];
@@ -271,7 +271,8 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
 
   it("states no recommendation on a connection that belongs to no organization", async () => {
     // A person of no organization still registers a server (cinatra#3397),
-    // and the write gate refuses a workspace grant on that row.
+    // and the write gate refuses a workspace grant on that row. This is the
+    // stated exception to acceptance item 1 of cinatra#3408.
     listNangoConnectionsByOwner.mockResolvedValue([
       { ...registeredRow, organizationId: null },
     ]);
