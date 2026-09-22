@@ -1,6 +1,6 @@
 /**
  * The WORKSPACE reference collection's store (cinatra#2811, per-scope surfaces
- * S5; the amended drawing, `specs/app-artifacts.html` §IX.1 and §IX.3).
+ * S5; the amended drawing, §IX.1 and §IX.3).
  *
  * The whole-workspace scope is a reference target: a dashboard homed in any
  * scope below it can be listed on the workspace Dashboards tab as a link, never

@@ -1,7 +1,7 @@
 import "server-only";
 /**
  * The workspace Dashboards tab's SERVER service (cinatra#2811, per-scope
- * surfaces S5; the amended drawing, `specs/app-artifacts.html` §IX.1 to §IX.4).
+ * surfaces S5; the amended drawing, §IX.1 to §IX.4).
  *
  * The I/O adapter around the pure decisions in `workspace-dashboards-model.ts`:
  *   - the VIEWER is built from the viewer's own memberships through the epic's
