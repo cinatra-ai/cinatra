@@ -335,8 +335,10 @@ export function foldScopeAssignmentMembership(input: {
 }
 
 async function readMembershipDefault(userId: string): Promise<ScopeAssignmentMembership> {
-  const [{ readOrgsWithTeamsForUserActiveOnly, readProjectsForUser }, { readProjectById }] =
-    await Promise.all([import("@/lib/better-auth-db"), import("@/lib/projects-store-dao")]);
+  const { readOrgsWithTeamsForUserActiveOnly, readProjectsForUser } = await import(
+    "@/lib/better-auth-db"
+  );
+  const { readProjectById } = await import("@/lib/projects-store-dao");
   const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
   const visible = orgs.length > 0 ? await readProjectsForUser(userId, orgs[0].id) : [];
   const projects = await Promise.all(
