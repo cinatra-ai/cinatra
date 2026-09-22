@@ -1,9 +1,12 @@
 /**
  * Marketplace VISIBILITY of an installed extension row (cinatra#3447).
  *
- * The §V settings page asks one question of this value — "is this extension
- * published on the marketplace?" — and draws either the published line or the
- * gated publish action from the answer. The row assembly used to answer it with
+ * The §V settings page reads this value in one place only: the publish gate
+ * (`canPublishToMarketplace`), where a public row keeps the live action off
+ * because the promote action refuses a row already recorded as public. §V draws
+ * no "already published" state, so the value never draws a line of its own; the
+ * Marketplace group always draws one of its three drawn states. The row
+ * assembly used to answer "is this extension published?" with
  * `"public"` whenever there was nothing to read: an extension that was never
  * published anywhere carries no registry origin at all, and an ABSENT origin is
  * not a public visibility. It is the kind's own native row first (an agent
