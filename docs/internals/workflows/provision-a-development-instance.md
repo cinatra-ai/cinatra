@@ -116,6 +116,35 @@ a token request naming the **new** origin is rejected outright, and the
 revocation. The command prints the restart step rather than leaving that to the
 next failed token request.
 
+## The agent definitions are not this command's
+
+This command does not read the git-native agent definitions into the database,
+and it cannot. The loader that writes those rows goes through the agent-template
+store (`packages/agents/src/store.ts`), which reads the instance's authorization
+policy (`packages/agents/src/auth-policy.ts`), and that module resolves the
+request-scoped session and the account screens. Its graph belongs to the
+application's own build, and importing it from a plain Node process fails — by
+one of two different mechanisms, depending on which process:
+
+- under **this command's** runtime (`--conditions=react-server`) the module's
+  `import "server-only"` marker is inert, because that package's export map sends
+  the `react-server` condition to an empty module. What fires instead is Next's
+  client router context, reached through the account screens: `createContext is
+  not a function`, because the same condition resolves `react` to the build that
+  has no such export.
+- under a runtime **without** that condition the marker itself fires, which is
+  what it is for.
+
+Either way the failure comes before the first definition is read.
+
+The development boot does it instead, in an awaited `dev-agent-ingest` phase. In
+development the boot is detached from `register()`
+(`src/lib/boot/register-await-policy.ts`), so the server serves while it runs;
+what awaiting the phase moves is the READY marker, which now comes after the
+definitions are on file. `/api/health` answers `starting` / 503 until then. One
+start after this command therefore reaches a complete instance, and a second
+start buys nothing.
+
 ## Idempotency
 
 Running the command twice with the same input performs no additional database
