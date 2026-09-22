@@ -166,16 +166,20 @@ export function decideConnectionShareSurface(input: {
     (storedPolicy?.runListVisibility ?? []).every((v) => v === "owner")
   ) {
     const scope = declaration.scope;
-    // EXPLICIT EXCEPTION to acceptance item 1 of cinatra#3408. A connection of
-    // NO organization (a legacy row stored before cinatra#3397 stamped the
-    // organization, or the row of a person of no organization) gets no
-    // recommendation line and no pre-selection, although its seed is
-    // untouched. The reason is the save path: the connection kind's write gate
-    // refuses a workspace or organization grant on such a row ("invalid_locus",
-    // `validatePolicyWrite` in packages/extensions/src/permissions-kind-hooks.ts).
-    // A pre-selected scope that Save always refuses is worse than no proposal,
-    // and "your organization" would name nothing. So the picker stays on the
-    // stored owner scope, which the gate accepts. Pinned by
+    // EXPLICIT EXCEPTION to acceptance item 1 of cinatra#3408. On a connection
+    // of NO organization (a legacy row stored before cinatra#3397 stamped the
+    // organization, or the row of a person of no organization), a WORKSPACE or
+    // ORGANIZATION recommendation draws no line and no pre-selection, although
+    // the seed is untouched. The MCP Servers connector recommends workspace, so
+    // this is its case. The reason is the save path: the connection kind's
+    // write gate refuses a workspace or organization grant on such a row
+    // ("invalid_locus", `validatePolicyWrite` in
+    // packages/extensions/src/permissions-kind-hooks.ts). A pre-selected scope
+    // that Save always refuses is worse than no proposal, and "your
+    // organization" would name nothing. So the picker stays on the stored
+    // owner scope, which the gate accepts. The other recommendations are not
+    // part of the exception: the gate does not refuse them on such a row.
+    // Pinned by
     // src/lib/__tests__/connection-share-ui-no-organization-exception.test.ts.
     const recommended =
       scope === "user"

@@ -19,8 +19,10 @@
 //
 // The last case runs the whole road once more with the real policy store over
 // an in-memory table: the stored seed is read as the tab reads it, Save
-// changes writes through the save's own parse, and the refreshed panel is read
-// back from the stored row. It draws the saved scope and no line.
+// changes writes through the same schema parse and upsert the save action
+// uses, and the refreshed panel is read back from the stored row. It draws the
+// saved scope and no line. The save action's authorization and vetoes are not
+// part of this case; the write-gate suites pin them.
 
 import "@/components/__tests__/access-picker-jsdom-shims";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -220,8 +222,9 @@ async function readStoredPolicy(): Promise<AgentAuthPolicy> {
 
 /**
  * Draw the panel from the STORED row: the real reader, the panel model for the
- * MCP Servers declaration, and the real form. Save changes takes the save
- * action's own road: its schema parse, then its upsert into the store.
+ * MCP Servers declaration, and the real form. Save changes follows the write
+ * of the save action (`saveExtensionAccessPolicy`): its schema parse, then its
+ * upsert into the store.
  */
 async function drawStoredPanel() {
   const storedPolicy = await readStoredPolicy();
@@ -288,7 +291,8 @@ describe("a recommending connector's panel after Save changes, read back from th
     expect(screen.queryByText(/recommends sharing/)).toBeNull();
     expect(after.surface).toEqual({ surface: "editable", value: "workspace" });
 
-    // The stored row is the saved grant, and the save removed the seed marker.
+    // The stored row is now the saved grant: the upsert replaced the whole
+    // seed, so no seed marker is left on it.
     const stored = await readStoredPolicy();
     expect(stored.runListVisibility).toEqual(["workspace"]);
     expect(stored).not.toHaveProperty("seededDefault");

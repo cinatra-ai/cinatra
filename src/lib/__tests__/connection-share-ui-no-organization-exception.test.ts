@@ -2,15 +2,18 @@
 //
 // Acceptance item 1 of the issue: on a recommending connector, a connection
 // panel whose seed is untouched draws the recommendation line and opens the
-// picker on the recommended scope. The panel model makes ONE exception: a
+// picker on the recommended scope. The panel model makes ONE exception: on a
 // connection of no organization (a legacy row stored before cinatra#3397
-// stamped the organization, or the row of a person of no organization) gets
-// no line and no pre-selection, although its seed is untouched.
+// stamped the organization, or the row of a person of no organization), a
+// workspace or organization recommendation draws no line and no
+// pre-selection, although the seed is untouched. The MCP Servers connector
+// recommends workspace, so this is its case.
 //
 // The reason is the save path. The connection kind's write gate refuses a
 // workspace or organization grant on a connection of no organization
 // ("invalid_locus"), so a pre-selected recommended scope there would be a Save
-// that always fails. This suite pins both halves on the SAME row: the real
+// that always fails. The admin, team and project recommendations are not part
+// of the exception. This suite pins both halves on the SAME row: the real
 // panel model states nothing and keeps the owner scope, and the real write
 // gate refuses the recommended scope and accepts the owner scope the picker
 // shows. The paired case on a connection of an organization shows that the
