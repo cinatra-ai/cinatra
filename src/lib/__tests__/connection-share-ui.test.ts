@@ -171,6 +171,9 @@ describe("decideConnectionShareSurface — default:* recommendation (never auto-
     // organization (the ratified rule of cinatra#3397), so a pre-selected
     // workspace scope could never be saved there, and "your organization"
     // would name nothing.
+    // The stated exception to acceptance item 1 of cinatra#3408; the save
+    // path's refusal on the same row is pinned in
+    // connection-share-ui-no-organization-exception.test.ts.
     const s = decideConnectionShareSurface({
       identity: { organizationId: null },
       declaration: decl("default", "workspace"),
@@ -192,7 +195,7 @@ describe("decideConnectionShareSurface — default:* recommendation (never auto-
     expect(s).toEqual({ surface: "editable", value: "workspace" });
   });
 
-  it("a SAVED recommended scope draws as saved, with no line", () => {
+  it("regression guard (passes without the #3408 fix too): a SAVED recommended scope draws as saved, with no line", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("default", "workspace"),
@@ -202,7 +205,7 @@ describe("decideConnectionShareSurface — default:* recommendation (never auto-
     expect(s).toEqual({ surface: "editable", value: "workspace" });
   });
 
-  it("a connector with a ceiling never states a recommendation, even on the untouched seed", () => {
+  it("regression guard (passes without the #3408 fix too): a connector with a ceiling never states a recommendation, even on the untouched seed", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("only", "workspace"),
