@@ -75,6 +75,10 @@ vi.mock("@/lib/better-auth-db", () => ({
   readProjectsForUser: async () => [{ id: PROJECT, name: "Launch" }],
 }));
 
+vi.mock("@/lib/projects-store-dao", () => ({
+  readProjectById: async (id: string) => (id === PROJECT ? { id, organizationId: ORG } : null),
+}));
+
 const eligible: ScopeSurfaceEligibilityRow[] = [
   {
     packageName: AGENT_PKG,

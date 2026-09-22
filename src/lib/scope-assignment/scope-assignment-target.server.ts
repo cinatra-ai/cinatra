@@ -294,32 +294,59 @@ async function readSessionDefault(): Promise<{ userId: string; activeOrgId: stri
   return { userId, activeOrgId };
 }
 
-async function readMembershipDefault(userId: string): Promise<ScopeAssignmentMembership> {
-  const { readOrgsWithTeamsForUserActiveOnly, readProjectsForUser } = await import(
-    "@/lib/better-auth-db"
-  );
-  const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
+/**
+ * Fold the reader's memberships into the workspace vantage and the scope
+ * names the page labels its sections with.
+ *
+ * The actor-visible project reader is a union across every organization the
+ * reader belongs to (it never reads its organization argument), so each
+ * project is filed under the organization its own row names, and a project
+ * whose organization is not one of the reader's current, non-archived
+ * memberships is dropped. Filing it under every organization would read its
+ * authority, its artifacts and its audit row in the wrong tenant.
+ */
+export function foldScopeAssignmentMembership(input: {
+  userId: string;
+  orgs: ReadonlyArray<{ id: string; name: string; teams: ReadonlyArray<{ id: string; name: string }> }>;
+  projects: ReadonlyArray<{ id: string; name: string; organizationId: string | null }>;
+}): ScopeAssignmentMembership {
   const scopeNames: Record<string, string> = {};
   const teamIdsByOrg: Record<string, string[]> = {};
   const projectIdsByOrg: Record<string, string[]> = {};
-  for (const org of orgs) {
+  for (const org of input.orgs) {
     scopeNames[`organization:${org.id}`] = org.name;
     teamIdsByOrg[org.id] = org.teams.map((t) => t.id);
+    projectIdsByOrg[org.id] = [];
     for (const team of org.teams) scopeNames[`team:${team.id}`] = team.name;
-    // The actor-visible project reader. A project it returns under an
-    // organization it does not belong to is dropped later by the S1 read
-    // resolver, whose project grants are anchored to that organization.
-    const projects = await readProjectsForUser(userId, org.id);
-    projectIdsByOrg[org.id] = projects.map((p) => p.id);
-    for (const project of projects) scopeNames[`project:${project.id}`] = project.name;
+  }
+  for (const project of input.projects) {
+    const orgId = project.organizationId;
+    if (!orgId || !projectIdsByOrg[orgId]) continue;
+    projectIdsByOrg[orgId].push(project.id);
+    scopeNames[`project:${project.id}`] = project.name;
   }
   const vantage = buildWorkspaceVantage({
-    userId,
-    memberships: orgs.map((org) => ({ orgId: org.id })),
+    userId: input.userId,
+    memberships: input.orgs.map((org) => ({ orgId: org.id })),
     teamIdsByOrg,
     projectIdsByOrg,
   });
   return { vantage, scopeNames };
+}
+
+async function readMembershipDefault(userId: string): Promise<ScopeAssignmentMembership> {
+  const [{ readOrgsWithTeamsForUserActiveOnly, readProjectsForUser }, { readProjectById }] =
+    await Promise.all([import("@/lib/better-auth-db"), import("@/lib/projects-store-dao")]);
+  const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
+  const visible = orgs.length > 0 ? await readProjectsForUser(userId, orgs[0].id) : [];
+  const projects = await Promise.all(
+    visible.map(async (p) => ({
+      id: p.id,
+      name: p.name,
+      organizationId: (await readProjectById(p.id))?.organizationId ?? null,
+    })),
+  );
+  return foldScopeAssignmentMembership({ userId, orgs, projects });
 }
 
 export const defaultScopeAssignmentTargetDeps: ScopeAssignmentTargetDeps = {

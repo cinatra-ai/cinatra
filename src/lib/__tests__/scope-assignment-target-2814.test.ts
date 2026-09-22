@@ -392,3 +392,36 @@ describe("a write names one of the page's own scopes", () => {
     });
   });
 });
+
+describe("the membership read places every project under its own organization", () => {
+  it("files a project under the organization it belongs to, never under every member organization", async () => {
+    const { foldScopeAssignmentMembership } = await import(
+      "@/lib/scope-assignment/scope-assignment-target.server"
+    );
+    const folded = foldScopeAssignmentMembership({
+      userId: ME,
+      orgs: [
+        { id: ORG, name: "Acme", teams: [{ id: TEAM, name: "Growth" }] },
+        { id: ORG2, name: "Beta", teams: [] },
+      ],
+      // The actor-visible project reader is a union across organizations.
+      projects: [
+        { id: PROJECT, name: "Launch", organizationId: ORG },
+        { id: "proj_beta", name: "Beta Site", organizationId: ORG2 },
+        { id: "proj_elsewhere", name: "Elsewhere", organizationId: "org_not_a_member" },
+        { id: "proj_orphan", name: "Orphan", organizationId: null },
+      ],
+    });
+    expect(folded.vantage.organizations).toEqual([
+      { orgId: ORG, teamIds: [TEAM], projectIds: [PROJECT] },
+      { orgId: ORG2, teamIds: [], projectIds: ["proj_beta"] },
+    ]);
+    expect(folded.scopeNames).toEqual({
+      [`organization:${ORG}`]: "Acme",
+      [`team:${TEAM}`]: "Growth",
+      [`organization:${ORG2}`]: "Beta",
+      [`project:${PROJECT}`]: "Launch",
+      "project:proj_beta": "Beta Site",
+    });
+  });
+});
