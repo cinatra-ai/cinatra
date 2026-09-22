@@ -50,18 +50,46 @@ already uses before anything is persisted.
 ## The runtime gate
 
 The command refuses to run outside a development runtime, and so does each write
-it performs — independently, one gate per wrapper, using the same predicate the
-rest of the codebase uses (`isAppDevelopmentMode()` / `getAppRuntimeMode()`,
-reading `CINATRA_RUNTIME_MODE` / `APP_RUNTIME_MODE`). This is in addition to,
-never instead of, the admin-session authorization the wizard's own actions
-require.
+it performs — independently, one gate per wrapper. This is in addition to, never
+instead of, the admin-session authorization the wizard's own actions require.
 
-That predicate reads an **unset** mode as development, as it does everywhere
-else in the codebase. "Nobody declared a mode" is not the same claim as "this is
-a development instance", though, so the gate adds one condition of its own: an
-undeclared runtime mode under `NODE_ENV=production` is refused as the ambiguity
-it is. A declared `CINATRA_RUNTIME_MODE=development` still passes under a
-production build — running one locally is exactly who this command is for.
+The gate starts from the same predicate the rest of the codebase uses
+(`isAppDevelopmentMode()` / `getAppRuntimeMode()`, reading `CINATRA_RUNTIME_MODE`
+/ `APP_RUNTIME_MODE`) and then asks for more than it. That predicate is a
+two-value projection: every spelling that is not `production` or `prod` reads as
+development. Right for a feature switch, too generous for a setup command that
+writes — so the gate recognises its development instances **by name** and fails
+closed on everything else:
+
+- a **declared** runtime mode is accepted as `development`, any letter case,
+  surrounding blanks trimmed. That is the one spelling every strict
+  development-only switch in the codebase tests for, so it is exactly what the
+  gate accepts. Any other declared value — a short form such as `dev`,
+  `staging`, `preview`, a misspelling of `development` — is refused, under every
+  build. The shared reading accepts `prod` beside `production` only because the
+  strict switches are negative tests (`!== "development"`), so a short form
+  still turns every development path off; a short *development* form is the
+  opposite, a positive miss, and the gate does not recognise one.
+- an **undeclared** runtime mode keeps parity with the shared reading, which
+  defaults it to development explicitly: it is accepted whenever the build is
+  not a production one, and refused under `NODE_ENV=production`, where "nobody
+  declared a mode" is an ambiguity rather than a development instance. A blank
+  value is not a declaration.
+- a declared `development` still passes under a production build — a developer
+  running one locally is exactly who this command is for.
+
+This is the one point where the gate disagrees with the app about which runtime
+it is in, and it disagrees only in the closed direction: it refuses runtimes the
+shared reading would call development, and never accepts one the shared reading
+calls production.
+
+A refusal names the variable and the spellings the command accepts; it never
+repeats the declared value back.
+
+`cinatra install --mode demo` is unaffected. A demo instance runs with
+`CINATRA_RUNTIME_MODE=development` and carries its overlay on the separate
+`CINATRA_INSTALL_PROFILE` axis (`src/lib/install-profile.ts`), so it is a
+development instance here like any other.
 
 ## Which writer each leg reuses
 
