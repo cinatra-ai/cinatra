@@ -151,7 +151,7 @@ describe("the stated exception: an untouched seed on a connection of no organiza
     expect(await saveVeto(legacyRow, policyOf("owner"))).toBeNull();
   });
 
-  it("draws no line and no pre-selection for an organization recommendation either, for the same reason", async () => {
+  it("regression guard (passes without the #3408 fix too): draws no line and no pre-selection for an organization recommendation either, for the same reason", async () => {
     const s = surfaceFor(legacyRow, "organization");
     expect(s).toEqual({ surface: "editable", value: "owner" });
 
