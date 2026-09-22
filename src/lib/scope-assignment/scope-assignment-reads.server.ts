@@ -381,6 +381,44 @@ export async function inspectArtifactForSlot(
   };
 }
 
+/** How many listing pages one picker search walks before it stops. */
+export const ARTIFACT_LISTING_MAX_PAGES = 20;
+
+/**
+ * Walk the artifact listing's cursor to its end, within a bound.
+ *
+ * The listing reads the newest rows per type in SQL and filters by extension
+ * and authorization afterwards, so one page is not the population: an older
+ * eligible artifact sits on a later page, and a page can even come back empty
+ * with a continuation. The walk stops when the cursor runs out (`complete`),
+ * when it hits its page bound, or when a cursor fails to move.
+ */
+export async function collectArtifactListing(
+  readPage: (cursor: string | null) => Promise<{
+    artifacts: ScopeAssignmentArtifactSummary[];
+    nextCursor: string | null;
+  }>,
+  maxPages: number = ARTIFACT_LISTING_MAX_PAGES,
+): Promise<{ artifacts: ScopeAssignmentArtifactSummary[]; complete: boolean }> {
+  const artifacts: ScopeAssignmentArtifactSummary[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  for (let page = 0; page < maxPages; page += 1) {
+    const read = await readPage(cursor);
+    for (const artifact of read.artifacts) {
+      if (seenIds.has(artifact.artifactId)) continue;
+      seenIds.add(artifact.artifactId);
+      artifacts.push(artifact);
+    }
+    if (!read.nextCursor) return { artifacts, complete: true };
+    if (seenCursors.has(read.nextCursor)) return { artifacts, complete: false };
+    seenCursors.add(read.nextCursor);
+    cursor = read.nextCursor;
+  }
+  return { artifacts, complete: false };
+}
+
 const MAX_PAGE = 50;
 
 function pageOf<T>(rows: T[], page: { offset: number; limit: number }): { results: T[]; hasMore: boolean } {
@@ -426,8 +464,25 @@ export const defaultScopeAssignmentReadDeps: ScopeAssignmentReadDeps = {
     return access.kind === "ok" ? { kind: "ok", artifact: toSummary(access.artifact) } : access;
   },
   listArtifacts: async ({ orgId, actor, extensionPackageName, projectId }) => {
-    const { listArtifacts } = await import("@/lib/artifacts/artifact-service");
-    return listArtifacts({ orgId, actor, extensionPackageName, projectId }).map(toSummary);
+    const { listArtifactsPage, ARTIFACT_PAGE_MAX_LIMIT } = await import("@/lib/artifacts/artifact-service");
+    const { artifacts, complete } = await collectArtifactListing(async (cursor) => {
+      const page = listArtifactsPage({
+        orgId,
+        actor,
+        extensionPackageName,
+        projectId,
+        cursor,
+        limit: ARTIFACT_PAGE_MAX_LIMIT,
+      });
+      return { artifacts: page.artifacts.map(toSummary), nextCursor: page.nextCursor };
+    });
+    if (!complete) {
+      console.warn(
+        "[scope-assignment] artifact listing walk stopped at its page bound; the picker offers the newest artifacts only. extension:",
+        String(extensionPackageName).slice(0, 200),
+      );
+    }
+    return artifacts;
   },
   expandAcceptedExtensions: async (accepted) => {
     const [{ expandAcceptedViaSatisfies }, { getInstalledExtensionDescriptors }] = await Promise.all([

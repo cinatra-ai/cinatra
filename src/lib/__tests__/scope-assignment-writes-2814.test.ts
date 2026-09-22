@@ -454,6 +454,13 @@ describe("the Artifacts pane's writes (agents only)", () => {
     });
   });
 
+  it("passes a long order through whole: storage is uncapped, so a 501-row slot still reorders", async () => {
+    const { deps } = harness({});
+    const ids = Array.from({ length: 501 }, (_, i) => `res_${i}`);
+    expect(await reorderScopeContextArtifacts(PERSONAL, SLOT.slotId, ids, deps)).toEqual({ ok: true });
+    expect(deps.reorderContext).toHaveBeenCalledWith(expect.objectContaining({ orderedArtifactIds: ids }));
+  });
+
   it("surfaces a stale order", async () => {
     const { deps } = harness({});
     deps.reorderContext = vi.fn(async () => ({ outcome: "stale-order" }) as const);

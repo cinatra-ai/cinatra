@@ -140,6 +140,9 @@ function wireId(value: unknown): string {
   return typeof value === "string" ? value.trim().slice(0, 400) : "";
 }
 
+/** The longest order a reorder accepts; far above any slot a person curates. */
+const MAX_REORDER_LENGTH = 10_000;
+
 class AuditFailed extends Error {}
 
 async function authorize(
@@ -457,7 +460,10 @@ export async function reorderScopeContextArtifacts(
 ): Promise<ScopeAssignmentActionResult> {
   return guarded(async () => {
     const slotId = wireId(rawSlotId);
-    const order = Array.isArray(rawOrder) ? rawOrder.slice(0, 500).map(wireId) : [];
+    // Never truncated: storage is uncapped, and a shortened order would fail
+    // the store's exact-set check for good. An absurd length is refused whole.
+    const order =
+      Array.isArray(rawOrder) && rawOrder.length <= MAX_REORDER_LENGTH ? rawOrder.map(wireId) : [];
     const auth = await authorize(input, "context", "write", deps);
     if ("ok" in auth) return auth;
     if (!slotId) return refuse("unknown-slot");
