@@ -55,6 +55,16 @@ import {
   type DashboardTwinContext,
 } from "../twin-writer-seam";
 import { DASHBOARD_CONFIG_V12_VERSION as V12 } from "../extension/dashboard-config-v12";
+import {
+  removeWorkspaceReferenceLink,
+  setWorkspaceReferenceReadGrant,
+} from "../mutation-service";
+import {
+  addWorkspaceReferenceLink,
+  isWorkspaceReadGranted,
+  listWorkspaceReferenceRows,
+} from "../store/workspace-links";
+import { DashboardAccessError, requireDashboardAccess } from "../auth/require-dashboard-access";
 
 const RUN_IT = process.env.DASH_DB_IT === "1" && !!process.env.SUPABASE_DB_URL;
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_it_2811";
@@ -570,6 +580,171 @@ describe.skipIf(!RUN_IT)("cinatra#2811 workspace dashboards (real Postgres)", ()
       expect(audit.rows).toEqual([
         { organization_id: null, operation: "dashboards.create", resource_id: overview.id },
       ]);
+    });
+  });
+
+  // ── Workspace references, the everyone-grant, and the read bypass ──────
+  describe("workspace references and the everyone-grant", () => {
+    const outsider: DashboardActor = {
+      userId: "u-outsider",
+      organizationId: ORG_B,
+      teamIds: [],
+      orgRole: "member",
+      teamRoles: {},
+    };
+
+    beforeEach(async () => {
+      await pool.query(`DELETE FROM ${L()} WHERE id <> 'pre-link'`);
+      await pool.query(`DELETE FROM ${T()} WHERE id NOT IN ('pre-team-dash')`);
+      await pool.query(`DELETE FROM "${SCHEMA}".audit_events`);
+      await pool.query(
+        `INSERT INTO ${T()} (id, name, config_json, owner_level, owner_id, organization_id, created_by, entity_type, entity_id)
+         VALUES ('b-org-dash', 'Spend by project', ${CFG}, 'organization', $1, $1, 'u-admin-b', 'organization', $1)`,
+        [ORG_B],
+      );
+    });
+
+    it("adds a reference only under the target's own home organization, idempotently", async () => {
+      expect(
+        await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_B, createdBy: "u-admin" }),
+      ).toEqual({ created: false });
+      expect(
+        await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u-admin" }),
+      ).toEqual({ created: true });
+      expect(
+        await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u-admin" }),
+      ).toEqual({ created: false });
+      const rows = await pool.query(`SELECT entity_type, entity_id, organization_id FROM ${L()} WHERE entity_type = 'workspace'`);
+      expect(rows.rows).toEqual([{ entity_type: "workspace", entity_id: "__workspace__", organization_id: ORG_A }]);
+    });
+
+    it("reads the collection across organizations, fenced on both sides of the join", async () => {
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      await addWorkspaceReferenceLink({ dashboardId: "b-org-dash", homeOrgId: ORG_B, createdBy: "u" });
+      // A malformed link whose organization disagrees with its target's is
+      // never surfaced (no name leaks across the fence).
+      await pool.query(
+        `INSERT INTO ${L()} (id, dashboard_id, entity_type, entity_id, organization_id, created_by)
+         VALUES ('bad-fence', 'pre-team-dash', 'team', 'team-1', $1, 'u')`,
+        [ORG_B],
+      );
+      await pool.query(
+        `UPDATE ${L()} SET organization_id = $1 WHERE dashboard_id = 'b-org-dash' AND entity_type = 'workspace'`,
+        [ORG_A],
+      );
+      const rows = await listWorkspaceReferenceRows();
+      expect(rows.map((r) => [r.dashboardId, r.homeOrgId, r.name])).toEqual([
+        ["pre-team-dash", ORG_A, "Pipeline health"],
+      ]);
+    });
+
+    it("grants, revokes and audits the everyone-grant; revoking keeps the audit history", async () => {
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      const g = await setWorkspaceReferenceReadGrant(
+        { dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true },
+        "u-platform",
+      );
+      expect(g).toEqual({ changed: true });
+      const live = await pool.query(
+        `SELECT workspace_read_granted AS g, workspace_read_granted_by AS by, workspace_read_granted_at IS NOT NULL AS at FROM ${L()} WHERE entity_type = 'workspace'`,
+      );
+      expect(live.rows).toEqual([{ g: true, by: "u-platform", at: true }]);
+      // Re-granting changes nothing and records nothing.
+      expect(
+        await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true }, "u-platform"),
+      ).toEqual({ changed: false });
+      expect(
+        await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: false }, "u-platform-2"),
+      ).toEqual({ changed: true });
+      const cleared = await pool.query(
+        `SELECT workspace_read_granted AS g, workspace_read_granted_by AS by, workspace_read_granted_at AS at FROM ${L()} WHERE entity_type = 'workspace'`,
+      );
+      expect(cleared.rows).toEqual([{ g: false, by: null, at: null }]);
+      const audit = await pool.query(
+        `SELECT operation, organization_id, actor_principal_id, resource_type, resource_id, metadata FROM "${SCHEMA}".audit_events ORDER BY created_at, operation`,
+      );
+      expect(audit.rows.map((r) => [r.operation, r.organization_id, r.actor_principal_id, r.resource_type, r.resource_id])).toEqual([
+        ["dashboard.workspace_read_granted", ORG_A, "u-platform", "dashboard", "pre-team-dash"],
+        ["dashboard.workspace_read_revoked", ORG_A, "u-platform-2", "dashboard", "pre-team-dash"],
+      ]);
+      expect(audit.rows[0].metadata.prior).toEqual({ granted: false, grantedBy: null, grantedAt: null });
+      expect(audit.rows[1].metadata.prior.granted).toBe(true);
+      expect(audit.rows[1].metadata.prior.grantedBy).toBe("u-platform");
+      expect(typeof audit.rows[0].metadata.linkId).toBe("string");
+      expect(typeof audit.rows[0].metadata.at).toBe("string");
+    });
+
+    it("refuses a grant on a link that does not exist or sits under another home organization", async () => {
+      expect(
+        await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true }, "u-p"),
+      ).toEqual({ changed: false, missing: true });
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      expect(
+        await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_B, granted: true }, "u-p"),
+      ).toEqual({ changed: false, missing: true });
+    });
+
+    it("removing a granted reference revokes it on the record, and the link is gone", async () => {
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true }, "u-p");
+      expect(await removeWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A }, "u-admin-a")).toEqual({
+        removed: true,
+      });
+      const left = await pool.query(`SELECT count(*)::int AS n FROM ${L()} WHERE entity_type = 'workspace'`);
+      expect(left.rows[0].n).toBe(0);
+      const audit = await pool.query(
+        `SELECT operation, metadata FROM "${SCHEMA}".audit_events ORDER BY created_at, operation`,
+      );
+      expect(audit.rows.map((r) => r.operation)).toEqual([
+        "dashboard.workspace_read_granted",
+        "dashboard.workspace_read_revoked",
+      ]);
+      expect(audit.rows[1].metadata.reason).toBe("reference-removed");
+      // An ungranted reference is removed without a revocation record.
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      await removeWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A }, "u-admin-a");
+      const after = await pool.query(`SELECT count(*)::int AS n FROM "${SCHEMA}".audit_events`);
+      expect(after.rows[0].n).toBe(2);
+    });
+
+    it("the grant opens READ ONLY, to any authenticated user, only while it stands", async () => {
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      const read = (actor: DashboardActor, mode: "read" | "write" = "read") =>
+        requireDashboardAccess({ actor, projectGrants: [], dashboardId: "pre-team-dash", mode });
+      // Without the grant the target's home access decides: an outsider is refused.
+      await expect(read(outsider)).rejects.toBeInstanceOf(DashboardAccessError);
+      expect(await isWorkspaceReadGranted("pre-team-dash", ORG_A)).toBe(false);
+
+      await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true }, "u-p");
+      expect(await isWorkspaceReadGranted("pre-team-dash", ORG_A)).toBe(true);
+      await expect(read(outsider)).resolves.toMatchObject({ id: "pre-team-dash" });
+      // Write never widens.
+      await expect(read(outsider, "write")).rejects.toBeInstanceOf(DashboardAccessError);
+      // No identified user, no bypass.
+      await expect(read({ ...outsider, userId: "" })).rejects.toBeInstanceOf(DashboardAccessError);
+      // An OBO-delegated agent actor is not "every authenticated user".
+      await expect(
+        read({ ...outsider, oboCeiling: [{ tier: "organization", id: ORG_B }] }),
+      ).rejects.toBeInstanceOf(DashboardAccessError);
+
+      await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: false }, "u-p");
+      await expect(read(outsider)).rejects.toBeInstanceOf(DashboardAccessError);
+    });
+
+    it("a reference without the grant widens nothing: home access alone decides", async () => {
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      const outsiderRead = requireDashboardAccess({
+        actor: outsider,
+        projectGrants: [],
+        dashboardId: "pre-team-dash",
+        mode: "read",
+      });
+      await expect(outsiderRead).rejects.toBeInstanceOf(DashboardAccessError);
+      // A member of the team's organization and team still reads it at home.
+      const teamMember: DashboardActor = { ...underA, userId: "u-member", teamIds: ["team-1"] };
+      await expect(
+        requireDashboardAccess({ actor: teamMember, projectGrants: [], dashboardId: "pre-team-dash", mode: "read" }),
+      ).resolves.toMatchObject({ id: "pre-team-dash" });
     });
   });
 

@@ -27,6 +27,7 @@ import type { DashboardActor } from "./permissions";
 import { resolveDashboardAccess } from "./permissions";
 import {
   auditEvents,
+  dashboardEntityLinks,
   dashboardRevisions,
   dashboards,
   getDashboardsDb,
@@ -45,6 +46,7 @@ import {
   isKnownEntityType,
   isWorkspaceDashboardRef,
   isWorkspaceDashboardRow,
+  WORKSPACE_DASHBOARD_ENTITY_ID,
   normalizeCreatableDashboardName,
   parseCanonicalOverviewId,
   type DashboardEntityRef,
@@ -2639,4 +2641,160 @@ export async function backfillDashboardArtifactTwins(
     );
   }
   return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The WORKSPACE reference collection's audited writers (cinatra#2811; the
+// amended drawing §IX.4). A platform administrator may mark a workspace
+// reference "visible to everyone": a READ-ONLY grant on the link row, never on
+// the dashboard's home access. Setting it, clearing it and removing a granted
+// link are each recorded as an append-only `audit_events` row in the SAME
+// transaction as the link change, naming the actor, the link, the dashboard,
+// the prior state and the moment. Clearing the live grant never touches its
+// audit history. AUTHORIZATION IS THE CALLER'S: the host service decides who
+// may grant (a platform administrator alone) and who may remove (the link's
+// curators); these writers only persist and record.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The two audit operations the everyone-grant writes. */
+export const WORKSPACE_READ_GRANTED_OPERATION = "dashboard.workspace_read_granted";
+export const WORKSPACE_READ_REVOKED_OPERATION = "dashboard.workspace_read_revoked";
+
+type WorkspaceLinkForUpdate = {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly granted: boolean;
+  readonly grantedBy: string | null;
+  readonly grantedAt: Date | null;
+};
+
+/** Lock the one workspace link to `dashboardId` filed under `homeOrgId`. */
+async function selectWorkspaceLinkForUpdate(
+  tx: DashboardsDb,
+  dashboardId: string,
+  homeOrgId: string,
+): Promise<WorkspaceLinkForUpdate | undefined> {
+  const rows = await tx
+    .select({
+      id: dashboardEntityLinks.id,
+      organizationId: dashboardEntityLinks.organizationId,
+      granted: dashboardEntityLinks.workspaceReadGranted,
+      grantedBy: dashboardEntityLinks.workspaceReadGrantedBy,
+      grantedAt: dashboardEntityLinks.workspaceReadGrantedAt,
+    })
+    .from(dashboardEntityLinks)
+    .where(
+      and(
+        eq(dashboardEntityLinks.dashboardId, dashboardId),
+        eq(dashboardEntityLinks.entityType, "workspace"),
+        eq(dashboardEntityLinks.entityId, WORKSPACE_DASHBOARD_ENTITY_ID),
+        eq(dashboardEntityLinks.organizationId, homeOrgId),
+      ),
+    )
+    .for("update")
+    .limit(1);
+  return rows[0];
+}
+
+/** Record one everyone-grant change (append-only; same transaction). */
+async function writeWorkspaceGrantAudit(
+  tx: DashboardsDb,
+  input: {
+    readonly operation: typeof WORKSPACE_READ_GRANTED_OPERATION | typeof WORKSPACE_READ_REVOKED_OPERATION;
+    readonly actorUserId: string;
+    readonly dashboardId: string;
+    readonly link: WorkspaceLinkForUpdate;
+    readonly at: Date;
+    readonly reason: "set" | "unset" | "reference-removed";
+  },
+): Promise<void> {
+  await tx.insert(auditEvents).values({
+    id: randomUUID(),
+    organizationId: input.link.organizationId,
+    actorPrincipalId: input.actorUserId,
+    actorPrincipalType: "user",
+    resourceType: "dashboard",
+    resourceId: input.dashboardId,
+    operation: input.operation,
+    decision: "allow",
+    metadata: {
+      linkId: input.link.id,
+      dashboardId: input.dashboardId,
+      actor: input.actorUserId,
+      reason: input.reason,
+      prior: {
+        granted: input.link.granted,
+        grantedBy: input.link.grantedBy,
+        grantedAt: input.link.grantedAt ? input.link.grantedAt.toISOString() : null,
+      },
+      at: input.at.toISOString(),
+    },
+  });
+}
+
+/**
+ * Set or clear the everyone-grant on the workspace link to `dashboardId`
+ * (filed under its home organization). A no-op when the link already holds the
+ * requested state (nothing changes, so nothing is recorded). `missing` when no
+ * such link exists: the grant rides a link, never a dashboard.
+ */
+export async function setWorkspaceReferenceReadGrant(
+  input: { readonly dashboardId: string; readonly homeOrgId: string; readonly granted: boolean },
+  actorUserId: string,
+): Promise<{ changed: boolean; missing?: true }> {
+  if (!actorUserId) throw new DashboardForbiddenError("dashboards.workspace_grant", input.dashboardId);
+  return getDashboardsDb().transaction(async (t) => {
+    const tx = t as unknown as DashboardsDb;
+    const link = await selectWorkspaceLinkForUpdate(tx, input.dashboardId, input.homeOrgId);
+    if (!link) return { changed: false, missing: true as const };
+    if (link.granted === input.granted) return { changed: false };
+    const at = new Date();
+    await tx
+      .update(dashboardEntityLinks)
+      .set(
+        input.granted
+          ? { workspaceReadGranted: true, workspaceReadGrantedBy: actorUserId, workspaceReadGrantedAt: at }
+          : { workspaceReadGranted: false, workspaceReadGrantedBy: null, workspaceReadGrantedAt: null },
+      )
+      .where(eq(dashboardEntityLinks.id, link.id));
+    await writeWorkspaceGrantAudit(tx, {
+      operation: input.granted ? WORKSPACE_READ_GRANTED_OPERATION : WORKSPACE_READ_REVOKED_OPERATION,
+      actorUserId,
+      dashboardId: input.dashboardId,
+      link,
+      at,
+      reason: input.granted ? "set" : "unset",
+    });
+    return { changed: true };
+  });
+}
+
+/**
+ * Remove the workspace link to `dashboardId` (filed under its home
+ * organization). Removing a GRANTED link revokes the grant, so the revocation
+ * is recorded in the same transaction before the row goes; an ungranted link
+ * leaves no grant record to write.
+ */
+export async function removeWorkspaceReferenceLink(
+  input: { readonly dashboardId: string; readonly homeOrgId: string },
+  actorUserId: string,
+): Promise<{ removed: boolean }> {
+  if (!actorUserId) throw new DashboardForbiddenError("dashboards.workspace_unlist", input.dashboardId);
+  return getDashboardsDb().transaction(async (t) => {
+    const tx = t as unknown as DashboardsDb;
+    const link = await selectWorkspaceLinkForUpdate(tx, input.dashboardId, input.homeOrgId);
+    if (!link) return { removed: false };
+    if (link.granted) {
+      await writeWorkspaceGrantAudit(tx, {
+        operation: WORKSPACE_READ_REVOKED_OPERATION,
+        actorUserId,
+        dashboardId: input.dashboardId,
+        link,
+        at: new Date(),
+        reason: "reference-removed",
+      });
+    }
+    await tx.delete(dashboardEntityLinks).where(eq(dashboardEntityLinks.id, link.id));
+    return { removed: true };
+  });
 }

@@ -27,6 +27,17 @@ export type ScopeDashboardTabRow = {
   /** Server-derived: may THIS viewer remove this listing? (listed AND manager).
    *  A Home row is never removable (its home is its identity, §IX). */
   readonly canRemove: boolean;
+  /**
+   * The §IX.4 "visible to everyone" mark, present ONLY on a WORKSPACE reference
+   * (cinatra#2811). `granted` is the link's live grant; `canSet` is true for a
+   * platform administrator alone. Everyone else reads the mark and a muted,
+   * disabled control with its reason, the drawing's one stated exception to
+   * suppression, because the mark is information a member may read.
+   */
+  readonly everyone?: {
+    readonly granted: boolean;
+    readonly canSet: boolean;
+  };
 };
 
 /** The tab's data + whether the viewer manages the scope (§IX.2 write gate).
