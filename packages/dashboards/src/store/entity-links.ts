@@ -25,6 +25,23 @@ import type { TenantListingScopeKind } from "./schema";
 export { LISTING_SCOPE_KINDS } from "./schema";
 export type { ListingScopeKind, TenantListingScopeKind } from "./schema";
 
+// The WORKSPACE reference collection (cinatra#2811) rides this same host alias:
+// its store sits beside this one and is re-exported here, so the host reaches
+// both listing relations through one subpath.
+export {
+  addWorkspaceReferenceLink,
+  isWorkspaceReadGranted,
+  listWorkspaceReferenceRows,
+  listWorkspaceReferencedDashboardIds,
+  listUserWorkspaceDashboards,
+  readWorkspaceReferenceLink,
+  removeWorkspaceReferenceLink,
+  setWorkspaceReferenceReadGrant,
+  WORKSPACE_READ_GRANTED_OPERATION,
+  WORKSPACE_READ_REVOKED_OPERATION,
+  type WorkspaceReferenceRow,
+} from "./workspace-links";
+
 /** A TENANT scope whose Dashboards tab lists dashboards (the three shared
  *  scopes). The workspace collection (cinatra#2811) spans organizations and is
  *  not a `ListingScope`: it has its own reads in `workspace-links.ts`. */

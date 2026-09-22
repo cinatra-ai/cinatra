@@ -72,7 +72,10 @@ export type ScopeDashboardsTabScopeKind =
 export function scopeOffersAddToScope(
   kind: ScopeDashboardsTabScopeKind,
 ): boolean {
-  return kind !== "personal" && kind !== "workspace";
+  // AMENDED by cinatra#2811 (the drawing's §IX.1): "the reference half of Add
+  // dashboard is the three shared scopes and the workspace". Personal alone
+  // keeps its landed shape with no add-to-scope.
+  return kind !== "personal";
 }
 
 export type ScopeDashboardsTabData = {
@@ -169,6 +172,12 @@ export type ScopeReferenceSource = {
   readonly requestPromotion: (
     dashboardId: string,
   ) => Promise<ScopeListingMutation>;
+};
+
+/** The workspace everyone-grant's one mutation (§IX.4), handed ONLY to a
+ *  platform administrator (cinatra#2811). */
+export type WorkspaceEveryoneGrantSource = {
+  readonly setGrant: (dashboardId: string, granted: boolean) => Promise<ScopeListingMutation>;
 };
 
 /** The listing panel's only mutation (§IX row Remove; §IX.2 manager-only). */

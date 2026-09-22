@@ -56,13 +56,11 @@ import {
 } from "../twin-writer-seam";
 import { DASHBOARD_CONFIG_V12_VERSION as V12 } from "../extension/dashboard-config-v12";
 import {
-  removeWorkspaceReferenceLink,
-  setWorkspaceReferenceReadGrant,
-} from "../mutation-service";
-import {
   addWorkspaceReferenceLink,
   isWorkspaceReadGranted,
   listWorkspaceReferenceRows,
+  removeWorkspaceReferenceLink,
+  setWorkspaceReferenceReadGrant,
 } from "../store/workspace-links";
 import { DashboardAccessError, requireDashboardAccess } from "../auth/require-dashboard-access";
 
