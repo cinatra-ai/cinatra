@@ -159,7 +159,7 @@ async function authorize(
   );
   if (!target) return refuse("not-found");
   if (area === "context" && target.surface === "assistant") return refuse("assistants-take-skills-only");
-  const section = selectScopeAssignmentSection(target, input.section ?? null);
+  const section = selectScopeAssignmentSection(target, input?.section ?? null);
   if (!section) return refuse("scope-not-on-this-page");
   if (!target.admission.ok) return refuse(target.admission.reason);
   const write = section.write;

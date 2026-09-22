@@ -275,6 +275,14 @@ describe("forged mutations reach the S1 resolver and are refused by it", () => {
     noStoreCalls(deps);
   });
 
+  it("refuses a malformed action input without throwing", async () => {
+    const { deps } = harness({});
+    for (const junk of [null, undefined, {}, { surface: "agent" }, { surface: "agent", scope: { kind: "team" }, vendor: "cinatra-ai", name: "research-agent" }]) {
+      expect(await assignScopeSkill(junk as never, SKILL, deps)).toEqual({ ok: false, reason: "not-found" });
+    }
+    noStoreCalls(deps);
+  });
+
   it("S1's assignment-target admission refusal is surfaced and nothing is written", async () => {
     const { deps } = harness({ admission: { ok: false, reason: "eligibility-unreadable" } });
     expect(await assignScopeSkill(agentAt({ kind: "personal" }), SKILL, deps)).toEqual({
@@ -465,6 +473,36 @@ describe("the Artifacts pane's writes (agents only)", () => {
     expect(deps.reads.listArtifacts).toHaveBeenCalledWith(
       expect.objectContaining({ orgId: ORG, extensionPackageName: "@cinatra-ai/brand-kit-artifact", projectId: null }),
     );
+  });
+
+  it("keeps a project's artifact inside its project: not offered, not admitted at a broader scope", async () => {
+    const bound = { artifactId: "res_sealed", title: "Sealed Brief", eligibleExtensions: ["@cinatra-ai/brand-kit-artifact"], primaryExtension: null, projectId: PROJECT };
+    const unbound = { artifactId: "res_open", title: "Open Kit", eligibleExtensions: ["@cinatra-ai/brand-kit-artifact"], primaryExtension: null, projectId: null };
+
+    // The organization page (an org admin) is offered the unbound artifact only.
+    const org = harness({ grants: { orgRole: "org_admin", teamIds: [], projectGrants: [{ projectId: PROJECT, effectiveRole: "admin", accessSource: "user" }] } });
+    org.deps.reads.listArtifacts = vi.fn(async () => [bound, unbound]);
+    org.deps.reads.readArtifact = vi.fn(async ({ artifactId }: { artifactId: string }) => ({
+      kind: "ok" as const,
+      artifact: artifactId === bound.artifactId ? bound : unbound,
+    }));
+    const offered = await searchScopeContextArtifacts(agentAt({ kind: "organization", id: ORG }), SLOT.slotId, "", { offset: 0, limit: 20 }, org.deps);
+    expect(offered.ok && offered.results.map((r) => r.artifactId)).toEqual(["res_open"]);
+    // A forged add of the project's artifact at the organization is refused.
+    expect(
+      await assignScopeContextArtifact(agentAt({ kind: "organization", id: ORG }), SLOT.slotId, bound.artifactId, org.deps),
+    ).toEqual({ ok: false, reason: "artifact-not-visible" });
+    expect(org.deps.insertContext).not.toHaveBeenCalled();
+
+    // The project's own page takes it.
+    const proj = harness({ grants: { teamIds: [], projectGrants: [{ projectId: PROJECT, effectiveRole: "admin", accessSource: "user" }] } });
+    proj.deps.reads.listArtifacts = vi.fn(async () => [bound, unbound]);
+    proj.deps.reads.readArtifact = org.deps.reads.readArtifact;
+    const inProject = await searchScopeContextArtifacts(agentAt({ kind: "project", id: PROJECT }), SLOT.slotId, "", { offset: 0, limit: 20 }, proj.deps);
+    expect(inProject.ok && inProject.results.map((r) => r.artifactId).sort()).toEqual(["res_open", "res_sealed"]);
+    expect(
+      await assignScopeContextArtifact(agentAt({ kind: "project", id: PROJECT }), SLOT.slotId, bound.artifactId, proj.deps),
+    ).toEqual({ ok: true });
   });
 
   it("refuses every artifact action on an assistant", async () => {

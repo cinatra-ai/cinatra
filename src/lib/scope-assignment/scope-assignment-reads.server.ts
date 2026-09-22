@@ -229,6 +229,21 @@ function artifactKindOf(
   return ext ? deps.artifactKindLabel(ext) : null;
 }
 
+/**
+ * May an artifact bound to `artifactProjectId` be assigned at a scope whose
+ * project is `scopeProjectId`? A project page takes its own project's
+ * artifacts and unbound ones; every broader scope takes unbound artifacts
+ * only. A project's artifact assigned at a team, an organization or the
+ * workspace would carry sealed-room content into runs outside the project.
+ * The picker and the write path both ask this one question.
+ */
+export function artifactFitsScopeProject(
+  artifactProjectId: string | null,
+  scopeProjectId: string | null,
+): boolean {
+  return !artifactProjectId || artifactProjectId === scopeProjectId;
+}
+
 /** Where a section's artifacts are read: the section's organization, or the
  *  session's for the workspace tier and the personal scope. */
 export type ScopeArtifactVantage = {
@@ -323,6 +338,7 @@ export async function searchScopeArtifactCandidates(
     });
     for (const artifact of listed) {
       if (chosen.has(artifact.artifactId) || byId.has(artifact.artifactId)) continue;
+      if (!artifactFitsScopeProject(artifact.projectId, vantage.projectId)) continue;
       // The listing's extension filter is the eligibility set; re-check it so
       // a wrong kind can never ride in on a listing that ignored the filter.
       if (!artifact.eligibleExtensions.some((e) => accepted.includes(e))) continue;
@@ -352,7 +368,7 @@ export async function inspectArtifactForSlot(
 ): Promise<{ visible: boolean; compatible: boolean }> {
   const access = await deps.readArtifact({ artifactId, orgId: vantage.orgId, actor: vantage.actor });
   if (access.kind !== "ok") return { visible: false, compatible: false };
-  if (vantage.projectId && access.artifact.projectId && access.artifact.projectId !== vantage.projectId) {
+  if (!artifactFitsScopeProject(access.artifact.projectId, vantage.projectId)) {
     return { visible: false, compatible: false };
   }
   return {
