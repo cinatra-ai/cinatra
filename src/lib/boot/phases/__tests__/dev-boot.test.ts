@@ -119,7 +119,7 @@ describe("devAgentIngestPhases", () => {
         imported: 2,
         alreadyOnFile: 0,
         declined: 1,
-        failures: [{ definitionPath: "cinatra-ai/broken-agent/cinatra/oas.json", reason: "x" }],
+        failures: [{ definitionPath: "vendor/broken-agent/cinatra/oas.json", reason: "x" }],
       }),
     );
 
@@ -153,14 +153,14 @@ describe("devAgentIngestPhases", () => {
         found: 3,
         imported: 1,
         alreadyOnFile: 0,
-        pending: ["cinatra-ai/b-agent/cinatra/oas.json", "cinatra-ai/c-agent/cinatra/oas.json"],
+        pending: ["vendor/b-agent/cinatra/oas.json", "vendor/c-agent/cinatra/oas.json"],
       }),
     );
 
     // The line still goes out — what was read in is not lost because the rest
     // was not reached.
     await expect(thePhase().run()).rejects.toThrow(
-      /2 definition\(s\) still pending: cinatra-ai\/b-agent\/cinatra\/oas\.json, cinatra-ai\/c-agent\/cinatra\/oas\.json/,
+      /2 definition\(s\) still pending: vendor\/b-agent\/cinatra\/oas\.json, vendor\/c-agent\/cinatra\/oas\.json/,
     );
     expect(lines).toEqual([
       "[agent-builder] git-native agent definitions: 3 found, 1 read in, 0 already on file, " +

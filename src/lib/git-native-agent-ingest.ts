@@ -201,12 +201,16 @@ export async function ingestGitNativeAgentDefinitions(
 ): Promise<GitNativeAgentIngestReport> {
   const { relative } = await import("node:path");
 
-  const loadDefinition =
-    options?.loadDefinition ??
-    (await import("@cinatra-ai/agents")).ensureAgentPackageFromGitFile;
-  const sourceRoot =
-    options?.sourceRoot ??
-    (await import("@cinatra-ai/agents/agent-runtime-mount")).resolveDevExtensionSourceRoot();
+  let loadDefinition = options?.loadDefinition;
+  if (!loadDefinition) {
+    const { ensureAgentPackageFromGitFile } = await import("@cinatra-ai/agents");
+    loadDefinition = ensureAgentPackageFromGitFile;
+  }
+  let sourceRoot = options?.sourceRoot;
+  if (!sourceRoot) {
+    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
+    sourceRoot = resolveDevExtensionSourceRoot();
+  }
   const budgetMs = options?.budgetMs ?? GIT_NATIVE_AGENT_INGEST_BUDGET_MS;
 
   const definitions = await collectDefinitions(sourceRoot);
