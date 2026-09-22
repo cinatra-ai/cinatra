@@ -71,11 +71,11 @@ function model(overrides: Partial<ScopeAssignmentPageModel> = {}): ScopeAssignme
     surface: "agent",
     tab: "skills",
     routeScope: scope,
-    packageName: "@cinatra-ai/research-agent",
+    packageName: "@cinatra-ai/scope-fixture-agent",
     displayName: "Research Agent",
     scopeLabel: "Team · Growth",
     crossScope: scope.kind === "workspace",
-    target: { surface: "agent", scope, vendor: "cinatra-ai", name: "research-agent" },
+    target: { surface: "agent", scope, vendor: "cinatra-ai", name: "scope-fixture-agent" },
     admission: { ok: true },
     manifest: null,
     sections: [section({ scope, key: `team:${TEAM}` })],
@@ -131,14 +131,14 @@ describe("the Skills pane", () => {
   it("renders the named root with the package, the scope and the Skills tab", () => {
     render(<ScopeAssignmentPage model={model()} />);
     const root = screen.getByTestId("scope-assignment-page");
-    expect(root.dataset.package).toBe("@cinatra-ai/research-agent");
+    expect(root.dataset.package).toBe("@cinatra-ai/scope-fixture-agent");
     expect(root.dataset.scopeKind).toBe("team");
     expect(root.dataset.scopeId).toBe(TEAM);
     expect(root.dataset.tab).toBe("skills");
     const tabs = within(root).getAllByRole("tab");
     expect(tabs.map((t) => t.getAttribute("href"))).toEqual([
-      `/teams/${TEAM}/agents/cinatra-ai/research-agent/settings?tab=skills`,
-      `/teams/${TEAM}/agents/cinatra-ai/research-agent/settings?tab=artifacts`,
+      `/teams/${TEAM}/agents/cinatra-ai/scope-fixture-agent/settings?tab=skills`,
+      `/teams/${TEAM}/agents/cinatra-ai/scope-fixture-agent/settings?tab=artifacts`,
     ]);
   });
 
@@ -196,7 +196,7 @@ describe("the Skills pane", () => {
           routeScope: ws,
           crossScope: true,
           scopeLabel: "Workspace",
-          target: { surface: "agent", scope: ws, vendor: "cinatra-ai", name: "research-agent" },
+          target: { surface: "agent", scope: ws, vendor: "cinatra-ai", name: "scope-fixture-agent" },
           sections: [
             section({ scope: ws, key: "workspace", label: "Workspace", write: { allowed: false, message: "Only a platform admin can change the workspace assignments." }, skills: [] }),
             section({ scope: { kind: "personal" }, key: "personal", label: "Personal", skills: [] }),
@@ -216,7 +216,7 @@ describe("the Skills pane", () => {
     fireEvent.click(within(sections[2]!).getByRole("button", { name: "Remove Blog Writing" }));
     await waitFor(() =>
       expect(actions.removeScopeSkillAction).toHaveBeenCalledWith(
-        { surface: "agent", scope: ws, vendor: "cinatra-ai", name: "research-agent", section: { kind: "organization", id: ORG } },
+        { surface: "agent", scope: ws, vendor: "cinatra-ai", name: "scope-fixture-agent", section: { kind: "organization", id: ORG } },
         "sk_blog",
       ),
     );
@@ -229,7 +229,7 @@ describe("the Skills pane", () => {
     fireEvent.click(await screen.findByText("Company Research"));
     await waitFor(() =>
       expect(actions.assignScopeSkillAction).toHaveBeenCalledWith(
-        { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent" },
+        { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent" },
         "sk_research",
       ),
     );
@@ -302,7 +302,7 @@ describe("the Artifacts pane", () => {
     fireEvent.click(await screen.findByText("Launch Announcement"));
     await waitFor(() =>
       expect(actions.assignScopeContextArtifactAction).toHaveBeenCalledWith(
-        { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent" },
+        { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent" },
         "reference-posts",
         "res_post",
       ),
@@ -453,7 +453,7 @@ describe("the Artifacts pane", () => {
     expect(within(empty).getByText("No context slots")).toBeTruthy();
     expect(within(empty).getByText(/declares no context slots/)).toBeTruthy();
     expect(within(empty).getByRole("link", { name: "Go to Skills" }).getAttribute("href")).toBe(
-      `/teams/${TEAM}/agents/cinatra-ai/research-agent/settings?tab=skills`,
+      `/teams/${TEAM}/agents/cinatra-ai/scope-fixture-agent/settings?tab=skills`,
     );
     expect(document.querySelector('[data-slot="scope-context-slot"]')).toBeNull();
   });

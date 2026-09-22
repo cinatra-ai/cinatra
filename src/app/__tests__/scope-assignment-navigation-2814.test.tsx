@@ -35,7 +35,7 @@ const ME = "user_me";
 const ORG = "org_acme";
 const TEAM = "team_growth";
 const PROJECT = "proj_launch";
-const AGENT_PKG = "@cinatra-ai/research-agent";
+const AGENT_PKG = "@cinatra-ai/scope-fixture-agent";
 const ASSISTANT_PKG = "@cinatra-ai/support-assistant";
 
 const nav = vi.hoisted(() => ({ pathname: "/" }));
@@ -299,7 +299,7 @@ describe("the server re-resolves the address (forged identifiers)", () => {
     await expect(
       ScopedAgentsRoute({
         scope: { kind: "organization", id: "org_elsewhere" },
-        segments: ["cinatra-ai", "research-agent", "settings"],
+        segments: ["cinatra-ai", "scope-fixture-agent", "settings"],
         searchParams: Promise.resolve({}),
       }),
     ).rejects.toThrow("NEXT_NOT_FOUND");

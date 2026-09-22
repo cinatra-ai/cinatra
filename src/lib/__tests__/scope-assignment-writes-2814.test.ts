@@ -38,7 +38,7 @@ const OTHER = "user_other";
 const ORG = "org_acme";
 const TEAM = "team_growth";
 const PROJECT = "proj_launch";
-const PKG = "@cinatra-ai/research-agent";
+const PKG = "@cinatra-ai/scope-fixture-agent";
 const SKILL = "@cinatra-ai/blog-skills:blog-writing";
 const SLOT: AgentContextSlot = {
   slotId: "brand-voice",
@@ -197,7 +197,7 @@ const agentAt = (scope: ScopeAssignmentActionTarget["scope"], section?: ScopeAss
   surface: "agent",
   scope,
   vendor: "cinatra-ai",
-  name: "research-agent",
+  name: "scope-fixture-agent",
   ...(section ? { section } : {}),
 });
 
@@ -277,7 +277,7 @@ describe("forged mutations reach the S1 resolver and are refused by it", () => {
 
   it("refuses a malformed action input without throwing", async () => {
     const { deps } = harness({});
-    for (const junk of [null, undefined, {}, { surface: "agent" }, { surface: "agent", scope: { kind: "team" }, vendor: "cinatra-ai", name: "research-agent" }]) {
+    for (const junk of [null, undefined, {}, { surface: "agent" }, { surface: "agent", scope: { kind: "team" }, vendor: "cinatra-ai", name: "scope-fixture-agent" }]) {
       expect(await assignScopeSkill(junk as never, SKILL, deps)).toEqual({ ok: false, reason: "not-found" });
     }
     noStoreCalls(deps);

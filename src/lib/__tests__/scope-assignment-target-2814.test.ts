@@ -109,7 +109,7 @@ function deps(opts: {
       scopeNames: { [`organization:${ORG}`]: "Acme", [`team:${TEAM}`]: "Growth" },
     }),
     readAgentRows: async (scope) =>
-      opts.agentRows ? opts.agentRows(scope) : [agentRow("@cinatra-ai/research-agent")],
+      opts.agentRows ? opts.agentRows(scope) : [agentRow("@cinatra-ai/scope-fixture-agent")],
     readAssistantRows: async (scope) =>
       opts.assistantRows
         ? opts.assistantRows(scope)
@@ -118,7 +118,7 @@ function deps(opts: {
   };
 }
 
-const AGENT = { surface: "agent" as const, vendor: "cinatra-ai", name: "research-agent" };
+const AGENT = { surface: "agent" as const, vendor: "cinatra-ai", name: "scope-fixture-agent" };
 
 describe("the package is re-resolved from the scope tab's own rows", () => {
   it("resolves the agent pair to the canonical package on every scope base", async () => {
@@ -133,7 +133,7 @@ describe("the package is re-resolved from the scope tab's own rows", () => {
         { ...AGENT, scope },
         deps({ grantsByOrg: { [ORG]: { teamIds: [TEAM], projectGrants: [{ projectId: PROJECT, effectiveRole: "read", accessSource: "user" }] } } }),
       );
-      expect(target?.packageName, scope.kind).toBe("@cinatra-ai/research-agent");
+      expect(target?.packageName, scope.kind).toBe("@cinatra-ai/scope-fixture-agent");
       expect(target?.routeScope).toEqual(scope);
     }
   });
@@ -150,10 +150,10 @@ describe("the package is re-resolved from the scope tab's own rows", () => {
   it("refuses a forged pair the tab does not list (server re-resolution)", async () => {
     for (const forged of [
       { vendor: "cinatra-ai", name: "not-installed" },
-      { vendor: "evil", name: "research-agent" },
-      { vendor: "cinatra-ai", name: "research-agent/../x" },
-      { vendor: "@cinatra-ai", name: "research-agent" },
-      { vendor: "", name: "research-agent" },
+      { vendor: "evil", name: "scope-fixture-agent" },
+      { vendor: "cinatra-ai", name: "scope-fixture-agent/../x" },
+      { vendor: "@cinatra-ai", name: "scope-fixture-agent" },
+      { vendor: "", name: "scope-fixture-agent" },
     ]) {
       expect(
         await resolveScopeAssignmentTarget({ surface: "agent", scope: { kind: "personal" }, ...forged }, deps({})),
@@ -170,7 +170,7 @@ describe("the package is re-resolved from the scope tab's own rows", () => {
     ).toBeNull();
     expect(
       await resolveScopeAssignmentTarget(
-        { surface: "assistant", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "research-agent" },
+        { surface: "assistant", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "scope-fixture-agent" },
         deps({}),
       ),
     ).toBeNull();
@@ -178,7 +178,7 @@ describe("the package is re-resolved from the scope tab's own rows", () => {
 
   it("refuses a package another scope lists but this one does not", async () => {
     const d = deps({
-      agentRows: (scope) => (scope.kind === "team" ? [] : [agentRow("@cinatra-ai/research-agent")]),
+      agentRows: (scope) => (scope.kind === "team" ? [] : [agentRow("@cinatra-ai/scope-fixture-agent")]),
       grantsByOrg: { [ORG]: { teamIds: [TEAM], projectGrants: [] } },
     });
     expect(await resolveScopeAssignmentTarget({ ...AGENT, scope: { kind: "team", id: TEAM } }, d)).toBeNull();

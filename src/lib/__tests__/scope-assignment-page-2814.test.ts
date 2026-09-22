@@ -27,7 +27,7 @@ import {
 const ME = "user_me";
 const ORG = "org_acme";
 const TEAM = "team_growth";
-const PKG = "@cinatra-ai/research-agent";
+const PKG = "@cinatra-ai/scope-fixture-agent";
 
 const BRAND: AgentContextSlot = {
   slotId: "brand-voice",
@@ -133,7 +133,7 @@ function deps(opts: { slots?: AgentContextSlot[] | "unreadable" } = {}) {
 describe("loadScopeAssignmentPage", () => {
   it("carries the resolved package, the Skills default and the route-derived scope", async () => {
     const page = await loadScopeAssignmentPage(
-      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent", tab: undefined },
+      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent", tab: undefined },
       deps(),
     );
     expect(page).toMatchObject({
@@ -145,7 +145,7 @@ describe("loadScopeAssignmentPage", () => {
       scopeLabel: "Team · Growth",
       crossScope: false,
       manifest: null,
-      target: { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent" },
+      target: { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent" },
     });
     expect(page!.sections).toHaveLength(1);
     expect(page!.sections[0]!.write).toEqual({ allowed: true, road: "grant" });
@@ -154,7 +154,7 @@ describe("loadScopeAssignmentPage", () => {
   it("lists exactly the section's rows, a degraded skill included, and reads no slot on the Skills pane", async () => {
     const d = deps();
     const page = await loadScopeAssignmentPage(
-      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent", tab: "skills" },
+      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent", tab: "skills" },
       d,
     );
     expect(d.reads.readAssignedSkills).toHaveBeenCalledWith(PKG, { scopeKind: "team", scopeId: TEAM });
@@ -169,7 +169,7 @@ describe("loadScopeAssignmentPage", () => {
   it("draws the manifest's declared slots on the Artifacts pane, with the rows this scope chose", async () => {
     const d = deps();
     const page = await loadScopeAssignmentPage(
-      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent", tab: "artifacts" },
+      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent", tab: "artifacts" },
       d,
     );
     expect(page!.tab).toBe("artifacts");
@@ -194,13 +194,13 @@ describe("loadScopeAssignmentPage", () => {
 
   it("reads a slot-less manifest as the honest empty state, and an unreadable one as unreadable", async () => {
     const empty = await loadScopeAssignmentPage(
-      { surface: "agent", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "research-agent", tab: "artifacts" },
+      { surface: "agent", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "scope-fixture-agent", tab: "artifacts" },
       deps({ slots: [] }),
     );
     expect(empty!.manifest).toBe("no-slots");
     expect(empty!.sections[0]!.slots).toBeNull();
     const unreadable = await loadScopeAssignmentPage(
-      { surface: "agent", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "research-agent", tab: "artifacts" },
+      { surface: "agent", scope: { kind: "personal" }, vendor: "cinatra-ai", name: "scope-fixture-agent", tab: "artifacts" },
       deps({ slots: "unreadable" }),
     );
     expect(unreadable!.manifest).toBe("unreadable");
@@ -230,7 +230,7 @@ describe("loadScopeAssignmentPage", () => {
     const d = deps();
     d.target.readGrantsInOrg = async () => ({ teamIds: [TEAM], teamRoles: { [TEAM]: "member" }, projectGrants: [] });
     const page = await loadScopeAssignmentPage(
-      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "research-agent", tab: undefined },
+      { surface: "agent", scope: { kind: "team", id: TEAM }, vendor: "cinatra-ai", name: "scope-fixture-agent", tab: undefined },
       d,
     );
     expect(page!.sections[0]!.write).toEqual({
