@@ -63,6 +63,7 @@ import {
   setWorkspaceReferenceReadGrant,
 } from "../store/workspace-links";
 import { DashboardAccessError, requireDashboardAccess } from "../auth/require-dashboard-access";
+import { listUserHomedDashboards } from "../store/entity-links";
 
 const RUN_IT = process.env.DASH_DB_IT === "1" && !!process.env.SUPABASE_DB_URL;
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_it_2811";
@@ -567,6 +568,15 @@ describe.skipIf(!RUN_IT)("cinatra#2811 workspace dashboards (real Postgres)", ()
       await ensureOverview({ ref: personalRefA }, underA);
       expect(twinCalls.length).toBe(1);
       expect(twinCalls[0].orgId).toBe(ORG_A);
+    });
+
+    it("keeps Personal in its landed shape: the personal read never returns a workspace row", async () => {
+      await ensureOverview({ ref: wsRef }, underA);
+      await createEntityDashboard({ ref: wsRef, name: "Workspace only" }, underA);
+      await ensureOverview({ ref: personalRefA }, underA);
+      const personal = await listUserHomedDashboards({ orgId: ORG_A, userId: "u-2811" });
+      expect(personal.map((r) => [r.entityType, r.organizationId])).toEqual([["personal", ORG_A]]);
+      expect(personal.map((r) => r.name)).not.toContain("Workspace only");
     });
 
     it("audits a workspace write with no organization", async () => {
