@@ -15,15 +15,17 @@
  *   - "Assistants: Skills tab only, no Artifacts trigger and no Artifacts
  *     content render; `?tab=artifacts` normalizes to Skills."
  *
- * Each fixture takes the Settings href the scope's card row actually carries
- * (built by the #2808 row builders over the #2809 href contract), resolves it
- * through the SAME scoped route the ten `[...launch]` pages delegate to, and
- * renders what the route returns. Only the I/O at the edges is stubbed: the
- * session, the membership reads, the scope tab's eligible rows and the stores.
+ * Each fixture renders the scope's real Agents or Assistants tab (the #2808
+ * cards over the #2809 href contract), reads the Settings link's href out of
+ * the rendered card, resolves that href through the SAME scoped route the ten
+ * `[...launch]` pages delegate to, and renders what the route returns. Only
+ * the I/O at the edges is stubbed: the session, the membership reads, the
+ * scope tab's eligible rows and the stores.
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ScopeSurfaceEligibilityRow } from "@/lib/scope-surface-eligibility";
 import { buildScopeSurfaceAgentRows, buildScopeSurfaceAssistantRows } from "@/lib/scope-surface-rows";
@@ -113,6 +115,10 @@ vi.mock("@/lib/scope-surface-entity-name", () => ({
     scope.kind === "organization" ? "Acme" : scope.kind === "team" ? "Growth" : scope.kind === "project" ? "Launch" : null,
 }));
 
+vi.mock("@/lib/marketplace-detail-actions", () => ({
+  getAgentMarketplaceDetailAction: async () => ({ status: "error", message: "stub" }),
+}));
+
 vi.mock("@cinatra-ai/skills/agent-package-resolver", () => ({
   assertAgentWriteTarget: async () => ({ ok: true }),
 }));
@@ -122,6 +128,18 @@ vi.mock("@/lib/agent-assigned-skills-store", () => ({
 }));
 
 import { ScopedAgentsRoute, ScopedAssistantsRoute } from "@/app/scoped-launch-routes";
+import { ScopeAgentsTab } from "@/components/scope-surfaces/scope-agents-tab";
+import { ScopeAssistantsTab } from "@/components/scope-surfaces/scope-assistants-tab";
+
+/** The Settings link's href, read out of the scope tab's rendered card. */
+function settingsHrefOnCard(html: string, slot: string): string {
+  const mark = html.indexOf(`data-slot="${slot}"`);
+  expect(mark, `no ${slot} link on the card`).toBeGreaterThan(-1);
+  const tag = html.slice(html.lastIndexOf("<", mark), html.indexOf(">", mark) + 1);
+  const href = /href="([^"]+)"/.exec(tag)?.[1];
+  expect(href).toBeTruthy();
+  return href!.replaceAll("&amp;", "&");
+}
 
 const SCOPES: ScopeSurfaceRef[] = [
   { kind: "workspace" },
@@ -142,8 +160,9 @@ function routeFor(scope: ScopeSurfaceRef, href: string, tree: "agents" | "assist
 }
 
 async function openAgentSettings(scope: ScopeSurfaceRef, tab?: string) {
-  const [row] = buildScopeSurfaceAgentRows(scope, eligible.filter((r) => r.packageName === AGENT_PKG));
-  const { path, segments, searchParams } = routeFor(scope, row!.settingsHref, "agents");
+  const rows = buildScopeSurfaceAgentRows(scope, eligible.filter((r) => r.packageName === AGENT_PKG));
+  const href = settingsHrefOnCard(renderToStaticMarkup(<ScopeAgentsTab rows={rows} />), "agent-card-settings");
+  const { path, segments, searchParams } = routeFor(scope, href, "agents");
   nav.pathname = path;
   const element = await ScopedAgentsRoute({
     scope,
@@ -154,8 +173,9 @@ async function openAgentSettings(scope: ScopeSurfaceRef, tab?: string) {
 }
 
 async function openAssistantSettings(scope: ScopeSurfaceRef, tab?: string) {
-  const [row] = buildScopeSurfaceAssistantRows(scope, directory, eligible);
-  const { path, segments, searchParams } = routeFor(scope, row!.settingsHref, "assistants");
+  const rows = buildScopeSurfaceAssistantRows(scope, directory, eligible);
+  const href = settingsHrefOnCard(renderToStaticMarkup(<ScopeAssistantsTab rows={rows} />), "scope-assistant-settings");
+  const { path, segments, searchParams } = routeFor(scope, href, "assistants");
   nav.pathname = path;
   const element = await ScopedAssistantsRoute({
     scope,
