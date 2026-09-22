@@ -197,6 +197,13 @@ export type PermissionsFormProps = {
   /** Rendered under the picker: the lock note ("Locked by this connector…")
    * or the default-recommendation note. */
   accessScopeNote?: string;
+  /**
+   * Which note `accessScopeNote` is (cinatra#3454). Section II of the
+   * connectors drawing puts the lock in front of the ceiling line only: the
+   * lock is a claim that the connector caps the scope, so only `locked` draws
+   * it. The recommendation line, and a note of no stated kind, draw no lock.
+   */
+  accessScopeNoteKind?: "locked" | "recommended";
 };
 
 // ---------------------------------------------------------------------------
@@ -250,6 +257,7 @@ export function PermissionsForm({
   accessDisabledScopes,
   accessDisabledReasons,
   accessScopeNote,
+  accessScopeNoteKind,
 }: PermissionsFormProps) {
   const router = useRouter();
 
@@ -552,7 +560,9 @@ export function PermissionsForm({
           )}
           {accessScopeNote && (
             <p className="text-xs text-muted-foreground flex items-center gap-1">
-              <Lock className="size-3 shrink-0" aria-hidden="true" />
+              {accessScopeNoteKind === "locked" && (
+                <Lock className="size-3 shrink-0" aria-hidden="true" />
+              )}
               {accessScopeNote}
             </p>
           )}

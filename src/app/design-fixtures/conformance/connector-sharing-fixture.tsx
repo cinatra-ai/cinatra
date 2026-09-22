@@ -140,6 +140,8 @@ function sharingPermissions(options: {
   accessDisabledScopes?: string[];
   accessDisabledReasons?: Record<string, string>;
   accessScopeNote?: string;
+  /** Which line the note is: only the ceiling line carries the lock (cinatra#3454). */
+  accessScopeNoteKind?: "locked" | "recommended";
 }) {
   return (
     <PermissionsForm
@@ -158,6 +160,7 @@ function sharingPermissions(options: {
       accessDisabledScopes={options.accessDisabledScopes}
       accessDisabledReasons={options.accessDisabledReasons}
       accessScopeNote={options.accessScopeNote}
+      accessScopeNoteKind={options.accessScopeNoteKind}
       actions={fixtureActions()}
     />
   );
@@ -204,6 +207,7 @@ export function ConnectorSharingFixture({
             CONNECTOR_SHARING_LOCKED_SCOPES.map((v) => [v, CONNECTOR_SHARING_LOCK_NOTE]),
           ),
           accessScopeNote: CONNECTOR_SHARING_LOCK_NOTE,
+          accessScopeNoteKind: "locked",
         }),
       }),
     ];
@@ -218,6 +222,7 @@ export function ConnectorSharingFixture({
           // ("Currently: only you") — distinct from the stored scope above.
           accessValueOverride: CONNECTOR_SHARING_OWNER_SCOPE,
           accessScopeNote: CONNECTOR_SHARING_RECOMMENDATION_NOTE,
+          accessScopeNoteKind: "recommended",
         }),
       }),
     ];

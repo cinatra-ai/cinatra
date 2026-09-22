@@ -280,6 +280,9 @@ export async function ConnectionSharingSection({
           accessScopeNote={
             surface.surface === "locked" ? surface.note : surface.recommendationNote
           }
+          // Section II draws the lock in front of the ceiling line only; the
+          // recommendation line carries none (cinatra#3454).
+          accessScopeNoteKind={surface.surface === "locked" ? "locked" : "recommended"}
         />
       ),
     }),
