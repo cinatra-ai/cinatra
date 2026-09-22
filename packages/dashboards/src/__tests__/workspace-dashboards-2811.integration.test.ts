@@ -63,7 +63,11 @@ import {
   setWorkspaceReferenceReadGrant,
 } from "../store/workspace-links";
 import { DashboardAccessError, requireDashboardAccess } from "../auth/require-dashboard-access";
-import { listUserHomedDashboards } from "../store/entity-links";
+import {
+  addDashboardEntityLink,
+  listUserHomedDashboards,
+  removeDashboardEntityLink,
+} from "../store/entity-links";
 
 const RUN_IT = process.env.DASH_DB_IT === "1" && !!process.env.SUPABASE_DB_URL;
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_it_2811";
@@ -344,6 +348,7 @@ describe.skipIf(!RUN_IT)("cinatra#2811 workspace dashboards (real Postgres)", ()
 
     it("refuses a workspace row outside the user-owned __workspace__ shape", async () => {
       for (const over of [
+        { entity_id: null },
         { entity_id: ORG_A },
         { owner_level: "team" },
         { project_id: "p-1" },
@@ -713,6 +718,51 @@ describe.skipIf(!RUN_IT)("cinatra#2811 workspace dashboards (real Postgres)", ()
       await removeWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A }, "u-admin-a");
       const after = await pool.query(`SELECT count(*)::int AS n FROM "${SCHEMA}".audit_events`);
       expect(after.rows[0].n).toBe(2);
+    });
+
+    it("deleting a dashboard whose reference is granted records the revocation before the cascade", async () => {
+      await pool.query(
+        `INSERT INTO ${T()} (id, name, config_json, owner_level, owner_id, organization_id, created_by, entity_type, entity_id)
+         VALUES ('a-user-dash', 'Doomed', ${CFG}, 'user', 'u-2811', $1, 'u-2811', 'personal', $1)`,
+        [ORG_A],
+      );
+      await addWorkspaceReferenceLink({ dashboardId: "a-user-dash", homeOrgId: ORG_A, createdBy: "u" });
+      await setWorkspaceReferenceReadGrant({ dashboardId: "a-user-dash", homeOrgId: ORG_A, granted: true }, "u-p");
+      await deleteEntityDashboard("a-user-dash", underA);
+      const links = await pool.query(`SELECT count(*)::int AS n FROM ${L()} WHERE dashboard_id = 'a-user-dash'`);
+      expect(links.rows[0].n).toBe(0);
+      const audit = await pool.query(
+        `SELECT operation, actor_principal_id, metadata FROM "${SCHEMA}".audit_events
+          WHERE resource_id = 'a-user-dash' AND operation LIKE 'dashboard.workspace_read_%' ORDER BY created_at, operation`,
+      );
+      expect(audit.rows.map((r) => [r.operation, r.actor_principal_id, r.metadata.reason])).toEqual([
+        ["dashboard.workspace_read_granted", "u-p", "set"],
+        ["dashboard.workspace_read_revoked", "u-2811", "dashboard-deleted"],
+      ]);
+    });
+
+    it("the tenant listing writers refuse a workspace link at runtime", async () => {
+      await addWorkspaceReferenceLink({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, createdBy: "u" });
+      await setWorkspaceReferenceReadGrant({ dashboardId: "pre-team-dash", homeOrgId: ORG_A, granted: true }, "u-p");
+      await expect(
+        removeDashboardEntityLink({
+          dashboardId: "pre-team-dash",
+          entityType: "workspace" as never,
+          entityId: "__workspace__",
+          organizationId: ORG_A,
+        }),
+      ).rejects.toThrow(/workspace/);
+      await expect(
+        addDashboardEntityLink({
+          dashboardId: "b-org-dash",
+          entityType: "workspace" as never,
+          entityId: "__workspace__",
+          organizationId: ORG_B,
+          createdBy: "u",
+        }),
+      ).rejects.toThrow(/workspace/);
+      const still = await pool.query(`SELECT workspace_read_granted AS g FROM ${L()} WHERE entity_type = 'workspace'`);
+      expect(still.rows).toEqual([{ g: true }]);
     });
 
     it("the grant opens READ ONLY, to any authenticated user, only while it stands", async () => {

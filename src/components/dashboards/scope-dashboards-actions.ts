@@ -51,6 +51,11 @@ export type ScopeActionArg = {
 async function authorizeScopeAction(
   scope: ScopeActionArg,
 ): Promise<{ actor: NonNullable<Awaited<ReturnType<typeof getActorContext>>>; listingScope: ListingScope } | null> {
+  // The tenant kinds only (cinatra#2811): the argument is untyped at runtime,
+  // and a workspace reference is curated through its own actions, never here.
+  if (scope.kind !== "team" && scope.kind !== "organization" && scope.kind !== "project") {
+    return null;
+  }
   const actor = await getActorContext();
   if (!actor) return null;
   if (

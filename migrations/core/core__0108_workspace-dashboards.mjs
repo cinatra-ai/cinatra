@@ -15,7 +15,8 @@
 //        tenant, and no workspace row may carry one;
 //      - `dashboards_workspace_entity_shape_check`: a workspace row is the
 //        user-owned `__workspace__` entity, never project-refined, never a
-//        template.
+//        template. The entity id is compared NULL-safely, so a NULL id cannot
+//        pass the CHECK as UNKNOWN (and slip past the unique twins with it).
 //    The per-entity partial unique indexes are keyed on organization_id, and
 //    NULLs are distinct in a unique index, so they cannot hold "one Overview"
 //    or "one name" for an org-NULL row. Their ORG-NULL TWINS are added here,
@@ -101,7 +102,7 @@ export const workspaceDashboardRowsSql = `
   DO $$ BEGIN
     ALTER TABLE dashboards ADD CONSTRAINT dashboards_workspace_entity_shape_check
       CHECK (entity_type IS DISTINCT FROM 'workspace'
-             OR (entity_id = '${WORKSPACE_ENTITY_ID}' AND owner_level = 'user'
+             OR (entity_id IS NOT DISTINCT FROM '${WORKSPACE_ENTITY_ID}' AND owner_level = 'user'
                  AND project_id IS NULL AND is_template = false));
   EXCEPTION WHEN duplicate_object THEN NULL; END $$;
   CREATE INDEX IF NOT EXISTS dashboards_workspace_entity_idx

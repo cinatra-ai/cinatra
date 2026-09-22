@@ -74,6 +74,22 @@ export type ScopeDashboardRow = {
   readonly relation: "home" | "listed";
 };
 
+/**
+ * RUNTIME fence for the tenant listing paths (cinatra#2811). The type already
+ * excludes the workspace kind, but a server action's argument is untyped at
+ * runtime: a workspace link reached through these tenant writers would skip the
+ * workspace curation authority and, on removal, the everyone-grant's revocation
+ * record. So a workspace kind is refused here outright; the workspace collection
+ * has its own store (`workspace-links.ts`).
+ */
+function assertTenantListingKind(kind: string): void {
+  if (kind !== "team" && kind !== "organization" && kind !== "project") {
+    throw new Error(
+      `dashboard listings: '${kind}' is not a tenant listing kind; a workspace reference is written through the workspace store`,
+    );
+  }
+}
+
 /** The live (non-archived, non-template) dashboard columns the tab reads. */
 const NOT_ARCHIVED_LIVE = (d: typeof dashboards) =>
   and(ne(d.status, "archived"), eq(d.isTemplate, false));
@@ -92,6 +108,7 @@ const NOT_ARCHIVED_LIVE = (d: typeof dashboards) =>
 export async function listScopeHomedDashboards(
   scope: ListingScope,
 ): Promise<ScopeDashboardRow[]> {
+  assertTenantListingKind(scope.kind);
   const db = getDashboardsDb();
   const homePredicate =
     scope.kind === "project"
@@ -185,6 +202,7 @@ export async function listUserHomedDashboards(input: {
 export async function listScopeListedDashboards(
   scope: ListingScope,
 ): Promise<ScopeDashboardRow[]> {
+  assertTenantListingKind(scope.kind);
   const db = getDashboardsDb();
   const rows = await db
     .select({
@@ -240,6 +258,7 @@ export async function addDashboardEntityLink(input: {
   organizationId: string;
   createdBy: string;
 }): Promise<{ created: boolean }> {
+  assertTenantListingKind(input.entityType);
   const db = getDashboardsDb();
   const inserted = await db
     .insert(dashboardEntityLinks)
@@ -274,6 +293,7 @@ export async function removeDashboardEntityLink(input: {
   entityId: string;
   organizationId: string;
 }): Promise<{ removed: boolean }> {
+  assertTenantListingKind(input.entityType);
   const db = getDashboardsDb();
   const deleted = await db
     .delete(dashboardEntityLinks)

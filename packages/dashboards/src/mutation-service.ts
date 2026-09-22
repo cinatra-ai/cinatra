@@ -27,6 +27,7 @@ import type { DashboardActor } from "./permissions";
 import { resolveDashboardAccess } from "./permissions";
 import {
   auditEvents,
+  dashboardEntityLinks,
   dashboardRevisions,
   dashboards,
   getDashboardsDb,
@@ -350,6 +351,65 @@ function assertRowTenancy(
   const rowIsWorkspace = row.organizationId === null;
   if (rowIsWorkspace !== (tenancy === "workspace")) {
     throw new DashboardForbiddenError(operation, id);
+  }
+}
+
+/**
+ * Record the revocation of every STANDING workspace everyone-grant on
+ * `dashboardId` (cinatra#2811), inside the delete writer's transaction and just
+ * before the dashboard row goes: its workspace links go with it (ON DELETE
+ * CASCADE), and a grant must never end without a revocation on the record. The
+ * row is the same shape `store/workspace-links.ts` writes for an unset or a
+ * removed reference (operation, organization, actor, dashboard, and the link,
+ * prior state and moment in the metadata); the integration suite pins both.
+ * Kept here, not imported from that store, so the delete writer pulls no extra
+ * module into any route graph.
+ */
+async function recordWorkspaceGrantRevocationsForDelete(
+  tx: DashboardsDb,
+  dashboardId: string,
+  actorUserId: string,
+): Promise<void> {
+  const granted = await tx
+    .select({
+      id: dashboardEntityLinks.id,
+      organizationId: dashboardEntityLinks.organizationId,
+      grantedBy: dashboardEntityLinks.workspaceReadGrantedBy,
+      grantedAt: dashboardEntityLinks.workspaceReadGrantedAt,
+    })
+    .from(dashboardEntityLinks)
+    .where(
+      and(
+        eq(dashboardEntityLinks.dashboardId, dashboardId),
+        eq(dashboardEntityLinks.entityType, "workspace"),
+        eq(dashboardEntityLinks.workspaceReadGranted, true),
+      ),
+    )
+    .for("update");
+  const at = new Date();
+  for (const link of granted) {
+    await tx.insert(auditEvents).values({
+      id: randomUUID(),
+      organizationId: link.organizationId,
+      actorPrincipalId: actorUserId,
+      actorPrincipalType: "user",
+      resourceType: "dashboard",
+      resourceId: dashboardId,
+      operation: "dashboard.workspace_read_revoked",
+      decision: "allow",
+      metadata: {
+        linkId: link.id,
+        dashboardId,
+        actor: actorUserId,
+        reason: "dashboard-deleted",
+        prior: {
+          granted: true,
+          grantedBy: link.grantedBy,
+          grantedAt: link.grantedAt ? link.grantedAt.toISOString() : null,
+        },
+        at: at.toISOString(),
+      },
+    });
   }
 }
 
@@ -1699,6 +1759,9 @@ export async function deleteEntityDashboard(
     // (same tx, atomic). Q2: no claim-binding withdraw — the dashboard type
     // mints no dedicated claim, so the tombstone + delete outbox suffice.
     await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, row, "delete", actor.userId);
+    // A standing everyone-grant on a workspace reference to this dashboard ends
+    // with the cascade below; its revocation is recorded first (cinatra#2811).
+    await recordWorkspaceGrantRevocationsForDelete(tx, id, actor.userId);
     await tx.delete(dashboards).where(eq(dashboards.id, id));
     },
   );
