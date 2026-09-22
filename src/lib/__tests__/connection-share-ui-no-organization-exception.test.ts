@@ -13,11 +13,12 @@
 // workspace or organization grant on a connection of no organization
 // ("invalid_locus"), so a pre-selected recommended scope there would be a Save
 // that always fails. The admin, team and project recommendations are not part
-// of the exception. This suite pins both halves on the SAME row: the real
-// panel model states nothing and keeps the owner scope, and the real write
-// gate refuses the recommended scope and accepts the owner scope the picker
-// shows. The paired case on a connection of an organization shows that the
-// exception follows the gate exactly.
+// of the exception; the admin case below pins that edge on the same row. This
+// suite pins both halves on the SAME row: the real panel model states nothing
+// and keeps the owner scope, and the real write gate refuses the recommended
+// scope and accepts the owner scope the picker shows. The paired case on a
+// connection of an organization shows that the exception follows the gate
+// exactly.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
@@ -104,7 +105,7 @@ const CONNECT_SEED = {
   seededDefault: true,
 } as unknown as AgentAuthPolicy;
 
-function decl(scope: "workspace" | "organization") {
+function decl(scope: "workspace" | "organization" | "admin") {
   return { formatVersion: 1 as const, mode: "default", scope, source: "declared" as const } as never;
 }
 
@@ -118,7 +119,10 @@ function policyOf(visibility: string): AgentAuthPolicy {
   } as unknown as AgentAuthPolicy;
 }
 
-function surfaceFor(row: NangoConnectionIdentity, scope: "workspace" | "organization") {
+function surfaceFor(
+  row: NangoConnectionIdentity,
+  scope: "workspace" | "organization" | "admin",
+) {
   return decideConnectionShareSurface({
     identity: row,
     declaration: decl(scope),
@@ -170,5 +174,17 @@ describe("the stated exception: an untouched seed on a connection of no organiza
     });
 
     expect(await saveVeto(orgRow, policyOf("workspace"))).toBeNull();
+  });
+
+  it("an admin recommendation on the same row of no organization is outside the exception: the line and the pre-selection, a scope the save path accepts", async () => {
+    const s = surfaceFor(legacyRow, "admin");
+    expect(s).toEqual({
+      surface: "editable",
+      value: "admin",
+      recommendationNote:
+        "This connector recommends sharing with workspace admins \u2014 nothing is shared until you save. Currently: only you.",
+    });
+
+    expect(await saveVeto(legacyRow, policyOf("admin"))).toBeNull();
   });
 });

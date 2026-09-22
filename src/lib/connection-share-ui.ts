@@ -178,7 +178,8 @@ export function decideConnectionShareSurface(input: {
     // that Save always refuses is worse than no proposal, and "your
     // organization" would name nothing. So the picker stays on the stored
     // owner scope, which the gate accepts. The other recommendations are not
-    // part of the exception: the gate does not refuse them on such a row.
+    // part of the exception: the gate accepts an admin grant on such a row,
+    // and a team or project recommendation pre-selects no scope.
     // Pinned by
     // src/lib/__tests__/connection-share-ui-no-organization-exception.test.ts.
     const recommended =
