@@ -3,10 +3,14 @@
  *
  * Two claims, both mechanical:
  *
- *   1. `assertDevelopmentRuntime` refuses outside a development runtime, reads
- *      the mode through the SAME predicate the rest of the codebase uses
- *      (`isAppDevelopmentMode()` / `getAppRuntimeMode()`, both env keys), and
- *      names the mode it refused in.
+ *   1. `assertDevelopmentRuntime` runs on development instances only. It starts
+ *      from the SAME predicate the rest of the codebase uses
+ *      (`isAppDevelopmentMode()` / `getAppRuntimeMode()`, both env keys) and
+ *      then asks for more than it: a DECLARED runtime mode is accepted only as
+ *      `development` (any letter case, surrounding blanks trimmed) and refused
+ *      otherwise, under every build; an UNDECLARED mode keeps parity with the
+ *      shared reading and is refused only under a production build. A refusal
+ *      names the variable and the accepted spelling, never the declared value.
  *   2. EVERY wrapper module asks the gate ITSELF — the gate is the FIRST
  *      executable statement of each exported entry point, not a single
  *      top-level check in the composed command. A source scan is the right
@@ -81,6 +85,111 @@ describe("assertDevelopmentRuntime", () => {
     } finally {
       // `vi.stubEnv` restores the prior value (including "unset") on unstub.
       vi.unstubAllEnvs();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // A DECLARED runtime mode has to be a development spelling.
+  //
+  // The shared reading is a two-value projection — everything that is not a
+  // production spelling projects onto "development" — so these claims are about
+  // the gate asking for MORE than it, in the closed direction only.
+  // -------------------------------------------------------------------------
+
+  it("accepts the development spelling, any letter case, surrounding blanks trimmed", () => {
+    for (const declared of [
+      "development",
+      "DEVELOPMENT",
+      "Development",
+      "  development  ",
+      "\tdevelopment\n",
+    ]) {
+      withRuntimeEnv({ CINATRA_RUNTIME_MODE: declared });
+      expect(() => assertDevelopmentRuntime("provisionInstanceNamespace")).not.toThrow();
+      withRuntimeEnv({ APP_RUNTIME_MODE: declared });
+      expect(() => assertDevelopmentRuntime("provisionInstanceNamespace")).not.toThrow();
+    }
+  });
+
+  it("refuses a DECLARED runtime mode that is not the development spelling", () => {
+    // The short form `dev` belongs in this list: every strict development-only
+    // switch in the codebase is a POSITIVE test for `development`, so an
+    // instance declaring a short form enables no development path at all while
+    // still asking for the development-only writes. `demo` belongs here for the
+    // opposite reason — a demo instance IS a development instance and declares
+    // `CINATRA_RUNTIME_MODE=development`, carrying its overlay on the separate
+    // `CINATRA_INSTALL_PROFILE` axis (`src/lib/install-profile.ts`), so no
+    // shipped install writes `demo` here. `producton` and `developmnet` are the
+    // misspellings the shared two-value projection would read as development.
+    for (const declared of [
+      "dev",
+      "Dev",
+      "\tdev\n",
+      "staging",
+      "preview",
+      "demo",
+      "developmnet",
+      "producton",
+    ]) {
+      withRuntimeEnv({ CINATRA_RUNTIME_MODE: declared });
+      expect(() => assertDevelopmentRuntime("provisionInstanceNamespace")).toThrow(
+        DevelopmentRuntimeRefusedError,
+      );
+      withRuntimeEnv({ APP_RUNTIME_MODE: declared });
+      expect(() => assertDevelopmentRuntime("provisionInstanceNamespace")).toThrow(
+        DevelopmentRuntimeRefusedError,
+      );
+    }
+  });
+
+  it("refuses a DECLARED non-development value under a development build too", () => {
+    try {
+      vi.stubEnv("NODE_ENV", "development");
+      withRuntimeEnv({ CINATRA_RUNTIME_MODE: "staging" });
+      expect(() => assertDevelopmentRuntime("provisionDevInstance")).toThrow(
+        DevelopmentRuntimeRefusedError,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("refuses the production spellings whatever their letter case and blanks", () => {
+    for (const declared of ["production", "prod", "PROD", "  Production  "]) {
+      withRuntimeEnv({ CINATRA_RUNTIME_MODE: declared });
+      expect(() => assertDevelopmentRuntime("provisionPublicOrigin")).toThrow(
+        DevelopmentRuntimeRefusedError,
+      );
+    }
+  });
+
+  it("accepts an UNDECLARED runtime mode when the build is not a production one", () => {
+    // Parity with the shared reading, which defaults an undeclared mode to
+    // development explicitly (`getAppRuntimeMode()` in `src/lib/runtime-mode.ts`
+    // returns "development" when no key carries a value). A blank value is not a
+    // declaration either.
+    withRuntimeEnv({});
+    expect(() => assertDevelopmentRuntime("provisionInstanceNamespace")).not.toThrow();
+    withRuntimeEnv({ CINATRA_RUNTIME_MODE: "   " });
+    expect(() => assertDevelopmentRuntime("provisionInstanceNamespace")).not.toThrow();
+  });
+
+  it("names the variable and the accepted spelling, never the declared value", () => {
+    for (const declared of ["staging", "preview", "developmnet"]) {
+      withRuntimeEnv({ CINATRA_RUNTIME_MODE: declared });
+      let caught: unknown = null;
+      try {
+        assertDevelopmentRuntime("provisionConnectorServiceSecret");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(DevelopmentRuntimeRefusedError);
+      const refused = caught as DevelopmentRuntimeRefusedError;
+      const reported = `${refused.message} ${refused.runtimeMode}`;
+      expect(reported).not.toContain(declared);
+      expect(reported).toContain("CINATRA_RUNTIME_MODE");
+      expect(reported).toContain("development");
+      expect(reported).toContain("provisionConnectorServiceSecret");
     }
   });
 });
