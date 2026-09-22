@@ -47,7 +47,7 @@ const TEAM = "team_growth";
 // vendor/name pair reads like a repository reference.
 const AGENT_VENDOR = "cinatra-ai";
 const AGENT_NAME = "scope-fixture-agent";
-const AGENT_PATH = `/`;
+const AGENT_PATH = `${AGENT_VENDOR}/${AGENT_NAME}`;
 const ORG = "org_acme";
 
 const SKILL_ROW = {
@@ -142,8 +142,8 @@ describe("the Skills pane", () => {
     expect(root.dataset.tab).toBe("skills");
     const tabs = within(root).getAllByRole("tab");
     expect(tabs.map((t) => t.getAttribute("href"))).toEqual([
-      `/teams/${TEAM}/agents//settings?tab=skills`,
-      `/teams/${TEAM}/agents//settings?tab=artifacts`,
+      `/teams/${TEAM}/agents/${AGENT_PATH}/settings?tab=skills`,
+      `/teams/${TEAM}/agents/${AGENT_PATH}/settings?tab=artifacts`,
     ]);
   });
 
@@ -458,7 +458,7 @@ describe("the Artifacts pane", () => {
     expect(within(empty).getByText("No context slots")).toBeTruthy();
     expect(within(empty).getByText(/declares no context slots/)).toBeTruthy();
     expect(within(empty).getByRole("link", { name: "Go to Skills" }).getAttribute("href")).toBe(
-      `/teams/${TEAM}/agents//settings?tab=skills`,
+      `/teams/${TEAM}/agents/${AGENT_PATH}/settings?tab=skills`,
     );
     expect(document.querySelector('[data-slot="scope-context-slot"]')).toBeNull();
   });
