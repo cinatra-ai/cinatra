@@ -226,6 +226,21 @@ const AUTH_API_CALLER_INVENTORY: readonly CallerRow[] = [
     // performs no organization-scoped table write at all.
     floor: "no-organization-axis",
   },
+  {
+    file: "src/lib/dev-instance-provisioning/provision-first-administrator.ts",
+    entryPoint: "provisionFirstAdministrator",
+    method: "revokeSession",
+    // Seating a development instance's first administrator from a command.
+    // Registering the account signs it in, and a command is not a browser, so
+    // this entry point ends that one minted session through the library's own
+    // single-session revoke. A revoke DELETES one session row: it grants no
+    // access, writes no member or invitation row, and none of this stage's
+    // archived-org guards intercept a DELETE — the same "can never get stuck"
+    // allowance removeUser above is classified under. Ending it is also the
+    // safe direction: the hazard is a live administrator session nobody holds,
+    // not a revoked one.
+    floor: "cleanup-never-blocked",
+  },
 ];
 
 // auth.api methods that are allowed ANYWHERE without an inventory row — each
