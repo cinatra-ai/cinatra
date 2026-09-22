@@ -57,9 +57,7 @@ export type DashboardArtifactRow = {
   readonly name: string;
   readonly ownerLevel: string;
   readonly ownerId: string;
-  /** NULL only for a workspace dashboard (cinatra#2811), which has no artifact
-   *  twin and so never becomes a library pointer; typed as the row stores it. */
-  readonly organizationId: string | null;
+  readonly organizationId: string;
   readonly projectId: string | null;
   readonly updatedAt: Date | string | null;
   readonly entityType: string | null;
