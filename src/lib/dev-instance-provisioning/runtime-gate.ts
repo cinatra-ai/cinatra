@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
-// THE RUNTIME GATE the development-only provisioning writes ask for THEMSELVES.
+// THE RUNTIME GATES the development-only provisioning writes ask for THEMSELVES.
 //
-// Every wrapper in this directory calls `assertDevelopmentRuntime` as its first
+// Every wrapper in this directory calls a gate from this module as its first
 // executable statement — not once at the top of the composed command. A single
 // top-level gate is a gate on ONE caller; a member that is only ever safe in
 // development has to be safe no matter who reaches it, including a future
@@ -19,12 +19,23 @@
 // reading would call development, and it never accepts one the shared reading
 // calls production.
 //
-// It is INDEPENDENT of, and additional to, the admin-session authorization the
-// wizard's own actions require: nothing here replaces that gate, and nothing
-// here is reachable from a browser at all.
+// TWO gates live here, and the second adds exactly ONE requirement to the
+// first. `assertDevelopmentRuntime` is what the four writes an operator can
+// undo ask for. `assertDeclaredDevelopmentRuntime` is what the one write an
+// operator CANNOT undo — seating the instance's first administrator — asks for:
+// the shared gate first, and then a runtime mode the operator actually
+// DECLARED. A declared mode is judged by the same list either way.
+//
+// Both are INDEPENDENT of, and additional to, the admin-session authorization
+// the wizard's own actions require: nothing here replaces that gate, and
+// nothing here is reachable from a browser at all.
 // -----------------------------------------------------------------------------
 
-import { getAppRuntimeMode, isAppDevelopmentMode } from "@/lib/runtime-mode";
+import {
+  APP_RUNTIME_MODE_ENV_KEYS as RUNTIME_MODE_ENV_KEYS,
+  getAppRuntimeMode,
+  isAppDevelopmentMode,
+} from "@/lib/runtime-mode";
 
 export class DevelopmentRuntimeRefusedError extends Error {
   readonly runtimeMode: string;
@@ -39,16 +50,15 @@ export class DevelopmentRuntimeRefusedError extends Error {
   }
 }
 
-const RUNTIME_MODE_ENV_KEYS = ["CINATRA_RUNTIME_MODE", "APP_RUNTIME_MODE"] as const;
-
 /**
  * The runtime-mode spellings this command accepts as a development instance,
  * compared with surrounding blanks trimmed and letter case folded. Exactly one
- * today, and the list is the single source the refusal message reads from.
+ * today, it is what BOTH gates below judge a declared mode by, and the list is
+ * the single source the refusal messages read from.
  *
  * `development` is the one spelling every strict development-only switch in the
  * codebase tests for (`CINATRA_RUNTIME_MODE === "development"`) and the one
- * `.env.example` ships, so it is exactly what this gate accepts.
+ * `.env.example` ships, so it is exactly what these gates accept.
  *
  * A SHORT FORM is deliberately absent. The shared reading accepts `prod`
  * alongside `production` (`src/lib/runtime-mode.ts`), but that works only
@@ -73,8 +83,10 @@ const ACCEPTED_SPELLINGS_PHRASE = DEVELOPMENT_RUNTIME_SPELLINGS.map(
 /**
  * The runtime mode an operator DECLARED, or `null` when nobody did.
  *
- * Same key precedence as `getAppRuntimeMode()`: the first key carrying a
- * non-blank value wins, and a blank value is not a declaration.
+ * Same key precedence as `getAppRuntimeMode()`, read from the app's own
+ * exported tuple: the first key carrying a non-blank value wins, and a blank
+ * value is not a declaration. Both gates read the declaration through here, so
+ * there is one reader and one precedence to keep in step with the app.
  */
 function declaredRuntimeMode(): string | null {
   for (const key of RUNTIME_MODE_ENV_KEYS) {
@@ -148,5 +160,53 @@ export function assertDevelopmentRuntime(operation: string): void {
         `runs on development instances only: declare ${ACCEPTED_SPELLINGS_PHRASE} to name ` +
         `this one.`,
     );
+  }
+}
+
+/**
+ * The instance did not SAY which runtime it is, so the one write an operator
+ * cannot undo is refused. The remedy is named; nothing the environment supplied
+ * is repeated back.
+ */
+export class DeclaredDevelopmentRuntimeRequiredError extends Error {
+  constructor(operation: string) {
+    super(
+      `${operation} runs only on an instance that DECLARES itself a development one, and ` +
+        `this instance declares no runtime mode at all. Set ${RUNTIME_MODE_ENV_KEYS[0]} ` +
+        `(or ${RUNTIME_MODE_ENV_KEYS[1]}) to ${ACCEPTED_SPELLINGS_PHRASE}.`,
+    );
+    this.name = "DeclaredDevelopmentRuntimeRequiredError";
+  }
+}
+
+/**
+ * THE STRICTER GATE, for the one provisioning write an operator cannot undo:
+ * seating the instance's first administrator.
+ *
+ * It asks the shared gate FIRST — nothing is loosened, and a declared mode is
+ * judged by the same list — and then adds the ONE requirement the shared gate
+ * deliberately does not make: the runtime mode has to have been DECLARED.
+ *
+ * The shared gate accepts an undeclared mode whenever the build is not a
+ * production one, keeping parity with the app's own reading, which defaults an
+ * undeclared mode to development. That parity is right for the four writes an
+ * operator can undo — a namespace, a connector-service secret, a public origin,
+ * a provider connection. It is not right for this one: seating a platform
+ * administrator on an instance that has nobody on it yet is the write an
+ * operator cannot take back, so "nobody said which runtime this is" is not
+ * enough to make it.
+ *
+ * The two gates therefore decide differently in exactly one case, the
+ * undeclared one.
+ */
+export function assertDeclaredDevelopmentRuntime(operation: string): void {
+  assertDevelopmentRuntime(operation);
+
+  // Everything else the shared gate has already decided: a declared mode that
+  // reaches this line is a development spelling. What is left is the one
+  // requirement this gate adds — "nobody said" is not "somebody said
+  // development".
+  if (declaredRuntimeMode() === null) {
+    throw new DeclaredDevelopmentRuntimeRequiredError(operation);
   }
 }

@@ -343,6 +343,21 @@ const authPlugins: CinatraRuntimeBetterAuthPlugins = [
   nextCookies(),
 ];
 
+/**
+ * The instance's password-policy bounds, NAMED so a non-browser caller can
+ * state the rule it just enforced without restating a number beside it. These
+ * ARE `emailAndPassword.minPasswordLength` / `maxPasswordLength` below — one
+ * literal each, and the comment there says where the minimum comes from.
+ *
+ * The maximum is declared rather than inherited on purpose: the library refuses
+ * an over-long password as firmly as a short one, and a caller that names the
+ * rule it enforced must not be naming a default it merely guessed at. 128 is
+ * the library's own default, so declaring it changes nothing about how any
+ * account is created.
+ */
+export const MINIMUM_PASSWORD_LENGTH = 12;
+export const MAXIMUM_PASSWORD_LENGTH = 128;
+
 export const auth = betterAuth({
   appName: "Cinatra",
   baseURL: authBaseUrl,
@@ -423,7 +438,8 @@ export const auth = betterAuth({
     // continue to work on login (the hash check passes) but cannot be
     // re-created at <12 chars. Customer-onboarding migration path:
     // gate weak-pw accounts behind a forced reset on next login.
-    minPasswordLength: 12,
+    minPasswordLength: MINIMUM_PASSWORD_LENGTH,
+    maxPasswordLength: MAXIMUM_PASSWORD_LENGTH,
     // Platform mailer (routes via @cinatra-ai/email-connector → the provider
     // assigned to the "platform" purpose). Dynamic import keeps the email
     // stack out of auth.ts's boot-time module graph (avoids a cycle through
