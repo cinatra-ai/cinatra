@@ -119,6 +119,22 @@ async function provision(pool: Pool): Promise<void> {
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (dashboard_id, revision_number)
   )`);
+  // The listings junction in its current shape (cinatra#1897 B4, widened by
+  // core__0108 for workspace references): the delete writer reads a dashboard's
+  // workspace links to record the revocation of a standing everyone-grant
+  // before the cascade (cinatra#2811), so the store's table must exist here.
+  await pool.query(`CREATE TABLE "${SCHEMA}".dashboard_entity_links (
+    id text PRIMARY KEY,
+    dashboard_id text NOT NULL REFERENCES "${SCHEMA}".dashboards(id) ON DELETE CASCADE,
+    entity_type text NOT NULL,
+    entity_id text NOT NULL,
+    organization_id text NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    workspace_read_granted boolean NOT NULL DEFAULT false,
+    workspace_read_granted_by text,
+    workspace_read_granted_at timestamptz
+  )`);
   await pool.query(`CREATE TABLE "${SCHEMA}".audit_events (
     id text PRIMARY KEY, organization_id text, actor_principal_id text,
     actor_principal_type text, auth_source text, delegated_by text,
@@ -151,7 +167,7 @@ async function provision(pool: Pool): Promise<void> {
 }
 
 async function truncate(pool: Pool): Promise<void> {
-  await pool.query(`TRUNCATE "${SCHEMA}".dashboard_revisions, "${SCHEMA}".dashboards, "${SCHEMA}".audit_events`);
+  await pool.query(`TRUNCATE "${SCHEMA}".dashboard_entity_links, "${SCHEMA}".dashboard_revisions, "${SCHEMA}".dashboards, "${SCHEMA}".audit_events`);
 }
 
 async function readRow(pool: Pool, id: string) {
