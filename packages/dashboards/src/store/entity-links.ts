@@ -17,17 +17,19 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import { getDashboardsDb, dashboards, dashboardEntityLinks } from "./db";
-import type { ListingScopeKind } from "./schema";
+import type { TenantListingScopeKind } from "./schema";
 
 // Re-export so host code (which imports this module as the flat alias
 // `@cinatra-ai/dashboards/entity-links`) gets the scope-kind type + roster from
 // one place, without needing a separate `store/schema` path alias.
 export { LISTING_SCOPE_KINDS } from "./schema";
-export type { ListingScopeKind } from "./schema";
+export type { ListingScopeKind, TenantListingScopeKind } from "./schema";
 
-/** A scope whose Dashboards tab lists dashboards (the three shared scopes). */
+/** A TENANT scope whose Dashboards tab lists dashboards (the three shared
+ *  scopes). The workspace collection (cinatra#2811) spans organizations and is
+ *  not a `ListingScope`: it has its own reads in `workspace-links.ts`. */
 export type ListingScope = {
-  readonly kind: ListingScopeKind;
+  readonly kind: TenantListingScopeKind;
   /** team id / org id / project id. */
   readonly scopeId: string;
   /** The scope's tenant — every listing + homed row is tenant-fenced to this. */
@@ -47,7 +49,9 @@ export type ScopeDashboardRow = {
   readonly projectId: string | null;
   readonly entityType: string | null;
   readonly entityId: string | null;
-  readonly organizationId: string;
+  /** The row's tenant: NULL only for a workspace dashboard homed in the
+   *  workspace itself (cinatra#2811). */
+  readonly organizationId: string | null;
   /** 'home' — canonically homed here (no Remove); 'listed' — a secondary listing
    *  (carries Remove). */
   readonly relation: "home" | "listed";
@@ -214,7 +218,7 @@ export async function listScopePresentDashboardIds(
  */
 export async function addDashboardEntityLink(input: {
   dashboardId: string;
-  entityType: ListingScopeKind;
+  entityType: TenantListingScopeKind;
   entityId: string;
   organizationId: string;
   createdBy: string;
@@ -249,7 +253,7 @@ export async function addDashboardEntityLink(input: {
  */
 export async function removeDashboardEntityLink(input: {
   dashboardId: string;
-  entityType: ListingScopeKind;
+  entityType: TenantListingScopeKind;
   entityId: string;
   organizationId: string;
 }): Promise<{ removed: boolean }> {

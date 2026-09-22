@@ -22,7 +22,7 @@
 import { getActorContext } from "@/lib/auth-session";
 import type {
   ListingScope,
-  ListingScopeKind,
+  TenantListingScopeKind,
 } from "@cinatra-ai/dashboards/entity-links";
 import {
   addScopeListing,
@@ -37,7 +37,7 @@ import type {
 
 /** The server-derived scope a bound action carries (safe: the page authors it). */
 export type ScopeActionArg = {
-  readonly kind: ListingScopeKind;
+  readonly kind: TenantListingScopeKind;
   readonly scopeId: string;
   readonly orgId: string;
 };

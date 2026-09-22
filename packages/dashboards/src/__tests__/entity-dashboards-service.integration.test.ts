@@ -49,7 +49,8 @@ if (RUN_IT && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(RAW_SCHEMA)) {
 }
 const SCHEMA = RAW_SCHEMA;
 
-const actor: DashboardActor = {
+// A tenant actor: its organization is always set (a workspace actor may carry none, cinatra#2811).
+const actor: DashboardActor & { readonly organizationId: string } = {
   userId: "u-700",
   organizationId: "org-700",
   teamIds: [],

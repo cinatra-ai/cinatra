@@ -19,7 +19,7 @@
  * serialize on the row lock and revision_number is computed atomically.
  */
 import "server-only";
-import { eq, max, sql, and, inArray, ne } from "drizzle-orm";
+import { eq, max, sql, and, inArray, isNull, ne } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { CURRENT_CONFIG_VERSION } from "./store/dashboard-config";
@@ -43,6 +43,8 @@ import {
   buildOverviewDashboardId,
   compareDashboardsForList,
   isKnownEntityType,
+  isWorkspaceDashboardRef,
+  isWorkspaceDashboardRow,
   normalizeCreatableDashboardName,
   parseCanonicalOverviewId,
   type DashboardEntityRef,
@@ -77,7 +79,7 @@ import {
 // surface (DashboardTwinContext / TwinTx) is erased at compile time and adds no
 // graph pressure.
 import type { DashboardTwinContext, TwinTx } from "./twin-writer-seam";
-import { guardedDashboardsWrite } from "./org-write-seam";
+import { guardedDashboardsWrite, type DashboardWriteTenancy } from "./org-write-seam";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 export class DashboardForbiddenError extends Error {
@@ -250,6 +252,16 @@ function twinCtx(
   // materialization — never an archive/restore re-mint or an adopt/upgrade path.
   opts?: { readonly mintMeaningAssertion?: boolean },
 ): DashboardTwinContext {
+  // The substrate twin is tenant-keyed. An org-NULL WORKSPACE row has no twin
+  // (cinatra#2811) and reaches pairing only through `pairTwinUnlessWorkspaceRow`,
+  // which skips it; an org-NULL row arriving HERE is a writer that bypassed the
+  // exception, so it fails closed and rolls the mutation back.
+  if (row.organizationId === null) {
+    throw new Error(
+      `dashboards-artifact twin: row ${row.id} has no organization; only a ` +
+        "workspace row is org-NULL, and it pairs no twin (cinatra#2811).",
+    );
+  }
   return {
     operation,
     dashboardId: row.id,
@@ -284,6 +296,60 @@ async function pairTwinBulk(
   const sorted = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   for (const row of sorted) {
     await pairTwin(tx, twinCtx(row, operation, actorId));
+  }
+}
+
+/**
+ * THE ONE RECORDED TWIN-PAIRING EXCEPTION (cinatra#2811, per-scope surfaces S5).
+ *
+ * A WORKSPACE dashboard row (org-NULL, the user-owned `(workspace,
+ * __workspace__)` entity) has NO artifact-substrate twin: the substrate is
+ * tenant-keyed and a workspace row has no tenant, and its access (the owner
+ * alone) is decided by `resolveDashboardAccess` without the substrate. Every
+ * other row pairs exactly as `pairTwin` always did. Only the writers a workspace
+ * row can reach call this helper, and the AST gate
+ * (`__tests__/pair-twin-required.test.ts`) names them; every other writer keeps
+ * the unconditional `pairTwin`, where an org-NULL row fails closed in `twinCtx`.
+ */
+async function pairTwinUnlessWorkspaceRow(
+  tx: TwinTx,
+  row: DashboardRow,
+  operation: "upsert" | "delete",
+  actorId: string | null,
+): Promise<void> {
+  if (isWorkspaceDashboardRow(row)) return;
+  await pairTwin(tx, twinCtx(row, operation, actorId));
+}
+
+/**
+ * The write tenancy of an EXISTING row (cinatra#2811), read before the guard
+ * opens its transaction: an org-NULL row is a workspace row and writes outside
+ * the org-write kernel; every other row keeps the organization guard exactly as
+ * before. No writer ever rewrites `organization_id`, so this pre-read cannot go
+ * stale; the writer still re-checks it on the LOCKED row (`assertRowTenancy`),
+ * so a workspace tenancy can never reach an organization row. An absent row
+ * reads as "organization", where the guarded body reports not-found as before.
+ */
+async function readRowTenancy(id: string): Promise<DashboardWriteTenancy> {
+  const rows = await getDashboardsDb()
+    .select({ organizationId: dashboards.organizationId })
+    .from(dashboards)
+    .where(eq(dashboards.id, id))
+    .limit(1);
+  return rows[0] && rows[0].organizationId === null ? "workspace" : "organization";
+}
+
+/** Re-check, on the locked row, that it matches the tenancy its write opened
+ *  under (fail-closed: a mismatch is a refusal, never a write). */
+function assertRowTenancy(
+  row: DashboardRow,
+  tenancy: DashboardWriteTenancy,
+  operation: string,
+  id: string,
+): void {
+  const rowIsWorkspace = row.organizationId === null;
+  if (rowIsWorkspace !== (tenancy === "workspace")) {
+    throw new DashboardForbiddenError(operation, id);
   }
 }
 
@@ -653,16 +719,19 @@ export async function updateDashboard(
 ): Promise<DashboardRow> {
   // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
   // lifecycle ruling run BEFORE this body — the per-dashboard twin lock below
-  // stays second (org-first lock order; see org-write-seam.ts).
+  // stays second (org-first lock order; see org-write-seam.ts). A workspace row
+  // (org-NULL, cinatra#2811) writes under the workspace tenancy instead.
+  const tenancy = await readRowTenancy(id);
   return guardedDashboardsWrite(
     actor,
-    { schema: backfillSchemaName() },
+    { schema: backfillSchemaName(), tenancy },
     async (guardedTx) => {
     const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
+    assertRowTenancy(row, tenancy, "dashboards.update", id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
       throw new DashboardForbiddenError("dashboards.update", id);
@@ -724,7 +793,7 @@ export async function updateDashboard(
         dashboardVersion: updated.dashboardVersion,
       },
     });
-    await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
+    await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, updated, "upsert", actor.userId);
     return updated;
     },
   );
@@ -745,6 +814,12 @@ export async function publishDashboard(
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
+    // A workspace row (org-NULL, cinatra#2811) is written only through the
+    // entity-dashboard surface; publishing (a revision snapshot) is not part
+    // of it, so the org-guarded publish path refuses it outright.
+    if (row.organizationId === null) {
+      throw new DashboardForbiddenError("dashboards.publish", id);
+    }
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
       throw new DashboardForbiddenError("dashboards.publish", id);
@@ -800,16 +875,19 @@ export async function archiveDashboard(
   actor: DashboardActor,
 ): Promise<DashboardRow> {
   // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
-  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts). A workspace
+  // row (org-NULL, cinatra#2811) writes under the workspace tenancy instead.
+  const tenancy = await readRowTenancy(id);
   return guardedDashboardsWrite(
     actor,
-    { schema: backfillSchemaName() },
+    { schema: backfillSchemaName(), tenancy },
     async (guardedTx) => {
     const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
+    assertRowTenancy(row, tenancy, "dashboards.archive", id);
     const access = resolveDashboardAccess(row, actor);
     if (!access.canWrite) {
       throw new DashboardForbiddenError("dashboards.archive", id);
@@ -839,7 +917,7 @@ export async function archiveDashboard(
       row: updated,
       metadata: { prevStatus, dashboardVersion: updated.dashboardVersion },
     });
-    await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
+    await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, updated, "upsert", actor.userId);
     return updated;
     },
   );
@@ -910,6 +988,12 @@ export async function upsertDashboardConfig(
     const existing = probed[0];
 
     // 2. Auth check — write-access on existing, create-access on pseudo.
+    // A workspace row (org-NULL, cinatra#2811) is saved only through the
+    // entity-dashboard surface; this legacy per-surface upsert keys its rows by
+    // organization and refuses one outright.
+    if (existing && existing.organizationId === null) {
+      throw new DashboardForbiddenError("dashboards.update", id);
+    }
     if (existing) {
       const access = resolveDashboardAccess(existing, actor);
       if (!access.canWrite) {
@@ -1127,6 +1211,30 @@ function assertValidEntityRef(ref: DashboardEntityRef): void {
   }
   if (!ref.entityId) throw new DashboardInvalidEntityError("entityId is required");
   if (!ref.ownerId) throw new DashboardInvalidEntityError("ownerId is required");
+  // The workspace type admits exactly ONE shape (cinatra#2811): the user-owned
+  // '__workspace__' entity. Anything else naming the type is refused, so no
+  // other org-NULL row can ever be requested.
+  if (ref.entityType === "workspace" && !isWorkspaceDashboardRef(ref)) {
+    throw new DashboardInvalidEntityError(
+      "a workspace dashboard ref is the user-owned '__workspace__' entity",
+    );
+  }
+}
+
+/**
+ * The tenant a ref's rows live under (cinatra#2811): NULL for the workspace ref,
+ * whatever organization the actor has active, and the actor's active
+ * organization for every other ref, which fails closed when there is none.
+ */
+function tenantForRef(
+  ref: DashboardEntityRef,
+  actor: DashboardActor,
+): { readonly tenancy: DashboardWriteTenancy; readonly orgId: string | null } {
+  if (isWorkspaceDashboardRef(ref)) return { tenancy: "workspace", orgId: null };
+  if (!actor.organizationId) {
+    throw new DashboardInvalidEntityError("actor.organizationId is required");
+  }
+  return { tenancy: "organization", orgId: actor.organizationId };
 }
 
 /** Validate + normalize a user-supplied dashboard name for create/rename. The
@@ -1155,7 +1263,7 @@ function assertCreatableName(name: string): string {
  *  doesn't exist yet). Config content is never inspected for auth. */
 function buildAuthPseudoRow(args: {
   readonly id: string;
-  readonly organizationId: string;
+  readonly organizationId: string | null;
   readonly ownerLevel: OwnerLevel;
   readonly ownerId: string;
   readonly config: unknown;
@@ -1202,7 +1310,7 @@ function buildAuthPseudoRow(args: {
 /** Locate the Overview default for (org, entity, owner) under the caller's TX. */
 async function findDefaultRow(
   q: DashboardsDb,
-  organizationId: string,
+  organizationId: string | null,
   ref: DashboardEntityRef,
 ): Promise<DashboardRow | undefined> {
   const rows = await q
@@ -1210,7 +1318,9 @@ async function findDefaultRow(
     .from(dashboards)
     .where(
       and(
-        eq(dashboards.organizationId, organizationId),
+        organizationId === null
+          ? isNull(dashboards.organizationId)
+          : eq(dashboards.organizationId, organizationId),
         eq(dashboards.entityType, ref.entityType),
         eq(dashboards.entityId, ref.entityId),
         eq(dashboards.ownerLevel, ref.ownerLevel),
@@ -1233,21 +1343,23 @@ export async function listDashboardsForEntity(
   ref: DashboardEntityRef,
   actor: DashboardActor,
 ): Promise<DashboardRow[]> {
-  if (
-    !actor.organizationId ||
-    !ref.entityId ||
-    !ref.ownerId ||
-    !isKnownEntityType(ref.entityType)
-  ) {
+  if (!ref.entityId || !ref.ownerId || !isKnownEntityType(ref.entityType)) {
     return [];
   }
+  // The workspace ref (cinatra#2811) reads its org-NULL rows under ANY active
+  // organization, or none; every other ref stays fenced to the active one.
+  const workspace = isWorkspaceDashboardRef(ref);
+  if (ref.entityType === "workspace" && !workspace) return [];
+  if (!workspace && !actor.organizationId) return [];
   const db = getDashboardsDb();
   const rows = await db
     .select()
     .from(dashboards)
     .where(
       and(
-        eq(dashboards.organizationId, actor.organizationId),
+        workspace
+          ? isNull(dashboards.organizationId)
+          : eq(dashboards.organizationId, actor.organizationId as string),
         eq(dashboards.entityType, ref.entityType),
         eq(dashboards.entityId, ref.entityId),
         eq(dashboards.ownerLevel, ref.ownerLevel),
@@ -1304,19 +1416,27 @@ export async function ensureOverview(
 ): Promise<DashboardRow> {
   const { ref } = input;
   assertValidEntityRef(ref);
-  const orgId = actor.organizationId;
-  if (!orgId) throw new DashboardInvalidEntityError("actor.organizationId is required");
+  // The workspace ref (cinatra#2811) is org-NULL under every active
+  // organization; every other ref lives under the active one.
+  const { tenancy, orgId } = tenantForRef(ref, actor);
 
-  const lockKey = ["overview", orgId, ref.entityType, ref.entityId, ref.ownerLevel, ref.ownerId].join(":");
+  const lockKey = [
+    orgId === null ? "overview-workspace" : "overview",
+    orgId ?? "",
+    ref.entityType,
+    ref.entityId,
+    ref.ownerLevel,
+    ref.ownerId,
+  ].join(":");
 
   // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
   // lifecycle ruling run BEFORE this body (see org-write-seam.ts). The
   // find-path returns without writing, but the ensure is one writer — it
   // holds the guard uniformly (an archived org must not lazily CREATE its
-  // missing Overview either).
+  // missing Overview either). The workspace ref takes the workspace tenancy.
   return guardedDashboardsWrite(
     actor,
-    { schema: backfillSchemaName() },
+    { schema: backfillSchemaName(), tenancy },
     async (guardedTx) => {
     const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first on the canonical overview id (uniform lock order across
@@ -1380,7 +1500,7 @@ export async function ensureOverview(
       row,
       metadata: { overview: true, entityType: ref.entityType, entityId: ref.entityId },
     });
-    await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
+    await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, row, "upsert", actor.userId);
     return row;
     },
   );
@@ -1404,8 +1524,9 @@ export async function createEntityDashboard(
 ): Promise<DashboardRow> {
   assertValidEntityRef(input.ref);
   const name = assertCreatableName(input.name);
-  const orgId = actor.organizationId;
-  if (!orgId) throw new DashboardInvalidEntityError("actor.organizationId is required");
+  // The workspace ref (cinatra#2811) is org-NULL under every active
+  // organization; every other ref lives under the active one.
+  const { tenancy, orgId } = tenantForRef(input.ref, actor);
 
   const { config, configVersion } = await normalizeConfigForWrite({
     config: input.seedConfig ?? EMPTY_ENTITY_DASHBOARD_DC,
@@ -1437,10 +1558,11 @@ export async function createEntityDashboard(
 
   try {
     // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
-    // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+    // lifecycle ruling run BEFORE this body (see org-write-seam.ts). The
+    // workspace ref takes the workspace tenancy (cinatra#2811).
     return await guardedDashboardsWrite(
       actor,
-      { schema: backfillSchemaName() },
+      { schema: backfillSchemaName(), tenancy },
       async (guardedTx) => {
       const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
@@ -1468,7 +1590,7 @@ export async function createEntityDashboard(
         row,
         metadata: { entityType: input.ref.entityType, entityId: input.ref.entityId, name },
       });
-      await pairTwin(tx as unknown as TwinTx, twinCtx(row, "upsert", actor.userId));
+      await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, row, "upsert", actor.userId);
       return row;
       },
     );
@@ -1491,18 +1613,21 @@ export async function renameDashboard(
   actor: DashboardActor,
 ): Promise<DashboardRow> {
   const name = assertCreatableName(newName);
+  // A workspace row (org-NULL, cinatra#2811) renames under the workspace tenancy.
+  const tenancy = await readRowTenancy(id);
   try {
     // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
     // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
     return await guardedDashboardsWrite(
       actor,
-      { schema: backfillSchemaName() },
+      { schema: backfillSchemaName(), tenancy },
       async (guardedTx) => {
       const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
       await acquireTwinLockFirst(tx as unknown as TwinTx, id);
       const row = await selectForUpdate(tx, id);
       if (!row) throw new DashboardNotFoundError(id);
+      assertRowTenancy(row, tenancy, "dashboards.rename", id);
       if (!resolveDashboardAccess(row, actor).canWrite) {
         throw new DashboardForbiddenError("dashboards.rename", id);
       }
@@ -1525,7 +1650,7 @@ export async function renameDashboard(
         row: updated,
         metadata: { previousName: row.name, name },
       });
-      await pairTwin(tx as unknown as TwinTx, twinCtx(updated, "upsert", actor.userId));
+      await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, updated, "upsert", actor.userId);
       return updated;
       },
     );
@@ -1545,16 +1670,19 @@ export async function deleteEntityDashboard(
   actor: DashboardActor,
 ): Promise<void> {
   // Org-write kernel guard (cinatra#1939 S3): org locks + the content.write
-  // lifecycle ruling run BEFORE this body (see org-write-seam.ts).
+  // lifecycle ruling run BEFORE this body (see org-write-seam.ts). A workspace
+  // row (org-NULL, cinatra#2811) deletes under the workspace tenancy instead.
+  const tenancy = await readRowTenancy(id);
   await guardedDashboardsWrite(
     actor,
-    { schema: backfillSchemaName() },
+    { schema: backfillSchemaName(), tenancy },
     async (guardedTx) => {
     const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
     const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
+    assertRowTenancy(row, tenancy, "dashboards.delete", id);
     if (!resolveDashboardAccess(row, actor).canWrite) {
       throw new DashboardForbiddenError("dashboards.delete", id);
     }
@@ -1570,7 +1698,7 @@ export async function deleteEntityDashboard(
     // Soft-delete tombstone the artifact-substrate twin BEFORE the hard delete
     // (same tx, atomic). Q2: no claim-binding withdraw — the dashboard type
     // mints no dedicated claim, so the tombstone + delete outbox suffice.
-    await pairTwin(tx as unknown as TwinTx, twinCtx(row, "delete", actor.userId));
+    await pairTwinUnlessWorkspaceRow(tx as unknown as TwinTx, row, "delete", actor.userId);
     await tx.delete(dashboards).where(eq(dashboards.id, id));
     },
   );
