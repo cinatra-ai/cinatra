@@ -75,7 +75,7 @@ vi.mock("@cinatra-ai/sdk-ui/connector-sharing-panels", () => ({
 
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 import { ConnectorSharingPanels } from "@cinatra-ai/sdk-ui/connector-sharing-panels";
-import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
+import type { PermissionsPanelProps } from "@cinatra-ai/sdk-ui/permissions-panel";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 
@@ -154,7 +154,8 @@ type PanelView = {
   name: string;
   url: string;
   scopeConstraint: string | null;
-  permissions: ReactElement;
+  /** The permissions DATA and bindings the tab states for this connection. */
+  permissions: PermissionsPanelProps;
 };
 
 /** Depth-first search of a server component's returned element tree. */
@@ -225,8 +226,10 @@ describe("ConnectionSharingSection — a server registered on the MCP Servers Se
     expect(readInstalledExtensionsByPackageName).toHaveBeenCalledWith(MCP_SERVERS_PACKAGE);
     const panel = panelsOf(rendered)?.[0];
     expect(panel?.scopeConstraint).toBe("recommended");
-    const note = (panel?.permissions.props as { accessScopeNote?: string }).accessScopeNote;
-    expect(panel?.permissions.type).toBe(ExtensionPermissionsClient);
+    const note = panel?.permissions.accessScopeNote;
+    // The panel's card is the SHARED one, drawn by the tab body from this data
+    // and these bindings (cinatra#3385), never a connector-specific copy.
+    expect(typeof panel?.permissions.actions.savePolicy).toBe("function");
     expect(note).toContain("This connector recommends sharing with");
     expect(note).toContain("nothing is shared until you save");
     // …and the picker the tab draws OPENS on the stored owner scope: the line
@@ -234,7 +237,7 @@ describe("ConnectionSharingSection — a server registered on the MCP Servers Se
     // ("Currently: only you") — and the proposed scope stays an enabled option
     // the owner may choose and save (cinatra#3408).
     expect(
-      (panel?.permissions.props as { accessValueOverride?: string }).accessValueOverride,
+      panel?.permissions.accessValueOverride,
     ).toBe("owner");
   });
 

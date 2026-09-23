@@ -85,6 +85,7 @@ vi.mock("@cinatra-ai/sdk-ui/connector-sharing-panels", () => ({
 
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 import { ConnectorSharingPanels } from "@cinatra-ai/sdk-ui/connector-sharing-panels";
+import type { PermissionsPanelProps } from "@cinatra-ai/sdk-ui/permissions-panel";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 
@@ -143,7 +144,8 @@ type PanelView = {
   name: string;
   url: string;
   scopeConstraint: string | null;
-  permissions: ReactElement;
+  /** The permissions DATA and bindings the tab states for this connection. */
+  permissions: PermissionsPanelProps;
 };
 
 function findElement(node: unknown, type: unknown): ReactElement | null {
@@ -207,7 +209,7 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
     expect(panel).toBeDefined();
     expect(panel?.scopeConstraint).toBe("recommended");
     expect(
-      (panel?.permissions.props as { accessScopeNote?: string }).accessScopeNote,
+      panel?.permissions.accessScopeNote,
     ).toBe(
       "This connector recommends sharing with the whole workspace — nothing is shared until you save. Currently: only you.",
     );
@@ -222,7 +224,7 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
     // alternative to the value already selected, so Save could never write
     // (cinatra#3408).
     expect(
-      (panel?.permissions.props as { accessValueOverride?: string }).accessValueOverride,
+      panel?.permissions.accessValueOverride,
     ).toBe("owner");
   });
 
@@ -233,10 +235,10 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
     expect(panel).toBeDefined();
     expect(panel?.scopeConstraint).toBeNull();
     expect(
-      (panel?.permissions.props as { accessScopeNote?: string }).accessScopeNote,
+      panel?.permissions.accessScopeNote,
     ).toBeUndefined();
     expect(
-      (panel?.permissions.props as { accessValueOverride?: string }).accessValueOverride,
+      panel?.permissions.accessValueOverride,
     ).toBe("workspace");
   });
 });
