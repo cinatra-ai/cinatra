@@ -29,6 +29,12 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 // atomic mint below drives it against the `assistant_threads_container_slug_uniq`
 // unique index.
 import { allocateByAttempt, slugifyTitle } from "@cinatra-ai/chat/thread-slug";
+import {
+  AssignmentScopeSnapshotError,
+  buildRunCreationAssignmentScopeSnapshot,
+  serializeAssignmentScopeSnapshot,
+  type RunCreationScopeActor,
+} from "@cinatra-ai/agents/assignment-scope-snapshot";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,6 +136,16 @@ export type CreateAssistantThreadInput = {
    *  seeded/updated later via {@link bindAssistantThread}. */
   assistantPackage?: string | null;
   instanceId?: string | null;
+  /**
+   * The human whose act creates this conversation (cinatra#2815 S3, epic
+   * #2812): the source of the IMMUTABLE assignment scopes the row freezes.
+   *
+   * An `ActorContext` satisfies the shape. Absent, or carrying no
+   * organization, leaves the column NULL and the conversation resolves the sole
+   * legacy fallback: a thread whose scopes this build cannot vouch for must not
+   * carry invented ones.
+   */
+  scopeActor?: RunCreationScopeActor | null;
 };
 
 export type AppendAssistantTurnInput = {
@@ -326,6 +342,50 @@ export function isContainerSlugUniqueViolation(err: unknown): boolean {
   );
 }
 
+/**
+ * The assignment scopes a NEW conversation freezes (cinatra#2815 S3, epic
+ * #2812), as the JSON text the column carries, or `null` when there is nothing
+ * this build can vouch for.
+ *
+ * It is exactly the derivation an agent run freezes, over the same three
+ * fields and through the same shared builder, so a thread and a run cannot
+ * answers about which scopes their creator granted. The originating human comes
+ * only from a `HumanUser` scope actor, so a conversation opened by a service
+ * principal carries no personal layer rather than a wrong one.
+ *
+ * NEVER THROWS. A thread with no organization has no scope to freeze, and the
+ * builder says so by refusing; the column then stays NULL and delivery resolves
+ * the sole legacy fallback. Failing the create instead would end a conversation
+ * over a layer it was never going to receive.
+ */
+export function buildThreadAssignmentScopeSnapshotText(input: {
+  orgId?: string | null;
+  projectId?: string | null;
+  scopeActor?: RunCreationScopeActor | null;
+}): string | null {
+  const orgId = typeof input.orgId === "string" ? input.orgId.trim() : "";
+  if (orgId === "") return null;
+  try {
+    return serializeAssignmentScopeSnapshot(
+      buildRunCreationAssignmentScopeSnapshot({
+        orgId,
+        projectId: input.projectId ?? undefined,
+        scopeActor: input.scopeActor ?? null,
+      }),
+    );
+  } catch (err) {
+    // A project or team from another organization is a caller defect the
+    // builder refuses rather than narrowing. The conversation still opens; it
+    // simply carries no frozen scope.
+    console.warn(
+      "[assistant-thread-store] assignment scope could not be frozen for a new " +
+        "thread. The conversation resolves the sole legacy fallback. reason:",
+      err instanceof AssignmentScopeSnapshotError ? err.reason : err,
+    );
+    return null;
+  }
+}
+
 /** Create a structured assistant thread; returns the persisted record. When a
  *  title is present, mints the container-scoped title-slug ATOMICALLY at insert
  *  (retrying a suffixed candidate on a container collision) so a titled row never
@@ -334,6 +394,9 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
   ensurePostgresSchema();
   const id = input.id ?? randomUUID();
   const schema = schemaIdent();
+  // Derived ONCE, outside the slug-retry loop: every attempt writes the same
+  // scopes, so which candidate slug finally won can never change them.
+  const scopeSnapshotText = buildThreadAssignmentScopeSnapshotText(input);
 
   const insertWithSlug = (titleSlug: string | null): AssistantThread => {
     // origin is stamped 'assistant-native' — createAssistantThread is the
@@ -343,9 +406,12 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
       connectionString: getPostgresConnectionString(),
       queries: [
         {
+          // cinatra#2815 S3: the frozen scopes ride the SAME atomic insert as
+          // the row they belong to. A second write would leave a window in
+          // which a first turn reads a thread that exists and has no scope.
           text: `INSERT INTO "${schema}"."assistant_threads"
-                   (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id, assistant_package, instance_id, title_slug)
-                 VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7, $8, $9, $10)
+                   (id, assistant_user_id, owner_user_id, org_id, project_id, origin, title, context_id, assistant_package, instance_id, title_slug, assignment_scope_snapshot)
+                 VALUES ($1, $2, $3, $4, $5, 'assistant-native', $6, $7, $8, $9, $10, $11::jsonb)
                  RETURNING id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at`,
           values: [
             id,
@@ -358,6 +424,7 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
             input.assistantPackage ?? null,
             input.instanceId ?? null,
             titleSlug,
+            scopeSnapshotText,
           ],
         },
       ],
@@ -985,6 +1052,66 @@ export function bindThreadContainerIfUnbound(
     };
   }
   return verdict === "bindable" ? { kind: "raced" } : { kind: verdict };
+}
+
+/**
+ * Freeze a conversation's assignment scopes when the row carries none
+ * (cinatra#2815 S3, epic #2812).
+ *
+ * WHY A SECOND WRITE EXISTS AT ALL. Two writers create an `assistant_threads`
+ * row: this store's own create, which freezes the scopes inside its atomic
+ * insert, and the legacy chat mirror, whose upsert names no scope column and
+ * which in the field usually wins the race. Without this, the conversations a
+ * person actually starts would take the sole legacy fallback forever, and the
+ * whole per-scope chain would be reachable only by threads the mirror never
+ * touched.
+ *
+ * IT IS A FREEZE, NOT AN UPDATE. The WHERE clause admits only a row whose
+ * column is still NULL, so the value is written once and no later turn, actor
+ * or project move can re-point a live conversation. That is the same rule the
+ * run store states with {@link assertAssignmentScopeSnapshotNotMutated}; here it
+ * is enforced by the statement itself rather than by a guard a writer must
+ * remember to call.
+ *
+ * NEVER THROWS. A conversation that cannot record its scopes is degraded, not
+ * over: the turn proceeds and delivery resolves the sole legacy fallback.
+ * Returns true only when this call was the one that wrote.
+ */
+export function freezeAssistantThreadAssignmentScopeIfAbsent(
+  threadId: string,
+  input: {
+    orgId?: string | null;
+    projectId?: string | null;
+    scopeActor?: RunCreationScopeActor | null;
+  },
+): boolean {
+  const id = typeof threadId === "string" ? threadId.trim() : "";
+  if (id === "") return false;
+  const snapshotText = buildThreadAssignmentScopeSnapshotText(input);
+  if (snapshotText === null) return false;
+  try {
+    ensurePostgresSchema();
+    const schema = schemaIdent();
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `UPDATE "${schema}"."assistant_threads"
+                 SET assignment_scope_snapshot = $2::jsonb
+                 WHERE id = $1 AND assignment_scope_snapshot IS NULL`,
+          values: [id, snapshotText],
+        },
+      ],
+    });
+    return (res?.rowCount ?? 0) > 0;
+  } catch (err) {
+    console.warn(
+      "[assistant-thread-store] assignment scope freeze failed. The conversation " +
+        "resolves the sole legacy fallback (fail-closed); the turn proceeds. cause:",
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
 }
 
 /** List an org's threads, most-recently-updated first (uses the org index). */
