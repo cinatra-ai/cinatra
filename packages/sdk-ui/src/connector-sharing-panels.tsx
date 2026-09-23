@@ -24,23 +24,29 @@
 // `connector-sharing`, `connector-sharing-rollup` and
 // `connector-sharing-locked` grade the same DOM wherever the tab is drawn.
 //
-// PRESENTATIONAL and server-safe (no `server-only`, no DB, no session): the
-// permissions card of each panel arrives as a NODE, and the actions inside it
-// are the caller's own callbacks. The product route hands it the real
-// `ExtensionPermissionsClient` (server actions bound to the connection); the
-// design-conformance harness hands it the same `PermissionsForm` with
-// fixture-fulfilled actions; a pack hands it the node its own page builds.
-// Every one of them mounts THIS component, so the three manifest surfaces it
-// emits are the product's own DOM either way.
+// PRESENTATIONAL and server-safe (no `server-only`, no DB, no session): each
+// panel's access picker and ownership card are drawn HERE, by this package's
+// own `PermissionsPanel`, from DATA and CALLBACKS the caller supplies
+// (cinatra#3385). The caller decides and reads; this component decides
+// nothing. The product route hands it the connection's stored policy and four
+// server actions bound to that connection; the design-conformance harness
+// hands it the same data with fixture-fulfilled actions; a pack hands it what
+// its own page already read. Every one of them draws the SAME controls, so
+// the three manifest surfaces are the product's own DOM either way.
+//
+// Why the card is not a NODE the caller passes in: a pack cannot build one.
+// The recommendation line, the lock glyph and the grant controls would have to
+// be copied into the pack, or imported from the app, and a pack can do
+// neither. Handing the card in as a node is how the tab stayed app-only.
 //
 // The roll-up carries NO `action`: `ConnectionsStatusCard` renders its action
 // slot only when one is passed, so omitting it IS the drawing's "no Check and
 // no All connections link" — no new primitive and no variant flag.
 // ---------------------------------------------------------------------------
 
-import * as React from "react";
 import { ConnectionsStatusCard } from "./connection-status-card";
 import { ConnectionsList, ConnectionRow } from "./connections-list";
+import { PermissionsPanel, type PermissionsPanelProps } from "./permissions-panel";
 
 /** The drawing's own words beneath the tab's heading (§II, Sharing tab). */
 export const CONNECTOR_SHARING_INTRO =
@@ -63,8 +69,16 @@ export type ConnectorSharingPanelView = {
    * reads instead …"). `null` = an unconstrained connector.
    */
   scopeConstraint: "locked" | "recommended" | null;
-  /** The access picker + ownership card for THIS connection. */
-  permissions: React.ReactNode;
+  /**
+   * The access picker and ownership card for THIS connection, as data and
+   * callbacks: the stored policy, the scopes the actor holds, the locked
+   * options and their reasons, the scope line, the owner and co-owner views,
+   * the helper lines, `canEdit`, `allowSharing`, and the four bindings that
+   * save the policy, search people, and add or remove an owner. Authorization,
+   * every read, and the binding of those four to server actions stay with the
+   * caller.
+   */
+  permissions: PermissionsPanelProps;
 };
 
 export type ConnectorSharingPanelsProps = {
@@ -72,8 +86,8 @@ export type ConnectorSharingPanelsProps = {
    * One view per connection the actor owns on THIS connector's page, in the
    * order the tab lists them. The caller resolves them through its own read
    * road — the app's generated page from the canonical connection store, a
-   * pack's own page from the road its setup page already reads — and hands
-   * each panel's access picker and ownership card in as `permissions`.
+   * pack's own page from the road its setup page already reads. It states
+   * each panel's permissions data and bindings as `permissions`.
    */
   panels: ConnectorSharingPanelView[];
   /** `loading` renders the declared loading treatment in the list's place. */
@@ -134,10 +148,10 @@ export function ConnectorSharingPanels({
                 data-conformance-id="connector-sharing-locked"
                 data-variant={panel.scopeConstraint}
               >
-                {panel.permissions}
+                <PermissionsPanel {...panel.permissions} />
               </div>
             ) : (
-              panel.permissions
+              <PermissionsPanel {...panel.permissions} />
             )}
           </div>
         ))}

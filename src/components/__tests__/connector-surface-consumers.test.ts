@@ -194,8 +194,9 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
 //
 //   • the sharing MODEL is unchanged — only its place and its drawing. Shared
 //     use still acts through the owner's connected account and is still
-//     audited, because the panels still mount the app's OWN permissions client
-//     bound to the connection, never a connector-specific copy of it.
+//     audited, because each panel's four bindings are still the app's OWN
+//     server actions, each bound to that connection, and the card they drive
+//     is the SHARED one, never a connector-specific copy of it.
 //   • the tab is drawn on the GENERATED setup page only. A bundled-react
 //     connector draws its own page whole, so this change does not reach it:
 //     those branches keep the standalone section they already mounted.
@@ -204,22 +205,33 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
 const UI_RENDER = readFileSync(join(ROOT, "lib", "connector-ui-render.ts"), "utf8");
 
 describe("the Sharing tab move — what it must NOT change", () => {
-  it("keeps the audited road: the app's own permissions client, bound to the connection", () => {
-    // Each panel view carries the permissions node the SECTION builds…
-    expect(SHARING_SECTION).toMatch(/permissions: \(\s*<ExtensionPermissionsClient/);
-    // …and it is the shared client, kind-discriminated to the CONNECTION and
-    // addressed by that connection's own id — the same binding as before the
-    // move, so the grant it writes is still audited through the owner's
-    // connected account.
-    expect(SHARING_SECTION).toContain('kind="connection"');
-    expect(SHARING_SECTION).toContain("resourceId={identity.id}");
-    expect(SHARING_SECTION).toContain("owner={owner}");
-    expect(SHARING_SECTION).toContain("currentUserId={userId}");
-    // The presentational tab body takes that node and mounts NO client of its
-    // own: a connector-specific copy of the two controls is exactly what §II
-    // forbids ("never a connector-specific copy of them").
+  it("keeps the audited road: the app's own server actions, bound to the connection", () => {
+    // Each panel view carries the permissions DATA and BINDINGS the SECTION
+    // builds…
+    expect(SHARING_SECTION).toMatch(/permissions: \{/);
+    // …and every one of the four is the app's own action, kind-discriminated
+    // to the CONNECTION and addressed by that connection's own id: the same
+    // binding as before the extraction, so the grant it writes is still
+    // audited through the owner's connected account.
+    for (const action of [
+      "saveExtensionAccessPolicy",
+      "searchExtensionCoOwnerCandidates",
+      "addExtensionCoOwner",
+      "removeExtensionCoOwner",
+    ]) {
+      expect(SHARING_SECTION).toContain(action);
+    }
+    expect(SHARING_SECTION).toContain('.bind(null, "connection", identity.id)');
+    expect(SHARING_SECTION).toContain("owner,");
+    expect(SHARING_SECTION).toContain("currentUserId: userId,");
+    // The tab body draws the SHARED permissions panel from that data, so a
+    // connector-specific copy of the two controls, exactly what §II forbids
+    // ("never a connector-specific copy of them"), cannot arise, and a pack
+    // gets the controls instead of an empty slot (cinatra#3385).
     expect(SHARING_PANELS).not.toContain("<ExtensionPermissionsClient");
-    expect(SHARING_PANELS).toContain("{panel.permissions}");
+    expect(SHARING_PANELS).toContain("<PermissionsPanel {...panel.permissions} />");
+    // Nothing in the shared package reaches the app.
+    expect(SHARING_PANELS).not.toContain('from "@/');
   });
 
   it("hands the Sharing TAB to the generated setup page only", () => {

@@ -12,10 +12,11 @@
 // So the ceiling line carries one lock and the recommendation line carries
 // none. This suite draws both lines the way the tab draws them: the REAL
 // `ConnectionSharingSection` builds the panels from the stored rows (only the
-// database leaves are mocked), and each panel's own permissions node, the real
-// `ExtensionPermissionsClient` over the real `PermissionsForm`, is rendered.
-// The conformance fixture's two variants are rendered too, so the harness
-// keeps drawing the same two lines the page draws.
+// database leaves are mocked), and the real `ConnectorSharingPanels` draws
+// each panel's permissions card from that data with the shared
+// `PermissionsPanel` (cinatra#3385). The third case mounts the host binding
+// `PermissionsForm` on its own, and the conformance fixture's two variants are
+// rendered too, so the harness keeps drawing the same two lines the page draws.
 
 import "@/components/__tests__/access-picker-jsdom-shims";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

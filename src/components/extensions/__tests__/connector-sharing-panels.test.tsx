@@ -10,19 +10,27 @@
 //    it";
 //  - each panel is "a connection row — … carrying its name and mono line and
 //    nothing else: no status badge and no per-row action";
-//  - "Beneath each row sits the shared permissions card";
+//  - "Beneath each row sits the shared permissions card", drawn by the shared
+//    component itself from data and callbacks (cinatra#3385), so the app's
+//    generated page and a pack's own page draw the same two controls;
 //  - a connector that constrains the scope marks its panel, so the locked and
 //    recommended lines are addressable surfaces of their own.
 
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+}));
+
 import {
   ConnectorSharingPanels,
   CONNECTOR_SHARING_LOADING_LABEL,
   type ConnectorSharingPanelView,
 } from "@cinatra-ai/sdk-ui/connector-sharing-panels";
+import type { PermissionsPanelProps } from "@cinatra-ai/sdk-ui/permissions-panel";
 import {
   CONNECTOR_SHARING_INITIAL_SCOPE,
   CONNECTOR_SHARING_INITIAL_SCOPE_LABEL,
@@ -45,15 +53,50 @@ afterEach(() => {
   container.remove();
 });
 
+/** The permissions DATA and bindings the tab states for one connection. */
+function permissions(i: number): PermissionsPanelProps {
+  return {
+    canEdit: true,
+    initialPolicy: {
+      runListVisibility: [CONNECTOR_SHARING_INITIAL_SCOPE],
+      runDataVisibility: [CONNECTOR_SHARING_OWNER_SCOPE],
+      runExecuteVisibility: [CONNECTOR_SHARING_OWNER_SCOPE],
+      allowRunSharing: true,
+    },
+    owner: {
+      userId: `owner-${i}`,
+      name: `Owner ${i}`,
+      email: `owner-${i}@example.com`,
+      image: null,
+    },
+    coOwners: [],
+    availableScopes: { orgs: [], projects: [], canGrantWorkspace: true },
+    currentUserId: `owner-${i}`,
+    allowSharing: true,
+    selfRemoveRedirect: "/connectors",
+    actions: {
+      savePolicy: async () => ({ ok: true as const }),
+      searchCandidates: async () => ({ ok: true as const, results: [], hasMore: false }),
+      addCoOwner: async () => ({ ok: true as const }),
+      removeCoOwner: async () => ({ ok: true as const }),
+    },
+  };
+}
+
 function panel(i: number, extra: Partial<ConnectorSharingPanelView> = {}): ConnectorSharingPanelView {
   return {
     key: `p${i}`,
     name: `connection-${i}`,
     url: `key-${i}`,
     scopeConstraint: null,
-    permissions: <div data-testid={`permissions-${i}`}>permissions</div>,
+    permissions: permissions(i),
     ...extra,
   };
+}
+
+/** The access picker's trigger inside one panel. */
+function accessTrigger(scope: Element): Element | null {
+  return scope.querySelector('[role="combobox"]');
 }
 
 async function render(node: React.ReactElement) {
@@ -94,7 +137,7 @@ describe("ConnectorSharingPanels", () => {
     const first = container.querySelector('[data-conformance-id="connector-sharing"]');
     expect(first).toBeTruthy();
     expect(first!.querySelector('[data-slot="connection-row"]')).toBeTruthy();
-    expect(first!.querySelector('[data-testid="permissions-0"]')).toBeTruthy();
+    expect(accessTrigger(first!)).toBeTruthy();
   });
 
   it("heads the list with the roll-up card once a SECOND connection is listed", async () => {
@@ -125,7 +168,17 @@ describe("ConnectorSharingPanels", () => {
     expect(row.textContent).toContain("key-0");
     expect(row.querySelector('[data-slot="connection-status-badge"]')).toBeNull();
     expect(row.querySelector("button")).toBeNull();
-    expect(first.querySelector('[data-testid="permissions-0"]')).toBeTruthy();
+    // The shared card beneath the row: the access picker, the ownership card
+    // and the one Save bar, drawn by the shared component itself.
+    expect(accessTrigger(first)).toBeTruthy();
+    expect(
+      first.querySelector('input[placeholder="Search by name or email…"]'),
+    ).toBeTruthy();
+    expect(
+      [...first.querySelectorAll("button")].filter(
+        (b) => b.textContent?.trim() === "Save changes",
+      ).length,
+    ).toBe(1);
   });
 
   it("marks a panel whose connector declares a ceiling, and one that only recommends", async () => {

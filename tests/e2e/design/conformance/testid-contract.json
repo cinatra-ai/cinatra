@@ -487,7 +487,7 @@
     },
     "connector-sharing": {
       "manifest": "app-connectors",
-      "selector": "[data-conformance-id=\"connector-sharing\"][data-state] \u2014 one panel per owned connection on the Sharing tab: the identity row ([data-slot=\"connection-row\"], name + mono line, no badge and no action) over the app's access picker and ownership card ([role=\"combobox\"] for the scope picker, the \"Search by name or email\u2026\" field, the per-owner \"Remove {name}\" buttons and the one right-aligned \"Save changes\"). Loading variant: [data-slot=\"connector-sharing-loading\"].",
+      "selector": "[data-conformance-id=\"connector-sharing\"][data-state] \u2014 one panel per owned connection on the Sharing tab: the identity row ([data-slot=\"connection-row\"], name + mono line, no badge and no action) over the shared access picker and ownership card the SDK draws ([role=\"combobox\"] for the scope picker, the \"Search by name or email\u2026\" field, the per-owner \"Remove {name}\" buttons and the one right-aligned \"Save changes\"). Loading variant: [data-slot=\"connector-sharing-loading\"].",
       "requires": [
         {
           "file": "packages/sdk-ui/src/connector-sharing-panels.tsx",
@@ -529,7 +529,7 @@
           ]
         },
         {
-          "file": "src/components/permissions-form.tsx",
+          "file": "packages/sdk-ui/src/permissions-panel.tsx",
           "literals": ["accessScopeNote", "accessDisabledScopes"]
         }
       ]
