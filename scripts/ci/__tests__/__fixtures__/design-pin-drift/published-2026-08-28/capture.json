@@ -1,5 +1,5 @@
 {
-  "$comment": "Capture receipt for the frozen published conformance manifests beside it. Every body in this directory is the VERBATIM response served at the url below on fetchedAt; nothing was reformatted. Re-derive any row with: curl -sS <url> | shasum -a 256. A row that no longer matches the live response is NOT a reason to edit this receipt: it is the drift this gate exists to report, and it moves only with the pin it belongs to.",
+  "$comment": "Capture receipt for the frozen published conformance manifests beside it. Every body in this directory is the VERBATIM response served at the url below on the row's own fetchedAt when it carries one, and on the top-level fetchedAt otherwise (a row gains its own on the day the pin it belongs to is re-adopted against a later response); nothing was reformatted. Re-derive any row with: curl -sS <url> | shasum -a 256. A row that no longer matches the live response is NOT a reason to edit this receipt: it is the drift this gate exists to report, and it moves only with the pin it belongs to.",
   "fetchedAt": "2026-08-28",
   "command": "curl -sS <url> -o <file>",
   "publishedBaseUrl": "https://docs.cinatra.ai/references/design/conformance/",
@@ -7,20 +7,22 @@
     {
       "file": "app.json",
       "url": "https://docs.cinatra.ai/references/design/conformance/app.json",
+      "fetchedAt": "2026-09-10",
       "httpStatus": 200,
       "byteLength": 1288,
-      "sha256": "e3e59dfd5b832f408bcba30649234f1bd0fb4f5774531347a0c8fad19fc77ddc",
+      "sha256": "7bd7505f5cb4b60ec77975718ed7759a62b78179bbcaeee6200373c9a780de8b",
       "schemaVersion": "1.0.0",
-      "contentHash": "sha256:ce3effaa5b7846bc36bc92ad136721f5e278a56d5653a66f2c19fff1ff0f8168"
+      "contentHash": "sha256:5e39a2f6b4360194511415a8bcfdbef45e5abcf3009d09ce0c45357ce327c025"
     },
     {
       "file": "app-components.json",
       "url": "https://docs.cinatra.ai/references/design/conformance/app-components.json",
+      "fetchedAt": "2026-09-10",
       "httpStatus": 200,
       "byteLength": 1211,
-      "sha256": "1890bb9e8ccfeeb2683082f2caecf3a4a0828dbe8c75dadf7d37f7f5ceddd7b6",
+      "sha256": "ddfcd50b57cea849063d6bb067c3a710169b5f48282154b6397f3ba1f6de9928",
       "schemaVersion": "1.0.0",
-      "contentHash": "sha256:4e229cf119738e7d435eeee0cde6a351dca18dece94953b4fda4dde081569add"
+      "contentHash": "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf"
     },
     {
       "file": "app-extensions.json",

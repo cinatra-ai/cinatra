@@ -53,8 +53,9 @@ import { executionBrokerPhases } from "@/lib/boot/phases/execution-broker";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
 import {
+  devAgentIngestPhases,
   devAwaitedPhases,
-  startDetachedDevAgentsScanPhase,
+  startDetachedDevExtensionsPhase,
   startDetachedDevAutoSetupPhase,
 } from "@/lib/boot/phases/dev-boot";
 import type { ActivationResult } from "@cinatra-ai/sdk-extensions";
@@ -63,7 +64,7 @@ import type { ActivationResult } from "@cinatra-ai/sdk-extensions";
 export type RunBootDeps = {
   isDevMode?: () => boolean;
   runPhase?: typeof runBootPhase;
-  startDetachedAgentsScan?: typeof startDetachedDevAgentsScanPhase;
+  startDetachedDevExtensions?: typeof startDetachedDevExtensionsPhase;
   startDetachedAutoSetup?: typeof startDetachedDevAutoSetupPhase;
   /** The #2554 startup deadline. Injectable so the fake-timer guard can drive it. */
   armStallWatchdog?: typeof armBootStallWatchdog;
@@ -102,7 +103,7 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   const {
     isDevMode = inDevMode,
     runPhase = runBootPhase,
-    startDetachedAgentsScan = startDetachedDevAgentsScanPhase,
+    startDetachedDevExtensions = startDetachedDevExtensionsPhase,
     startDetachedAutoSetup = startDetachedDevAutoSetupPhase,
   } = deps;
 
@@ -254,13 +255,20 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   await run(dashboardTemplateMaterializePhases());
 
 
-  // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────
+  // ── dev block 1, first half: the git-native agent ingest (AWAITED) ───────────
   // Original interleave point: right after install-op cleanup, before the
-  // always-on system services. Fire-and-forget; NOT awaited. The marker backfill
-  // it used to perform is now the always-on `agent-marker-backfill` phase above;
-  // the detached scan keeps the dev-only git-native agent ingest + skill loading
-  // + hot-reload watcher.
-  if (dev) startDetachedAgentsScan();
+  // always-on system services. AWAITED since cinatra#3626 — detached, it finished
+  // after the instance had begun serving, so a freshly prepared instance was
+  // incomplete until it was started a second time. AFTER the always-on
+  // `agent-marker-backfill` phase above, which is what that ordering note meant.
+  // `dev-only`: prod never executes it and a failure never blocks boot.
+  if (dev) await run(devAgentIngestPhases());
+
+  // ── dev block 1, remainder (DETACHED as in the original) ─────────────────────
+  // The skill-package load, the catalog rebuild and the hot-reload watcher.
+  // Fire-and-forget; NOT awaited — nothing the instance's agent rows depend on is
+  // in here.
+  if (dev) startDetachedDevExtensions();
 
   // ── provider connection bootstrap from the environment ───────────────────────
   // Seals `OPENAI_API_KEY` into the sealed connection row and completes the model
