@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   useTransition,
   type ReactElement,
 } from "react";
@@ -2341,12 +2342,18 @@ function useRecommendationHoldState(params: {
 export type { RunRecommendationHoldState };
 
 
+/** The mirror announces nothing: it is read on render, never pushed. */
+const subscribeToNothing = () => () => {};
+/** The server render has no browser storage, so it carries no mirrored row. */
+const serverHasNoMirror = () => null;
+
 export function RecommendationHoldCard({
   runId,
   agentPackageName,
   wireRef,
   onStateChange,
   initialState = null,
+  runStatus,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
@@ -2374,6 +2381,18 @@ export function RecommendationHoldCard({
    * Hosts with no stream pass `null` and still get mount/focus/decision resolves.
    */
   wireRef?: string | null;
+  /**
+   * THE RUN'S OWN STATUS, as the host's run-row watch last read it
+   * (cinatra#3062, refinement 1). A CHANGE SIGNAL, never a state — the card
+   * reads nothing out of it. The run leaving its pre-start statuses is none of
+   * the events the card re-reads on, so a conversation kept drawing an editable
+   * card with a live Continue on a run that was already `running`, until a
+   * reload. When this value CHANGES after its first non-null reading the card
+   * asks its authority again, and the authority answers `runStarted` from the
+   * run row — the one place that rule is applied. A host that passes nothing is
+   * unchanged.
+   */
+  runStatus?: string | null;
   /**
    * THE HOST'S OWN READING, RESOLVED BEFORE THE FIRST PAINT (cinatra#3047,
    * review point C — the re-shoot round).
@@ -2426,6 +2445,15 @@ export function RecommendationHoldCard({
   // directly and the card re-reads the authority.
   const [reloadToken, setReloadToken] = useState(0);
   const onDecided = useCallback(() => setReloadToken((n) => n + 1), []);
+  // …and so does the run's own status MOVING (cinatra#3062). Adjusted during
+  // render — React's "adjust state when a prop changes" shape — so no effect
+  // and no timer is involved: the first non-null reading is the one the mount
+  // already resolved against, and only a later change re-asks the authority.
+  const [seenRunStatus, setSeenRunStatus] = useState<string | null>(runStatus ?? null);
+  if (runStatus != null && runStatus !== seenRunStatus) {
+    setSeenRunStatus(runStatus);
+    if (seenRunStatus !== null) setReloadToken((n) => n + 1);
+  }
 
   // Hooks run unconditionally (rules of hooks); the resolve itself is cheap and
   // the ABSENT host is enforced on the render below, so a surface that has not
@@ -2479,14 +2507,24 @@ export function RecommendationHoldCard({
   // half is read during render and is empty on the server, so the server render
   // and the first client render agree; the `sessionStorage` mirror — a
   // browser-only read that also promotes what it finds into the module's map —
-  // is asked for from an effect, so a render React discards leaves nothing
-  // behind and a hydrating page cannot draw a row its own markup did not carry.
-  const [mirrored, setMirrored] = useState<RunRecommendationHoldState | null>(null);
-  useEffect(() => {
-    if (!keepsItsPlace) return;
-    const fromReload = hydrateDrawnRecommendationReadingFromStorage(runId);
-    if (fromReload !== null) setMirrored(fromReload);
-  }, [keepsItsPlace, runId]);
+  // is read only after hydration (below), so a hydrating page cannot draw a
+  // row its own markup did not carry.
+  //
+  // READ AS AN EXTERNAL STORE, NOT SET FROM AN EFFECT (cinatra#3062).
+  // The mirror is browser storage, and React's own road for reading one is
+  // `useSyncExternalStore`, with no setState in an effect body. WHILE HYDRATING
+  // from server markup the SERVER snapshot (`null`) is used, so the hydrating
+  // render draws exactly what that markup carried and the browser snapshot is
+  // read on the next render. On a PLAIN CLIENT MOUNT (a turn re-created in an
+  // already-hydrated page) the browser snapshot is read during the first
+  // render itself, one commit earlier than the effect read it. The promotion
+  // inside the read is idempotent (a
+  // second read returns the promoted object itself), so the snapshot is stable.
+  const readMirror = useCallback(
+    () => (keepsItsPlace ? hydrateDrawnRecommendationReadingFromStorage(runId) : null),
+    [keepsItsPlace, runId],
+  );
+  const mirrored = useSyncExternalStore(subscribeToNothing, readMirror, serverHasNoMirror);
   const remembered = keepsItsPlace
     ? (recallDrawnRecommendationReading(runId) ?? mirrored)
     : null;

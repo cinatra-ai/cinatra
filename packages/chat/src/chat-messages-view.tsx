@@ -786,7 +786,7 @@ function AgentRunTurnSlot({
           makes it survive a transcript reload and what lets it settle IN PLACE
           into its confirmed/skipped summary after a decision instead of
           disappearing. */}
-      <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} runStatus={momentCard.status} />
       {/* THE SETTLED MOMENT'S OWN READING (cinatra#3044). Drawn here, in the
           producing part's own container, ABOVE the reading the run has now:
           the schedule was settled before the run moved on, and a conversation

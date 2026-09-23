@@ -471,3 +471,117 @@ describe("Continue is not a lock — a decision that lands while the run has not
     expect(continueButton(container)!.hasAttribute("disabled")).toBe(false);
   });
 });
+
+describe("the card settles when the run starts, without a reload", () => {
+  // THE DEFECT THE PICTURE ROUNDS RE-PROVED (cinatra#3062, refinement 1). The
+  // card re-reads its authority on mount, on a change of the hold interrupt's
+  // wire ref, on focus, visibility and `online`, and on its own decision — and
+  // the run LEAVING its pre-start statuses is none of those. So a reader who
+  // pressed Continue before the start kept an editable card with a live
+  // Continue after the run was `running`, until a reload re-mounted it.
+  //
+  // The conversation already watches its run's row, so the host hands the
+  // card that row's STATUS as a change signal. The card reads nothing out of
+  // it: a change makes it ask the authority again, and the authority answers
+  // `runStarted` from the run row, exactly as on every other read.
+  //
+  // THE PROP GOES IN THROUGH A TYPED SPREAD so this block compiles on the
+  // head it was written against as well as after the change; its red there is
+  // the card's behaviour, never a type error.
+  type CardProps = React.ComponentProps<typeof RecommendationHoldCard> & {
+    runStatus?: string | null;
+  };
+  function card(runStatus?: string | null) {
+    const props: CardProps = {
+      runId: RUN_ID,
+      agentPackageName: PKG,
+      wireRef: null,
+      ...(runStatus === undefined ? {} : { runStatus }),
+    };
+    return (
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <RecommendationHoldCard {...props} />
+      </LifecycleCardSurfaceProvider>
+    );
+  }
+  /** Let any read a re-render could have started land before counting. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  it("redraws the same pills read-only with NO Continue once the run's status moves to running", async () => {
+    holdStateMock.mockResolvedValue(settled(false));
+    const { container, rerender } = render(card("pending_trigger"));
+    await waitFor(() => expect(boxes(container)).toHaveLength(2));
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true");
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(false);
+    expect(continueButton(container)).not.toBeNull();
+    await settle();
+    const asked = holdStateMock.mock.calls.length;
+
+    // The run row now records the start, and the authority answers so.
+    holdStateMock.mockResolvedValue(settled(true));
+    rerender(card("running"));
+
+    // No remount, no focus event, no reload.
+    await waitFor(() => expect(continueButton(container)).toBeNull());
+    expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("false");
+    expect(boxes(container)).toHaveLength(2);
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(true);
+    // The same pills, still stating what the run recorded.
+    expect(boxFor(container, CANDIDATES[0].skillId).getAttribute("aria-checked")).toBe("true");
+    expect(boxFor(container, CANDIDATES[1].skillId).getAttribute("aria-checked")).toBe("false");
+    await settle();
+    expect(holdStateMock.mock.calls.length).toBe(asked + 1);
+  });
+
+  it("keeps the boxes editable and Continue present across a PRE-START move", async () => {
+    holdStateMock.mockResolvedValue(settled(false));
+    const { container, rerender } = render(card("pending_input"));
+    await waitFor(() => expect(boxes(container)).toHaveLength(2));
+    rerender(card("pending_trigger"));
+    await settle();
+    await waitFor(() =>
+      expect(row(container)!.getAttribute("data-skills-step-editable")).toBe("true"),
+    );
+    for (const box of boxes(container)) expect(box.hasAttribute("disabled")).toBe(false);
+    expect(continueButton(container)).not.toBeNull();
+  });
+
+  it("asks nothing more for a host that passes no run status", async () => {
+    holdStateMock.mockResolvedValue(settled(false));
+    const { container, rerender } = render(card());
+    await waitFor(() => expect(boxes(container)).toHaveLength(2));
+    await settle();
+    const asked = holdStateMock.mock.calls.length;
+    rerender(card());
+    await settle();
+    expect(holdStateMock.mock.calls.length).toBe(asked);
+    expect(continueButton(container)).not.toBeNull();
+  });
+
+  it("draws the server's refusal for a press that lands after the start, and keeps the recorded boxes", async () => {
+    // The server-side refusal is kept as it is: a decision on a run that has
+    // started is refused before its first write (`run_already_started`,
+    // run-recommendation-core.ts) with this sentence. It is read from its own
+    // module's source rather than imported, because that module is server-only.
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const REFUSAL =
+      "This run has already started, so its skill selection is settled. Nothing was changed.";
+    expect(
+      readFileSync(path.join(__dirname, "..", "recommendation-hold.ts"), "utf8"),
+    ).toContain(`"${REFUSAL}"`);
+
+    holdStateMock.mockResolvedValue(settled(false));
+    confirmRunRecommendationAction.mockResolvedValueOnce({
+      ok: false,
+      error: REFUSAL,
+    } as unknown as Awaited<ReturnType<typeof confirmRunRecommendationAction>>);
+    const { container } = render(card("pending_trigger"));
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    fireEvent.click(continueButton(container)!);
+    await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.textContent).toContain(REFUSAL));
+    expect(boxFor(container, CANDIDATES[0].skillId).getAttribute("aria-checked")).toBe("true");
+    expect(boxFor(container, CANDIDATES[1].skillId).getAttribute("aria-checked")).toBe("false");
+  });
+});
