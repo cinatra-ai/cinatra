@@ -100,7 +100,53 @@ export type ResolveContextSlotInput = {
      * claimant's snapshot with a new claimant's identity). */
     semanticAssertionId: string;
   }>;
+  /**
+   * Apply the slot's own `maxItems` cut to the returned list (cinatra#2815 S3
+   * part 3). Default TRUE, which is the landed per-slot contract the resolve
+   * route serves.
+   *
+   * The manifest-wide planner asks for FALSE. Its rules apply `maxItems` after
+   * the cross-slot dedupe, and a pool already cut to the cap here could not
+   * feed that: the earlier slot claims a ref, the later slot's own cut has
+   * already discarded everything behind it, and the slot ends empty where the
+   * full pool would have filled it.
+   */
+  applyMaxItems?: boolean;
 };
+
+/** Numeric weight for narrow→broad ordering. Lower = narrower. The twin of
+ *  `contextScopeWeight` in `context-route-support.ts`; see the sort below. */
+function scopeWeight(
+  scope: "user" | "team" | "organization" | "workspace" | "project",
+): number {
+  switch (scope) {
+    case "project":
+      return 0;
+    case "user":
+      return 1;
+    case "team":
+      return 2;
+    case "organization":
+      return 3;
+    case "workspace":
+      return 4;
+  }
+}
+
+/** The resolver's TOTAL narrow-to-broad order. Exported for the parity suite
+ *  only, which pins it byte-for-byte against `compareContextRefs`. */
+function resolverRefOrder(a: ResolvedContextRef, b: ResolvedContextRef): number {
+  const w = scopeWeight(a.sourceScope) - scopeWeight(b.sourceScope);
+  if (w !== 0) return w;
+  const byArtifact = a.artifactId.localeCompare(b.artifactId);
+  if (byArtifact !== 0) return byArtifact;
+  const byAssertion = a.semanticAssertionId.localeCompare(b.semanticAssertionId);
+  if (byAssertion !== 0) return byAssertion;
+  return a.representationRevisionId.localeCompare(b.representationRevisionId);
+}
+
+/** @internal test seam for the twin-parity suite. */
+export const __resolverRefOrderForTest = resolverRefOrder;
 
 // ---------------------------------------------------------------------------
 // Satisfies-graph expansion (pure, no I/O)
@@ -155,24 +201,6 @@ function deriveSourceScope(
   // Unrecognized → treat as user (defense — should never happen given the
   // canonical owner_level domain).
   return "user";
-}
-
-/** Numeric weight for narrow→broad ordering. Lower = narrower. */
-function scopeWeight(
-  scope: "user" | "team" | "organization" | "workspace" | "project",
-): number {
-  switch (scope) {
-    case "project":
-      return 0;
-    case "user":
-      return 1;
-    case "team":
-      return 2;
-    case "organization":
-      return 3;
-    case "workspace":
-      return 4;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +465,12 @@ export function resolveContextSlot(
         sa.assertion_basis = 'binding'
         AND sa.id = (SELECT p.assertion_id FROM pins p WHERE p.object_id = o.id LIMIT 1)
       ))
+    -- A TOTAL row order (cinatra#2815 S3 part 3). Without it the plan decides,
+    -- and two eligible assertions on one artifact arrive in whichever order
+    -- the plan produced. The JavaScript comparator below is total too; this
+    -- makes the INPUT to it total as well, so a reader of the raw statement
+    -- sees the same rule the code states.
+    ORDER BY o.id, sa.id, r.id
   `;
 
   const [res] = runPostgresQueriesSync({
@@ -466,13 +500,24 @@ export function resolveContextSlot(
     ownerId: r.owner_id,
   }));
 
-  // Sort narrow → broad (project < user < team < org < workspace).
-  // Tie-break by artifactId for determinism.
-  refs.sort((a, b) => {
-    const w = scopeWeight(a.sourceScope) - scopeWeight(b.sourceScope);
-    if (w !== 0) return w;
-    return a.artifactId.localeCompare(b.artifactId);
-  });
+  // Sort narrow -> broad (project < user < team < org < workspace), and make
+  // the order TOTAL.
+  //
+  // Scope and artifact id alone left rows TIED: one artifact can carry two
+  // eligible assertions from two accepted extensions, and both land at the same
+  // tier under the same artifact id. The database returns those in whatever
+  // order the plan produced, so an override slot took whichever came first and
+  // a later re-plan could take the other, reporting drift against data nobody
+  // touched. The tiebreak below finishes the order on the ref's own unique
+  // triple, and the statement above orders on it too, so neither layer can
+  // leave the choice to chance.
+  //
+  // A DELIBERATE TWIN of `compareContextRefs` in `context-route-support.ts`,
+  // which the pure planner uses. Importing that leaf from here would add it to
+  // the chat route's reachable graph, whose locked module budget may only ever
+  // shrink; `context-resolver-order-parity.test.ts` pins that the two agree on
+  // every axis, so the copy cannot drift in silence.
+  refs.sort(resolverRefOrder);
 
   // Apply resolutionMode:
   //  - "override" → keep ONLY the rows from the narrowest tier that
@@ -497,8 +542,13 @@ export function resolveContextSlot(
 
   // maxItems truncation. minItems is a CALLER concern (the runtime decides
   // what to do when too few candidates are present — typically prompt the
-  // user via the interactive selector).
-  if (typeof input.slot.maxItems === "number" && filtered.length > input.slot.maxItems) {
+  // user via the interactive selector). A caller that plans across the whole
+  // manifest opts out and applies the cap after its own dedupe.
+  if (
+    input.applyMaxItems !== false &&
+    typeof input.slot.maxItems === "number" &&
+    filtered.length > input.slot.maxItems
+  ) {
     filtered = filtered.slice(0, input.slot.maxItems);
   }
   return filtered;

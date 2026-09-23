@@ -81,9 +81,15 @@ describe("manifest-wide context allocation planner", () => {
       { slot: slot({ slotId: "second", minItems: 1 }), candidates: [shared] },
       { slot: slot({ slotId: "third" }), candidates: [shared] },
     ]);
+    // ORDER UPDATED DELIBERATELY (cinatra#2815 S3 part 3). The planner now
+    // applies the shared narrow-to-broad order itself instead of trusting the
+    // order its input arrived in, so that two eligible rows on one artifact
+    // cannot plan differently on two reads of unchanged data. This fixture
+    // hands it an organization ref before a user one, which the resolver never
+    // produces; the narrower `only-first` now leads, as the chain says it must.
     expect(allocationForSlot(plan, "first")?.refs.map((r) => r.artifactId)).toEqual([
-      "shared",
       "only-first",
+      "shared",
     ]);
     // `second` would be emptied by the dedupe, but its minItems of 1 wins.
     expect(allocationForSlot(plan, "second")?.refs.map((r) => r.artifactId)).toEqual([

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentContextSlot } from "@cinatra-ai/extensions/agent-context-slots-reader";
-import type { ContextCandidate } from "./context-route-support";
+import { compareContextRefs, type ContextCandidate } from "./context-route-support";
 
 // ---------------------------------------------------------------------------
 // THE MANIFEST-WIDE CONTEXT ALLOCATION PLANNER (cinatra#2815 S3 part 3).
@@ -19,7 +19,9 @@ import type { ContextCandidate } from "./context-route-support";
 //   1. THE ASSIGNED LAYER SITS ABOVE AMBIENT. A candidate carrying
 //      `layer: "assigned"` was deliberately assigned to a scope; an ambient one
 //      was merely discovered by the resolver's visibility walk. Within each
-//      layer the resolver's own narrow -> broad order is preserved untouched.
+//      layer the order is the shared narrow -> broad one, applied here through
+//      the SAME total comparator the resolver sorts with, so the allocation is
+//      a function of the data rather than of the order rows arrived in.
 //   2. OVERRIDE PICKS THE FIRST IN THE LANDED CHAIN. `resolutionMode:
 //      "override"` collapses to a single ref — the first of the merged list,
 //      i.e. the narrowest assigned ref, or the narrowest ambient one when the
@@ -138,10 +140,15 @@ export function planContextAllocation(
   const slots: ContextSlotAllocation[] = [];
 
   for (const { slot, candidates } of inputs) {
-    // (1) assigned above ambient, each layer in the resolver's own order.
+    // (1) assigned above ambient, each layer in the SHARED narrow-to-broad
+    // order. The order is applied here rather than merely inherited from the
+    // caller, and `compareContextRefs` is TOTAL, so an override slot's single
+    // ref is a function of the data and never of the order two rows happened
+    // to arrive in. It is the same comparator the resolver sorts with, so
+    // enforcing it changes nothing about a resolver-fed list.
     const merged = [
-      ...candidates.filter((c) => isAssigned(c)),
-      ...candidates.filter((c) => !isAssigned(c)),
+      ...candidates.filter((c) => isAssigned(c)).sort(compareContextRefs),
+      ...candidates.filter((c) => !isAssigned(c)).sort(compareContextRefs),
     ];
     // (2) override collapses to the FIRST of that merged chain.
     const scoped = slot.resolutionMode === "override" ? merged.slice(0, 1) : merged;
