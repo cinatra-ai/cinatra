@@ -41,6 +41,8 @@ import {
   RECOMMENDATION_OFFER_STALE_REFUSAL,
   RECOMMENDATION_OFFER_UNREADABLE_CODE,
   RECOMMENDATION_OFFER_UNREADABLE_REFUSAL,
+  RECOMMENDATION_SCOPE_UNDECIDABLE_CODE,
+  RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL,
   RECOMMENDATION_SKIP_NOT_RECORDED,
   RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
   type RecommendationHoldActor,
@@ -1103,9 +1105,11 @@ export type RunSkillSelectionWriteResult = {
   refusal?: string;
   /** The typed outcome that rides alongside `refusal`. */
   refusalCode?: string;
-  /** cinatra#2815 S3 part (4): what the KEEP did, when one was asked for. The
-   *  run's own selection is written either way — a keep that finds no writable
-   *  scope refuses the keep, never the selection. */
+  /** cinatra#2815 S3 part (4): what the KEEP did, when one was asked for. A
+   *  keep that finds no writable scope refuses the KEEP alone and the run's
+   *  own selection is written anyway. The one exception is decided before the
+   *  write: a run whose assignment scope cannot be read at all refuses the
+   *  whole confirm, so this field is absent and `refusalCode` names it. */
   kept?: KeepRecommendationResult;
 };
 
@@ -1272,7 +1276,7 @@ export function resolveRecommendationPersistenceScope(input: {
 // keeps nothing, because there is no human to have chosen a scope.
 //
 // THE SCOPE IS ENFORCED, NOT RENDERED. The offered set is derived server-side
-// by `recommendation-persistence-scope.ts` from the run's IMMUTABLE snapshot
+// by `offeredRecommendationScopes` below from the run's IMMUTABLE snapshot
 // intersected with the confirming actor's writable scopes (plus their personal
 // scope only when they are the run's originating human), and a requested scope
 // that is not in it is REFUSED. A client that draws a wider picker changes
@@ -1282,6 +1286,9 @@ export function resolveRecommendationPersistenceScope(input: {
 // nothing and says why; an individual insert that the store's own per-scope cap
 // rejects is reported, not thrown — the run's selection is already written and
 // committed by then, and a keep that could not fit a cap must never unwind it.
+// The one thing that can still refuse the SELECTION is the scope being
+// unreadable at all, and its caller decides that BEFORE the write rather than
+// here, so no confirm is ever reported failed over a set that landed.
 // ---------------------------------------------------------------------------
 
 /** The store insert this keep needs, as a seam: the default is the real store,
@@ -1432,6 +1439,36 @@ export async function writeRunSkillSelectionForActor(input: {
       : undefined;
     const adjustedSkillIds = input.adjustedSkillIds?.filter((skillId) => allowed.has(skillId));
 
+    // THE KEEP'S SCOPE IS DECIDED BEFORE THE WRITE (cinatra#2815 S3 part 4).
+    //
+    // `readAssignmentScopeSnapshot` THROWS when the frozen payload is unusable
+    // and the run can name no durable organization to fall back on. Read after
+    // the selection write, where this read used to sit, that throw reached
+    // the outer catch and answered `empty`, telling the caller the confirm
+    // failed while the run's selection was already committed. A reader cannot
+    // act on that: retrying re-writes a set that landed, and leaving it alone
+    // leaves a run changed by a confirm they were told had failed.
+    //
+    // So the read happens HERE, before the write's first statement. An
+    // undecidable scope refuses the whole confirm and commits nothing, and the
+    // refusal says which half could not be decided. Only a confirm that ASKED
+    // for a keep reads it at all: every landed caller passes no
+    // `keepRecommended` and is untouched by this.
+    let keepSnapshot: AssignmentScopeSnapshot | undefined;
+    if (input.keepRecommended && who.actor.actorType === "human" && who.actor.userId) {
+      try {
+        keepSnapshot = readAssignmentScopeSnapshot(run.assignmentScopeSnapshot, {
+          durableOrgId: run.orgId ?? viewer.organizationId ?? "",
+        }).snapshot;
+      } catch {
+        return {
+          ...empty,
+          refusal: RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL,
+          refusalCode: RECOMMENDATION_SCOPE_UNDECIDABLE_CODE,
+        };
+      }
+    }
+
     const result = await confirmRunSkillSelection({
       runId: input.runId,
       agentId: agentPackageName,
@@ -1486,16 +1523,13 @@ export async function writeRunSkillSelectionForActor(input: {
     // IMMUTABLE snapshot — never the actor's live memberships — intersected
     // with what this actor may write.
     let kept: KeepRecommendationResult | undefined;
-    if (input.keepRecommended && who.actor.actorType === "human" && who.actor.userId) {
-      const resolved = readAssignmentScopeSnapshot(run.assignmentScopeSnapshot, {
-        durableOrgId: run.orgId ?? viewer.organizationId ?? "",
-      });
+    if (input.keepRecommended && keepSnapshot && who.actor.userId) {
       kept = await keepConfirmedRecommendationInScope({
         agentPackageName,
         runId: input.runId,
         confirmedSkillIds: input.confirmedSkillIds.filter((id) => allowed.has(id)),
         createdBy: who.actor.userId,
-        snapshot: resolved.snapshot,
+        snapshot: keepSnapshot,
         writable: {
           actorUserId: who.actor.userId,
           projectIds: viewer.projectIds,

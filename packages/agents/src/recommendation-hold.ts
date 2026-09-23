@@ -209,6 +209,28 @@ export const RECOMMENDATION_OFFER_UNREADABLE_REFUSAL =
 /** The TYPED outcome that rides alongside the prose above. */
 export const RECOMMENDATION_OFFER_UNREADABLE_CODE = "recommendation_offer_unreadable";
 
+/**
+ * THE KEEP'S SCOPE COULD NOT BE DECIDED (cinatra#2815 S3 part 4).
+ *
+ * A keep writes the accepted skills into ONE scope, derived from the run's
+ * IMMUTABLE assignment-scope snapshot. When that payload is unusable AND no
+ * durable organization can be named for the run, there is no chain to
+ * intersect and no fallback to take. The scope is UNDECIDABLE, which is a
+ * different thing from an actor who holds nothing writable (that one refuses
+ * the keep alone and keeps the selection).
+ *
+ * So this refuses the WHOLE confirm, and it is raised BEFORE the selection
+ * write. Raised after it, the reader would be told the confirm failed while
+ * the run's set had already changed under them, which is the worst of both
+ * readings. Nothing is written, and the one true and actionable thing is
+ * said: try again.
+ */
+export const RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL =
+  "This run's assignment scope could not be read, so the skills could not be kept. Nothing was recorded. Please try again.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_SCOPE_UNDECIDABLE_CODE = "recommendation_scope_undecidable";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;
