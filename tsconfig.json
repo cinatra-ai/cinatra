@@ -539,6 +539,7 @@
       "@cinatra-ai/objects/module": ["./packages/objects/src/integration/module.ts"],
       "@cinatra-ai/objects/namespace": ["./packages/objects/src/namespace.ts"],
       "@cinatra-ai/objects/claims": ["./packages/objects/src/claims.ts"],
+      "@cinatra-ai/objects/semantic-manifest": ["./packages/objects/src/semantic-manifest.ts"],
       "@cinatra-ai/objects/connector-ref": ["./packages/objects/src/connector-ref.ts"],
       "@cinatra-ai/objects/effective-identity": ["./packages/objects/src/effective-identity.ts"],
       "@cinatra-ai/objects/presentation-identity": ["./packages/objects/src/presentation-identity.ts"],

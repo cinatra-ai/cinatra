@@ -44,10 +44,8 @@ import { MarketplaceReadmeMarkdownSection } from "@/components/marketplace-readm
 import { RequiredDependenciesSection } from "@/components/extensions/required-dependencies-section";
 import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
-import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { ImportAgentForm } from "./import-form";
-import { ImportPackageFromGitHubForm } from "./import-skill-from-github-form";
+import { UploadExtensionScreenBody } from "./upload-extension-screen-body";
 // InstallScopeDialog + server-side picker target builder (shared with the
 // extension marketplace screen — see install-target-picker.ts).
 import { InstallScopeDialog } from "./components/install-scope-dialog";
@@ -870,38 +868,10 @@ export async function AgentBuilderImportScreen() {
   });
   const installScope = { installTargets, ownerEntityNames, activeOrgId, availability };
 
-  return (
-    <Main className="min-h-screen">
-      <PageHeader
-        label="Extensions"
-        title="Upload Extension"
-        actions={
-          <Button asChild variant="outline">
-            <Link href="/configuration/marketplace">Back to Marketplace</Link>
-          </Button>
-        }
-        divider={false}
-      />
-      <PageContent className="flex flex-col gap-6 pb-8">
-        <Tabs defaultValue="file" className="max-w-2xl">
-          <TabsListRow>
-            <TabsTrigger value="file">File</TabsTrigger>
-            <TabsTrigger value="github">GitHub</TabsTrigger>
-          </TabsListRow>
-          <TabsContent value="file">
-            <div className="soft-panel rounded-card px-6 py-5 max-w-xl">
-              <ImportAgentForm installScope={installScope} />
-            </div>
-          </TabsContent>
-          <TabsContent value="github">
-            <div className="soft-panel rounded-card px-6 py-5">
-              <ImportPackageFromGitHubForm installScope={installScope} />
-            </div>
-          </TabsContent>
-        </Tabs>
-      </PageContent>
-    </Main>
-  );
+  // The screen's own JSX body is ./upload-extension-screen-body — props-only, so
+  // the conformance harness mounts the SAME component this route renders and
+  // there is one drawing of this screen in the tree (cinatra#3546).
+  return <UploadExtensionScreenBody installScope={installScope} />;
 }
 
 export const agentPluginScreens = {
