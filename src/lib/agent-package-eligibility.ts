@@ -53,26 +53,57 @@ type ReaderDb = Pick<typeof betterAuthDb, "select">;
 const LIVE_STATUSES = ["active", "locked"] as const;
 
 /**
+ * What the `installed_extension` rows say about a package's kind. The three
+ * states are kept apart because a FALLBACK reader may answer for one of them
+ * and must never answer for the others:
+ *
+ *   * `absent`: the package has no install row at all.
+ *   * `named`: the considered rows name exactly one kind.
+ *   * `unreadable`: rows exist but name no single kind, either because they
+ *     disagree or because none of them carries a kind at all.
+ *
+ * Collapsing `unreadable` into `absent` is what lets a fallback answer over the
+ * top of a row that is present and contradictory, which is the opposite of
+ * failing closed.
+ */
+type PackageKindReading =
+  | { state: "absent" }
+  | { state: "named"; kind: string }
+  | { state: "unreadable" };
+
+/**
+ * The `installed_extension` rows' verdict on a package's kind. Prefers the LIVE
+ * rows; falls back to any row so an archived agent still reads as an agent (the
+ * assignability predicate, not the kind gate, is what refuses an archived
+ * target).
+ */
+async function readCanonicalPackageKindReading(
+  packageName: string,
+  db: ReaderDb,
+): Promise<PackageKindReading> {
+  if (!packageName) return { state: "absent" };
+  const rows = await db
+    .select({ kind: installedExtension.kind, status: installedExtension.status })
+    .from(installedExtension)
+    .where(eq(installedExtension.packageName, packageName));
+  if (rows.length === 0) return { state: "absent" };
+  const live = rows.filter((r) => LIVE_STATUSES.includes(r.status as (typeof LIVE_STATUSES)[number]));
+  const considered = live.length > 0 ? live : rows;
+  const kinds = [...new Set(considered.map((r) => r.kind).filter((k): k is string => Boolean(k)))];
+  return kinds.length === 1 ? { state: "named", kind: kinds[0]! } : { state: "unreadable" };
+}
+
+/**
  * The canonical `cinatra.kind` for a package, from its `installed_extension`
- * rows. Prefers the LIVE rows; falls back to any row so an archived agent still
- * reads as an agent (the assignability predicate, not the kind gate, is what
- * refuses an archived target). `null` when there is no row, or when live rows
- * disagree — an ambiguous kind fails closed at the caller.
+ * rows. `null` when there is no row, or when the rows name no single kind. An
+ * ambiguous kind fails closed at the caller.
  */
 export async function readCanonicalPackageKind(
   packageName: string,
   db: ReaderDb = betterAuthDb,
 ): Promise<string | null> {
-  if (!packageName) return null;
-  const rows = await db
-    .select({ kind: installedExtension.kind, status: installedExtension.status })
-    .from(installedExtension)
-    .where(eq(installedExtension.packageName, packageName));
-  if (rows.length === 0) return null;
-  const live = rows.filter((r) => LIVE_STATUSES.includes(r.status as (typeof LIVE_STATUSES)[number]));
-  const considered = live.length > 0 ? live : rows;
-  const kinds = [...new Set(considered.map((r) => r.kind).filter((k): k is string => Boolean(k)))];
-  return kinds.length === 1 ? kinds[0]! : null;
+  const reading = await readCanonicalPackageKindReading(packageName, db);
+  return reading.state === "named" ? reading.kind : null;
 }
 
 /**
@@ -120,15 +151,23 @@ export async function readBuiltInAssistantPackageKind(
  * package's answer byte-identical (an installed package of the reserved name
  * would still answer from its row), and a package with neither stays null, so
  * the gate keeps failing closed on it.
+ *
+ * The built-in's arm is reached only where the package has NO install row,
+ * because that is the state the built-in is actually in: the platform writes no
+ * row for it. Rows that exist and name no single kind are an UNREADABLE install
+ * record, and an unreadable record refuses. The package-name read is not
+ * narrowed by organization, owner or version, so one package name legitimately
+ * carries many rows, and two of them disagreeing is a real answer about a real
+ * install rather than the absence the fallback speaks for.
  */
 export async function readWritablePackageKind(
   packageName: string,
   db: ReaderDb = betterAuthDb,
 ): Promise<string | null> {
-  return (
-    (await readCanonicalPackageKind(packageName, db)) ??
-    (await readBuiltInAssistantPackageKind(packageName, db))
-  );
+  const reading = await readCanonicalPackageKindReading(packageName, db);
+  if (reading.state === "named") return reading.kind;
+  if (reading.state === "unreadable") return null;
+  return readBuiltInAssistantPackageKind(packageName, db);
 }
 
 /**
