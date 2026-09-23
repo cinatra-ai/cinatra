@@ -44,6 +44,15 @@ vi.mock("@/lib/agent-assigned-skills-store", async (importOriginal) => ({
   insertAssignedSkill: (...args: unknown[]) => insertAssignedSkill(...args),
 }));
 
+// The workspace tier's AUDITED ROAD (cinatra#2813 S1): the keep now travels
+// `withPlatformAdminBypass` with the `workspace_configuration` reason, which
+// writes its audit row before the mutation. Mocked here because this suite's
+// subject is the AUTHORITY, not the audit store.
+const withPlatformAdminBypass = vi.fn();
+vi.mock("@/lib/authz/admin-bypass", () => ({
+  withPlatformAdminBypass: (...args: unknown[]) => withPlatformAdminBypass(...args),
+}));
+
 import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
 import type { AssignmentScope } from "@/lib/assignment-scope";
 import { writeRunSkillSelectionForActor } from "../run-recommendation-core";
@@ -88,6 +97,7 @@ const confirm = (over: Record<string, unknown> = {}) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  withPlatformAdminBypass.mockResolvedValue({ auditEventId: "audit-1" });
   readAgentRunById.mockResolvedValue(runRow());
   readAgentTemplateById.mockResolvedValue({ packageName: "@cinatra-ai/some-agent" });
   readRunCoOwners.mockResolvedValue([]);

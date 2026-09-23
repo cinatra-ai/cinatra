@@ -17,16 +17,40 @@ import type { RecommendationWritableScopes } from "../run-recommendation-core";
 const snapshot = (over: Partial<AssignmentScopeSnapshot> = {}): AssignmentScopeSnapshot =>
   ({ v: 1, orgId: "org-1", teamIds: [], ...over }) as AssignmentScopeSnapshot;
 
+/**
+ * The actor's write authority as a TEST DOUBLE.
+ *
+ * `offeredRecommendationScopes` now asks a predicate rather than searching
+ * three id lists, because belonging to a scope is not authority over it (the
+ * real predicate is `resolveAssignmentWriteAuthority`, wired at the caller).
+ * These lists stand for the scopes that predicate ADMITS, so every case below
+ * still drives the same axes it always did.
+ */
 const writable = (
-  over: Partial<RecommendationWritableScopes> = {},
-): RecommendationWritableScopes => ({
-  actorUserId: "user-1",
-  projectIds: [],
-  teamIds: [],
-  organizationIds: [],
-  mayWriteWorkspace: false,
-  ...over,
-});
+  over: {
+    actorUserId?: string;
+    projectIds?: string[];
+    teamIds?: string[];
+    organizationIds?: string[];
+    mayWriteWorkspace?: boolean;
+  } = {},
+): RecommendationWritableScopes => {
+  const actorUserId = over.actorUserId ?? "user-1";
+  const projectIds = over.projectIds ?? [];
+  const teamIds = over.teamIds ?? [];
+  const organizationIds = over.organizationIds ?? [];
+  return {
+    actorUserId,
+    mayWrite: (scope) => {
+      if (scope.scopeKind === "project") return projectIds.includes(scope.scopeId);
+      if (scope.scopeKind === "team") return teamIds.includes(scope.scopeId);
+      if (scope.scopeKind === "organization") return organizationIds.includes(scope.scopeId);
+      if (scope.scopeKind === "user") return scope.scopeId === actorUserId;
+      return false;
+    },
+    mayWriteWorkspace: over.mayWriteWorkspace ?? false,
+  };
+};
 
 const keep = (over: Record<string, unknown> = {}) =>
   keepConfirmedRecommendationInScope({

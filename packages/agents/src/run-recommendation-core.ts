@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   WORKSPACE_SCOPE_SENTINEL,
+  evaluateAssignmentScope,
   type AssignmentScope,
 } from "@/lib/assignment-scope";
 import {
@@ -261,6 +262,17 @@ export type RecommendationSelectionWrite = (input: {
    * different hold's offer.
    */
   holdId?: string | null;
+  /**
+   * THE KEEP REQUEST, carried from the entry (cinatra#2815 S3 part 4).
+   *
+   * A plain PASS-THROUGH of an explicit, caller-supplied scope. Transporting it
+   * is not trusting it: the write derives the offered set server-side from the
+   * run's own frozen snapshot intersected with this actor's assignment-write
+   * authority, and refuses a scope that is not in it. Without the transport the
+   * field existed only inside the write, so a confirmation asking to keep the
+   * accepted skills wrote nothing and said nothing.
+   */
+  keepRecommended?: { scope?: AssignmentScope };
 }) => Promise<{
   ok: boolean;
   /**
@@ -819,6 +831,8 @@ export async function confirmRecommendationForActor(input: {
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
   adjustedSkillIds?: string[];
+  /** The keep request this confirmation carries: see the write contract. */
+  keepRecommended?: { scope?: AssignmentScope };
   holdRef?: string;
   dispatch?: RecommendationDispatch;
 }): Promise<RunRecommendationDecisionResult> {
@@ -841,6 +855,7 @@ export async function confirmRecommendationForActor(input: {
     ...(input.targetArtifactKind ? { targetArtifactKind: input.targetArtifactKind } : {}),
     ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
     ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+    ...(input.keepRecommended ? { keepRecommended: input.keepRecommended } : {}),
   });
   if (!written.ok) {
     // A REFUSED WRITE KEEPS THE HOLD. Nothing is released and nothing is
@@ -1186,14 +1201,28 @@ function viewerScopeForHoldActor(who: RecommendationHoldActor): {
 // ---------------------------------------------------------------------------
 
 
-/** The scopes the confirming actor may WRITE an assignment into. Resolved by
- *  the caller from the verified actor — never from anything a client sent. */
+/**
+ * The confirming actor's ASSIGNMENT-WRITE AUTHORITY, as this pure module needs
+ * it.
+ *
+ * `mayWrite` used to be three lists of ids the actor BELONGS to, and belonging
+ * is not authority: the epic's rule is that whoever writes an assignment must
+ * ADMINISTER the scope it affects, and `src/lib/authz/assignment-authority.ts`
+ * is where that rule lives. An ordinary member of the run's organization could
+ * therefore have organization-wide rows written on their confirm. The predicate
+ * is injected rather than re-stated here, so this leaf stays pure and there is
+ * still exactly ONE answer to "may this actor write at this scope".
+ */
 export type RecommendationWritableScopes = {
   actorUserId: string;
-  projectIds: readonly string[];
-  teamIds: readonly string[];
-  organizationIds: readonly string[];
-  /** Whether this actor may write a workspace-wide assignment at all. */
+  /** The authority module's own verdict for exactly this scope. */
+  mayWrite: (scope: AssignmentScope) => boolean;
+  /**
+   * Whether this actor may write a workspace-wide assignment at all. Separate
+   * because the workspace tier has NO grant road: `mayWrite` refuses it for
+   * everybody, and a platform administrator reaches it only through the audited
+   * bypass the keep takes below.
+   */
   mayWriteWorkspace: boolean;
 };
 
@@ -1208,6 +1237,54 @@ function sameScope(a: AssignmentScope, b: AssignmentScope): boolean {
 }
 
 /**
+ * May this actor WRITE an assignment row at exactly this scope?
+ *
+ * A DELIBERATE TWIN of `resolveAssignmentWriteAuthority`
+ * (`src/lib/authz/assignment-authority.ts`), which is the module that owns the
+ * rule. Importing that module from here would add it to four locked route
+ * graphs whose reachable-module budgets may only ever shrink, so the rule is
+ * restated and then PINNED: `recommendation-keep-authority-parity.test.ts`
+ * drives both functions over every scope kind and every role and refuses any
+ * disagreement, so the copy cannot drift in silence.
+ *
+ * The rule, in one sentence: whoever writes an assignment must ADMINISTER the
+ * scope it affects. Membership is not authority. WORKSPACE has no grant road at
+ * all, not even for an organization owner, because a workspace row applies to
+ * every organization on the instance; a platform administrator reaches it only
+ * through the audited bypass, which is why this returns false for it here.
+ */
+export function mayWriteAssignmentAtScope(
+  actor: {
+    principalId?: string;
+    organizationId?: string | null;
+    orgRole?: string | null;
+    teamRoles?: Record<string, string> | null;
+    projectGrants?: ReadonlyArray<{ projectId: string; effectiveRole?: string }> | null;
+  },
+  scope: AssignmentScope,
+): boolean {
+  const verdict = evaluateAssignmentScope(scope);
+  if (!verdict.ok) return false;
+  switch (verdict.scope.scopeKind) {
+    case "workspace":
+      return false;
+    case "organization":
+      return (
+        actor.organizationId === verdict.scope.scopeId &&
+        (actor.orgRole === "org_owner" || actor.orgRole === "org_admin")
+      );
+    case "team":
+      return actor.teamRoles?.[verdict.scope.scopeId] === "team_admin";
+    case "project": {
+      const grant = actor.projectGrants?.find((g) => g.projectId === verdict.scope.scopeId);
+      return grant?.effectiveRole === "owner" || grant?.effectiveRole === "admin";
+    }
+    case "user":
+      return Boolean(actor.principalId) && actor.principalId === verdict.scope.scopeId;
+  }
+}
+
+/**
  * The scopes this actor may persist an accepted recommendation into, on this
  * run, narrowest first. An empty array means there is nowhere to keep it — a
  * refusal, never a silent fall back to a wider scope.
@@ -1218,31 +1295,28 @@ export function offeredRecommendationScopes(input: {
 }): AssignmentScope[] {
   const { snapshot, writable } = input;
   const offered: AssignmentScope[] = [];
+  const admit = (scope: AssignmentScope) => {
+    if (writable.mayWrite(scope)) offered.push(scope);
+  };
 
-  // project — the run's own project refinement, when the actor holds it.
-  if (snapshot.projectId && writable.projectIds.includes(snapshot.projectId)) {
-    offered.push({ scopeKind: "project", scopeId: snapshot.projectId });
-  }
+  // project: the run's own project refinement, when the actor ADMINISTERS it.
+  if (snapshot.projectId) admit({ scopeKind: "project", scopeId: snapshot.projectId });
   // user — THE CONDITIONAL LAYER. Only the originating human's own scope, and
   // only when that human is the one confirming.
   if (
     snapshot.originatingHumanUserId &&
     snapshot.originatingHumanUserId === writable.actorUserId
   ) {
-    offered.push({ scopeKind: "user", scopeId: writable.actorUserId });
+    admit({ scopeKind: "user", scopeId: writable.actorUserId });
   }
   // team(s) — in the SNAPSHOT's order, which is sorted and deduplicated at
   // creation, so two confirms of one run offer the same list in the same order.
   for (const teamId of snapshot.teamIds) {
-    if (writable.teamIds.includes(teamId)) {
-      offered.push({ scopeKind: "team", scopeId: teamId });
-    }
+    admit({ scopeKind: "team", scopeId: teamId });
   }
   // organization — the run's own org, never another the actor happens to hold.
-  if (writable.organizationIds.includes(snapshot.orgId)) {
-    offered.push({ scopeKind: "organization", scopeId: snapshot.orgId });
-  }
-  // workspace — the widest, and only for an actor authorized to write it.
+  admit({ scopeKind: "organization", scopeId: snapshot.orgId });
+  // workspace: the widest, and only for an actor the audited road admits.
   if (writable.mayWriteWorkspace) {
     offered.push({ scopeKind: "workspace", scopeId: WORKSPACE_SCOPE_SENTINEL });
   }
@@ -1318,7 +1392,14 @@ export type KeepRecommendationResult =
    * because the scope decision is a pure function of an actor and a snapshot
    * and knows nothing about how a run was started.
    */
-  | { ok: false; reason: RecommendationScopeRefusal | "not-interactive" };
+  | {
+      ok: false;
+      reason:
+        | RecommendationScopeRefusal
+        | "not-interactive"
+        /** The workspace tier's audited road refused or was unreachable. */
+        | "workspace-audit-unavailable";
+    };
 
 /**
  * Persist the confirmed skills as `source=recommended` assignments in ONE
@@ -1335,6 +1416,17 @@ export async function keepConfirmedRecommendationInScope(input: {
   /** The scope the confirmer chose. Absent = the narrowest writable one. */
   requestedScope?: AssignmentScope;
   insert?: AssignedSkillInsert;
+  /**
+   * The AUDITED ROAD a workspace-tier write must travel (cinatra#2813 S1).
+   *
+   * No role grants workspace authority, so the assignment-authority contract
+   * sends a platform administrator through `withPlatformAdminBypass` with the
+   * `workspace_configuration` reason, which writes the audit row BEFORE the
+   * mutation. Inserting straight into the store is exactly what that convention
+   * exists to prevent. Supplied by the caller that holds the verified actor;
+   * ABSENT means no workspace write may happen here at all.
+   */
+  auditWorkspaceWrite?: () => Promise<unknown>;
 }): Promise<KeepRecommendationResult> {
   const verdict = resolveRecommendationPersistenceScope({
     snapshot: input.snapshot,
@@ -1342,6 +1434,18 @@ export async function keepConfirmedRecommendationInScope(input: {
     ...(input.requestedScope ? { requested: input.requestedScope } : {}),
   });
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
+
+  // The workspace tier's audit row is written BEFORE the first insert, and a
+  // refusal or an unwritable audit row writes NOTHING. Fail-closed on an absent
+  // road: a caller that cannot audit the write may not make it.
+  if (verdict.scope.scopeKind === "workspace") {
+    if (!input.auditWorkspaceWrite) return { ok: false, reason: "workspace-audit-unavailable" };
+    try {
+      await input.auditWorkspaceWrite();
+    } catch {
+      return { ok: false, reason: "workspace-audit-unavailable" };
+    }
+  }
 
   const insert: AssignedSkillInsert =
     input.insert ??
@@ -1439,12 +1543,21 @@ export async function writeRunSkillSelectionForActor(input: {
     if (!agentPackageName) return empty;
 
     const viewer = viewerScopeForHoldActor(who);
-    const assignedIds = await getAssignedSkillIdsForAgent(agentPackageName, {
-      principalId: viewer.principalId,
-      teamIds: viewer.teamIds,
-      projectIds: viewer.projectIds,
-      ...(viewer.organizationId ? { organizationId: viewer.organizationId } : {}),
-    }).catch(() => [] as string[]);
+    // THE RUN'S FROZEN SCOPES BOUND THE ALLOWED SET (cinatra#2815 S3). Without
+    // them the resolution takes the sole legacy fallback, so a run's project,
+    // team and personal assignments vanish from the set this write is bounded
+    // by, and the CONFIRMER'S organization supplies the tenancy floor instead
+    // of the run's.
+    const assignedIds = await getAssignedSkillIdsForAgent(
+      agentPackageName,
+      {
+        principalId: viewer.principalId,
+        teamIds: viewer.teamIds,
+        projectIds: viewer.projectIds,
+        ...(viewer.organizationId ? { organizationId: viewer.organizationId } : {}),
+      },
+      { snapshot: run.assignmentScopeSnapshot, durableOrgId: run.orgId ?? null },
+    ).catch(() => [] as string[]);
     const allowed = new Set(assignedIds);
     const forcedRevisions = input.forcedRevisions
       ? Object.fromEntries(
@@ -1560,6 +1673,10 @@ export async function writeRunSkillSelectionForActor(input: {
     // with what this actor may write.
     let kept: KeepRecommendationResult | undefined;
     if (input.keepRecommended && keepSnapshot && who.actor.userId) {
+      // The kernel context of the VERIFIED confirmer, built once: the authority
+      // resolver and the audited bypass must judge the same actor.
+      const keepActor = buildActorContextFromPrimitive(who.actor, null, who.roleHints);
+      const { withPlatformAdminBypass } = await import("@/lib/authz/admin-bypass");
       kept = await keepConfirmedRecommendationInScope({
         agentPackageName,
         runId: input.runId,
@@ -1568,9 +1685,12 @@ export async function writeRunSkillSelectionForActor(input: {
         snapshot: keepSnapshot,
         writable: {
           actorUserId: who.actor.userId,
-          projectIds: viewer.projectIds,
-          teamIds: viewer.teamIds,
-          organizationIds: viewer.organizationId ? [viewer.organizationId] : [],
+          // THE ASSIGNMENT-AUTHORITY MODULE DECIDES, per scope. It wants an
+          // organization owner or admin, a team admin, or a project owner or
+          // admin; belonging to the scope is not authority over it, and asking
+          // the membership question let an ordinary member of the run's
+          // organization write organization-wide rows.
+          mayWrite: (scope) => mayWriteAssignmentAtScope(keepActor, scope),
           // WORKSPACE AUTHORITY, read off the VERIFIED actor's role hints.
           // A workspace-wide assignment is a platform-administrator act, and
           // `platformRole` is resolved by whichever entry verified this
@@ -1582,6 +1702,20 @@ export async function writeRunSkillSelectionForActor(input: {
           // narrowest writable scope the confirmer holds.
           mayWriteWorkspace: who.roleHints.platformRole === "platform_admin",
         },
+        // The audited road the workspace tier has instead of a grant road. The
+        // audit row lands BEFORE the first insert, and a refusal writes nothing.
+        auditWorkspaceWrite: () =>
+          withPlatformAdminBypass(
+            keepActor,
+            "agent_assigned_skill.keep_recommended",
+            {
+              resourceType: "agent",
+              resourceId: agentPackageName,
+              ownerId: who.actor.userId!,
+            },
+            "workspace_configuration",
+            { runId: input.runId },
+          ),
         ...(input.keepRecommended.scope ? { requestedScope: input.keepRecommended.scope } : {}),
       });
     }
