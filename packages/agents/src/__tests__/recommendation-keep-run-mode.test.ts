@@ -115,7 +115,9 @@ describe("the run's mode decides whether a keep may happen at all", () => {
     expect(confirmRunSkillSelection).toHaveBeenCalledTimes(1);
     // The keep does not.
     expect(insertAssignedSkill).not.toHaveBeenCalled();
-    expect(result.kept).toBeUndefined();
+    // Reported twice: the structured outcome a caller already reads, and the
+    // sentence a reader is shown.
+    expect(result.kept).toEqual({ ok: false, reason: "not-interactive" });
     expect(result.refusalCode).toBe(RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE);
     expect(result.refusal).toBe(RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL);
   });

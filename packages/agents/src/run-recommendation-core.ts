@@ -1311,7 +1311,14 @@ export type AssignedSkillInsert = (input: {
 
 export type KeepRecommendationResult =
   | { ok: true; scope: AssignmentScope; written: number; skipped: string[] }
-  | { ok: false; reason: RecommendationScopeRefusal };
+  /**
+   * `not-interactive` is the RUN's own refusal (cinatra#2815 S3 part 4): a run
+   * nobody started by hand may not keep skills for the next one, whatever the
+   * confirmer holds. It rides here rather than on the scope union below,
+   * because the scope decision is a pure function of an actor and a snapshot
+   * and knows nothing about how a run was started.
+   */
+  | { ok: false; reason: RecommendationScopeRefusal | "not-interactive" };
 
 /**
  * Persist the confirmed skills as `source=recommended` assignments in ONE
@@ -1578,14 +1585,20 @@ export async function writeRunSkillSelectionForActor(input: {
         ...(input.keepRecommended.scope ? { requestedScope: input.keepRecommended.scope } : {}),
       });
     }
+    // A keep the run's mode refuses. The confirm SUCCEEDED, so this rides the
+    // successful result rather than replacing it. It is reported twice on
+    // purpose: as a structured `kept` outcome, which is the field a caller
+    // already reads to learn what the keep did, and as the sentence a reader is
+    // shown. Nothing has to infer it from a missing field, and the one caller
+    // that maps `refusal` to an error reads it only when `ok` is false.
+    const keptOutcome: KeepRecommendationResult | undefined = keepRefusal
+      ? { ok: false, reason: "not-interactive" }
+      : kept;
     return {
       ok: true,
       written: result.written,
       efficacy: result.efficacy,
-      ...(kept ? { kept } : {}),
-      // A keep the run's mode refuses. The confirm succeeded, so this rides the
-      // successful result rather than replacing it, and names what did not
-      // happen instead of leaving the reader to infer it from a missing field.
+      ...(keptOutcome ? { kept: keptOutcome } : {}),
       ...(keepRefusal ?? {}),
     };
   } catch {
