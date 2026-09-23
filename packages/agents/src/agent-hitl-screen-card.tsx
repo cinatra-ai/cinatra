@@ -288,8 +288,15 @@ export function hitlGateKey(gate: AgentHitlScreenGate): string {
  * form's over. Giving the card that form's send means the form handing its whole
  * validated value out on demand, which is its own work.
  *
- * On the run page and the review page the field is the primary input, the
- * renderer keeps its own control, and nothing here reaches them.
+ * On the run page and the review page the field is the primary input and the
+ * renderer keeps its own control — UNLESS IT HAS NONE (cinatra#3532). A
+ * renderer whose registry entry declares no submit control of its own
+ * (`FieldRendererEntry.drawsOwnSubmit`) leaves the reader nothing to press
+ * there, which is not a hierarchy question at all: it is a field that cannot be
+ * passed. The wizard's second field, drawn by a pack's own renderer, was exactly
+ * that, and no run could be started through it. So on a primary host the card
+ * takes the send for that field and only for that field — the fallback field,
+ * which draws its own Continue, declares one and keeps it.
  */
 export function cardOwnsTheSend(
   host: LifecycleCardHost,
@@ -312,9 +319,15 @@ export function cardOwnsTheSend(
 export function cardOwnsTheSetupSend(
   host: LifecycleCardHost,
   gate: AgentHitlScreenGate,
+  /** Does the renderer this gate mounts draw a submit control of its own? The
+   *  default is the answer a caller that cannot say leaves behind: on a primary
+   *  host the renderer keeps the send, exactly as before #3532. */
+  rendererDrawsOwnSubmit: boolean = true,
 ): boolean {
-  if (!cardOwnsTheSend(host, gate)) return false;
-  return !classifyHitlGate(gate).isMidRun;
+  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+  if (isMidRun || isGroupedSetup) return false;
+  if (hitlFieldPresentationFor(host) === "subordinate") return true;
+  return !rendererDrawsOwnSubmit;
 }
 
 /** One shared empty buffer, so "nothing typed yet" is one identity rather than
@@ -648,6 +661,20 @@ function gateMountsAnAnsweringRenderer(runId: string, gate: AgentHitlScreenGate)
   return resolveHitlGateEntry(runId, gate) !== null;
 }
 
+/**
+ * DOES THE RENDERER THIS GATE MOUNTS DRAW A SUBMIT CONTROL OF ITS OWN?
+ * (cinatra#3532.) The entry's own declaration, resolved the way the region
+ * resolves it — absent means it declares none, and the card's Continue is then
+ * this field's only way forward. A PRESENTATION HINT draws the card's own
+ * `DispatchRenderer`, which the card hands no `onChange`, so it is reported as
+ * carrying its own control and the takeover does not reach it (the condition it
+ * rides on withholds it anyway).
+ */
+function gateRendererDrawsOwnSubmit(runId: string, gate: AgentHitlScreenGate): boolean {
+  if (presentationHintOf(gate) !== null) return true;
+  return resolveHitlGateEntry(runId, gate)?.drawsOwnSubmit === true;
+}
+
 /** The registry entry this gate resolves to, or null — resolved the way
  *  `AgentHitlScreenFields` resolves it, so the card's decisions and the region's
  *  rendering can never disagree about which component is in question. */
@@ -750,6 +777,15 @@ export function AgentHitlScreenFields({
 
   const presentation = hitlFieldPresentationFor(host);
   const flushKey = gateKey ?? hitlGateKey(gate);
+  // WHAT THE FIELD SHOWS WHILE THE CARD HOLDS ITS ANSWER (cinatra#3532,
+  // convergence finding 1). Where the card owns the send, a setup field's
+  // change is staged rather than sent, and a renderer controlled by `value`
+  // (CtaRenderer's textarea reads it and keeps no state of its own) would
+  // otherwise clear itself after every keystroke. Keyed by the gate, so a
+  // draft never seeds the next question.
+  const [setupDraft, setSetupDraft] = useState<{ key: string; value: unknown } | null>(
+    null,
+  );
   const registerRendererFlush = registerFlush
     ? (fn: () => Promise<void>) => registerFlush(flushKey, fn)
     : undefined;
@@ -786,11 +822,17 @@ export function AgentHitlScreenFields({
           key={`${gate.xRenderer}::${gate.fieldName ?? ""}`}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
-          value={setupFieldRendererValue(
-            { ...gate.currentValues, ...buffered },
-            gate.fieldName ?? undefined,
-            renderSchema,
-          )}
+          value={
+            hideRendererSubmit === true &&
+            setupDraft !== null &&
+            setupDraft.key === flushKey
+              ? setupDraft.value
+              : setupFieldRendererValue(
+                  { ...gate.currentValues, ...buffered },
+                  gate.fieldName ?? undefined,
+                  renderSchema,
+                )
+          }
           onChange={
             isMidRun
               ? async (next: unknown) => {
@@ -818,6 +860,11 @@ export function AgentHitlScreenFields({
                         (renderSchema as { type?: string } | undefined)?.type === "object",
                     },
                   );
+                  // The field goes on showing what the reader put in it while
+                  // the card holds the send (cinatra#3532, finding 1).
+                  if (hideRendererSubmit === true) {
+                    setSetupDraft({ key: flushKey, value: next });
+                  }
                   await onSubmitField(payload, payloadFieldName);
                 }
           }
@@ -1319,11 +1366,9 @@ export function AgentHitlScreenCard({
     // AND THE MID-RUN GATE RIDES THE SAME ONE (cinatra#3051, fix leg 9): its
     // renderer's own send is withheld too, and the card's Continue — which that
     // screen already draws — asks the renderer for its value first.
-    const cardOwnsSend =
-      cardOwnsTheSend(host, gate) &&
-      !withholdRenderer &&
-      gateMountsAnAnsweringRenderer(runId, gate);
-    const cardOwnsSetupSend = cardOwnsSend && cardOwnsTheSetupSend(host, gate);
+    const cardMayAnswer = !withholdRenderer && gateMountsAnAnsweringRenderer(runId, gate);
+    const cardOwnsSetupSend = cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate)) && cardMayAnswer;
+    const cardOwnsSend = (cardOwnsTheSend(host, gate) && cardMayAnswer) || cardOwnsSetupSend;
     return (
       <>
         <AgentHitlScreenFields

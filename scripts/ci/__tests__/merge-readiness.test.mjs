@@ -5,6 +5,9 @@
 // check -> PASS with a report line; the queue event with a moved head -> FAIL.
 
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   DEADLINE_MINUTES,
@@ -16,13 +19,9 @@ import {
   evaluateReadiness,
   exitCodeFor,
   isSettled,
-  parseBoundaryRecords,
   pathsApply,
-  pullNumberFromQueueRef,
   resolveCandidateSha,
-  validateApprovedHead,
   validateInventory,
-  verificationBoundaryVerdict,
   waitBudgetMinutes,
 } from "../merge-readiness.mjs";
 // Namespace import for the sha-splitting road, so a missing export shows up as
@@ -219,35 +218,136 @@ describe("merge-readiness fixture matrix", () => {
   });
 });
 
-describe("merge-readiness queue arm", () => {
-  const queueEval = (queue, checks = greenChecks()) =>
-    evaluateReadiness({ inventory: inventory(), checks, changedPaths: ["src/a.ts"], eventName: "merge_group", queue });
+const GROUP = "b".repeat(40), BASE = "c".repeat(40), TREE = "d".repeat(40), REPO = "cinatra-ai/cinatra";
+const queueBinding = () => ({ schema: "cinatra.queue-binding/v1", repository: REPO, repositoryId: 10, pullRequest: 7,
+  headSha: HEAD, headRepositoryId: 10, baseRef: "main", baseSha: BASE, groupHeadSha: GROUP, parents: [BASE, HEAD], groupTree: TREE, authority: "delegated-v1" });
+const boundaryBinding = () => ({ schema: "cinatra.verification-boundary-current/v1", repository: REPO, repositoryId: 10,
+  pullRequest: 7, headSha: HEAD, state: "candidate", commentId: 100, digest: "e".repeat(64) });
+const queueSnapshot = () => ({ binding: queueBinding(), boundary: boundaryBinding(), identity: [7], files: [], changedPaths: ["src/a.ts"] });
+const queuePair = () => { const before = queueSnapshot(); return { before, after: structuredClone(before) }; };
 
-  const record = (state, sha) => `**In simple words:** x\n\nVerification boundary: ${state} at ${sha}\n`;
-
-  it("PASSes on the queue event when the head is unmoved and the boundary is candidate", () => {
-    const r = queueEval({ approvedHead: HEAD, pullRequestHead: HEAD, recordText: record("candidate", HEAD) });
-    expect(r.failures).toEqual([]);
-    expect(r.verdict).toBe("PASS");
+describe("authenticated merge-readiness queue arm", () => {
+  const queueEval = (queue, checks = greenChecks()) => evaluateReadiness({ inventory: inventory(), checks,
+    changedPaths: ["src/a.ts"], eventName: "merge_group", queue });
+  it("accepts unchanged authenticated queue and boundary snapshots while retaining real CI verdicts", () => {
+    expect(queueEval(queuePair()).verdict).toBe("PASS");
+    const checks = greenChecks(); checks[0].conclusion = "failure";
+    expect(queueEval(queuePair(), checks).verdict).toBe("FAIL");
+    checks[0].status = "in_progress"; checks[0].conclusion = null;
+    expect(queueEval(queuePair(), checks).verdict).toBe("PENDING");
   });
-
-  it("FAILs on the queue event when the approved head moved", () => {
-    const moved = "a".repeat(40);
-    const r = queueEval({ approvedHead: HEAD, pullRequestHead: moved, recordText: record("candidate", moved) });
-    expect(r.verdict).toBe("FAIL");
-    expect(r.failures.join("\n")).toMatch(/approved-head: the approved head moved/);
+  it("rejects editable-body, prefix-head and missing before/after authority", () => {
+    for (const value of [undefined, { approvedHead: HEAD, pullRequestHead: HEAD, recordText: `Verification boundary: candidate at ${HEAD}` },
+      { before: queueSnapshot() }]) expect(queueEval(value).verdict).toBe("FAIL");
+    const value = queuePair(); value.after.boundary.headSha = HEAD.slice(0, 7);
+    expect(queueEval(value).verdict).toBe("FAIL");
   });
-
-  it("FAILs when the last boundary record for the head is not candidate or promoted", () => {
-    const text = `${record("candidate", HEAD)}Verification boundary: proof-failed at ${HEAD}\n`;
-    const r = queueEval({ approvedHead: HEAD, pullRequestHead: HEAD, recordText: text });
-    expect(r.verdict).toBe("FAIL");
-    expect(r.failures.join("\n")).toMatch(/verification-boundary: the last verification-boundary record .* is 'proof-failed'/);
+  it("rejects any final authority, receipt, identity or file change, including another positive receipt", () => {
+    for (const change of [s => { s.binding.groupTree = "f".repeat(40); }, s => { s.binding.authority = "review"; },
+      s => { s.boundary.commentId++; }, s => { s.boundary.digest = "f".repeat(64); }, s => { s.boundary.state = "promoted"; },
+      s => { s.identity.push("changed"); }, s => { s.files.push({ filename: "other" }); }, s => { s.changedPaths = []; }]) {
+      const value = queuePair(); change(value.after); expect(queueEval(value).verdict).toBe("FAIL");
+    }
   });
+  it("keeps ordinary PR readiness independent of boundary publication", () => {
+    expect(evalPr(greenChecks()).verdict).toBe("PASS");
+  });
+});
 
-  it("does not evaluate the queue arm on a pull_request event", () => {
-    const r = evalPr(greenChecks());
-    expect(r.failures.join("\n")).not.toMatch(/approved-head|verification-boundary/);
+describe("strict engine report binding", () => {
+  const expected = { repository: REPO, groupHeadSha: GROUP, baseSha: BASE, baseRef: "main" };
+  const report = () => ({ arm: "merge-group", mode: "enforce", repo: REPO, apiSkippedReason: null, findingCount: 0, findings: [], queueBinding: queueBinding() });
+  it("accepts both engine authority paths and only exact boundary scope", () => {
+    const value = report(); expect(readiness.validateQueueBinding(value, expected)).toEqual(queueBinding());
+    value.queueBinding.authority = "review"; value.queueBinding.headRepositoryId = 11;
+    expect(readiness.validateQueueBinding(value, expected).headRepositoryId).toBe(11);
+    expect(readiness.validateBoundaryBinding(boundaryBinding(), queueBinding())).toEqual(boundaryBinding());
+  });
+  it("refuses warn, offline, failed, malformed and mismatched engine reports", () => {
+    for (const change of [r => { r.mode = "warn"; }, r => { r.apiSkippedReason = "offline"; }, r => { r.findings = [{}]; },
+      r => { r.findingCount = 1; }, r => { r.arm = "pre-merge"; }, r => { r.repo = "cinatra-ai/ci"; },
+      r => { r.queueBinding.extra = true; }, r => { r.queueBinding.pullRequest = "7"; }, r => { r.queueBinding.headSha = HEAD.slice(0, 12); },
+      r => { r.queueBinding.repositoryId = 0; }, r => { r.queueBinding.headRepositoryId = 11; },
+      r => { r.queueBinding.baseSha = GROUP; }, r => { r.queueBinding.baseRef = "release"; },
+      r => { r.queueBinding.groupHeadSha = BASE; }, r => { r.queueBinding.parents.reverse(); }]) {
+      const value = report(); change(value); expect(() => readiness.validateQueueBinding(value, expected)).toThrow();
+    }
+    for (const field of Object.keys(queueBinding())) {
+      const value = report(); delete value.queueBinding[field]; expect(() => readiness.validateQueueBinding(value, expected)).toThrow();
+    }
+  });
+  it("requires full authenticated boundary identity and eligible state without a body fallback", () => {
+    for (const change of [b => { b.schema = "other/v1"; }, b => { b.repository = "cinatra-ai/ci"; }, b => { b.repositoryId++; },
+      b => { b.pullRequest++; }, b => { b.headSha = GROUP; }, b => { b.state = "not-a-lane"; }, b => { b.state = "proof-failed"; },
+      b => { b.state = "candidate-pending-ci"; }, b => { b.commentId = "100"; }, b => { b.digest = "e".repeat(63); },
+      b => { b.recordText = `Verification boundary: candidate at ${HEAD}`; }]) {
+      const value = boundaryBinding(); change(value); expect(() => readiness.validateBoundaryBinding(value, queueBinding())).toThrow();
+    }
+  });
+});
+
+function queueTransport() {
+  const calls = [], engineCalls = [];
+  const pull = { number: 7, state: "open", merged: false, draft: false, changed_files: 1,
+    head: { sha: HEAD, ref: "feature/change", repo: { id: 10, full_name: REPO } },
+    base: { ref: "main", sha: "f".repeat(40), repo: { id: 10, full_name: REPO } } };
+  const file = { filename: "docs/new.md", previous_filename: "src/old.ts", status: "renamed", sha: HEAD, additions: 0, deletions: 0, changes: 0 };
+  const state = { pull, pages: [[file]], final: null };
+  const get = async endpoint => {
+    calls.push(endpoint);
+    if (endpoint.endsWith("/pulls/7")) return structuredClone(calls.filter(c => c === endpoint).length > 1 && state.final ? state.final : state.pull);
+    const page = /\/files\?per_page=100&page=(\d+)$/.exec(endpoint);
+    if (page) return structuredClone(state.pages[Number(page[1]) - 1] ?? []);
+    throw new Error("unexpected test endpoint");
+  };
+  const engine = (kind, args, group) => {
+    engineCalls.push({ kind, args, group });
+    return kind === "attribution" ? { arm: "merge-group", mode: "enforce", repo: REPO, apiSkippedReason: null, findingCount: 0, findings: [], queueBinding: queueBinding() } : boundaryBinding();
+  };
+  const args = { repo: REPO, payload: { merge_group: { head_sha: GROUP, base_sha: BASE, base_ref: "refs/heads/main", head_ref: "untrusted/pr-999-ref" } }, lookupSha: GROUP, recordedSha: GROUP, get, engine };
+  return { state, calls, engineCalls, get, args, file };
+}
+
+describe("queue collector uses verified identity and complete file inventory", () => {
+  it("emits exact engine argv and uses its PR identity rather than the ref or a review-list guess", async () => {
+    const f = queueTransport(), value = await readiness.readQueueEvidence(f.args);
+    expect(f.engineCalls).toEqual([
+      { kind: "attribution", group: GROUP, args: ["--arm", "merge-group", "--mode", "enforce", "--format", "json", "--repo", REPO, "--merge-group-head", GROUP, "--merge-group-base", BASE, "--gate-arm-wait-ms", "0"] },
+      { kind: "boundary", group: GROUP, args: ["--repo", REPO, "--pr", "7", "--head", HEAD] },
+    ]);
+    expect(value.changedPaths).toEqual(["docs/new.md", "src/old.ts"]);
+    expect(readiness.pathsApply(["src/**"], value.changedPaths)).toBe(true);
+    expect(f.calls.some(c => c.includes("999") || c.includes("reviews"))).toBe(false);
+  });
+  it("finishes terminal pagination and matches the exact live count", async () => {
+    const f = queueTransport(); f.state.pages = [Array.from({ length: 100 }, (_, i) => ({ ...f.file, filename: `src/${i}.ts` })), [{ ...f.file, filename: "src/last.ts" }]];
+    f.state.pull.changed_files = 101;
+    expect((await readiness.readQueuedFiles(f.get, queueBinding())).files).toHaveLength(101);
+    expect(f.calls.at(-2)).toMatch(/page=2$/);
+  });
+  it("refuses truncated, duplicate, malformed and over-limit file responses", async () => {
+    for (const change of [f => { f.state.pull.changed_files = 2; }, f => { f.state.pages = [[f.file, f.file]]; },
+      f => { f.state.pages = [[]]; }, f => { f.state.pages = [{}]; }, f => { f.state.pages[0][0].sha = "short"; },
+      f => { delete f.state.pages[0][0].previous_filename; }, f => { f.state.pages[0][0].filename = "../escape"; },
+      f => { f.state.pull.changed_files = 3001; }]) {
+      const f = queueTransport(); change(f); await expect(readiness.readQueuedFiles(f.get, queueBinding())).rejects.toThrow();
+    }
+  });
+  it("binds initial and final PR identity independently of valid helper reports", async () => {
+    for (const change of [p => { p.head.sha = GROUP; }, p => { p.head.repo.id++; }, p => { p.base.repo.id++; },
+      p => { p.head.ref = "retargeted"; }, p => { p.head.repo.full_name = "cinatra-ai/ci"; }, p => { p.base.ref = "release"; },
+      p => { p.state = "closed"; }, p => { p.merged = true; }, p => { p.draft = true; }, p => { p.changed_files++; }]) {
+      const f = queueTransport(); f.state.final = structuredClone(f.state.pull); change(f.state.final);
+      await expect(readiness.readQueueEvidence(f.args)).rejects.toThrow();
+    }
+    const f = queueTransport(); f.state.pull.head.repo.id++;
+    await expect(readiness.readQueueEvidence(f.args)).rejects.toThrow();
+  });
+  it("refuses malformed event identity before invoking either helper", async () => {
+    for (const change of [a => { a.recordedSha = HEAD; }, a => { a.lookupSha = HEAD; }, a => { a.payload.merge_group.base_sha = "short"; },
+      a => { a.payload.merge_group.base_ref = "main"; }, a => { a.repo = "foreign/../repo"; }]) {
+      const f = queueTransport(); change(f.args); await expect(readiness.readQueueEvidence(f.args)).rejects.toThrow(); expect(f.engineCalls).toEqual([]);
+    }
   });
 });
 
@@ -308,11 +408,7 @@ describe("the check runs are read from the sha that carries them", () => {
       checks: runsOnQueue[lookupSha],
       changedPaths: ["src/a.ts"],
       eventName: "merge_group",
-      queue: {
-        approvedHead: HEAD,
-        pullRequestHead: HEAD,
-        recordText: `Verification boundary: candidate at ${HEAD}\n`,
-      },
+      queue: queuePair(),
     });
     expect(r.failures).toEqual([]);
     expect(r.verdict).toBe("PASS");
@@ -365,10 +461,6 @@ describe("candidate sha resolution", () => {
     expect(() => resolveCandidateSha({ eventName: "merge_group", githubSha: HEAD, payload: {} })).toThrow(/merge_group.head_sha/);
   });
 
-  it("reads the queued pull-request number out of the queue ref", () => {
-    expect(pullNumberFromQueueRef("refs/heads/gh-readonly-queue/main/pr-3350-1066982")).toBe(3350);
-    expect(pullNumberFromQueueRef("refs/heads/main")).toBeNull();
-  });
 });
 
 describe("the deadline is shorter than the queue timeout", () => {
@@ -437,34 +529,6 @@ describe("a pending outcome exits non-zero, and distinctly from a failure", () =
     });
     expect(summary).toContain("merge-readiness: PENDING");
     expect(summary).toContain("pending: 'build' is still 'queued' after 90 minutes — not a failure");
-  });
-});
-
-describe("verification-boundary parser", () => {
-  it("reads column-0 records in document order", () => {
-    const text = `Verification boundary: candidate-pending-ci at ${HEAD} (checks: build; proof)\nVerification boundary: candidate at ${HEAD}\n`;
-    expect(parseBoundaryRecords(text)).toEqual([
-      { state: "candidate-pending-ci", sha: HEAD },
-      { state: "candidate", sha: HEAD },
-    ]);
-  });
-
-  it("accepts a promoted last record and rejects a pending-ci last record", () => {
-    expect(verificationBoundaryVerdict(`Verification boundary: promoted at ${HEAD}`, HEAD).ok).toBe(true);
-    expect(verificationBoundaryVerdict(`Verification boundary: candidate-pending-ci at ${HEAD}`, HEAD).ok).toBe(false);
-  });
-
-  it("fails closed when no record names the head", () => {
-    const v = verificationBoundaryVerdict(`Verification boundary: candidate at ${"c".repeat(40)}`, HEAD);
-    expect(v.ok).toBe(false);
-    expect(v.reason).toMatch(/no verification-boundary record names the head/);
-  });
-});
-
-describe("approved-head revalidation", () => {
-  it("fails closed when no approval could be resolved", () => {
-    expect(validateApprovedHead({ approvedHead: null, pullRequestHead: HEAD }).ok).toBe(false);
-    expect(validateApprovedHead({ approvedHead: HEAD, pullRequestHead: null }).ok).toBe(false);
   });
 });
 
@@ -618,5 +682,89 @@ describe("a check run's source is the workflow that produced it, not its check s
     const r = evalPr([...greenChecks().filter((c) => c.name !== "build"), run]);
     expect(r.failures).toEqual([]);
     expect(r.verdict).toBe("PASS");
+  });
+});
+
+describe("fixed engine source and subprocess boundary", () => {
+  function fixture() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-source-"));
+    const engine = path.join(root, readiness.QUEUE_ENGINE_DIRECTORY); fs.mkdirSync(engine);
+    const calls = [], state = { pin: readiness.QUEUE_ENGINE_PIN, dirty: "", candidate: GROUP, output: JSON.stringify({ fixture: true }), afterPin: null };
+    let sourceReads = 0;
+    const execute = (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command !== "git") { if (state.error) throw state.error; return state.output; }
+      const cwd = args[args.indexOf("-C") + 1], op = args.slice(args.indexOf("-C") + 2);
+      if (op.join(" ") === "rev-parse --show-toplevel") return engine + "\n";
+      if (op.join(" ") === "rev-parse HEAD") {
+        if (cwd === engine) { sourceReads++; return (sourceReads > 1 && state.afterPin ? state.afterPin : state.pin) + "\n"; }
+        return state.candidate + "\n";
+      }
+      if (op[0] === "status") return state.dirty;
+      throw new Error("unexpected fixture command");
+    };
+    return { root, engine, calls, state, reader: readiness.createQueueEngineReader(root, "fixture-token", execute),
+      dispose: () => fs.rmSync(root, { recursive: true, force: true }) };
+  }
+  it("uses only fixed engine entrypoints and bounded clean environment with no shell", () => {
+    const f = fixture();
+    try {
+      expect(f.reader("boundary", ["--repo", REPO, "--pr", "7", "--head", HEAD], GROUP)).toEqual({ fixture: true });
+      const call = f.calls.find(c => c.command !== "git");
+      expect(call.command).toBe("python3");
+      expect(call.args).toEqual([path.join(f.engine, "scripts/verification-boundary.py"), "--repo", REPO, "--pr", "7", "--head", HEAD]);
+      expect(call.options).toMatchObject({ cwd: f.root, timeout: 90_000, maxBuffer: 4 * 1024 * 1024,
+        env: { GH_HOST: "github.com", GH_TOKEN: "fixture-token", GIT_NO_REPLACE_OBJECTS: "1", PYTHONDONTWRITEBYTECODE: "1" } });
+      expect(call.options.shell).toBeUndefined();
+      expect(call.options.env.GIT_DIR).toBeUndefined();
+      expect(call.options.env.PYTHONPATH).toBeUndefined();
+      expect(call.options.env.NODE_OPTIONS).toBeUndefined();
+      expect(f.calls.filter(c => c.command === "git" && c.args.at(-1) === "HEAD")).toHaveLength(4);
+    } finally { f.dispose(); }
+  });
+  it("refuses wrong or dirty source, wrong candidate, and a source change during execution", () => {
+    for (const changes of [{ pin: "f".repeat(40) }, { dirty: "?? untrusted.py\n" }, { candidate: HEAD }, { afterPin: "f".repeat(40) }]) {
+      const f = fixture();
+      try { Object.assign(f.state, changes); expect(() => f.reader("boundary", [], GROUP)).toThrow(); }
+      finally { f.dispose(); }
+    }
+    const f = fixture();
+    try {
+      fs.rmdirSync(f.engine); fs.symlinkSync(f.root, f.engine);
+      expect(() => f.reader("boundary", [], GROUP)).toThrow(/fixed checkout/);
+      expect(f.calls).toEqual([]);
+    } finally { f.dispose(); }
+  });
+  it("rejects incomplete output and subprocess failure without exposing captured credentials", () => {
+    const f = fixture();
+    try {
+      f.state.output = '{}\n::notice::annotation'; expect(() => f.reader("boundary", [], GROUP)).toThrow(/one JSON document/);
+      f.state.error = new Error("fixture-token in captured process output");
+      expect(() => f.reader("boundary", [], GROUP)).toThrow(/engine refused or could not complete/);
+      expect(() => f.reader("boundary", [], GROUP)).not.toThrow(/fixture-token/);
+    } finally { f.dispose(); }
+  });
+});
+
+describe("coordinated immutable queue engine pins", () => {
+  it("binds all consumer selections to the same full source SHA without widening events or grants", () => {
+    const root = path.resolve(import.meta.dirname, "../../..");
+    const read = name => fs.readFileSync(path.join(root, name), "utf8");
+    const pin = readiness.QUEUE_ENGINE_PIN;
+    expect(pin).toMatch(/^[0-9a-f]{40}$/);
+    const suite = JSON.parse(read(".github/gate-suite.json"));
+    const attribution = suite.requiredContexts.filter(c => c.context === "truthful-attribution-gate / truthful-attribution-gate");
+    expect(attribution).toHaveLength(1); expect(attribution[0].pinned).toBe(pin);
+    expect(attribution[0].allowedEvents).toEqual(["pull_request", "push", "merge_group"]);
+    const caller = read(".github/workflows/truthful-attribution-gate.yml");
+    expect(caller).toContain(`truthful-attribution-gate.yml@${pin}`);
+    expect(caller).toMatch(new RegExp(`ref: ${pin}(?:\\s|$)`));
+    expect(read(".github/workflows/attribution-record-reverify.yml")).toMatch(new RegExp(`ref: ${pin}(?:\\s|$)`));
+    const workflow = read(".github/workflows/merge-readiness-reusable.yml");
+    expect(workflow).toContain(`ref: ${pin}`);
+    expect(workflow).toContain(`path: ${readiness.QUEUE_ENGINE_DIRECTORY}`);
+    expect(workflow).toContain("fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}");
+    expect(workflow).not.toMatch(/(?:contents|checks|actions|pull-requests): write/);
+    expect(workflow).toContain("timeout-minutes: 115");
   });
 });

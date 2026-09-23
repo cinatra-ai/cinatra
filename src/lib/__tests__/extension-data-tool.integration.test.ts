@@ -68,7 +68,7 @@ const auditEvents: Record<string, unknown>[] = [];
 
 async function run(request: Record<string, unknown>) {
   const { runExtensionDataOperation } = await import("@/lib/extension-data-tool");
-  return runExtensionDataOperation({
+  const result = await runExtensionDataOperation({
     client: client as never,
     schemaName: SCHEMA,
     packageName: PACKAGE,
@@ -80,6 +80,8 @@ async function run(request: Record<string, unknown>) {
       auditEvents.push(e);
     },
   });
+  // Every operation this tier exercises hands rows back.
+  return result as { rows: Record<string, unknown>[]; rowCount: number; table: string };
 }
 
 describeDb("the extension-data tool on a real store (cinatra#3031 acceptance 2)", () => {
