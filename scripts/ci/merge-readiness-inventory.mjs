@@ -44,7 +44,7 @@
 //          - "self": the merge-readiness context itself — the job must never
 //            wait on itself.
 //
-//     4. A job that declares an `if:` guard other than `always()` is marked
+//     4. A job with a selection guard beyond always() or sole !cancelled() is marked
 //        `skippable: true`: GitHub reports it on the candidate with the
 //        `skipped` conclusion when the guard is false, and branch protection
 //        counts a skipped required check as satisfied — so the readiness job
@@ -217,8 +217,19 @@ export function parseJobAttrs(text) {
  */
 export const ALWAYS_IF = new Set(["always()", "${{ always() }}"]);
 
-/** A job-level `if:` other than always() means the job may not report. */
-export const isConditional = (ifExpr) => ifExpr != null && !ALWAYS_IF.has(ifExpr.trim());
+/** Cancellation alone never authorizes missing required validation. */
+export const isConditional = (ifExpr) => {
+  if (ifExpr == null) return false;
+  const expression = ifExpr.trim();
+  if (ALWAYS_IF.has(expression)) return false;
+  const inner = expression.startsWith("${{") && expression.endsWith("}}")
+    ? expression.slice(3, -2)
+    : expression;
+  // A sole status guard still runs on every uncancelled candidate. A queued
+  // job may become skipped after cancellation, but that is not an intentional
+  // path/draft skip. Compound selection guards retain the existing policy.
+  return inner.replace(/\s/g, "") !== "!cancelled()";
+};
 
 /** A `${{ ... }}` job name (a matrix leg) has no statically knowable context. */
 export const isDynamicName = (name) => typeof name === "string" && name.includes("${{");
@@ -300,7 +311,7 @@ export function deriveInventory(workflows) {
       write: "node scripts/ci/merge-readiness-inventory.mjs --write",
       check: "node scripts/ci/merge-readiness-inventory.mjs --check",
       derivedFrom:
-        "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
+        "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
       generator: "scripts/ci/merge-readiness-inventory.mjs",
     },
     excluded,
