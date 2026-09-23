@@ -52,6 +52,12 @@ const revokedConnections: string[] = [];
 // identity-only, so its retirements are recorded apart from the credential
 // revokes above — a keyed delete must still make exactly ONE credential call.
 const retiredKeylessIdentities: string[] = [];
+// The derived ids the keyless road actually registered. The fix leg guards the
+// registration on the row it describes, so "nothing was registered" is itself an
+// outcome a case has to be able to read.
+const registeredKeylessIdentities: string[] = [];
+// Whose live keyless identity the reconciling roads find, or null for none.
+let keylessIdentityOwner: string | null = "u1";
 let apiKeyImportShouldFail = false;
 
 class ExternalMcpServerWriteConflictError extends Error {
@@ -147,9 +153,23 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   // (its identity write is proved over the REAL seam in
   // `mcp-server-connection-workspace-share.test.ts`).
   externalMcpKeylessConnectionId: (serverId: string) => `external-mcp-keyless-${serverId}`,
-  registerExternalMcpKeylessConnectionIdentity: async () => {},
-  revokeExternalMcpKeylessConnectionIdentity: async (connectionId: string | null | undefined) => {
-    if (connectionId) retiredKeylessIdentities.push(connectionId);
+  registerExternalMcpKeylessConnectionIdentity: async (connectionId: string) => {
+    registeredKeylessIdentities.push(connectionId);
+  },
+  // The live identity the derived id addresses. This file holds no identity
+  // store, so nothing is ever registered here; the owner/workspace
+  // reconciliation itself is measured over the REAL seam in
+  // `mcp-server-connection-workspace-share.test.ts`.
+  // A live identity row for every derived id, so the reconciling roads have
+  // something to witness. The row id carries the connection id it belongs to,
+  // which is what the recorder reads back. `keylessIdentityOwner` decides whose
+  // it is; set it to null for a row that has no identity at all.
+  readExternalMcpKeylessConnectionIdentity: async (connectionId: string) =>
+    keylessIdentityOwner === null
+      ? null
+      : { id: `identity:${connectionId}`, ownerUserId: keylessIdentityOwner, organizationId: null },
+  retireExternalMcpKeylessConnectionIdentityRow: async (identityId: string) => {
+    retiredKeylessIdentities.push(identityId.replace(/^identity:/, ""));
   },
 }));
 
@@ -165,6 +185,8 @@ beforeEach(() => {
   importedApiKeys.length = 0;
   revokedConnections.length = 0;
   retiredKeylessIdentities.length = 0;
+  registeredKeylessIdentities.length = 0;
+  keylessIdentityOwner = "u1";
   apiKeyImportShouldFail = false;
 });
 
@@ -359,6 +381,34 @@ describe("createServerHandler API key persistence (cinatra#1407 defect 1)", () =
     expect(importedApiKeys[0].connectionId).toBe(stored.nangoConnectionId);
     // Prior credential revoked AFTER the successful re-key (no stale credential).
     expect(revokedConnections).toContain("external-mcp-old");
+  });
+
+  it("EVERY keyed save reconciles the row's keyless identity, not only its first upgrade", async () => {
+    // A row that already carries a credential: the first upgrade is long past,
+    // so a keyless identity still live here is one an earlier retire failed to
+    // take away. The save has to retire it anyway.
+    servers.set("k1", {
+      id: "k1",
+      scope: "user",
+      userId: "u1",
+      label: "K",
+      serverUrl: "https://k",
+      nangoConnectionId: "external-mcp-old",
+    });
+    await createServerHandler({ id: "k1", label: "K", serverUrl: "https://k", scope: "user", apiKey: "sk-new" });
+    expect(retiredKeylessIdentities).toEqual(["external-mcp-keyless-k1"]);
+    // IDENTITY-ONLY: a keyless id never reaches the credential service, on this
+    // road or any other. The only credential call is the prior key's revoke.
+    expect(revokedConnections).toEqual(["external-mcp-old"]);
+    expect(registeredKeylessIdentities).toEqual([]);
+  });
+
+  it("a keyless save whose row is GONE by the time the identity is registered registers nothing", async () => {
+    // The row lands, then the other request deletes it: the fresh re-read the
+    // registration is guarded on no longer finds it.
+    authzOverride.set("gone-1", null);
+    await createServerHandler({ id: "gone-1", label: "G", serverUrl: "https://g", scope: "user" });
+    expect(registeredKeylessIdentities).toEqual([]);
   });
 
   it("rolls back the just-imported credential when the guarded write CONFLICTS (TOCTOU)", async () => {

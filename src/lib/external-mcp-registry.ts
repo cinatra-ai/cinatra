@@ -635,8 +635,50 @@ export async function revokeExternalMcpApiKeyConnection(
  * never collide with the keyed road's unique `external-mcp-<uuid>` credential
  * ids, which address a real vault entry.
  */
+const EXTERNAL_MCP_KEYLESS_CONNECTION_PREFIX = "external-mcp-keyless-";
+
 export function externalMcpKeylessConnectionId(serverId: string): string {
-  return `external-mcp-keyless-${serverId}`;
+  return `${EXTERNAL_MCP_KEYLESS_CONNECTION_PREFIX}${serverId}`;
+}
+
+/**
+ * Refuse an id outside the derived keyless namespace. The three helpers below
+ * read and retire identity rows WITHOUT a credential call, and the reconciling
+ * caller retires a superseded one outright, so each of them must be unable to
+ * address a real credential-backed connection by mistake.
+ */
+function assertKeylessConnectionId(connectionId: string, operation: string): void {
+  if (!connectionId.startsWith(EXTERNAL_MCP_KEYLESS_CONNECTION_PREFIX)) {
+    throw new Error(
+      `${operation} was given "${connectionId}", which is not a derived keyless ` +
+        `external-MCP connection id. Only ids from externalMcpKeylessConnectionId ` +
+        `may travel this road.`,
+    );
+  }
+}
+
+/**
+ * The LIVE `externalMcp` identity the derived keyless id addresses, or null
+ * (cinatra#3485). The caller compares its owner and organization against the
+ * ones the row's own save derived, so a row whose owner or workspace moved
+ * does not keep an identity that describes who owned it before. A read only:
+ * it decides nothing and writes nothing.
+ */
+export async function readExternalMcpKeylessConnectionIdentity(
+  connectionId: string,
+): Promise<{ id: string; ownerUserId: string; organizationId: string | null } | null> {
+  assertKeylessConnectionId(connectionId, "readExternalMcpKeylessConnectionIdentity");
+  const { readNangoConnectionByNaturalKey } = await import(
+    "@cinatra-ai/extensions/connection-identity-store"
+  );
+  const identity = await readNangoConnectionByNaturalKey("externalMcp", connectionId);
+  return identity
+    ? {
+        id: identity.id,
+        ownerUserId: identity.ownerUserId,
+        organizationId: identity.organizationId,
+      }
+    : null;
 }
 
 /**
@@ -657,6 +699,7 @@ export async function registerExternalMcpKeylessConnectionIdentity(
   connectionId: string,
   identity: { ownerUserId: string; organizationId: string | null; seed: "owner" | "workspace" },
 ): Promise<void> {
+  assertKeylessConnectionId(connectionId, "registerExternalMcpKeylessConnectionIdentity");
   const { registerSavedConnectionIdentity } = await import("@/lib/connection-identity-seam");
   await registerSavedConnectionIdentity({
     connectorKey: "externalMcp",
@@ -668,32 +711,27 @@ export async function registerExternalMcpKeylessConnectionIdentity(
 }
 
 /**
- * Retire the `externalMcp` connection IDENTITY of a KEYLESS external-MCP server
- * row (cinatra#3485) — the IDENTITY half of
- * `revokeExternalMcpApiKeyConnection` with no credential half.
- *
- * A keyless connection id addresses NO vault entry at all, so routing it
- * through the credential road would ask the connection service to delete a
- * credential the row never had — and, because the derived id is computed for
- * every row, would fire that request on every KEYED delete too. This soft-
- * deletes the live identity row and stops there: never a credential call,
- * never a throw (the server row is already gone or its key already retired),
- * logged NON-SECRETLY, and a no-op on an empty id or a row that never had an
- * identity.
+ * Retire ONE witnessed keyless identity row, addressed by its own primary key
+ * (cinatra#3485). Pass an id that came from
+ * `readExternalMcpKeylessConnectionIdentity`, which is where the derived
+ * namespace was proved: retiring by the natural key would re-resolve it, and a
+ * concurrent request that replaced the identity in between would have its NEW
+ * row retired instead of the one the caller read. Addressing the row itself
+ * makes the retire a compare-and-retire: it either takes away exactly the row
+ * that was witnessed, or nothing, because the store's soft delete passes over a
+ * row that is already retired. Never a credential call, never a throw.
  */
-export async function revokeExternalMcpKeylessConnectionIdentity(
-  connectionId: string | null | undefined,
+export async function retireExternalMcpKeylessConnectionIdentityRow(
+  identityId: string,
 ): Promise<void> {
-  if (!connectionId) return;
   try {
-    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+    const { softDeleteNangoConnection } = await import(
       "@cinatra-ai/extensions/connection-identity-store"
     );
-    const identity = await readNangoConnectionByNaturalKey("externalMcp", connectionId);
-    if (identity) await softDeleteNangoConnection(identity.id);
+    await softDeleteNangoConnection(identityId);
   } catch (err) {
     console.warn(
-      "[external-mcp-registry] best-effort keyless identity revoke failed",
+      "[external-mcp-registry] best-effort witnessed keyless identity retire failed",
       err instanceof Error ? err.message : String(err),
     );
   }

@@ -229,8 +229,9 @@ describe("revokeExternalMcpApiKeyConnection", () => {
 // ---------------------------------------------------------------------------
 const {
   externalMcpKeylessConnectionId,
+  readExternalMcpKeylessConnectionIdentity,
   registerExternalMcpKeylessConnectionIdentity,
-  revokeExternalMcpKeylessConnectionIdentity,
+  retireExternalMcpKeylessConnectionIdentityRow,
 } = await import("@/lib/external-mcp-registry");
 
 describe("a KEYLESS external-MCP registration (cinatra#3485)", () => {
@@ -268,23 +269,65 @@ describe("a KEYLESS external-MCP registration (cinatra#3485)", () => {
     expect(enforceConnectionUse).not.toHaveBeenCalled();
   });
 
-  it("its identity is retired IDENTITY-ONLY — no credential is ever asked for", async () => {
-    await revokeExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-1"));
+  it("its identity is retired IDENTITY-ONLY, by its own row id, and no credential is ever asked for", async () => {
+    await retireExternalMcpKeylessConnectionIdentityRow("id-row");
+    expect(softDeleteNangoConnection).toHaveBeenCalledWith("id-row");
+    // A keyless identity addresses NO vault entry: the credential road is not
+    // travelled at all, and the natural key is never re-resolved, so a row
+    // registered after the caller read cannot be the one retired.
+    expect(readNangoConnectionByNaturalKey).not.toHaveBeenCalled();
+    expect(deleteNangoConnection).not.toHaveBeenCalled();
+  });
+
+  it("a retire whose store write fails is logged and swallowed, never thrown at the save", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    softDeleteNangoConnection.mockRejectedValueOnce(new Error("the store was unreachable"));
+    await expect(retireExternalMcpKeylessConnectionIdentityRow("id-row")).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    expect(deleteNangoConnection).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("reads back the live identity the derived id addresses: its owner and its workspace, and nothing else", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValueOnce({
+      id: "id-row",
+      ownerUserId: "u2",
+      organizationId: "org-1",
+      connectorKey: "externalMcp",
+      connectionId: "external-mcp-keyless-row-1",
+      deletedAt: null,
+    });
+    expect(
+      await readExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-1")),
+    ).toEqual({ id: "id-row", ownerUserId: "u2", organizationId: "org-1" });
     expect(readNangoConnectionByNaturalKey).toHaveBeenCalledWith(
       "externalMcp",
       "external-mcp-keyless-row-1",
     );
-    expect(softDeleteNangoConnection).toHaveBeenCalledWith("id-row");
-    // A keyless id addresses NO vault entry: the credential road is not
-    // travelled at all (codex convergence finding 4).
+    // A read only: it retires nothing and asks for no credential.
+    expect(softDeleteNangoConnection).not.toHaveBeenCalled();
     expect(deleteNangoConnection).not.toHaveBeenCalled();
   });
 
-  it("retiring an identity that was never written is a silent no-op", async () => {
+  it("a row with no live identity reads back as none", async () => {
     readNangoConnectionByNaturalKey.mockResolvedValueOnce(null);
+    expect(
+      await readExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-9")),
+    ).toBeNull();
+  });
+
+  it("REFUSES an id outside the derived namespace, so no road here can address a credential-backed connection", async () => {
+    await expect(readExternalMcpKeylessConnectionIdentity(CONN)).rejects.toThrow(
+      /not a derived keyless/i,
+    );
     await expect(
-      revokeExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-9")),
-    ).resolves.toBeUndefined();
+      registerExternalMcpKeylessConnectionIdentity(CONN, {
+        ownerUserId: "u1",
+        organizationId: null,
+        seed: "owner",
+      }),
+    ).rejects.toThrow(/not a derived keyless/i);
+    expect(registerSavedConnectionIdentity).not.toHaveBeenCalled();
     expect(softDeleteNangoConnection).not.toHaveBeenCalled();
     expect(deleteNangoConnection).not.toHaveBeenCalled();
   });

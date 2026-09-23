@@ -160,8 +160,9 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     importExternalMcpApiKeyConnection,
     revokeExternalMcpApiKeyConnection,
     externalMcpKeylessConnectionId,
+    readExternalMcpKeylessConnectionIdentity,
     registerExternalMcpKeylessConnectionIdentity,
-    revokeExternalMcpKeylessConnectionIdentity,
+    retireExternalMcpKeylessConnectionIdentityRow,
     ExternalMcpServerWriteConflictError,
     ExternalMcpServerManagedEndpointError,
   } = await import("@/lib/external-mcp-registry");
@@ -376,27 +377,139 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   // failure is logged NON-SECRETLY (no key is in scope on this road at all).
   const keylessConnectionId = externalMcpKeylessConnectionId(id);
   if (nangoConnectionId === null) {
+    // STILL THE ROW THIS SAVE WROTE? The identity lives in a different store from
+    // the row, with no shared transaction, so the only honest guard is a fresh
+    // re-read that matches the row this save landed on every field the identity
+    // is derived from: its scope and its owner decide who the identity belongs
+    // to, and a stored credential means the keyless identity may not stand at
+    // all. A save that lost the row to another request must do NOTHING here, and
+    // above all must not retire an identity that request just registered.
+    const describesThisSave = (
+      candidate: { scope: string; userId: string | null; nangoConnectionId: string | null } | null,
+    ): boolean =>
+      candidate !== null &&
+      candidate.scope === row.scope &&
+      candidate.userId === row.userId &&
+      (candidate.nangoConnectionId ?? null) === null;
+    // MAY THIS SAVE RETIRE THE IDENTITY IT FINDS? Only when the identity names
+    // the owner the row itself is moving AWAY from, so the retire is this save's
+    // own business: a user row carries its previous owner in the witnessed
+    // guard, and a shared row is the platform admin's to reconcile. An identity
+    // naming anybody else belongs to somebody whose row this is not, and it is
+    // left alone even though the seam will then refuse this registration.
+    const mayRetireSupersededIdentity = (live: { ownerUserId: string }): boolean =>
+      guard !== undefined &&
+      (guard.scope === "user"
+        ? guard.userId !== null && guard.userId === live.ownerUserId
+        : actorIsAdmin);
+    // Whether the registration was reached at all. The seam writes the identity
+    // row and seeds its grant as two writes, so a failure in the second leaves
+    // the first standing: the compensating re-read below has to run even when
+    // the registration threw.
+    let registrationAttempted = false;
     try {
-      await registerExternalMcpKeylessConnectionIdentity(keylessConnectionId, {
-        ownerUserId: credentialOwnerUserId,
-        organizationId: identityOrganizationId,
-        seed: identitySeed,
-      });
+      // GUARDED ON THE ROW IT DESCRIBES, AS LATE AS THE TWO STORES ALLOW. The row
+      // write landed, but another request can store a key on the same row, take
+      // it over, or delete it while this one is still on its way to the
+      // identity. The row is therefore re-read immediately before the reads, and
+      // again immediately before the writes, and this save does nothing at all
+      // unless the row is still the one it wrote.
+      if (describesThisSave(getExternalMcpServerByIdFresh(id))) {
+        // RECONCILE A SUPERSEDED IDENTITY. The derived id is stable across every
+        // save of the row, so a save that moved the row to a new owner (a
+        // promotion to global) or to a new workspace would otherwise address an
+        // identity describing the PREVIOUS one: the seam refuses it, the
+        // previous owner keeps the panel and the authority to edit its sharing,
+        // and the new owner gets neither. What the seam TOLERATES is left alone
+        // (a re-save under the same owner, an org-less admin edit of someone
+        // else's row), so a repeated save still never mints a second identity
+        // or resets a widened policy.
+        const live = guard
+          ? await readExternalMcpKeylessConnectionIdentity(keylessConnectionId)
+          : null;
+        const supersededOwner = live !== null && live.ownerUserId !== credentialOwnerUserId;
+        const supersededOrganization =
+          live !== null &&
+          live.organizationId !== null &&
+          identityOrganizationId !== null &&
+          live.organizationId !== identityOrganizationId;
+        const retireFirst =
+          live !== null &&
+          (supersededOwner || supersededOrganization) &&
+          mayRetireSupersededIdentity(live);
+        if (describesThisSave(getExternalMcpServerByIdFresh(id))) {
+          // Retire the row that was WITNESSED, never whatever the derived id
+          // resolves to now: a request that replaced the identity between the
+          // read above and this line keeps its own, and this retire passes over
+          // a row that is already retired.
+          if (retireFirst && live) await retireExternalMcpKeylessConnectionIdentityRow(live.id);
+          registrationAttempted = true;
+          await registerExternalMcpKeylessConnectionIdentity(keylessConnectionId, {
+            ownerUserId: credentialOwnerUserId,
+            organizationId: identityOrganizationId,
+            seed: identitySeed,
+          });
+        }
+      }
     } catch (err) {
       console.error(
         "[mcp-server-write-actions] keyless connection identity registration failed",
         err instanceof Error ? err.message : String(err),
       );
     }
-  } else if (newConnectionId && guard && preservedNangoConnectionId === null) {
-    // An EXISTING row that was keyless now carries a credential of its own:
-    // retire the identity its PREVIOUS keyless save left behind, so one server
-    // never draws two panels on the Sharing tab. A brand-new keyed row (no
-    // existing row at the fresh read) can have no keyless identity to retire,
-    // and a re-key preserved a credential, so neither travels this branch.
-    // IDENTITY-ONLY: a keyless id addresses no credential, so retiring it never
-    // asks the connection service to delete one (codex convergence finding 4).
-    await revokeExternalMcpKeylessConnectionIdentity(keylessConnectionId);
+    // TAKE IT BACK when the row changed underneath, and take back ONLY what this
+    // save put there. Outside the try, because the seam writes the identity row
+    // and seeds its grant as two writes: one that threw on the second still
+    // leaves the first standing. The live identity is read again first and
+    // retired by its OWN row id, so a save that lost the row takes away its own
+    // identity and never the one the request that won just registered.
+    if (registrationAttempted && !describesThisSave(getExternalMcpServerByIdFresh(id))) {
+      try {
+        const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
+        // The row is read ONCE MORE after the identity read: the id can be
+        // registered again in that window, and a save that re-created the same
+        // row registers an identity that looks exactly like this one. Its row
+        // describes this save again, which is the sign to leave it alone.
+        if (
+          live &&
+          live.ownerUserId === credentialOwnerUserId &&
+          live.organizationId === identityOrganizationId &&
+          !describesThisSave(getExternalMcpServerByIdFresh(id))
+        ) {
+          await retireExternalMcpKeylessConnectionIdentityRow(live.id);
+        }
+      } catch (err) {
+        console.error(
+          "[mcp-server-write-actions] keyless connection identity take-back failed",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+  } else {
+    // The row landed WITH a credential of its own, so no keyless identity may
+    // stand for it: retire one if it is still live. This runs on EVERY keyed
+    // save, not only the first upgrade away from keyless. The retire is
+    // best-effort, so a transient failure used to leave two panels for one
+    // server for ever. The next save of that row now reconciles it, and so
+    // does its delete. A row that never had a keyless identity reads nothing
+    // and writes nothing. IDENTITY-ONLY: a keyless id addresses no credential,
+    // so retiring it never asks the connection service to delete one.
+    //
+    // The row is read again between the identity read and the retire, and the
+    // retire addresses the identity ROW that was read: a server deleted and
+    // registered again keyless in that window keeps the identity its own save
+    // just wrote, because the fresh row no longer carries a credential.
+    try {
+      const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
+      if (live && (getExternalMcpServerByIdFresh(id)?.nangoConnectionId ?? null) !== null) {
+        await retireExternalMcpKeylessConnectionIdentityRow(live.id);
+      }
+    } catch (err) {
+      console.error(
+        "[mcp-server-write-actions] keyless connection identity reconciliation failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
   return { banner: "saved" };
 }
@@ -420,12 +533,38 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
     deleteExternalMcpServerGuarded,
     revokeExternalMcpApiKeyConnection,
     externalMcpKeylessConnectionId,
-    revokeExternalMcpKeylessConnectionIdentity,
+    readExternalMcpKeylessConnectionIdentity,
+    retireExternalMcpKeylessConnectionIdentityRow,
     ExternalMcpServerWriteConflictError,
   } = await import("@/lib/external-mcp-registry");
+  const keylessConnectionId = externalMcpKeylessConnectionId(id);
   const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
-    // Already gone — idempotent success (the row is not there to over-expose).
+    // Already gone: idempotent success (the row is not there to over-expose).
+    // RECONCILE AN ORPHAN FIRST. The retire below is best-effort, so a delete
+    // whose retire failed once used to leave a panel for a server nobody can
+    // reach any more, and no later delete could repair it: this road returned
+    // here without looking. It looks now. The identity is retired only for the
+    // person it belongs to, or by a platform admin, so a guessed id can never
+    // take a panel away from anyone else, and a row that never had a keyless
+    // identity reads nothing and writes nothing.
+    try {
+      const orphan = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
+      // Still an orphan? The id can be registered again while this read is in
+      // flight, and that registration's identity is not an orphan at all.
+      if (
+        orphan &&
+        getExternalMcpServerByIdFresh(id) === null &&
+        (orphan.ownerUserId === session.user.id || (await isPlatformAdminNow(session)))
+      ) {
+        await retireExternalMcpKeylessConnectionIdentityRow(orphan.id);
+      }
+    } catch (err) {
+      console.warn(
+        "[mcp-server-write-actions] orphan keyless identity reconciliation failed",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     return { banner: "deleted" };
   }
   const actorIsAdmin = await isPlatformAdminNow(session);
@@ -450,14 +589,6 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
   // rare losing race where the guarded delete then conflicts, the row survives
   // with a revoked key (self-correcting — re-save the key), never a mint.
   await revokeExternalMcpApiKeyConnection(server.nangoConnectionId);
-  // cinatra#3485 — a keyless row stores no connection pointer, so its identity
-  // is addressed by the id DERIVED from the row. IDENTITY-ONLY (codex
-  // convergence finding 4): that id addresses no vault entry, so this retires
-  // the identity and asks the connection service for NOTHING — a keyed row's
-  // delete therefore still makes exactly the ONE credential call it made
-  // before. Deleting a keyless server leaves no orphan identity behind on the
-  // connector's Sharing tab, and it is a no-op for a row that never had one.
-  await revokeExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId(id));
   try {
     // Witness the connection too: a concurrent re-key that moved it fails the
     // delete closed (the row keeps its NEW, live connection) rather than removing
@@ -475,6 +606,32 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
       );
     }
     throw err;
+  }
+  // cinatra#3485: a keyless row stores no connection pointer, so its identity is
+  // addressed by the id DERIVED from the row. AFTER the row is gone, not before:
+  // a save racing this delete re-reads the row to decide whether its own
+  // registration may stand, so retiring while the row is still there lets that
+  // save see a live row, keep its identity and leave a panel for a server that
+  // is about to vanish. Retiring last means the save either sees the row gone
+  // and takes its own identity back, or registers before this line and has its
+  // identity retired here. It also means a delete that then CONFLICTS leaves the
+  // surviving row its panel instead of stripping it.
+  //
+  // IDENTITY-ONLY: that id addresses no vault entry, so this asks the connection
+  // service for NOTHING, and a keyed row's delete still makes exactly the ONE
+  // credential call it made before. A no-op for a row that never had one. The
+  // row is read once more between the identity read and the retire, so a save
+  // that registered the same id again in that window keeps its identity.
+  try {
+    const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
+    if (live && getExternalMcpServerByIdFresh(id) === null) {
+      await retireExternalMcpKeylessConnectionIdentityRow(live.id);
+    }
+  } catch (err) {
+    console.warn(
+      "[mcp-server-write-actions] keyless identity retire after delete failed",
+      err instanceof Error ? err.message : String(err),
+    );
   }
   return { banner: "deleted" };
 }
