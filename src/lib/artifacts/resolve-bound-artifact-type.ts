@@ -1,15 +1,17 @@
 import "server-only";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { parseSemanticArtifactManifest } from "@cinatra-ai/objects";
+import { parseSemanticArtifactManifest } from "@cinatra-ai/objects/semantic-manifest";
 import {
   resolveClaimWinner,
   claimWinnerProjectionDisposition,
+  type ArbitrableClaim,
 } from "@cinatra-ai/objects/claims";
 import {
   resolveArtifactBindingObjectType,
   type ResolveArtifactBindingObjectTypeResult,
 } from "@cinatra-ai/agents/artifact-binding";
 import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
+import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
 
 // ---------------------------------------------------------------------------
 // Bound-artifact-type resolution seam (cinatra#1454).
@@ -68,6 +70,53 @@ export type ResolveBoundArtifactTargetDeps = {
   }) => Promise<string>;
 };
 
+/** One artifact-safe claim WINNER: the type it is over, and the package that
+ *  won it. */
+type ArtifactSafeClaimWinner = {
+  objectTypeId: string;
+  extensionPackage: string;
+};
+
+/**
+ * THE ONE CLAIM ARBITRATION BOTH SIDES OF THE ARTIFACT BOUNDARY READ
+ * (cinatra#3603).
+ *
+ * Four steps, in this order, written ONCE: read the organisation's claim chain,
+ * arbitrate a WINNER per distinct claimed type (`resolveClaimWinner` — ratified
+ * PURE policy in the claims leaf: kind over scope, domination, generation), keep
+ * a winner whose PROJECTION disposition is `artifact-safe`, and intersect with a
+ * currently-registered host type.
+ *
+ * The WRITE side (`readEffectiveArtifactSafeTypeIdsForExtension`) narrows the
+ * result to one extension; the READ side
+ * (`readAdmissibleArtifactTypeIdsForOrg`) takes it whole. Two copies of these
+ * four steps IS the drift cinatra#3603 exists to close, so there is exactly one
+ * and both exported functions call it.
+ *
+ * Sync — the claim store is sync. `readClaimsForOrg` is injectable for unit
+ * tests only; the default is the real org-chain store read.
+ */
+function readArtifactSafeClaimWinners(
+  orgId: string,
+  readClaimsForOrg: (
+    orgId: string,
+  ) => readonly ArbitrableClaim[] = readArtifactTypeClaimsForOrg,
+): ArtifactSafeClaimWinner[] {
+  const claims = readClaimsForOrg(orgId);
+  const typeIds = new Set(claims.map((c) => c.objectTypeId));
+  const out: ArtifactSafeClaimWinner[] = [];
+  for (const objectTypeId of typeIds) {
+    const winner = resolveClaimWinner(claims, { orgId, objectTypeId });
+    if (!winner) continue;
+    if (claimWinnerProjectionDisposition(winner) !== "artifact-safe") continue;
+    // Intersect with a currently-registered host type — a claim over a type this
+    // process never registered cannot be materialized here.
+    if (objectTypeRegistry.resolve(objectTypeId) === null) continue;
+    out.push({ objectTypeId, extensionPackage: winner.extensionPackage });
+  }
+  return out;
+}
+
 /**
  * Effective artifact-safe declared type ids a given extension provides for an
  * org: the WINNING claim per type whose `extensionPackage` is `extension` and
@@ -79,20 +128,75 @@ export function readEffectiveArtifactSafeTypeIdsForExtension(
   orgId: string,
   extension: string,
 ): string[] {
-  const claims = readArtifactTypeClaimsForOrg(orgId);
-  const typeIds = new Set(claims.map((c) => c.objectTypeId));
-  const out: string[] = [];
-  for (const objectTypeId of typeIds) {
-    const winner = resolveClaimWinner(claims, { orgId, objectTypeId });
-    if (!winner) continue;
-    if (winner.extensionPackage !== extension) continue;
-    if (claimWinnerProjectionDisposition(winner) !== "artifact-safe") continue;
-    // Intersect with a currently-registered host type — a claim over a type this
-    // process never registered cannot be materialized here.
-    if (objectTypeRegistry.resolve(objectTypeId) === null) continue;
-    out.push(objectTypeId);
+  return readArtifactSafeClaimWinners(orgId)
+    .filter((w) => w.extensionPackage === extension)
+    .map((w) => w.objectTypeId)
+    .sort();
+}
+
+// ---------------------------------------------------------------------------
+// THE ADMISSIBLE ARTIFACT TYPES OF ONE ORGANISATION (cinatra#3603).
+//
+// THE DEFECT THIS CLOSES. The host's artifact WRITER admits a type when the
+// organisation's WINNING claim over it is artifact-safe and the type is
+// registered in this process — `readEffectiveArtifactSafeTypeIdsForExtension`
+// just above, and `createSemanticArtifact`'s write boundary. Every READ path
+// tested a DIFFERENT list: the in-process `objectTypeRegistry.listArtifacts()`,
+// which holds exactly the definitions carrying an `isArtifact` descriptor. A
+// CLAIM-BACKED HOST-REGISTERED type (the claiming pack's name is not the type's
+// namespace, so the artifact bridge never registers it as a type and the host
+// registrar attaches no `isArtifact` — by design, see the accepts note above)
+// can never be on that list, so bytes this host's own writer authored were
+// refused by every reader with "does not resolve".
+//
+// THE ONE SOURCE. The readers now ask THIS function, which returns the
+// registered artifact types TOGETHER WITH the organisation's live,
+// artifact-safe claim-winner types — through the SAME arbitration the write
+// side reads, so the set is never WIDER than what the writer admits (pinned by
+// a unit case comparing the two, not asserted here).
+//
+// WHY NOT THE REGISTRY'S OWN DISPOSITION. `resolveTypeProjectionDisposition`
+// would be one line shorter and is wrong for this: the registry is
+// process-global and ORGANISATION-INDEPENDENT (registry.ts calls it "unscoped
+// — what a cache may be and an ownership authority must not"), so it would
+// admit a claim-backed type on an organisation that holds NO claim over it, and
+// would admit MORE than the writer does. The CLAIM registry is the authority;
+// registry membership is only the intersection the write side already applies.
+//
+// NO CACHE. Both halves are read at CALL time, deliberately: the registry half
+// already was (a hot-installed pack must be admitted immediately), and a cache
+// would be a new lifetime rule with no owner.
+// ---------------------------------------------------------------------------
+
+/**
+ * The artifact object type ids admissible for `orgId`: every REGISTERED
+ * artifact type, plus every type whose WINNING claim in this organisation's
+ * scope chain projects `artifact-safe` and which this process has registered.
+ * Sorted and de-duplicated. Synchronous — the claim store is synchronous.
+ *
+ * Takes no extension argument: a reader asks "is this type admissible for this
+ * organisation", never "which extension provides it".
+ *
+ * `deps.readClaimsForOrg` is injectable for unit tests only; the default is the
+ * real org-chain store read.
+ */
+export function readAdmissibleArtifactTypeIdsForOrg(
+  orgId: string,
+  deps?: { readClaimsForOrg?: (orgId: string) => readonly ArbitrableClaim[] },
+): string[] {
+  // Warm the registry first: the read paths do not transitively trigger boot
+  // registration, so a cold process would see an empty artifact-type set.
+  ensureArtifactTypesRegistered();
+  const admissible = new Set<string>(
+    objectTypeRegistry.listArtifacts().map((d) => d.type),
+  );
+  for (const winner of readArtifactSafeClaimWinners(
+    orgId,
+    deps?.readClaimsForOrg,
+  )) {
+    admissible.add(winner.objectTypeId);
   }
-  return out.sort();
+  return [...admissible].sort();
 }
 
 /**
