@@ -241,10 +241,10 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Objects MCP primitive handler reads object state per tool call. Migrates with the objects subsystem.",
   },
-  "packages/skills/src/skills-store.ts": {
+  "packages/skills/src/skill-packages.ts": {
     class: "migratable-request-path",
     justification:
-      "Skills catalog store read on request paths. Migratable; converted with the skills subsystem.",
+      "Skill package/skill co-owner ROW store (the nine readers and writers of skill_package_co_owners, skill_co_owners and the polymorphic extension_co_owners / extension_access_policy uninstall cleanup), relocated here verbatim from skills-store.ts to bring that file back under its size ceiling (cinatra#3204 leg 3): SAME nine call sites, no new direct sync call was added. Request-path reads. Migratable; converted with the skills subsystem.",
   },
   "src/lib/objects/effective-identity.ts": {
     class: "migratable-request-path",
