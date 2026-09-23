@@ -5,6 +5,14 @@ import "server-only";
 // whole suite down at load, and the same bare alias breaks the image build.
 // A sibling relative path resolves everywhere this module is loaded from.
 import { buildSupersedeRunBoundTurnsQuery } from "./assistant-turn-supersede";
+// The run-creation derivation of the frozen assignment scopes (cinatra#2815 S3,
+// epic #2812). A workspace package specifier, so it resolves from this file's
+// own location wherever this module is loaded from.
+import {
+  AssignmentScopeSnapshotError,
+  buildRunCreationAssignmentScopeSnapshot,
+  serializeAssignmentScopeSnapshot,
+} from "@cinatra-ai/agents/assignment-scope-snapshot";
 
 /**
  * Write-time project inheritance and substrate exclusion.
@@ -405,6 +413,54 @@ export function resolveAssistantMirrorOrgId(
 }
 
 /**
+ * The assignment scopes the mirror freezes when it CREATES a conversation
+ * (cinatra#2815 S3, epic #2812), as the JSON text the column carries, or `null`
+ * when there is nothing this build can vouch for.
+ *
+ * THE MIRROR IS THE SEAM THAT CAN VOUCH FOR THE PROJECT. The /chat client saves
+ * the thread before it routes, so in the field this upsert usually INSERTs the
+ * row, and it holds the three fields the run-creation derivation needs at the
+ * moment the row comes into being: the organization it anchors, the project the
+ * conversation is created in, and its owner. Read later, `project_id` could no
+ * longer be trusted for this: a conversation moves between projects, and the
+ * column would answer where it is rather than where it was created.
+ *
+ * NEVER THROWS. A conversation with no organization has no scopes to freeze,
+ * and one whose project belongs elsewhere is a caller defect the builder
+ * refuses. The row is created either way; the column simply stays NULL and
+ * delivery resolves the sole legacy fallback.
+ */
+export function buildMirrorAssignmentScopeSnapshotText(args: {
+  ownerUserId: string | null;
+  orgId: string | null;
+  projectId: string | null;
+}): string | null {
+  const orgId = typeof args.orgId === "string" ? args.orgId.trim() : "";
+  if (orgId === "") return null;
+  const ownerUserId = typeof args.ownerUserId === "string" ? args.ownerUserId.trim() : "";
+  try {
+    return serializeAssignmentScopeSnapshot(
+      buildRunCreationAssignmentScopeSnapshot({
+        orgId,
+        projectId: args.projectId ?? undefined,
+        // The conversation's own owner is the person it is created for. A row
+        // with none carries no personal layer rather than a borrowed one.
+        scopeActor: ownerUserId
+          ? { principalType: "HumanUser", principalId: ownerUserId, teamIds: [] }
+          : null,
+      }),
+    );
+  } catch (err) {
+    console.warn(
+      "[project-inheritance] assignment scope could not be frozen for a mirrored " +
+        "thread. The conversation resolves the sole legacy fallback. reason:",
+      err instanceof AssignmentScopeSnapshotError ? err.reason : err,
+    );
+    return null;
+  }
+}
+
+/**
  * Build the assistant_threads mirror upsert. Semantics (codex-converged):
  *   - title mirrors the server-sanitized payload wholesale (the payload is the
  *     full truth on every legacy write);
@@ -425,6 +481,10 @@ export function resolveAssistantMirrorOrgId(
  *     (now product-callerless) buildChatThreadUpsertQuery's chat_threads.project_id;
  *   - created_at is immutable post-INSERT; updated_at mirrors the payload
  *     (falling back to now()) so activity ordering matches the legacy table;
+ *   - assignment_scope_snapshot (cinatra#2815 S3) is written ON INSERT ONLY and
+ *     named by no conflict clause: it records the scopes the conversation was
+ *     CREATED under, and this writer is the one that can still tell the creation
+ *     project from a later move;
  *   - assistant_user_id / context_id are never listed (S2-owned columns).
  */
 export function buildAssistantThreadMirrorUpsertQuery(args: {
@@ -445,8 +505,11 @@ export function buildAssistantThreadMirrorUpsertQuery(args: {
 }): { text: string; values: unknown[] } {
   const schema = args.schemaName.replaceAll('"', '""');
   return {
-    text: `INSERT INTO "${schema}"."assistant_threads" (id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, 'legacy-chat', $6::jsonb, $7, COALESCE($8::timestamptz, now()), COALESCE($9::timestamptz, now()))
+    text: `INSERT INTO "${schema}"."assistant_threads" (id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at, assignment_scope_snapshot)
+VALUES ($1, $2, $3, $4, $5, 'legacy-chat', $6::jsonb, $7, COALESCE($8::timestamptz, now()), COALESCE($9::timestamptz, now()), $10::jsonb)
+-- The frozen assignment scopes are written on INSERT and are NAMED BY NO CLAUSE
+-- below (cinatra#2815 S3): they belong to the moment the row is created, and a
+-- later write carries the project the conversation may since have moved to.
 ON CONFLICT (id) DO UPDATE SET
   -- ownership axis is SET-ONCE: never reassign/clear an established owner
   owner_user_id = COALESCE(assistant_threads.owner_user_id, EXCLUDED.owner_user_id),
@@ -477,6 +540,11 @@ ON CONFLICT (id) DO UPDATE SET
       args.title,
       args.createdAt,
       args.updatedAt,
+      buildMirrorAssignmentScopeSnapshotText({
+        ownerUserId: args.ownerUserId,
+        orgId: args.orgId,
+        projectId: args.projectId,
+      }),
     ],
   };
 }
