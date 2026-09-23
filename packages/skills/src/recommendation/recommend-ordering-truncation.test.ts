@@ -124,3 +124,59 @@ describe("recommendSkillsForAgentTaskOrderedV1", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE CUT FALLS ON THE RANKING, NOT ON THE ALPHABET (cinatra#2815 S3 part 4).
+//
+// The cap used to be applied to the eligible pool in SKILL-ID order, before
+// anything was scored. A better match whose id sorted late was therefore
+// removed before the scorer ever saw it, and the recommendation the reader was
+// offered was decided by the alphabet.
+// ---------------------------------------------------------------------------
+describe("truncation after the authoritative ordering", () => {
+  it("keeps the BEST match even when its id sorts past the cap", async () => {
+    // "a-needle" would be cut by an id-ordered cap of one; it is the only
+    // candidate whose text answers the intent.
+    listInstalledSkills.mockResolvedValue([
+      {
+        id: "a-unrelated",
+        name: "unrelated",
+        description: "nothing to do with it",
+        content: "nothing to do with it",
+        level: "workspace",
+      },
+      {
+        id: "z-needle",
+        name: "needle",
+        description: "needle",
+        content: "needle",
+        level: "workspace",
+      },
+    ]);
+    const { recommendations, truncation } = await recommendSkillsForAgentTaskOrderedV1({
+      agentId: "agent-1",
+      intent: { promptText: "needle" },
+      restrictToSkillIds: ["a-unrelated", "z-needle"],
+      maxCandidates: 1,
+    });
+    expect(recommendations.map((r) => r.skillId)).toEqual(["z-needle"]);
+    expect(recommendations[0].score).toBeGreaterThan(0);
+    // The record still counts the ELIGIBLE intersection, not the kept set.
+    expect(truncation.candidatePoolCount).toBe(2);
+    expect(truncation.truncatedCount).toBe(1);
+  });
+
+  it("pins a revision for every row it returns, and only for those rows", async () => {
+    listInstalledSkills.mockResolvedValue(catalog(3));
+    const { recommendations } = await recommendSkillsForAgentTaskOrderedV1({
+      agentId: "agent-1",
+      intent: { promptText: "needle" },
+      restrictToSkillIds: ["s-000", "s-001", "s-002"],
+      maxCandidates: 1,
+    });
+    expect(recommendations).toHaveLength(1);
+    expect(recommendations[0].skillRevisionId).toBe(`${recommendations[0].skillId}@active`);
+    // The revision read costs one query per row, so it runs on the KEPT set.
+    expect(readSkillActiveRevisionFromDatabase).toHaveBeenCalledTimes(1);
+  });
+});

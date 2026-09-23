@@ -67,10 +67,30 @@ function resolvePinnedRevision(skillId: string): string {
 }
 
 /**
+ * A candidate before its immutable revision is pinned.
+ *
+ * Pinning costs ONE database read per candidate, which is the whole reason the
+ * cap used to be applied before scoring. Separating it lets every eligible
+ * skill be scored while only the surviving rows pay for a read.
+ */
+type UnpinnedCandidate = Omit<RecommendationCandidate, "skillRevisionId">;
+
+/** Pin each candidate to its immutable active revision. */
+function pinCandidates(
+  rows: ReadonlyArray<UnpinnedCandidate>,
+): RecommendationCandidate[] {
+  return rows.map((row) => ({ ...row, skillRevisionId: resolvePinnedRevision(row.skillId) }));
+}
+
+/**
  * Generate the candidate set for (agent, intent). Candidates are the catalog
  * skills that either carry a `skill_matches` row for the agent OR are named in
  * `restrictToSkillIds`. Deterministic order (skill id ascending) before the
  * `maxCandidates` cap so the scored set is a pure function of DB state.
+ *
+ * This entry keeps the id-ordered cut, because its remaining caller is a
+ * MEMBERSHIP PROBE that bounds the cap by its own input and ranks nothing. The
+ * two scoring entries below cut after the ranking instead.
  */
 export async function buildRecommendationCandidatesForAgent(
   input: RecommendSkillsForAgentInput,
@@ -79,6 +99,23 @@ export async function buildRecommendationCandidatesForAgent(
    *  caller is untouched. */
   poolOut?: { eligibleCount: number },
 ): Promise<RecommendationCandidate[]> {
+  const eligible = await buildEligibleCandidates(input, poolOut);
+  return pinCandidates(eligible.slice(0, input.maxCandidates ?? DEFAULT_MAX_CANDIDATES));
+}
+
+/**
+ * The WHOLE eligible pool, unpinned and in skill-id order.
+ *
+ * Eligibility is the installed catalog intersected with the caller's
+ * restriction (or, without one, the skills the agent has a `skill_matches` row
+ * for). No cap is applied here: a cut taken before the ranking decides which
+ * rows are even SCORED, and the row it removes can be the best match in the
+ * pool. The cut belongs after the ordering, which is what the callers below do.
+ */
+async function buildEligibleCandidates(
+  input: RecommendSkillsForAgentInput,
+  poolOut?: { eligibleCount: number },
+): Promise<UnpinnedCandidate[]> {
   let eligiblePoolCount = 0;
   try {
     return await buildCandidates();
@@ -86,7 +123,7 @@ export async function buildRecommendationCandidatesForAgent(
     if (poolOut) poolOut.eligibleCount = eligiblePoolCount;
   }
 
-  async function buildCandidates(): Promise<RecommendationCandidate[]> {
+  async function buildCandidates(): Promise<UnpinnedCandidate[]> {
   const [matches, skills, labels] = await Promise.all([
     readSkillMatchesByAgent(input.agentId).catch((): SkillMatchRow[] => []),
     listInstalledSkills().catch((): SkillManifest[] => []),
@@ -132,25 +169,21 @@ export async function buildRecommendationCandidatesForAgent(
   // Tie-break uses code-unit order (locale-independent) so the pre-cap candidate
   // set is identical across runtime locales (AC-1 determinism).
   //
-  // TRUNCATION HAPPENS AFTER ELIGIBILITY (cinatra#2815 S3 part 4, bound by
-  // RecommendationOrderingV1). `eligible` IS the pool the record counts: the
-  // installed catalog intersected with the restriction. Only then is the cap
-  // applied — cutting first would let an ineligible id consume a slot a
-  // deliverable skill should have had.
+  // TRUNCATION HAPPENS AFTER ELIGIBILITY AND AFTER THE RANKING (cinatra#2815
+  // S3 part 4, bound by RecommendationOrderingV1). `eligible` IS the pool the
+  // record counts: the installed catalog intersected with the restriction. No
+  // cut is taken here at all: a cut in skill-id order decides which rows are
+  // even scored, so the best match in the pool can be removed before anything
+  // looks at it.
   const eligible = skills
     .filter((s) => (restrict ? restrict.has(s.id) : matchBySkill.has(s.id)))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const candidateSkills = eligible.slice(
-    0,
-    input.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
-  );
   eligiblePoolCount = eligible.length;
 
-  return candidateSkills.map((skill) => {
+  return eligible.map((skill) => {
     const match = matchBySkill.get(skill.id);
     return {
       skillId: skill.id,
-      skillRevisionId: resolvePinnedRevision(skill.id),
       name: skill.name,
       // Undefined when the owning extension declares no title (or owns no
       // manifest at all — a user-authored custom skill): the scorer's own
@@ -190,13 +223,19 @@ export async function recommendSkillsForAgentTaskOrderedV1(
   truncation: RecommendationTruncationV1;
 }> {
   const pool = { eligibleCount: 0 };
-  const candidates = await buildRecommendationCandidatesForAgent(input, pool);
-  const scored = scoreSkillRecommendations({ intent: input.intent, candidates });
+  const eligible = await buildEligibleCandidates(input, pool);
+  const ordered = orderRankAuthoritative(
+    scoreSkillRecommendations({ intent: input.intent, candidates: forScoring(eligible) }),
+  );
+  // The cut falls HERE, on the authoritative ordering, so what it removes is
+  // the tail of the ranking rather than the tail of the alphabet. The record
+  // still counts the eligible intersection, which is what it always meant.
+  const kept = ordered.slice(0, input.maxCandidates ?? DEFAULT_MAX_CANDIDATES);
   return {
-    recommendations: orderRankAuthoritative(scored),
+    recommendations: withPinnedRevisions(kept),
     truncation: buildRecommendationTruncation({
       eligibleCount: pool.eligibleCount,
-      keptCount: candidates.length,
+      keptCount: kept.length,
     }),
   };
 }
@@ -209,6 +248,28 @@ export async function recommendSkillsForAgentTaskOrderedV1(
 export async function recommendSkillsForAgentTask(
   input: RecommendSkillsForAgentInput,
 ): Promise<RankedRecommendation[]> {
-  const candidates = await buildRecommendationCandidatesForAgent(input);
-  return scoreSkillRecommendations({ intent: input.intent, candidates });
+  const eligible = await buildEligibleCandidates(input);
+  const scored = scoreSkillRecommendations({
+    intent: input.intent,
+    candidates: forScoring(eligible),
+  });
+  // Same rule as the authoritative entry: the cap trims the RANKING, so the
+  // best match in the pool can never be removed before it is scored.
+  return withPinnedRevisions(scored.slice(0, input.maxCandidates ?? DEFAULT_MAX_CANDIDATES));
+}
+
+/**
+ * Hand the scorer a candidate whose revision is not pinned yet.
+ *
+ * The scorer carries `skillRevisionId` through untouched and scores nothing on
+ * it, so an empty one costs the ranking nothing, and it never escapes; every
+ * row this module returns has been through {@link withPinnedRevisions}.
+ */
+function forScoring(rows: ReadonlyArray<UnpinnedCandidate>): RecommendationCandidate[] {
+  return rows.map((row) => ({ ...row, skillRevisionId: "" }));
+}
+
+/** Pin the immutable revision of every row that survived the cut. */
+function withPinnedRevisions(rows: ReadonlyArray<RankedRecommendation>): RankedRecommendation[] {
+  return rows.map((row) => ({ ...row, skillRevisionId: resolvePinnedRevision(row.skillId) }));
 }

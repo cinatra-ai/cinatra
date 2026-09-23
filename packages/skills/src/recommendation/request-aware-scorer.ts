@@ -372,15 +372,21 @@ export function scoreSkillRecommendations(
 //     one convention across both.
 //
 //   TRUNCATION BEFORE OR AFTER ELIGIBILITY
-//     AFTER. The pool is made eligible first (installed-catalog membership
-//     INTERSECTED with the caller's restriction), and only the eligible pool
-//     is cut to the cap. Truncating first would let an ineligible id consume a
-//     slot a deliverable skill should have had, and `candidatePoolCount` would
-//     then count rows that could never have been recommended.
+//     AFTER, and after the ORDERING as well. The pool is made eligible first
+//     (installed-catalog membership INTERSECTED with the caller's restriction),
+//     then EVERY eligible candidate is scored and ranked, and only then is the
+//     ranking cut to the cap. Truncating before eligibility would let an
+//     ineligible id consume a slot a deliverable skill should have had, and
+//     `candidatePoolCount` would count rows that could never have been
+//     recommended. Truncating before the RANKING is worse still: the cut would
+//     fall in skill-id order, so the best match in the pool could be removed
+//     before anything scored it. The cut therefore removes the TAIL of the
+//     ranking, which is the only removal a reader can reason about.
 //
-// TELEMETRY NEVER MARKS UNSEEN CANDIDATES REJECTED. The metadata says how big
+// TELEMETRY NEVER MARKS REMOVED CANDIDATES REJECTED. The metadata says how big
 // the eligible pool was and how many rows the cut removed — nothing about the
-// removed rows' merit, because they were never scored.
+// removed rows' merit. They were scored, and they ranked below the cut; that is
+// a different statement from a rejection, and the record does not make it.
 //
 // PURE: no IO, no `server-only`. The recommender and the persistence path both
 // decide with this code.
