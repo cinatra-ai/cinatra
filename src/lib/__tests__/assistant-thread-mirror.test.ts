@@ -209,7 +209,7 @@ describe("buildAssistantThreadMirrorUpsertQuery", () => {
 
   it("targets assistant_threads with the expected parameter order (incl. project_id + team_id + origin + scalars)", () => {
     expect(q.text).toContain(`INSERT INTO "${SCHEMA}"."assistant_threads"`);
-    expect(q.text).toContain("(id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at)");
+    expect(q.text).toContain("(id, owner_user_id, org_id, project_id, team_id, origin, scalars, title, created_at, updated_at, assignment_scope_snapshot)");
     // origin is a SQL LITERAL ('legacy-chat'), not a bound parameter, so the
     // scalars/title/timestamp param positions are UNSHIFTED ($6::jsonb).
     expect(q.text).toContain("$5, 'legacy-chat', $6::jsonb");
@@ -224,6 +224,14 @@ describe("buildAssistantThreadMirrorUpsertQuery", () => {
       "  Title ",
       "2026-01-01T00:00:00.000Z",
       "2026-01-02T00:00:00.000Z",
+      // The frozen assignment scopes (cinatra#2815 S3) ride the same INSERT.
+      JSON.stringify({
+        v: 1,
+        orgId: "org-1",
+        projectId: "proj-1",
+        teamIds: [],
+        originatingHumanUserId: "u1",
+      }),
     ]);
   });
 
@@ -645,4 +653,57 @@ describe("structured-authoritative mirror deletes", () => {
   // (its wipe of the full chat_threads set was the cross-tenant vuln). The
   // delete-all path is now OWNER + 'legacy-chat' scoped inside
   // deleteAllChatThreadsFromDatabase — covered in the database delete tests.
+});
+
+describe("the mirror freezes assignment scopes AT CREATION (cinatra#2815 S3)", () => {
+  // The mirror is the writer that, in the field's normal ordering, creates the
+  // conversation people actually start. It is therefore the only seam that can
+  // vouch for the PROJECT a conversation was created in: `project_id` is a
+  // mutable projection, so a later turn reading that column could not tell the
+  // creation project from a move.
+  const q = buildAssistantThreadMirrorUpsertQuery({
+    schemaName: SCHEMA,
+    threadId: "t1",
+    ownerUserId: "u1",
+    orgId: "org-1",
+    projectId: "proj-1",
+    teamId: null,
+    scalars: null,
+    title: null,
+    createdAt: null,
+    updatedAt: null,
+  });
+
+  it("writes the frozen scopes in the same INSERT as the row", () => {
+    expect(q.text).toContain("assignment_scope_snapshot");
+    expect(JSON.parse(q.values[9] as string)).toEqual({
+      v: 1,
+      orgId: "org-1",
+      projectId: "proj-1",
+      teamIds: [],
+      originatingHumanUserId: "u1",
+    });
+  });
+
+  it("never re-writes them on conflict, so only creation decides", () => {
+    const onConflict = q.text.slice(q.text.indexOf("DO UPDATE SET"));
+    expect(onConflict).not.toContain("assignment_scope_snapshot");
+  });
+
+  it("freezes nothing when the mirror can name no organization", () => {
+    const qn = buildAssistantThreadMirrorUpsertQuery({
+      schemaName: SCHEMA, threadId: "t1", ownerUserId: "u1", orgId: null, projectId: "proj-1",
+      teamId: null, scalars: null, title: null, createdAt: null, updatedAt: null,
+    });
+    expect(qn.values[9]).toBeNull();
+  });
+
+  it("carries the project through the composed mirror write", () => {
+    const [upsert] = buildAssistantThreadMirrorQueries({
+      schemaName: SCHEMA,
+      thread: { id: "t1", ownerUserId: "u1", projectId: "proj-1", messages: [] },
+      explicitMirrorOrgId: "org-1",
+    });
+    expect(JSON.parse(upsert.values[9] as string).projectId).toBe("proj-1");
+  });
 });

@@ -290,16 +290,15 @@ export async function streamAgUiChatTurn(params: {
     // Nothing downstream reads the outcome; it is typed so the decision table is
     // testable and so a future caller cannot mistake a refusal for a bind.
     bindThreadContainerIfUnbound(threadId, container, { userId, orgId: mirrorOrgId });
-    // cinatra#2815 S3: the row this request did not create still needs its
-    // scopes. The legacy chat mirror creates a thread without them and, in the
-    // field's normal ordering, usually wins the race above; without this freeze
-    // the conversations people actually start would take the sole legacy
-    // fallback for their whole life. The write admits a NULL column only, so it
-    // is the freeze that was missed, never a re-pointing of a live thread.
-    freezeAssistantThreadAssignmentScopeIfAbsent(threadId, {
-      orgId: mirrorOrgId,
-      scopeActor: params.scopeActor ?? null,
-    });
+    // cinatra#2815 S3: a row created before this change still carries no
+    // scopes, and the seam records them from the ROW'S OWN creation-time
+    // columns. This turn's session is deliberately NOT passed: its participant
+    // may be an administrator continuing somebody else's conversation, or the
+    // owner working in a different organization, and either would write a
+    // provenance the conversation never had. A row the mirror creates from here
+    // on already froze its scopes in its own insert, so this call finds nothing
+    // to do for it.
+    freezeAssistantThreadAssignmentScopeIfAbsent(threadId);
   }
   const runId = randomUUID();
   const turn = appendAssistantTurn({

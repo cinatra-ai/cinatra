@@ -95,6 +95,18 @@ export type AssignedSkillScopeRow = {
   readonly scopeKind?: string | null;
   readonly scopeId?: string | null;
   readonly position?: number | null;
+  /**
+   * WHICH STORE the row came from, carried through to the winning pick.
+   *
+   * A caller that feeds two stores into one chain has to know afterwards which
+   * of them won each pick, because the two owe different downstream gates.
+   * Asking whether the id appears anywhere in one store's input cannot answer
+   * that: the same skill is routinely assigned in both, at scopes the chain
+   * never even reaches. Only the row the chain actually selected knows.
+   *
+   * Opaque to this module: it is carried, never compared.
+   */
+  readonly source?: string;
 };
 
 /** One delivered skill, with the layer that won it. */
@@ -103,6 +115,8 @@ export type EffectiveAssignedSkillPick = {
   readonly layer: EffectiveAssignmentScopeLayer;
   /** The exact scope id the winning row carried; "" for the workspace layer. */
   readonly scopeId: string;
+  /** The `source` of the row that won this pick, when it carried one. */
+  readonly source?: string;
 };
 
 export type EffectiveAssignedSkillsSelection = {
@@ -219,7 +233,12 @@ export function selectEffectiveAssignedSkills(
           droppedOverCap.push(entry.skillId);
           continue;
         }
-        picks.push({ skillId: entry.skillId, layer, scopeId: target });
+        picks.push({
+          skillId: entry.skillId,
+          layer,
+          scopeId: target,
+          ...(typeof entry.row.source === "string" ? { source: entry.row.source } : {}),
+        });
       }
     }
   }

@@ -159,6 +159,14 @@ export type AssignedSkillTierDeps = {
   customScopeRows?: readonly AssignedSkillScopeRow[];
 };
 
+/**
+ * The two stores that enter the one chain, as the marker the winning pick
+ * carries back. They are compared HERE and nowhere else: the chain treats the
+ * field as opaque, so the two names cannot drift apart inside it.
+ */
+const PER_SCOPE_STORE = "per-scope";
+const CUSTOM_STORE = "custom";
+
 /** The scope input {@link AssignedSkillTierDeps.runScope} carries. */
 export type AssignedSkillDeliveryScope = {
   /** The raw immutable snapshot payload of the run / assistant thread. */
@@ -338,19 +346,29 @@ export async function resolveAssignedSkillTier(
   // positions the settings page wrote, and a custom row for a skill already won
   // there is the duplicate the dedupe drops rather than a second slot.
   const customScopeRows = deps.customScopeRows ?? [];
-  const effective = resolveEffectiveAssignedSkills([...(rows ?? []), ...customScopeRows], {
-    snapshot: deps.runScope?.snapshot,
-    durableOrgId: deps.runScope?.durableOrgId ?? null,
-    cap: EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
-  });
-  // Which store won a pick decides which gate it still owes, not whether it was
-  // counted. A pick whose id appears among the per-scope rows is this tier's:
-  // the per-scope rows are first in the input, so a shared id is always theirs.
-  const perScopeIds = new Set(
-    (rows ?? []).map((row) => (typeof row?.skillId === "string" ? row.skillId.trim() : "")),
+  const effective = resolveEffectiveAssignedSkills(
+    [
+      ...(rows ?? []).map((row) => ({ ...row, source: PER_SCOPE_STORE })),
+      ...customScopeRows.map((row) => ({ ...row, source: CUSTOM_STORE })),
+    ],
+    {
+      snapshot: deps.runScope?.snapshot,
+      durableOrgId: deps.runScope?.durableOrgId ?? null,
+      cap: EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
+    },
   );
-  const orderedIds = effective.skillIds.filter((id) => perScopeIds.has(id));
-  const customSkillIds = effective.skillIds.filter((id) => !perScopeIds.has(id));
+  // Which store won a pick decides which gate it still owes, not whether it was
+  // counted. The WINNING ROW answers that and nothing else can: the same skill
+  // is routinely assigned in both stores, and asking whether the id appears
+  // anywhere among the per-scope rows sent a custom winner into the catalog
+  // gate whenever an unrelated scope, one this run's snapshot never names,
+  // happened to name the same skill.
+  const orderedIds = effective.picks
+    .filter((pick) => pick.source !== CUSTOM_STORE)
+    .map((pick) => pick.skillId);
+  const customSkillIds = effective.picks
+    .filter((pick) => pick.source === CUSTOM_STORE)
+    .map((pick) => pick.skillId);
   if (effective.droppedOverCap.length > 0) {
     console.warn(
       "[agent-assigned-skills] the per-run effective cap of " +

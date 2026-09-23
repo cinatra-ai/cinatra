@@ -1073,25 +1073,51 @@ export function bindThreadContainerIfUnbound(
  * is enforced by the statement itself rather than by a guard a writer must
  * remember to call.
  *
+ * THE SESSION OF A LATER TURN DECIDES NOTHING. This seam takes a thread id and
+ * no scope at all, and derives what it writes from the ROW'S OWN columns. The
+ * participant of a turn is not the creator of the conversation: an
+ * administrator continuing somebody else's conversation, or the owner with a
+ * different active organization, would otherwise stamp a permanent provenance
+ * that nobody granted, and every later turn would deliver that tenancy's
+ * assignments. `owner_user_id` and `org_id` are SET-ONCE at the SQL layer, so
+ * they still say what the row was created with; `project_id` is a MUTABLE
+ * projection, so it is NOT read here and a conversation the mirror created
+ * inside a project receives that project from the mirror's own insert instead.
+ *
  * NEVER THROWS. A conversation that cannot record its scopes is degraded, not
  * over: the turn proceeds and delivery resolves the sole legacy fallback.
  * Returns true only when this call was the one that wrote.
  */
-export function freezeAssistantThreadAssignmentScopeIfAbsent(
-  threadId: string,
-  input: {
-    orgId?: string | null;
-    projectId?: string | null;
-    scopeActor?: RunCreationScopeActor | null;
-  },
-): boolean {
+export function freezeAssistantThreadAssignmentScopeIfAbsent(threadId: string): boolean {
   const id = typeof threadId === "string" ? threadId.trim() : "";
   if (id === "") return false;
-  const snapshotText = buildThreadAssignmentScopeSnapshotText(input);
-  if (snapshotText === null) return false;
   try {
     ensurePostgresSchema();
     const schema = schemaIdent();
+    const [read] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT owner_user_id, org_id
+                 FROM "${schema}"."assistant_threads"
+                 WHERE id = $1 AND assignment_scope_snapshot IS NULL`,
+          values: [id],
+        },
+      ],
+    });
+    const row = (read?.rows ?? [])[0] as
+      | { owner_user_id?: string | null; org_id?: string | null }
+      | undefined;
+    if (!row) return false;
+    const ownerUserId = typeof row.owner_user_id === "string" ? row.owner_user_id.trim() : "";
+    const snapshotText = buildThreadAssignmentScopeSnapshotText({
+      orgId: row.org_id ?? null,
+      // No project, deliberately: see above.
+      scopeActor: ownerUserId
+        ? { principalType: "HumanUser", principalId: ownerUserId, teamIds: [] }
+        : null,
+    });
+    if (snapshotText === null) return false;
     const [res] = runPostgresQueriesSync({
       connectionString: getPostgresConnectionString(),
       queries: [
