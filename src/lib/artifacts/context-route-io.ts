@@ -18,6 +18,7 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
 import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
 import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context";
+import { resolveAssignmentScopeChain } from "@cinatra-ai/agents/effective-assigned-skills";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   deriveOboCeilingChain,
@@ -486,12 +487,46 @@ export async function deriveContextRouteContext(
         : recomputedCeiling;
   }
 
+  // THE PERSONAL LAYER BELONGS TO A PERSON (cinatra#2815 S3, epic #2812).
+  //
+  // The actor above is built from `run.runBy`, which is durable OWNERSHIP and
+  // not evidence that a person started THIS run: a schedule, a trigger or an
+  // orchestrator child all keep a human owner. So a headless run was handed its
+  // owner's own user axis, and the ownership filter then admitted that person's
+  // PRIVATE artifacts into a run nobody was watching.
+  //
+  // The run's frozen snapshot is the authority on whether a person started it,
+  // exactly as it is for assigned skills. When it names no originating human,
+  // or names a different one, the user axis is REMOVED. Only that axis moves:
+  // the team, project, organization and platform-role axes are what the run
+  // legitimately carries, and the OBO ceiling above still narrows all of them.
+  //
+  // The filter binds `principalId ?? null`, and `owner_id = NULL` matches no
+  // row, so an absent axis contributes nothing rather than matching something
+  // else. This actor is used for candidate resolution only; the audit rows take
+  // their creator from the run, not from here.
+  const originatingHumanUserId = resolveAssignmentScopeChain({
+    snapshot: run.assignmentScopeSnapshot,
+    durableOrgId: run.orgId,
+  }).snapshot.originatingHumanUserId;
+  const contextActor: ActorContext =
+    originatingHumanUserId && originatingHumanUserId === run.runBy
+      ? actor
+      : ({ ...actor, principalId: undefined } as unknown as ActorContext);
+
   // projectId: the run's project is authoritative; fall back to the normalized
   // body value. Normalize both (a stored "" must not fail-close the resolver).
   const projectId =
     normalizeProjectId(run.projectId) ?? normalizeProjectId(body.projectId);
 
-  return { actor, run, projectId, servedBy, trustedPackageName, trustedSlotPackageName };
+  return {
+    actor: contextActor,
+    run,
+    projectId,
+    servedBy,
+    trustedPackageName,
+    trustedSlotPackageName,
+  };
 }
 
 /** Resolve candidates for a slot via the existing resolver + server-side
