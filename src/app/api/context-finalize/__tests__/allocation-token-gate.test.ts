@@ -184,7 +184,7 @@ describe("cinatra#2815 S3 part 3 — the allocation token across resolve and fin
   it("a finalize carrying NO token is REFUSED, and writes nothing", async () => {
     // The token used to be optional so an un-rolled renderer still finalized,
     // and that optionality was the hole: omitting one field skipped the whole
-    // drift gate. An omitted token is now refused under its own code rather
+    // comparison. An omitted token is now refused under its own code rather
     // than waved through; no older renderer is served here.
     planAllocationForGate.mockResolvedValue(
       gateAllocation("ContextAllocationTokenV1.any", [candidate("a")]),
