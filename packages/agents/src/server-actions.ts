@@ -15,6 +15,7 @@ import {
 } from "./auth-policy";
 import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
+import type { AssignmentScope } from "@/lib/assignment-scope";
 import {
   listInstalledSkills,
   readSkillsCatalog,
@@ -340,6 +341,13 @@ export async function confirmRunSkillSelectionAction(input: {
    * row this caller could already write, never admits one.
    */
   adjustedSkillIds?: string[];
+  /**
+   * The keep request the confirmation carries (cinatra#2815 S3 part 4). A plain
+   * pass-through of an explicit, caller-supplied scope; the write enforces it
+   * against the run's own frozen snapshot and this caller's assignment-write
+   * authority, so carrying it is not trusting it.
+   */
+  keepRecommended?: { scope?: AssignmentScope };
   restrictToSkillIds?: string[];
   /**
    * The hold this decision was bound to by the caller's hold-instance CAS
@@ -396,6 +404,7 @@ export async function confirmRunSkillSelectionAction(input: {
     ...(input.targetArtifactKind ? { targetArtifactKind: input.targetArtifactKind } : {}),
     ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
     ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+    ...(input.keepRecommended ? { keepRecommended: input.keepRecommended } : {}),
     ...(input.holdId ? { holdId: input.holdId } : {}),
   });
 }

@@ -65,6 +65,26 @@ const requestSchema = z
     holdRef: z.string().min(1).max(4096).optional(),
     /** Serialized run intent, for request-aware scoring on the write. */
     promptText: z.string().max(20_000).optional(),
+    /**
+     * THE KEEP REQUEST (cinatra#2815 S3 part 4): keep the confirmed skills as
+     * assignments for the next run, in one EXPLICIT scope.
+     *
+     * Bounded on SHAPE only. The write derives the offered set server-side from
+     * the run's own frozen snapshot intersected with this caller's
+     * assignment-write authority, and refuses a scope that is not in it, so a
+     * client that asks for a wider one changes nothing.
+     */
+    keepRecommended: z
+      .object({
+        scope: z
+          .object({
+            scopeKind: z.enum(["project", "user", "team", "organization", "workspace"]),
+            scopeId: z.string().min(1).max(256),
+          })
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -123,6 +143,7 @@ export async function POST(request: Request): Promise<Response> {
           ...(body.promptText !== undefined ? { promptText: body.promptText } : {}),
           ...(body.forcedRevisions ? { forcedRevisions: body.forcedRevisions } : {}),
           ...(body.adjustedSkillIds ? { adjustedSkillIds: body.adjustedSkillIds } : {}),
+          ...(body.keepRecommended ? { keepRecommended: body.keepRecommended } : {}),
           ...(body.holdRef !== undefined ? { holdRef: body.holdRef } : {}),
           dispatch,
         });

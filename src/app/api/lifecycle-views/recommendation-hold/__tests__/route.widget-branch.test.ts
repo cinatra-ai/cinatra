@@ -362,6 +362,44 @@ describe("behind the door it is the ONE core, taking the widget's actor", () => 
     );
   });
 
+  it("DECIDE/confirm: forwards the caller's explicit keep scope to the core", async () => {
+    // cinatra#2815 S3 part 4, the TRANSPORT only. The scope is still enforced
+    // server-side against the run's own frozen snapshot; carrying it is not
+    // trusting it, and a route that drops it makes a confirmation asking to
+    // keep write nothing at all.
+    await DECIDE(
+      request(
+        WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
+        {
+          runId: RUN_ID,
+          decision: "confirm",
+          confirmedSkillIds: ["skill-a"],
+          keepRecommended: { scope: { scopeKind: "organization", scopeId: "org-1" } },
+        },
+        WIDGET_HEADERS,
+      ),
+    );
+    expect(confirmRecommendationForActor.mock.calls[0]![0].keepRecommended).toEqual({
+      scope: { scopeKind: "organization", scopeId: "org-1" },
+    });
+  });
+
+  it("DECIDE/confirm: refuses a keep scope of an unknown kind at the door", async () => {
+    const res = await DECIDE(
+      request(
+        WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
+        {
+          runId: RUN_ID,
+          decision: "confirm",
+          keepRecommended: { scope: { scopeKind: "galaxy", scopeId: "g-1" } },
+        },
+        WIDGET_HEADERS,
+      ),
+    );
+    expect(res.status).toBe(400);
+    expect(confirmRecommendationForActor).not.toHaveBeenCalled();
+  });
+
   it("DECIDE/skip: routes to the skip core, with the hold it was taken against", async () => {
     await DECIDE(
       request(
