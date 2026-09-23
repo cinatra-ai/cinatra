@@ -6,8 +6,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { buildOwnershipFilter } from "@/lib/derived-store-ownership";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import { readAdmissibleArtifactTypeIdsForOrg } from "./resolve-bound-artifact-type";
 import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
 // NOTE the RAW `postgresSchema` at the call site: this builder escapes its own
 // identifier (the binding-write-path convention), and the local `schema` const is
@@ -263,11 +262,13 @@ export function resolveContextSlot(
   // row into the visible set. An UPLOADED (assertion-less) pack row is admitted
   // here but produces no candidate (no eligible assertion an accepted extension
   // matches) — identical to an assertion-less generic row, not a regression.
-  // Warm the registry first: the context read paths do not transitively trigger
-  // boot registration, so a cold process would see an empty artifact-type set.
-  ensureArtifactTypesRegistered();
+  // cinatra#3603: the ADMISSIBLE set for this organisation — the registered
+  // artifact types PLUS its live, artifact-safe claim winners, the same set the
+  // writer admits. (The helper warms the registry itself: the context read
+  // paths do not transitively trigger boot registration, so a cold process
+  // would otherwise see an empty artifact-type set.)
   const artifactTypeIdsPh = ph(
-    objectTypeRegistry.listArtifacts().map((d) => d.type),
+    readAdmissibleArtifactTypeIdsForOrg(input.actor.organizationId),
   );
 
   // The project-narrowing clause. When projectId is set, we ADDITIONALLY

@@ -300,7 +300,7 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
     expect(reload).not.toHaveBeenCalled();
   });
 
-  // --- convergence round 1 (codex findings adopted) ---------------------------
+  // --- convergence round 1 (review findings adopted) --------------------------
 
   it("reports FAILURE when a FRESH mount is not among the agents the runtime says it mounted", async () => {
     // The runtime answers with a non-zero total that never names this package:

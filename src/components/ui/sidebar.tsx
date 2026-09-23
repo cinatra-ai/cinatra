@@ -28,7 +28,12 @@ const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
 const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
-const SIDEBAR_WIDTH_ICON = "3rem"
+// "collapses to 56px rail" (the components drawing's Sidebar section). 3.5rem
+// is 56px on the app's 16px root; the rail used to be "3rem" = 48px, eight
+// pixels under the stated value. The inset variant derives its own width from
+// this token (`calc(var(--sidebar-width-icon) + spacing(4))`) and so moves with
+// it (cinatra#3189, leg 2).
+const SIDEBAR_WIDTH_ICON = "3.5rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
 type SidebarContextProps = {
