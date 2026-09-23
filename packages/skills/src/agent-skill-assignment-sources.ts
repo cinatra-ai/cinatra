@@ -97,11 +97,26 @@ export async function readAgentPopulationSource(): Promise<AgentIdentitySource[]
  *  kind therefore comes from the same boot-seeded template row the assistant
  *  registry reader unions its descriptor in from. Every other package's answer
  *  is unchanged, and a package with neither a row nor a directory entry still
- *  resolves to null, so the write gate keeps failing closed on it. */
+ *  resolves to null, so the write gate keeps failing closed on it.
+ *
+ *  What the row read returns is a READING, not a kind, and the difference is
+ *  the whole point of this composition. It reports three states, and only ONE
+ *  of them leaves a question for the descriptor to answer:
+ *
+ *    * `named`: the kind, and the disk is not consulted at all.
+ *    * `unreadable`: an install record EXISTS and cannot be read, because its
+ *      rows contradict each other or name no kind. Refuse. A descriptor may
+ *      not speak over a record that is present, or a package whose rows say
+ *      both `agent` and `skill` would be admitted on the strength of its
+ *      manifest.
+ *    * `absent`: no record at all, which is the only state the descriptor arm
+ *      below was ever there for.
+ */
 export async function readPackageKindSource(packageName: string): Promise<string | null> {
-  const { readWritablePackageKind } = await import("@/lib/agent-package-eligibility");
-  const fromRow = await readWritablePackageKind(packageName);
-  if (fromRow) return fromRow;
+  const { readWritablePackageKindReading } = await import("@/lib/agent-package-eligibility");
+  const reading = await readWritablePackageKindReading(packageName);
+  if (reading.state === "named") return reading.kind;
+  if (reading.state === "unreadable") return null;
   // Provider-declared / image-shipped agents may carry NO canonical row. Their
   // on-disk `cinatra.kind` is still authoritative — it is the same declaration
   // the canonical row is derived from at install time — and without this arm a

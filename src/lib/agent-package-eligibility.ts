@@ -66,7 +66,7 @@ const LIVE_STATUSES = ["active", "locked"] as const;
  * top of a row that is present and contradictory, which is the opposite of
  * failing closed.
  */
-type PackageKindReading =
+export type PackageKindReading =
   | { state: "absent" }
   | { state: "named"; kind: string }
   | { state: "unreadable" };
@@ -159,15 +159,36 @@ export async function readBuiltInAssistantPackageKind(
  * narrowed by organization, owner or version, so one package name legitimately
  * carries many rows, and two of them disagreeing is a real answer about a real
  * install rather than the absence the fallback speaks for.
+ *
+ * The verdict is reported as a READING, not as a kind, because the refusal has
+ * to survive one more arm. The assignment slice's seam asks a package's on-disk
+ * descriptor after this reader, and a two-state answer cannot tell it which of
+ * the two refusals it received: "no record anywhere", which the descriptor may
+ * still answer for, or "a record that cannot be read", which nothing may answer
+ * over the top of.
+ */
+export async function readWritablePackageKindReading(
+  packageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<PackageKindReading> {
+  const reading = await readCanonicalPackageKindReading(packageName, db);
+  if (reading.state !== "absent") return reading;
+  const builtIn = await readBuiltInAssistantPackageKind(packageName, db);
+  return builtIn === null ? { state: "absent" } : { state: "named", kind: builtIn };
+}
+
+/**
+ * The same verdict as a plain kind, for the callers that only need to know
+ * whether the gate could read one. `null` covers both refusals: the caller that
+ * has a SECOND source to try must read the reading above instead, so that an
+ * unreadable install record refuses there too.
  */
 export async function readWritablePackageKind(
   packageName: string,
   db: ReaderDb = betterAuthDb,
 ): Promise<string | null> {
-  const reading = await readCanonicalPackageKindReading(packageName, db);
-  if (reading.state === "named") return reading.kind;
-  if (reading.state === "unreadable") return null;
-  return readBuiltInAssistantPackageKind(packageName, db);
+  const reading = await readWritablePackageKindReading(packageName, db);
+  return reading.state === "named" ? reading.kind : null;
 }
 
 /**
