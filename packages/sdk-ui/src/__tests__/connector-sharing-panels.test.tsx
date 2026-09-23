@@ -14,8 +14,13 @@
 // counts, and only where there is more than one connection to roll up; one
 // panel per owned connection (its identity row — name and mono
 // line, no status badge and no per-row action — over the access picker and
-// ownership card, handed in as a node), the locked and recommended marks where
-// the connector constrains the scope, and the declared loading treatment.
+// ownership card THIS package draws from data and callbacks), the locked and
+// recommended marks where the connector constrains the scope, and the declared
+// loading treatment.
+//
+// The panels below are driven the way a connector PACK drives them: data and
+// callbacks only, with no host component handed in. That is the whole point of
+// cinatra#3385: a pack can draw the controls, because this package draws them.
 // Plus the export wiring (its own dedicated subpath, off the root and
 // /marketplace barrels) and the one addition a pack makes, as the README states
 // it.
@@ -25,13 +30,25 @@ import { join } from "node:path";
 import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The panel refreshes the route after a write and navigates after a
+// self-removal. Neither is exercised here; the router is stubbed so the tree
+// mounts outside a Next router.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+}));
+
 import {
   ConnectorSharingPanels,
   CONNECTOR_SHARING_INTRO,
   CONNECTOR_SHARING_LOADING_LABEL,
   type ConnectorSharingPanelView,
 } from "../connector-sharing-panels";
+import type {
+  PermissionsPanelProps,
+  PermissionsPanelResult,
+} from "../permissions-panel";
 
 const PKG_DIR = join(__dirname, "..", "..");
 const pkg = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")) as {
@@ -49,6 +66,10 @@ const componentSrc = readFileSync(
  * The three surfaces this component emits — the ids the functional-acceptance
  * drivers grade, declared by the ratified drawing's own conformance manifest.
  */
+/** The ceiling sentence a constraining connector states, as the drawing gives it. */
+const CEILING_LINE =
+  'Locked by this connector: access is limited to your organization (only:"organization").';
+
 const SHARING_SURFACES = [
   "connector-sharing",
   "connector-sharing-rollup",
@@ -68,6 +89,43 @@ afterEach(() => {
   container.remove();
 });
 
+const OK: PermissionsPanelResult = { ok: true };
+
+/**
+ * Exactly what a connector pack states: the stored grant, the scopes the actor
+ * holds, the owner, and four bindings. No host component, and no node the pack
+ * would have to build for itself.
+ */
+function permissions(i: number, extra: Partial<PermissionsPanelProps> = {}): PermissionsPanelProps {
+  return {
+    canEdit: true,
+    initialPolicy: {
+      runListVisibility: ["owner"],
+      runDataVisibility: ["owner"],
+      runExecuteVisibility: ["owner"],
+      allowRunSharing: true,
+    },
+    owner: {
+      userId: `owner-${i}`,
+      name: `Owner ${i}`,
+      email: `owner-${i}@example.com`,
+      image: null,
+    },
+    coOwners: [],
+    availableScopes: { orgs: [], projects: [], canGrantWorkspace: true },
+    currentUserId: `owner-${i}`,
+    allowSharing: true,
+    selfRemoveRedirect: "/connectors",
+    actions: {
+      savePolicy: async () => OK,
+      searchCandidates: async () => ({ ok: true as const, results: [], hasMore: false }),
+      addCoOwner: async () => OK,
+      removeCoOwner: async () => OK,
+    },
+    ...extra,
+  };
+}
+
 function panel(
   i: number,
   extra: Partial<ConnectorSharingPanelView> = {},
@@ -77,9 +135,26 @@ function panel(
     name: `connection-${i}`,
     url: `key-${i}`,
     scopeConstraint: null,
-    permissions: <div data-testid={`permissions-${i}`}>permissions</div>,
+    permissions: permissions(i),
     ...extra,
   };
+}
+
+/** The access picker's trigger inside one panel. */
+function accessTrigger(scope: Element): Element | null {
+  return scope.querySelector('[role="combobox"]');
+}
+
+/** The ownership card's people-search field inside one panel. */
+function ownershipSearch(scope: Element): Element | null {
+  return scope.querySelector('input[placeholder="Search by name or email…"]');
+}
+
+/** The panel's one Save bar. */
+function saveButton(scope: Element): Element | null {
+  return [...scope.querySelectorAll("button")].find(
+    (b) => b.textContent?.trim() === "Save changes",
+  ) ?? null;
 }
 
 async function render(node: React.ReactElement) {
@@ -101,7 +176,7 @@ describe("ConnectorSharingPanels — the roll-up card", () => {
     const first = container.querySelector('[data-conformance-id="connector-sharing"]');
     expect(first).toBeTruthy();
     expect(first!.querySelector('[data-slot="connection-row"]')).toBeTruthy();
-    expect(first!.querySelector('[data-testid="permissions-0"]')).toBeTruthy();
+    expect(accessTrigger(first!)).toBeTruthy();
   });
 
   it("heads the list once a SECOND connection is listed, with no Check and no link", async () => {
@@ -124,6 +199,15 @@ describe("ConnectorSharingPanels — the roll-up card", () => {
     ).toBeTruthy();
   });
 
+  it("draws the permissions panel itself, with no caller node and no host import", () => {
+    // The gap cinatra#3385 closes: the card used to arrive as a
+    // `React.ReactNode` the caller built, which a pack cannot build.
+    expect(componentSrc).not.toContain("permissions: React.ReactNode");
+    expect(componentSrc).toContain("<PermissionsPanel {...panel.permissions} />");
+    // Nothing in this package reaches the app.
+    expect(componentSrc).not.toContain('from "@/');
+  });
+
   it("carries no mode switch at all — the component takes no `rollup` prop", () => {
     // ONE rule for every mount, so there is nothing for a caller to choose.
     expect(componentSrc).not.toContain("rollup ===");
@@ -144,13 +228,17 @@ describe("ConnectorSharingPanels — one panel per owned connection", () => {
     expect(row.textContent).toContain("key-0");
     expect(row.querySelector('[data-slot="connection-status-badge"]')).toBeNull();
     expect(row.querySelector("button")).toBeNull();
-    // The access picker and ownership card are the caller's node — this
-    // component mounts no client of its own, so a pack cannot end up drawing a
-    // connector-specific copy of the two controls.
-    const permissions = first.querySelector('[data-testid="permissions-0"]')!;
-    expect(permissions).toBeTruthy();
+    // The access picker and the ownership card are drawn by THIS package from
+    // the data and callbacks above: no host component and no node the caller
+    // had to build, so a pack draws the same two controls the app draws.
+    const picker = accessTrigger(first)!;
+    expect(picker).toBeTruthy();
+    expect(ownershipSearch(first)).toBeTruthy();
+    expect(saveButton(first)).toBeTruthy();
+    expect(first.textContent).toContain("Access");
+    expect(first.textContent).toContain("Ownership");
     expect(
-      row.compareDocumentPosition(permissions) & Node.DOCUMENT_POSITION_FOLLOWING,
+      row.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -158,7 +246,14 @@ describe("ConnectorSharingPanels — one panel per owned connection", () => {
     await render(
       <ConnectorSharingPanels
         panels={[
-          panel(0, { scopeConstraint: "locked" }),
+          panel(0, {
+            scopeConstraint: "locked",
+            permissions: permissions(0, {
+              accessDisabledScopes: ["workspace"],
+              accessDisabledReasons: { workspace: CEILING_LINE },
+              accessScopeNote: CEILING_LINE,
+            }),
+          }),
           panel(1, { scopeConstraint: "recommended" }),
         ]}
       />,
@@ -167,12 +262,18 @@ describe("ConnectorSharingPanels — one panel per owned connection", () => {
       ...container.querySelectorAll('[data-conformance-id="connector-sharing-locked"]'),
     ].map((n) => n.getAttribute("data-variant"));
     expect(marked).toEqual(["locked", "recommended"]);
-    // The mark WRAPS that panel's picker — the locked reason and the
-    // recommendation line are drawn by the permissions node inside it.
+    // The mark WRAPS that panel's picker, and the line the connector states
+    // sits under it with a lock. This package draws both.
     const locked = container.querySelector(
       '[data-conformance-id="connector-sharing-locked"][data-variant="locked"]',
     )!;
-    expect(locked.querySelector('[data-testid="permissions-0"]')).toBeTruthy();
+    expect(accessTrigger(locked)).toBeTruthy();
+    expect(locked.textContent).toContain(CEILING_LINE);
+    const line = [...locked.querySelectorAll("p")].find(
+      (p) => p.textContent?.trim() === CEILING_LINE,
+    )!;
+    expect(line).toBeTruthy();
+    expect(line.querySelectorAll("svg").length).toBe(1);
   });
 
   it("leaves an unconstrained panel unmarked", async () => {
