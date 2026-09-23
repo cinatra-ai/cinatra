@@ -19,6 +19,7 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
+import { decodeDashboardRouteSegment } from "@/lib/dashboards/dashboard-route-segment";
 import { DashboardAccessError, requireDashboardAccess } from "@/lib/dashboards/authz";
 import {
   buildWorkspaceViewer,
@@ -46,7 +47,13 @@ type Props = { params: Promise<{ dashboardId: string }> };
  *   - Any other workspace dashboard renders its stored config.
  */
 export default async function WorkspaceDashboardPage({ params }: Props) {
-  const { dashboardId } = await params;
+  // The segment is read ONCE, here, and every step below works on the decoded
+  // identifier: the comparison with the composed id, the lookup, the access
+  // check and the current path this page builds. The framework hands the
+  // segment escaped whichever form the address took, while the store holds the
+  // plain identifier (see the helper for where the framework does it).
+  const { dashboardId: dashboardIdSegment } = await params;
+  const dashboardId = decodeDashboardRouteSegment(dashboardIdSegment);
   const session = await requireAuthSession();
   let row = await readDashboardRowById(dashboardId);
 

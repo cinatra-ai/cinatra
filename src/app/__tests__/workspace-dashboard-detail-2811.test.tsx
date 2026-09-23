@@ -287,3 +287,79 @@ describe("the shell's Overview opens at its canonical surface", () => {
     expect(state.rows[OWN_OVERVIEW_ID]).toBeUndefined();
   });
 });
+
+// The address as the RUNTIME hands it (cinatra#2811, fix leg 2). The row's Open
+// writes the identifier percent-escaped into the link, and the framework hands
+// a dynamic segment to the page already escaped whichever form the address
+// took: it decodes the raw path segment when it matches the route, then
+// re-escapes the value on its way to user code
+// (next/dist/shared/lib/router/utils/route-matcher.js:19 and
+// next/dist/shared/lib/router/utils/get-dynamic-param.js:58, whose own comment
+// calls it "the value that is passed to user code"). So these cases hand the
+// page the segment, never the identifier; a case that passes the identifier
+// proves nothing about the running page.
+describe("the address reaches the page escaped, and still opens the Overview", () => {
+  const OWN_REF = {
+    entityType: "workspace",
+    entityId: "__workspace__",
+    ownerLevel: "user",
+    ownerId: "u1",
+  };
+  const ESCAPED = encodeURIComponent(OWN_OVERVIEW_ID);
+
+  it("opens the Overview when the segment arrives escaped, as the row's own link writes it", async () => {
+    delete state.rows["w-ov"];
+    state.rows[OWN_OVERVIEW_ID] = wsRow({ id: OWN_OVERVIEW_ID, name: "Overview", isDefault: true });
+    await open(ESCAPED);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Overview");
+    expect(state.ensured).toEqual([]);
+  });
+
+  it("opens the Overview when a person types the address plainly punctuated", async () => {
+    delete state.rows["w-ov"];
+    state.rows[OWN_OVERVIEW_ID] = wsRow({ id: OWN_OVERVIEW_ID, name: "Overview", isDefault: true });
+    await open(OWN_OVERVIEW_ID);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Overview");
+  });
+
+  it("builds the crumb at the escaped address, whichever form the address took", async () => {
+    delete state.rows["w-ov"];
+    state.rows[OWN_OVERVIEW_ID] = wsRow({ id: OWN_OVERVIEW_ID, name: "Overview", isDefault: true });
+    await open(ESCAPED);
+    expect(state.crumbs).toEqual([
+      { prefix: "/workspace", label: "Workspace" },
+      { prefix: "/workspace/dashboards", label: "Dashboards", nonNavigable: true },
+      { prefix: `/workspace/dashboards/${ESCAPED}`, label: "Overview" },
+    ]);
+  });
+
+  it("brings the Overview into being from the escaped address before any tab ensured it", async () => {
+    delete state.rows["w-ov"];
+    expect(state.rows[OWN_OVERVIEW_ID]).toBeUndefined();
+    await open(ESCAPED);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Overview");
+    expect(state.ensured).toEqual([OWN_REF]);
+  });
+
+  it("keeps opening a created dashboard, whose identifier carries no punctuation", async () => {
+    await open(encodeURIComponent("w-mine"));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Mine");
+  });
+
+  it("still refuses another person's Overview when that segment arrives escaped", async () => {
+    const theirs = encodeURIComponent(buildOverviewDashboardId(workspaceDashboardRef("u2")));
+    await expect(open(theirs)).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(state.ensured).toEqual([]);
+  });
+
+  it("is not found for a doubly escaped segment, and ensures nothing", async () => {
+    await expect(open(encodeURIComponent(ESCAPED))).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(state.ensured).toEqual([]);
+  });
+
+  it("is not found for a segment that is not a valid escape sequence, and never throws", async () => {
+    await expect(open("dash%ZZworkspace")).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(open("%E0%A4%A")).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(state.ensured).toEqual([]);
+  });
+});
