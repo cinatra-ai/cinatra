@@ -333,7 +333,9 @@ export function scopeAssignmentActionRefusalText(reason: ScopeAssignmentActionRe
     case "not-an-agent":
       return "this package can't be given assignments";
     case "eligibility-unreadable":
-      return "the extension registry couldn't be read";
+      // The gate reads an install row and a directory, never the registry
+      // address; see `admissionMessage` in scope-assignment-page.server.ts.
+      return "this package's install record couldn't be read";
     case "assistants-take-skills-only":
       return "assistants take skills only";
     case "unknown-skill":

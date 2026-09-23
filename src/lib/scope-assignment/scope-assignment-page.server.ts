@@ -111,9 +111,12 @@ export function scopeAssignmentScopeLabel(
 }
 
 function admissionMessage(reason: "not-an-agent" | "eligibility-unreadable"): string {
+  // The refusal names what the gate actually read. It reads the package's
+  // canonical install row and the extension directory on disk; the registry
+  // ADDRESS takes no part in it, so the sentence must not point a reader there.
   return reason === "not-an-agent"
     ? "This package can't be given assignments."
-    : "The extension registry couldn't be read, so these assignments can't be changed right now.";
+    : "This package's install record couldn't be read, so these assignments can't be changed right now.";
 }
 
 export async function loadScopeAssignmentPage(

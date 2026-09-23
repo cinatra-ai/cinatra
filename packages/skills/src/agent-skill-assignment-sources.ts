@@ -90,10 +90,17 @@ export async function readAgentPopulationSource(): Promise<AgentIdentitySource[]
   }));
 }
 
-/** Canonical `cinatra.kind` for a package (install row first, manifest second). */
+/** Canonical `cinatra.kind` for a package (install row first, manifest second).
+ *
+ *  The row read is the WRITE-SIDE one: it also answers for the built-in platform
+ *  assistant, which carries no install row and no package on disk, and whose
+ *  kind therefore comes from the same boot-seeded template row the assistant
+ *  registry reader unions its descriptor in from. Every other package's answer
+ *  is unchanged, and a package with neither a row nor a directory entry still
+ *  resolves to null, so the write gate keeps failing closed on it. */
 export async function readPackageKindSource(packageName: string): Promise<string | null> {
-  const { readCanonicalPackageKind } = await import("@/lib/agent-package-eligibility");
-  const fromRow = await readCanonicalPackageKind(packageName);
+  const { readWritablePackageKind } = await import("@/lib/agent-package-eligibility");
+  const fromRow = await readWritablePackageKind(packageName);
   if (fromRow) return fromRow;
   // Provider-declared / image-shipped agents may carry NO canonical row. Their
   // on-disk `cinatra.kind` is still authoritative — it is the same declaration

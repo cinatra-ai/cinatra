@@ -26,6 +26,7 @@ import "server-only";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { jsonb, pgSchema, text } from "drizzle-orm/pg-core";
 
+import { BUILTIN_ASSISTANT_ALIAS } from "@/lib/assistant-registry-schema";
 import { betterAuthDb } from "@/lib/better-auth-db";
 
 const CORE_STORE_SCHEMA = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
@@ -72,6 +73,62 @@ export async function readCanonicalPackageKind(
   const considered = live.length > 0 ? live : rows;
   const kinds = [...new Set(considered.map((r) => r.kind).filter((k): k is string => Boolean(k)))];
   return kinds.length === 1 ? kinds[0]! : null;
+}
+
+/**
+ * The kind of the BUILT-IN PLATFORM ASSISTANT.
+ *
+ * It is the one package that has neither of the two things the reader above and
+ * the on-disk scan look at: no `installed_extension` row is ever written for it,
+ * and no package of its name ships in the extension tree. Its identity is the
+ * boot-seeded `agent_templates` row with the reserved package name and
+ * `agent_kind = 'assistant'`: exactly the row the assistant registry reader
+ * unions its descriptor in from, unconditionally, on every read surface.
+ *
+ * So the write road reads its kind from that same row, and the two roads admit
+ * the same package: the Assistants tab offers the built-in everywhere, and the
+ * page behind its Settings link can now be written. The kind returned is `agent`
+ * because that is the kind an assistant descriptor carries (the registry
+ * reader's installed arm joins on `installed_extension.kind = 'agent'`); its
+ * ASSISTANT standing is the `agent_kind` column, which `isAssistantPackageName`
+ * below already reads.
+ *
+ * Any other package name returns null WITHOUT a query: this arm widens nothing
+ * but the one reserved identity.
+ */
+export async function readBuiltInAssistantPackageKind(
+  packageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<string | null> {
+  if (packageName !== BUILTIN_ASSISTANT_ALIAS.packageName) return null;
+  const rows = await db
+    .select({ id: agentTemplates.id })
+    .from(agentTemplates)
+    .where(
+      and(
+        eq(agentTemplates.packageName, packageName),
+        eq(agentTemplates.agentKind, "assistant"),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0 ? "agent" : null;
+}
+
+/**
+ * The kind the WRITE GATE decides on: the canonical install row first, the
+ * built-in platform assistant's own row second. The order keeps every other
+ * package's answer byte-identical (an installed package of the reserved name
+ * would still answer from its row), and a package with neither stays null, so
+ * the gate keeps failing closed on it.
+ */
+export async function readWritablePackageKind(
+  packageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<string | null> {
+  return (
+    (await readCanonicalPackageKind(packageName, db)) ??
+    (await readBuiltInAssistantPackageKind(packageName, db))
+  );
 }
 
 /**
