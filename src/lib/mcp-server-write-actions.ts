@@ -159,14 +159,14 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     updateExternalMcpServerGuarded,
     importExternalMcpApiKeyConnection,
     revokeExternalMcpApiKeyConnection,
-    externalMcpKeylessConnectionId,
-    readExternalMcpKeylessConnectionIdentity,
-    registerExternalMcpKeylessConnectionIdentity,
-    retireExternalMcpKeylessConnectionIdentityRow,
-    normalizeExternalMcpRowStamp,
     ExternalMcpServerWriteConflictError,
     ExternalMcpServerManagedEndpointError,
   } = await import("@/lib/external-mcp-registry");
+  // cinatra#3485: the keyless connection identity follows the row, and every
+  // write road reconciles it through the ONE lifecycle, never a copy.
+  const { reconcileKeylessConnectionIdentityAfterSave } = await import(
+    "@/lib/external-mcp-keyless-identity"
+  );
 
   // A global write is a platform-wide trust mutation → PLATFORM ADMIN required.
   // A user write only needs an authenticated actor (already proven by the endpoint).
@@ -368,226 +368,26 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   ) {
     await revokeExternalMcpApiKeyConnection(preservedNangoConnectionId);
   }
-  // cinatra#3485 — a row that landed with NO stored credential still gets its
-  // `externalMcp` connection IDENTITY. The Sharing tab lists identity rows, so
-  // without one a server registered with the optional API-key field left blank
-  // drew no panel while the same server registered WITH a key drew one. The
-  // identity is the one derived above: the row's own owner, its organization,
-  // its scope's seed. NOTHING about the key changes — no credential is minted,
-  // `nangoConnectionId` stays null (so `apiKeyConfigured` stays false) and
-  // `resolveExternalMcpServerBearer` still mints nothing for this row.
-  //
-  // BEST-EFFORT, like the host's one connector-save identity road
-  // (cinatra#3460, `extension-host-context.ts`): the row write has already
-  // landed, and a registration that cannot be truthful — the seam's
-  // foreign-row hard-fail — must never turn a saved server into an error. The
-  // failure is logged NON-SECRETLY (no key is in scope on this road at all).
-  const keylessConnectionId = externalMcpKeylessConnectionId(id);
-  if (nangoConnectionId === null) {
-    // WOULD THE IDENTITY STILL BE TRUE OF THE ROW? The identity lives in a
-    // different store from the row, with no shared transaction, so the only
-    // honest guard is a fresh re-read that matches the row this save landed on
-    // every field the identity is derived from: its scope and its owner decide
-    // who the identity belongs to, and a stored credential means the keyless
-    // identity may not stand at all. A save that lost the row to another request
-    // must do NOTHING here, and above all must not retire an identity that
-    // request just registered.
-    //
-    // This reading is the FLOOR. It answers "may an identity stand for this row
-    // at all", and every road below asks the stricter question underneath it as
-    // well, because an identity may only stand on the row it was written for.
-    const describesThisSave = (
-      candidate: {
-        scope: string;
-        userId: string | null;
-        nangoConnectionId: string | null;
-      } | null,
-    ): boolean =>
-      candidate !== null &&
-      candidate.scope === row.scope &&
-      candidate.userId === row.userId &&
-      (candidate.nangoConnectionId ?? null) === null;
-    // IS IT THE VERY ROW THIS SAVE WROTE? The question above asks whether the
-    // identity would still be TRUE of whatever row stands under this id. This
-    // one asks something stricter, and the registration needs it: ids are
-    // supplied by the caller, so another person can delete this server and
-    // register the same id again, keyless and shared, between this save's write
-    // and its identity. Such a replacement answers the question above with yes
-    // on every field, because a shared row carries no owner and neither row
-    // carries a key, and this save would then retire the identity that person
-    // just registered and put its own in its place.
-    //
-    // The row's own stamps settle it. A replacement is CREATED, so it carries a
-    // creation instant this save never wrote, and this save's own write stamps
-    // the update instant it returned. A save that cannot read both stamps holds
-    // no witness and registers nothing, which is the same fail-closed direction
-    // every other ordering on this road takes: the panel is missing, never
-    // owned by the wrong person, and the next save of that row restores it.
-    //
-    // WHAT THE STAMPS CANNOT DO. They are the store's own clock, read to the
-    // millisecond, so two writes are only two instants while that clock moves.
-    // A replacement must be created in the same millisecond as the row it
-    // replaces, which a delete and an insert on separate queries cannot do while
-    // the clock advances; a clock that stands still or steps backwards removes
-    // that separation, and only a generation the row itself carries would
-    // replace it. That is a change to the schema and it is not made here.
-    //
-    // THE TWO STAMPS ANSWER TWO QUESTIONS, and the roads below need one each.
-    // The CREATION instant names the ROW: an update never moves it, so a row
-    // written again by somebody else is still the same row, and only a row
-    // created again is a different one. The UPDATE instant names THIS WRITE:
-    // any save of the row moves it, including a harmless one by the same
-    // person.
-    type RowCandidate = {
-      scope: string;
-      userId: string | null;
-      nangoConnectionId: string | null;
-      createdAt?: unknown;
-      updatedAt?: unknown;
-    };
-    /** The same row this save wrote, however many times it has been saved since. */
-    const isTheRowThisSaveWrote = (candidate: RowCandidate | null): boolean =>
-      describesThisSave(candidate) &&
-      written !== null &&
-      written.createdAt !== null &&
-      normalizeExternalMcpRowStamp(candidate?.createdAt) === written.createdAt;
-    /** That row, and untouched since this save wrote it. */
-    const isThisSavesOwnWrite = (candidate: RowCandidate | null): boolean =>
-      isTheRowThisSaveWrote(candidate) &&
-      written !== null &&
-      written.updatedAt !== null &&
-      normalizeExternalMcpRowStamp(candidate?.updatedAt) === written.updatedAt;
-    // MAY THIS SAVE RETIRE THE IDENTITY IT FINDS? Only when the identity names
-    // the owner the row itself is moving AWAY from, so the retire is this save's
-    // own business: a user row carries its previous owner in the witnessed
-    // guard, and a shared row is the platform admin's to reconcile. An identity
-    // naming anybody else belongs to somebody whose row this is not, and it is
-    // left alone even though the seam will then refuse this registration.
-    const mayRetireSupersededIdentity = (live: { ownerUserId: string }): boolean =>
-      guard !== undefined &&
-      (guard.scope === "user"
-        ? guard.userId !== null && guard.userId === live.ownerUserId
-        : actorIsAdmin);
-    // Whether the registration was reached at all. The seam writes the identity
-    // row and seeds its grant as two writes, so a failure in the second leaves
-    // the first standing: the compensating re-read below has to run even when
-    // the registration threw.
-    let registrationAttempted = false;
-    try {
-      // GUARDED ON THE ROW IT WROTE, AS LATE AS THE TWO STORES ALLOW. The row
-      // write landed, but another request can store a key on the same row, take
-      // it over, delete it, or delete it and register the same id again while
-      // this one is still on its way to the identity. The row is therefore
-      // re-read immediately before the reads, and again immediately before the
-      // writes, and this save does nothing at all unless the row that stands
-      // there is the one it wrote, stamps included.
-      if (isThisSavesOwnWrite(getExternalMcpServerByIdFresh(id))) {
-        // RECONCILE A SUPERSEDED IDENTITY. The derived id is stable across every
-        // save of the row, so a save that moved the row to a new owner (a
-        // promotion to global) or to a new workspace would otherwise address an
-        // identity describing the PREVIOUS one: the seam refuses it, the
-        // previous owner keeps the panel and the authority to edit its sharing,
-        // and the new owner gets neither. What the seam TOLERATES is left alone
-        // (a re-save under the same owner, an org-less admin edit of someone
-        // else's row), so a repeated save still never mints a second identity
-        // or resets a widened policy.
-        const live = guard
-          ? await readExternalMcpKeylessConnectionIdentity(keylessConnectionId)
-          : null;
-        const supersededOwner = live !== null && live.ownerUserId !== credentialOwnerUserId;
-        const supersededOrganization =
-          live !== null &&
-          live.organizationId !== null &&
-          identityOrganizationId !== null &&
-          live.organizationId !== identityOrganizationId;
-        const retireFirst =
-          live !== null &&
-          (supersededOwner || supersededOrganization) &&
-          mayRetireSupersededIdentity(live);
-        if (isThisSavesOwnWrite(getExternalMcpServerByIdFresh(id))) {
-          // Retire the row that was WITNESSED, never whatever the derived id
-          // resolves to now: a request that replaced the identity between the
-          // read above and this line keeps its own, and this retire passes over
-          // a row that is already retired.
-          if (retireFirst && live) await retireExternalMcpKeylessConnectionIdentityRow(live.id);
-          registrationAttempted = true;
-          await registerExternalMcpKeylessConnectionIdentity(keylessConnectionId, {
-            ownerUserId: credentialOwnerUserId,
-            organizationId: identityOrganizationId,
-            seed: identitySeed,
-          });
-        }
-      }
-    } catch (err) {
-      console.error(
-        "[mcp-server-write-actions] keyless connection identity registration failed",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    // TAKE IT BACK when the row changed underneath, and take back ONLY what this
-    // save put there. Outside the try, because the seam writes the identity row
-    // and seeds its grant as two writes: one that threw on the second still
-    // leaves the first standing. The live identity is read again first and
-    // retired by its OWN row id, so a save that lost the row takes away its own
-    // identity and never the one the request that won just registered.
-    //
-    // It asks about the ROW, not about this write. A row somebody registered
-    // again at the same id carries the same scope, the same absent owner and the
-    // same missing key, so reading those three alone would leave this save's
-    // identity standing on a stranger's server with the authority to share it:
-    // the creation instant is what takes it back. A row merely SAVED again,
-    // by this person or another one, is still the row this identity was written
-    // for, and retiring it there would throw away a sharing policy the owner
-    // set by hand, because the policy belongs to the identity row and a fresh
-    // registration seeds a fresh one at the scope's default. So the update
-    // instant is deliberately not read here.
-    if (registrationAttempted && !isTheRowThisSaveWrote(getExternalMcpServerByIdFresh(id))) {
-      try {
-        const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
-        // The row is read ONCE MORE after the identity read: the row can come
-        // back in that window, and a save whose own row is there again keeps
-        // what it wrote.
-        if (
-          live &&
-          live.ownerUserId === credentialOwnerUserId &&
-          live.organizationId === identityOrganizationId &&
-          !isTheRowThisSaveWrote(getExternalMcpServerByIdFresh(id))
-        ) {
-          await retireExternalMcpKeylessConnectionIdentityRow(live.id);
-        }
-      } catch (err) {
-        console.error(
-          "[mcp-server-write-actions] keyless connection identity take-back failed",
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-    }
-  } else {
-    // The row landed WITH a credential of its own, so no keyless identity may
-    // stand for it: retire one if it is still live. This runs on EVERY keyed
-    // save, not only the first upgrade away from keyless. The retire is
-    // best-effort, so a transient failure used to leave two panels for one
-    // server for ever. The next save of that row now reconciles it, and so
-    // does its delete. A row that never had a keyless identity reads nothing
-    // and writes nothing. IDENTITY-ONLY: a keyless id addresses no credential,
-    // so retiring it never asks the connection service to delete one.
-    //
-    // The row is read again between the identity read and the retire, and the
-    // retire addresses the identity ROW that was read: a server deleted and
-    // registered again keyless in that window keeps the identity its own save
-    // just wrote, because the fresh row no longer carries a credential.
-    try {
-      const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
-      if (live && (getExternalMcpServerByIdFresh(id)?.nangoConnectionId ?? null) !== null) {
-        await retireExternalMcpKeylessConnectionIdentityRow(live.id);
-      }
-    } catch (err) {
-      console.error(
-        "[mcp-server-write-actions] keyless connection identity reconciliation failed",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-  }
+  // cinatra#3485: the row has landed, so its keyless connection identity is
+  // reconciled against what it landed as. The whole reading lives in the one
+  // lifecycle, which every write road on these rows travels: whether an identity
+  // may stand for this row at all, whether this save wrote the row that stands
+  // there now, whose identity this save may retire, and what it takes back when
+  // it loses the row. Best-effort by contract: a saved server never becomes an
+  // error because its panel could not be written.
+  await reconcileKeylessConnectionIdentityAfterSave({
+    serverId: id,
+    row: { scope: row.scope, userId: row.userId },
+    guard,
+    written,
+    storedCredential: nangoConnectionId,
+    identity: {
+      ownerUserId: credentialOwnerUserId,
+      organizationId: identityOrganizationId,
+      seed: identitySeed,
+    },
+    actorIsAdmin,
+  });
   return { banner: "saved" };
 }
 
@@ -609,39 +409,23 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
     getExternalMcpServerByIdFresh,
     deleteExternalMcpServerGuarded,
     revokeExternalMcpApiKeyConnection,
-    externalMcpKeylessConnectionId,
-    readExternalMcpKeylessConnectionIdentity,
-    retireExternalMcpKeylessConnectionIdentityRow,
     ExternalMcpServerWriteConflictError,
   } = await import("@/lib/external-mcp-registry");
-  const keylessConnectionId = externalMcpKeylessConnectionId(id);
+  // The same ONE lifecycle the save roads reconcile through (cinatra#3485).
+  const {
+    reconcileKeylessConnectionIdentityAfterDelete,
+    reconcileOrphanKeylessConnectionIdentity,
+  } = await import("@/lib/external-mcp-keyless-identity");
   const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
     // Already gone: idempotent success (the row is not there to over-expose).
-    // RECONCILE AN ORPHAN FIRST. The retire below is best-effort, so a delete
-    // whose retire failed once used to leave a panel for a server nobody can
-    // reach any more, and no later delete could repair it: this road returned
-    // here without looking. It looks now. The identity is retired only for the
-    // person it belongs to, or by a platform admin, so a guessed id can never
-    // take a panel away from anyone else, and a row that never had a keyless
-    // identity reads nothing and writes nothing.
-    try {
-      const orphan = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
-      // Still an orphan? The id can be registered again while this read is in
-      // flight, and that registration's identity is not an orphan at all.
-      if (
-        orphan &&
-        getExternalMcpServerByIdFresh(id) === null &&
-        (orphan.ownerUserId === session.user.id || (await isPlatformAdminNow(session)))
-      ) {
-        await retireExternalMcpKeylessConnectionIdentityRow(orphan.id);
-      }
-    } catch (err) {
-      console.warn(
-        "[mcp-server-write-actions] orphan keyless identity reconciliation failed",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
+    // RECONCILE AN ORPHAN FIRST: the identity of a row an earlier delete removed
+    // while its own retire failed. The lifecycle owns who may take it away.
+    await reconcileOrphanKeylessConnectionIdentity({
+      serverId: id,
+      actorUserId: session.user.id,
+      actorIsAdmin: await isPlatformAdminNow(session),
+    });
     return { banner: "deleted" };
   }
   const actorIsAdmin = await isPlatformAdminNow(session);
@@ -685,31 +469,15 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
     throw err;
   }
   // cinatra#3485: a keyless row stores no connection pointer, so its identity is
-  // addressed by the id DERIVED from the row. AFTER the row is gone, not before:
-  // a save racing this delete re-reads the row to decide whether its own
-  // registration may stand, so retiring while the row is still there lets that
-  // save see a live row, keep its identity and leave a panel for a server that
-  // is about to vanish. Retiring last means the save either sees the row gone
-  // and takes its own identity back, or registers before this line and has its
-  // identity retired here. It also means a delete that then CONFLICTS leaves the
-  // surviving row its panel instead of stripping it.
-  //
-  // IDENTITY-ONLY: that id addresses no vault entry, so this asks the connection
-  // service for NOTHING, and a keyed row's delete still makes exactly the ONE
-  // credential call it made before. A no-op for a row that never had one. The
-  // row is read once more between the identity read and the retire, so a save
-  // that registered the same id again in that window keeps its identity.
-  try {
-    const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
-    if (live && getExternalMcpServerByIdFresh(id) === null) {
-      await retireExternalMcpKeylessConnectionIdentityRow(live.id);
-    }
-  } catch (err) {
-    console.warn(
-      "[mcp-server-write-actions] keyless identity retire after delete failed",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+  // addressed by the id DERIVED from the row, and it is retired AFTER the row is
+  // gone. The lifecycle owns the ordering, the re-read and the question of whose
+  // identity this delete may take away.
+  await reconcileKeylessConnectionIdentityAfterDelete({
+    serverId: id,
+    deletedRow: { scope: server.scope, userId: server.userId },
+    actorUserId: session.user.id,
+    actorIsAdmin,
+  });
   return { banner: "deleted" };
 }
 

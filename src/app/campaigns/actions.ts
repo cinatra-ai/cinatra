@@ -42,6 +42,11 @@ import {
   TwentyConnectionError,
   type ExternalMcpServerScope,
 } from "@/lib/external-mcp-registry";
+import {
+  reconcileKeylessConnectionIdentityAfterDelete,
+  reconcileKeylessConnectionIdentityAfterSave,
+  reconcileOrphanKeylessConnectionIdentity,
+} from "@/lib/external-mcp-keyless-identity";
 import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 import { randomUUID } from "node:crypto";
 import { saveEmailSystemDevelopmentSettings } from "@/lib/email-system";
@@ -459,11 +464,19 @@ export async function createExternalMcpServerAction(formData: FormData) {
   // concurrently-created row). A race that flips the row under the actor is
   // refused (fail-closed) rather than applied.
   const requestedId = parsed.id?.trim() || undefined;
-  let guard: { scope: ExternalMcpServerScope; userId: string | null } | undefined;
+  let guard:
+    | { scope: ExternalMcpServerScope; userId: string | null; nangoConnectionId?: string | null }
+    | undefined;
   let preservedUserId: string | null | undefined;
+  // This form carries no API-key field, so it must never DECIDE anything about
+  // the row's key: an edit preserves the connection the row already stores
+  // (cinatra#3485). Writing null here dropped a stored key on a label or URL
+  // edit and left the credential behind with nothing pointing at it.
+  let preservedNangoConnectionId: string | null | undefined;
   if (requestedId) {
     const existing = getExternalMcpServerByIdFresh(requestedId);
     if (existing) {
+      preservedNangoConnectionId = existing.nangoConnectionId;
       if (existing.scope === "global") {
         // Touching an existing global row always requires platform admin,
         // regardless of the scope the caller requested.
@@ -487,28 +500,48 @@ export async function createExternalMcpServerAction(formData: FormData) {
           preservedUserId = existing.userId;
         }
       }
-      // The compare-and-write guard is the WITNESSED existing scope+owner.
-      guard = { scope: existing.scope, userId: existing.userId };
+      // The compare-and-write guard is the WITNESSED existing scope+owner AND
+      // its current connection (cinatra#3485): this write now carries that
+      // connection forward, so a concurrent re-key that moved it must fail the
+      // write closed instead of resurrecting a revoked pointer.
+      guard = {
+        scope: existing.scope,
+        userId: existing.userId,
+        nangoConnectionId: existing.nangoConnectionId,
+      };
     }
   }
 
+  const id = requestedId || randomUUID();
+  // The identity a keyless row carries, derived exactly as the connector setup
+  // surface derives it (cinatra#3485), so which road a server was saved on never
+  // changes whose connection it is or where it shares. An admin editing ANOTHER
+  // person's row keeps that row org-less: it is not the admin's connection and
+  // must never be re-homed to the acting admin's organization.
+  const organizationId = session.session?.activeOrganizationId ?? null;
+  const identityOwnerUserId =
+    scope === "user" ? preservedUserId ?? session.user.id : session.user.id;
+  const identityOrganizationId =
+    scope === "user" ? (identityOwnerUserId === session.user.id ? organizationId : null) : organizationId;
+  const nangoConnectionId = preservedNangoConnectionId ?? null;
   const row = {
-    id: requestedId || randomUUID(),
+    id,
     label: parsed.label,
     serverUrl: parsed.serverUrl,
     scope,
-    nangoConnectionId: null,
+    nangoConnectionId,
     orgId: null,
     userId: scope === "user" ? preservedUserId ?? session.user.id : null,
     enabled: true,
     // Persist the declared transport, or "unknown" when omitted (#1713).
     transport: parsed.transport ?? "unknown",
   };
+  let written: { createdAt: string | null; updatedAt: string | null } | undefined;
   try {
     if (guard) {
-      updateExternalMcpServerGuarded(row, guard);
+      written = updateExternalMcpServerGuarded(row, guard);
     } else {
-      insertExternalMcpServerStrict(row);
+      written = insertExternalMcpServerStrict(row);
     }
   } catch (err) {
     if (err instanceof ExternalMcpServerWriteConflictError) {
@@ -517,6 +550,23 @@ export async function createExternalMcpServerAction(formData: FormData) {
     }
     throw err;
   }
+  // cinatra#3485: this road can promote a personal keyless server to global, move
+  // its owner or leave it altogether, and the connection identity that carries
+  // the Sharing tab's panel has to follow. It is reconciled through the ONE
+  // lifecycle the connector setup surface travels, never a copy of it.
+  await reconcileKeylessConnectionIdentityAfterSave({
+    serverId: id,
+    row: { scope: row.scope, userId: row.userId },
+    guard,
+    written,
+    storedCredential: nangoConnectionId,
+    identity: {
+      ownerUserId: identityOwnerUserId,
+      organizationId: identityOrganizationId,
+      seed: scope === "user" ? "owner" : "workspace",
+    },
+    actorIsAdmin: isPlatformAdmin(session),
+  });
   redirect(`${externalMcpRedirectBase()}?saved=1`);
 }
 
@@ -532,6 +582,14 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
   const session = await requireAuthSession();
   const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
+    // Already gone: the identity of a row an earlier delete removed while its
+    // own retire failed is reconciled here too (cinatra#3485), on the same terms
+    // the connector setup surface reconciles it.
+    await reconcileOrphanKeylessConnectionIdentity({
+      serverId: id,
+      actorUserId: session.user.id,
+      actorIsAdmin: isPlatformAdmin(session),
+    });
     redirect(externalMcpRedirectBase());
   }
   if (server.scope === "global") {
@@ -553,6 +611,14 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
     }
     throw err;
   }
+  // The row is gone, so the identity that drew its panel may not stand: retired
+  // AFTER the row, through the same ONE lifecycle (cinatra#3485).
+  await reconcileKeylessConnectionIdentityAfterDelete({
+    serverId: id,
+    deletedRow: { scope: server.scope, userId: server.userId },
+    actorUserId: session.user.id,
+    actorIsAdmin: isPlatformAdmin(session),
+  });
   redirect(`${externalMcpRedirectBase()}?deleted=1`);
 }
 
