@@ -125,6 +125,12 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
     resetStartBootForTests();
   });
 
+  /**
+   * The auth context every case below but its own already has in hand. The boot
+   * waits for it in both runtimes; these cases are about what happens after.
+   */
+  const inHand = () => Promise.resolve();
+
   /** A boot that never settles on its own, so a caller that WAITS is visible. */
   function pendingBoot() {
     let release: () => void = () => undefined;
@@ -153,14 +159,17 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
   it("returns on the development server WITHOUT waiting for the boot", async () => {
     const b = pendingBoot();
     await expect(
-      startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" }),
+      startBoot(
+        { NODE_ENV: "development" },
+        { authContext: inHand(), boot: b.boot, ensureRouteTree: async () => "resolved" },
+      ),
     ).resolves.toBeUndefined();
     b.release();
   });
 
   it("waits for the boot in production, and a fatal phase still propagates", async () => {
     const b = pendingBoot();
-    const started = startBoot({ NODE_ENV: "production" }, { boot: b.boot });
+    const started = startBoot({ NODE_ENV: "production" }, { authContext: inHand(), boot: b.boot });
     await expect(settled(started)).resolves.toBe("pending");
     const boom = new Error("fatal phase");
     b.fail(boom);
@@ -171,7 +180,7 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
     for (const NODE_ENV of ["test", undefined]) {
       resetStartBootForTests();
       const b = pendingBoot();
-      const started = startBoot({ NODE_ENV }, { boot: b.boot });
+      const started = startBoot({ NODE_ENV }, { authContext: inHand(), boot: b.boot });
       await expect(settled(started)).resolves.toBe("pending");
       b.release();
       await started;
@@ -183,6 +192,7 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
     await startBoot(
       { NODE_ENV: "development" },
       {
+        authContext: inHand(),
         ensureRouteTree: async () => {
           order.push("route-tree");
           return "resolved";
@@ -202,9 +212,10 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
   // resetting the other's phase log.
   it("runs ONE boot per process however many times it is called", async () => {
     const b = pendingBoot();
-    await startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" });
-    await startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" });
-    await startBoot({ NODE_ENV: "development" }, { boot: b.boot, ensureRouteTree: async () => "resolved" });
+    const deps = { authContext: inHand(), boot: b.boot, ensureRouteTree: async () => "resolved" };
+    await startBoot({ NODE_ENV: "development" }, deps);
+    await startBoot({ NODE_ENV: "development" }, deps);
+    await startBoot({ NODE_ENV: "development" }, deps);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(b.calls).toBe(1);
     b.release();
@@ -217,6 +228,7 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
     await startBoot(
       { NODE_ENV: "development" },
       {
+        authContext: inHand(),
         ensureRouteTree: async () => "resolved",
         boot: async () => {
           throw new Error("a phase failed");
@@ -230,7 +242,7 @@ describe("the boot entry point starts exactly one boot, and the right one", () =
 
   it("hands the boot over from the framework entry point", () => {
     const entry = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
-    expect(entry).toContain("startBoot()");
+    expect(entry).toMatch(/await startBoot\(/);
     expect(entry).not.toContain("runBoot()");
   });
 });

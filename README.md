@@ -1,116 +1,602 @@
 <div align="center">
 
-<img src="src/app/icon.svg" width="96" alt="Cinatra logo" />
+<img src="assets/logo.svg" alt="Cinatra" width="360" />
 
-# CINATRA
+# Agentic Teams Workspace
 
-**The open source AI workspace for teams**
+Cinatra is an extensible Web application where people, AI assistants, and agents work together in projects, teams, and organizations, or across the whole workspace and in personal spaces. It provides the shared tools and knowledge to work together from discussion to delivery in a multi-purpose AI productivity environment that you can host yourself. Most notably, Cinatra supports an agent lifecycle, from selecting context and skills to scheduling, execution, review, and learning.
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-docs.cinatra.ai-6E56CF.svg)](https://docs.cinatra.ai)
+[**Overview**](#overview) · [**Agents**](#agents) · [**Assistants**](#assistants) · [**Connectors**](#connectors) · [**Skills**](#skills) · [**Artifacts**](#artifacts) · [**Extensions**](#extensions) · [**Permissions**](#permissions) · [**Integration**](#integration) · [**Architecture**](#architecture)
+
+[**Quick start**](#quick-start) · [**Documentation**](#documentation) · [**Contributing**](#contributing)
+
+[![Licence](https://img.shields.io/badge/licence-Apache--2.0-c79545)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/cinatra-ai/cinatra?color=c79545&label=release)](https://github.com/cinatra-ai/cinatra/releases)
+[![Status](https://img.shields.io/badge/status-beta-c79545)](https://github.com/cinatra-ai/cinatra/milestones)
 [![Build](https://github.com/cinatra-ai/cinatra/actions/workflows/build-image.yml/badge.svg)](https://github.com/cinatra-ai/cinatra/actions/workflows/build-image.yml)
-[![Status: not production ready](https://img.shields.io/badge/status-not%20production%20ready-orange.svg)](https://docs.cinatra.ai)
-
-<img src="screenshot.png" alt="Cinatra — the open source AI workspace for teams" width="820" />
 
 </div>
 
-> [!WARNING]
-> **Cinatra is not production ready!**
-> It is under active development and has not been hardened, security-audited, or stability-tested for production workloads. Run it for evaluation, local development, and self-hosted experimentation only. Do not deploy it to handle production data, untrusted users, or business-critical workflows yet. APIs, schemas, and the extension contract may change without notice.
+<a href="https://www.youtube.com/watch?v=rWQMaZox95o">
+  <img src="assets/introduction-poster.png" alt="Cinatra introduction video, 2 minutes 28 seconds" width="100%" />
+</a>
 
 ---
 
-## What Cinatra is
+## Overview
 
-Cinatra is an open source AI workspace for teams: a shared, persistent, browser-based environment where people, AI assistants, and autonomous agents work together. It turns isolated prompts into durable workflows that have state, tooling, handoffs, approvals, and real operational outputs.
-
-Most AI tools are optimized for individual use and short chat sessions. Cinatra is built for collaborative work that takes time, spans systems, requires oversight, and improves as teams capture their patterns into reusable skills, extensions, artifacts and agents.
-
-### Core pillars
-
-- **[A built-in AI assistant](https://docs.cinatra.ai/guides/user/built-in-ai-assistant/).** The workspace has a chat assistant that works across its MCP-exposed capabilities — agents, connectors, data, dashboards, files, and artifacts — scoped to what you can access. Describe what you need to build or run, and it can draft agents, workflows, dashboards, and artifacts, dispatch agents, and coordinate with other @-mentioned assistants in the same thread.
-- **[A connected ecosystem of capabilities](https://docs.cinatra.ai/guides/user/connected-ecosystem/).** Agents, connectors, skills, objects, lists, and dashboards live in one capability fabric. Workflows compose across domains instead of living as isolated scripts.
-- **[Human-in-the-loop by design](https://docs.cinatra.ai/guides/user/human-in-the-loop/).** Agents pause at typed HITL gates for review, edits, approvals, or missing context — instead of forcing an all-or-nothing automation model.
-- **[Continuous learning](https://docs.cinatra.ai/guides/user/continuous-learning/).** Prompt edits inside HITL surfaces are captured into per-user, per-agent personal skills that prime the next run. Improvements become reusable operating knowledge instead of getting lost in chat history.
-- **[An extendable marketplace](https://docs.cinatra.ai/guides/user/marketplace-and-extensions/).** Install agents, connectors, skills, artifacts, and workflows from the marketplace onto a running workspace, with the access each team grants — and publish your own.
-- **[Cross-instance collaboration](https://docs.cinatra.ai/guides/user/cross-instance-collaboration/).** Cinatra instances share a marketplace, install each other's extensions, and call each other's agents over A2A — with run data staying where the run runs.
-- **[Durable workflows](https://docs.cinatra.ai/guides/user/durable-workflows/).** Background execution with BullMQ over Redis and durable state in PostgreSQL. Workflows survive page reloads, resume from network drops, and pause for human approval without losing context.
-
-## Example: Email outreach campaign
-
-1. A user tells the AI assistant they need to run an outreach campaign.
-2. Cinatra spins up an Email Outreach agent (or reuses an existing one) with a default `SKILL.md` describing the ideal customer profile and contact-selection rules.
-3. The agent selects prospects, enriches their data, and drafts personalized emails using company context and recent events.
-4. The team reviews the drafts, edits them one by one, or applies prompt-driven changes across the whole batch.
-5. Replies are tracked and follow-ups are sent automatically using the same workflow.
-6. Prompts and edits made along the way can be captured back into a custom `SKILL.md`, so the next campaign starts tuned to the team's real working style.
-
-## Inside the app
-
-The main sidebar groups the day-to-day workspace:
-
-- **Intelligence → Chat** — multi-threaded AI assistant chat with team threads; the place agents are created, run, and edited conversationally
-- **Agents** — two tabs: the top-level `/agents` route is **All Agents**, the run-agent picker; **Executions** (`/agents/executions`) is an interactive dashboard of recently used and recently run agents. Installing agents happens in Configuration → Marketplace
-- **Management** — Personal, Projects, Teams, Organizations
-- **Information** — Artifacts, Data (a unified object list with typed views, plus History and Merge), and Analytics (LLM and API usage)
-- **Tools** — Skills (catalog, installed packages, match overview, autosave from chat edits) and Connectors (e.g. Gmail, Google Calendar, Apollo, LinkedIn, WordPress, Drupal, Apify, YouTube, GitHub)
-
-Platform admins also see an **Admin** group at the top of the sidebar (Approvals, Configuration).
-
-Beyond the sidebar, the platform ships routes for **Dashboards** (operator workspaces composed from extension-shipped portlets, with the agents dashboard at `/agents/executions`, also reachable as an MCP primitive) and **Notifications** (a durable feed with real-time updates and failure routing). They are reachable directly by URL.
-
-A separate **Configuration** area (linked from the sidebar as **Admin → Configuration**) covers platform-level settings: environment, AI providers, MCP, extensions, webhooks, [marketplace](https://docs.cinatra.ai/guides/admin/marketplace/) (install agents, connectors, skills, artifacts, and workflows from the shared registry), skills, [permissions](https://docs.cinatra.ai/guides/admin/permissions/) (a co-owner model across extension resources — agents, agent runs, connectors, skills, skill packages, artifacts, and workflows), access control, workflows, agents, assistants, workspace, telemetry, and development. Most configuration screens are admin-only. The [Admin Guide](https://docs.cinatra.ai/guides/admin/) covers this surface in detail.
+- **Collaborate:** Bring people and their AI together in projects, teams, or organizations, such as headquarters, subsidiaries, or departments. Collaborate across the whole workspace, encompassing all these scopes, or work with your AI in a personal space.
+- **Research:** Ask AI assistants to find, combine, and summarize information from connected applications and data stored in Cinatra, within your permissions.
+- **Execute:** Run agents that plan, coordinate, and carry out work using connected applications. Agents can work together and pause for human input. Connect external agents through the Agent-to-Agent (A2A) protocol.
+- **Automate:** Start work on demand, schedule it for later, or run it repeatedly. Background execution and persistent run state let work continue when you leave the page or close your laptop, with notifications when your attention is needed.
+- **Connect:** Give assistants and agents access to applications through connectors that utilize APIs and Model Context Protocol (MCP) integrations. Let compatible external AI clients and coding agents use Cinatra’s exposed capabilities through its MCP server.
+- **Customize:** Install extensions from the Cinatra marketplace or build your own agents, assistants, connectors, skills, and artifact types. Use conversational authoring in the Cinatra chat, or develop extensions in code.
+- **Create:** Keep work as persistent artifacts (such as documents, drafts, images, and structured data) that people can inspect, edit, and review.
+- **Reuse:** Compose more complex agents from existing agents, build new skills on top of existing ones, and use artifacts as context for subsequent work.
+- **Share:** Share access to assistants, agents, skills, data, and artifacts within the workspace. Publish reusable extensions through the marketplace and connect agents across Cinatra instances.
+- **Control:** Decide who can access resources, run agents, manage configuration, and approve work. Use review checkpoints to inspect outputs and request changes before configured publishing or handoff steps proceed. Track revisions and decisions through the relevant AI lifecycles.
+- **Learn:** Turn feedback into reusable instructions. When enabled, Cinatra can distill captured review prompts into custom skills for future runs. Agents can also save and recall persistent memory, with controlled sharing of knowledge across users, teams, and organizations.
+- **Embed:** Bring supported Cinatra capabilities into other applications through MCP integrations and embedded assistant interfaces. For example, ask Cinatra to update a page directly from your CMS, or request a report on last quarter’s conversion rates from within your CRM.
 
 ---
+
+## Agents
+
+Assistants provide the conversation interface through which people can start agents, guide their work, and review the results. Agents carry out that work through lifecycle steps connecting preparation, execution, human input, and reusable results. The steps that apply depend on the agent, the task, and workspace policies.
+
+Each run keeps its state, outputs, and decisions so people can follow progress and return to the work later. Co-owners have the owner’s full rights to the run, allowing colleagues to manage it together.
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/context.png">
+        <img src="assets/images/lifecycle/context.png" alt="Context in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Context</h3>
+      <p>Choose the material the agent should work from, such as a strategy, customer profile, or brand guidelines. The Context step comes before Skills and helps you find artifacts or import documents through supported connectors. You decide what to include, and the selected revisions remain fixed for the run.</p>
+      <p><a href="assets/images/lifecycle/context.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/skills.png">
+        <img src="assets/images/lifecycle/skills.png" alt="Skills in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Skills</h3>
+      <p>Equip the agent with reusable instructions in the open <a href="https://agentskills.io/">Agent Skills</a> format, centered on <code>SKILL.md</code> files. Skills are reusable Cinatra extensions. Review recommended skills alongside those assigned within the applicable personal, project, team, organization, or workspace scope.</p>
+      <p><a href="assets/images/lifecycle/skills.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/scheduling.png">
+        <img src="assets/images/lifecycle/scheduling.png" alt="Scheduling in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Scheduling</h3>
+      <p>Start work immediately, schedule it for later, or configure recurring runs. Review the proposed schedule before confirming it and manage future execution through the scheduling controls.</p>
+      <p><a href="assets/images/lifecycle/scheduling.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/execution.png">
+        <img src="assets/images/lifecycle/execution.png" alt="Execution in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Execution</h3>
+      <p>The agent carries out its work using the selected context, skills, and connected applications. It can coordinate with other agents and pause to request information or a decision. Background execution preserves progress while you are away.</p>
+      <p><a href="assets/images/lifecycle/execution.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/review.png">
+        <img src="assets/images/lifecycle/review.png" alt="Review in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Review</h3>
+      <p>Inspect the work, provide feedback, request changes, or let the run continue. Reviews can happen between execution steps, including before publishing or handing work to another agent. The change workflow returns requests to the producing agent and brings back a new revision of the same artifact for you to check.</p>
+      <p><a href="assets/images/lifecycle/review.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/auditing.png">
+        <img src="assets/images/lifecycle/auditing.png" alt="Auditing in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Auditing</h3>
+      <p>Examine the record behind a requested change. The Audit view opens from Review and shows the reviewed and changed revisions side by side, together with the request, the outcome of each finding, and verification evidence. It is available on demand after changes have been requested and does not add a mandatory stop.</p>
+      <p><a href="assets/images/lifecycle/auditing.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/artifacts.png">
+        <img src="assets/images/lifecycle/artifacts.png" alt="Artifacts in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Artifacts</h3>
+      <p>Keep the resulting artifacts, their revisions, and associated decisions for later inspection and reuse. Supported publishing and handoff steps deliver work to connected applications or downstream agents.</p>
+      <p><a href="assets/images/lifecycle/artifacts.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/learning.png">
+        <img src="assets/images/lifecycle/learning.png" alt="Learning in the Supplier recommendation chat" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Learning</h3>
+      <p>Carry useful feedback into future runs through <a href="#skills">Skills</a>. Agents can also save and recall persistent memory to reuse knowledge and solutions.</p>
+      <p><a href="assets/images/lifecycle/learning.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/lifecycle/notifications.png">
+        <img src="assets/images/lifecycle/notifications.png" alt="Notifications for the Supplier Comparison agent" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Notifications</h3>
+      <p>Stay informed when a lifecycle step needs your attention, such as a request for input or an artifact awaiting review. Notifications link back to the relevant run so you can inspect its state and act. A persistent notification feed keeps these requests accessible when you return to the workspace.</p>
+      <p><a href="assets/images/lifecycle/notifications.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+<img src="assets/lifecycle.svg" alt="Context, Skills, Scheduling, Execution, Review and Artifacts, with a revision loop, on-demand Auditing, Learning that informs future runs, and Notifications for progress and requests for attention." width="100%" />
+
+## Assistants
+
+Assistants bring people and AI together in conversation. Use them to research, develop ideas, work with connected applications, and guide agents through their lifecycle. Each assistant can specialize in a particular application or knowledge domain, or represent an LLM or AI system such as Claude, Codex, or Gemini, bringing its expertise, capabilities, and tools into the conversation.
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/overview/assistants-full.png">
+        <img src="assets/images/overview/assistants.png" alt="Assistant directory with domain, model, and connected-site assistants" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Selection</h3>
+      <p>Open an assistant from the directory or the scope where you are working. Assistants can serve different domains, use different model providers, or connect to a particular application or site.</p>
+      <p><a href="assets/images/overview/assistants-full.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/assistants-chat.png">
+        <img src="assets/images/features/assistants-chat.png" alt="A request to compare supplier proposals and the assistant explaining which inputs its agents need" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Chat</h3>
+      <p>Discuss a task with an assistant, ask follow-up questions, and refine the work together. Bring relevant information into the conversation to compare options, develop ideas, and decide what to do next.</p>
+      <p><a href="assets/images/features/assistants-chat.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/assistants-collaboration.png">
+        <img src="assets/images/features/assistants-collaboration.png" alt="Teammates and an AI assistant in a shared chat with the people, assistants, and agents mention picker open" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Collaboration</h3>
+      <p>Bring teammates and AI into the same conversation. Use the <code>@</code> menu to find people, assistants, and agents by name, then mention them to involve colleagues, get an assistant’s input, or start an agent. Each contribution is attributed to its author.</p>
+      <p><a href="assets/images/features/assistants-collaboration.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/assistants-embedded.png">
+        <img src="assets/images/features/assistants-embedded.png" alt="WordPress Assistant reporting page edits with a red and green content diff" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Embedded assistants</h3>
+      <p>Work with an assistant inside a connected application (e.g. a CMS such as WordPress). An embedded interface streams the conversation into the application, so you can ask for help with the content you are working on.</p>
+      <p><a href="assets/images/features/assistants-embedded.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/assistants-configuration.png">
+        <img src="assets/images/features/assistants-configuration.png" alt="Assistants — Configuration in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Configuration</h3>
+      <p>Shape an assistant’s role through its instructions, skills, model preferences, and permitted tools and agents. Control who can use it through its configured audience and access permissions.</p>
+      <p><a href="assets/images/features/assistants-configuration.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+- **Conversation history:** Return to saved conversations and their work later, with the context of earlier requests and replies.
+- **Human decisions:** An assistant can present a review and recommend an outcome. Approval, scheduling, and cancellation require a signed-in user’s own session and permissions. The assistant cannot perform those actions independently, and this restriction cannot be disabled by configuration.
+
+## Connectors
+
+Connectors give assistants and agents access to the applications and services your work depends on, from CRM and CMS platforms to email, calendars, and external AI tools. A connector is an extension that supplies the integration; a connection links it to a particular account, site, or service. Integrations can use application APIs, the Model Context Protocol (MCP), and other supported interfaces.
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/overview/connectors-full.png">
+        <img src="assets/images/overview/connectors.png" alt="Connector directory with all available services and tools" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Directory</h3>
+      <p>Browse available connectors, search by name, and filter by connection status and scope. Open a connector to see the accounts or sites available to you.</p>
+      <p><a href="assets/images/overview/connectors-full.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/connectors-connections.png">
+        <img src="assets/images/features/connectors-connections.png" alt="Gmail connector — Setup tab and connection status" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Setup</h3>
+      <p>Authorize an account or supply the credentials the integration requires. Connect multiple accounts or sites where supported, and manage their settings and connection status.</p>
+      <p><a href="assets/images/features/connectors-connections.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/connectors-sharing.png">
+        <img src="assets/images/features/connectors-sharing.png" alt="Connectors — Sharing in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Sharing</h3>
+      <p>Keep a connection personal or share it with selected people and scopes, within the connector’s sharing rules. Manage access and co-owners for each connection so collaborators and their AI can use the appropriate accounts.</p>
+      <p><a href="assets/images/features/connectors-sharing.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+- **Information retrieval:** Let assistants retrieve and combine information from connected applications within your permissions. Use supported records and imported documents as context for an agent’s work.
+- **Application actions:** Give agents the tools to act in connected applications, such as updating CRM records, preparing email, or publishing reviewed content. Available actions depend on the connector and the permissions granted to the connection.
+
+## Skills
+
+Skills give assistants and agents reusable instructions for how to work, such as applying a brand voice, evaluating suppliers, or following a research method. They are Cinatra extensions built around a `SKILL.md` file in the open [Agent Skills](https://agentskills.io/) format, with supporting resources where needed.
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/overview/skills-full.png">
+        <img src="assets/images/overview/skills.png" alt="Skills catalog preview showing five reusable skills" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Catalog</h3>
+      <p>Browse the skills available in your workspace and see their instructions, source extensions, and the assistants or agents that use them. Search the catalog and filter by scope to find relevant guidance.</p>
+      <p><a href="assets/images/overview/skills-full.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/skills-assignments.png">
+        <img src="assets/images/features/skills-assignments.png" alt="Skills — Assignments in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Assignments</h3>
+      <p>Configure skills for an agent or assistant within a personal, project, team, organization, or workspace scope. Assignments follow the applicable scope permissions, so shared instructions can reflect how each group works.</p>
+      <p><a href="assets/images/features/skills-assignments.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+- **Learning:** When enabled, Cinatra can distill durable instructions from captured conversations and review feedback into personal skills for future runs. Share useful guidance within a project, team, organization, or workspace so individual corrections become shared knowledge.
+- **Revision history:** Keep a history of skill revisions, inspect changes, and manage which skills remain active. Replace or retire outdated guidance while preserving the record of how it evolved.
+
+## Artifacts
+
+Artifacts make work available beyond the conversation or run that produced it. They can be source material, intermediate drafts, or finished deliverables, bringing the inputs and results of human and AI collaboration into a shared library.
+
+Cinatra supports MIME-type artifacts, which identify file formats such as PDF, images, or Markdown, and meaning-type artifacts, which identify what the content represents, such as brand guidelines, a customer profile, or a strategy. Meaning types help agents find relevant context regardless of the underlying file format.
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/overview/artifacts-full.png">
+        <img src="assets/images/overview/artifacts.png" alt="Artifact library with seven sample procurement artifacts in different formats" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Discovery</h3>
+      <p>Browse artifacts within the scopes you can access. Ownership, sharing permissions, and project context determine which material is available to you and to the agents working with you.</p>
+      <p><a href="assets/images/overview/artifacts-full.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-review.png">
+        <img src="assets/images/features/artifacts-review.png" alt="Artifacts — Supplier recommendation in the embedded PDF viewer" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Review</h3>
+      <p>Inspect the artifact at full size through its type’s renderer, request changes from its producing agent, or edit it in place through the available editor. The review workflow applies across artifact types.</p>
+      <p><a href="assets/images/features/artifacts-review.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-history.png">
+        <img src="assets/images/features/artifacts-history.png" alt="Artifacts — Version history in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Version history</h3>
+      <p>Retain revisions and review decisions within the scope that owns the artifact. Modified data records carry a change history, and most changes can be reverted in one step while preserving that history.</p>
+      <p><a href="assets/images/features/artifacts-history.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-records.png">
+        <img src="assets/images/features/artifacts-records.png" alt="Artifacts — Records and lists in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Records and lists</h3>
+      <p>Work with typed records such as contacts, accounts, campaigns, content, and media. Lists group records into reusable inputs and outputs for agents.</p>
+      <p><a href="assets/images/features/artifacts-records.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-meaning.png">
+        <img src="assets/images/features/artifacts-meaning.png" alt="Artifacts — Meaning types in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Meaning types</h3>
+      <p>Choose what an uploaded file represents, such as a supplier contract or pricing sheet, while retaining its original file format. Confirm a suggested meaning or select a compatible type so people and agents can find and reuse the material.</p>
+      <p><a href="assets/images/features/artifacts-meaning.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-context-assignments.png">
+        <img src="assets/images/features/artifacts-context-assignments.png" alt="Artifacts — Context assignments in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Context assignments</h3>
+      <p>Give an agent reusable inputs through named context slots, such as purchasing policies or supplier proposals. Each slot accepts the artifact kinds and number of items the agent declares, with choices drawn from the relevant scope. Selected revisions stay fixed for each run, so later edits do not silently change its inputs.</p>
+      <p><a href="assets/images/features/artifacts-context-assignments.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-dashboards.png">
+        <img src="assets/images/features/artifacts-dashboards.png" alt="Artifacts — Dashboards in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Dashboards</h3>
+      <p>Arrange widgets by drag and drop or ask an assistant to build a dashboard on the shared semantic layer. Usage and cost analytics are included.</p>
+      <p><a href="assets/images/features/artifacts-dashboards.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/artifacts-dashboard-references.png">
+        <img src="assets/images/features/artifacts-dashboard-references.png" alt="Artifacts — Dashboard references in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Dashboard references</h3>
+      <p>Make an existing dashboard available from another project, team, organization, or the workspace through a reference. The dashboard keeps its original home and access rules; listing it elsewhere does not grant additional access.</p>
+      <p><a href="assets/images/features/artifacts-dashboard-references.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+- **Collection:** Keep generated documents, emails, slide decks, images, charts, dashboards, PDFs, and structured data alongside uploads and connected records.
+- **Publication:** Publish a chosen revision to a supported destination or pass it into subsequent work. Set approval rules by artifact type and destination; external actions are blocked unless the applicable checks pass. Scheduling governs delivery timing, and the publication record keeps the outcome attached to the artifact.
+
+## Extensions
+
+Extensions adapt Cinatra to the work your organization does. They supply agents and assistants, application connectors, reusable skills, and artifact types, so teams can combine shared capabilities with their own processes and expertise. Discover and install extensions from the Cinatra marketplace at [marketplace.cinatra.ai](https://marketplace.cinatra.ai).
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/overview/marketplace-full.png">
+        <img src="assets/images/overview/marketplace.png" alt="Marketplace preview with 15 extensions in three columns and five rows" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Marketplace</h3>
+      <p>Browse marketplace listings to understand what an extension provides, who publishes it, and which versions are compatible with your Cinatra instance.</p>
+      <p><a href="https://marketplace.cinatra.ai">Visit marketplace</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/extensions-installation.png">
+        <img src="assets/images/features/extensions-installation.png" alt="Extensions — Installation in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Installation</h3>
+      <p>Add an extension from the marketplace, upload a ZIP package from another instance or your own development work, or install from a GitHub repository. Cinatra validates the package and applies the setup requirements for its kind.</p>
+      <p><a href="assets/images/features/extensions-installation.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/extensions-installation-requests.png">
+        <img src="assets/images/features/extensions-installation-requests.png" alt="Extensions — Installation requests in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Installation requests</h3>
+      <p>Request an artifact extension from the type picker when you cannot install it yourself. Cinatra notifies platform administrators with the package and requester details, and shows when the request has been sent.</p>
+      <p><a href="assets/images/features/extensions-installation-requests.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/extensions-management.png">
+        <img src="assets/images/features/extensions-management.png" alt="Installed extensions with an update available for Supplier Comparison and Delivery Follow-up archived" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Installed extensions</h3>
+      <p>Browse the extensions available in your instance, inspect their versions and active or archived status, and open their settings or package details from one place.</p>
+      <p><a href="assets/images/features/extensions-management.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/extensions-maintenance.png">
+        <img src="assets/images/features/extensions-maintenance.png" alt="Extensions — Lifecycle management in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Lifecycle management</h3>
+      <p>Manage extension versions and updates, and publish reusable packages privately or publicly for other Cinatra instances. Installation permissions, capability grants, and publishing reviews govern how extensions become available to others. Archive extensions you no longer need and reactivate them when required.</p>
+      <p><a href="assets/images/features/extensions-maintenance.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+- **Configuration:** Choose the applicable installation scope, complete the required connections and settings, and control access to the capabilities it exposes. Each user’s access to connected accounts is governed by connection permissions.
+- **Composition:** Build on installed extensions to connect applications, equip assistants and agents with skills, and produce new kinds of artifacts. Using the [Open Agent Specification (OAS)](https://oracle.github.io/agent-spec/26.1.2/howtoguides/index.html), combine agents into more complex agents and workflows through sequential pipelines, conditional routing, parallel execution, map-reduce, orchestrator-workers, manager-worker teams, and swarms with message passing or conversation handoffs. Author extensions conversationally with an assistant or develop them in code. Artifact extensions can provide their own renderers and editors.
+- **Development tools:** Scaffold an extension with `cinatra create-extension`, which generates its manifest, package structure, documentation, and validation checks. Cinatra’s authoring skills guide AI coding agents through implementation, testing, and packaging, with specialized guidance for agents, connectors, artifact types, and skill bundles.
+- **Portability:** Export agent extensions as ZIP archives and import them on another Cinatra instance. Connectors, skills, and artifact types can also be packaged as ZIP files for upload, with package validation and installation permissions applied on the receiving instance.
+- **Authoring review:** Describe an agent in chat and the assistant checks for an existing match before drafting it. Drafts from non-administrators become proposals for an administrator to approve before installation.
+
+---
+
+## Permissions
+
+Scopes organize where people and their AI work together. Use personal spaces for individual work, projects for a shared task, teams for ongoing collaboration, and organizations for departments, subsidiaries, or headquarters. The workspace brings these scopes together, while each resource retains its own ownership and access rules.
+
+<table>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/architecture-ownership.png">
+        <img src="assets/images/features/architecture-ownership.png" alt="Permissions — Ownership in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Ownership</h3>
+      <p>Give threads, agents, skills, artifacts, and connections a home in a personal, project, team, organization, or workspace scope. Keep individual work in your personal space and organize shared work in the scope it belongs to.</p>
+      <p><a href="assets/images/features/architecture-ownership.png">View screenshot</a></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="600" valign="top">
+      <a href="assets/images/features/architecture-authorization.png">
+        <img src="assets/images/features/architecture-authorization.png" alt="Permissions — Authorization in the procurement workspace" width="600">
+      </a>
+    </td>
+    <td valign="top">
+      <h3>Authorization</h3>
+      <p>Control access to agents, runs, connectors, connections, skills, artifacts, and workflows through resource-specific permissions and co-owners. Agents and integrations act within the authority granted to the relevant user or caller, so shared work respects those permissions.</p>
+      <p><a href="assets/images/features/architecture-authorization.png">View screenshot</a></p>
+    </td>
+  </tr>
+</table>
+
+---
+
+## Integration
+
+Cinatra connects its workspace to the tools, agents, and interfaces people already use. External applications can call its capabilities, exchange events, or bring an assistant directly into their own interface. Access follows the authenticated user or integration’s permissions and the capabilities exposed by installed extensions.
+
+- **Agent runtime portability:** Agents use the [Open Agent Specification (OAS)](https://github.com/oracle/agent-spec), allowing their definitions to run on any runtime that supports the Agent Spec features they use. Cinatra defaults to [WayFlow](https://github.com/oracle/wayflow), the reference implementation. Other options include LangGraph, CrewAI, and AutoGen through [Agent Spec runtime adapters](https://github.com/oracle/agent-spec#executing-agent-spec-configurations). Alternative runtimes integrate with Cinatra’s execution and lifecycle interfaces.
+- **Multi-model support:** Cinatra is model agnostic: agents can use any LLM model through their runtime and provider integrations. The Cinatra core currently supports OpenAI and Anthropic.
+- **MCP server:** Give any application access to Cinatra through its OAuth-secured Model Context Protocol (MCP) server, including AI clients such as Claude Desktop, Codex, and ChatGPT. Applications that implement an MCP client can discover available tools, work with permitted data, and invoke agents under the authenticated account’s permissions.
+- **Agent-to-Agent protocol:** Use the Agent-to-Agent (A2A) protocol to call external agents or make published Cinatra agents available to other systems. Exchange tasks, follow progress, and receive results across application and Cinatra instance boundaries.
+- **Webhooks:** Exchange events with connected applications through extension-supplied handlers. Cinatra verifies inbound signatures and tracks repeated deliveries, and sends signed outbound events with background retries and records of failed deliveries. Events can include published CMS content or mentions of external assistants.
+- **Assistant stream:** Make a Cinatra assistant available outside the workspace through its AG-UI event stream. Third-party applications can display streamed replies and supported lifecycle interactions in an embedded widget, including requests for input and artifact reviews. WordPress and Drupal integrations bring this experience into the sites where people work.
 
 ## Architecture
 
-Cinatra is a monorepo of TypeScript packages running on Next.js. Each package owns its persistence, background jobs, React screens, and capability surface. Packages communicate through public capability surfaces rather than importing each other's internals.
+Cinatra connects people and teams, applications, clients, and external agents through its application core and extension system. Agents combine memory, runtime, sandbox, and human-in-the-loop (HITL) capabilities, supported by background execution and persistent data. Shared permissions, scopes, and an audit trail carry through the work.
 
-Cinatra speaks four open agent protocols so that agents authored here are not locked here, and so that agents from other platforms plug in without bespoke integration:
+<a href="assets/architecture.svg">
+  <img src="assets/architecture.svg" alt="Cinatra at the center of its ecosystem: connectors call third-party apps; external applications access its MCP server, embed assistant streams, and exchange webhooks. A separate marketplace supplies extensions, external agents connect over A2A, and portable runtimes execute composed agents. The core contains shared permissions and dedicated extension types. Agents include Memory, Runtime, Sandbox, and HITL interactions through AG-UI. Background execution and persistent data sit outside the core." width="100%">
+</a>
 
-- **OAS (Open Agent Specification / agentspec)** — every agent is a declarative OAS Flow file
-- **A2A (Agent-to-Agent)** — every agent is callable from any A2A client; Cinatra calls remote A2A agents as local tools
-- **AG-UI (Agent-User Interaction Protocol)** — typed lifecycle events streamed over SSE with durable replay
-- **A2UI (Agent-to-User Interface)** — declarative HITL surface payloads on a parallel channel
-
-Every capability is also an MCP primitive, and the whole workspace is itself reachable as an OAuth-secured MCP server — so external MCP clients (Claude Desktop, ChatGPT, OpenAI Codex, Claude.ai) can drive Cinatra directly.
-
-The agent runtime is **WayFlow**, the reference OAS implementation, running as a Python sidecar. The Next.js app invokes it over A2A — making the runtime replaceable by any OAS-compliant alternative.
-
-For the full write-up, see the [Architecture](https://docs.cinatra.ai/references/platform/architecture/), [Open standards in Cinatra](https://docs.cinatra.ai/references/platform/open-standards/), and [MCP reference](https://docs.cinatra.ai/references/mcp/) pages.
+- **Application core:** The Next.js application is organized as a monorepo of TypeScript domain packages. Each package owns its screens, capabilities, persistence, and background jobs, and communicates through public interfaces. Together they provide the workspace and lifecycle coordination.
+- **Shared permissions, scopes & audit trail:** Personal, project, team, organization, and workspace scopes govern access to shared resources. Privileged actions record both allowed and denied outcomes in your database. Administrator access to user data requires a named, audited intervention rather than a standing grant.
+- **Extension system:** Versioned packages supply assistants, artifacts, connectors, skills, and agents. Their declarations describe dependencies and capabilities, while the core manages access and registration. The Extensions Marketplace provides a shared catalog of these packages.
+- **Agents:** Reusable definitions describe the work and its lifecycle steps. Agents bring together memory, a runtime, a sandbox, and HITL interactions to carry work through execution and human decisions.
+- **Memory:** [Open Knowledge Format (OKF)](https://okf.md/) represents reusable knowledge as Markdown files with YAML metadata. Local memory bundles can synchronize into Cinatra’s shared records for permission-scoped recall across sessions and compatible agent tools.
+- **Runtime:** Cinatra invokes the agent runtime over A2A to execute agent definitions. See [Integration](#integration) for supported runtimes, portability, and compatibility requirements.
+- **Sandbox:** A broker and isolated sandbox workers run shell commands, scripts, and package installs for assistants, agents, and deterministic tasks. Access checks, resource quotas, and network policies govern execution, and command decisions are recorded for auditing.
+- **HITL:** Human input and review use shared rendering components and typed AG-UI events over server-sent events (SSE), with durable replay through Redis. A2UI provides declarative interaction surfaces in chat and embedded assistants.
+- **Background execution:** Server-side workers handle scheduling, jobs, retries, and notifications through BullMQ and Redis. Persisted run state supports pauses for human input and lets work continue independently of an open browser session.
+- **Persistent data:** PostgreSQL stores workspace records, run state, revisions, and decisions; artifact files use dedicated blob storage. Graphiti and Neo4j maintain a derived knowledge index for retrieval across related records.
 
 ---
 
 ## Quick start
 
+Requirements: Node.js 24 or newer, git, Docker with Compose, and about 6 GB of RAM.
+
 ```bash
 npx @cinatra-ai/cinatra install
 ```
 
-The [cinatra CLI](https://www.npmjs.com/package/@cinatra-ai/cinatra) is the single, idempotent command that takes a machine from zero to a running instance: it checks prerequisites (Node.js 24+, git, pnpm via Corepack, Docker + Compose), clones Cinatra, creates your `.env.local`, brings up the local Docker services, installs dependencies, and runs first-time setup. Re-running it on an existing checkout reconciles it in place instead of cloning again. Use `--mode prod` for a production instance.
+The installer checks prerequisites, prepares the checkout and configuration, starts local services, and installs dependencies. Running it again reconciles the existing instance. Add `--mode prod` for a production instance.
 
-Once it finishes, `cd` into the checkout (`cinatra/` by default) and run `npx @cinatra-ai/cinatra instance start` for day-to-day dev-server start/stop, or `npx @cinatra-ai/cinatra doctor` / `npx @cinatra-ai/cinatra status` to check on it. After pulling new code, `npx @cinatra-ai/cinatra instance refresh` reconciles dependencies and the dev database schema to match your checkout; `npx @cinatra-ai/cinatra update` moves the checkout itself forward first (dev → latest `main`, prod → latest release) and then reconciles. Install the CLI globally with `npm install -g @cinatra-ai/cinatra` to drop the `npx` prefix.
+1. Open <http://localhost:3000> and register. The first account becomes the platform administrator.
+2. Follow the setup wizard to configure a model provider and connect the applications you need.
+3. Open an assistant, mention an agent by its handle, and describe the work. Respond to requests for input and review its artifacts as the run progresses.
 
-Open <http://localhost:3000>. The first user to register becomes the platform admin and lands in the in-app setup wizard for the remaining first-run configuration.
+For ongoing operation, install the CLI globally with `npm install -g @cinatra-ai/cinatra`, or replace `cinatra` in the commands below with `npx @cinatra-ai/cinatra`.
 
-Full walkthrough with prerequisites, services, and first-time configuration: see [Installation](https://docs.cinatra.ai/guides/hosting/installation/) and [Quickstart](https://docs.cinatra.ai/guides/hosting/quickstart/) in the Hosting Guide.
+| Command | What it does |
+|---|---|
+| `cinatra instance start` / `stop` / `restart` | Run the instance |
+| `cinatra update` | Update the checkout, dependencies, and database schema |
+| `cinatra instance backup create` | Export a full backup bundle |
+| `cinatra doctor` / `status` / `logs` | Diagnose and inspect the instance |
 
----
+See the [Installation guide](https://docs.cinatra.ai/guides/hosting/installation/) and [Quickstart walkthrough](https://docs.cinatra.ai/guides/hosting/quickstart/) for details.
 
 ## Documentation
 
-The full documentation set is published at **[docs.cinatra.ai](https://docs.cinatra.ai)**.
+The documentation at [docs.cinatra.ai](https://docs.cinatra.ai) covers:
 
-Release history and notable changes are tracked in **[CHANGELOG.md](CHANGELOG.md)**; each tagged release also has auto-generated notes on the [GitHub Releases](https://github.com/cinatra-ai/cinatra/releases) page.
-
----
+- **[User guides](https://docs.cinatra.ai/guides/user/):** Conversations, agents, skills, artifacts, reviews, and collaboration.
+- **[Administration](https://docs.cinatra.ai/guides/admin/):** Extensions, permissions, providers, telemetry, and instance settings.
+- **[Development](https://docs.cinatra.ai/guides/developer/):** Extension authoring, development workflows, and contributions to the core.
+- **[Hosting](https://docs.cinatra.ai/guides/hosting/):** Installation, configuration, operation, and troubleshooting.
+- **[Integrations](https://docs.cinatra.ai/integrations/):** Connections to applications such as WordPress, Drupal, Twenty, and Plane.
+- **[References](https://docs.cinatra.ai/references/):** Platform architecture, MCP interfaces, design specifications, and terminology.
+- **[Resources](https://docs.cinatra.ai/resources/):** Platform background and comparisons with other AI tools.
 
 ## Contributing
 
-Issues and pull requests are welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**. To report a security vulnerability, see **[SECURITY.md](SECURITY.md)**.
-
-## License
-
-Cinatra is open source under the Apache License 2.0 — see **[LICENSE](LICENSE)**.
+- **[Discussions](https://github.com/cinatra-ai/cinatra/discussions):** Ask questions, propose ideas, and share what you have built.
+- **[Good first issues](https://github.com/cinatra-ai/cinatra/labels/good%20first%20issue):** Find a starting point for contributing to the core.
+- **[Contribution guide](https://github.com/cinatra-ai/cinatra/blob/main/CONTRIBUTING.md):** Set up your development environment and follow the contribution workflow and [Code of Conduct](https://github.com/cinatra-ai/cinatra/blob/main/CODE_OF_CONDUCT.md).
+- **[Extension development skills](https://github.com/cinatra-ai/claude-plugin):** Use Cinatra’s AI coding-agent skills for scaffolding, implementing, validating, and packaging extensions. Build an extension to add capabilities without changing the core.
