@@ -1,20 +1,29 @@
 // -----------------------------------------------------------------------------
-// ONE DEVELOPMENT COMMAND FOR THE FOUR SETUP WRITES.
+// ONE DEVELOPMENT COMMAND FOR THE FIVE SETUP WRITES.
 //
 // Proving a change on a development instance should not begin with a browser
-// session through four wizard steps whose underlying writes take seconds. This
-// composes the four — namespace, provider connection, connector-service secret,
-// public origin — into one in-process call, reusing the SAME writers each
-// screen reaches. It invents no row shape, no codec and no second validator.
+// session through five wizard steps whose underlying writes take seconds. This
+// composes the five — first administrator, namespace, provider connection,
+// connector-service secret, public origin — into one in-process call, reusing
+// the SAME writers each screen reaches. It invents no row shape, no codec and
+// no second validator.
 //
 // SECRET TRAVEL — the rule this whole path is built around:
 //
-//     Every secret value (the provider key, the connector-service secret)
-//     reaches this process over STDIN, or an equivalent in-process channel.
+//     Every secret value (the provider key, the connector-service secret, the
+//     first administrator's password — though never their ADDRESS, which is an
+//     ordinary argument) reaches this process over STDIN, or an equivalent
+//     in-process channel.
 //     NEVER as a command-line argument. NEVER through an environment file
-//     written to disk. NEVER logged. Each value is sealed by the exact
-//     encryption call the corresponding screen already uses, and nothing here
-//     ever writes a credential to a file or bakes one into a database template.
+//     written to disk. NEVER logged. Nothing here ever writes a credential to
+//     a file or bakes one into a database template.
+//
+//     What becomes of a value differs by kind. Each one EXCEPT the
+//     administrator password is sealed by the exact encryption call the
+//     corresponding screen already uses, before anything is persisted. The
+//     password is not sealed at all: it is HASHED, one way, by the account
+//     creation itself, exactly as it would be for an account created in a
+//     browser. Nothing stores it in clear, and nothing can read it back.
 //
 // RUNTIME. This command, and every wrapper it calls, independently refuses to
 // run outside a development runtime — see `./runtime-gate`. That is in addition
@@ -41,6 +50,11 @@ import {
   provisionPublicOrigin,
   type ProvisionPublicOriginOutcome,
 } from "@/lib/dev-instance-provisioning/provision-public-origin";
+import {
+  provisionFirstAdministrator,
+  type ProvisionFirstAdministratorDeps,
+  type ProvisionFirstAdministratorOutcome,
+} from "@/lib/dev-instance-provisioning/provision-first-administrator";
 import type {
   ProvisionProviderConnectionDeps,
   ProvisionProviderConnectionOutcome,
@@ -48,6 +62,13 @@ import type {
 import type { DeferredInstanceIdentityDeps } from "@/lib/instance-identity-deferred-write";
 
 export type DevInstanceProvisioningRequest = {
+  firstAdministrator?: {
+    /** An ordinary value — an address is not a secret. */
+    email: string;
+    name?: string;
+    /** In-memory only, from stdin. */
+    password: string;
+  };
   namespace?: {
     instanceNamespace: string;
     instanceDisplayName: string;
@@ -69,9 +90,11 @@ export type DevInstanceProvisioningRequest = {
 };
 
 export type DevInstanceProvisioningDeps = ProvisionProviderConnectionDeps &
+  ProvisionFirstAdministratorDeps &
   DeferredInstanceIdentityDeps;
 
 export type DevInstanceProvisioningReport = {
+  firstAdministrator: ProvisionFirstAdministratorOutcome | null;
   namespace: ProvisionNamespaceOutcome | null;
   connectorService: ProvisionConnectorServiceSecretOutcome | null;
   provider: ProvisionProviderConnectionOutcome | null;
@@ -83,10 +106,22 @@ export type DevInstanceProvisioningReport = {
 };
 
 /**
- * ORDER MATTERS, and it is the wizard's own. The connector-service secret comes
- * before the provider connection because the Anthropic credential is stored
- * THROUGH the connection service — the wizard's Secrets step precedes its Model
- * step for the same reason, and its Model step's fix-forward copy says so.
+ * ORDER MATTERS, and it is the wizard's own.
+ *
+ * The FIRST ADMINISTRATOR comes first because the Account step is step 1 of the
+ * wizard's rail (src/app/setup/layout.tsx), and because it is the only step
+ * whose absence makes the others unreachable in a browser: every later screen's
+ * action is behind an admin session. Nothing forces the order from below — none
+ * of the four legs that follow reads the current user, and the provider leg
+ * passes a null actor on purpose, since no human worked the wizard. What the
+ * order buys is that every intermediate state of this command is a state a
+ * wizard run also passes through: an instance carrying a namespace and a
+ * committed provider but no administrator is not one of them.
+ *
+ * The connector-service secret then comes before the provider connection
+ * because the Anthropic credential is stored THROUGH the connection service —
+ * the wizard's Secrets step precedes its Model step for the same reason, and
+ * its Model step's fix-forward copy says so.
  */
 export async function provisionDevInstance(
   request: DevInstanceProvisioningRequest,
@@ -95,6 +130,20 @@ export async function provisionDevInstance(
   assertDevelopmentRuntime("provisionDevInstance");
 
   const notices: string[] = [];
+
+  const firstAdministrator = request.firstAdministrator
+    ? await provisionFirstAdministrator(request.firstAdministrator, deps)
+    : null;
+  if (firstAdministrator) {
+    notices.push(
+      firstAdministrator.alreadySeated
+        ? "First administrator: this instance already has one — nothing written."
+        : firstAdministrator.administrator
+          ? `First administrator: ${firstAdministrator.email} created and promoted.`
+          : `First administrator: ${firstAdministrator.email} created, but this instance ` +
+            "declined to promote it — the account is NOT an administrator.",
+    );
+  }
 
   const namespace = request.namespace
     ? await provisionInstanceNamespace(request.namespace, {
@@ -151,12 +200,14 @@ export async function provisionDevInstance(
   }
 
   return {
+    firstAdministrator,
     namespace,
     connectorService,
     provider,
     publicOrigin,
     wrote: Boolean(
-      namespace?.written ||
+      firstAdministrator?.written ||
+        namespace?.written ||
         connectorService?.written ||
         provider?.written ||
         publicOrigin?.written,
