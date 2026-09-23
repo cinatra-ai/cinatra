@@ -146,3 +146,63 @@ describe("the personal axis follows the snapshot, not the run's owner", () => {
     expect(ctx.actor.organizationId).toBe("org-1");
   });
 });
+
+describe("the RUN decides the project scope, not the request body", () => {
+  // A body field narrowed the resolution to a project the run never named, so
+  // the caller chose which project's context an agent run reads. The run's
+  // frozen scopes decide, and both routes answer the same way.
+  it("ignores a body project on a run that names one of its own", async () => {
+    readAgentRunById.mockResolvedValue(
+      run({
+        projectId: "proj-run",
+        assignmentScopeSnapshot: {
+          v: 1,
+          orgId: "org-1",
+          projectId: "proj-run",
+          teamIds: [],
+          originatingHumanUserId: "owner-1",
+        },
+      }),
+    );
+    const ctx = await deriveContextRouteContext(
+      request(),
+      { ...body(), projectId: "proj-run" },
+      "resolve",
+    );
+    expect(ctx.projectId).toBe("proj-run");
+  });
+
+  it("REFUSES a body project on a run that names none", async () => {
+    readAgentRunById.mockResolvedValue(
+      run({ projectId: null, assignmentScopeSnapshot: { v: 1, orgId: "org-1", teamIds: [] } }),
+    );
+    await expect(
+      deriveContextRouteContext(request(), { ...body(), projectId: "proj-other" }, "resolve"),
+    ).rejects.toMatchObject({ code: "project_outside_run_scope", status: 422 });
+  });
+
+  it("REFUSES a body project that is not the run's own, on finalize too", async () => {
+    readAgentRunById.mockResolvedValue(
+      run({
+        projectId: "proj-run",
+        assignmentScopeSnapshot: {
+          v: 1,
+          orgId: "org-1",
+          projectId: "proj-run",
+          teamIds: [],
+        },
+      }),
+    );
+    await expect(
+      deriveContextRouteContext(request(), { ...body(), projectId: "proj-other" }, "finalize"),
+    ).rejects.toMatchObject({ code: "project_outside_run_scope" });
+  });
+
+  it("accepts an empty body project, which names nothing at all", async () => {
+    readAgentRunById.mockResolvedValue(
+      run({ projectId: "proj-run", assignmentScopeSnapshot: { v: 1, orgId: "org-1", projectId: "proj-run", teamIds: [] } }),
+    );
+    const ctx = await deriveContextRouteContext(request(), { ...body(), projectId: "" }, "resolve");
+    expect(ctx.projectId).toBe("proj-run");
+  });
+});
