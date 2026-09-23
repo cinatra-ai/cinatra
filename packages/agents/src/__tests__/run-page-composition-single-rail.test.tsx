@@ -34,7 +34,7 @@
  */
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -85,6 +85,34 @@ const row = vi.hoisted(() => ({
   hitlContext: null as unknown,
   /** The input forms the agent declares — none for the finished-run reading. */
   required: ["idea", "audience"] as string[],
+  /**
+   * THE FIELDS THE AGENT DECLARES, WITH THE TITLES IT MAPS TO THEM
+   * (cinatra#3243). A field whose title only restates its own key declares no
+   * name of its own, and `run-input-steps.ts` merges every such form into the
+   * run's one setup entry — which is the reading every case above takes. A
+   * field that declares a real name is its own step, which is what a run with
+   * a form it is standing at and a form it has not been asked needs.
+   */
+  properties: {
+    idea: { type: "string", title: "idea" },
+    audience: { type: "string", title: "audience" },
+  } as Record<string, unknown>,
+  /** The values the run carries for those fields — none before it is asked. */
+  inputParams: { idea: "a post about rails", audience: "developers" } as Record<
+    string,
+    unknown
+  >,
+}));
+
+/**
+ * THE RUN'S RECOMMENDATION PARK, AS THE STORE HOLDS IT (cinatra#3243) — the
+ * whole reading of the Skills entry: a `parked` row is the question still held,
+ * which is the moment the issue reports, and `null` is a run that never held.
+ */
+const recommendationPark = vi.hoisted(() => ({
+  row: null as { status: string } | null,
+  /** What the card's own resolve answers for that park. */
+  holdState: { state: "none" } as unknown,
 }));
 
 /**
@@ -188,7 +216,11 @@ const TEMPLATE = {
 function makeTemplate() {
   return {
     ...TEMPLATE,
-    inputSchema: { ...TEMPLATE.inputSchema, required: row.required },
+    inputSchema: {
+      ...TEMPLATE.inputSchema,
+      properties: row.properties,
+      required: row.required,
+    },
   };
 }
 
@@ -199,7 +231,7 @@ function makeRun() {
     versionId: null,
     runBy: "user-1",
     status: row.status,
-    inputParams: { idea: "a post about rails", audience: "developers" },
+    inputParams: row.inputParams,
     stepResults: null,
     startedAt: new Date("2026-01-01"),
     completedAt: null,
@@ -279,7 +311,18 @@ vi.mock("../lifecycle-policy-store", () => ({
 }));
 
 vi.mock("../recommendation-hold", () => ({
-  readRecommendationParkForRun: vi.fn(async () => null),
+  readRecommendationParkForRun: vi.fn(async () => recommendationPark.row),
+}));
+
+// The Skills card resolves its own offer through this module after it mounts,
+// and until that answer lands a LIVE hold draws no DOM at all — the card says
+// so itself. That read is data layer, so it is stubbed here exactly as every
+// other read the page makes; the card, the frame and the rail are the real
+// ones.
+vi.mock("../run-recommendation-actions", () => ({
+  getRunRecommendationHoldStateAction: vi.fn(async () => recommendationPark.holdState),
+  confirmRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
+  skipRunRecommendationAction: vi.fn(async () => ({ ok: true, dispatched: true })),
 }));
 
 vi.mock("../hitl-context", () => ({
@@ -356,6 +399,13 @@ beforeEach(() => {
   row.lifecycleCardRef = "wayflow-task-1";
   row.hitlContext = STORED_IDEAS_GATE;
   row.required = ["idea", "audience"];
+  row.properties = {
+    idea: { type: "string", title: "idea" },
+    audience: { type: "string", title: "audience" },
+  };
+  row.inputParams = { idea: "a post about rails", audience: "developers" };
+  recommendationPark.row = null;
+  recommendationPark.holdState = { state: "none" };
   reviewSlot.awaiting = false;
   reviewSlot.reviewTaskId = null;
   reviewGates.rows = [];
@@ -852,5 +902,177 @@ describe("the run's schedule heads the one rail (cinatra#3478)", () => {
     expect(numerals).toEqual([...new Set(numerals)]);
     expect(numerals).toEqual([...numerals].sort((a, b) => a - b));
     expect(numerals[0]).toBe(1);
+  });
+});
+
+/**
+ * NO ENTRY OPENS ONTO NOTHING (cinatra#3243).
+ *
+ * WHAT WAS MEASURED. A reader opens the page of a run that has NOT been
+ * dispatched — the run is `pending_input`, it holds no interrupt, and its Skills
+ * question is still held — presses the rail entry of one of the run's own
+ * question forms, and the right-hand column shows nothing at all.
+ *
+ * WHY. The run detail is composed as ONE fragment whose every child is gated on
+ * a condition that is false for such a run, so the fragment draws nothing; and a
+ * fragment is an ELEMENT however its children resolve, so the frame's own
+ * predicate read it as something to draw and drew that row selectable. The frame
+ * states that limit itself (`run-surface-rail-step.ts`): "a step whose surface
+ * renders nothing on the client can still open an empty column … the frame
+ * refuses what it can see, and the page answers what only the page can."
+ *
+ * The ratified drawing, `specs/app-artifact-review.html` section I: "Selecting a
+ * step opens that step's page in the run detail, and the page carries the one
+ * card of the step it belongs to", and "The step the run is paused on is
+ * highlighted; steps already passed sit above it, steps still to come below."
+ * One rule in two halves: an entry either opens onto its own card or does not
+ * open, and no entry ever opens onto nothing.
+ *
+ * So these cases render the REAL screen and read its own DOM anchors — the run
+ * detail column, the rail's rows, the Skills card the column draws — and press a
+ * real row with `fireEvent`. Nothing here is asserted against a node this file
+ * composed.
+ */
+describe("a step the reader selects opens its own card, never a blank run detail (cinatra#3243)", () => {
+  /**
+   * THE RUN THE ISSUE REPORTS. Undispatched, so `pending_input`, with no
+   * lifecycle moment and no gate context; two visible required fields it carries
+   * no value for, each declaring a name of its own so the rail lists them as two
+   * steps — the one the loop would ask first, and one further down it has not
+   * been asked; and its Skills question still held, which is the moment the
+   * issue names.
+   */
+  function undispatchedRunHoldingItsSkillsQuestion() {
+    row.status = "pending_input";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = ["idea", "audience"];
+    row.properties = {
+      idea: { type: "string", title: "The idea" },
+      audience: { type: "string", title: "The audience" },
+    };
+    row.inputParams = {};
+    recommendationPark.row = { status: "parked" };
+    recommendationPark.holdState = {
+      state: "held",
+      agentPackageName: "@cinatra-ai/blog-idea-generator",
+      promptText: "a post about rails",
+      recommendations: [
+        {
+          skillId: "@cinatra-ai/seo/seo-audit",
+          skillRevisionId: "rev-1",
+          name: "SEO Audit",
+          vendor: null,
+          recommended: true,
+        },
+      ],
+      holdRef: "hold-1",
+      canDecide: true,
+    };
+  }
+
+  /** One rail row, by the key the rail gives it. */
+  function railRow(container: HTMLElement, key: string): HTMLElement | undefined {
+    return Array.from(
+      container.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    ).find((el) => el.getAttribute("data-run-surface-rail-step-key") === key);
+  }
+
+  /**
+   * Render the page and wait for the Skills card's own resolve to land. A LIVE
+   * hold draws no DOM until it does — the card says so itself — so this is the
+   * page as a reader actually meets it, not a first frame nobody sees.
+   */
+  async function renderTheRunPage() {
+    const { container } = await renderRunPage();
+    const detail = container.querySelector<HTMLElement>("[data-run-detail-column]");
+    expect(detail).not.toBeNull();
+    await waitFor(() => {
+      expect(
+        detail!.querySelector('[data-lifecycle-card="recommendation_hold"]'),
+      ).not.toBeNull();
+    });
+    return { container, detail: detail! };
+  }
+
+  /**
+   * THE DRAWING'S "OPENED BEFORE THE RUN STARTS" READING, by the card's own
+   * anchors: "the step's page carries the row with the boxes still able to take
+   * a change and Continue beneath them".
+   */
+  function expectTheSkillsCard(detail: HTMLElement) {
+    const card = detail.querySelector<HTMLElement>(
+      '[data-lifecycle-card="recommendation_hold"]',
+    );
+    expect(card).not.toBeNull();
+    expect(card!.getAttribute("data-lifecycle-card-state")).toBe("held");
+    expect(card!.querySelectorAll("[data-skills-step-checkbox]").length).toBeGreaterThan(0);
+    expect(card!.querySelector("[data-skills-step-floor]")).not.toBeNull();
+    expect((detail.textContent ?? "").trim().length).toBeGreaterThan(0);
+  }
+
+  it("keeps the Skills step's own card in the run detail when the reader presses the form the run has not been dispatched to ask", async () => {
+    undispatchedRunHoldingItsSkillsQuestion();
+
+    const { container, detail } = await renderTheRunPage();
+
+    // The page opens on the Skills step, whose card it draws — the entry the
+    // reader is standing on before the press.
+    expect(detail.getAttribute("data-run-surface-selected-step")).toBe("recommendation");
+    expectTheSkillsCard(detail);
+
+    // AND THE PRESS THE ISSUE REPORTS. The row of the run's own question form is
+    // on the rail, and the reader presses it.
+    const openForm = railRow(container, "input:0");
+    expect(openForm).toBeDefined();
+    fireEvent.pointerDown(openForm!);
+    fireEvent.pointerUp(openForm!);
+    fireEvent.click(openForm!);
+
+    // The live reading before this fix: the row was selectable, the press moved
+    // the selection to `input:0`, and the column rendered the fragment whose
+    // every child is withheld — nothing at all. The page now keeps the card the
+    // reader was reading, because the entry does not open.
+    expect(detail.getAttribute("data-run-surface-selected-step")).toBe("recommendation");
+    expectTheSkillsCard(detail);
+  });
+
+  it("draws every form the run has not been asked in the muted upcoming reading, so no entry opens onto nothing", async () => {
+    undispatchedRunHoldingItsSkillsQuestion();
+
+    const { container, detail } = await renderTheRunPage();
+
+    // BOTH HALVES OF THE ONE RULE, on the two rows the rail draws for this run:
+    // the form the loop would ask first, which the run has not been dispatched
+    // to ask, and the form further down — "steps still to come below". Neither
+    // opens, and the action word says so rather than promising a step.
+    for (const key of ["input:0", "input:1"]) {
+      const step = railRow(container, key);
+      expect(step).toBeDefined();
+      expect(step!.getAttribute("data-action")).toBe("input-step-unavailable");
+      expect(step!.getAttribute("aria-disabled")).toBe("true");
+      expect(step!.getAttribute("data-run-surface-rail-selected")).toBe("false");
+    }
+
+    // AND THE RAIL STILL LISTS THEM, in the run's own order and numbered with
+    // the rest: the drawing keeps the steps still to come on the rail, it only
+    // refuses to open them.
+    expect(railRow(container, "input:0")!.getAttribute("data-run-surface-rail-reached")).toBe(
+      "true",
+    );
+    expect(railRow(container, "input:1")!.getAttribute("data-run-surface-rail-reached")).toBe(
+      "false",
+    );
+
+    // Pressing the one further down leaves the page on the card it was showing.
+    const upcoming = railRow(container, "input:1")!;
+    fireEvent.pointerDown(upcoming);
+    fireEvent.pointerUp(upcoming);
+    fireEvent.click(upcoming);
+
+    expect(detail.getAttribute("data-run-surface-selected-step")).toBe("recommendation");
+    expectTheSkillsCard(detail);
   });
 });
