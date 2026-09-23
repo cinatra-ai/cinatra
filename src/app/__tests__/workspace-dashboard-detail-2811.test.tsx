@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
   rows: {} as Record<string, Record<string, unknown>>,
   crumbs: [] as unknown[],
   ensured: [] as Array<Record<string, unknown>>,
+  read: [] as string[],
 }));
 
 vi.mock("next/navigation", () => ({
@@ -61,7 +62,10 @@ vi.mock("@/lib/dashboards/authz", () => {
   };
 });
 vi.mock("@cinatra-ai/dashboards/extension-dashboard-reads", () => ({
-  readDashboardRowById: async (id: string) => state.rows[id],
+  readDashboardRowById: async (id: string) => {
+    state.read.push(id);
+    return state.rows[id];
+  },
 }));
 // The workspace tab's own idempotent find-or-create, with the service's real
 // rule: an Overview is LOCATED by the (entity, owner) composite, never by its
@@ -178,6 +182,7 @@ beforeEach(() => {
   };
   state.crumbs = [];
   state.ensured = [];
+  state.read = [];
 });
 afterEach(cleanup);
 
@@ -360,6 +365,17 @@ describe("the address reaches the page escaped, and still opens the Overview", (
   it("is not found for a segment that is not a valid escape sequence, and never throws", async () => {
     await expect(open("dash%ZZworkspace")).rejects.toThrow("NEXT_NOT_FOUND");
     await expect(open("%E0%A4%A")).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(state.ensured).toEqual([]);
+  });
+
+  // An escaped NUL decodes to a character no stored identifier can hold, since
+  // a PostgreSQL text value cannot carry one. Handing it to the store would
+  // fail the query rather than miss, so the segment is used as it arrived and
+  // the page answers not-found.
+  it("is not found for an escaped NUL, and never reaches the store with one", async () => {
+    await expect(open("%00")).rejects.toThrow("NEXT_NOT_FOUND");
+    await expect(open(`${ESCAPED}%00`)).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(state.read.some((id) => id.includes("\u0000"))).toBe(false);
     expect(state.ensured).toEqual([]);
   });
 });

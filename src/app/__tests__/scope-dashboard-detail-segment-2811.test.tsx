@@ -95,6 +95,16 @@ describe("the team dashboard page reads its segments as the runtime hands them",
     expect(p.id).toBe("dash%ZZteam");
   });
 
+  it("passes an escaped NUL through, so it names no row rather than reaching the store", async () => {
+    const p = props(
+      await TeamDashboardDetailPage({
+        params: Promise.resolve({ teamId: "t1", dashboardId: "%00" }),
+      }),
+    );
+    expect(p.id).toBe("%00");
+    expect(p.id.includes("\u0000")).toBe(false);
+  });
+
   it("hands the decoded identifier to the metadata gate", async () => {
     await teamMetadata({
       params: Promise.resolve({ teamId: "t1", dashboardId: encodeURIComponent(TEAM_OVERVIEW_ID) }),
@@ -158,6 +168,11 @@ describe("the flat dashboard page reads its segment as the runtime hands it", ()
     );
     expect(p.id).toBe(TEAM_OVERVIEW_ID);
     expect(p.currentPath).toBe(`/dashboards/${segment}`);
+  });
+
+  it("passes an escaped NUL through, so it names no row rather than reaching the store", async () => {
+    const p = props(await FlatDashboardDetailPage({ params: Promise.resolve({ id: "%00" }) }));
+    expect(p.id).toBe("%00");
   });
 
   it("hands the decoded identifier to the metadata gate", async () => {
