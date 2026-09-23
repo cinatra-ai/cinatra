@@ -36,6 +36,7 @@ const actions = vi.hoisted(() => ({
 vi.mock("@/lib/scope-assignment/scope-assignment-actions", () => actions);
 
 import { ScopeAssignmentPage } from "@/components/scope-assignment/scope-assignment-page";
+import { Tabs, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import type {
   ScopeAssignmentPageModel,
   ScopeAssignmentSectionModel,
@@ -131,6 +132,72 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+describe("the pane strip", () => {
+  /** The row the application's own scope pages draw, straight from the shared
+   *  primitive. Every class the page's strip carries is compared against this,
+   *  so the strip cannot drift from the app's strip again. */
+  function sharedStrip(): { row: string; list: string; trigger: string; rule: string } {
+    const { container } = render(
+      <Tabs value="skills">
+        <TabsListRow aria-label="Assignment panes">
+          <TabsTrigger value="skills">Skills</TabsTrigger>
+        </TabsListRow>
+      </Tabs>,
+    );
+    const list = container.querySelector('[data-slot="tabs-list"]')!;
+    const row = list.parentElement!;
+    const out = {
+      row: row.getAttribute("class") ?? "",
+      list: list.getAttribute("class") ?? "",
+      trigger: container.querySelector('[data-slot="tabs-trigger"]')!.getAttribute("class") ?? "",
+      rule: row.querySelector('[data-slot="separator"]')!.getAttribute("class") ?? "",
+    };
+    cleanup();
+    return out;
+  }
+
+  it("is the application's shared strip, not a row of its own", () => {
+    const shared = sharedStrip();
+    render(<ScopeAssignmentPage model={model()} />);
+
+    const list = document.querySelector('[data-slot="tabs-list"]')!;
+    const row = list.parentElement!;
+    // The row itself: no column gap, so the trailing rule starts immediately
+    // right of the last tab.
+    expect(row.getAttribute("class")).toBe(shared.row);
+    expect(list.getAttribute("class")).toBe(shared.list);
+    // The rule sits on the list's bottom edge, with no lift above the tab
+    // baseline, so it continues the active tab's underline.
+    const rule = row.querySelector('[data-slot="separator"]');
+    expect(rule?.getAttribute("class")).toBe(shared.rule);
+    // The tabs carry the app's own metrics and weight.
+    for (const trigger of document.querySelectorAll('[data-slot="tabs-trigger"]')) {
+      expect(trigger.getAttribute("class")).toBe(shared.trigger);
+    }
+  });
+
+  it("leaves no hand-rolled rule or gap anywhere on the page", () => {
+    render(<ScopeAssignmentPage model={model()} />);
+    const list = document.querySelector('[data-slot="tabs-list"]')!;
+    const row = list.parentElement!;
+    expect(row.className).not.toMatch(/\bgap-/);
+    for (const rule of document.querySelectorAll('[data-slot="separator"]')) {
+      expect(rule.className).not.toMatch(/\bmb-2\.75\b/);
+    }
+  });
+
+  it("keeps both pane addresses", () => {
+    render(<ScopeAssignmentPage model={model()} />);
+    const base = `/teams/${TEAM}/agents/${AGENT_PATH}/settings`;
+    expect(
+      document.querySelector('[data-slot="scope-assignment-tab-skills"]')!.getAttribute("href"),
+    ).toBe(`${base}?tab=skills`);
+    expect(
+      document.querySelector('[data-slot="scope-assignment-tab-artifacts"]')!.getAttribute("href"),
+    ).toBe(`${base}?tab=artifacts`);
+  });
+});
 
 describe("the Skills pane", () => {
   it("renders the named root with the package, the scope and the Skills tab", () => {

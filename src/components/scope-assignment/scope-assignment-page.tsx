@@ -20,7 +20,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import {
   Empty,
   EmptyContent,
@@ -241,26 +241,24 @@ export function ScopeAssignmentPage({ model }: { model: ScopeAssignmentPageModel
       <Separator major decorative className="mt-5 mb-1" />
 
       {model.surface === "agent" ? (
-        // The §II tab strip: route links, the active pane driven by the
-        // address, the etched rule running on from the last tab.
+        // The §II tab strip, drawn with the application's OWN strip primitive
+        // (`TabsListRow`), the same road `EntityScopeTabs` takes for a scope
+        // page's five tabs. The primitive holds two corrections a hand-rolled
+        // row loses: the trailing rule starts immediately right of the last tab
+        // with no column gap, and it sits on the list's bottom edge, so it
+        // continues the active tab's underline instead of floating above it.
+        // Each tab stays a route link, so the active pane is driven by the
+        // address and both pane addresses are unchanged.
         <Tabs value={model.tab} className="mt-5">
-          <div className="grid grid-cols-[auto_1fr] items-end gap-4.5">
-            <TabsList aria-label="Assignment panes" className="gap-0 border-0">
-              {(["skills", "artifacts"] as const).map((pane) => (
-                <TabsTrigger
-                  key={pane}
-                  value={pane}
-                  asChild
-                  className="px-3.5 pt-2.25 pb-2.75 font-normal data-[state=active]:font-semibold"
-                >
-                  <Link data-slot={`scope-assignment-tab-${pane}`} href={scopeAssignmentPaneHref(model, pane)}>
-                    {pane === "skills" ? "Skills" : "Artifacts"}
-                  </Link>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            <Separator major decorative className="mb-2.75" />
-          </div>
+          <TabsListRow aria-label="Assignment panes">
+            {(["skills", "artifacts"] as const).map((pane) => (
+              <TabsTrigger key={pane} value={pane} asChild>
+                <Link data-slot={`scope-assignment-tab-${pane}`} href={scopeAssignmentPaneHref(model, pane)}>
+                  {pane === "skills" ? "Skills" : "Artifacts"}
+                </Link>
+              </TabsTrigger>
+            ))}
+          </TabsListRow>
         </Tabs>
       ) : null}
 
