@@ -145,3 +145,48 @@ describe("a failure is never the cached answer", () => {
     expect(ok.allocation.slots[0].refs.map((r) => r.artifactId)).toEqual(["a"]);
   });
 });
+
+describe("the gate plans over the FULL eligible pool", () => {
+  it("asks the resolver not to truncate, because the cap belongs after the dedupe", async () => {
+    // Each slot's resolver used to cut to maxItems BEFORE the manifest-wide
+    // dedupe ran, so a later slot could end EMPTY where the full pool would
+    // have filled it: the first slot takes `a`, the second is eligible for
+    // [a, b] with maxItems 1, its resolver keeps only `a`, the dedupe removes
+    // it, and nothing is left. Planning the full pool yields [b].
+    await planAllocationForGate(GATE);
+    for (const call of resolveCandidates.mock.calls) {
+      expect((call[0] as { applyMaxItems?: boolean }).applyMaxItems).toBe(false);
+    }
+  });
+
+  it("fills a later slot from the pool the earlier slot did not claim", async () => {
+    const first = slot({ slotId: "first", maxItems: 1 });
+    const second = slot({ slotId: "second", maxItems: 1, minItems: 0 });
+    readAgentContextSlotsFromOas.mockReturnValue([first, second]);
+    resolveCandidates.mockImplementation(async (input: { slot: { slotId: string } }) =>
+      input.slot.slotId === "first" ? [candidate("a")] : [candidate("a"), candidate("b")],
+    );
+    const gate = await planAllocationForGate(GATE);
+    const refs = gate.allocation.slots.map((s) => s.refs.map((r) => r.artifactId));
+    expect(refs).toEqual([["a"], ["b"]]);
+  });
+});
+
+describe("refreshing one entry does not evict an unrelated gate", () => {
+  it("replaces in place, because a replacement needs no extra capacity", async () => {
+    // A `fresh` recompute of a key the cache ALREADY holds is a REPLACEMENT.
+    // Evicting the oldest entry to make room for it throws away another gate's
+    // allocation for nothing, and the next ordinary callback for that gate then
+    // starts a second computation instead of reading the one already there.
+    const CAPACITY = 200;
+    for (let i = 0; i < CAPACITY; i += 1) {
+      await planAllocationForGate({ ...GATE, runId: `run-${i}` });
+    }
+    const afterFill = resolveCandidates.mock.calls.length;
+    // Refresh one entry the cache already holds. The oldest is `run-0`.
+    await planAllocationForGate({ ...GATE, runId: "run-100" }, { fresh: true });
+    // ...and the oldest must still be memoized.
+    await planAllocationForGate({ ...GATE, runId: "run-0" });
+    expect(resolveCandidates.mock.calls.length).toBe(afterFill + 1);
+  });
+});

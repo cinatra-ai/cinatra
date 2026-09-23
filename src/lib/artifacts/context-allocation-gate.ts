@@ -91,7 +91,12 @@ function readCache(key: string, now: number): Promise<GateAllocation> | null {
 }
 
 function writeCache(key: string, inFlight: Promise<GateAllocation>, now: number): void {
-  if (gateCache.size >= GATE_CACHE_MAX_ENTRIES) {
+  // Capacity is only ever spent by a NEW key. Replacing an entry the cache
+  // already holds (the `fresh` recompute a finalize asks for) needs none, and
+  // evicting for it threw away an unrelated gate's allocation: the next
+  // ordinary callback for that gate then started a second computation instead
+  // of reading the one already there.
+  if (!gateCache.has(key) && gateCache.size >= GATE_CACHE_MAX_ENTRIES) {
     const oldest = gateCache.keys().next();
     if (!oldest.done) gateCache.delete(oldest.value);
   }
@@ -143,6 +148,14 @@ export async function planAllocationForGate(
         actor: input.actor,
         slot,
         projectId: input.projectId,
+        // THE POOL, NOT THE SLOT'S OWN CUT. Each slot's resolver trims to
+        // `maxItems` for the per-slot contract the resolve route serves, and
+        // that trim ran BEFORE the manifest-wide dedupe here: the first slot
+        // claimed a ref, the second slot's resolver had already discarded
+        // everything past its own cap, and the slot ended EMPTY where the full
+        // pool would have filled it. The planner applies `maxItems` itself,
+        // after the merge and the dedupe, which is the order the rules state.
+        applyMaxItems: false,
       });
       // The resolver emits no assigned/ambient tag today, so every candidate
       // enters the planner as ambient and the assigned-layer rule is inert until

@@ -509,15 +509,41 @@ export async function deriveContextRouteContext(
     snapshot: run.assignmentScopeSnapshot,
     durableOrgId: run.orgId,
   }).snapshot.originatingHumanUserId;
+
   const contextActor: ActorContext =
     originatingHumanUserId && originatingHumanUserId === run.runBy
       ? actor
       : ({ ...actor, principalId: undefined } as unknown as ActorContext);
 
-  // projectId: the run's project is authoritative; fall back to the normalized
-  // body value. Normalize both (a stored "" must not fail-close the resolver).
-  const projectId =
-    normalizeProjectId(run.projectId) ?? normalizeProjectId(body.projectId);
+  // THE RUN'S FROZEN SCOPES DECIDE THE PROJECT (cinatra#2815 S3, epic #2812).
+  //
+  // The body value used to FILL IN for a run that names no project, so a caller
+  // chose which project's context an agent run read: a run with none, whose
+  // owner can reach project P, was narrowed to P on the strength of a request
+  // field. The run's own scope is the authority, and a body project it does not
+  // name is REFUSED rather than quietly honoured or quietly dropped, because a
+  // caller that asked for a different project must learn that it did not get
+  // one. Both routes derive their context here, so resolve and finalize answer
+  // the same way by construction.
+  //
+  // The frozen snapshot is preferred, and the mutable column is the fallback
+  // for a run whose payload predates it: that is the same order every other
+  // scope decision on this road takes.
+  const scopeChain = resolveAssignmentScopeChain({
+    snapshot: run.assignmentScopeSnapshot,
+    durableOrgId: run.orgId,
+  });
+  const projectId = scopeChain.usedFallback
+    ? normalizeProjectId(run.projectId)
+    : normalizeProjectId(scopeChain.snapshot.projectId ?? null);
+  const requestedProjectId = normalizeProjectId(body.projectId);
+  if (requestedProjectId !== undefined && requestedProjectId !== projectId) {
+    throw new ContextRouteError(
+      422,
+      "project_outside_run_scope",
+      `project '${requestedProjectId}' is not the project this run was created in`,
+    );
+  }
 
   return {
     actor: contextActor,
@@ -542,6 +568,9 @@ export async function resolveCandidates(input: {
   actor: ActorContext;
   slot: AgentContextSlot;
   projectId: string | undefined;
+  /** Forwarded to the resolver. The manifest-wide planner asks for `false`,
+   *  because it applies `maxItems` itself after its cross-slot dedupe. */
+  applyMaxItems?: boolean;
 }): Promise<ContextCandidate[]> {
   const installedExtensions = getInstalledExtensionDescriptors();
   const capture = await captureSnapshotsForContextSlot({
@@ -558,6 +587,7 @@ export async function resolveCandidates(input: {
     // Claimed rows resolve ONLY through the snapshots pinned at THIS
     // resolution (never "latest revision") — see ResolveContextSlotInput.
     snapshotPins: capture.pins,
+    ...(input.applyMaxItems !== undefined ? { applyMaxItems: input.applyMaxItems } : {}),
   });
   return refs as ContextCandidate[];
 }
