@@ -11,7 +11,6 @@ import {
 import {
   deriveContextRouteContext,
   loadTrustedSlot,
-  resolveCandidates,
   type DerivedContext,
 } from "@/lib/artifacts/context-route-io";
 import {
@@ -20,6 +19,7 @@ import {
   recordContextRouteSuccess,
 } from "@/lib/artifacts/context-route-observability";
 import { planAllocationForGate } from "@/lib/artifacts/context-allocation-gate";
+import { allocationForSlot } from "@/lib/artifacts/context-allocation-planner";
 import {
   finalizeContextSelectionPinsAtomic,
   MissingRepresentationError,
@@ -45,8 +45,9 @@ const RequestSchema = z.object({
   selectionMode: z.enum(["interactive", "autonomous"]),
   userResponse: z.string(),
   // cinatra#2815 S3 part (3): the ContextAllocationTokenV1 /api/context-resolve
-  // returned for THIS gate, carried by the renderer. Optional on the wire so a
-  // renderer that has not yet rolled still finalizes exactly as it did before.
+  // returned for THIS gate, carried by the renderer. Optional ON THE WIRE only
+  // so a caller that omits it is refused with a reason it can act on rather
+  // than a shapeless body error; it is REQUIRED (see the refusal below).
   allocationToken: z.string().min(1).optional(),
 });
 
@@ -112,56 +113,81 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    // cinatra#2815 S3 part (3): THE DRIFT GATE. When the renderer carried an
-    // allocation token, the manifest-wide allocation is recomputed here and
-    // compared to it. Equal means the world the human answered about is the
-    // world being written; unequal means it MOVED between the gate being drawn
-    // and the answer landing, and that is a structured conflict, never a
-    // silent write of a different set.
+    // cinatra#2815 S3 part (3): THE DRIFT GATE, and the ALLOCATION this
+    // finalize is allowed to write.
     //
-    // FAIL-CLOSED, unlike the resolve side: a token was presented, so this
-    // route can no longer say "the planner is optional here". A plan that
-    // cannot be computed refuses with its own stable code, distinct from the
-    // drift itself, so an operator can tell a moved world from a broken read.
-    if (body.allocationToken) {
-      let recomputed: string;
-      try {
-        recomputed = (
-          await planAllocationForGate({
-            actor: ctx.actor,
-            runId: ctx.run.id,
-            trustedSlotPackageName: ctx.trustedSlotPackageName,
-            projectId: ctx.projectId,
-          })
-        ).token;
-      } catch (err) {
-        throw new ContextRouteError(
-          409,
-          "allocation_unavailable",
-          `the manifest-wide allocation could not be recomputed: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-      if (recomputed !== body.allocationToken) {
-        throw new ContextRouteError(
-          409,
-          "allocation_drift",
-          `context allocation drifted: the gate was drawn for ` +
-            `${body.allocationToken} and now plans ${recomputed}`,
-        );
-      }
+    // THE TOKEN IS REQUIRED. It was optional while a renderer that had not yet
+    // rolled still had to finalize, and that optionality WAS the hole: a caller
+    // could skip the whole gate by omitting one field, which is precisely the
+    // pre-cutover compatibility this platform does not keep before its first
+    // stable release. A finalize with no token is refused, in its own stable
+    // code, so an operator reads "this caller is not carrying the token" rather
+    // than a shapeless body error.
+    if (!body.allocationToken) {
+      throw new ContextRouteError(
+        422,
+        "allocation_token_required",
+        "finalize requires the allocationToken /api/context-resolve returned for this gate",
+      );
     }
 
-    // Re-resolve the trusted candidate set and revalidate the submission.
-    const candidates = await resolveCandidates({
-      actor: ctx.actor,
-      slot,
-      projectId: ctx.projectId,
-    });
+    // Recomputed FRESH, never from the gate memo: the human has answered since
+    // the gate was drawn, and an allocation replayed from a cache could not
+    // show that the world moved underneath them. A plan that cannot be computed
+    // refuses with its own stable code, distinct from the drift itself, so an
+    // operator can tell a moved world from a broken read.
+    let gate: Awaited<ReturnType<typeof planAllocationForGate>>;
+    try {
+      gate = await planAllocationForGate(
+        {
+          actor: ctx.actor,
+          runId: ctx.run.id,
+          trustedSlotPackageName: ctx.trustedSlotPackageName,
+          projectId: ctx.projectId,
+        },
+        { fresh: true },
+      );
+    } catch (err) {
+      throw new ContextRouteError(
+        409,
+        "allocation_unavailable",
+        `the manifest-wide allocation could not be recomputed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    if (gate.token !== body.allocationToken) {
+      throw new ContextRouteError(
+        409,
+        "allocation_drift",
+        `context allocation drifted: the gate was drawn for ` +
+          `${body.allocationToken} and now plans ${gate.token}`,
+      );
+    }
+
+    // THE SUBMISSION IS VALIDATED AGAINST THE ALLOCATION, NOT THE POOL.
+    //
+    // This used to re-resolve the slot's candidates and accept any submitted
+    // ref that appeared among them. That is a WIDER set than the planner
+    // allocated: an override slot resolves several candidates and is allocated
+    // exactly one, and a ref the cross-slot dedupe removed is still in the
+    // second slot's pool. So a selection the planner never made could be
+    // written, with a matching token, because the token proved the allocation
+    // and nothing then enforced it.
+    //
+    // The allocation the token names IS the trusted set. One authority, and the
+    // token now means what it says.
+    const allocated = allocationForSlot(gate.allocation, body.slotId);
+    if (!allocated) {
+      throw new ContextRouteError(
+        422,
+        "slot_not_allocated",
+        `slot '${body.slotId}' received no allocation in the manifest this gate planned`,
+      );
+    }
     const trusted = revalidateSelectedRefs({
       submitted: envelope.selectedRefs,
-      candidates,
+      candidates: allocated.refs,
       slot,
     });
 

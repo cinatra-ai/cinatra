@@ -181,10 +181,91 @@ describe("cinatra#2815 S3 part 3 — the allocation token across resolve and fin
     expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
   });
 
-  it("a finalize carrying NO token never consults the planner (the landed path)", async () => {
+  it("a finalize carrying NO token is REFUSED, and writes nothing", async () => {
+    // The token used to be optional so an un-rolled renderer still finalized,
+    // and that optionality was the hole: omitting one field skipped the whole
+    // drift gate. This platform keeps no pre-cutover compatibility, so the
+    // omission is refused under its own code rather than waved through.
+    planAllocationForGate.mockResolvedValue(
+      gateAllocation("ContextAllocationTokenV1.any", [candidate("a")]),
+    );
     const res = await FINALIZE(finalizeRequest());
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe(
+      "allocation_token_required",
+    );
+    expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
+  });
+
+  it("recomputes FRESH, so a cached allocation cannot hide a world that moved", async () => {
+    planAllocationForGate.mockResolvedValue(
+      gateAllocation("ContextAllocationTokenV1.same", [candidate("a")]),
+    );
+    await FINALIZE(finalizeRequest("ContextAllocationTokenV1.same"));
+    expect(planAllocationForGate).toHaveBeenCalledTimes(1);
+    expect(planAllocationForGate.mock.calls[0][1]).toEqual({ fresh: true });
+  });
+
+  it("accepts ONLY what the allocation the token names contains", async () => {
+    // An override slot resolves several candidates and is allocated exactly
+    // one. Submitting the other one used to pass, because the submission was
+    // checked against the re-resolved POOL rather than against the allocation
+    // the matching token had just proved.
+    resolveCandidates.mockResolvedValue([candidate("a"), candidate("b")]);
+    planAllocationForGate.mockResolvedValue(
+      gateAllocation("ContextAllocationTokenV1.plan", [candidate("a")]),
+    );
+    const req = new Request("http://localhost/api/context-finalize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        parentRunId: "run-1",
+        parentPackageName: "@cinatra-ai/blog-draft-writer-agent",
+        slotId: SLOT_ID,
+        selectionMode: "interactive",
+        allocationToken: "ContextAllocationTokenV1.plan",
+        userResponse: JSON.stringify({
+          slotId: SLOT_ID,
+          resolutionMode: "override",
+          selectedRefs: [
+            {
+              artifactId: "b",
+              representationRevisionId: "b-rev",
+              semanticAssertionId: "b-sem",
+            },
+          ],
+        }),
+      }),
+    });
+    const res = await FINALIZE(req);
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe(
+      "ref_not_in_candidates",
+    );
+    expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
+  });
+
+  it("never re-resolves the candidate pool: the allocation is the only authority", async () => {
+    planAllocationForGate.mockResolvedValue(
+      gateAllocation("ContextAllocationTokenV1.same", [candidate("a")]),
+    );
+    const res = await FINALIZE(finalizeRequest("ContextAllocationTokenV1.same"));
     expect(res.status).toBe(200);
-    expect(planAllocationForGate).not.toHaveBeenCalled();
-    expect(finalizeContextSelectionPinsAtomic).toHaveBeenCalledTimes(1);
+    expect(resolveCandidates).not.toHaveBeenCalled();
+  });
+
+  it("a slot the manifest allocated nothing for is refused, never written", async () => {
+    planAllocationForGate.mockResolvedValue({
+      token: "ContextAllocationTokenV1.same",
+      allocation: {
+        plannerVersion: "context-allocation-planner-v1",
+        manifestDigest: "digest",
+        slots: [{ slotId: "someOtherSlot", refs: [] }],
+      },
+    });
+    const res = await FINALIZE(finalizeRequest("ContextAllocationTokenV1.same"));
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as Record<string, unknown>).error).toBe("slot_not_allocated");
+    expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
   });
 });
