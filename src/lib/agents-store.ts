@@ -1015,9 +1015,20 @@ export async function getAssignedSkillIdsForAgent(
   // workspace layer alone — never wider. The rest of this resolver is
   // untouched: the other tiers, their union and the lifecycle chokepoint below
   // all behave exactly as before.
+  //
+  // An EXPLICITLY absent durable organization stays absent. `durableOrgId: null`
+  // is a statement by a caller that holds the run: this instance has none.
+  // Replacing it with whoever happens to be resolving would deliver an
+  // organization assignment to a run whose durable scope supports the workspace
+  // alone, decided by the actor rather than by the run. A caller that names the
+  // field at all has decided; only a caller that names NO field leaves the
+  // actor frame to supply the instance's organization, as it always has.
   const deliveryScope: AssignedSkillDeliveryScope = {
     snapshot: runScope?.snapshot,
-    durableOrgId: runScope?.durableOrgId ?? actor?.organizationId ?? null,
+    durableOrgId:
+      runScope?.durableOrgId !== undefined
+        ? runScope.durableOrgId
+        : (actor?.organizationId ?? null),
   };
   // The scopes this resolution may read, decided ONCE and consumed by BOTH
   // assignment stores (cinatra#2815 S3). The custom-assignment table used to
@@ -1040,11 +1051,16 @@ export async function getAssignedSkillIdsForAgent(
         teamIds: [...(scopeChain.snapshot.teamIds ?? [])],
         projectIds: scopeChain.snapshot.projectId ? [scopeChain.snapshot.projectId] : [],
         organizationId: scopeChain.snapshot.orgId ?? "",
-        // The workspace layer is in every chain, including the narrowed one an
-        // instance with no durable organization falls back to. The reader's own
-        // default ties it to a resolved organization; here the snapshot has
-        // already decided that this resolution is a real workspace principal.
-        includeWorkspace: true,
+        // The workspace layer needs EVIDENCE of a real workspace principal. The
+        // reader's historical guard took a resolved organization as that
+        // evidence, because it had nothing better. The chain has something
+        // better and states it here: a frozen snapshot, or the legacy fallback
+        // that named the instance's durable organization. Both leave the
+        // chain's own organization non-empty. What is left is the narrowed
+        // fallback of a resolution that can name neither, and that one is no
+        // evidence at all, so the layer is refused rather than granted for
+        // having an actor object.
+        includeWorkspace: (scopeChain.snapshot.orgId ?? "") !== "",
       });
       // The rows carry their scope as an OWNER tuple; the chain places rows by
       // (scopeKind, scopeId). Same tuple, two names, translated here, once,

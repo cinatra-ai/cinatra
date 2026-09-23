@@ -110,14 +110,46 @@ function assignment(skillId: string, ownerType: OwnerType, ownerId: string) {
   return { skillId, agentId: AGENT, ownerType, ownerId, createdBy: null };
 }
 
-/** Seed the assignment table with the given rows for the next resolve call. */
+type ReadFilter = {
+  principalId: string;
+  teamIds?: string[];
+  projectIds?: string[];
+  organizationId?: string;
+  includeWorkspace?: boolean;
+};
+
+/**
+ * Seed the assignment table with the given rows for the next resolve call.
+ *
+ * The mock APPLIES THE READER'S OWN PREDICATE rather than returning every row,
+ * so what the filter says is what the caller receives. A mock that ignored the
+ * filter would let a case pass on the chain's narrowing alone and could not
+ * show a layer the read should never have asked for.
+ */
 function seedAssignments(rows: ReturnType<typeof assignment>[]) {
-  vi.mocked(readCustomSkillAssignmentsForAgent).mockReturnValue(rows as never);
+  vi.mocked(readCustomSkillAssignmentsForAgent).mockImplementation(((
+    _agentId: string,
+    filter: ReadFilter,
+  ) =>
+    rows.filter((row) => {
+      switch (row.ownerType) {
+        case "user":
+          return row.ownerId === filter.principalId;
+        case "team":
+          return (filter.teamIds ?? []).includes(row.ownerId);
+        case "project":
+          return (filter.projectIds ?? []).includes(row.ownerId);
+        case "organization":
+          return row.ownerId === filter.organizationId;
+        case "workspace":
+          return filter.includeWorkspace ?? (filter.organizationId ?? "") !== "";
+      }
+    })) as never);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(readCustomSkillAssignmentsForAgent).mockReturnValue([] as never);
+  seedAssignments([]);
 });
 
 /** A frozen V1 snapshot, as the run column carries it. */
@@ -227,9 +259,15 @@ describe("the custom-assignment road: workspace scope", () => {
     expect(ids).toContain("sk-workspace");
   });
 
-  it("still delivers it on the narrowest chain of all: no snapshot AND no durable organization", async () => {
+  it("withholds it on the narrowest chain of all: no snapshot AND no durable organization", async () => {
+    // REPLACED DELIBERATELY. This case used to assert the opposite, on the
+    // reading that the workspace layer is in every chain. It is, but the
+    // custom-assignment READ still needs evidence that this resolution belongs
+    // to a real workspace principal, and a resolution that can name neither a
+    // frozen snapshot nor a durable organization supplies none. Granting the
+    // layer for holding an actor object is wider than the guard it replaced.
     const ids = await resolve({ snapshot: null, durableOrgId: null });
-    expect(ids).toContain("sk-workspace");
+    expect(ids).not.toContain("sk-workspace");
   });
 });
 
@@ -296,5 +334,60 @@ describe("the actor-less resolution", () => {
     const ids = await getAssignedSkillIdsForAgent(AGENT);
     expect(ids).toEqual([]);
     expect(vi.mocked(readCustomSkillAssignmentsForAgent)).not.toHaveBeenCalled();
+  });
+});
+
+describe("the workspace layer needs evidence of a real workspace principal", () => {
+  // The historical reader tied the workspace layer to a RESOLVED organization,
+  // because that was the only evidence it had that the read belonged to a real
+  // workspace principal. A frozen snapshot is better evidence; an empty
+  // fallback with no organization at all is NO evidence, and the layer must not
+  // ride along on the actor object merely existing.
+  beforeEach(() => seedAssignments([assignment("sk-workspace", "workspace", "ws-marker")]));
+
+  function filterOfLastRead() {
+    const calls = vi.mocked(readCustomSkillAssignmentsForAgent).mock.calls;
+    return calls[calls.length - 1]?.[1] as { includeWorkspace?: boolean; organizationId?: string };
+  }
+
+  it("asks for it when the snapshot froze real scopes", async () => {
+    const ids = await resolve({ snapshot: snapshot({ orgId: "org-1" }) });
+    expect(filterOfLastRead().includeWorkspace).toBe(true);
+    expect(ids).toContain("sk-workspace");
+  });
+
+  it("asks for it when the sole legacy fallback names the durable organization", async () => {
+    await resolve({ snapshot: "not-a-snapshot", durableOrgId: "org-1" });
+    expect(filterOfLastRead().includeWorkspace).toBe(true);
+  });
+
+  it("REFUSES it when there is no usable snapshot and no durable organization", async () => {
+    const ids = await resolve({ snapshot: null, durableOrgId: null });
+    expect(filterOfLastRead().includeWorkspace).toBe(false);
+    expect(ids).not.toContain("sk-workspace");
+  });
+});
+
+describe("an EXPLICITLY absent durable organization stays absent", () => {
+  beforeEach(() => seedAssignments([assignment("sk-org", "organization", "org-1")]));
+
+  it("never borrows the actor's organization when the caller stated null", async () => {
+    // The caller holds the run and says its durable organization is null. That
+    // is a statement, not a gap: replacing it with whoever is resolving would
+    // deliver an organization assignment to an instance whose durable scope
+    // supports the workspace alone.
+    const ids = await resolve({ snapshot: null, durableOrgId: null });
+    const filter = vi.mocked(readCustomSkillAssignmentsForAgent).mock.calls[0]?.[1] as {
+      organizationId?: string;
+    };
+    expect(filter.organizationId).toBe("");
+    expect(ids).not.toContain("sk-org");
+  });
+
+  it("still borrows it when the caller states no durable organization at all", async () => {
+    // A caller that names NO field has not decided; the actor frame is then the
+    // only thing that can name the instance's organization, exactly as before.
+    const ids = await resolve({ snapshot: "not-a-snapshot" });
+    expect(ids).toContain("sk-org");
   });
 });
