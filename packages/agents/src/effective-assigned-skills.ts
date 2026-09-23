@@ -185,7 +185,7 @@ export function selectEffectiveAssignedSkills(
       return;
     }
     const scopeId = kind === "workspace" ? "" : clean(row?.scopeId);
-    const key = `${kind} ${scopeId}`;
+    const key = `${kind}\u0000${scopeId}`;
     const bucket = byLayer.get(key) ?? [];
     bucket.push({ row, index, skillId });
     byLayer.set(key, bucket);
@@ -210,7 +210,7 @@ export function selectEffectiveAssignedSkills(
 
   for (const layer of EFFECTIVE_ASSIGNMENT_SCOPE_CHAIN) {
     for (const target of layerTargets(layer, snapshot)) {
-      const bucket = byLayer.get(`${layer} ${target}`);
+      const bucket = byLayer.get(`${layer}\u0000${target}`);
       if (!bucket) continue;
       for (const entry of ordered(bucket)) {
         if (seen.has(entry.skillId)) continue;
@@ -246,10 +246,35 @@ export type EffectiveAssignedSkillsResolution = EffectiveAssignedSkillsSelection
   readonly fallbackDegraded: EffectiveAssignedSkillsFallbackDegradation | null;
 };
 
+/** The scope input every delivery road carries. */
+export type AssignmentScopeChainInput = {
+  /** The raw persisted payload (jsonb object or JSON text), or nothing. */
+  snapshot?: unknown;
+  /** The instance's durable organization: the legacy fallback's org floor. */
+  durableOrgId?: string | null;
+};
+
+/** Which scopes a resolution is allowed to read, and how it got them. */
+export type ResolvedAssignmentScopeChain = {
+  /** The snapshot the chain walks. */
+  readonly snapshot: AssignmentScopeSnapshot;
+  /** True when the persisted payload was absent, malformed, or an unknown version. */
+  readonly usedFallback: boolean;
+  /** Non-null only when the fallback itself had to be narrowed. */
+  readonly fallbackDegraded: EffectiveAssignedSkillsFallbackDegradation | null;
+};
+
 /**
- * The chain's ENTRY POINT: a persisted payload plus the rows, in one call.
+ * WHICH SCOPES a delivery may read, decided ONCE, from the payload alone.
  *
- * The snapshot is parsed by the module that owns the payload — this one never
+ * Split out from {@link resolveEffectiveAssignedSkills} because more than one
+ * store answers "what is assigned here": the per-scope assignment store and the
+ * older custom-assignment table both do. Both must be admitted by the SAME
+ * scopes, and a second road that re-derived the fallback would be a second
+ * authority on what an unusable payload means, which is exactly how a run ends
+ * up reading a project layer it was never granted.
+ *
+ * The snapshot is parsed by the module that owns the payload; this one never
  * re-implements the version rule, and therefore cannot disagree with it about
  * what "absent" means.
  *
@@ -261,32 +286,18 @@ export type EffectiveAssignedSkillsResolution = EffectiveAssignedSkillsSelection
  * run silently losing its organization layer is a fact an operator must be able
  * to read.
  */
-export function resolveEffectiveAssignedSkills(
-  rows: readonly AssignedSkillScopeRow[] | null | undefined,
-  options: {
-    /** The raw persisted payload (jsonb object or JSON text), or nothing. */
-    snapshot?: unknown;
-    /** The instance's durable organization — the legacy fallback's org floor. */
-    durableOrgId?: string | null;
-    cap?: number;
-  },
-): EffectiveAssignedSkillsResolution {
-  const parsed = parseAssignmentScopeSnapshot(options.snapshot);
+export function resolveAssignmentScopeChain(
+  input: AssignmentScopeChainInput,
+): ResolvedAssignmentScopeChain {
+  const parsed = parseAssignmentScopeSnapshot(input.snapshot);
   if (parsed) {
-    return {
-      ...selectEffectiveAssignedSkills(rows, parsed, { cap: options.cap }),
-      snapshot: parsed,
-      usedFallback: false,
-      fallbackDegraded: null,
-    };
+    return { snapshot: parsed, usedFallback: false, fallbackDegraded: null };
   }
 
-  const durableOrgId = clean(options.durableOrgId);
+  const durableOrgId = clean(input.durableOrgId);
   if (durableOrgId) {
-    const snapshot = assignmentScopeFallback(durableOrgId);
     return {
-      ...selectEffectiveAssignedSkills(rows, snapshot, { cap: options.cap }),
-      snapshot,
+      snapshot: assignmentScopeFallback(durableOrgId),
       usedFallback: true,
       fallbackDegraded: null,
     };
@@ -301,9 +312,26 @@ export function resolveEffectiveAssignedSkills(
     teamIds: Object.freeze([] as string[]),
   });
   return {
-    ...selectEffectiveAssignedSkills(rows, workspaceOnly, { cap: options.cap }),
     snapshot: workspaceOnly,
     usedFallback: true,
     fallbackDegraded: "no-durable-organization",
+  };
+}
+
+/**
+ * The chain's ENTRY POINT: a persisted payload plus the rows, in one call.
+ *
+ * Scope resolution is {@link resolveAssignmentScopeChain}'s answer, consumed
+ * whole, so this entry point and a caller that must admit rows from a second
+ * store cannot decide differently.
+ */
+export function resolveEffectiveAssignedSkills(
+  rows: readonly AssignedSkillScopeRow[] | null | undefined,
+  options: AssignmentScopeChainInput & { cap?: number },
+): EffectiveAssignedSkillsResolution {
+  const chain = resolveAssignmentScopeChain(options);
+  return {
+    ...selectEffectiveAssignedSkills(rows, chain.snapshot, { cap: options.cap }),
+    ...chain,
   };
 }
