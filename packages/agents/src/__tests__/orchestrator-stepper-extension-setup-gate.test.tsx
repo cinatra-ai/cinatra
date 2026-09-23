@@ -447,3 +447,166 @@ describe("a renderer that holds the reader's text locally is asked for it", () =
     expect(payloadFieldName).toBe("callToAction");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE MAINTAINER'S RULE OF 2026-09-23 (cinatra#3358): a required field left
+// empty shows an error on Continue; an optional one does not; a mixed mask
+// needs every required field.
+//
+// The per-field setup gate asks only for REQUIRED fields
+// (`pendingFields = requiredFields.filter(...)` in execution.ts); the one
+// required field an empty box still answers is one whose own schema declares a
+// `default` — the server settles it with that default (cinatra#3452). The mask
+// holding both kinds is the grouped setup form, which validates itself.
+// ---------------------------------------------------------------------------
+
+describe("a required field left empty shows an error on Continue; an optional one does not", () => {
+  const NO_ANSWER = "Add an answer before continuing.";
+
+  it("refuses a box typed into and cleared, and sends nothing (S1)", async () => {
+    const { toast } = await import("@/lib/cinatra-toast");
+    await renderSetupGate();
+    fireEvent.change(field(), { target: { value: "Book" } });
+    await waitFor(() => expect(field().value).toBe("Book"));
+    fireEvent.change(field(), { target: { value: "" } });
+    await waitFor(() => expect(field().value).toBe(""));
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    fireEvent.click(continueButton()!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(approveReviewTask).not.toHaveBeenCalled();
+    expect(field()).not.toBeNull();
+  });
+
+  it("refuses a buffering field flushed empty, and sends nothing (S2)", async () => {
+    const { toast } = await import("@/lib/cinatra-toast");
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    fieldRendererRegistry.register({
+      id: FLUSH_BINDING_ID,
+      priority: 500,
+      condition: (_f, _s, ctx) => ctx.xRenderer === FLUSH_BINDING_ID,
+      renderer: FakeFlushOnlyRenderer as unknown as RegistryEntry["renderer"],
+    });
+    interruptContext = {
+      schema: { type: "string", "x-renderer": FLUSH_BINDING_ID },
+      xRenderer: FLUSH_BINDING_ID,
+      values: {},
+      reviewTaskId: "setup-run-3358",
+      fieldName: "callToAction",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    const flushField = () =>
+      document.querySelector("[data-testid='fake-flush-field']") as HTMLTextAreaElement;
+    await waitFor(() => expect(flushField()).not.toBeNull());
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    fireEvent.click(continueButton()!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(approveReviewTask).not.toHaveBeenCalled();
+    expect(flushField()).not.toBeNull();
+
+    // The refused blank is not kept: the reader types, presses again, and the
+    // field is asked for its value anew — the typed answer is sent.
+    fireEvent.change(flushField(), { target: { value: "Book a meeting" } });
+    await waitFor(() => expect(flushField().value).toBe("Book a meeting"));
+    await waitFor(() => expect(continueButton()!.disabled).toBe(false));
+    fireEvent.click(continueButton()!);
+    await waitFor(() => expect(approveReviewTask).toHaveBeenCalledTimes(1));
+    const [, payload] = approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(payload.callToAction).toBe("Book a meeting");
+  });
+
+  it("sends a field that declares a default, left empty, with no error (S3)", async () => {
+    const { toast } = await import("@/lib/cinatra-toast");
+    const schema = { type: "string", default: "Book a demo", "x-renderer": FAKE_BINDING_ID };
+    interruptContext = {
+      schema,
+      xRenderer: FAKE_BINDING_ID,
+      values: {},
+      reviewTaskId: "setup-run-3358",
+      fieldName: "callToAction",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    await waitFor(() => expect(field()).not.toBeNull());
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    fireEvent.click(continueButton()!);
+
+    await waitFor(() => expect(approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(approveReviewTask).toHaveBeenCalledWith(
+      "setup-run-3358",
+      { callToAction: null },
+      "callToAction",
+      schema,
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a mask with both kinds refuses until every required field is filled (G1)", async () => {
+    const { GROUPED_SETUP_FORM_RENDERER_ID } = await import("../agent-builder-ids");
+    const { GroupedSetupFormRenderer, isGroupedSetupFormField } = await import(
+      "../grouped-setup-form-renderer"
+    );
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    fieldRendererRegistry.register({
+      id: GROUPED_SETUP_FORM_RENDERER_ID,
+      priority: 50,
+      condition: isGroupedSetupFormField,
+      renderer: GroupedSetupFormRenderer,
+      drawsOwnSubmit: true,
+    });
+    interruptContext = {
+      schema: {
+        type: "object",
+        properties: {
+          callToAction: { type: "string" },
+          senderName: { type: "string" },
+        },
+        required: ["callToAction"],
+      },
+      xRenderer: GROUPED_SETUP_FORM_RENDERER_ID,
+      values: {},
+      reviewTaskId: "setup-run-3358",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    const box = (name: string) =>
+      document.querySelector(`#field-${name}`) as HTMLInputElement | null;
+    const errorLineUnder = (name: string) =>
+      Array.from(box(name)?.closest("div")?.querySelectorAll("p") ?? []).some(
+        (p) => (p.textContent ?? "").trim() === "Required",
+      );
+    const saveButton = () =>
+      Array.from(document.querySelectorAll("button")).find((b) =>
+        /save & start run/i.test((b.textContent ?? "").trim()),
+      ) as HTMLButtonElement | undefined;
+    await waitFor(() => expect(box("callToAction")).not.toBeNull());
+    await waitFor(() => expect(box("senderName")).not.toBeNull());
+    await waitFor(() => expect(saveButton()).toBeDefined());
+
+    // Both empty: nothing sent, the error under the required field only.
+    fireEvent.click(saveButton()!);
+    await waitFor(() => expect(errorLineUnder("callToAction")).toBe(true));
+    expect(errorLineUnder("senderName")).toBe(false);
+    expect(approveReviewTask).not.toHaveBeenCalled();
+
+    // The required field filled, the optional one left empty: sent once.
+    fireEvent.change(box("callToAction")!, { target: { value: "Book a meeting" } });
+    await waitFor(() => expect(box("callToAction")!.value).toBe("Book a meeting"));
+    await waitFor(() => expect(saveButton()!.disabled).toBe(false));
+    fireEvent.click(saveButton()!);
+    await waitFor(() => expect(approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("setup-run-3358");
+    expect(payload.callToAction).toBe("Book a meeting");
+    expect(errorLineUnder("callToAction")).toBe(false);
+    expect(errorLineUnder("senderName")).toBe(false);
+  });
+});

@@ -327,6 +327,55 @@ export const SETUP_GATE_NO_ANSWER_STAGED =
   "Add an answer before continuing.";
 
 /**
+ * WHAT A PRESS OF A PER-FIELD SETUP GATE'S CONTINUE FINDS (cinatra#3358, the
+ * maintainer's rule of 2026-09-23): a required field left empty shows an error
+ * on Continue; an optional one does not.
+ *
+ * BLANK: nothing staged for the gate, or the field's own value — lifted out of
+ * the staged payload under its field name — is undefined, null, a string that
+ * is empty after trimming, an empty list or a plain object with no own keys.
+ * `0` and `false` are answers.
+ *
+ * OPTIONAL: the per-field setup loop asks only for REQUIRED fields
+ * (`pendingFields` in execution.ts), and the one required field an empty box
+ * still answers is one whose own schema declares a `default` — the server
+ * settles `{ [fieldName]: null }` with that default (cinatra#3452,
+ * review-task-actions.ts). Without a field name the empty answer has no name
+ * to travel under, so it reads as required.
+ */
+export function setupPressAnswerReading(args: {
+  schema: unknown;
+  fieldName: string | undefined;
+  staged: { payload: unknown; payloadFieldName: string | undefined } | null;
+}): { blank: boolean; optional: boolean } {
+  const { schema, fieldName, staged } = args;
+  const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  let blank = true;
+  if (staged !== null) {
+    const value =
+      staged.payloadFieldName !== undefined && isPlainObject(staged.payload)
+        ? Object.prototype.hasOwnProperty.call(staged.payload, staged.payloadFieldName)
+          ? staged.payload[staged.payloadFieldName]
+          : undefined
+        : staged.payload;
+    blank =
+      value === undefined ||
+      value === null ||
+      (typeof value === "string" && value.trim() === "") ||
+      (Array.isArray(value) && value.length === 0) ||
+      (isPlainObject(value) && Object.keys(value).length === 0);
+  }
+  const optional =
+    fieldName !== undefined &&
+    fieldName.trim() !== "" &&
+    isPlainObject(schema) &&
+    Object.prototype.hasOwnProperty.call(schema, "default") &&
+    schema.default !== undefined;
+  return { blank, optional };
+}
+
+/**
  * The `fieldName` prop for a single-field HITL gate's renderer (cinatra#2541).
  *
  * THE SEAM THIS ISSUE REGRESSED AT. Both single-field HITL surfaces used to

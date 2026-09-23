@@ -110,6 +110,7 @@ import {
   liftRendererApprovalNote,
   SETUP_GATE_NO_ANSWER_STAGED,
   setupFieldRendererValue,
+  setupPressAnswerReading,
   setupGateBufferedFieldValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -1317,12 +1318,27 @@ function HitlApprovalCard({
         const flush = setupFlushRef.current;
         if (flush !== null && flush.key === key) await flush.fn();
       }
-      // NOTHING STAGED FOR THIS GATE: nothing is sent at all and the screen is
-      // left exactly as it was — the same gate, with its own reading and its own
-      // validation, and no second card minted for the field. (The server's half
-      // of that rule is the guard in review-task-actions.ts, which refuses to
-      // resume on a submission that records nothing.)
-      const staged = setupAnswerRef.current;
+      // AN EMPTY ANSWER (cinatra#3358, the maintainer's rule of 2026-09-23): a
+      // required field left empty shows an error on Continue and nothing is
+      // sent — the same gate stays on the screen; an optional one (its own
+      // schema declares a `default`) does not, and the step is sent as
+      // `{ [fieldName]: null }`, which the server settles with that default.
+      const stagedNow = setupAnswerRef.current;
+      const press = setupPressAnswerReading({
+        schema: interruptContext.schema,
+        fieldName: interruptContext.fieldName,
+        staged: stagedNow !== null && stagedNow.key === key ? stagedNow : null,
+      });
+      if (press.blank && !press.optional) {
+        // The refused blank is not kept, so the next press asks the field
+        // for its value anew instead of re-reading the empty one.
+        if (stagedNow !== null && stagedNow.key === key) setupAnswerRef.current = null;
+        toast.error(SETUP_GATE_NO_ANSWER_STAGED);
+        return;
+      }
+      const staged = press.blank
+        ? { key, ...wrapPrimitiveSetupPayload(interruptContext.fieldName, undefined) }
+        : stagedNow;
       if (staged === null || staged.key !== key) return;
       try {
         const outcome = await submitSetupFieldPayload(
@@ -1345,8 +1361,9 @@ function HitlApprovalCard({
           // primitive field), so the reader's own value is lifted back out of
           // it here rather than re-read from the draft, which is React state
           // and need not have settled in the turn the flush above wrote it.
-          const recorded =
-            staged.payloadFieldName !== undefined &&
+          const recorded = press.blank
+            ? (interruptContext.schema as { default?: unknown } | undefined)?.default
+            : staged.payloadFieldName !== undefined &&
             staged.payload !== null &&
             typeof staged.payload === "object" &&
             !Array.isArray(staged.payload)
