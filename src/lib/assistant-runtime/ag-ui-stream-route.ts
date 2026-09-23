@@ -7,6 +7,7 @@ import {
   appendAssistantTurn,
   bindThreadContainerIfUnbound,
   createAssistantThread,
+  freezeAssistantThreadAssignmentScopeIfAbsent,
   getAssistantThread,
   touchAssistantThread,
   updateAssistantTurn,
@@ -208,6 +209,19 @@ export async function streamAgUiChatTurn(params: {
    * the conversation.
    */
   producerAssistantUserId?: string | null;
+  /**
+   * The human whose act opens this conversation (cinatra#2815 S3, epic #2812).
+   *
+   * An `ActorContext` satisfies the shape. It is the source of the IMMUTABLE
+   * assignment scopes the thread freezes: the same derivation an agent run
+   * freezes at creation. Absent, the conversation carries no frozen scope and
+   * assigned-skill delivery resolves the sole legacy fallback.
+   */
+  scopeActor?: {
+    readonly principalType: string;
+    readonly principalId: string;
+    readonly teamIds?: readonly string[] | null;
+  } | null;
 }): Promise<Response> {
   const { request, threadId, mirrorOrgId, needsStructuredRow, userId, isAdmin, runProducer, container } =
     params;
@@ -236,6 +250,9 @@ export async function streamAgUiChatTurn(params: {
         orgId: mirrorOrgId,
         assistantPackage: container.assistantPackage,
         instanceId: container.instanceId,
+        // cinatra#2815 S3: the scopes this conversation is created under,
+        // frozen inside the same atomic insert as the row.
+        scopeActor: params.scopeActor ?? null,
       });
       createdHere = true;
     } catch {
@@ -273,6 +290,16 @@ export async function streamAgUiChatTurn(params: {
     // Nothing downstream reads the outcome; it is typed so the decision table is
     // testable and so a future caller cannot mistake a refusal for a bind.
     bindThreadContainerIfUnbound(threadId, container, { userId, orgId: mirrorOrgId });
+    // cinatra#2815 S3: the row this request did not create still needs its
+    // scopes. The legacy chat mirror creates a thread without them and, in the
+    // field's normal ordering, usually wins the race above; without this freeze
+    // the conversations people actually start would take the sole legacy
+    // fallback for their whole life. The write admits a NULL column only, so it
+    // is the freeze that was missed, never a re-pointing of a live thread.
+    freezeAssistantThreadAssignmentScopeIfAbsent(threadId, {
+      orgId: mirrorOrgId,
+      scopeActor: params.scopeActor ?? null,
+    });
   }
   const runId = randomUUID();
   const turn = appendAssistantTurn({
