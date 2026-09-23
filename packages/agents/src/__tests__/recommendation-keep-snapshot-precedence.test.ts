@@ -59,6 +59,9 @@ const undecidableRun = {
   id: "run-1",
   templateId: "tpl-1",
   orgId: null,
+  // A keep is an INTERACTIVE act (cinatra#2815 S3 part 4), so every run in this
+  // suite is one. The run-mode rule has its own fixtures.
+  humanPresent: true,
   assignmentScopeSnapshot: "not a snapshot",
 };
 
@@ -66,6 +69,7 @@ const usableRun = {
   id: "run-1",
   templateId: "tpl-1",
   orgId: "org-1",
+  humanPresent: true,
   assignmentScopeSnapshot: {
     v: 1,
     orgId: "org-1",

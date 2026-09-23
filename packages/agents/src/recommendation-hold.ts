@@ -231,6 +231,29 @@ export const RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL =
 /** The TYPED outcome that rides alongside the prose above. */
 export const RECOMMENDATION_SCOPE_UNDECIDABLE_CODE = "recommendation_scope_undecidable";
 
+/**
+ * A KEEP IS AN INTERACTIVE ACT (cinatra#2815 S3 part 4).
+ *
+ * The issue binds recommendation persistence to interactive runs, and headless
+ * runs to assigned-only. What marks a run interactive in this codebase is
+ * `humanPresent`: the run-start presence discriminator (cinatra#2067), true only
+ * for UI and chat runs and null or false for everything a schedule, a trigger or
+ * an orchestrator starts. The hold that OFFERS a recommendation already gates on
+ * it, so an offer can only appear on an interactive run; this refuses the WRITE
+ * on the same rule, so a keep cannot reach a scheduled run through some later
+ * caller that never passed the hold.
+ *
+ * It refuses the keep alone, not the confirm: the selection itself is an
+ * ordinary confirm and nothing about it is wrong. The reader is told that the
+ * skills were applied to this run and not kept for the next one, which is
+ * exactly what happened.
+ */
+export const RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL =
+  "These skills were applied to this run. A run nobody started by hand cannot keep them for the next one, so nothing was assigned.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE = "recommendation_keep_not_interactive";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;

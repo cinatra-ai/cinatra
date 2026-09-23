@@ -60,6 +60,9 @@ const runRow = (over: Record<string, unknown> = {}) => ({
   id: "run-1",
   templateId: "tpl-1",
   orgId: "org-1",
+  // A keep is an INTERACTIVE act (cinatra#2815 S3 part 4); the run-mode rule
+  // has its own fixtures.
+  humanPresent: true,
   assignmentScopeSnapshot: {
     v: 1,
     orgId: "org-1",
@@ -153,6 +156,7 @@ describe("the workspace layer of a recommendation keep", () => {
   it("a FOREIGN confirmer is still refused the PERSONAL scope, platform role or not", async () => {
     readAgentRunById.mockResolvedValue(
       runRow({
+        humanPresent: true,
         assignmentScopeSnapshot: {
           v: 1,
           orgId: "org-1",

@@ -42,6 +42,8 @@ import {
   RECOMMENDATION_OFFER_UNREADABLE_CODE,
   RECOMMENDATION_OFFER_UNREADABLE_REFUSAL,
   RECOMMENDATION_SCOPE_UNDECIDABLE_CODE,
+  RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE,
+  RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL,
   RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL,
   RECOMMENDATION_SKIP_NOT_RECORDED,
   RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
@@ -1101,6 +1103,11 @@ export type RunSkillSelectionWriteResult = {
    * The reader-facing sentence for a refusal that describes the CALLER'S OWN
    * next step (cinatra#2906: the offer the card made can no longer be honoured).
    * Absent for an authorization denial, which keeps the generic refusal.
+   *
+   * It can ride a SUCCESSFUL result (cinatra#2815 S3 part 4): a keep the run's
+   * mode refuses leaves the selection written and names what did not happen,
+   * so `ok` says whether the selection landed and this says whether anything
+   * else was refused along the way.
    */
   refusal?: string;
   /** The typed outcome that rides alongside `refusal`. */
@@ -1454,11 +1461,33 @@ export async function writeRunSkillSelectionForActor(input: {
     // refusal says which half could not be decided. Only a confirm that ASKED
     // for a keep reads it at all: every landed caller passes no
     // `keepRecommended` and is untouched by this.
+    //
+    // A KEEP IS ALSO AN INTERACTIVE ACT. A human standing has never been
+    // evidence that a person STARTED this run: a schedule, a trigger or an
+    // orchestrator child all keep a human owner, and their confirm reached this
+    // seam with no run-mode check at all. The issue binds persistence to
+    // interactive runs and headless runs to assigned-only, and what marks a run
+    // interactive here is `humanPresent` (cinatra#2067), the same field the
+    // hold that OFFERS a recommendation already gates on. The keep alone is
+    // refused; the selection is an ordinary confirm and still lands.
+    let keepRefusal: { refusal: string; refusalCode: string } | undefined;
     let keepSnapshot: AssignmentScopeSnapshot | undefined;
-    if (input.keepRecommended && who.actor.actorType === "human" && who.actor.userId) {
+    const keepAsked =
+      Boolean(input.keepRecommended) && who.actor.actorType === "human" && Boolean(who.actor.userId);
+    if (keepAsked && run.humanPresent !== true) {
+      keepRefusal = {
+        refusal: RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL,
+        refusalCode: RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE,
+      };
+    } else if (keepAsked) {
       try {
+        // THE RUN'S OWN DURABLE ORGANIZATION, AND NOTHING ELSE. Falling back to
+        // the confirmer's organization made the keep land in a tenancy the RUN
+        // never named, decided by whoever happened to press the button. A run
+        // that can name no organization has no scope to fall back on, which is
+        // precisely the undecidable case below.
         keepSnapshot = readAssignmentScopeSnapshot(run.assignmentScopeSnapshot, {
-          durableOrgId: run.orgId ?? viewer.organizationId ?? "",
+          durableOrgId: run.orgId ?? "",
         }).snapshot;
       } catch {
         return {
@@ -1554,6 +1583,10 @@ export async function writeRunSkillSelectionForActor(input: {
       written: result.written,
       efficacy: result.efficacy,
       ...(kept ? { kept } : {}),
+      // A keep the run's mode refuses. The confirm succeeded, so this rides the
+      // successful result rather than replacing it, and names what did not
+      // happen instead of leaving the reader to infer it from a missing field.
+      ...(keepRefusal ?? {}),
     };
   } catch {
     return empty;
