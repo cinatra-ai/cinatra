@@ -171,10 +171,14 @@ describe("the pane strip", () => {
     // baseline, so it continues the active tab's underline.
     const rule = row.querySelector('[data-slot="separator"]');
     expect(rule?.getAttribute("class")).toBe(shared.rule);
-    // The tabs carry the app's own metrics and weight.
-    for (const trigger of document.querySelectorAll('[data-slot="tabs-trigger"]')) {
-      expect(trigger.getAttribute("class")).toBe(shared.trigger);
-    }
+    // The tabs carry the app's own metrics and weight. They are read by ROLE,
+    // not by `data-slot`: each tab is a route link rendered through `asChild`,
+    // so the link's own slot name is what survives on the element and a slot
+    // selector matches nothing at all. Counting them first keeps the comparison
+    // below from passing over an empty list.
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    for (const tab of tabs) expect(tab.getAttribute("class")).toBe(shared.trigger);
   });
 
   it("leaves no hand-rolled rule or gap anywhere on the page", () => {
