@@ -153,6 +153,9 @@ describe("stored order, dedup and the empty cases", () => {
     });
     expect(out).toEqual({
       skillIds: [],
+      // cinatra#2815 S3: the other assignment store's picks, from the SAME
+      // chain and the SAME per-run cap. This caller hands it no rows.
+      customSkillIds: [],
       agentPackageName: AGENT_PKG,
       withheld: [],
       degraded: null,
@@ -432,6 +435,9 @@ describe("fail-closed arms — the run always proceeds (issue AC 5)", () => {
     });
     expect(out).toEqual({
       skillIds: [],
+      // A degraded arm is THIS tier's read, not the other store's; with no
+      // custom rows handed in there is nothing for it to deliver either.
+      customSkillIds: [],
       agentPackageName: AGENT_PKG,
       withheld: [],
       degraded: "assignment-read-failed",

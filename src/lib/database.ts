@@ -1439,6 +1439,10 @@ export type CustomSkillAssignmentActorFilter = {
   teamIds?: string[];
   projectIds?: string[];
   organizationId?: string;
+  /** Does this read carry the workspace layer (cinatra#2815 S3)? Unset keeps the
+   *  historical rule: a resolved orgId was the only evidence of a real
+   *  workspace principal, and a frozen snapshot is better evidence. */
+  includeWorkspace?: boolean;
 };
 
 /**
@@ -1461,11 +1465,7 @@ export function readCustomSkillAssignmentsForAgent(
       OR (owner_type = 'team' AND owner_id = ANY($3::text[]))
       OR (owner_type = 'project' AND owner_id = ANY($4::text[]))
       OR (owner_type = 'organization' AND owner_id = $5)
-      -- Workspace assignments are usable by every workspace user, but the
-      -- caller must have a resolved orgId (the actor must be a real workspace
-      -- principal, not org-less). $5 ($empty for unauth/org-less actors)
-      -- guards against cross-org / unauthenticated enumeration.
-      OR (owner_type = 'workspace' AND $5 <> '')
+      OR (owner_type = 'workspace' AND $6) -- the caller states this layer
     )
     -- Deterministic ordering. Without ORDER BY, Postgres returns rows in
     -- arbitrary heap/plan order, making the resolved skill list (and thus the
@@ -1475,7 +1475,7 @@ export function readCustomSkillAssignmentsForAgent(
     ORDER BY skill_id ASC`;
   const [result] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
-    queries: [{ text: sql, values: [agentId, actor.principalId, teamIds, projectIds, orgId] }],
+    queries: [{ text: sql, values: [agentId, actor.principalId, teamIds, projectIds, orgId, actor.includeWorkspace ?? orgId !== ""] }],
   });
   const rows = (result?.rows ?? []) as Array<{
     skill_id: string;

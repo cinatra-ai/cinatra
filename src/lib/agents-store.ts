@@ -12,9 +12,13 @@ import {
 // The DIRECTLY ASSIGNED skill tier (cinatra#2347, epic #2345) — read +
 // resolution-time revalidation behind one non-rejecting seam.
 import {
-  resolveAssignedSkillTierIds,
+  resolveAssignedSkillTier,
   type AssignedSkillDeliveryScope,
 } from "@/lib/agent-assigned-skills-injection";
+import {
+  resolveAssignmentScopeChain,
+  type AssignedSkillScopeRow,
+} from "@cinatra-ai/agents/effective-assigned-skills";
 
 // Actor filter shape used by the read-path union below.
 // Includes `platformRole` so the visibility predicate
@@ -1015,40 +1019,43 @@ export async function getAssignedSkillIdsForAgent(
     snapshot: runScope?.snapshot,
     durableOrgId: runScope?.durableOrgId ?? actor?.organizationId ?? null,
   };
-  // When an ActorContext is provided, union in custom_skill_assignments DB
-  // rows filtered by principalId/teamIds/
-  // projectIds/organizationId. Existing system-globals + agent self-match +
-  // ranked match union remains additive.
-  let customAssignmentIds: string[] = [];
+  // The scopes this resolution may read, decided ONCE and consumed by BOTH
+  // assignment stores (cinatra#2815 S3). The custom-assignment table used to
+  // decide for itself, from the actor's LIVE memberships: a headless run whose
+  // snapshot names no originating human still received its owner's personal
+  // assignments, and an unusable snapshot still admitted project and team rows
+  // the sole legacy fallback forbids. The snapshot is now the only authority on
+  // both roads, and the SHAPE of the fallback is what enforces it: a fallback
+  // snapshot carries no project, no user and no team id, so those layers have
+  // nothing to match against.
+  const scopeChain = resolveAssignmentScopeChain(deliveryScope);
+  // The custom rows this run's SCOPES can see, read by the snapshot's ids, not
+  // by whatever the confirming actor happens to belong to today.
+  let customScopeRows: AssignedSkillScopeRow[] = [];
   let systemGlobalIds: string[] = [];
   if (actor) {
     try {
       const customRows = await readCustomSkillAssignmentsForAgent(agentId, {
-        principalId: actor.principalId,
-        teamIds: actor.teamIds ?? [],
-        projectIds: actor.projectIds ?? [],
-        organizationId: actor.organizationId ?? "",
+        principalId: scopeChain.snapshot.originatingHumanUserId ?? "",
+        teamIds: [...(scopeChain.snapshot.teamIds ?? [])],
+        projectIds: scopeChain.snapshot.projectId ? [scopeChain.snapshot.projectId] : [],
+        organizationId: scopeChain.snapshot.orgId ?? "",
+        // The workspace layer is in every chain, including the narrowed one an
+        // instance with no durable organization falls back to. The reader's own
+        // default ties it to a resolved organization; here the snapshot has
+        // already decided that this resolution is a real workspace principal.
+        includeWorkspace: true,
       });
-      // Defense-in-depth filter (test parity): the real DB query already
-      // applies the same predicate via parameterized SQL, but unit tests
-      // mock readCustomSkillAssignmentsForAgent and return rows for all
-      // owner_types — the JS-side filter ensures the union honors actor scope.
-      const teamIds = new Set(actor.teamIds ?? []);
-      const projectIds = new Set(actor.projectIds ?? []);
-      const orgId = actor.organizationId ?? "";
-      customAssignmentIds = customRows
-        .filter((row) => {
-          if (row.ownerType === "user") return row.ownerId === actor.principalId;
-          if (row.ownerType === "team") return teamIds.has(row.ownerId);
-          if (row.ownerType === "project") return projectIds.has(row.ownerId);
-          if (row.ownerType === "organization") return Boolean(orgId) && row.ownerId === orgId;
-          // Workspace assignments are usable by every workspace user, but
-          // the actor must be a real workspace principal (resolved
-          // orgId). Org-less / unauthenticated shapes must NOT pass.
-          if (row.ownerType === "workspace") return Boolean(orgId);
-          return false;
-        })
-        .map((row) => row.skillId);
+      // The rows carry their scope as an OWNER tuple; the chain places rows by
+      // (scopeKind, scopeId). Same tuple, two names, translated here, once,
+      // rather than teaching the pure chain a second vocabulary. A workspace row
+      // carries a marker id that means nothing to the chain, so it is dropped:
+      // the workspace layer is matched by KIND.
+      customScopeRows = customRows.map((row) => ({
+        skillId: row.skillId,
+        scopeKind: row.ownerType,
+        scopeId: row.ownerType === "workspace" ? "" : row.ownerId,
+      }));
     } catch (err) {
       // Log instead of swallowing silently. Operators
       // need this signal to diagnose partial outages where the assignment
@@ -1057,7 +1064,7 @@ export async function getAssignedSkillIdsForAgent(
         `[agents-store] readCustomSkillAssignmentsForAgent failed (agent=${agentId}):`,
         err,
       );
-      customAssignmentIds = [];
+      customScopeRows = [];
     }
     try {
       systemGlobalIds = (await readSystemGlobalSkillIdsForAgent(agentId)) ?? [];
@@ -1119,12 +1126,17 @@ export async function getAssignedSkillIdsForAgent(
     // the agent itself (no population survived the failed Promise.all above) and
     // is fail-closed end to end: a read error, a revalidation throw or an
     // unresolvable reference yields the EMPTY set and the run still proceeds.
-    const degradedAssignedIds = await resolveAssignedSkillTierIds(agentId, null, {
+    const degradedTier = await resolveAssignedSkillTier(agentId, null, {
       runScope: deliveryScope,
+      customScopeRows,
     });
     return filterToRuntimeDeliverableSkillIds(
       Array.from(
-        new Set([...degradedAssignedIds, ...systemGlobalIds, ...customAssignmentIds]),
+        new Set([
+          ...degradedTier.skillIds,
+          ...systemGlobalIds,
+          ...degradedTier.customSkillIds,
+        ]),
       ),
     );
   }
@@ -1152,8 +1164,9 @@ export async function getAssignedSkillIdsForAgent(
   // canonical resolver rather than `canonicalPackageId` — that local fallback is
   // `agentId` itself when nothing matched, which would key an assignment read on
   // a slug the store never writes.
-  const assignedTierPromise = resolveAssignedSkillTierIds(agentId, agents, {
+  const assignedTierPromise = resolveAssignedSkillTier(agentId, agents, {
     runScope: deliveryScope,
+    customScopeRows,
   });
 
   try {
@@ -1260,8 +1273,13 @@ export async function getAssignedSkillIdsForAgent(
   );
 
   // The revalidated assigned tier, in stored `position` order. Awaited here so
-  // the read overlapped everything above it.
-  const assignedSkillIds = await assignedTierPromise;
+  // the read overlapped everything above it. The custom-assignment picks come
+  // back from the SAME resolution: both stores were placed by one snapshot
+  // chain and counted against one per-run cap, so what arrives here is at most
+  // five distinct assigned skills whatever their source.
+  const assignedTier = await assignedTierPromise;
+  const assignedSkillIds = assignedTier.skillIds;
+  const customAssignmentIds = assignedTier.customSkillIds;
 
   // Deduplicated union — agent self-matches first (most specific), then the
   // DIRECTLY ASSIGNED skills, then skill_matches results (recommender score
