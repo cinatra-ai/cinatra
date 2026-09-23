@@ -20,7 +20,7 @@ const row = (skillId: string, score: number, rank: number): RankAuthoritativeRow
 
 describe("RecommendationOrderingV1", () => {
   it("pins the literal orderingVersion value", () => {
-    expect(RECOMMENDATION_ORDERING_VERSION).toBe("recommendation-ordering-v1");
+    expect(RECOMMENDATION_ORDERING_VERSION).toBe("RecommendationOrderingV1");
   });
 
   it("the authoritative ordered input is the scorer's rank, ascending", () => {
@@ -66,7 +66,7 @@ describe("RecommendationOrderingV1", () => {
     expect(meta).toEqual({
       candidatePoolCount: 60,
       truncatedCount: 10,
-      orderingVersion: "recommendation-ordering-v1",
+      orderingVersion: "RecommendationOrderingV1",
     });
   });
 
@@ -74,7 +74,7 @@ describe("RecommendationOrderingV1", () => {
     expect(buildRecommendationTruncation({ eligibleCount: 7, keptCount: 7 })).toEqual({
       candidatePoolCount: 7,
       truncatedCount: 0,
-      orderingVersion: "recommendation-ordering-v1",
+      orderingVersion: "RecommendationOrderingV1",
     });
     // keptCount can never exceed the pool, but a caller that miscounts must not
     // produce a negative truncation — telemetry never marks unseen candidates.

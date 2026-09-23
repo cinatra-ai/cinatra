@@ -363,9 +363,13 @@ export function scoreSkillRecommendations(
 //     boundaries for one ranking.
 //
 //   THE LITERAL orderingVersion VALUE
-//     "recommendation-ordering-v1". It rides on every truncation record, so a
-//     row persisted under a future V2 is distinguishable on sight rather than
-//     by inference from its shape.
+//     "RecommendationOrderingV1", the name the issue and the pull request
+//     bound before implementation, spelled the same way here so the code and
+//     the binding cannot drift. It rides on every truncation record, so a row
+//     persisted under a future V2 is distinguishable on sight rather than by
+//     inference from its shape. The sibling contract in this slice states its
+//     own name the same way ("ContextAllocationTokenV1"), so a reader meets
+//     one convention across both.
 //
 //   TRUNCATION BEFORE OR AFTER ELIGIBILITY
 //     AFTER. The pool is made eligible first (installed-catalog membership
@@ -383,7 +387,7 @@ export function scoreSkillRecommendations(
 // ---------------------------------------------------------------------------
 
 /** The bound literal. */
-export const RECOMMENDATION_ORDERING_VERSION = "recommendation-ordering-v1";
+export const RECOMMENDATION_ORDERING_VERSION = "RecommendationOrderingV1";
 
 /** The default cut applied to the eligible pool. Mirrors the recommender's
  *  landed `DEFAULT_MAX_CANDIDATES`; stated here so the truncation record and

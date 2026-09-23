@@ -25,7 +25,7 @@ beforeEach(() => {
     truncation: {
       candidatePoolCount: 2,
       truncatedCount: 0,
-      orderingVersion: "recommendation-ordering-v1",
+      orderingVersion: "RecommendationOrderingV1",
     },
   });
 });
@@ -53,7 +53,7 @@ describe("the chip-row read path", () => {
       assignedSkillIds: ["assigned-a", "assigned-b"],
     });
     expect(recommendations.map((r) => r.skillId)).toEqual(["assigned-a"]);
-    expect(truncation.orderingVersion).toBe("recommendation-ordering-v1");
+    expect(truncation.orderingVersion).toBe("RecommendationOrderingV1");
     expect(truncation.candidatePoolCount).toBe(2);
   });
 
@@ -63,7 +63,7 @@ describe("the chip-row read path", () => {
       truncation: {
         candidatePoolCount: 0,
         truncatedCount: 0,
-        orderingVersion: "recommendation-ordering-v1",
+        orderingVersion: "RecommendationOrderingV1",
       },
     });
     const { recommendations } = await getRunRecommendationsForReader({
