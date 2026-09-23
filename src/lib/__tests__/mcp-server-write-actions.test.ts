@@ -34,7 +34,29 @@ type Row = {
   // cinatra#1407 defect 1: the stored connection id (apiKeyConfigured is derived
   // connector-side as `nangoConnectionId != null`).
   nangoConnectionId?: string | null;
+  // cinatra#3485 fix leg 2: the stamps a real store keeps. A row hand-placed by
+  // a case starts without them, exactly as a legacy row reaches the store.
+  createdAt?: string;
+  updatedAt?: string;
 };
+
+// The store clock. Every write reads it once, so two writes are two instants
+// and a case never depends on a wall clock.
+let storeClock = 0;
+function nextStamp(): string {
+  storeClock += 1;
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, storeClock)).toISOString();
+}
+// A row a case places by hand is a row that was ALREADY THERE when the case
+// began. The columns are NOT NULL in the store, so such a row carries stamps
+// too, and they are older than anything this case writes.
+const PLACED_BEFORE = "2025-12-31T00:00:00.000Z";
+function stampsOf(row: Row | undefined): { createdAt: string; updatedAt: string } {
+  return {
+    createdAt: row?.createdAt ?? PLACED_BEFORE,
+    updatedAt: row?.updatedAt ?? PLACED_BEFORE,
+  };
+}
 // The REAL backing store (what the guarded compare-and-write checks against).
 const servers = new Map<string, Row>();
 // The AUTHZ view the FRESH read returns. Defaults to mirroring `servers`; a test
@@ -105,20 +127,40 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   // through this helper; mirror the real closed-vocabulary coercion.
   normalizeExternalMcpTransport: (value: unknown) =>
     value === "streamable-http" || value === "sse" ? value : "unknown",
-  getExternalMcpServerByIdFresh: (id: string) =>
-    authzOverride.has(id) ? authzOverride.get(id) : servers.get(id) ?? null,
+  getExternalMcpServerByIdFresh: (id: string) => {
+    const row = authzOverride.has(id) ? authzOverride.get(id) : servers.get(id) ?? null;
+    return row ? { ...row, ...stampsOf(row) } : row;
+  },
+  // cinatra#3485 fix leg 2: one reading of a stamp, for both sides of a
+  // comparison, mirroring the real helper.
+  normalizeExternalMcpRowStamp: (value: unknown) => {
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value !== "string" || value.trim() === "") return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  },
+  // The guarded writes STAMP the row and hand their stamps back, as the real
+  // ones do: an INSERT mints a creation instant, an UPDATE leaves it standing
+  // and mints a new update instant. That is what tells the row a save wrote
+  // apart from a replacement created at the same id.
   insertExternalMcpServerStrict: (input: Row) => {
     if (servers.has(input.id)) throw new ExternalMcpServerWriteConflictError("id exists");
-    servers.set(input.id, input);
+    const stamp = nextStamp();
+    servers.set(input.id, { ...input, createdAt: stamp, updatedAt: stamp });
+    return { createdAt: stamp, updatedAt: stamp };
   },
   updateExternalMcpServerGuarded: (
     input: Row,
     expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
   ) => {
-    if (!guardMatches(servers.get(input.id), expected)) {
+    const real = servers.get(input.id);
+    if (!guardMatches(real, expected)) {
       throw new ExternalMcpServerWriteConflictError("guard miss");
     }
-    servers.set(input.id, input);
+    const { createdAt } = stampsOf(real);
+    const updatedAt = nextStamp();
+    servers.set(input.id, { ...input, createdAt, updatedAt });
+    return { createdAt, updatedAt };
   },
   deleteExternalMcpServerGuarded: (
     id: string,
@@ -182,6 +224,7 @@ beforeEach(() => {
   sessionActiveOrganizationId = null;
   servers.clear();
   authzOverride.clear();
+  storeClock = 0;
   importedApiKeys.length = 0;
   revokedConnections.length = 0;
   retiredKeylessIdentities.length = 0;
@@ -409,6 +452,52 @@ describe("createServerHandler API key persistence (cinatra#1407 defect 1)", () =
     authzOverride.set("gone-1", null);
     await createServerHandler({ id: "gone-1", label: "G", serverUrl: "https://g", scope: "user" });
     expect(registeredKeylessIdentities).toEqual([]);
+  });
+
+  it("an ordinary keyless save registers exactly ONE identity for the row it wrote", async () => {
+    // The witness the two cases below rest on must not be one that refuses
+    // everything: a plain save of a plain row still gets its identity.
+    await createServerHandler({ id: "plain-1", label: "P", serverUrl: "https://p", scope: "user" });
+    expect(registeredKeylessIdentities).toEqual(["external-mcp-keyless-plain-1"]);
+    expect(revokedConnections).toEqual([]);
+  });
+
+  it("a keyless save whose row was REPLACED at the same id registers nothing and retires nothing", async () => {
+    // cinatra#3485 fix leg 2. The row the fresh read hands back has the same
+    // scope, the same absent owner and no key, and it is still not this save's
+    // row: it was created at a different instant, which is what a delete and a
+    // fresh registration at the same id leave behind. Scope, owner and the
+    // missing key cannot tell the two apart, so without the stamps this save
+    // would retire the replacement's identity and register its own over it.
+    platformAdmin = true;
+    servers.set("g9", {
+      id: "g9",
+      scope: "global",
+      userId: null,
+      label: "G",
+      serverUrl: "https://g",
+      nangoConnectionId: null,
+      createdAt: "2026-01-01T00:00:10.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+    });
+    // What every fresh read of this id returns: the replacement, with the
+    // stamps of a row this save never wrote.
+    authzOverride.set("g9", {
+      id: "g9",
+      scope: "global",
+      userId: null,
+      label: "G",
+      serverUrl: "https://g",
+      nangoConnectionId: null,
+      createdAt: "2026-02-02T00:00:00.000Z",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+    });
+    // The identity the replacement's own registration left behind, owned by the
+    // person who registered it.
+    keylessIdentityOwner = "other-admin";
+    await createServerHandler({ id: "g9", label: "G", serverUrl: "https://g", scope: "global" });
+    expect(registeredKeylessIdentities).toEqual([]);
+    expect(retiredKeylessIdentities).toEqual([]);
   });
 
   it("rolls back the just-imported credential when the guarded write CONFLICTS (TOCTOU)", async () => {

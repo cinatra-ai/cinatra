@@ -163,6 +163,7 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     readExternalMcpKeylessConnectionIdentity,
     registerExternalMcpKeylessConnectionIdentity,
     retireExternalMcpKeylessConnectionIdentityRow,
+    normalizeExternalMcpRowStamp,
     ExternalMcpServerWriteConflictError,
     ExternalMcpServerManagedEndpointError,
   } = await import("@/lib/external-mcp-registry");
@@ -326,14 +327,20 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     // Persist the declared transport, or "unknown" when omitted (#1713).
     transport,
   };
+  // THE STAMPS OF THE ROW THIS SAVE WROTE (cinatra#3485). The write returns the
+  // row's creation instant and the update instant it stamped, which is the only
+  // thing that tells this row apart from a replacement somebody creates at the
+  // same id: ids are supplied by the caller, and a delete followed by a fresh
+  // registration lands a row with the same scope, the same owner and no key.
+  let written: { createdAt: string | null; updatedAt: string | null } | null = null;
   try {
     if (guard) {
       // Existing row: conditional UPDATE guarded on the witnessed scope+owner.
-      updateExternalMcpServerGuarded(row, guard);
+      written = updateExternalMcpServerGuarded(row, guard);
     } else {
       // New row (no existing row at the fresh read): strict INSERT that refuses
       // to clobber a concurrently-created id.
-      insertExternalMcpServerStrict(row);
+      written = insertExternalMcpServerStrict(row);
     }
   } catch (err) {
     // The row write did NOT land — roll back the just-created credential+identity
@@ -377,20 +384,79 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   // failure is logged NON-SECRETLY (no key is in scope on this road at all).
   const keylessConnectionId = externalMcpKeylessConnectionId(id);
   if (nangoConnectionId === null) {
-    // STILL THE ROW THIS SAVE WROTE? The identity lives in a different store from
-    // the row, with no shared transaction, so the only honest guard is a fresh
-    // re-read that matches the row this save landed on every field the identity
-    // is derived from: its scope and its owner decide who the identity belongs
-    // to, and a stored credential means the keyless identity may not stand at
-    // all. A save that lost the row to another request must do NOTHING here, and
-    // above all must not retire an identity that request just registered.
+    // WOULD THE IDENTITY STILL BE TRUE OF THE ROW? The identity lives in a
+    // different store from the row, with no shared transaction, so the only
+    // honest guard is a fresh re-read that matches the row this save landed on
+    // every field the identity is derived from: its scope and its owner decide
+    // who the identity belongs to, and a stored credential means the keyless
+    // identity may not stand at all. A save that lost the row to another request
+    // must do NOTHING here, and above all must not retire an identity that
+    // request just registered.
+    //
+    // This reading is the FLOOR. It answers "may an identity stand for this row
+    // at all", and every road below asks the stricter question underneath it as
+    // well, because an identity may only stand on the row it was written for.
     const describesThisSave = (
-      candidate: { scope: string; userId: string | null; nangoConnectionId: string | null } | null,
+      candidate: {
+        scope: string;
+        userId: string | null;
+        nangoConnectionId: string | null;
+      } | null,
     ): boolean =>
       candidate !== null &&
       candidate.scope === row.scope &&
       candidate.userId === row.userId &&
       (candidate.nangoConnectionId ?? null) === null;
+    // IS IT THE VERY ROW THIS SAVE WROTE? The question above asks whether the
+    // identity would still be TRUE of whatever row stands under this id. This
+    // one asks something stricter, and the registration needs it: ids are
+    // supplied by the caller, so another person can delete this server and
+    // register the same id again, keyless and shared, between this save's write
+    // and its identity. Such a replacement answers the question above with yes
+    // on every field, because a shared row carries no owner and neither row
+    // carries a key, and this save would then retire the identity that person
+    // just registered and put its own in its place.
+    //
+    // The row's own stamps settle it. A replacement is CREATED, so it carries a
+    // creation instant this save never wrote, and this save's own write stamps
+    // the update instant it returned. A save that cannot read both stamps holds
+    // no witness and registers nothing, which is the same fail-closed direction
+    // every other ordering on this road takes: the panel is missing, never
+    // owned by the wrong person, and the next save of that row restores it.
+    //
+    // WHAT THE STAMPS CANNOT DO. They are the store's own clock, read to the
+    // millisecond, so two writes are only two instants while that clock moves.
+    // A replacement must be created in the same millisecond as the row it
+    // replaces, which a delete and an insert on separate queries cannot do while
+    // the clock advances; a clock that stands still or steps backwards removes
+    // that separation, and only a generation the row itself carries would
+    // replace it. That is a change to the schema and it is not made here.
+    //
+    // THE TWO STAMPS ANSWER TWO QUESTIONS, and the roads below need one each.
+    // The CREATION instant names the ROW: an update never moves it, so a row
+    // written again by somebody else is still the same row, and only a row
+    // created again is a different one. The UPDATE instant names THIS WRITE:
+    // any save of the row moves it, including a harmless one by the same
+    // person.
+    type RowCandidate = {
+      scope: string;
+      userId: string | null;
+      nangoConnectionId: string | null;
+      createdAt?: unknown;
+      updatedAt?: unknown;
+    };
+    /** The same row this save wrote, however many times it has been saved since. */
+    const isTheRowThisSaveWrote = (candidate: RowCandidate | null): boolean =>
+      describesThisSave(candidate) &&
+      written !== null &&
+      written.createdAt !== null &&
+      normalizeExternalMcpRowStamp(candidate?.createdAt) === written.createdAt;
+    /** That row, and untouched since this save wrote it. */
+    const isThisSavesOwnWrite = (candidate: RowCandidate | null): boolean =>
+      isTheRowThisSaveWrote(candidate) &&
+      written !== null &&
+      written.updatedAt !== null &&
+      normalizeExternalMcpRowStamp(candidate?.updatedAt) === written.updatedAt;
     // MAY THIS SAVE RETIRE THE IDENTITY IT FINDS? Only when the identity names
     // the owner the row itself is moving AWAY from, so the retire is this save's
     // own business: a user row carries its previous owner in the witnessed
@@ -408,13 +474,14 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     // the registration threw.
     let registrationAttempted = false;
     try {
-      // GUARDED ON THE ROW IT DESCRIBES, AS LATE AS THE TWO STORES ALLOW. The row
+      // GUARDED ON THE ROW IT WROTE, AS LATE AS THE TWO STORES ALLOW. The row
       // write landed, but another request can store a key on the same row, take
-      // it over, or delete it while this one is still on its way to the
-      // identity. The row is therefore re-read immediately before the reads, and
-      // again immediately before the writes, and this save does nothing at all
-      // unless the row is still the one it wrote.
-      if (describesThisSave(getExternalMcpServerByIdFresh(id))) {
+      // it over, delete it, or delete it and register the same id again while
+      // this one is still on its way to the identity. The row is therefore
+      // re-read immediately before the reads, and again immediately before the
+      // writes, and this save does nothing at all unless the row that stands
+      // there is the one it wrote, stamps included.
+      if (isThisSavesOwnWrite(getExternalMcpServerByIdFresh(id))) {
         // RECONCILE A SUPERSEDED IDENTITY. The derived id is stable across every
         // save of the row, so a save that moved the row to a new owner (a
         // promotion to global) or to a new workspace would otherwise address an
@@ -437,7 +504,7 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
           live !== null &&
           (supersededOwner || supersededOrganization) &&
           mayRetireSupersededIdentity(live);
-        if (describesThisSave(getExternalMcpServerByIdFresh(id))) {
+        if (isThisSavesOwnWrite(getExternalMcpServerByIdFresh(id))) {
           // Retire the row that was WITNESSED, never whatever the derived id
           // resolves to now: a request that replaced the identity between the
           // read above and this line keeps its own, and this retire passes over
@@ -463,18 +530,28 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     // leaves the first standing. The live identity is read again first and
     // retired by its OWN row id, so a save that lost the row takes away its own
     // identity and never the one the request that won just registered.
-    if (registrationAttempted && !describesThisSave(getExternalMcpServerByIdFresh(id))) {
+    //
+    // It asks about the ROW, not about this write. A row somebody registered
+    // again at the same id carries the same scope, the same absent owner and the
+    // same missing key, so reading those three alone would leave this save's
+    // identity standing on a stranger's server with the authority to share it:
+    // the creation instant is what takes it back. A row merely SAVED again,
+    // by this person or another one, is still the row this identity was written
+    // for, and retiring it there would throw away a sharing policy the owner
+    // set by hand, because the policy belongs to the identity row and a fresh
+    // registration seeds a fresh one at the scope's default. So the update
+    // instant is deliberately not read here.
+    if (registrationAttempted && !isTheRowThisSaveWrote(getExternalMcpServerByIdFresh(id))) {
       try {
         const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
-        // The row is read ONCE MORE after the identity read: the id can be
-        // registered again in that window, and a save that re-created the same
-        // row registers an identity that looks exactly like this one. Its row
-        // describes this save again, which is the sign to leave it alone.
+        // The row is read ONCE MORE after the identity read: the row can come
+        // back in that window, and a save whose own row is there again keeps
+        // what it wrote.
         if (
           live &&
           live.ownerUserId === credentialOwnerUserId &&
           live.organizationId === identityOrganizationId &&
-          !describesThisSave(getExternalMcpServerByIdFresh(id))
+          !isTheRowThisSaveWrote(getExternalMcpServerByIdFresh(id))
         ) {
           await retireExternalMcpKeylessConnectionIdentityRow(live.id);
         }

@@ -178,6 +178,50 @@ function toRecord(row: RawRow): ExternalMcpServerRecord {
   };
 }
 
+/**
+ * ONE reading of a row timestamp, for BOTH sides of a comparison (cinatra#3485).
+ * The sync query worker hands a `timestamptz` back as a JSON string and a direct
+ * client hands back a `Date`, so comparing one against the other by value is a
+ * comparison that can never be true. Every caller that compares a stamp reads
+ * BOTH sides through this, and gets the same ISO-8601 UTC reading of the same
+ * instant. A value that is absent or unreadable is `null`, which a caller must
+ * treat as "no witness at all", never as a match.
+ *
+ * The reading carries MILLISECOND resolution: a `timestamptz` reaches JavaScript
+ * as a `Date`, which holds no finer unit. Two writes are therefore only
+ * distinguishable when more than a millisecond separates them, which every write
+ * that travels a separate query does.
+ */
+export function normalizeExternalMcpRowStamp(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
+ * What a guarded write leaves behind: the stamps of the row IT wrote
+ * (cinatra#3485). `createdAt` is the row's creation instant, which an UPDATE
+ * never moves and an INSERT mints fresh, so it tells a caller whether the row
+ * under an id is still the row it saved or a replacement somebody created at
+ * the same id. `updatedAt` is the instant THIS write stamped. Either is `null`
+ * when the store returned no readable value, and a caller that cannot read both
+ * holds no witness.
+ */
+export type ExternalMcpServerWriteStamps = {
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+function readWriteStamps(row: Record<string, unknown> | undefined): ExternalMcpServerWriteStamps {
+  return {
+    createdAt: normalizeExternalMcpRowStamp(row?.created_at),
+    updatedAt: normalizeExternalMcpRowStamp(row?.updated_at),
+  };
+}
+
 function q(text: string) {
   return text.replaceAll('"', '""');
 }
@@ -872,8 +916,14 @@ export type ExternalMcpServerGuard = {
  * by a concurrent worker before this insert — the plain upsert would have
  * silently clobbered it. (Detecting the conflict via `rowCount` is reliable
  * without relying on the sync worker to propagate the pg duplicate-key code.)
+ *
+ * Returns the stamps of the row it created (cinatra#3485), so a caller with more
+ * to do after the write can tell that row apart from a replacement somebody
+ * created at the same id.
  */
-export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInput): void {
+export function insertExternalMcpServerStrict(
+  input: ExternalMcpServerUpsertInput,
+): ExternalMcpServerWriteStamps {
   assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   const [result] = runPostgresQueriesSync({
@@ -883,7 +933,7 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
         text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
                ON CONFLICT (id) DO NOTHING
-               RETURNING id`,
+               RETURNING id, created_at, updated_at`,
         values: [
           input.id,
           input.label,
@@ -906,6 +956,7 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
     );
   }
   invalidateCache();
+  return readWriteStamps((result?.rows ?? [])[0] as Record<string, unknown> | undefined);
 }
 
 /**
@@ -922,11 +973,15 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
  * concurrent re-key/keyless-edit that moved the connection fails closed instead
  * of resurrecting a revoked pointer (cinatra#1407). Throws
  * `ExternalMcpServerWriteConflictError` on a zero-row match.
+ *
+ * Returns the stamps of the row it wrote (cinatra#3485): the creation instant it
+ * left untouched and the update instant it stamped, which together name the row
+ * this write landed on.
  */
 export function updateExternalMcpServerGuarded(
   input: ExternalMcpServerUpsertInput,
   expected: ExternalMcpServerGuard,
-): void {
+): ExternalMcpServerWriteStamps {
   assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   const witnessNango = expected.nangoConnectionId !== undefined;
@@ -967,7 +1022,7 @@ export function updateExternalMcpServerGuarded(
                  AND user_id IS NOT DISTINCT FROM $13${
                    witnessNango ? "\n                 AND nango_connection_id IS NOT DISTINCT FROM $14" : ""
                  }
-               RETURNING id`,
+               RETURNING id, created_at, updated_at`,
         values,
       },
     ],
@@ -976,6 +1031,7 @@ export function updateExternalMcpServerGuarded(
     throw new ExternalMcpServerWriteConflictError();
   }
   invalidateCache();
+  return readWriteStamps((result?.rows ?? [])[0] as Record<string, unknown> | undefined);
 }
 
 /**

@@ -30,8 +30,41 @@ let sessionIsPlatformAdmin = false;
 // The identity rows the REAL seam writes (the store is the leaf that is stubbed).
 const identities = new Map<string, NangoConnectionIdentity>();
 let identitySeq = 0;
-// The external-MCP server rows the write handler persists.
-const servers = new Map<string, { id: string; scope: string; userId: string | null; nangoConnectionId?: string | null }>();
+// The external-MCP server rows the write handler persists. `createdAt` and
+// `updatedAt` are the stamps a real store keeps (cinatra#3485 fix leg 2): a row
+// a case places by hand starts without them, exactly as a legacy row does.
+const servers = new Map<
+  string,
+  {
+    id: string;
+    scope: string;
+    userId: string | null;
+    nangoConnectionId?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  }
+>();
+
+// The store clock. Every write reads it once, so two writes are two instants and
+// no case depends on a wall clock.
+let storeClock = 0;
+function nextStamp(): string {
+  storeClock += 1;
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, storeClock)).toISOString();
+}
+// A row a case places by hand is a row that was ALREADY THERE when the case
+// began. The columns are NOT NULL in the store, so such a row carries stamps
+// too, and they are older than anything this case writes.
+const PLACED_BEFORE = "2025-12-31T00:00:00.000Z";
+function stampsOf(row: { createdAt?: string; updatedAt?: string } | undefined): {
+  createdAt: string;
+  updatedAt: string;
+} {
+  return {
+    createdAt: row?.createdAt ?? PLACED_BEFORE,
+    updatedAt: row?.updatedAt ?? PLACED_BEFORE,
+  };
+}
 
 // cinatra#3485 fix leg: deterministic stand-ins for the two things a wall
 // clock would otherwise have to produce: a CONCURRENT request that lands
@@ -42,6 +75,10 @@ let onServerRowWritten: (() => void | Promise<void>) | null = null;
 let onKeylessIdentityRegister: (() => void | Promise<void>) | null = null;
 let onAfterKeylessRetire: (() => void | Promise<void>) | null = null;
 let onAfterKeylessIdentityRead: (() => void | Promise<void>) | null = null;
+// The window BEFORE an identity read resolves, as against the one after it: a
+// request that runs here changes WHAT the read returns, and a request that runs
+// after it changes what stands once the caller already holds its answer.
+let onBeforeKeylessIdentityRead: (() => void | Promise<void>) | null = null;
 let keylessRetireFailsOnce = false;
 let identitySeedFailsOnce = false;
 
@@ -79,17 +116,32 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     value === "streamable-http" || value === "sse" ? value : "unknown",
   getExternalMcpServerByIdFresh: (id: string) => {
     const row = servers.get(id);
-    return row ? { ...row } : null;
+    return row ? { ...row, ...stampsOf(row) } : null;
+  },
+  // cinatra#3485 fix leg 2: one reading of a stamp, for both sides of a
+  // comparison, mirroring the real helper.
+  normalizeExternalMcpRowStamp: (value: unknown) => {
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value !== "string" || value.trim() === "") return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
   },
   // A COPY, as a real store hands back: the handler must never be able to read
-  // its own row object back and see itself unchanged.
+  // its own row object back and see itself unchanged. The write also STAMPS the
+  // row and hands its stamps back: an INSERT mints a creation instant, an UPDATE
+  // leaves it standing and mints a new update instant.
   insertExternalMcpServerStrict: (input: { id: string; scope: string; userId: string | null }) => {
-    servers.set(input.id, { ...input });
+    const stamp = nextStamp();
+    servers.set(input.id, { ...input, createdAt: stamp, updatedAt: stamp });
     void onServerRowWritten?.();
+    return { createdAt: stamp, updatedAt: stamp };
   },
   updateExternalMcpServerGuarded: (input: { id: string; scope: string; userId: string | null }) => {
-    servers.set(input.id, { ...input });
+    const { createdAt } = stampsOf(servers.get(input.id));
+    const updatedAt = nextStamp();
+    servers.set(input.id, { ...input, createdAt, updatedAt });
     void onServerRowWritten?.();
+    return { createdAt, updatedAt };
   },
   deleteExternalMcpServerGuarded: (id: string) => {
     servers.delete(id);
@@ -132,6 +184,11 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   // reconciles its owner and workspace against (cinatra#3485 fix leg). Exactly
   // the store read the real helper performs, no decision of its own.
   readExternalMcpKeylessConnectionIdentity: async (connectionId: string) => {
+    // The window BEFORE the read resolves: a racing request that deletes the
+    // row and registers the same id again here is a request whose identity this
+    // read HANDS BACK, which is how one person's save comes to hold another
+    // person's identity row.
+    await onBeforeKeylessIdentityRead?.();
     const found =
       [...identities.values()].find(
         (r) =>
@@ -396,8 +453,10 @@ beforeEach(() => {
   onKeylessIdentityRegister = null;
   onAfterKeylessRetire = null;
   onAfterKeylessIdentityRead = null;
+  onBeforeKeylessIdentityRead = null;
   keylessRetireFailsOnce = false;
   identitySeedFailsOnce = false;
+  storeClock = 0;
 });
 
 // This file's stores are module-level, and `vi.spyOn` is used below — leave the
@@ -412,6 +471,7 @@ afterEach(() => {
   onKeylessIdentityRegister = null;
   onAfterKeylessRetire = null;
   onAfterKeylessIdentityRead = null;
+  onBeforeKeylessIdentityRead = null;
   keylessRetireFailsOnce = false;
   identitySeedFailsOnce = false;
   vi.restoreAllMocks();
@@ -1059,7 +1119,17 @@ describe("no retire takes away the identity of a server registered again (cinatr
     expect(liveIdentities().map((r) => r.connectionId)).toContain("external-mcp-keyless-srv-flip");
   });
 
-  it("the TAKE-BACK leaves the identity a save that re-created the same row just registered", async () => {
+  // cinatra#3485 fix leg 2 MOVED this case's outcome. A row REGISTERED AGAIN at
+  // the same id is a different row, and the second opinion put the reason
+  // plainly: reading only the scope, the owner and the missing key leaves this
+  // save's identity standing on a server somebody ELSE registered, with the
+  // authority to share it. The take-back reads the row's creation instant, so it
+  // takes back what it wrote whoever the other person is. The price is here:
+  // when the SAME person re-created the row, they lose the panel until their
+  // next save. That is the fail-closed direction, and the case below pins the
+  // repair. A row merely SAVED again is NOT this case: see the case that keeps
+  // the identity, and its sharing, through a concurrent save.
+  it("the TAKE-BACK takes back what it wrote even from a row registered again at the same id", async () => {
     sessionActiveOrganizationId = ORG;
     // The row is deleted right after this save's identity landed, so its
     // take-back runs; the row is registered again inside that take-back's read.
@@ -1072,8 +1142,15 @@ describe("no retire takes away the identity of a server registered again (cinatr
       };
     };
     await registerKeyless({ id: "srv-back" });
+    // The row that came back stands, without the identity of the save that lost
+    // it, and with no orphan left anywhere.
     expect(servers.get("srv-back")).toBeTruthy();
+    expect(liveIdentities()).toHaveLength(0);
+    expect(orphanKeylessIdentities()).toEqual([]);
+    // The next save of that row draws its panel again.
+    await registerKeyless({ id: "srv-back" });
     expect(liveIdentities()).toHaveLength(1);
+    expect((await renderMcpServersSharingTab()).panelViews).toHaveLength(1);
   });
 
   it("the ALREADY-GONE delete branch leaves the identity of a server created in its window", async () => {
@@ -1089,5 +1166,158 @@ describe("no retire takes away the identity of a server registered again (cinatr
     await deleteServerHandler({ id: "srv-gone-race" });
     expect(servers.get("srv-gone-race")).toBeTruthy();
     expect(liveIdentities()).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3485, the fix leg's second leg. TWO PEOPLE AND ONE ID. A server id is
+// supplied by the caller, so a person who deletes a server may register the same
+// id again, and the row that lands then carries the same scope, the same absent
+// owner and the same missing key as the row somebody else's save is still on its
+// way to. The identity of the ROW is what tells them apart: a row registered
+// again was CREATED again, and a save that reads a creation instant it never
+// wrote is a save looking at somebody else's server.
+// ---------------------------------------------------------------------------
+describe("a server registered again at the same id is not the row this save wrote (cinatra#3485)", () => {
+  it("a keyless GLOBAL row deleted and registered again by ANOTHER admin keeps ITS identity, and this save writes nothing", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    sessionIsPlatformAdmin = true;
+    sessionActiveOrganizationId = ORG;
+    sessionUserId = "admin-a";
+    await registerKeyless({ id: "srv-two-admins", scope: "global" });
+    expect(liveIdentities()).toHaveLength(1);
+    expect(liveIdentities()[0].ownerUserId).toBe("admin-a");
+    // The first admin saves the same server again and pauses before the read of
+    // its identity returns. The second admin deletes the server and registers
+    // the same id again, keyless and global, so the identity that read hands
+    // back is the second admin's.
+    onBeforeKeylessIdentityRead = async () => {
+      onBeforeKeylessIdentityRead = null;
+      sessionUserId = "admin-b";
+      await deleteServerHandler({ id: "srv-two-admins" });
+      await registerKeyless({ id: "srv-two-admins", scope: "global" });
+      sessionUserId = "admin-a";
+    };
+    await registerKeyless({ id: "srv-two-admins", scope: "global" });
+    // The replacement keeps the identity its own registration wrote: the first
+    // admin never retires it and never registers over it.
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerUserId).toBe("admin-b");
+    expect(orphanKeylessIdentities()).toEqual([]);
+    // Nothing was refused either: the save that lost the row never reached the
+    // seam at all.
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it("the person who lost the row gets their panel back on their NEXT save, and takes no one else's", async () => {
+    sessionIsPlatformAdmin = true;
+    sessionActiveOrganizationId = ORG;
+    sessionUserId = "admin-a";
+    await registerKeyless({ id: "srv-two-admins-again", scope: "global" });
+    onBeforeKeylessIdentityRead = async () => {
+      onBeforeKeylessIdentityRead = null;
+      sessionUserId = "admin-b";
+      await deleteServerHandler({ id: "srv-two-admins-again" });
+      await registerKeyless({ id: "srv-two-admins-again", scope: "global" });
+      sessionUserId = "admin-a";
+    };
+    await registerKeyless({ id: "srv-two-admins-again", scope: "global" });
+    expect(liveIdentities()[0].ownerUserId).toBe("admin-b");
+    // The second admin owns the server now, and a save of their own keeps it.
+    sessionUserId = "admin-b";
+    await registerKeyless({ id: "srv-two-admins-again", scope: "global" });
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerUserId).toBe("admin-b");
+    expect((await renderMcpServersSharingTab()).panelViews).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3485 fix leg 2, second opinion round 1. The same two people and the
+// same id, one window later: this save's identity lands on a replacement row
+// that another admin created while the save was on its way to the seam. Reading
+// the scope, the owner and the missing key says the identity belongs there, and
+// it does not: the row is somebody else's server.
+// ---------------------------------------------------------------------------
+describe("an identity never stays on a replacement row this save never wrote (cinatra#3485)", () => {
+  it("a replacement ANOTHER admin created while this save was registering never keeps this save's identity", async () => {
+    sessionIsPlatformAdmin = true;
+    sessionActiveOrganizationId = ORG;
+    sessionUserId = "admin-a";
+    // The first admin's save is inside its own registration when the second
+    // admin deletes the server and lands a replacement row at the same id. The
+    // replacement's own identity is not written yet, so the identity that lands
+    // on it is the first admin's.
+    onKeylessIdentityRegister = async () => {
+      onKeylessIdentityRegister = null;
+      sessionUserId = "admin-b";
+      await deleteServerHandler({ id: "srv-replaced" });
+      servers.set("srv-replaced", {
+        id: "srv-replaced",
+        scope: "global",
+        userId: null,
+        nangoConnectionId: null,
+        createdAt: "2026-03-03T00:00:00.000Z",
+        updatedAt: "2026-03-03T00:00:00.000Z",
+      });
+      sessionUserId = "admin-a";
+    };
+    await registerKeyless({ id: "srv-replaced", scope: "global" });
+    // The replacement carries no identity of the person who never registered
+    // it, so nobody holds sharing authority over somebody else's server.
+    expect(liveIdentities()).toHaveLength(0);
+    expect(orphanKeylessIdentities()).toEqual([]);
+    sessionUserId = "admin-a";
+    expect((await renderMcpServersSharingTab()).section).toBeNull();
+    // The admin whose server it is gets the panel on their own next save.
+    sessionUserId = "admin-b";
+    await registerKeyless({ id: "srv-replaced", scope: "global" });
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerUserId).toBe("admin-b");
+    expect((await renderMcpServersSharingTab()).panelViews).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3485 fix leg 2, second opinion round 2. The other half of the same
+// question. A row written again is still the row the identity was written for,
+// and the identity row is what a sharing policy hangs on: retiring it because
+// somebody saved the server again would hand the next registration a FRESH
+// identity, seeded at the scope's default, and a policy an owner narrowed by
+// hand would silently widen without anybody editing the sharing.
+// ---------------------------------------------------------------------------
+describe("a row SAVED again keeps its identity, and the sharing set on it (cinatra#3485)", () => {
+  it("a concurrent save of the same row by the same person keeps the identity row the policy hangs on", async () => {
+    sessionIsPlatformAdmin = true;
+    sessionActiveOrganizationId = ORG;
+    await registerKeyless({ id: "srv-resaved", scope: "global" });
+    const before = liveIdentities()[0];
+    // The admin narrows that connection's sharing by hand, through the same
+    // sanctioned save action the Sharing tab calls.
+    expect(await saveExtensionAccessPolicy("connection", before.id, policyOf("owner"))).toEqual({
+      ok: true,
+    });
+    expect(writtenPolicies).toHaveLength(1);
+    expect(writtenPolicies[0].resourceId).toBe(before.id);
+    // A second save of the SAME server lands while this one is inside its
+    // registration. Nothing about the row moves except the instant it was
+    // written.
+    onKeylessIdentityRegister = async () => {
+      onKeylessIdentityRegister = null;
+      await registerKeyless({ id: "srv-resaved", scope: "global" });
+    };
+    await registerKeyless({ id: "srv-resaved", scope: "global" });
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    // The very same identity row, so the narrowed policy written against it
+    // still governs, and no second grant seed was written at the default.
+    expect(rows[0].id).toBe(before.id);
+    expect(seededPolicies.size).toBe(1);
+    expect(writtenPolicies).toHaveLength(1);
+    expect((await renderMcpServersSharingTab()).panelViews).toHaveLength(1);
   });
 });
