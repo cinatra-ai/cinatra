@@ -1,7 +1,6 @@
 import "server-only";
-import { GateNotPendingError, RunTransitionError } from "./run-status";
-
 import { randomUUID } from "node:crypto";
+import { GateNotPendingError, RunTransitionError } from "./run-status";
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -256,7 +255,11 @@ export async function approveReviewTaskInternal(
   // synthetic ID instead of relying on planned_action/review_task rows. This
   // branch:
   //   (a) validates run exists and run.status === "pending_approval"
-  //   (b) validates fieldName is present in the request values (single-field path)
+  //   (b) validates the single-field path's fieldName carries a value — or,
+  //       when it carries none, that the agent declared a DEFAULT for that
+  //       field (merged in its place) or declared the field OPTIONAL
+  //       (cinatra#3452); a required field with no value and no declared
+  //       default is still refused, naming it
   //   (c) merges the approved field value(s) into agent_runs.inputParams AND
   //       transitions the run back to "queued" in one CAS UPDATE (#76)
   //   (d) re-enqueues AGENT_BUILDER_EXECUTION so the setup loop re-evaluates
@@ -316,6 +319,11 @@ export async function approveReviewTaskInternal(
     // variant) up front, so the DB write below stays ONE statement. All
     // validation and the template-allowlist read happen BEFORE the write.
     let inputParamsMerge: SQL | null = null;
+    // Did this submit knowingly settle an empty box (cinatra#3452: a declared
+    // default merged in its place, or a field the schema declares optional)?
+    // Read by the no-value guard below (cinatra#3532), which must not refuse a
+    // submission that DID answer its field with nothing.
+    let emptyFieldSettled = false;
     // Effective declared inputs for this run's template, resolved at most once
     // per approval (the resolver memoizes per packageName@version internally).
     // `null` = no template identity ⇒ nothing to validate against.
@@ -327,9 +335,12 @@ export async function approveReviewTaskInternal(
       }
       return templateCache;
     };
-    let declaredPropertiesCache: Record<string, Record<string, unknown>> | null | undefined;
-    const declaredProperties = async () => {
-      if (declaredPropertiesCache !== undefined) return declaredPropertiesCache;
+    let resolvedSchemaCache:
+      | { required: string[]; properties: Record<string, Record<string, unknown>> }
+      | null
+      | undefined;
+    const resolvedInputSchema = async () => {
+      if (resolvedSchemaCache !== undefined) return resolvedSchemaCache;
       const template = await setupTemplate();
       // Resolution reads the mounted OAS from disk, so it can fail for reasons
       // that have NOTHING to do with the value being approved (codex round 1).
@@ -340,9 +351,18 @@ export async function approveReviewTaskInternal(
       // schema itself), so a violating value is still stopped before the run,
       // just one step later and with the run landed failed rather than a submit
       // error. Only the point of report moves; nothing gets through.
+      //
+      // cinatra#3452 — the SAME resolution now also answers "did the agent
+      // declare this field required, and did it declare a default for it?", so
+      // every reading comes from one resolve and they can never disagree about
+      // the schema they were taken from. They read `null` in OPPOSITE
+      // directions, deliberately: unresolved means "not type-validated here"
+      // for the properties above, and "the refusal stands" for the
+      // required/default split below (a guard that cannot consult the schema
+      // must not start letting empty submissions through).
       try {
-        declaredPropertiesCache = template
-          ? (await resolveTemplateInputSchema(template)).properties
+        resolvedSchemaCache = template
+          ? await resolveTemplateInputSchema(template)
           : null;
       } catch (err) {
         console.warn(
@@ -350,19 +370,122 @@ export async function approveReviewTaskInternal(
             `declared-type validation deferred to dispatch: ` +
             `${err instanceof Error ? err.message : String(err)}`,
         );
-        declaredPropertiesCache = null;
+        resolvedSchemaCache = null;
       }
-      return declaredPropertiesCache;
+      return resolvedSchemaCache;
     };
+    const declaredProperties = async () =>
+      (await resolvedInputSchema())?.properties ?? null;
     if (values !== undefined) {
-      // Guard: single-field path requires fieldName to be present in values.
-      if (typeof fieldName === "string" && (values === null || !(fieldName in (values as object)))) {
-        throw new Error(
-          `Setup approval rejected: fieldName "${fieldName}" is not present in the submitted values`,
-        );
+      // -----------------------------------------------------------------
+      // cinatra#3452 — A FIELD LEFT EMPTY IS NOT A MISSING FIELD.
+      //
+      // The guard here used to refuse EVERY single-field submission that
+      // carried no value for its fieldName, so an operator who left a number
+      // box blank was told
+      // `fieldName "ideaCount" is not present in the submitted values` and
+      // could not go on without typing a number they did not want to give.
+      // The drawing says the opposite: "If a step offered an optional field
+      // and the operator left it blank, the step is still done and still
+      // carries its check."
+      //
+      // "No value given" is the key being ABSENT (an undefined-valued key does
+      // not survive the Server Action boundary) or present as an explicit
+      // empty. `0` and `false` are answers, not emptiness.
+      //
+      // Three readings, all taken from the template's OWN declaration, in this
+      // order:
+      //   1. the field declares a DEFAULT — the empty box is satisfied by that
+      //      default, which is merged into inputParams, and the step continues.
+      //      This is the reported case: the Blog Pipeline Agent declares
+      //      `ideaCount` in its StartNode `required` list AND with
+      //      `default: 5`, so a person who leaves the idea count blank is
+      //      asking for the count the agent itself declared.
+      //   2. the field is declared OPTIONAL and declares no default — the key
+      //      stays absent and the step continues (the setup loop prompts
+      //      REQUIRED fields only, so an absent optional field is not asked
+      //      again).
+      //   3. the field is declared REQUIRED and declares no default — the
+      //      refusal stands, naming that field.
+      //
+      // It FAILS CLOSED: a schema that cannot be resolved, or that does not
+      // declare this field at all, keeps the refusal exactly as before.
+      // -----------------------------------------------------------------
+      if (typeof fieldName === "string") {
+        const submitted =
+          values !== null && typeof values === "object" && !Array.isArray(values)
+            ? (values as Record<string, unknown>)
+            : null;
+        // `in` walks the prototype chain, so it answers TRUE for
+        // "toString"/"constructor" on any plain object (convergence round).
+        // Every presence reading here is an OWN-property reading.
+        const submittedCarriesKey =
+          submitted !== null &&
+          Object.prototype.hasOwnProperty.call(submitted, fieldName);
+        const noValueGiven =
+          submitted === null ||
+          !submittedCarriesKey ||
+          submitted[fieldName] === null ||
+          submitted[fieldName] === undefined;
+        if (noValueGiven) {
+          const schema = await resolvedInputSchema();
+          // cinatra#3452 (convergence round) — an OWN declaration only. A bare
+          // property read answers the inherited Object.prototype names
+          // ("toString", "constructor", …) with a truthy value, which would
+          // then read as "declared, and not listed in `required`" — optional —
+          // and let a field the schema never declared through a guard whose
+          // whole job is to fail closed.
+          const declaredField =
+            schema && Object.prototype.hasOwnProperty.call(schema.properties, fieldName)
+              ? schema.properties[fieldName]
+              : undefined;
+          const declaredDefault = declaredField ? declaredField.default : undefined;
+          const satisfiedByDeclaredDefault =
+            !!schema && !!declaredField && declaredDefault !== undefined;
+          const declaredOptional =
+            !!schema && !!declaredField && !schema.required.includes(fieldName);
+          if (!satisfiedByDeclaredDefault && !declaredOptional) {
+            // The refusal stands. When the value the operator DID submit is one
+            // the declared-type guard can speak to (cinatra#2484's object-typed
+            // inputs), that sharper reading is reported first — an explicit
+            // `null` for an object input is told as a type violation naming the
+            // input, not as a field the submission forgot to carry.
+            if (schema && submittedCarriesKey) {
+              assertSetupValuesMatchDeclaredObjectTypes(schema.properties, {
+                [fieldName]: submitted[fieldName],
+              });
+            }
+            throw new Error(
+              `Setup approval rejected: fieldName "${fieldName}" is not present in the submitted values`,
+            );
+          }
+          emptyFieldSettled = true;
+          // "absent (or its declared default)": a default the agent declared is
+          // what the run should carry, and it is merged here so the setup loop
+          // reading PRESENCE sees the field answered and moves the wizard on.
+          if (satisfiedByDeclaredDefault) {
+            const serializedDefault = JSON.stringify(declaredDefault);
+            inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || jsonb_build_object(${fieldName}::text, ${serializedDefault}::jsonb)`;
+          } else if (
+            submittedCarriesKey &&
+            !!run.inputParams &&
+            typeof run.inputParams === "object" &&
+            !Array.isArray(run.inputParams) &&
+            Object.prototype.hasOwnProperty.call(run.inputParams, fieldName)
+          ) {
+            // cinatra#3452 (convergence round) — the operator CLEARED a field
+            // that already carried an answer. Writing nothing would leave the
+            // stale answer in place and the run would go on carrying a value the
+            // person just removed. "Absent" has to be made true, so the key is
+            // deleted — the same shape a box that was never filled leaves
+            // behind. Only this case writes: when inputParams does not carry the
+            // field there is nothing to remove and the merge stays empty.
+            inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) - ${fieldName}::text`;
+          }
+        }
       }
 
-      if (typeof fieldName === "string") {
+      if (typeof fieldName === "string" && !emptyFieldSettled) {
         // Single-field path: merge ONE key's value into inputParams.
         // Avoid serializing the whole `values` object and then wrapping it
         // again with jsonb_build_object(fieldName, ...), which would produce
@@ -386,7 +509,12 @@ export async function approveReviewTaskInternal(
           );
         }
         inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || jsonb_build_object(${fieldName}::text, ${serializedValue}::jsonb)`;
-      } else if (values !== null && typeof values === "object" && !Array.isArray(values)) {
+      } else if (
+        typeof fieldName !== "string" &&
+        values !== null &&
+        typeof values === "object" &&
+        !Array.isArray(values)
+      ) {
         // Grouped-form path: merge the submitted setup-field values into
         // inputParams. The approval UI wraps those fields in an approval
         // envelope, adding reserved metadata keys (approved/approvedAt/…) that
@@ -433,6 +561,58 @@ export async function approveReviewTaskInternal(
       }
     }
 
+    // -----------------------------------------------------------------
+    // cinatra#3532 — A SUBMIT THAT RECORDS NOTHING MUST NOT RE-EMIT THE GATE.
+    //
+    // The setup loop parks one gate per required input the run is still
+    // missing, and the resume below hands it back exactly the inputs it parked
+    // on. So a submission that merged NO value and settled no field leaves the
+    // loop with the same reading it already had — and it parks the SAME field
+    // again, as a brand-new gate, while the card the person was answering says
+    // "This review is no longer open". That is the dead end #3532 was reported
+    // as: the wizard's second field could not be passed by any road.
+    //
+    // WHAT STILL RESUMES, so this reads as a narrowing and not a new refusal:
+    //   · every submission that merges a value (the single-field path, the
+    //     grouped merge, a declared default put in an empty box's place);
+    //   · an EMPTY box the schema settled (cinatra#3452) — an optional field
+    //     left blank is answered, and the loop asks required fields only;
+    //   · a run that is waiting for nothing — the plain approve, and the
+    //     envelope-only approval (#554), keep falling through to the CAS;
+    //   · a schema this road cannot resolve, which says nothing about what the
+    //     run is waiting for and must not start refusing on a guess.
+    //
+    // Refusing leaves the run `pending_approval` at the gate it is already
+    // parked on, with the values it already holds: the field stays open with
+    // its reading, and no second gate is ever minted for it.
+    // -----------------------------------------------------------------
+    if (inputParamsMerge === null && !emptyFieldSettled) {
+      const schema = await resolvedInputSchema();
+      const held =
+        run.inputParams !== null &&
+        typeof run.inputParams === "object" &&
+        !Array.isArray(run.inputParams)
+          ? (run.inputParams as Record<string, unknown>)
+          : {};
+      // The SAME reading the setup loop takes (execution.ts): a required field,
+      // not hidden, whose key the run does not already carry.
+      const stillWaitingFor = !schema
+        ? []
+        : schema.required.filter((name) => {
+            const declared = Object.prototype.hasOwnProperty.call(schema.properties, name)
+              ? (schema.properties[name] as { "x-hidden"?: boolean } | undefined)
+              : undefined;
+            if (declared?.["x-hidden"] === true) return false;
+            return !Object.prototype.hasOwnProperty.call(held, name);
+          });
+      if (stillWaitingFor.length > 0) {
+        throw new Error(
+          `Setup approval recorded no value: run ${runId} is still waiting for required ` +
+            `input "${stillWaitingFor[0]}" — the gate stays open`,
+        );
+      }
+    }
+
     // Single atomic CAS UPDATE (#76), now GUARDED (§7.1): merge the approved
     // value(s) into inputParams (when present) AND transition the run back to
     // "queued" — so runAgentBuilderExecutionJob won't skip — in ONE statement,
@@ -467,46 +647,107 @@ export async function approveReviewTaskInternal(
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
     );
 
-    await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-      // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
-      // execution.ts that, once the last required field is in, this run owes the
-      // trigger step before it may dispatch — so it hands off to
-      // `pending_trigger` instead of running before the user has chosen when.
-      { runId, resumedFromSetup: true },
-      {
-        // cinatra#3033 — THE HAND-OFF. One job id PER LEG, never one per run.
-        //
-        // `reviewTaskId` is `setup-<runId>`, so `resume-${reviewTaskId}` alone
-        // was CONSTANT for the whole run while the queue retains settled jobs
-        // (`removeOnComplete: 200`). BullMQ's `add` is HSETNX-based, so with the
-        // previous leg's job still on the queue the add returned that old job
-        // and enqueued NOTHING: a setup asking for two fields parked, resumed
-        // once, parked again — and the second approval flipped the run
-        // `pending_approval -> queued` and then handed it to nobody. The run
-        // stalled at `queued` with no job, no trigger row and no error, and
-        // every further press of the same form was refused by the
-        // `pending_approval` guard above with the run's own current status.
-        //
-        // Clearing a SETTLED entry of a shared id does not close this: the
-        // previous leg is itself what re-parks the run, and it stays ACTIVE for
-        // the rest of its own unwind after that park commits — a press inside
-        // that window meets a LIVE job of the same id and is dropped exactly as
-        // before. A per-leg id closes the window outright.
-        //
-        // Safe because nothing resolves a resume job by its id (the run-href
-        // resolver reads `job.data`, never `job.id`), and a genuine double press
-        // is already de-duplicated one statement earlier: the org-scoped
-        // `pending_approval` CAS inside `resumeRunFromSetupApproval` lets
-        // exactly one press through and the loser throws before this line.
-        // The separator is `__`, not `:`. BullMQ VALIDATES a custom job id
-        // and throws `Custom Id cannot contain :` before it enqueues anything,
-        // so a colon here turned this whole approval into a 500 AFTER the
-        // status write had already committed — the run reached `queued` with no
-        // job and no trigger row: the same dead end by a different door.
-        jobId: `resume-${reviewTaskId}__${randomUUID()}`,
-      },
-    );
+    // cinatra#3033 — WHAT THIS BRANCH MEASURED AT THE SAME SEAM, KEPT here
+    // because it is the reading the id below has to satisfy. `reviewTaskId` is
+    // `setup-<runId>`, so `resume-${reviewTaskId}` was CONSTANT for a whole run
+    // while the queue retains settled jobs (`removeOnComplete: 200`): BullMQ's
+    // HSETNX `add` handed the pre-existing job back and enqueued NOTHING, so a
+    // setup asking for two fields parked, resumed once and parked again — and
+    // the second approval flipped the run `pending_approval -> queued` and then
+    // handed it to nobody. Two things this branch proved, and neither is undone
+    // by the id below. FIRST, clearing a SETTLED entry of a shared id does not
+    // close the window: the previous leg is itself what re-parks the run and it
+    // stays ACTIVE for the rest of its own unwind after that park commits, so a
+    // press inside that window meets a LIVE job of the same id and is dropped
+    // exactly as before — only an id that is not shared closes it outright.
+    // SECOND, a COLON in a custom job id makes BullMQ throw `Custom Id cannot
+    // contain :` before it enqueues anything, which turned the whole approval
+    // into a 500 AFTER the status write had already committed: the run reached
+    // `queued` with no job and no trigger row, the same dead end by a different
+    // door. The per-confirmation id minted just below carries BOTH readings —
+    // it is unique per confirmation rather than per run, and it holds no colon.
+    // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
+    // REPEAT. The id this add used to carry, `resume-${reviewTaskId}`, was a
+    // FALSE idempotency key: the setup gate's `reviewTaskId` is the synthetic
+    // `setup-${runId}` minted once per RUN, so every confirmed field of one run
+    // asked the queue for the SAME id. The queue refuses to create a second job
+    // when the id key already exists (it hands the pre-existing id back and
+    // stores nothing) and it keeps its completed jobs, so the FIRST
+    // confirmation of a run landed and every later one was dropped: no next
+    // field was asked, no hand-over was made, and the run sat at `queued`.
+    //
+    // The id is now minted PER CONFIRMATION out of nothing the run can repeat,
+    // so two confirmations of one run never collide. It is still an id rather
+    // than none at all because the queue connection resends an unanswered
+    // command after a reconnect (`maxRetriesPerRequest: null` plus IORedis's
+    // default `autoResendUnfulfilledCommands`): with a per-call id the resent
+    // add is the duplicate the queue is meant to swallow, while with NO id the
+    // replay would mint a SECOND resume job for the same confirmation and park
+    // the same gate twice. An id derived from the field name would not do
+    // either, since a run really can park on the same field twice (the clear
+    // road above removes an answered key again).
+    //
+    // The org-scoped CAS in `resumeRunFromSetupApproval` one statement above
+    // moves the run pending_approval -> queued and throws when it updates no
+    // row, so the ordinary double-submit of one parked gate is refused before
+    // this line. It checks the run, its org and that status only — it is not by
+    // itself proof that no duplicate submission can ever arrive, and that
+    // admission gap is older than this change. Nothing reads this job id.
+    const resumeJobId = `resume-${randomUUID()}`;
+    try {
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+        // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
+        // execution.ts that, once the last required field is in, this run owes the
+        // trigger step before it may dispatch — so it hands off to
+        // `pending_trigger` instead of running before the user has chosen when.
+        { runId, resumedFromSetup: true },
+        { jobId: resumeJobId },
+      );
+    } catch (err) {
+      // cinatra#3585 — A SETUP THAT CANNOT BE HANDED BACK TO THE RUNNER SAYS SO
+      // ON THE RUN. The CAS above has already moved this run to `queued`; if the
+      // runner is never handed it back, the run would sit there with nothing
+      // said — the same silent shape this issue reports. Land it FAILED with a
+      // message a person can act on instead, naming the field just answered.
+      // Mirrors the tree's own rule for this class one file over (execution.ts
+      // lands the run failed with the message rather than letting a throw
+      // escape, "leaving the run parked at queued forever").
+      const enqueueError = err instanceof Error ? err.message : String(err);
+      const answeredField = fieldName ?? "(grouped)";
+      try {
+        await transitionRunStatus(
+          runId,
+          "queued",
+          "failed",
+          {
+            error:
+              `Setup could not be handed back to the runner after the field ` +
+              `"${answeredField}" was answered: ${enqueueError}`,
+          },
+          sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+        );
+      } catch (transitionErr) {
+        // stale_from_status: a concurrent stop — or a resume job the queue DID
+        // accept before the acknowledgement failed — already moved the run off
+        // `queued`. That writer wins, exactly as the sibling arms swallow it.
+        // Any OTHER compensation failure is reported here and not re-thrown:
+        // the enqueue failure below is the real cause, and replacing it with a
+        // secondary failure would hide it from the caller.
+        const stale =
+          transitionErr instanceof RunTransitionError &&
+          transitionErr.code === "stale_from_status";
+        if (!stale) {
+          console.error(
+            `[approveReviewTaskInternal] setup-path could not land run=${runId} failed ` +
+              `after the resume enqueue failed: ` +
+              `${transitionErr instanceof Error ? transitionErr.message : String(transitionErr)}`,
+          );
+        }
+      }
+      // …and the ENQUEUE failure — the real cause — travels on to the caller.
+      throw err;
+    }
     console.log(
       `[approveReviewTaskInternal] setup-path resumed run=${runId} fieldName=${fieldName ?? "(grouped)"} actor=${actorId}`,
     );

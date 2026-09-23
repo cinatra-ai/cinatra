@@ -205,12 +205,14 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
     expect(pkg.cinatra?.hasApprovalGates).toBe(true);
   });
 
-  it("hitlScreens declares the send-confirmation gate and the output renderer", () => {
+  it("hitlScreens declares the send-confirmation gate", () => {
     const metadata = oas.metadata as Record<string, unknown>;
     const cinatra = metadata.cinatra as Record<string, unknown>;
+    // The pinned head names ONE screen. The host's generated field-renderer
+    // map still resolves that id to the send-confirmation renderer, so the
+    // card advertises nothing the host cannot draw.
     expect(cinatra.hitlScreens).toEqual([
       "@cinatra-ai/email-delivery-agent:send-confirmation",
-      "@cinatra-ai/email-delivery-agent:output",
     ]);
   });
 

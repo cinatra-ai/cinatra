@@ -411,7 +411,11 @@ describe("assertUploadMeaning — the person's own assertion promotes a matcher-
     expect(promoteMatchedArtifactType).toHaveBeenCalledWith(
       expect.objectContaining({
         extension: PACK,
-        personAsserted: true,
+        // THE PERSON'S OWN ROAD IS NAMED BY THE ACTING PRINCIPAL, not by a
+        // caller flag: the store proves the authority from the durable `user`
+        // assertion this call just wrote, and only the acting person's own
+        // counts — so what the caller owes the road is WHO is acting.
+        principal: "u1",
         threshold: null,
         confirmed: true,
         ownType: expect.objectContaining({ typeId: OWN_TYPE }),

@@ -518,6 +518,25 @@ export async function scanSkillExtensions(
   const roots = await resolveExtensionRoots(strict);
   const out: SkillExtensionDescriptor[] = [];
   const seenPkgDir = new Set<string>();
+
+  // ONE admission rule for every road a package can arrive by: dedupe by the
+  // package dir's realpath (first root wins), read the manifest, keep what
+  // declares a `cinatra.kind`.
+  const admit = async (pkgDir: string, pkgDirName: string): Promise<void> => {
+    let realPkgDir: string;
+    try {
+      realPkgDir = realpathSync(pkgDir);
+    } catch (err) {
+      if (strict) throw err;
+      realPkgDir = pkgDir;
+    }
+    if (seenPkgDir.has(realPkgDir)) return;
+    const descriptor = await readSkillExtensionDescriptor(pkgDir, pkgDirName, strict);
+    if (!descriptor) return;
+    seenPkgDir.add(realPkgDir);
+    out.push(descriptor);
+  };
+
   for (const root of roots) {
     let vendors;
     try {
@@ -542,80 +561,132 @@ export async function scanSkillExtensions(
         if (!pkg.isDirectory() || pkg.name === "node_modules" || pkg.name.startsWith(".")) {
           continue;
         }
-        const pkgDir = path.join(vendorDir, pkg.name);
-        let realPkgDir: string;
-        try {
-          realPkgDir = realpathSync(pkgDir);
-        } catch (err) {
-          if (strict) throw err;
-          realPkgDir = pkgDir;
-        }
-        if (seenPkgDir.has(realPkgDir)) continue;
-        const pkgJsonPath = path.join(pkgDir, "package.json");
-        if (!pathExists(pkgJsonPath, strict)) continue;
-        let pkgJson: {
-          name?: string;
-          author?: unknown;
-          cinatra?: {
-            kind?: string;
-            skillRole?: unknown;
-            displayName?: unknown;
-            vendor?: unknown;
-            capabilities?: unknown;
-            dependencies?: unknown;
-          };
-        };
-        try {
-          pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
-        } catch (err) {
-          if (strict) throw err;
-          continue;
-        }
-        const kind = pkgJson?.cinatra?.kind;
-        if (!kind) continue;
-        seenPkgDir.add(realPkgDir);
-        const rawCaps = pkgJson?.cinatra?.capabilities;
-        const capabilities: Record<string, string> = {};
-        if (rawCaps && typeof rawCaps === "object" && !Array.isArray(rawCaps)) {
-          for (const [k, v] of Object.entries(rawCaps as Record<string, unknown>)) {
-            if (typeof v === "string" && v) capabilities[k] = v;
-          }
-        }
-        const skillsRoot = path.join(pkgDir, "skills");
-        let slugs: string[] = [];
-        if (pathExists(skillsRoot, strict)) {
-          try {
-            slugs = (await readdir(skillsRoot, { withFileTypes: true }))
-              .filter(
-                (e) =>
-                  e.isDirectory() && pathExists(path.join(skillsRoot, e.name, "SKILL.md"), strict),
-              )
-              .map((e) => e.name);
-          } catch (err) {
-            if (strict) throw err;
-            slugs = [];
-          }
-        }
-        out.push({
-          pkgDir,
-          pkgName: pkgJson.name ?? pkg.name,
-          pkgDirName: pkg.name,
-          kind,
-          skillRole:
-            typeof pkgJson?.cinatra?.skillRole === "string" && pkgJson.cinatra.skillRole
-              ? pkgJson.cinatra.skillRole
-              : undefined,
-          displayName: nonEmptyString(pkgJson?.cinatra?.displayName),
-          vendorName: readDeclaredVendorName(pkgJson?.cinatra?.vendor),
-          author: readNpmAuthorName(pkgJson?.author),
-          dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
-          capabilities,
-          slugs,
-        });
+        await admit(path.join(vendorDir, pkg.name), pkg.name);
       }
     }
   }
+
+  // THE UNIFIED EXTENSION STORE (cinatra#3204). Every package installed at
+  // runtime lives at `<CINATRA_EXTENSION_DATA_ROOT>/skill/<slug>/<digest>/`,
+  // which neither root above covers — the authoring tree is the git-native
+  // source and the agent mount is the agent kind's own projection. Without this
+  // arm an installed skill extension owns no scanned descriptor, so its skill
+  // ids never enter the ownership map the assignability predicate and the
+  // agent Skills offer both read from, and the offer answers "no matches" for a
+  // skill the catalog is listing. Walked LAST so a package that is also present
+  // in the authoring tree keeps its authoring descriptor.
+  for (const entry of await listStoreInstalledSkillPackageDirs(strict)) {
+    await admit(entry.dir, entry.pkgDirName);
+  }
   return out;
+}
+
+/**
+ * The unified extension store's installed skill packages, as
+ * `{dir, pkgDirName}` pairs pointing at each package's ACTIVE payload dir.
+ *
+ * Reached through a lazy, fail-soft dynamic import for the same reason the
+ * agent runtime mount above is: `@cinatra-ai/skills` must not take a static
+ * dependency on the host app's module graph. Under `strict` the failure is
+ * rethrown, because a caller that RETIRES rows on absence must never read "the
+ * host module would not load" as "the store holds nothing".
+ */
+async function listStoreInstalledSkillPackageDirs(
+  strict: boolean,
+): Promise<{ dir: string; pkgDirName: string }[]> {
+  try {
+    const { listInstalledStorePackageDirs } = await import(
+      "@/lib/extension-data-root"
+    );
+    return listInstalledStorePackageDirs("skill").map((entry) => ({
+      dir: entry.dir,
+      // The reserved chat-namespace allowlist keys on a package's dir BASENAME,
+      // and in the store the payload dir is named by its content digest. The
+      // segment carrying the identity is the package name's own last segment, so
+      // that is what a store-installed package presents — a first-party successor
+      // package then derives exactly the virtual namespace it derives from the
+      // authoring tree, and nothing else can reach the allowlist that could not
+      // reach it before (the allowlist also requires the manifest name).
+      pkgDirName: entry.packageName.split("/").pop() ?? entry.packageName,
+    }));
+  } catch (err) {
+    if (strict) throw err;
+    return [];
+  }
+}
+
+/**
+ * Read ONE package dir as a skill-extension descriptor, or `null` when the dir
+ * carries no `cinatra.kind` manifest. Shared by every root the scan walks — the
+ * git-native authoring tree, the agent runtime mount and the unified extension
+ * store — so a package reads identically whichever road installed it.
+ * Fail-soft by default; `strict` rethrows every enumeration/parse failure the
+ * default swallows into "that package is not there".
+ */
+async function readSkillExtensionDescriptor(
+  pkgDir: string,
+  pkgDirName: string,
+  strict: boolean,
+): Promise<SkillExtensionDescriptor | null> {
+  const pkgJsonPath = path.join(pkgDir, "package.json");
+  if (!pathExists(pkgJsonPath, strict)) return null;
+  let pkgJson: {
+    name?: string;
+    author?: unknown;
+    cinatra?: {
+      kind?: string;
+      skillRole?: unknown;
+      displayName?: unknown;
+      vendor?: unknown;
+      capabilities?: unknown;
+      dependencies?: unknown;
+    };
+  };
+  try {
+    pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
+  } catch (err) {
+    if (strict) throw err;
+    return null;
+  }
+  const kind = pkgJson?.cinatra?.kind;
+  if (!kind) return null;
+  const rawCaps = pkgJson?.cinatra?.capabilities;
+  const capabilities: Record<string, string> = {};
+  if (rawCaps && typeof rawCaps === "object" && !Array.isArray(rawCaps)) {
+    for (const [k, v] of Object.entries(rawCaps as Record<string, unknown>)) {
+      if (typeof v === "string" && v) capabilities[k] = v;
+    }
+  }
+  const skillsRoot = path.join(pkgDir, "skills");
+  let slugs: string[] = [];
+  if (pathExists(skillsRoot, strict)) {
+    try {
+      slugs = (await readdir(skillsRoot, { withFileTypes: true }))
+        .filter(
+          (e) => e.isDirectory() && pathExists(path.join(skillsRoot, e.name, "SKILL.md"), strict),
+        )
+        .map((e) => e.name);
+    } catch (err) {
+      if (strict) throw err;
+      slugs = [];
+    }
+  }
+  return {
+    pkgDir,
+    pkgName: pkgJson.name ?? pkgDirName,
+    pkgDirName,
+    kind,
+    skillRole:
+      typeof pkgJson?.cinatra?.skillRole === "string" && pkgJson.cinatra.skillRole
+        ? pkgJson.cinatra.skillRole
+        : undefined,
+    displayName: nonEmptyString(pkgJson?.cinatra?.displayName),
+    vendorName: readDeclaredVendorName(pkgJson?.cinatra?.vendor),
+    author: readNpmAuthorName(pkgJson?.author),
+    dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
+    capabilities,
+    slugs,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,6 +1225,67 @@ async function resolveDeclaredSkillEdge(
   role: string | null,
   onScanFailure: "null" | "throw",
 ): Promise<DeclaredSkillEdgeResolution | null> {
+  return (await resolveDeclaredSkillEdgeWithReason(matchConsumer, role, onScanFailure)).resolution;
+}
+
+/**
+ * WHY an empty declared-edge resolution is empty (cinatra#3091, wave 3 of
+ * #3087).
+ *
+ * A `null` from the resolver is a fact about the DECLARATION, and the callers
+ * whose policy is fail-closed act on it — the artifact matcher falls back to
+ * its package-owned anchor and, when that anchor does not hold either, refuses
+ * the skill. A proof leg then read that refusal on a booted instance and could
+ * not tell which of the six distinct non-declarations produced it, because the
+ * resolver collapses all of them into the same `null`. That is the whole gap
+ * this token closes: it names the step that returned nothing, so the refusal a
+ * running instance prints can be read back to a cause instead of guessed at.
+ *
+ * The tokens are CLOSED and are read by branching, never by matching a
+ * sentence. `extension-scan-failed` is never produced on the `"throw"` policy
+ * (there a scan failure that ESCAPES the scanner is rethrown, by design, so an
+ * fs blip can never look like a deliberate non-declaration).
+ *
+ * THE RESIDUAL, NAMED RATHER THAN PAPERED OVER: `scanSkillExtensions()` is
+ * called below in its FAIL-SOFT mode, which swallows a per-root or per-package
+ * read error instead of throwing. A partially-failed scan therefore does not
+ * reach the rethrow at all - it reaches the walk with the consumer or the
+ * provider simply missing, and the token reads
+ * `consumer-not-found-or-ambiguous` or `provider-not-found-or-ambiguous`. Those
+ * two tokens must be read as "absent OR unreadable", never as "provably not
+ * declared"; they are still a far narrower answer than the bare `null` they
+ * replace. Closing that last gap means passing
+ * `{ strict: onScanFailure === "throw" }` to the scan, which would make ONE
+ * unreadable extension directory throw for EVERY consumer on the surface - a
+ * live-availability change to two production callers, and not a change this
+ * leg is scoped to make.
+ */
+export type DeclaredSkillEdgeEmptyReason =
+  | "consumer-name-missing"
+  | "consumer-not-found-or-ambiguous"
+  | "consumer-kind-is-not-an-edge-consumer"
+  | "no-single-declared-edge-for-role"
+  | "provider-not-found-or-ambiguous"
+  | "provider-is-not-a-one-bundle-skill-package"
+  | "provider-reserved-namespace"
+  | "extension-scan-failed";
+
+/** A resolution, or an emptiness with its named cause — never both, never
+ *  neither. */
+export type DeclaredSkillEdgeOutcome =
+  | { resolution: DeclaredSkillEdgeResolution; reason: null }
+  | { resolution: null; reason: DeclaredSkillEdgeEmptyReason };
+
+const edgeEmpty = (reason: DeclaredSkillEdgeEmptyReason): DeclaredSkillEdgeOutcome => ({
+  resolution: null,
+  reason,
+});
+
+async function resolveDeclaredSkillEdgeWithReason(
+  matchConsumer: (ext: SkillExtensionDescriptor) => boolean,
+  role: string | null,
+  onScanFailure: "null" | "throw",
+): Promise<DeclaredSkillEdgeOutcome> {
   let exts: SkillExtensionDescriptor[];
   try {
     exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
@@ -1166,37 +1298,43 @@ async function resolveDeclaredSkillEdge(
     // it asks for `"null"`; the surfaces whose fail-closed policy would be
     // user-visible ask for `"throw"` and fall back on it.
     if (onScanFailure === "throw") throw err;
-    return null;
+    return edgeEmpty("extension-scan-failed");
   }
 
   const consumers = exts.filter(matchConsumer);
   // A bare dir slug cannot disambiguate two vendors shipping the same slug —
   // the same fail-closed rule the bridge's own mount probe applies.
-  if (consumers.length !== 1) return null;
-  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) return null;
+  if (consumers.length !== 1) return edgeEmpty("consumer-not-found-or-ambiguous");
+  if (!DECLARED_EDGE_CONSUMER_KINDS.has(consumers[0]!.kind)) {
+    return edgeEmpty("consumer-kind-is-not-an-edge-consumer");
+  }
 
   const edges = consumers[0]!.dependencies
     .filter(isRuntimeSkillEdge)
     .filter((dep) => edgeMatchesRole(dep, role));
-  if (edges.length !== 1) return null;
+  if (edges.length !== 1) return edgeEmpty("no-single-declared-edge-for-role");
   const providerName = edges[0]!.packageName;
 
   const providers = exts.filter((e) => e.kind === "skill" && e.pkgName === providerName);
-  if (providers.length !== 1) return null;
+  if (providers.length !== 1) return edgeEmpty("provider-not-found-or-ambiguous");
   const provider = providers[0]!;
   // The S2 packaging contract: one `kind:"skill"` extension ships exactly one
   // bundle. Anything else is not a package this projection can mount from.
-  if (provider.slugs.length !== 1) return null;
+  if (provider.slugs.length !== 1) return edgeEmpty("provider-is-not-a-one-bundle-skill-package");
   const slug = provider.slugs[0]!;
 
   const reg = safeDeriveSkillRegistration(provider.pkgName, provider.pkgDirName, slug);
-  if (!reg) return null; // reserved-namespace impostor: never mount from it
+  // reserved-namespace impostor: never mount from it
+  if (!reg) return edgeEmpty("provider-reserved-namespace");
   const { packageName, skillId } = reg;
   return {
-    packageName,
-    slug,
-    skillId,
-    sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+    resolution: {
+      packageName,
+      slug,
+      skillId,
+      sourcePath: path.join(provider.pkgDir, "skills", slug, "SKILL.md"),
+    },
+    reason: null,
   };
 }
 
@@ -1257,8 +1395,28 @@ export async function resolveDeclaredSkillEdgeForPackage(
   consumerPackageName: string,
   role: "matcher" | "authoring",
 ): Promise<DeclaredSkillEdgeResolution | null> {
-  if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) return null;
-  return resolveDeclaredSkillEdge((e) => e.pkgName === consumerPackageName, role, "throw");
+  return (await resolveDeclaredSkillEdgeForPackageWithReason(consumerPackageName, role)).resolution;
+}
+
+/**
+ * {@link resolveDeclaredSkillEdgeForPackage} with the emptiness NAMED
+ * (cinatra#3091).
+ *
+ * Identical resolution, identical fail-closed policy, identical throw on a
+ * filesystem-scan failure — the only difference is that an empty answer says
+ * which step produced it. A caller that must LOG why it fell back to its other
+ * trust anchor calls this one and prints the token; a caller that only needs
+ * the resolution keeps calling the function above, whose behaviour is
+ * byte-for-byte what it was.
+ */
+export async function resolveDeclaredSkillEdgeForPackageWithReason(
+  consumerPackageName: string,
+  role: "matcher" | "authoring",
+): Promise<DeclaredSkillEdgeOutcome> {
+  if (typeof consumerPackageName !== "string" || consumerPackageName.length === 0) {
+    return edgeEmpty("consumer-name-missing");
+  }
+  return resolveDeclaredSkillEdgeWithReason((e) => e.pkgName === consumerPackageName, role, "throw");
 }
 
 // ---------------------------------------------------------------------------

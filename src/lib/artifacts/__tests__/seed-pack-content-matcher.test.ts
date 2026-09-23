@@ -40,7 +40,12 @@ const {
   buildPortsMock: vi.fn(),
   assertSemanticTypeMock: vi.fn(),
   lazyRegisterMock: vi.fn(),
-  resolveEdgeMock: vi.fn(),
+  resolveEdgeMock: vi.fn(
+    async (
+      _consumerPackageName: string,
+      _role: string,
+    ): Promise<{ skillId: string; packageName: string } | null> => null,
+  ),
 }));
 
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: runPgMock }));
@@ -73,6 +78,17 @@ vi.mock("@cinatra-ai/skills", () => ({
   // classifier row. Omitting it here would make every resolution throw, silently
   // collapsing the post-extraction anchor back onto the package-owned one.
   resolveDeclaredSkillEdgeForPackage: resolveEdgeMock,
+  // cinatra#3091: the runtime asks for that resolution WITH the reason an empty
+  // one is empty, so it can print which anchor it fell to. The staging below
+  // still describes the RESOLUTION, which is what these packs are about; this
+  // adapter lifts it into the outcome shape. Omitting it would make every
+  // resolution throw — the same silent collapse the note above warns about.
+  resolveDeclaredSkillEdgeForPackageWithReason: async (pkgName: string, role: string) => {
+    const resolution = await resolveEdgeMock(pkgName, role);
+    return resolution
+      ? { resolution, reason: null }
+      : { resolution: null, reason: "no-single-declared-edge-for-role" };
+  },
 }));
 vi.mock("../attachment-resolver-ports", () => ({
   buildAttachmentResolverPorts: buildPortsMock,

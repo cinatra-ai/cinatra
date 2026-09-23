@@ -15,16 +15,32 @@ import "server-only";
 // DENIES. There is deliberately no "if the type is a core one, allow" branch:
 // a second admission source is exactly what that issue removed.
 //
-// WHY THE OWNER PACKAGE IS THE KEY. An artifact type id is `@vendor/package:type`
-// — the owning artifact extension names it. So "the types the calling extension
-// declares as artifact dependencies" resolves, without a registry round trip, to
-// "every artifact type whose owner package is one of the `kind: "artifact"`
-// edges on the caller's own `cinatra.dependencies`". A declared edge to
-// `@cinatra-ai/blog-post-artifact` admits `@cinatra-ai/blog-post-artifact:post`
-// and nothing else — not another vendor's type, not a host-written kind, and
-// not "every artifact".
+// WHERE A TYPE'S OWNER COMES FROM (cinatra#3597). An artifact type id LOOKS like
+// `@vendor/package:type`, but that shape is a naming convention and not a
+// registration: five shipped artifact packages register types whose id namespace
+// is not their package name (`@cinatra-ai/linkedin-artifacts` registers
+// `@cinatra-ai/linkedin:post-draft`, the email artifacts register the
+// `@cinatra-ai/email:*` work products, and so on). So the owner of a type is
+// read from the type's REGISTRATION — the winning claim of the run's own
+// organisation chain, whose `extensionPackage` is the package that installed the
+// type — and never guessed from the id. "The types the calling extension
+// declares as artifact dependencies" therefore resolves to "every type whose
+// WINNING claim names one of the `kind: "artifact"` edges on the caller's own
+// `cinatra.dependencies`", and a type no active winning claim names an owner for
+// is admitted to NOBODY: the fail-closed half, stated as behaviour.
+//
+// WHAT IS DELIBERATELY NOT FOLDED IN. The owner resolution applies no projection
+// filter and no intersection with the in-process type registry. A claim's
+// projection disposition governs how a row is PROJECTED, and the registry
+// governs what THIS process can render; neither says who OWNS the type, and
+// either one folded in here would refuse a declared pack's own type for a reason
+// the declaration never spoke about.
 
 import { createHash } from "node:crypto";
+
+import { resolveClaimWinner, type ArbitrableClaim } from "@cinatra-ai/objects/claims";
+
+import { readArtifactTypeClaimsForOrg } from "@/lib/objects/artifact-claim-store";
 
 export type ArtifactDependencyAdmission = {
   /** The CALLING extension. */
@@ -34,13 +50,24 @@ export type ArtifactDependencyAdmission = {
   /** The artifact packages the caller declares as dependencies, sorted. */
   admittedPackages: string[];
   /**
+   * The type ids those packages OWN in the run's organisation, per the WINNING
+   * claim of each claimed type — sorted. This, and not the id's shape, is what
+   * a read is admitted against.
+   */
+  admittedTypes: string[];
+  /**
    * The digest of what was admitted, at which version — the datum an audit row
    * carries so a later reader can tell WHICH declaration allowed a read.
    */
   declarationDigest: string;
 };
 
-/** `@vendor/package:type` -> `@vendor/package`. Null for anything else. */
+/**
+ * `@vendor/package:type` -> `@vendor/package`. Null for anything else.
+ *
+ * A PURE naming helper that decides nothing: the admission reads an owner from
+ * the registration (see the header), never from this split.
+ */
 export function artifactTypeOwnerPackage(objectType: string): string | null {
   const s = String(objectType ?? "");
   const idx = s.lastIndexOf(":");
@@ -58,15 +85,24 @@ type DependencyEdge = {
 
 /**
  * Derive the admission from the calling extension's own manifest block at the
- * run's pinned version. Fail-closed by construction: a manifest with no
- * `kind: "artifact"` edge admits NOTHING, and so does an unreadable one (the
- * caller passes `{}`).
+ * run's pinned version, and resolve the type ids the declared packages own from
+ * the organisation's claim registry. Fail-closed by construction: a manifest
+ * with no `kind: "artifact"` edge admits NOTHING, an unreadable one (the caller
+ * passes `{}`) admits nothing, and a type no winning claim attributes to a
+ * declared package is admitted to nobody.
+ *
+ * `readClaims` is the one injection point — the unit suites drive the real
+ * resolution without a database; the default is the shipped store read.
  */
 export function resolveArtifactDependencyAdmission(input: {
   packageName: string;
   packageVersion: string | null;
   /** The caller's `cinatra` manifest block. */
   cinatra: Record<string, unknown>;
+  /** The run's ORGANISATION — the claim chain the owners are read from. */
+  orgId: string;
+  /** The org's claim chain (default: the shipped claim-registry read). */
+  readClaims?: (orgId: string) => readonly ArbitrableClaim[];
 }): ArtifactDependencyAdmission {
   const raw = input.cinatra.dependencies;
   const admitted = new Set<string>();
@@ -82,6 +118,17 @@ export function resolveArtifactDependencyAdmission(input: {
     }
   }
   const admittedPackages = [...admitted].sort();
+  const admittedTypes: string[] = [];
+  if (admittedPackages.length > 0) {
+    const claims = (input.readClaims ?? readArtifactTypeClaimsForOrg)(input.orgId);
+    for (const objectTypeId of new Set(claims.map((c) => c.objectTypeId))) {
+      const winner = resolveClaimWinner(claims, { orgId: input.orgId, objectTypeId });
+      if (winner === null) continue;
+      if (!admitted.has(winner.extensionPackage)) continue;
+      admittedTypes.push(objectTypeId);
+    }
+    admittedTypes.sort();
+  }
   const declarationDigest = createHash("sha256")
     .update(
       JSON.stringify({
@@ -95,6 +142,7 @@ export function resolveArtifactDependencyAdmission(input: {
     packageName: input.packageName,
     packageVersion: input.packageVersion,
     admittedPackages,
+    admittedTypes,
     declarationDigest,
   };
 }
@@ -104,9 +152,7 @@ export function admitsArtifactType(
   admission: ArtifactDependencyAdmission,
   objectType: string,
 ): boolean {
-  const owner = artifactTypeOwnerPackage(objectType);
-  if (owner === null) return false;
-  return admission.admittedPackages.includes(owner);
+  return admission.admittedTypes.includes(objectType);
 }
 
 /** The admitted subset of a candidate type set — the listing's own filter. */

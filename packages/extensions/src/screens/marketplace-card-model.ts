@@ -46,7 +46,12 @@ export interface MarketplaceCardData {
   freshnessAt: string | null;
   /** Rating mirrored from the storefront entry; null when it has none. */
   rating: { average: number; count: number } | null;
-  /** /configuration/marketplace/<scope>/<name> (unchanged detail route). */
+  /**
+   * /configuration/marketplace/<scope>/<name> — the legacy in-app detail URL.
+   * The route behind it is RETIRED (cinatra#2736): it redirects to the plain
+   * marketplace grid. This stays as the no-JS fallback href of the card's
+   * "More details" opener, whose real affordance is the §II modal.
+   */
   detailHref: string;
   /**
    * Total install count, or null when the marketplace does not (yet) track it.
@@ -352,7 +357,11 @@ function normalizeKind(slug: string | null | undefined): MarketplaceCardKind {
   return slug && KNOWN_KINDS.has(slug) ? (slug as MarketplaceCardKind) : "unknown";
 }
 
-/** Detail route — drops the leading "@"; the route re-adds it. */
+/**
+ * The legacy in-app detail URL — drops the leading "@". The route behind it is
+ * RETIRED (cinatra#2736) and reads no params at all: it redirects to the plain
+ * marketplace grid, so this is a no-JS fallback, not a detail destination.
+ */
 export function marketplaceDetailHref(packageName: string): string {
   return `/configuration/marketplace/${packageName.replace(/^@/, "")}`;
 }
@@ -386,6 +395,55 @@ export function isValidInstallIdentity(packageName: string, version: string): bo
 const LEADING_ATX_HEADING_RE = /^\s*#{1,6}[ \t]+/;
 
 /**
+ * The NAMED HTML entity forms the storefront emits inside a flattened card
+ * summary (cinatra#3560). Exported as DATA so the mapper's own suite enumerates
+ * the table read from this module instead of restating it — a form added here
+ * and left out of that table fails in the unit suite, never first on a card.
+ *
+ * The decode step (see `normalizeCardDescription`) is one left-to-right pass
+ * that never re-reads what it has written, so no decoded `&` — from this
+ * table's `amp` key or from a numeric token — is ever read as the start of
+ * another entity, and a double-encoded sequence yields the literal text a
+ * reader would see rather than a character the storefront never sent.
+ */
+export const CARD_DESCRIPTION_NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201C",
+  rdquo: "\u201D",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  nbsp: "\u00A0",
+  lt: "<",
+  gt: ">",
+  quot: "\"",
+  amp: "&",
+};
+
+// Every expression below is bounded and unambiguous: every attempt is bounded,
+// so scanning stays linear — the same written care as LEADING_ATX_HEADING_RE
+// above.
+// ONE entity token in ONE bounded expression: a named form, a hexadecimal
+// numeric form, or a decimal numeric form. The decode step is a SINGLE
+// left-to-right pass that never re-reads what it has just written, so a
+// decoded ampersand — named (`&amp;`) or numeric (`&#38;`) — is never the
+// start of another entity; that is the "ampersand decoded last" contract, held
+// by the pass itself rather than by an extra pass over decoded output. The
+// digit runs are wide enough to carry the zero-padded spellings a storefront
+// may emit; a wider token, or one out of range, survives as it stands.
+const CARD_DESCRIPTION_ENTITY_RE =
+  /&(?:([a-zA-Z]{2,8})|#[xX]([0-9A-Fa-f]{1,8})|#([0-9]{1,10}));/g;
+// A markup tag: "<", an optional solidus, a letter, a bounded run that excludes
+// BOTH brackets, then ">" — so there is exactly one way to reach the
+// terminator. A "<" that starts no tag (a decoded "less-than three", say) never
+// matches and survives as the character it is.
+const MARKUP_TAG_RE = /<\/?[A-Za-z][^<>]{0,512}>/g;
+// The last Unicode code point; a numeric token above it, or inside the
+// surrogate range, is left exactly as it stands instead of throwing.
+const MAX_UNICODE_CODE_POINT = 0x10ffff;
+
+/**
  * Normalize a storefront entry description into clean plain text for the card
  * SUMMARY. The card renders the description raw in a `<p>` (no markdown), and
  * the storefront flattens each package README into a single-line description
@@ -405,7 +463,47 @@ export function normalizeCardDescription(
   if (typeof raw !== "string") {
     return null;
   }
-  const stripped = raw.replace(LEADING_ATX_HEADING_RE, "").trim();
+  // cinatra#3560 (i) — DECODE the entities the storefront emits, in ONE
+  // left-to-right pass: the named forms from the exported table above, and both
+  // numeric shapes. A malformed, out-of-range or surrogate numeric token is
+  // left exactly as it stands rather than throwing. The pass never re-reads
+  // what it has written, so a decoded ampersand — named or numeric — is never
+  // the start of another entity and a double-encoded sequence yields the
+  // literal text a reader would see.
+  const decoded = raw.replace(
+    CARD_DESCRIPTION_ENTITY_RE,
+    (
+      token,
+      name: string | undefined,
+      hex: string | undefined,
+      dec: string | undefined,
+    ) => {
+      if (name !== undefined) {
+        const character = CARD_DESCRIPTION_NAMED_ENTITIES[name];
+        return typeof character === "string" ? character : token;
+      }
+      const codePoint = Number.parseInt(
+        hex ?? dec ?? "",
+        hex !== undefined ? 16 : 10,
+      );
+      if (
+        !Number.isInteger(codePoint) ||
+        codePoint > MAX_UNICODE_CODE_POINT ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return token;
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+  // cinatra#3560 (ii) — REMOVE any markup tag, including one the storefront
+  // sent ENCODED and step (i) has just decoded; the card keeps drawing plain
+  // text and no markup-rendering road is introduced anywhere.
+  const untagged = decoded.replace(MARKUP_TAG_RE, "");
+  // (iii)–(v) unchanged: the cinatra#205 leading-heading strip (so a heading
+  // marker that arrived encoded is stripped exactly as a raw one is), the trim,
+  // and the empty-collapses-to-null contract.
+  const stripped = untagged.replace(LEADING_ATX_HEADING_RE, "").trim();
   return stripped.length > 0 ? stripped : null;
 }
 

@@ -154,6 +154,17 @@ describe("the review binder — the content channel reaches the review target", 
  * against the port the page actually takes now. Neither assertion is weakened:
  * the negative claims are unchanged and each positive claim still names a
  * concrete call in the page's source.
+ *
+ * AND THE PORT MOVED ONCE MORE, WIDER. Wave 3 of `PLAN: Agents Lifecycle (D) -
+ * Review` (cinatra#3091) rebound this page from the TEXT-ONLY pair
+ * (`buildArtifactContentProjection` + `artifactTextChannelPorts`) to the surface
+ * road `hostArtifactContentBuilder()`, which carries EVERY class the channel
+ * projects — the json and cms-snapshot displays on this page draw through the
+ * same channel the text one does. Pinning the narrower pair here would now pin
+ * the page to a road that un-ships those classes, so the positive claim names
+ * the wider road instead. The property is untouched: the page still reads the
+ * pinned revision on the SERVER and carries a real projection, and the only
+ * absence it may hand on is the channel's own named one.
  */
 describe("the artifact page — the second consumer of the same channel", () => {
   it("no longer passes a hard-coded absence, and builds through the channel", async () => {
@@ -162,8 +173,8 @@ describe("the artifact page — the second consumer of the same channel", () => 
     const page = readFileSync(path.resolve(__dirname, "..", "page.tsx"), "utf8");
     const body = page.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(body).not.toMatch(/content:\s*absentArtifactContent\(/);
-    expect(body).toMatch(/buildArtifactContentProjection/);
-    expect(body).toMatch(/artifactTextChannelPorts/);
+    expect(body).toMatch(/hostArtifactContentBuilder\(\)\(/);
+    expect(body).toMatch(/representationRevisionId: revisionId/);
     // The absence that REMAINS is the channel's own NAMED one, for the classes
     // this port does not carry — never a blanket absence over a text revision.
     expect(body).toMatch(/absentArtifactContent\([^)]*"unsupported-form"/);

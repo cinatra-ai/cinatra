@@ -199,11 +199,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s1", resumedFromSetup: true },
-      // cinatra#3033: PER-LEG job id. A single `resume-setup-<runId>` was
-      // constant for the whole run, and the queue both retains settled jobs and
-      // holds the previous leg ACTIVE across its own unwind — so BullMQ's
-      // HSETNX add silently dropped the second approval of a two-field setup.
-      { jobId: expect.stringMatching(/^resume-setup-run-s1__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -224,9 +226,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   // Clearing a settled entry of the shared id is NOT enough: the leg that
   // re-parks the run is still ACTIVE for the rest of its own unwind after the
   // park commits, so a press inside that window meets a LIVE job of the same id
-  // and is dropped exactly as before. The fix is a PER-LEG id, so the
-  // assertions below pin that the two legs enqueue under DIFFERENT ids — the
+  // and is dropped exactly as before. The fix is an id no two legs can share, so
+  // the assertions below pin that the two legs enqueue under DIFFERENT ids — the
   // whole point is that the second one is a real enqueue.
+  //
+  // That id is now minted PER CONFIRMATION (cinatra#3585) out of nothing the run
+  // can repeat, so it no longer names the run at all — which is the shape the
+  // per-call assertion below reads.
   // ---------------------------------------------------------------------------
   it("cinatra#3033: EVERY setup leg gets its OWN job id, so a second approval really enqueues", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
@@ -269,8 +275,8 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
         Record<string, unknown>,
       ];
       expect(payload).toEqual({ runId: "run-two-field", resumedFromSetup: true });
-      // The id still names the run it resumes, for anyone reading the queue...
-      expect(String(options.jobId)).toMatch(/^resume-setup-run-two-field__.+/);
+      // The id is the per-confirmation one the seam mints...
+      expect(String(options.jobId)).toMatch(/^resume-[0-9a-f-]{36}$/);
       jobIds.push(String(options.jobId));
     }
     // ...but the two legs are DIFFERENT jobs. A shared id is what let BullMQ
@@ -287,6 +293,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   // 500 before anything is enqueued: the run's status write has already landed,
   // so the run sits at `queued` with no job and no trigger row — the very
   // deadlock the per-leg id was added to close, reached by a different door.
+  //
+  // The id is now minted PER CONFIRMATION (cinatra#3585) and no longer names the
+  // run, so the case reads that shape; the colon reading it pins is unchanged,
+  // because the queue's rule is about the id whatever mints it.
   // ---------------------------------------------------------------------------
   it("cinatra#3033: the per-leg resume job id carries NO colon (the queue rejects one) and stays unique per leg", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
@@ -329,11 +339,9 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // The queue's own rule. A colon here is not a style question: `add`
       // throws and the approval never enqueues.
       expect(jobId).not.toContain(":");
-      // It still names the run it resumes, for anyone reading the queue.
-      expect(jobId.startsWith("resume-setup-run-no-colon")).toBe(true);
-      // And it still carries a per-leg suffix — the constant id is what
-      // stranded the run before.
-      expect(jobId.length).toBeGreaterThan("resume-setup-run-no-colon".length);
+      // And it is the per-confirmation id the seam now mints — the constant,
+      // run-named id is what stranded the run before.
+      expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
     }
     expect(jobIds[0]).not.toBe(jobIds[1]);
   });
@@ -517,7 +525,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s2", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-s2__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -558,6 +572,446 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     ).rejects.toThrow(/fieldName "name" is not present/);
   });
 
+  // ---------------------------------------------------------------------------
+  // cinatra#3452 — a field left EMPTY is not a missing fieldName.
+  //
+  // The drawing (specs/app-setup.html, the rail-states paragraph): "If a step
+  // offered an optional field and the operator left it blank, the step is still
+  // done and still carries its check." The single-field guard used to refuse
+  // EVERY valueless submission, so a blank optional box could not be submitted
+  // at all — the operator had to type a number they did not want to give.
+  //
+  // The split these tests pin:
+  //   - declares a DEFAULT + no value -> accepted; that default is merged and
+  //     the step continues (the reported `ideaCount` case: the agent declares
+  //     it required AND with `default: 5`).
+  //   - declared optional, no default, no value -> accepted; the key stays
+  //     absent and the step continues.
+  //   - declared required, no default, no value -> the refusal stands, naming
+  //     the field.
+  //   - schema cannot say (no template, or the field is not declared at all)
+  //     -> FAIL CLOSED, the refusal stands.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3452: an OPTIONAL field left empty is accepted and the step continues (explicit empty)", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt1",
+      templateId: "tpl-opt1",
+      status: "pending_approval",
+      inputParams: { brief: "a brief" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-opt1",
+      "actor-1",
+      { ideaCount: null }, // the empty box, as the submission carries it
+      "ideaCount",
+    );
+
+    // Nothing merged for the field the operator left blank...
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeUndefined();
+    // ...and the step continues: status -> queued and the setup loop re-runs.
+    const statusWrite = dbWrites.find((w) => w.set?.status === "queued");
+    expect(statusWrite).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-opt1", resumedFromSetup: true },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
+    );
+  });
+
+  it("cinatra#3452: an OPTIONAL field whose key never crossed the boundary is accepted too", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt2",
+      templateId: "tpl-opt2",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt2",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    // `{ ideaCount: undefined }` reaches the server with the key GONE — that is
+    // what the Server Action boundary does to an undefined-valued key, and it
+    // is the exact shape the reported refusal was raised on.
+    await approveReviewTaskInternal("setup-run-opt2", "actor-1", {}, "ideaCount");
+
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+  });
+
+  it("cinatra#3452: an OPTIONAL field left empty carries its DECLARED DEFAULT into inputParams", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt3",
+      templateId: "tpl-opt3",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt3",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: {
+          brief: { type: "string" },
+          ideaCount: { type: "integer", default: 5 },
+        },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-opt3",
+      "actor-1",
+      { ideaCount: null },
+      "ideaCount",
+    );
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    expect(stringChunks).toContain("5");
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+  });
+
+  it("cinatra#3452: THE REPORTED CASE — a field that declares a DEFAULT, left empty, is satisfied by that default and the step continues", async () => {
+    // The Blog Pipeline Agent's own StartNode declares `ideaCount` in its
+    // `required` list AND with `default: 5`. Leaving the idea count blank drew
+    // `Setup approval rejected: fieldName "ideaCount" is not present in the
+    // submitted values` and the wizard would not advance — the person had to
+    // type a number they did not want to give. A declared default IS the
+    // answer for an empty box: it is merged, and the step continues.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-def1",
+      templateId: "tpl-def1",
+      status: "pending_approval",
+      inputParams: { brief: "a brief" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-def1",
+      inputSchema: {
+        type: "object",
+        required: ["brief", "ideaCount"],
+        properties: {
+          brief: { type: "string" },
+          ideaCount: { type: "integer", default: 5 },
+        },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-def1",
+      "actor-1",
+      { ideaCount: null }, // the empty box, as the submission carries it
+      "ideaCount",
+    );
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    expect(stringChunks).toContain("5");
+    // ...and the step continues: status -> queued and the setup loop re-runs.
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-def1", resumedFromSetup: true },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
+    );
+  });
+
+  it("cinatra#3452: a REQUIRED field with NO declared default left empty still refuses Continue, naming that field", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-req1",
+      templateId: "tpl-req1",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-req1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    await expect(
+      approveReviewTaskInternal("setup-run-req1", "actor-1", { brief: null }, "brief"),
+    ).rejects.toThrow(/fieldName "brief" is not present/);
+
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3452: a field the schema does not declare FAILS CLOSED when left empty", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-req2",
+      templateId: "tpl-req2",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-req2",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" } },
+      },
+    });
+
+    await expect(
+      approveReviewTaskInternal("setup-run-req2", "actor-1", { mystery: null }, "mystery"),
+    ).rejects.toThrow(/fieldName "mystery" is not present/);
+  });
+
+  it("cinatra#3452: a value of 0 for an optional field is an ANSWER, not an empty box", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-opt4",
+      templateId: "tpl-opt4",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-opt4",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: {
+          brief: { type: "string" },
+          ideaCount: { type: "integer", default: 5 },
+        },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-opt4",
+      "actor-1",
+      { ideaCount: 0 },
+      "ideaCount",
+    );
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    // the submitted 0, not the declared default
+    expect(stringChunks).toContain("0");
+    expect(stringChunks).not.toContain("5");
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3452 (convergence round) — the two readings the first cut got wrong.
+  // ---------------------------------------------------------------------------
+  it("cinatra#3452: an INHERITED Object.prototype name is not a declaration — it fails closed", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-proto1",
+      templateId: "tpl-proto1",
+      status: "pending_approval",
+      inputParams: { brief: "a brief" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-proto1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" } },
+      },
+    });
+
+    // `properties.toString` answers truthy on ANY plain object. Read as a
+    // declaration it would be "declared and not required" — optional — and the
+    // guard would let a field the agent never declared settle silently.
+    await expect(
+      approveReviewTaskInternal("setup-run-proto1", "actor-1", {}, "toString"),
+    ).rejects.toThrow(/fieldName "toString" is not present/);
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3452: CLEARING an optional field that already carries an answer removes it", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-clear1",
+      templateId: "tpl-clear1",
+      status: "pending_approval",
+      // the field was answered on an earlier pass
+      inputParams: { brief: "a brief", ideaCount: 8 },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-clear1",
+      inputSchema: {
+        type: "object",
+        required: ["brief"],
+        properties: { brief: { type: "string" }, ideaCount: { type: "integer" } },
+      },
+    });
+
+    await approveReviewTaskInternal(
+      "setup-run-clear1",
+      "actor-1",
+      { ideaCount: null }, // the box emptied again
+      "ideaCount",
+    );
+
+    // "absent" is made true: the stale 8 is DELETED, not left standing and not
+    // rewritten as a merged null.
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    // the fragment's literal SQL text (drizzle keeps it in StringChunk.value)
+    const rendered = (chunks as Array<unknown>)
+      .map((c) =>
+        typeof c === "string"
+          ? c
+          : Array.isArray((c as { value?: unknown })?.value)
+            ? ((c as { value: unknown[] }).value as unknown[]).join("")
+            : "",
+      )
+      .join("");
+    expect(rendered).not.toContain("jsonb_build_object");
+    expect(rendered).toContain("::jsonb) - ");
+    const stringChunks = (chunks as unknown[]).filter((c): c is string => typeof c === "string");
+    expect(stringChunks).toContain("ideaCount");
+    // ...and the step still continues.
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-clear1", resumedFromSetup: true },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3532 — A SUBMIT THAT RECORDS NOTHING MUST NOT RE-EMIT THE GATE.
+  //
+  // The setup loop parks one gate per required input it is still missing, and
+  // this branch flips the run back to `queued` and re-enqueues it. A submit that
+  // recorded NO value and settled no field therefore hands the loop the exact
+  // state it parked on — and it parks the SAME field again, as a brand-new
+  // gate, while the card that was on screen reads "This review is no longer
+  // open". That is the loop #3532 was reported as: six wizard attempts, the gate
+  // row still on `callToAction`, nothing ever recorded.
+  //
+  // So a submit that records nothing does not resume a run that is still waiting
+  // for a required input: the gate stays open with its reading, and the refusal
+  // names the field. A submit that DOES record something — or that settles an
+  // empty box the schema declared optional or defaulted (cinatra#3452 above) —
+  // is untouched.
+  // ---------------------------------------------------------------------------
+  const CTA_TEMPLATE = {
+    id: "tpl-3532",
+    inputSchema: {
+      type: "object",
+      required: ["offeringCompanyWebsite", "callToAction"],
+      properties: {
+        offeringCompanyWebsite: { type: "string" },
+        callToAction: { type: "string" },
+      },
+    },
+  };
+
+  it("cinatra#3532: a submit that records no value does not resume a run still waiting for that input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    // A bare value with no field name: the merge keys off `fieldName`, so
+    // nothing is recorded — the shape `wrapPrimitiveSetupPayload` warns about.
+    await expect(
+      approveReviewTaskInternal("setup-run-3532", "actor-1", "Book a meeting"),
+    ).rejects.toThrow(/callToAction/);
+
+    // Nothing written, the run stays parked at its gate, and no resume job is
+    // enqueued — so the loop cannot mint a second gate for the same field.
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeUndefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeUndefined();
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3532: an APPROVAL ENVELOPE alone does not resume a run still waiting for that input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532b",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    await expect(
+      approveReviewTaskInternal("setup-run-3532b", "actor-1", {
+        approved: true,
+        approvedAt: "2026-09-16T00:00:00.000Z",
+      }),
+    ).rejects.toThrow(/callToAction/);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3532: the value the renderer holds still records and resumes the run", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3532c",
+      templateId: "tpl-3532",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(CTA_TEMPLATE);
+
+    await approveReviewTaskInternal(
+      "setup-run-3532c",
+      "actor-1",
+      { callToAction: "Book a meeting: https://cal.example/intro" },
+      "callToAction",
+    );
+
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeDefined();
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-3532c", resumedFromSetup: true },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
+    );
+  });
+
   it("throws when values payload exceeds 65536 bytes", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
       id: "run-s5",
@@ -594,7 +1048,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-s6", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-s6__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 
@@ -642,7 +1102,13 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // can tell it apart from every other producer and hand a finished setup to
       // the trigger step instead of running the agent before the user has chosen when.
       { runId: "run-554a", resumedFromSetup: true },
-      { jobId: expect.stringMatching(/^resume-setup-run-554a__.+/) },
+      // cinatra#3585: the job id is minted PER CONFIRMATION and is no longer
+      // `resume-setup-<runId>`, which was constant for the run and made the
+      // queue swallow every confirmation after the first. The enqueue happens —
+      // with that job name and that payload, after the write resolved — for the
+      // second, third and sixth confirmed field alike, and no two confirmations
+      // of one run can ask the queue for the same id.
+      { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
   });
 

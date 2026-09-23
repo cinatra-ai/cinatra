@@ -8,6 +8,30 @@
 // phase runner. The a2a-dev-peer block was AWAITED in the original and stays a
 // `dev-only` runBootPhase below.
 //
+// ONE EXCEPTION, and it is deliberate (cinatra#3626). The first of those two
+// detached blocks opened with the git-native AGENT INGEST: the walk that reads
+// the agent definitions committed under the extension source tree into the
+// database. Detached, that ingest finished some seconds after the boot had
+// reached its ready marker, so an instance that had just been prepared reported
+// itself READY while its agent rows were still filling in, and the way to get a
+// complete one was to start it a second time.
+//
+// WHAT AWAITING MOVES, precisely. In development the whole boot is detached from
+// `register()` (`src/lib/boot/register-await-policy.ts:36`,
+// `src/lib/boot/start-boot.ts:105-123`), so the development server serves while
+// the boot runs either way — awaiting this phase does NOT hold requests. What it
+// moves is the READY marker: the phase now completes before `markBootReady()`,
+// so `/api/health` answers `starting` / 503 until the definitions are on file
+// and a poller that waits for ready gets an instance that carries them.
+//
+// The ingest is therefore its own AWAITED phase (`devAgentIngestPhases`), and
+// the rest of that block — the skill-package load, the catalog rebuild and the
+// hot-reload watcher, none of which the instance's agent rows depend on — keeps
+// the detachment (`startDetachedDevExtensionsPhase`). One start is enough, and
+// the cost on a restart is the one the loader's version-skip already carries:
+// one read per definition, plus the declared-tables activation that runs above
+// that skip (cinatra#3462).
+//
 // All `dev-only`: prod never executes them (the orchestrator gates the whole
 // group on development mode), and a failure is always logged + swallowed.
 //
@@ -36,29 +60,103 @@ export function devAwaitedPhases(): BootPhase[] {
 }
 
 /**
- * Start DETACHED dev BLOCK 1 (fire-and-forget): the dev agents/skills filesystem
- * scan (git-native agent ingest) + skill-package load + hot-reload watcher (~18s
- * of dev-only work). Returns immediately so `register()` is not blocked. The
- * ORIGINAL boot fired this block at the EARLY interleave point (right after
- * install-op cleanup, before the always-on system services); the orchestrator
- * calls it there.
+ * The git-native AGENT INGEST, AWAITED (cinatra#3626).
  *
- * The published-marker backfill + WayFlow reload that this block used to perform
- * was promoted to the always-on `agent-marker-backfill` boot phase (engineering
- * #418) so PROD installs self-heal too; the orchestrator AWAITS that phase before
- * starting this detached scan, so markers are already valid by the time the
- * git-native ingest below runs.
+ * Returned as a `BootPhase` so the orchestrator runs it through the normal
+ * runner, at the interleave point dev BLOCK 1 always had (right after the
+ * install-op cleanup, before the always-on system services) and — the point of
+ * the change — before `markBootReady()`. The always-on `agent-marker-backfill`
+ * phase still runs BEFORE it, so every on-disk agent already carries a valid
+ * marker by the time the definitions are read in.
  *
- * Mirrors the original `void (async () => {...})()` block exactly: errors are
- * self-contained (each inner try/catch logs + swallows; the runner is the net).
- * NOT awaited by the orchestrator — that detachment is the whole point.
+ * `dev-only`: production never executes it, and the runner logs and swallows a
+ * failure. What a failure leaves behind is a RECORDED phase: `boot-state` folds
+ * only `degraded` and `retryable` failures into readiness and into the
+ * `degradedPhases` / `blockingPhases` lists (`src/lib/boot/boot-state.ts:93-112`),
+ * and `/api/health` reports exactly those lists
+ * (`src/app/api/health/route.ts:43-51`). So a failed ingest is in the log and in
+ * the process-local phase log, and it changes neither readiness nor the health
+ * answer — a development-only step must not be able to fail a deploy gate.
+ *
+ * An instance with no extension source tree at all records the phase as SKIPPED
+ * rather than failed: a minimal deployment has nothing to read in, which is not
+ * a fault.
+ *
+ * BOUNDED. The walk carries its own budget
+ * (`GIT_NATIVE_AGENT_INGEST_BUDGET_MS`) and reports what it did not reach, and
+ * this phase turns that into a failure naming the definitions still pending.
+ * Without it a loader that never returns would sit here until the boot-stall
+ * watchdog collected it, and that watchdog's development arm exits the process
+ * (`src/lib/boot/boot-stall-watchdog.ts:33`) — a development-only convenience
+ * must not be able to kill a development server.
+ *
+ * A definition the loader cannot read is named and the remaining definitions are
+ * still read in — see `@/lib/git-native-agent-ingest`.
  */
-export function startDetachedDevAgentsScanPhase(): void {
+export function devAgentIngestPhases(): BootPhase[] {
+  return [
+    {
+      name: "dev-agent-ingest",
+      policy: "dev-only",
+      run: async () => {
+        const { existsSync } = await import("node:fs");
+        const { resolveDevExtensionSourceRoot } = await import(
+          "@cinatra-ai/agents/agent-runtime-mount"
+        );
+        const sourceRoot = resolveDevExtensionSourceRoot();
+        if (!existsSync(sourceRoot)) {
+          return { skipped: "no extension source tree to read agent definitions from" };
+        }
+
+        const { ingestGitNativeAgentDefinitions, GIT_NATIVE_AGENT_INGEST_BUDGET_MS } =
+          await import("@/lib/git-native-agent-ingest");
+        const report = await ingestGitNativeAgentDefinitions({ sourceRoot });
+        console.info(
+          `[agent-builder] git-native agent definitions: ${report.found} found, ` +
+            `${report.imported} read in, ${report.alreadyOnFile} already on file` +
+            (report.declined > 0 ? `, ${report.declined} declined` : "") +
+            (report.failures.length > 0 ? `, ${report.failures.length} not read in` : "") +
+            (report.pending.length > 0
+              ? `, ${report.pending.length} still pending at the ${GIT_NATIVE_AGENT_INGEST_BUDGET_MS} ms budget`
+              : ""),
+        );
+        if (report.pending.length > 0) {
+          // Recorded as a phase failure (logged and swallowed by the `dev-only`
+          // policy, readiness untouched) so the definitions that were not
+          // reached are named where an operator looks, instead of read off a
+          // row count.
+          throw new Error(
+            `the git-native agent ingest ran out of its ${GIT_NATIVE_AGENT_INGEST_BUDGET_MS} ms ` +
+              `budget with ${report.pending.length} definition(s) still pending: ` +
+              `${report.pending.join(", ")}`,
+          );
+        }
+        return undefined;
+      },
+    },
+  ];
+}
+
+/**
+ * Start the DETACHED remainder of dev BLOCK 1 (fire-and-forget): the SKILL-kind
+ * extension package load, the lifecycle catalog rebuild and the recursive
+ * hot-reload watcher. Returns immediately so `register()` is not blocked — that
+ * detachment is the whole point, and nothing the instance's agent rows depend on
+ * is in here (the ingest that was is now the awaited phase above).
+ *
+ * The published-marker backfill + WayFlow reload this block used to perform was
+ * promoted to the always-on `agent-marker-backfill` boot phase (engineering
+ * #418) so PROD installs self-heal too.
+ *
+ * Errors are self-contained (the inner try/catch logs + swallows; the runner is
+ * the net). NOT awaited by the orchestrator.
+ */
+export function startDetachedDevExtensionsPhase(): void {
   void runBootPhase({
-    name: "dev-agents-skills-scan",
+    name: "dev-extensions-scan",
     policy: "dev-only",
     run: async () => {
-      await runDevAgentsAndSkillsScan();
+      await runDevExtensionsScan();
     },
   });
 }
@@ -82,85 +180,12 @@ export function startDetachedDevAutoSetupPhase(): void {
   });
 }
 
-// ── Block 1 body (verbatim from the original detached IIFE) ──────────────────
-async function runDevAgentsAndSkillsScan(): Promise<void> {
-  // Load git-native agent definitions from agents/ at startup. The version-skip
-  // guard in ensureAgentPackageFromGitFile ensures DB writes are skipped when the
-  // packageVersion matches — restarts are low-overhead.
-  try {
-    const { readdir } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    const { existsSync } = await import("node:fs");
-    const {
-      ensureAgentPackageFromGitFile,
-    } = await import("@cinatra-ai/agents");
-    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
-    const agentsDir = resolveDevExtensionSourceRoot();
-
-    // NOTE: `.cinatra-published.json` marker backfill (+ post-backfill wayflow
-    // reload) now runs in the always-on `agent-marker-backfill` boot phase
-    // (engineering #418), which the orchestrator AWAITS BEFORE starting this
-    // detached dev scan — so by the time the git-native ingest below runs (and
-    // by the time wayflow scans), every on-disk agent already has a valid marker
-    // in BOTH dev and prod. Do not re-run the backfill here (it would be a
-    // redundant second pass on the same tree).
-
-    const entries = await readdir(agentsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const entryPath = join(agentsDir, entry.name);
-
-      // Vendor-namespace probe first
-      // (e.g., extensions/cinatra-ai/<slug>-agent/cinatra/oas.json).
-      let foundInside = false;
-      try {
-        const subEntries = await readdir(entryPath, { withFileTypes: true });
-        for (const sub of subEntries) {
-          if (!sub.isDirectory()) continue;
-          const oasJson = join(entryPath, sub.name, "cinatra", "oas.json");
-          const transitional = join(entryPath, sub.name, "cinatra", "agent.json");
-          const target = existsSync(oasJson)
-            ? oasJson
-            : (existsSync(transitional) ? transitional : null);
-          if (target) {
-            try {
-              await ensureAgentPackageFromGitFile({ oasSourcePath: target, licenseAcknowledged: true });
-            } catch (fileErr) {
-              console.warn(`[agent-builder] git agent load skipped (${entry.name}/${sub.name}):`, fileErr);
-            }
-            foundInside = true;
-          }
-        }
-      } catch {
-        // Non-fatal — skip unreadable subdirectories
-      }
-      if (foundInside) continue;
-
-      // Fallback layout — entry/<cinatra/agent.json> or entry/agent.json.
-      const cinatraAgentJson = join(entryPath, "cinatra", "agent.json");
-      const firstLevelAgentJson = join(entryPath, "agent.json");
-      if (existsSync(cinatraAgentJson)) {
-        try {
-          await ensureAgentPackageFromGitFile({ oasSourcePath: cinatraAgentJson, licenseAcknowledged: true });
-        } catch (fileErr) {
-          console.warn(`[agent-builder] git agent load skipped (${entry.name}/cinatra):`, fileErr);
-        }
-      } else if (existsSync(firstLevelAgentJson)) {
-        try {
-          await ensureAgentPackageFromGitFile({ oasSourcePath: firstLevelAgentJson, licenseAcknowledged: true });
-        } catch (fileErr) {
-          console.warn(`[agent-builder] git agent load skipped (${entry.name}):`, fileErr);
-        }
-      }
-    }
-  } catch (err) {
-    // Non-fatal — agents/ directory may not exist in minimal deployments
-    console.warn("[agent-builder] agents/ directory scan skipped:", err);
-  }
-
-  // Dev-mode: load SKILL-kind extension packages at boot (the agent scan above
-  // only covers agent kind) AND start the recursive hot-reload watcher so live
-  // edits/additions under extensions/ surface without a server restart.
+// ── Block 1 body, detached remainder (the skill half of the original IIFE) ───
+async function runDevExtensionsScan(): Promise<void> {
+  // Dev-mode: load SKILL-kind extension packages at boot (the awaited agent
+  // ingest above only covers agent kind) AND start the recursive hot-reload
+  // watcher so live edits/additions under extensions/ surface without a server
+  // restart.
   try {
     const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
     const {

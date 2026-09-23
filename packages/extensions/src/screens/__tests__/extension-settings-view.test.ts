@@ -162,52 +162,37 @@ describe("card → settings wiring", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §V Skills (cinatra#2349 S4, epic #2345) — the per-agent skill choices.
+// §V Skills — RETIRED (cinatra#2702). The per-agent Skills section and the four
+// package-global assignment actions behind it are gone from this surface. These
+// arms pin the ABSENCE at the source level (the rendered proof that the page
+// still renders its remaining sections, in order, with their bound actions,
+// lives in the root suite's extension-settings-view-sections render test).
 // ---------------------------------------------------------------------------
 
-describe("§V Skills — the slot, its placement, and who gets it", () => {
-  it("the view takes the section as an INJECTED node, so it holds no skills-plane dependency", () => {
-    expect(VIEW).toContain("skills?: ReactNode");
-    expect(VIEW).toContain("{skills}");
-    // No skills import reaches this presentational module.
+describe("§V Skills — the section is retired", () => {
+  it("the view offers no skills slot, no Skills heading, and no skills-plane dependency", () => {
+    expect(VIEW).not.toContain("skills?: ReactNode");
+    expect(VIEW).not.toContain('data-slot="settings-skills"');
+    expect(VIEW).not.toContain(">Skills</h2>");
     expect(VIEW).not.toContain("@cinatra-ai/skills");
     expect(VIEW).not.toContain("agent-skills-config");
   });
 
-  it("renders NOTHING at all — heading included — when the section does not apply", () => {
-    // The heading lives INSIDE the conditional, so a non-agent page has no
-    // empty "Skills" frame (§V: absent entirely).
-    const block = VIEW.slice(VIEW.indexOf("{skills ?"), VIEW.indexOf("{/* Marketplace */}"));
-    expect(block).toContain('data-slot="settings-skills"');
-    expect(block).toContain(">Skills</h2>");
-    expect(block).toContain(": null}");
-  });
-
-  it("sits LAST in the per-agent configuration run — after Execution, before Marketplace", () => {
+  it("the per-agent configuration run ends at Execution — Marketplace follows it directly", () => {
     const permissions = VIEW.indexOf('data-slot="settings-permissions"');
     const execution = VIEW.indexOf('data-slot="settings-execution"');
-    const skills = VIEW.indexOf('data-slot="settings-skills"');
     const marketplace = VIEW.indexOf('data-slot="settings-marketplace"');
     expect(permissions).toBeGreaterThan(-1);
     expect(execution).toBeGreaterThan(permissions);
-    expect(skills).toBeGreaterThan(execution);
-    expect(marketplace).toBeGreaterThan(skills);
+    expect(marketplace).toBeGreaterThan(execution);
+    expect(VIEW.indexOf("settings-skills")).toBe(-1);
   });
 
-  it("the screen loads it for AGENT kind only, lazily, and best-effort", () => {
-    expect(SCREEN).toContain('if (extKind === "agent")');
-    expect(SCREEN).toContain('await import(\n        "@/components/skills/agent-skills-config-section"\n      )');
-    expect(SCREEN).toContain("loadAgentSkillsSection({ packageName })");
-    // A load failure omits the section rather than blanking the page.
-    expect(SCREEN).toContain("could not load the skills config section");
-    expect(SCREEN).toContain("skills={skills}");
-  });
-
-  it("the screen NEVER decides assistant-ness itself by name or template shape", () => {
-    // The authoritative eligibility read lives in the loader; the screen must
-    // carry no suffix/template heuristic of its own.
-    expect(SCREEN).not.toMatch(/-assistant/);
-    expect(SCREEN).not.toContain("agent_kind");
+  it("the screen loads no skills section and passes no skills prop", () => {
+    expect(SCREEN).not.toContain("agent-skills-config-section");
+    expect(SCREEN).not.toContain("loadAgentSkillsSection");
+    expect(SCREEN).not.toContain("skills={skills}");
+    expect(SCREEN).not.toContain("could not load the skills config section");
   });
 });
 

@@ -72,9 +72,15 @@ refuses a mapped path that no longer exists, so the map cannot rot quietly.
   changed, not all five — otherwise a PR that fixes one pin would be red for
   the four drifts it did not touch. When the changed entries cannot be
   determined (no diff base to compare against), every id counts: fail-closed.
-- **A diff that touches the checker, the map or the workflow** touches every id.
-  Those change what the gate itself decides, so after such a change no pin's
-  silence is trustworthy.
+- **A diff that touches the map** touches the ids whose **entry** changed, on the
+  same granularity and for the same reason; it touches every id when it moves
+  `globalPaths` or the set of pin ids, which decide what the gate reads rather
+  than what one pin adopts.
+- **A diff that touches the shared driver file** touches the ids whose **driver
+  block** changed. The paragraph below states how a block is attributed.
+- **A diff that touches the checker or the workflow** touches every id. Those
+  change what the gate itself decides, so after such a change no pin's silence is
+  trustworthy.
 - **A push to `main` or a `workflow_dispatch`** is red on **any** non-`match`
   outcome, touched or not. This is the run that makes a drift impossible to
   ignore.
@@ -86,6 +92,40 @@ refuses a mapped path that no longer exists, so the map cannot rot quietly.
   `HEAD` there, which self-compares to an empty diff; for this check that is the
   fail-OPEN direction — an empty diff adopts no pin and every drift would
   degrade to a warning — so it over-reports instead.
+
+### How a shared file is attributed
+
+Three files are listed under every pin — the pin file, the map, and the shared
+driver file `tests/e2e/design/conformance/contract.ts` — so a whole-file rule on
+any of them reads a one-line edit as every pin, and an adoption goes red on every
+other pin that drifts (cinatra#3421: two adoptions red each other, and a seed-helper
+edit red all four drifts). Each is attributed by the part of it that changed
+instead. **The pin file and the map** by the *entry*: the pins whose entry differs
+between the diff base and the head. **The driver file** by the *driver block*,
+stated by the file's own structure — a block is one top-level declaration (the
+exported driver constants per drawing, and the helpers beside them), running from
+its declaration, with the comment written directly above it, to the line before the
+next declaration; `SURFACE_DRIVERS` binds a manifest surface id to the block that
+drives it, and each pin's manifest declares the surface ids that pin owns. A
+changed line therefore answers in exactly one of three ways: a block the table
+binds to pinned surfaces attributes to **those pins**; a block the table reaches
+only through a computed entry (a family factory spread over a fixture list, whose
+surface ids the file cannot name without running it), together with the table's own
+braces and comments, attributes to **every pin** — fail-closed; and a block the
+table never names — a shared helper such as the seed helper, the imports, the
+preamble — attributes to **no pin**. Both sides of the cut are read: a deleted or rebound line
+exists only in the base file, so the base text is attributed by the removed line
+range and the head text by the added one, and the answer is the union — a
+head-only reader would credit a deletion to whatever closed over the gap and
+never ask the pin that owned it. Every base-side read names the same merge base
+the three-dot path diff already uses, so an entry the target branch moved after
+the cut is never read as this branch's adoption. Everything unreadable stays
+fail-closed: no diff base, an unparseable file, a declaration this reader cannot
+see as a block boundary, diff output carrying no line range, or a
+surface-to-driver table the checker cannot find is every id, exactly as a
+pin-file edit with no base already was. The rule
+"a pin moves only with its adoption" is untouched by this: it changes who is asked,
+never what.
 
 ## Who moves a pin
 
@@ -143,16 +183,45 @@ adoption, never the whole of it.
 
 ## Known drifts
 
-**One: `app-connectors`.** Its published body redeclares the manifest (three
-sharing surfaces gained), so it moves with the drivers and harness mounts that
-answer those surfaces and is adopted where those live, not here — until that
-lands, the `push`-to-`main` arm, red on any non-`match` outcome, reports that
-single drift. The four other pins read `match` on both arms after the
-2026-09-12 reconciliation. The record of what each adoption changed is below;
-the bodies that were drifting are kept as the checker's own drift fixtures (see
-`superseded-pins-2026-08-28/` and `superseded-pins-2026-09-12/` beside the
-frozen published ones), because a gate whose drift path has no input is a gate
-whose drift path is untested.
+**One, adopted on 2026-09-18 — and this round was NOT a hashes-only re-pin.**
+`app-extensions` drifted a fourth time and the `design-pin-drift` job was red on
+the default branch until the 2026-09-18 adoption below took it: four pins read
+`match` and that one read `drift`. Unlike the three rounds before it, the cause
+was not a spec source that moved under an unchanged drawing. The published body
+declares **sixteen** surfaces where the pinned one declared thirteen: the
+thirteen are field-for-field identical and three are new —
+`upload-extension-screen`, `upload-github-form` and
+`upload-resolved-install-panel`, section VIII of the drawing, the Upload
+Extension screen. That is the class this page's own rule names, so the pin moved
+together with the drivers, the harness mounts and the stable-id contract that
+answer those surfaces; a hashes-only re-pin would have been refused. With that
+adoption all five pins read `match` against the published manifests, including
+on the `push`-to-`main` arm that is red on any non-`match` outcome.
+
+Five adoptions got them there and all five are recorded below: the 2026-09-10
+adoption of `app-connectors`, whose published body redeclares the manifest
+(three sharing surfaces gained) and therefore moves with the drivers and harness
+mounts that answer those surfaces — it landed with cinatra#3374 — the 2026-09-12
+hashes-only re-pin of `app`, `app-components` and `app-extensions`, the
+2026-09-13 and 2026-09-17 hashes-only re-pins of `app-extensions` alone, each
+after the design source republished its spec under a byte-identical drawing, and
+the 2026-09-18 adoption of `app-extensions` with its three new surfaces.
+`app-notifications` has not moved since 2026-08-30.
+
+A published manifest can republish more than once under one drawing, and
+`app-extensions` did three times: the 2026-09-12 round adopted its
+republication, the 2026-09-13 round below adopted the next one, and the
+2026-09-17 round the one after that. The fourth round is a different thing
+altogether — the drawing itself gained a section. Each round keeps its own
+frozen pair — the bodies it adopted and the bodies it superseded — so no record
+has to be rewritten for another to be true.
+
+The bodies a pin named before an adoption are kept as the checker's own drift
+input (see `superseded-pins-2026-08-28/`, `superseded-pins-2026-09-12/`,
+`superseded-pins-2026-09-13/`, `superseded-pins-2026-09-17/` and
+`superseded-pins-2026-09-18/` beside the
+frozen published ones, and every row a later frozen fetch superseded), because
+a gate whose drift path has no input is a gate whose drift path is untested.
 
 ## Reconciliation record
 
@@ -214,6 +283,47 @@ pin needed to be deferred, and none was.
 `allowlist.json` gained nothing — it is shrink-only and did not move. Every
 surface in every adopted manifest has a driver.
 
+### 2026-09-10 — `app-connectors` (cinatra#3374, unblocking cinatra#3372)
+
+Adopted the published `app-connectors` manifest fetched from the pin file's
+`publishedBaseUrl` on 2026-09-10 (HTTP 200, 4821 bytes,
+`2b98802f27fb…`), byte-identical on a second fetch. The committed artifact
+under `tests/e2e/design/conformance/manifests/app-connectors.json` is that
+response verbatim and both hashes in `conformance-pins.json` were re-derived
+from it, never typed. The four other pins were not touched.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app-connectors` | `drift` | three surfaces gained: `connector-sharing`, `connector-sharing-rollup`, `connector-sharing-locked`; the eight surfaces the pin already declared are byte-identical; the embedded spec-content hash moved with them | one driver each, written against the host code cinatra#3374 lands; `allowlist.json` unchanged |
+
+What moved, surface by surface:
+
+- **`connector-sharing`** declares four field bindings (`name <- connection.connectionId`, `url <- connection.connectorKey`, `access <- policy.runListVisibility`, `co-owners <- connection.coOwners`), four actions (`select-scope -> scopes-selected`, `search-people -> people-listed`, `remove-co-owner -> co-owner-removed`, `save-access -> access-saved`) and the `loading` state.
+- **`connector-sharing-rollup`** and **`connector-sharing-locked`** declare no field, action or state of their own.
+- The eight surfaces already pinned — `connector-connection-filter`, `connector-grid`, `connector-install-cta`, `connector-empty-panel`, `connector-setup`, `connector-multi-setup`, `connector-connections`, `connector-config-tab` — are unchanged, declaration for declaration. Their part of this move is spec-content-only: the spec source changed under an unchanged drawing.
+
+**The drivers land with this adoption.** A driver reads the host code the
+surface is drawn by, and when the adoption was first prepared none of the three
+gained surfaces had any — which is why that pull request stopped at the record
+rather than buying a green with an allowlist entry the ratchet forbids.
+cinatra#3374 draws them: the setup page's fixed second tab, Sharing, and the
+per-connection panels beneath it. So each of the three now has a driver in
+`tests/e2e/design/conformance/contract.ts`, mounted on the harness by
+`src/app/design-fixtures/conformance/connector-sharing-fixture.tsx`,
+`allowlist.json` gains nothing (it is shrink-only), and this pin reads `match`.
+
+**The issue that owns those three surfaces is cinatra#3374**, which draws the
+Sharing tab and adopts this pin as part of the same change, per the rule above:
+a pin moves in the issue that validates the new contract and updates the
+drivers, harness mounts and proofs together with it.
+
+The response body is frozen beside the checker's other fixtures under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-09-10/` with
+its own receipt. A frozen fetch is written FORWARD, never over an earlier one:
+the 2026-08-28 rows still describe the fetch of that day, and the unit suite
+resolves a pin's adopted body from the newest directory that carries its file,
+so the `app-connectors` body of 2026-08-28 is a drift input now.
+
 ## Reconciliation record — 2026-09-12
 
 Measured 2026-09-12 against the manifests published under `publishedBaseUrl`.
@@ -238,9 +348,122 @@ had.
 
 `app-connectors` is the one pin this reconciliation does not adopt: its
 published body redeclares the manifest, so it takes the drivers and harness
-mounts with it and is adopted where those live. Until that lands, the
-`push`-to-`main` arm — red on any non-`match` outcome — reports that single
-drift; the four other pins read `match` on both arms.
+mounts with it and is adopted where those live — landed with cinatra#3374, the
+2026-09-10 record above, which pins the same body this capture froze. Until it
+landed, the `push`-to-`main` arm — red on any non-`match` outcome — reported
+that single drift; the four other pins read `match` on both arms.
+
+## Reconciliation record — 2026-09-13
+
+Measured 2026-09-13 against the manifests published under `publishedBaseUrl`.
+`app-extensions` republished a second time: its body was fetched into a scratch
+directory outside the tree and compared, as parsed JSON, with the committed copy
+under `tests/e2e/design/conformance/manifests/`. `schemaVersion`, `spec` and the
+whole `surfaces` array — thirteen surfaces, the same ids in the same order,
+field-for-field identical — are unchanged; `contentHash` alone moved. That is
+again the second of the two cases "why a hash-only re-pin is refused" names, the
+one nothing downstream catches: the spec source changed under an unchanged
+drawing. The committed artifact of that row is now the verbatim published body,
+and both hashes in `conformance-pins.json` were re-derived from it through the
+checker's own functions, never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-extensions` | `drift` | **hashes only** — byte-identical surface declarations (13 surfaces) | re-pin |
+| `app-connectors` | `drift` | three surfaces gained (`connector-sharing`, `connector-sharing-locked`, `connector-sharing-rollup`) — adopted with its drivers by the pull request of #3374 | not this diff |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+`app-connectors` is again the one pin this reconciliation does not adopt, for
+the reason the record above already gives, and its published body has not moved
+since that round measured it. Until the adoption that owns it lands, the
+`push`-to-`main` arm reports that single drift; the four other pins read `match`
+on both arms.
+
+## Reconciliation record — 2026-09-17
+
+Measured 2026-09-17 against the manifests published under `publishedBaseUrl`.
+All five bodies were fetched into a scratch directory outside the tree and
+frozen under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-09-17/`
+beside the receipt that records each one's url, HTTP status, byte length and
+hash. Four came back byte-identical to the artifacts their pins already named;
+`app-extensions` republished a third time and was compared, as parsed JSON,
+with the committed copy under `tests/e2e/design/conformance/manifests/`.
+`schemaVersion`, `spec` and the whole `surfaces` array — thirteen surfaces, the
+same ids in the same order, field-for-field identical — are unchanged;
+`contentHash` alone moved. That is again the second of the two cases "why a
+hash-only re-pin is refused" names, the one nothing downstream catches: the
+spec source changed under an unchanged drawing. The committed artifact of that
+row is now the verbatim published body, and both hashes in
+`conformance-pins.json` were re-derived from it on the branch — the manifest
+hash over the file's bytes, the spec-content hash read back out of the adopted
+body's own `contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-extensions` | `drift` | **hashes only** — byte-identical surface declarations (13 surfaces) | re-pin |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+Unlike the two rounds above, this one leaves no pin outstanding: `app-connectors`
+has read `match` since cinatra#3374 landed its drivers and harness mounts, so
+after this adoption the `push`-to-`main` arm — red on any non-`match` outcome —
+is green on all five. The body `app-extensions` named before this round is
+frozen as the round's own drift input under `superseded-pins-2026-09-17/`, with
+the provenance receipt that names the commit its bytes were read from.
+
+## Reconciliation record — 2026-09-18
+
+Measured 2026-09-18 against the manifests published under `publishedBaseUrl`.
+The `app-extensions` body was fetched into a scratch directory outside every
+repository tree with one anonymous `curl -sS`, and both hashes were derived from
+those bytes on the branch — the manifest hash over the file's own bytes, the
+spec-content hash read back out of the adopted body's own `contentHash` field —
+never typed. The other four answered this round's fetch byte-identical to the
+artifacts their pins already named. All five are frozen under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-09-18/` beside
+the receipt that records each one's url, HTTP status, byte length, hash,
+schemaVersion and embedded content hash.
+
+**This round is the first `app-extensions` adoption that is not hashes-only.**
+Compared as parsed JSON with the committed copy under
+`tests/e2e/design/conformance/manifests/`, `schemaVersion` and `spec` are
+unchanged and every one of the thirteen pinned surfaces is field-for-field
+identical — but the published body declares **three more**:
+`upload-extension-screen`, `upload-github-form` and
+`upload-resolved-install-panel`, between them three fields, five actions and two
+`loading` states. They are section VIII of the drawing, the Upload Extension
+screen, whose product screens shipped with cinatra#3204. So the rule at the top
+of this page applies in its own words — a pin moves only in a change that
+validates the new published contract and updates the required drivers, harness
+mounts and proofs together with it — and this adoption lands the three drivers
+(`tests/e2e/design/conformance/contract.ts`), the three harness mounts
+(`src/app/design-fixtures/conformance/upload-extension-fixtures.tsx`) and the
+three stable-id contract entries in the same change as the pin.
+`tests/e2e/design/conformance/allowlist.json` is untouched: with a driver for
+each of the three the unmapped-surface red is unreachable, so there is no
+exemption to create, and the shrink-only ratchet reads `0 added/widened`.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-extensions` | `drift` | **three surfaces gained** (13 to 16; the thirteen field-for-field identical) | re-pin + drivers, harness mounts and stable ids |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+Like the round before it this one leaves no pin outstanding: after the adoption
+the `push`-to-`main` arm — red on any non-`match` outcome — is green on all
+five. The body `app-extensions` named before this round is frozen as the round's
+own drift input under `superseded-pins-2026-09-18/`, with the provenance receipt
+that names the commit its bytes were read from, and the checker's own suite
+asserts both halves of the finding: that the superseded body still classifies as
+`drift` in both hashes, and that the body adopted in its place adds exactly
+those three surfaces and redraws none of the thirteen.
 
 ## Running it locally
 
@@ -251,7 +474,7 @@ pnpm exec vitest run --config vitest.config.ts scripts/ci/__tests__/design-pin-d
 ```
 
 The unit suite needs no network: it runs the checker against the frozen
-2026-09-12 bodies (the adopted set — four `match`es and the one `app-connectors`
-drift the section above names), against the superseded bodies frozen beside
-each reconciliation (the drift sets), against the committed manifest copies,
-and against one fixture per failure outcome.
+published bodies, each pin served the body of the newest capture that carries
+its file (the adopted set — five `match`es), against the superseded bodies
+frozen beside each reconciliation (the drift sets), against the committed
+manifest copies, and against one fixture per failure outcome.
