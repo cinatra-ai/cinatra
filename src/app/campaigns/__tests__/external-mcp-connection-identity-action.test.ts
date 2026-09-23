@@ -57,6 +57,13 @@ function stampsOf(row: ServerRow | undefined): { createdAt: string; updatedAt: s
   };
 }
 
+// Every connection id the road asked the credential service to revoke, in
+// order, so a case can count the credential deletes a delete road makes.
+const credentialRevokes: Array<string | null> = [];
+// The window between the credential revoke and the guarded row delete: a
+// deterministic stand-in for a concurrent request that re-keys the row there.
+let onCredentialRevoke: (() => void | Promise<void>) | null = null;
+
 class ExternalMcpServerWriteConflictError extends Error {}
 
 vi.mock("@/lib/auth-session", () => ({
@@ -121,8 +128,35 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     servers.set(input.id, { ...input, createdAt, updatedAt });
     return { createdAt, updatedAt };
   },
-  deleteExternalMcpServerGuarded: (id: string) => {
+  deleteExternalMcpServerGuarded: (
+    id: string,
+    expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
+  ) => {
+    const real = servers.get(id);
+    if (!real || real.scope !== expected.scope || real.userId !== expected.userId) {
+      throw new ExternalMcpServerWriteConflictError("guard miss");
+    }
+    // The connection WITNESS: a concurrent re-key that moved it fails the delete
+    // closed rather than removing the row and orphaning the new credential
+    // (cinatra#3485 fix leg 4).
+    if (
+      expected.nangoConnectionId !== undefined &&
+      (real.nangoConnectionId ?? null) !== (expected.nangoConnectionId ?? null)
+    ) {
+      throw new ExternalMcpServerWriteConflictError("guard miss");
+    }
     servers.delete(id);
+  },
+  // The stored credential's revoke, mirroring the real helper's IDENTITY-FIRST
+  // ordering: soft-delete the live `externalMcp` identity addressed by this
+  // connection id, never throw, no-op on an empty id. Counted, because "exactly
+  // one credential delete per keyed delete" is the pin.
+  revokeExternalMcpApiKeyConnection: async (connectionId?: string | null) => {
+    credentialRevokes.push(connectionId ?? null);
+    await onCredentialRevoke?.();
+    if (!connectionId) return;
+    const live = liveIdentityAt(connectionId);
+    if (live) live.deletedAt = new Date();
   },
   externalMcpKeylessConnectionId: (serverId: string) => `${KEYLESS_PREFIX}${serverId}`,
   // The identity store's live-unique natural key, and the seam's foreign-row
@@ -210,6 +244,20 @@ async function save(fields: Record<string, string>): Promise<string> {
   }
   throw new Error("the action returned without redirecting");
 }
+/**
+ * A save the road REFUSES throws, and this form's wrapper surfaces the message
+ * as a notification. Returns that message (cinatra#3485 fix leg 4).
+ */
+async function saveExpectingRefusal(fields: Record<string, string>): Promise<string> {
+  try {
+    await createExternalMcpServerAction(form(fields));
+  } catch (err) {
+    const redirectedTo = (err as { __redirectTo?: string }).__redirectTo;
+    if (redirectedTo) throw new Error(`the action redirected to ${redirectedTo}`);
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error("the action returned without refusing");
+}
 async function remove(id: string): Promise<string> {
   try {
     await deleteExternalMcpServerAction(form({ id }));
@@ -217,6 +265,19 @@ async function remove(id: string): Promise<string> {
     return String((err as { __redirectTo?: string }).__redirectTo ?? "");
   }
   throw new Error("the action returned without redirecting");
+}
+
+/** A live identity row placed by hand, as a save of an earlier road left it. */
+function placeIdentity(connectionId: string, ownerUserId: string): IdentityRow {
+  const row: IdentityRow = {
+    id: `identity-${++identitySeq}`,
+    connectionId,
+    ownerUserId,
+    organizationId: ORG,
+    deletedAt: null,
+  };
+  identities.set(row.id, row);
+  return row;
 }
 
 beforeEach(() => {
@@ -227,6 +288,8 @@ beforeEach(() => {
   sessionUserId = "u1";
   sessionRole = null;
   sessionOrganizationId = ORG;
+  credentialRevokes.length = 0;
+  onCredentialRevoke = null;
 });
 
 describe("the host MCP-server actions reconcile the keyless connection identity (cinatra#3485)", () => {
@@ -292,19 +355,181 @@ describe("the host MCP-server actions reconcile the keyless connection identity 
     await save({ id: "srv-host-orphan", label: "Mine", serverUrl: "https://mcp.example", scope: "user" });
     const orphan = liveIdentities()[0];
     servers.delete("srv-host-orphan");
-    // Another person registers their own row at the same id and deletes it.
+    // Another person's own row at the same id, PLACED (the create road refuses
+    // that id since fix leg 4) and then deleted through the host action.
+    servers.set("srv-host-orphan", {
+      id: "srv-host-orphan",
+      label: "Mine too",
+      serverUrl: "https://mcp.example",
+      scope: "user",
+      userId: "u1",
+      nangoConnectionId: null,
+    });
     sessionUserId = "u1";
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    await save({ id: "srv-host-orphan", label: "Mine too", serverUrl: "https://mcp.example", scope: "user" });
     await remove("srv-host-orphan");
     const rows = liveIdentities();
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(orphan.id);
     expect(rows[0].ownerUserId).toBe("u2");
-    error.mockRestore();
     // Their own delete of the absent id is what repairs it.
     sessionUserId = "u2";
     await remove("srv-host-orphan");
+    expect(liveIdentities()).toHaveLength(0);
+  });
+
+  // cinatra#3485 fix leg 4, the seventh round, finding 2 on this road: the host
+  // action inherited the same fail-open, and takes the same refusal.
+  it("saving a server at an id another person's identity still holds is REFUSED, and no row is written", async () => {
+    sessionUserId = "u2";
+    await save({ id: "srv-host-taken", label: "Mine", serverUrl: "https://mcp.example", scope: "user" });
+    const orphan = liveIdentities()[0];
+    servers.delete("srv-host-taken");
+    sessionUserId = "u1";
+    expect(
+      await saveExpectingRefusal({
+        id: "srv-host-taken",
+        label: "Mine too",
+        serverUrl: "https://mcp.example",
+        scope: "user",
+      }),
+    ).toMatch(/another person's saved connection/i);
+    expect(servers.has("srv-host-taken")).toBe(false);
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(orphan.id);
+    expect(rows[0].ownerUserId).toBe("u2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3485 fix leg 4, the seventh round, finding 3. The host DELETE of a
+// server that stores a credential removed the row and reconciled only the
+// derived keyless identity, so the credential and the identity that mints its
+// bearer outlived a delete the person was told had succeeded. The connector's
+// own delete road has always revoked it. Both roads now travel one step.
+// ---------------------------------------------------------------------------
+describe("the host MCP-server delete revokes the stored credential too (cinatra#3485)", () => {
+  it("deleting a KEYED server makes exactly ONE credential delete and leaves no panel for it", async () => {
+    servers.set("srv-keyed-del", {
+      id: "srv-keyed-del",
+      label: "Keyed",
+      serverUrl: "https://mcp.example",
+      scope: "user",
+      userId: "u1",
+      nangoConnectionId: "external-mcp-stored",
+    });
+    const credential = placeIdentity("external-mcp-stored", "u1");
+    expect(await remove("srv-keyed-del")).toBe(`${MCP_SERVER_SETUP_HREF}?deleted=1`);
+    expect(servers.has("srv-keyed-del")).toBe(false);
+    // Exactly one credential delete, for the connection the row stored.
+    expect(credentialRevokes).toEqual(["external-mcp-stored"]);
+    expect(identities.get(credential.id)?.deletedAt).not.toBeNull();
+    expect(liveIdentities()).toHaveLength(0);
+  });
+
+  it("deleting a KEYLESS server still makes NO credential delete", async () => {
+    await save({ id: "srv-plain-del", label: "Mine", serverUrl: "https://mcp.example", scope: "user" });
+    expect(await remove("srv-plain-del")).toBe(`${MCP_SERVER_SETUP_HREF}?deleted=1`);
+    expect(credentialRevokes).toEqual([null]);
+    expect(liveIdentities()).toHaveLength(0);
+  });
+
+  it("a concurrent RE-KEY in the delete's window fails the delete closed, and the new credential is not orphaned", async () => {
+    servers.set("srv-rekeyed-del", {
+      id: "srv-rekeyed-del",
+      label: "Keyed",
+      serverUrl: "https://mcp.example",
+      scope: "user",
+      userId: "u1",
+      nangoConnectionId: "external-mcp-first",
+    });
+    placeIdentity("external-mcp-first", "u1");
+    // Another request re-keys the row after this delete read it.
+    onCredentialRevoke = () => {
+      onCredentialRevoke = null;
+      const row = servers.get("srv-rekeyed-del");
+      if (row) row.nangoConnectionId = "external-mcp-second";
+      placeIdentity("external-mcp-second", "u1");
+    };
+    expect(await remove("srv-rekeyed-del")).toBe("/not-authorized");
+    // The row survives with its NEW credential, which no delete removed.
+    expect(servers.get("srv-rekeyed-del")?.nangoConnectionId).toBe("external-mcp-second");
+    expect(liveIdentityAt("external-mcp-second")).not.toBeNull();
+    expect(credentialRevokes).toEqual(["external-mcp-first"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3485 fix leg 4, the seventh round, finding 5. The host actions read
+// "not global" as "personal", so a non-admin whose id happened to sit in an
+// org, team or workspace row could overwrite or delete it. The connector
+// handlers have always required platform standing for every shared scope, and
+// these roads reach the same rows.
+// ---------------------------------------------------------------------------
+describe("a shared-scope row needs platform standing on the host actions too (cinatra#3485)", () => {
+  for (const scope of ["org", "team", "workspace"] as const) {
+    it(`a non-admin never overwrites a stored ${scope} row as a personal one`, async () => {
+      servers.set("srv-shared", {
+        id: "srv-shared",
+        label: "Shared",
+        serverUrl: "https://mcp.example",
+        scope,
+        userId: "u1",
+        nangoConnectionId: null,
+      });
+      sessionUserId = "u1";
+      expect(
+        await save({
+          id: "srv-shared",
+          label: "Mine now",
+          serverUrl: "https://mcp.example",
+          scope: "user",
+        }),
+      ).toBe("/not-authorized");
+      expect(servers.get("srv-shared")?.scope).toBe(scope);
+      expect(servers.get("srv-shared")?.label).toBe("Shared");
+      expect(liveIdentities()).toHaveLength(0);
+    });
+
+    it(`a non-admin never deletes a stored ${scope} row`, async () => {
+      servers.set("srv-shared-del", {
+        id: "srv-shared-del",
+        label: "Shared",
+        serverUrl: "https://mcp.example",
+        scope,
+        userId: "u1",
+        nangoConnectionId: null,
+      });
+      sessionUserId = "u1";
+      expect(await remove("srv-shared-del")).toBe("/not-authorized");
+      expect(servers.has("srv-shared-del")).toBe(true);
+      expect(credentialRevokes).toEqual([]);
+    });
+  }
+
+  it("a platform admin still deletes a shared row", async () => {
+    servers.set("srv-shared-admin", {
+      id: "srv-shared-admin",
+      label: "Shared",
+      serverUrl: "https://mcp.example",
+      scope: "org",
+      userId: "u1",
+      nangoConnectionId: null,
+    });
+    sessionUserId = "admin-1";
+    sessionRole = "admin";
+    expect(await remove("srv-shared-admin")).toBe(`${MCP_SERVER_SETUP_HREF}?deleted=1`);
+    expect(servers.has("srv-shared-admin")).toBe(false);
+  });
+
+  it("a person still edits and deletes their OWN personal row", async () => {
+    sessionUserId = "u1";
+    await save({ id: "srv-own", label: "Mine", serverUrl: "https://mcp.example", scope: "user" });
+    expect(
+      await save({ id: "srv-own", label: "Renamed", serverUrl: "https://mcp.example", scope: "user" }),
+    ).toBe(`${MCP_SERVER_SETUP_HREF}?saved=1`);
+    expect(servers.get("srv-own")?.label).toBe("Renamed");
+    expect(await remove("srv-own")).toBe(`${MCP_SERVER_SETUP_HREF}?deleted=1`);
     expect(liveIdentities()).toHaveLength(0);
   });
 });

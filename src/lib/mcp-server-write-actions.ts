@@ -164,9 +164,11 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   } = await import("@/lib/external-mcp-registry");
   // cinatra#3485: the keyless connection identity follows the row, and every
   // write road reconciles it through the ONE lifecycle, never a copy.
-  const { reconcileKeylessConnectionIdentityAfterSave } = await import(
-    "@/lib/external-mcp-keyless-identity"
-  );
+  const {
+    reconcileKeylessConnectionIdentityAfterSave,
+    keylessIdentityCollisionAtCreate,
+    keylessIdentityCollisionMessage,
+  } = await import("@/lib/external-mcp-keyless-identity");
 
   // A global write is a platform-wide trust mutation → PLATFORM ADMIN required.
   // A user write only needs an authenticated actor (already proven by the endpoint).
@@ -287,6 +289,22 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   const identityOrganizationId =
     scope === "user" ? (selfRegistered ? organizationId : null) : organizationId;
   const identitySeed: "owner" | "workspace" = scope === "user" ? "owner" : "workspace";
+
+  // IS THE SUPPLIED ID FREE? (cinatra#3485 fix leg 4, the seventh round.) A
+  // create at an id another person's live identity still holds used to be
+  // reported as saved while the panel stayed with that person, and no save of
+  // the new row could repair it. It is refused here, BEFORE the key import and
+  // before the row write, so nothing lands at all. Only a create asks: an
+  // existing row is an update, and the save road reconciles its identity on its
+  // own terms. A newly minted id can collide with nothing.
+  if (requestedId && !guard) {
+    const collision = await keylessIdentityCollisionAtCreate({
+      serverId: id,
+      identityOwnerUserId: credentialOwnerUserId,
+    });
+    if (collision) throw new WriteActionError(keylessIdentityCollisionMessage(id));
+  }
+
   let nangoConnectionId: string | null = preservedNangoConnectionId ?? null;
   let newConnectionId: string | undefined;
   if (apiKey) {
@@ -405,17 +423,12 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
   // 30s TTL cache) and delete CONDITIONALLY on the witnessed scope+owner so a row
   // promoted/re-owned between read and delete fails closed instead of being
   // deleted under the actor's stale view.
-  const {
-    getExternalMcpServerByIdFresh,
-    deleteExternalMcpServerGuarded,
-    revokeExternalMcpApiKeyConnection,
-    ExternalMcpServerWriteConflictError,
-  } = await import("@/lib/external-mcp-registry");
+  const { getExternalMcpServerByIdFresh, ExternalMcpServerWriteConflictError } = await import(
+    "@/lib/external-mcp-registry"
+  );
   // The same ONE lifecycle the save roads reconcile through (cinatra#3485).
-  const {
-    reconcileKeylessConnectionIdentityAfterDelete,
-    reconcileOrphanKeylessConnectionIdentity,
-  } = await import("@/lib/external-mcp-keyless-identity");
+  const { deleteExternalMcpServerRowWithIdentities, reconcileOrphanKeylessConnectionIdentity } =
+    await import("@/lib/external-mcp-keyless-identity");
   const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
     // Already gone: idempotent success (the row is not there to over-expose).
@@ -442,22 +455,21 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
       throw new WriteActionError("Only a platform admin can delete this MCP server.");
     }
   }
-  // Revoke the stored key BEFORE removing the row (cinatra#1407) — identity
-  // soft-delete first, so a stale cross-worker cached copy of the row cannot mint
-  // the bearer during (or after a crash within) the delete window; the use-gate
-  // reads live-only identities and fails closed the instant the identity is gone.
-  // Mirrors disconnectTwentyConnection's revoke-before-row-delete ordering. On the
-  // rare losing race where the guarded delete then conflicts, the row survives
-  // with a revoked key (self-correcting — re-save the key), never a mint.
-  await revokeExternalMcpApiKeyConnection(server.nangoConnectionId);
+  // THE ONE DELETE STEP (cinatra#3485 fix leg 4): revoke the stored credential,
+  // delete the row under a guard that witnesses its connection, retire the
+  // derived keyless identity after the row is gone. The lifecycle owns that
+  // order and the reasons for it, and the host server actions travel the very
+  // same step rather than a second copy of it.
   try {
-    // Witness the connection too: a concurrent re-key that moved it fails the
-    // delete closed (the row keeps its NEW, live connection) rather than removing
-    // the row and orphaning that new credential.
-    deleteExternalMcpServerGuarded(id, {
-      scope: server.scope,
-      userId: server.userId,
-      nangoConnectionId: server.nangoConnectionId,
+    await deleteExternalMcpServerRowWithIdentities({
+      serverId: id,
+      row: {
+        scope: server.scope,
+        userId: server.userId,
+        nangoConnectionId: server.nangoConnectionId,
+      },
+      actorUserId: session.user.id,
+      actorIsAdmin,
     });
   } catch (err) {
     if (err instanceof ExternalMcpServerWriteConflictError) {
@@ -468,16 +480,6 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
     }
     throw err;
   }
-  // cinatra#3485: a keyless row stores no connection pointer, so its identity is
-  // addressed by the id DERIVED from the row, and it is retired AFTER the row is
-  // gone. The lifecycle owns the ordering, the re-read and the question of whose
-  // identity this delete may take away.
-  await reconcileKeylessConnectionIdentityAfterDelete({
-    serverId: id,
-    deletedRow: { scope: server.scope, userId: server.userId },
-    actorUserId: session.user.id,
-    actorIsAdmin,
-  });
   return { banner: "deleted" };
 }
 

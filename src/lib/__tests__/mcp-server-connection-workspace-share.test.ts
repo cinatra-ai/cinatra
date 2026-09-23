@@ -39,6 +39,9 @@ const servers = new Map<
     id: string;
     scope: string;
     userId: string | null;
+    // The configuration a save wrote, so a case can say WHOSE save the row that
+    // stands is holding (cinatra#3485 fix leg 4).
+    label?: string;
     nangoConnectionId?: string | null;
     createdAt?: string;
     updatedAt?: string;
@@ -130,13 +133,23 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   // its own row object back and see itself unchanged. The write also STAMPS the
   // row and hands its stamps back: an INSERT mints a creation instant, an UPDATE
   // leaves it standing and mints a new update instant.
-  insertExternalMcpServerStrict: (input: { id: string; scope: string; userId: string | null }) => {
+  insertExternalMcpServerStrict: (input: {
+    id: string;
+    scope: string;
+    userId: string | null;
+    label?: string;
+  }) => {
     const stamp = nextStamp();
     servers.set(input.id, { ...input, createdAt: stamp, updatedAt: stamp });
     void onServerRowWritten?.();
     return { createdAt: stamp, updatedAt: stamp };
   },
-  updateExternalMcpServerGuarded: (input: { id: string; scope: string; userId: string | null }) => {
+  updateExternalMcpServerGuarded: (input: {
+    id: string;
+    scope: string;
+    userId: string | null;
+    label?: string;
+  }) => {
     const { createdAt } = stampsOf(servers.get(input.id));
     const updatedAt = nextStamp();
     servers.set(input.id, { ...input, createdAt, updatedAt });
@@ -736,26 +749,57 @@ describe("a KEYLESS MCP Servers registration writes its connection identity (cin
     expect(panelViews).toHaveLength(1);
   });
 
-  it("a registration whose identity cannot be written truthfully still SAVES the server", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    sessionActiveOrganizationId = ORG;
-    // A FOREIGN live identity already holds this row's derived connection id:
-    // the seam hard-fails rather than taking it away from its owner.
-    identities.set("identity-foreign", {
-      id: "identity-foreign",
+  /** A foreign live identity already holding a row's derived connection id. */
+  function placeForeignIdentityFor(serverId: string) {
+    identities.set(`identity-foreign-${serverId}`, {
+      id: `identity-foreign-${serverId}`,
       organizationId: ORG,
       connectorPackageId: EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL,
       connectorKey: "externalMcp",
-      connectionId: "external-mcp-keyless-srv-foreign",
+      connectionId: `external-mcp-keyless-${serverId}`,
       ownerUserId: "somebody-else",
       createdAt: new Date(),
       deletedAt: null,
     } as NangoConnectionIdentity);
-    await expect(registerKeyless({ id: "srv-foreign" })).resolves.toEqual({ banner: "saved" });
-    expect(servers.get("srv-foreign")).toBeTruthy();
+  }
+
+  // cinatra#3485 fix leg 4, the seventh round, finding 2 MOVED this case's
+  // outcome. A CREATE that would land a row under an id somebody else's
+  // identity holds was reported as saved, and the panel stayed with that
+  // person; it is refused before the row is written now.
+  it("a registration at an id a FOREIGN identity already holds is refused, and no row lands", async () => {
+    sessionActiveOrganizationId = ORG;
+    placeForeignIdentityFor("srv-foreign");
+    await expect(registerKeyless({ id: "srv-foreign" })).rejects.toThrow(
+      /another person's saved connection/i,
+    );
+    expect(servers.get("srv-foreign")).toBeUndefined();
+    expect(liveIdentities()).toHaveLength(1);
+    expect(liveIdentities()[0].ownerUserId).toBe("somebody-else");
+  });
+
+  // The best-effort contract this case was written for STANDS where the
+  // refusal can only be met after the row is already there: the row write has
+  // landed, and an identity that cannot be written truthfully must never turn a
+  // saved server into an error.
+  it("an EDIT whose identity cannot be written truthfully still SAVES the server", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    sessionActiveOrganizationId = ORG;
+    servers.set("srv-foreign-edit", {
+      id: "srv-foreign-edit",
+      scope: "user",
+      userId: "u1",
+      nangoConnectionId: null,
+    });
+    placeForeignIdentityFor("srv-foreign-edit");
+    await expect(registerKeyless({ id: "srv-foreign-edit" })).resolves.toEqual({
+      banner: "saved",
+    });
+    expect(servers.get("srv-foreign-edit")).toBeTruthy();
     expect(liveIdentities()).toHaveLength(1);
     expect(liveIdentities()[0].ownerUserId).toBe("somebody-else");
     expect(error).toHaveBeenCalled();
+    error.mockRestore();
   });
 });
 
@@ -1059,8 +1103,14 @@ describe("the keyless identity road never retires what it may not (cinatra#3485)
     error.mockRestore();
   });
 
-  it("re-using the id of a DELETED server never takes the orphan identity away from the person who owns it", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  // cinatra#3485 fix leg 4, the seventh round, finding 2 MOVED this case's
+  // outcome. The earlier ruling stands: another person's save never takes the
+  // orphan away. What changes is the answer the person gets. Registering a
+  // server at an id another person's identity still holds used to be reported
+  // as SAVED while the panel stayed with that person, and no later save of the
+  // new row could repair it. It is refused instead, before the row is written,
+  // and the caller is told what is in the way.
+  it("registering a server at an id another person's orphan identity still holds is REFUSED, and their orphan stands", async () => {
     sessionActiveOrganizationId = ORG;
     // The victim's delete leaves an orphan identity behind.
     sessionUserId = "u2";
@@ -1069,17 +1119,60 @@ describe("the keyless identity road never retires what it may not (cinatra#3485)
     keylessRetireFailsOnce = true;
     await deleteServerHandler({ id: "srv-reused" });
     expect(liveIdentities()).toHaveLength(1);
-    // Another person registers a server under the SAME id, twice, so the second
-    // save witnesses a row of their own.
+    // Another person registers a server under the SAME id: refused, and NO row
+    // is written, so nobody owns a configuration whose panel is somebody
+    // else's.
     sessionUserId = "u1";
-    await registerKeyless({ id: "srv-reused" });
-    await registerKeyless({ id: "srv-reused" });
+    await expect(registerKeyless({ id: "srv-reused" })).rejects.toThrow(
+      /another person's saved connection/i,
+    );
+    expect(servers.get("srv-reused")).toBeUndefined();
     const rows = liveIdentities();
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe(orphan.id);
     expect(rows[0].ownerUserId).toBe("u2");
-    expect(error).toHaveBeenCalled();
-    error.mockRestore();
+  });
+
+  it("a platform admin's replacement at that id is refused too, and their delete of the absent id is the repair", async () => {
+    sessionActiveOrganizationId = ORG;
+    sessionUserId = "u2";
+    await registerKeyless({ id: "srv-admin-reused" });
+    keylessRetireFailsOnce = true;
+    await deleteServerHandler({ id: "srv-admin-reused" });
+    expect(liveIdentities()).toHaveLength(1);
+    // Platform standing does not make somebody else's identity this save's to
+    // write over: the admin is refused exactly as anybody else is.
+    sessionUserId = "u1";
+    sessionIsPlatformAdmin = true;
+    await expect(registerKeyless({ id: "srv-admin-reused", scope: "global" })).rejects.toThrow(
+      /another person's saved connection/i,
+    );
+    expect(servers.get("srv-admin-reused")).toBeUndefined();
+    // The road the orphan was always repaired on is still open to the admin,
+    // and the id is free once they take it.
+    await deleteServerHandler({ id: "srv-admin-reused" });
+    expect(liveIdentities()).toHaveLength(0);
+    await registerKeyless({ id: "srv-admin-reused", scope: "global" });
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerUserId).toBe("u1");
+  });
+
+  it("registering a server at an id the SAME person's orphan holds is not a collision at all", async () => {
+    sessionActiveOrganizationId = ORG;
+    sessionUserId = "u2";
+    await registerKeyless({ id: "srv-own-reused" });
+    keylessRetireFailsOnce = true;
+    await deleteServerHandler({ id: "srv-own-reused" });
+    expect(liveIdentities()).toHaveLength(1);
+    // Their own orphan is their own to write over, and the row they register
+    // keeps exactly one panel.
+    await registerKeyless({ id: "srv-own-reused" });
+    expect(servers.get("srv-own-reused")).toBeTruthy();
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerUserId).toBe("u2");
+    expect(orphanKeylessIdentities()).toEqual([]);
   });
 });
 
@@ -1412,6 +1505,97 @@ describe("two admins saving one row: the identity follows the write that stands 
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#3485 fix leg 4, the seventh read-only round, finding 1. THREE SAVES
+// AND TWO PEOPLE on one keyless row. The round drove the exact four steps
+// below and read back a row holding the second person's configuration with the
+// FIRST person's name on its panel, while the second person's save reported
+// success. A retry alone cannot settle it: the first person has two saves in
+// flight, so each pass of the second person's retry can be undone by the next
+// one landing. What settles it is that an identity a save PUT on the row while
+// a later write already stood there is taken back by the save that put it
+// there.
+// ---------------------------------------------------------------------------
+describe("three saves, two people, one row (cinatra#3485)", () => {
+  it("the first admin's two saves never leave that admin holding the panel over the second admin's configuration", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    sessionIsPlatformAdmin = true;
+    sessionActiveOrganizationId = ORG;
+    // Every save runs until it reaches the seam and PARKS there, so the order
+    // the identities land is the order this case releases them, and no wall
+    // clock decides anything.
+    const release: Array<() => void> = [];
+    const announce: Array<() => void> = [];
+    const parked = [0, 1, 2].map(
+      (i) => new Promise<void>((resolve) => { release[i] = resolve; }),
+    );
+    const reachedTheSeam = [0, 1, 2].map(
+      (i) => new Promise<void>((resolve) => { announce[i] = resolve; }),
+    );
+    let reached = 0;
+    let secondSave: Promise<unknown> | null = null;
+    onKeylessIdentityRegister = async () => {
+      const n = reached++;
+      if (n < 3) {
+        announce[n]();
+        await parked[n];
+        return;
+      }
+      // A FOURTH registration is the second admin's retry, and the round's step
+      // five lands the first admin's second identity inside it: the retry has
+      // already taken the first identity away and has not yet put its own
+      // there.
+      release[1]();
+      await secondSave;
+    };
+
+    sessionUserId = "admin-a";
+    const firstSave = registerKeyless({
+      id: "srv-four-step",
+      scope: "global",
+      label: "A, the first save",
+    });
+    await reachedTheSeam[0];
+    secondSave = registerKeyless({
+      id: "srv-four-step",
+      scope: "global",
+      label: "A, the second save",
+    });
+    await reachedTheSeam[1];
+    sessionUserId = "admin-b";
+    const thirdSave = registerKeyless({
+      id: "srv-four-step",
+      scope: "global",
+      label: "B, the configuration that stands",
+    });
+    await reachedTheSeam[2];
+
+    // Step four: the first admin's FIRST identity lands and that save finishes.
+    release[0]();
+    await firstSave;
+    // Step five and six: the second admin's registration meets whatever stands.
+    release[2]();
+    await thirdSave;
+    // The first admin's second save, if the retry above did not already let it
+    // through.
+    release[1]();
+    await secondSave;
+
+    // The row holds the second admin's configuration, so the panel and the
+    // authority to share it belong to the second admin, and to nobody else.
+    expect(servers.get("srv-four-step")?.label).toBe("B, the configuration that stands");
+    const rows = liveIdentities();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ownerUserId).toBe("admin-b");
+    expect(orphanKeylessIdentities()).toEqual([]);
+    sessionUserId = "admin-a";
+    expect((await renderMcpServersSharingTab()).section).toBeNull();
+    sessionUserId = "admin-b";
+    expect((await renderMcpServersSharingTab()).panelViews).toHaveLength(1);
+    error.mockRestore();
+  });
+});
+
 describe("the orphan of a deleted server belongs to its owner, on every road (cinatra#3485)", () => {
   it("a KEYED save of somebody else's replacement row never retires the orphan identity", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1423,11 +1607,20 @@ describe("the orphan of a deleted server belongs to its owner, on every road (ci
     keylessRetireFailsOnce = true;
     await deleteServerHandler({ id: "srv-keyed-orphan" });
     expect(liveIdentities()).toHaveLength(1);
-    // Another person registers their own server at the SAME id, then adds a key
-    // to it. The keyed road retires a keyless identity that may not stand on a
-    // row carrying a credential, and the identity it finds is not this row's.
+    // Another person's own server at the SAME id, then a key added to it. The
+    // keyed road retires a keyless identity that may not stand on a row
+    // carrying a credential, and the identity it finds is not this row's.
+    //
+    // The row is PLACED here rather than registered: since fix leg 4 the create
+    // road refuses an id another person's identity still holds, so the only way
+    // such a row can stand at all is one that was already there.
+    servers.set("srv-keyed-orphan", {
+      id: "srv-keyed-orphan",
+      scope: "user",
+      userId: "u1",
+      nangoConnectionId: null,
+    });
     sessionUserId = "u1";
-    await registerKeyless({ id: "srv-keyed-orphan" });
     await createServerHandler({
       id: "srv-keyed-orphan",
       label: "Keyed",
@@ -1450,9 +1643,15 @@ describe("the orphan of a deleted server belongs to its owner, on every road (ci
     keylessRetireFailsOnce = true;
     await deleteServerHandler({ id: "srv-del-orphan" });
     expect(liveIdentities()).toHaveLength(1);
-    // The other person's own row at the same id, created and then deleted.
+    // The other person's own row at the same id, PLACED (the create road
+    // refuses that id since fix leg 4) and then deleted.
+    servers.set("srv-del-orphan", {
+      id: "srv-del-orphan",
+      scope: "user",
+      userId: "u1",
+      nangoConnectionId: null,
+    });
     sessionUserId = "u1";
-    await registerKeyless({ id: "srv-del-orphan" });
     await deleteServerHandler({ id: "srv-del-orphan" });
     const rows = liveIdentities();
     expect(rows).toHaveLength(1);

@@ -35,7 +35,6 @@ import {
   getExternalMcpServerByIdFresh,
   insertExternalMcpServerStrict,
   updateExternalMcpServerGuarded,
-  deleteExternalMcpServerGuarded,
   ExternalMcpServerWriteConflictError,
   saveTwentyConnection,
   disconnectTwentyConnection,
@@ -43,7 +42,9 @@ import {
   type ExternalMcpServerScope,
 } from "@/lib/external-mcp-registry";
 import {
-  reconcileKeylessConnectionIdentityAfterDelete,
+  deleteExternalMcpServerRowWithIdentities,
+  keylessIdentityCollisionAtCreate,
+  keylessIdentityCollisionMessage,
   reconcileKeylessConnectionIdentityAfterSave,
   reconcileOrphanKeylessConnectionIdentity,
 } from "@/lib/external-mcp-keyless-identity";
@@ -481,8 +482,8 @@ export async function createExternalMcpServerAction(formData: FormData) {
         // Touching an existing global row always requires platform admin,
         // regardless of the scope the caller requested.
         await requireAdminSession();
-      } else {
-        // Non-global existing row: owner (same userId) or platform admin only.
+      } else if (existing.scope === "user") {
+        // A PERSONAL row: its owner (same userId) or a platform admin.
         const actorIsAdmin = isPlatformAdmin(session);
         const actorOwnsRow =
           existing.userId !== null && existing.userId === session.user.id;
@@ -496,9 +497,18 @@ export async function createExternalMcpServerAction(formData: FormData) {
         // Preserve the existing owner of a user row on overwrite — an admin edit
         // must never silently reassign ownership to the admin (mirrors the
         // connector-setup handler's `preservedUserId`).
-        if (existing.scope === "user" && scope === "user") {
+        if (scope === "user") {
           preservedUserId = existing.userId;
         }
+      } else {
+        // An existing org / team / workspace row is a SHARED row, never an
+        // actor-owned one: the store carries only `org_id` and `user_id`, so
+        // such a row maps to org-wide visibility whatever `user_id` happens to
+        // hold. Reading "not global" as "personal" let a non-admin whose id sat
+        // in that column overwrite it as their own (cinatra#3485 fix leg 4, the
+        // seventh round). The connector setup handler has always required
+        // platform standing here, and these actions reach the same rows.
+        await requireAdminSession();
       }
       // The compare-and-write guard is the WITNESSED existing scope+owner AND
       // its current connection (cinatra#3485): this write now carries that
@@ -524,6 +534,18 @@ export async function createExternalMcpServerAction(formData: FormData) {
   const identityOrganizationId =
     scope === "user" ? (identityOwnerUserId === session.user.id ? organizationId : null) : organizationId;
   const nangoConnectionId = preservedNangoConnectionId ?? null;
+  // IS THE SUPPLIED ID FREE? (cinatra#3485 fix leg 4, the seventh round.) The
+  // same refusal the connector setup handler makes, on the same rule and
+  // BEFORE the row write: a create at an id another person's live identity
+  // still holds used to be reported as saved while the panel, the workspace
+  // seed and the authority to share it stayed with that person.
+  if (requestedId && !guard) {
+    const collision = await keylessIdentityCollisionAtCreate({
+      serverId: id,
+      identityOwnerUserId: identityOwnerUserId,
+    });
+    if (collision) throw new Error(keylessIdentityCollisionMessage(id));
+  }
   const row = {
     id,
     label: parsed.label,
@@ -592,33 +614,45 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
     });
     redirect(externalMcpRedirectBase());
   }
-  if (server.scope === "global") {
-    await requireAdminSession();
-  } else {
+  if (server.scope === "user") {
+    // A PERSONAL row: its owner or a platform admin.
     const actorIsAdmin = isPlatformAdmin(session);
     const actorOwnsRow =
       server.userId !== null && server.userId === session.user.id;
     if (!actorIsAdmin && !actorOwnsRow) {
       redirect("/not-authorized");
     }
+  } else {
+    // global, org, team or workspace: a SHARED row, never an actor-owned one,
+    // so it takes platform standing to delete. The same rule the connector
+    // setup handler has always applied (cinatra#3485 fix leg 4).
+    await requireAdminSession();
   }
   try {
-    deleteExternalMcpServerGuarded(id, { scope: server.scope, userId: server.userId });
+    // THE ONE DELETE STEP (cinatra#3485 fix leg 4): the stored credential is
+    // revoked, the row is deleted under a guard that witnesses its connection,
+    // and the derived keyless identity is retired after the row is gone. This
+    // road used to remove the row and reconcile only the keyless identity, so a
+    // KEYED server deleted here kept its credential and the identity that mints
+    // its bearer, and its panel survived a delete reported as done.
+    await deleteExternalMcpServerRowWithIdentities({
+      serverId: id,
+      row: {
+        scope: server.scope,
+        userId: server.userId,
+        nangoConnectionId: server.nangoConnectionId,
+      },
+      actorUserId: session.user.id,
+      actorIsAdmin: isPlatformAdmin(session),
+    });
   } catch (err) {
     if (err instanceof ExternalMcpServerWriteConflictError) {
-      // The row changed/vanished under the authorized delete (TOCTOU race) → deny.
+      // The row changed/vanished under the authorized delete (TOCTOU race), or a
+      // concurrent re-key moved the connection this delete witnessed → deny.
       redirect("/not-authorized");
     }
     throw err;
   }
-  // The row is gone, so the identity that drew its panel may not stand: retired
-  // AFTER the row, through the same ONE lifecycle (cinatra#3485).
-  await reconcileKeylessConnectionIdentityAfterDelete({
-    serverId: id,
-    deletedRow: { scope: server.scope, userId: server.userId },
-    actorUserId: session.user.id,
-    actorIsAdmin: isPlatformAdmin(session),
-  });
   redirect(`${externalMcpRedirectBase()}?deleted=1`);
 }
 
