@@ -86,6 +86,13 @@ concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
 
+# Execution jobs use !cancelled(): prerequisite failures still reach their red
+# guards, while a newer PR head can stop old builds and suites. Job-level
+# always() would keep those jobs running despite workflow cancellation and
+# hold the shared concurrency slot. Only the short result fan-ins retain it
+# so selected failed/cancelled prerequisites cannot become a green aggregate.
+# Step-level cleanup and evidence conditions remain independent.
+
 # cinatra#3355 — the committed worker cap for every vitest invocation in this
 # workflow (a workflow-level `env:` is in scope for the steps of every job in
 # the file). The value is the INTERIM worker count cinatra#3355 records, now
@@ -98,55 +105,32 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # detect — compute whether this PR needs heavy validation (`skip`).
-  #
-  # The four required status checks live in THIS workflow. It used to be
-  # `paths-ignore`-gated and was therefore absent on docs-only PRs, leaving each
-  # required check stuck at "Expected — Waiting" and blocking the merge. The
-  # workflow now triggers on every PR; this job emits a single `skip` boolean so
-  # the required jobs green-stub when the PR needs no heavy validation and run
-  # for real otherwise.
-  #
-  # skip = docs-only OR draft:
-  #  - docs-only: EVERY changed file is a docs path. dorny's
-  #    `predicate-quantifier: every` makes the inverse `code` filter match a file
-  #    iff it is a NON-docs file; `code == 'true'` ⇔ ≥1 code file ⇔ {code OR
-  #    mixed} (real checks). A pure-docs PR matches no code file → `code` is
-  #    'false' → docs-only.
-  #  - draft: a draft PR is unmergeable by GitHub, so green-stubbing its required
-  #    checks is safe; marking it ready (ready_for_review) re-runs them for real.
-  #    This keeps noisy draft iteration off the expensive e2e/build path — the
-  #    dominant CI cost on this repo.
-  # On push/tag/dispatch/merge_group the dorny step is skipped, draft is N/A, and
-  # `skip` defaults to false (real run).
-  #
-  # No checkout: dorny reads the PR's changed files from the REST API (needs
-  # `pull-requests: read`). Fast (~5s), no services.
-  # ---------------------------------------------------------------------------
+  # detect — classify the complete PR inventory before paying for builds.
+  # Unknown/shared inputs retain every gate. Drafts keep type/unit feedback;
+  # expensive runtime jobs remain deferred until ready_for_review. Push, queue
+  # and manual events always retain the full check set.
   detect:
-    name: Detect skip — docs-only or draft (build-image)
+    name: Detect CI impact (build-image)
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      # skip the heavy/required jobs when the PR is docs-only OR a draft. Draft
-      # is N/A on push/merge_group (github.event.pull_request is null -> false).
-      skip: ${{ github.event_name == 'pull_request' && (github.event.pull_request.draft == true || steps.filter.outputs.code != 'true') }}
+      skip: ${{ steps.impact.outputs.skip }}
+      skip_unit: ${{ steps.impact.outputs.skip_unit }}
+      skip_feedback: ${{ steps.impact.outputs.skip_feedback }}
+      skip_runtime: ${{ steps.impact.outputs.skip_runtime }}
+      skip_notifications: ${{ steps.impact.outputs.skip_notifications }}
+      skip_agents: ${{ steps.impact.outputs.skip_agents }}
     steps:
-      - id: filter
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        with:
-          predicate-quantifier: 'every'
-          filters: |
-            code:
-              - '**'
-              - '!docs/**'
-              - '!**/*.md'
-              - '!AGENTS.md'
-              - '!CLAUDE.md'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select work from the complete changed-file inventory
+        id: impact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CI_PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: node scripts/ci/ci-impact.mjs
 
   # ---------------------------------------------------------------------------
   # actions-pin-gate — supply-chain recurrence guard (FORMAT ONLY).
@@ -167,7 +151,7 @@ jobs:
   actions-pin-gate:
     name: Actions SHA-pin gate
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    if: ${{ needs.detect.outputs.skip_feedback != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
@@ -183,8 +167,8 @@ jobs:
       - name: Pin-format gate
         run: node scripts/audit/actions-pinned-gate.mjs
 
-      - name: Parser tests
-        run: node --test scripts/audit/__tests__/actions-pinned-gate.test.mjs
+      - name: Parser and impact-selection tests
+        run: node --test scripts/audit/__tests__/actions-pinned-gate.test.mjs scripts/ci/__tests__/ci-impact.test.mjs
 
   # PR gate for typecheck + unit tests.
   # `pnpm test` excludes integration tests via vitest.config.ts; the
@@ -204,13 +188,13 @@ jobs:
     # successful — so the build runs `if: always()` and the guard turns a failed
     # `test` into a definitive RED build, never a passing skip.) A green
     # "Build and publish image" result therefore provably implies a green `test`.
-    # The two e2e jobs intentionally run independently (`if: always()`, decoupled
+    # The two e2e jobs run independently (`if: !cancelled()`, decoupled
     # from publish cadence); they validate RUNTIME, so a type error there either
     # breaks runtime (e2e fails) or is caught here (and the build guard fails).
     # The merge gate is the build result. `needs: detect` is mandatory — without it
     # the `skip` expression has no value and the gate silently no-ops.
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    if: ${{ needs.detect.outputs.skip_feedback != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     # Budget rationale for EVERY job on the self-hosted classes
     # (CI_RUNNER_HEAVY / CI_RUNNER_POOL / CI_RUNNER_PIXEL), cinatra#3364:
@@ -261,6 +245,7 @@ jobs:
       # Default vitest run; vitest.config.ts excludes *.integration.test.ts
       # from this run. The integration tier has its own job below.
       - name: Unit tests (packages/agents)
+        if: ${{ needs.detect.outputs.skip_unit != 'true' }}
         run: cd packages/agents && pnpm test
 
   # Full packages/skills unit suite (#1359). Runs in its OWN top-level job —
@@ -438,13 +423,13 @@ jobs:
   # tests deliberately RED until run.orgId is wired to actor.organizationId.
   # Drop the --exclude once those tests should gate CI.
   #
-  # REQUIRED status check on `main`. Always runs (`if: always()`) so the check
-  # always reports; the `detect` guard fails it RED if detection broke; a
-  # docs-only PR green-stubs in seconds.
+  # REQUIRED status check on `main`. Runs unless the workflow is cancelled,
+  # including after a prerequisite failure. The `detect` guard fails it RED
+  # if detection broke; a docs-only PR green-stubs in seconds.
   rbac-authz-unit:
     name: RBAC authz unit tests
     needs: detect
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 24
     steps:
@@ -495,7 +480,7 @@ jobs:
   context-resolve-route-shape:
     name: context-resolve route response shape
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    if: ${{ needs.detect.outputs.skip_unit != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     timeout-minutes: 23
     steps:
@@ -610,7 +595,7 @@ jobs:
     # job closes with this exact pattern). Docs-only and draft PRs (detect
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
@@ -989,14 +974,14 @@ jobs:
   # carve-outs: every entry names its reason, and shrinking this list is a
   # follow-up, not a silent drift.
   #
-  # The carve-out does NOT hide the debt: step (2) below runs the WHOLE tier
-  # (all 31 files, no exclude) informationally on every run, so the 8 red files
+  # The carve-out does NOT hide the debt: a scheduled diagnostic runs the WHOLE tier
+  # (all files, no exclude) in agents-integration-diagnostic.yml, so known-red files
   # are named in the log each time — a green job here can never mean "the tier
   # is fine", only "the gated set did not regress".
   #
-  # RUNTIME ADDED TO CI (measured in CI on this branch, plus locally on a fresh
+  # HISTORICAL BASELINE before moving the informational pass (measured on a fresh
   # postgres:18 + redis:8): gated step ~52 s, informational whole-tier step ~68 s,
-  # two DDL provisioning passes ~2 s each in CI. The whole job measured 3.0 min in
+  # two DDL provisioning passes ~2 s each in CI. The prior whole job measured 3.0 min in
   # CI before the serialisation flag and lands around 4-5 min with it — compare the
   # sibling `extension-lifecycle-db-tests` DB job at 1.8 min. It is a NEW PARALLEL
   # job and deliberately NOT a `build` prerequisite, so it adds nothing to the
@@ -1005,7 +990,8 @@ jobs:
   agents-integration-db:
     # The name says GATED SET, not "the integration tier", on purpose: a green
     # result here means "the 23-file gated set did not regress", never "all 31
-    # files pass". The full-tier report is the informational step (2).
+    # files pass". The full-tier report now runs in the scheduled diagnostic.
+    # Keep the existing public check name; diagnostics now have their own run.
     name: Agents integration — gated set (+ full-tier report)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -1193,17 +1179,6 @@ jobs:
         # the canonical builder is TypeScript and imports `@/…`.
         run: node --import tsx scripts/ci/apply-store-schema.mjs
 
-      - name: Provision a second store schema for the informational whole-tier pass
-        # The two suite steps below get their OWN schema each. The suites write
-        # real rows and several self-skip when a fixture they expect to create
-        # already exists, so re-running the tier against a schema a previous
-        # step already populated turns 7 real assertions into silent skips —
-        # the exact vacuity class this job exists to remove. One schema per
-        # pass keeps BOTH runs pristine and their numbers comparable.
-        env:
-          SUPABASE_SCHEMA: cinatra_full_tier
-        run: node --import tsx scripts/ci/apply-store-schema.mjs
-
       # (1) THE BLOCKING SIGNAL — the gated set. `--exclude` entries are the
       # documented known-red carve-out in this job's header; do not add one
       # without a reason there. A regression in any of these 23 files reds this
@@ -1214,14 +1189,14 @@ jobs:
       # the store bootstrap DDL in their own `beforeAll`. Run concurrently against
       # ONE schema, two forks take `AccessExclusiveLock` on the same shared
       # `public` objects and Postgres kills one with `40P01 deadlock detected` —
-      # observed exactly once in CI on this branch (run 30507842403,
+      # recorded historically in CI (run 30507842403,
       # lifecycle-interceptions-s0), which would have made this gate a flaky one.
       # Serialising the FILES removes the concurrency that causes it. Per-file
       # process isolation is UNAFFECTED: the base config's `pool: "forks"` +
       # vitest's default `isolate: true` still give every file a fresh child
       # process (the module-cache pollution that config warns about needs a
       # SHARED fork, which this flag does not create) — verified by three green
-      # serialised runs, and by the whole-tier step below reproducing its recorded
+      # serialised runs, and by the historical whole-tier pass reproducing its recorded
       # failure baseline exactly. Cost is small: 52 s serialised, and the CI
       # parallel run measured 52 s too, since the DB is the bottleneck either way.
       - name: Agents integration tests — gated set (packages/agents)
@@ -1239,51 +1214,35 @@ jobs:
           --exclude '**/trigger-gate-integration.integration.test.ts'
           --exclude '**/trigger-handlers.integration.test.ts'
           --exclude '**/trigger-schedule.integration.test.ts'
+          --reporter=default
+          --reporter=json
+          --outputFile "$RUNNER_TEMP/agents-integration-gated.json"
 
-      # (2) THE WHOLE TIER, INFORMATIONAL — every one of the 31 files, including
-      # the 8 carved out above, with NO filter and NO exclude. Never fails this
-      # job (same convention as the archive-acceptance-gate `--strict` step
-      # below). Two reasons it is here rather than omitted:
-      #   - a green step (1) alone would advertise "the integration tier runs"
-      #     while silently dropping 89 tests — precisely the vacuity class this
-      #     issue is about, and the one scripts/audit/ci-pinned-tests-exist.mjs
-      #     exists to prevent elsewhere. This step keeps the debt VISIBLE in the
-      #     log of every run, with the exact failing files named, so shrinking
-      #     the carve-out cannot be quietly forgotten;
-      #   - it is the honest artifact for the issue's acceptance criterion "a CI
-      #     run's log shows the integration tier executing, not skipping": all
-      #     31 files / 277 tests, 0 skipped.
-      # Runs against its OWN schema (see the provisioning step above) so step (1)
-      # cannot have pre-populated fixtures out from under it. `!cancelled()` (not
-      # `always()`) so it still reports after a red step (1) but honours a
-      # workflow cancellation.
-      #
-      # The warning below deliberately does NOT assert a cause: a non-zero exit
-      # here can be the known-red assertion failures, but it can equally be a
-      # vitest crash, an OOM, a config error, or MORE failures than the recorded
-      # baseline. It reports the observed exit code and points at the baseline for
-      # comparison rather than explaining the failure away.
-      - name: Agents integration tests — WHOLE tier incl. known-red files (informational; never blocking)
-        if: ${{ !cancelled() }}
-        working-directory: packages/agents
-        env:
-          SUPABASE_SCHEMA: cinatra_full_tier
+      - name: Report gated integration counts
+        if: ${{ always() }}
         run: |
-          set +e
-          pnpm exec vitest run --config vitest.integration.config.ts --no-coverage --no-file-parallelism
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Whole-tier packages/agents integration run exited $status. Recorded baseline for this branch (cinatra#2226): 31 files / 277 tests, 0 skipped, 8 files / 44 tests failing — pre-existing test-health debt named in this job's header. COMPARE the summary above against that baseline: a WORSE result (more failing files/tests, a different file, a crash or timeout rather than assertion failures) is a real finding and should be investigated, not assumed pre-existing. This step never fails the job; the gated step above is the blocking signal."
-          fi
-          exit 0
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const file = path.join(process.env.RUNNER_TEMP, 'agents-integration-gated.json');
+          let summary = 'Gated integration: no completed JSON report (see the blocking test step).';
+          if (fs.existsSync(file)) {
+            const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const files = report.testResults ?? [];
+            summary = `Gated integration: ${files.length} files; ${report.numPassedTests}/${report.numTotalTests} tests passed, ${report.numFailedTests} failed, ${report.numPendingTests} skipped.`;
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
+          NODE
+
+      # The full tier (including known-red files) runs daily and on demand in
+      # agents-integration-diagnostic.yml. Every blocking suite stays here.
 
       # cinatra#3067 — the AG-UI durable-resume tier, wired HERE because this is
       # where a real Redis already runs: the `redis:8` service declared above,
       # health-checked, with REDIS_URL set at job level so this step cannot read
       # an unset value. The tier is a ROOT config (vitest/integration/3067.config.ts),
       # so this step runs from the repository root and carries NO
-      # `working-directory:` — unlike the two packages/agents steps above.
+      # `working-directory:` — unlike the packages/agents step above.
       # BLOCKING on purpose: scripts/audit/ci-pinned-tests-exist.mjs direction 4
       # credits a tier only to a step that can turn a check red, and the defect
       # class this suite measures — a durable log that replays out of order, or
@@ -1339,11 +1298,10 @@ jobs:
   # `needs:` lists every job a manifest row's ciDependency currently names,
   # so this job structurally depends on each of them — the hard CI-graph
   # edge Decision 1's `--strict` mode looks for when it parses this workflow
-  # file's own YAML. `always()` below no longer means this job's own result
-  # is unhooked from those jobs' pass/fail — see DEPENDENCY-HONEST below for
-  # why that used to be true, why it was a bug, and the fix. `always()` now
-  # exists only so a FAILED prerequisite produces a definitive job FAILURE
-  # here rather than a silent SKIP, the same reason the `build` job uses it.
+  # file's own YAML. `!cancelled()` admits a FAILED prerequisite so its guard
+  # produces a definitive RED rather than a silent SKIP. It also prevents
+  # this dependent job from starting fresh work after workflow cancellation.
+  # The short `build` fan-in separately checks every selected result.
   #
   # `agents-integration-db` (cinatra#1943 P1-CI follow-up) — added so a row
   # whose ciDependency names that job (the two live-Postgres acceptance rows
@@ -1414,7 +1372,7 @@ jobs:
     # required check as successful (the same hole `build`'s own comment
     # names). Docs-only and draft PRs (`detect` succeeds with `skip: true`)
     # still skip this job.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
@@ -1796,7 +1754,7 @@ jobs:
     # job closes with this exact pattern). Docs-only and draft PRs (detect
     # succeeded + skip) still skip this job — the documented skip-as-success
     # path is unchanged.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_POOL || '"ubuntu-latest"') }}
     # Least privilege, tightened with cinatra#2288 slice 2 and matching what
     # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
@@ -2870,20 +2828,20 @@ jobs:
   # covering permissions, role, and extension authorization surfaces in a real
   # hydrated browser.
   # Intentionally NOT a `needs:` of `build` — image publish stays decoupled from
-  # browser-test cadence. This is a REQUIRED status check on `main`: it always
-  # runs (`if: always()`) so the check reports on every PR, the `detect` guard
+  # browser-test cadence. This is a REQUIRED status check on `main`: it runs
+  # unless the workflow is cancelled, including after failure. The `detect` guard
   # fails it RED if detection broke, and a docs-only PR green-stubs in seconds
   # with no service containers started.
   perpetual-extension-suites:
     name: Perpetual extension suites (discovery gate shard)
     needs: detect
-    # Same always()+guard shape as every required-adjacent job here: a failed
+    # Same cancellation-aware guard shape as execution jobs here: a failed
     # `detect` yields a definitive RED via the guard, never a silent skip;
     # docs-only/draft PRs skip. Split out of perpetual-core so the ~5-minute
     # suite battery (44 companion suites, 2,149 tests — see the step's comment)
     # runs beside the ratchet gates instead of after them; the REQUIRED context
     # is the `perpetual-loops-invariants` fan-in below, which needs both shards.
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     permissions:
       contents: read
@@ -2959,7 +2917,7 @@ jobs:
       # Rides THIS job for the reason already recorded above for the seed-pack
       # tier: it already has the PINNED extension tree on disk
       # (clone-extensions) and node_modules installed, and it is a REQUIRED
-      # status check whose `always()` + hard-fail guard shape means this gate
+      # status check whose `!cancelled()` + hard-fail guard shape means this gate
       # inherits "definitive, never a silent skip" rather than needing a new
       # required context.
       - name: Extension suites — discovery gate (every materialized suite)
@@ -2992,7 +2950,7 @@ jobs:
   e2e-rbac:
     name: RBAC browser e2e
     needs: detect
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     # Opt-in larger-runner lever — same mechanism the `build` job already uses.
     # Unset keeps `ubuntu-latest` (zero-risk default). Set the org/repo variable
     # CI_BUILD_RUNNER (e.g. `ubuntu-latest-4-cores`, 16GB) AFTER confirming
@@ -3007,7 +2965,7 @@ jobs:
     timeout-minutes: 45
     services:
       postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -3024,7 +2982,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' && 'redis:8' || '' }}
         ports:
           # Container port only: the runner publishes it on a RANDOM free
           # host port, read back from `job.services.redis.ports` in this
@@ -3062,40 +3020,40 @@ jobs:
           exit 1
 
       - name: Docs-only stub
-        if: ${{ needs.detect.outputs.skip == 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime == 'true' }}
         run: echo "Docs-only or draft PR — reporting RBAC browser e2e as a green stub (the real suite runs on code/mixed PRs)."
 
       # Carries the same skip guard every real step below does: on a
       # docs-only run the service images are the empty string, no container
       # starts, and there is no mapped port to read (cinatra#3267).
       - name: Export the mapped service ports
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: |
           {
             echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
             echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
           } >> "$GITHUB_ENV"
 
-      - if: ${{ needs.detect.outputs.skip != 'true' }}
+      - if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
       - name: Set up Node.js
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'pnpm'
 
       - name: Clone companion extension repos
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: ./.github/actions/clone-extensions
 
       - name: Install dependencies
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: pnpm install --frozen-lockfile
 
       # Cache the Playwright browser download (~175 MiB chromium + ffmpeg +
@@ -3103,7 +3061,7 @@ jobs:
       # lockfile hash so a version bump invalidates the cache. Saves
       # 30-90s per e2e job when warm.
       - name: Cache Playwright browsers
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -3111,7 +3069,7 @@ jobs:
           restore-keys: playwright-${{ runner.os }}-
 
       - name: Install Playwright Chromium
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: pnpm exec playwright install --with-deps chromium
 
       # Reuse Next.js's incremental build cache across runs. Keyed by
@@ -3119,7 +3077,7 @@ jobs:
       # by the most-recent matching restore-key. Saves 1-3 min on `pnpm build`
       # when warm.
       - name: Cache Next.js build cache
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .next/cache
@@ -3129,7 +3087,7 @@ jobs:
             nextjs-prod-${{ runner.os }}-
 
       - name: Provision Better Auth tables (public schema)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         # The cinatra schema DDL is owned by ensurePostgresSchema (runs on
         # first server query), but Better Auth's tables in `public.*`
         # (user/session/member/organization/...) are managed separately. On a
@@ -3167,7 +3125,7 @@ jobs:
         # detonation entry-66 root-caused -- >33G and still climbing) fills any
         # swap and still reclaims the runner; that class needs the content fix,
         # not more swap.
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' && runner.environment == 'github-hosted' }}
         run: |
           set -uxo pipefail
           # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
@@ -3204,7 +3162,7 @@ jobs:
           exit 0
 
       - name: Build app (production)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         # Run the suite against a production build, not `pnpm dev`. Turbopack
         # dev compiles each route cold on first hit, which made the suite
         # exhaust runner resources mid-run (the heaviest authorization test
@@ -3230,7 +3188,7 @@ jobs:
         run: pnpm build
 
       - name: Start production server on port 3000
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         # next.config sets `output: "standalone"`, so `next start` won't serve;
         # run the standalone server exactly like the Dockerfile (server.js +
         # static/public copied alongside it).
@@ -3241,7 +3199,7 @@ jobs:
           echo "prod server launched as PID $!"
 
       - name: Wait for server ready (prod boot + DB schema provisioning)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         # The instrumentation hook provisions the cinatra schema on first query;
         # poll /api/auth/get-session which is light + cached after first hit.
         run: |
@@ -3264,7 +3222,7 @@ jobs:
         # job-level cancellation/timeout skips even `always()` cleanup, which
         # left earlier runs with no diagnostics. The captured exit code is
         # asserted at the end so the job still fails on test failure.
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         id: e2e
         env:
           E2E_BASE_URL: http://localhost:3000
@@ -3283,7 +3241,7 @@ jobs:
         # — failure()/cancelled() are both false when a step is killed inside an
         # otherwise-successful workflow, which skipped these before. Also gated on
         # a real (non-docs) run so the stub path uploads nothing.
-        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rbac-playwright-report
@@ -3293,7 +3251,7 @@ jobs:
           retention-days: 7
 
       - name: Upload dev server log
-        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rbac-dev-server-log
@@ -3304,7 +3262,7 @@ jobs:
         # Fail the job on test failure / timeout, after artifacts are uploaded.
         # A heavy step (reads steps.e2e.outputs.code): gated on a real run so the
         # docs-only stub path does not see an empty code and go falsely RED.
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: |
           code="${{ steps.e2e.outputs.code }}"
           if [ "$code" != "0" ]; then
@@ -3316,7 +3274,7 @@ jobs:
   chat-hitl-held-turn-e2e:
     name: Chat-HITL held-turn dev-runtime e2e
     needs: detect
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     # HOSTED, not the E2E class the sibling e2e jobs take: this flow's web
     # server does not start on the shared self-hosted pool — its boot log ends on
     # an extension migration the pool's database role refuses — while it starts
@@ -3337,7 +3295,7 @@ jobs:
       # Conditional images, the required-check idiom this workflow already uses:
       # a docs-only run must reach its green stub without provisioning sidecars.
       postgres:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' && 'postgres:18' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -3354,7 +3312,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' && 'redis:8' || '' }}
         ports:
           # Container port only: the runner publishes it on a RANDOM free
           # host port, read back from `job.services.redis.ports` in this
@@ -3433,29 +3391,29 @@ jobs:
           exit 1
 
       - name: Docs-only stub
-        if: ${{ needs.detect.outputs.skip == 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime == 'true' }}
         run: echo "Docs-only or draft PR — reporting the chat-HITL held-turn e2e as a green stub (the real flow runs on code/mixed PRs)."
 
       # Carries the same skip guard every real step below does: on a
       # docs-only run the service images are the empty string, no container
       # starts, and there is no mapped port to read (cinatra#3267).
       - name: Export the mapped service ports
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: |
           {
             echo "SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres"
             echo "REDIS_URL=redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}"
           } >> "$GITHUB_ENV"
 
-      - if: ${{ needs.detect.outputs.skip != 'true' }}
+      - if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
       - name: Set up Node.js
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
@@ -3467,15 +3425,15 @@ jobs:
       # boot at all, the recommendation scorer offers no candidate, and the run
       # dispatches UNHELD — a red with a misleading cause.
       - name: Clone companion extension repos
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: ./.github/actions/clone-extensions
 
       - name: Install dependencies
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: pnpm install --frozen-lockfile
 
       - name: Cache Playwright browsers
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -3483,11 +3441,11 @@ jobs:
           restore-keys: playwright-${{ runner.os }}-
 
       - name: Install Playwright Chromium
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Provision Better Auth tables (public schema)
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         # The `cinatra` schema is owned by `ensurePostgresSchema` (first server
         # query); Better Auth's `public.*` tables are not, and without them the
         # instrumentation hook fails with `relation "public.user" does not exist`
@@ -3536,7 +3494,7 @@ jobs:
       # Headroom is what this job can give, so it gives it — the wp-drupal-uat
       # recipe, unchanged in intent. Nothing here touches what the flow asserts.
       - name: Reclaim runner disk (so the swapfile below has room)
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' && runner.environment == 'github-hosted' }}
         # Same reclaim the UAT gate does before enlarging swap. Disk was never
         # this job's constraint; this exists only so the 16G file below fits with
         # room to spare.
@@ -3545,7 +3503,7 @@ jobs:
           df -h /
 
       - name: Enlarge swap + record the memory baseline
-        if: ${{ needs.detect.outputs.skip != 'true' && runner.environment == 'github-hosted' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' && runner.environment == 'github-hosted' }}
         # Turns the cliff into a slowdown the suite can still finish and REPORT
         # THROUGH, which is the part that matters for a required gate: a slow red
         # names a failing test, a reclaimed runner names nothing. The baseline is
@@ -3579,7 +3537,7 @@ jobs:
       # root, which redirects into a 404 wizard hop on a bypassed fresh instance),
       # so there is nothing to build, start or poll in this job.
       - name: Run the chat-HITL held-turn Playwright flow
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         id: e2e
         env:
           E2E_CHAT_HITL_PORT: "3126"
@@ -3615,7 +3573,7 @@ jobs:
           exit 0
 
       - name: Upload Playwright report
-        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chat-hitl-held-turn-playwright-report
@@ -3632,7 +3590,7 @@ jobs:
       # alone adopts and canonicalizes AC-15 records; this job produces runtime
       # evidence and hands it over.
       - name: Upload provisional dev-runtime capture evidence
-        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chat-hitl-held-turn-provisional-captures
@@ -3642,7 +3600,7 @@ jobs:
           include-hidden-files: true
 
       - name: Assert the chat-HITL held-turn flow passed
-        if: ${{ needs.detect.outputs.skip != 'true' }}
+        if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
         run: |
           code="${{ steps.e2e.outputs.code }}"
           if [ "$code" != "0" ]; then
@@ -3743,22 +3701,22 @@ jobs:
       # pool and schema lifecycle never touch the next. Same convention as the
       # sibling `extension-lifecycle-db-tests` job's per-suite steps.
       - name: Lifecycle-moment triple — real-DB tier (cinatra#2928, W2a)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:lifecycle-moment
 
       - name: Lent-action grant ledger — real-DB tier (cinatra#2932, W5a)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:lent-action-grant
 
       - name: Named-agent start — real-DB tier (cinatra#2935, W5d)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:named-agent-start
 
       - name: Run-window conversation — real-DB tier (cinatra#2933, W5b)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:run-window
 
@@ -3770,7 +3728,7 @@ jobs:
       # same convention as the four tiers above, so it cannot join the class of
       # root tiers that run nowhere.
       - name: Non-file revision reader — real-DB tier (cinatra#3027, lifecycle-c W3)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:lifecycle-c-w3
 
@@ -3785,7 +3743,7 @@ jobs:
       # Wired here on arrival, beside its siblings, so it cannot join the class
       # of root tiers that run nowhere.
       - name: The review floor — real-store tier (cinatra#3080, epic #3023)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:review-floor
 
@@ -3797,7 +3755,7 @@ jobs:
       # describes or not at all. Wired here on arrival, in the same job and by
       # the same convention as the tiers above.
       - name: The editor's save with an expected base — real-DB tier (cinatra#3026, lifecycle-c W2)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:lifecycle-c-w2
 
@@ -3811,7 +3769,7 @@ jobs:
       # somebody adds a step, so here it is, next to its siblings, watched by
       # direction 4 of scripts/audit/ci-pinned-tests-exist.mjs.
       - name: Extension tables, data tool and artifact reads — real-DB tier (cinatra#3031, W7)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:extension-tables
 
@@ -3826,7 +3784,7 @@ jobs:
       # Wired here on arrival, by the same convention as the tiers above, so it
       # cannot join the class of root tiers that run nowhere.
       - name: Object-backed contract + typed promotion — real-DB tier (cinatra#3028, lifecycle-c W4)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:lifecycle-c-w4
 
@@ -3844,7 +3802,7 @@ jobs:
       # here on arrival, by the same convention as the tiers above, so it cannot
       # join the class of root tiers that run nowhere.
       - name: Run folder pickup + file bindings + mid-run revision — real-DB tier (cinatra#3030, lifecycle-c W6)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:run-folder
 
@@ -3860,7 +3818,7 @@ jobs:
       # UNIQUE INDEX. Wired here on arrival, by the same convention as the tiers
       # above, so it cannot join the class of root tiers that run nowhere.
       - name: The image tool — real-DB tier (cinatra#3032, lifecycle-c W8)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:lifecycle-c-w8
 
@@ -3874,7 +3832,7 @@ jobs:
       # widget thread through Confirm — so leaving it unrun would leave the
       # defect it closes free to come back silently.
       - name: Widget schedule grant — real-DB tier (cinatra#3052)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: pnpm test:widget-schedule-grant
 
@@ -3922,7 +3880,7 @@ jobs:
       # such a reader, its direction 5 being what keeps THIS step from being
       # quietly deleted — and a red e2e above must not hide a red gate.
       - name: One-card gate — every lifecycle card kind drawn by a named owner (cinatra#2936, W6)
-        if: ${{ !cancelled() && needs.detect.outputs.skip != 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
         shell: bash
         run: |
           node scripts/audit/chat-hitl-one-card-gate.mjs
@@ -3939,7 +3897,7 @@ jobs:
     # unit job still blocks every image publish including `latest`; the only
     # new cost is a discarded image build on a push whose unit tier fails.
     needs: [detect]
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.skip_runtime != 'true') }}
     # HOSTED, not the E2E class: the prod-boot e2e step below RUNS the image this
     # job builds a step earlier. The build step already asks for `load: true`,
     # and on the self-hosted pool's docker-container buildx driver the image
@@ -4197,20 +4155,17 @@ jobs:
   # it exactly as the old `build` did.
   build:
     needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e]
-    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    if: ${{ always() }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     permissions:
       contents: read
     timeout-minutes: 5
     steps:
-      - name: Gate — image + unit tier + held-turn e2e must all have succeeded
-        run: |
-          fail=0
-          for pair in "detect=${{ needs.detect.result }}" "image=${{ needs.image.result }}" "test=${{ needs.test.result }}" "skills-unit=${{ needs['skills-unit'].result }}" "a2a-unit=${{ needs['a2a-unit'].result }}" "execution-plane-unit=${{ needs['execution-plane-unit'].result }}" "package-unit-suites=${{ needs['package-unit-suites'].result }}" "hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}" "chat-hitl-held-turn-e2e=${{ needs['chat-hitl-held-turn-e2e'].result }}"; do
-            case "$pair" in *"=success") ;; *) echo "::error::prerequisite not green: $pair"; fail=1;; esac
-          done
-          [ "$fail" = 0 ] && echo "image + unit tier + held-turn e2e all green"
-          exit "$fail"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Gate every selected prerequisite and explain intentional skips
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci/ci-result-gate.mjs
 
   publish-nonrelease-image:
     name: Publish image (non-release)
@@ -4266,9 +4221,70 @@ jobs:
             type=sha,format=long,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # Pure cache re-export — `build` populated type=gha,mode=max, so no layer
-      # is rebuilt. Identical build-args (CI=true) to the load build keep the
-      # cache hit total.
+      # A cache miss can rebuild this image (for example, producer and consumer
+      # ran on different hosts). Keep hosted-runner headroom even on that path.
+      - name: Add publish build swap (GitHub-hosted only)
+        # Cold-cache OOM fix (issue #1758 follow-up, folded into #1759). The
+        # docker-buildx build below runs `pnpm build` (Turbopack) INSIDE buildkit;
+        # a COLD `next build` peaks ~33G, above the default runner's 15.8G RAM +
+        # ~3G stock swap, so buildkit is reclaimed mid-compile. The failing head-
+        # of-lane run logged `Creating an optimized production build ...` ->
+        # `[ELIFECYCLE] Command failed.` (118.9s) -> `ResourceExhausted: ... pnpm
+        # build did not complete successfully: cannot allocate memory` (run
+        # 29612773246, `build` job). #1757 DROPPED this job's swapfile (see the
+        # prune step above) because PR #1746's 20G swapfile shared the root disk
+        # buildkit writes its layers + mode=max gha cache to and ENOSPC-killed
+        # #1756 (~6G left after a 9.4G swapfile, with NO prune). Both conditions
+        # behind that ENOSPC are gone now: (1) the prune above runs FIRST and
+        # reclaims ~23G (this run: / 19G->42G avail), and (2) this step sizes the
+        # swapfile at min(20G, free-12G) on the ROOMIER of / and the /mnt temp
+        # disk, so it ALWAYS leaves >=12G free on the chosen disk. On a roomy
+        # runner (~96G avail post-prune) a 20G swapfile leaves ~76G, above the
+        # ~73G baseline docker builds were historically green under, so #1757's
+        # ENOSPC structurally cannot recur — while 15.8G RAM + 20G swap (~35.8G)
+        # clears the ~33G cold peak. Byte-identical best-effort/fail-open script
+        # to the four memory-bound jobs' swap step (subshell-guarded, partial-
+        # file cleanup on failure, swapon --show/df -h diagnostics); GitHub-hosted
+        # runners ONLY (a self-hosted runner brings its own memory and cleanup,
+        # and this step's tools are not on its path).
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          set -uxo pipefail
+          # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
+          # if/else makes it best-effort — any failure exits the step 0 with a warning.
+          # Disk-aware: pick the roomier of / and the /mnt temp disk, cap the
+          # size to what fits behind a 12G disk margin, and ALWAYS remove a
+          # partial file on failure — a swapfile that fills the disk kills the
+          # build on ENOSPC, strictly worse than no swap.
+          # Genuinely best-effort from here: +e (Actions invokes bash -e) so no
+          # discovery/diagnostic hiccup can fail the build; explicit exit 0 at
+          # the end. The && chain still gates the success path; every var the
+          # arithmetic reads is defaulted so set -u cannot abort either.
+          set +e
+          target=/
+          free_kb=$(df -Pk / 2>/dev/null | awk 'NR==2{print $4}'); free_kb=${free_kb:-0}
+          if [ -d /mnt ]; then
+            mnt_kb=$(df -Pk /mnt 2>/dev/null | awk 'NR==2{print $4}'); mnt_kb=${mnt_kb:-0}
+            if [ "$mnt_kb" -gt "$free_kb" ]; then target=/mnt; free_kb=$mnt_kb; fi
+          fi
+          SWAPFILE="${target%/}/swapfile-ci-build"
+          size_kb=$(( free_kb - 12*1024*1024 )); want_kb=$(( 20*1024*1024 ))
+          if [ "$size_kb" -gt "$want_kb" ]; then size_kb=$want_kb; fi
+          if [ "$size_kb" -lt $(( 2*1024*1024 )) ]; then
+            echo "::notice::CI build swap skipped — under 2G swap headroom on $target (free: $(( free_kb / 1024 / 1024 ))G)"
+          elif { sudo fallocate -l "${size_kb}K" "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=$(( size_kb / 1024 )); }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show || true; free -h || true; df -h "$target" || true
+          else
+            echo "::warning::CI build swap setup failed — removing any partial swapfile and proceeding without extra swap (today's behavior)"
+            sudo rm -f "$SWAPFILE" || true
+          fi
+          exit 0
+
+      # Identical build arguments preserve cache compatibility. A missing cache
+      # still performs a real build and is covered by the memory provision above.
       - name: Push image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -4677,7 +4693,7 @@ jobs:
   presence-degraded-build:
     name: Presence-degraded build (required-only universe)
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     # Long-pole build job: 31 = the measured worst setup phase on the
     # self-hosted classes (17) + this job's longest measured post-install build

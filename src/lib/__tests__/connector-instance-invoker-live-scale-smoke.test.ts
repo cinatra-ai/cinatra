@@ -17,6 +17,7 @@ import {
 } from "@/lib/connector-instance-mcp-transport";
 import { createConnectorInstanceSnapshotLoader } from "@/lib/connector-instance-snapshot-loader";
 import type { InstanceToolPolicyRecord } from "@cinatra-ai/mcp-server/instance-tool-policy";
+import { runWithPreparedMcpClients } from "./helpers/prepared-mcp-clients";
 
 // cinatra#2024 (S9 program acceptance) — item A / design §3 / D2: the LIVE
 // half of the M1 governed-invoker provider-scale proof. PR #2189 (S4/#2019's
@@ -208,12 +209,15 @@ describe.skipIf(!LIVE)(
           .slice(0, CONCURRENT_SAMPLE_SIZE);
         expect(candidateNames.length).toBe(CONCURRENT_SAMPLE_SIZE);
 
-        const results = await Promise.all(
-          candidateNames.map((name) =>
-            invokeConnectorInstanceTool(
-              { connectorKey: "wordpress", toolName: name, serverId: SCALE_SERVER_ID, args: {}, actor },
-              deps,
-            ),
+        // The pinned adapter's same-user session map has non-atomic writes.
+        // Prepare the REAL sessions sequentially, preserve all nine concurrent
+        // governed invocations, and defer session deletion until they settle.
+        const results = await runWithPreparedMcpClients(
+          { endpoint: endpointFor(SCALE_SERVER_ID), authHeader },
+          candidateNames.length,
+          (clientFactory, index) => invokeConnectorInstanceTool(
+            { connectorKey: "wordpress", toolName: candidateNames[index]!, serverId: SCALE_SERVER_ID, args: {}, actor },
+            { ...deps, callWireTool: (input) => callConnectorInstanceMcpTool({ ...input, clientFactory }) },
           ),
         );
         results.forEach((result, i) => {
