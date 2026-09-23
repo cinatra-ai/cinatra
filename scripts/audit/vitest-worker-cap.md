@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 18 workflow files carry a test-runner step;
-11 of them are governed. 135 invocations:
-94 governed, 12 hosted-pinned,
+11 of them are governed. 136 invocations:
+95 governed, 12 hosted-pinned,
 20 node:test, 8 playwright,
 1 extension-suite-gate.
 
@@ -248,6 +248,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | skill-packaging-gate.yml | tests | name%3ARun%20verdict%20%2B%20agreement-pin%20tests | 122 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | trusted-read-scale-smoke.yml | scale-smoke | name%3ARun%20the%20bounded%20hosted%20live%20proof%20series | 196 | ubuntu-latest | vitest | hosted-pinned | none |
 | validate-agents.yml | validate-runtime-invariants | name%3ARun%20hermetic%20runtime-invariants%20vitest | 157 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| validate-agents.yml | validate-runtime-invariants | name%3APin-advance%20host-tool%20check%20unit%20tests | 201 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | works-after-proof.yml | proof | name%3AUnit%20tests%20(works-after%20static%20invariants) | 320 | CI_RUNNER_E2E | node:test | node:test | none |
 | wp-mcp-gateway-capture.yml | capture | name%3ARun%20equivalence%20suite%20(four%20VERIFY%20verdicts) | 212 | CI_RUNNER_E2E | node:test | node:test | none |
 | wp-mcp-gateway-capture.yml | capture | name%3ARun%20repair%20round-trip%20suite%20(cinatra%232286%20S10%20deliverable%207) | 227 | CI_RUNNER_E2E | node:test | node:test | none |
