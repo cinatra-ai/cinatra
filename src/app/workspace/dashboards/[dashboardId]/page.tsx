@@ -3,7 +3,12 @@ import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 
 import { buildWorkspaceOverviewConfig } from "@cinatra-ai/dashboards/overview-config";
-import { isWorkspaceDashboardRow } from "@cinatra-ai/dashboards/entity-identity";
+import { ensureEntityOverviewAction } from "@cinatra-ai/dashboards/entity-dashboard-actions";
+import {
+  buildOverviewDashboardId,
+  isWorkspaceDashboardRow,
+  workspaceDashboardRef,
+} from "@cinatra-ai/dashboards/entity-identity";
 import { readDashboardRowById } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import { validateDashboardConfigV12 } from "@cinatra-ai/dashboards/dashboard-config-v12";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +48,25 @@ type Props = { params: Promise<{ dashboardId: string }> };
 export default async function WorkspaceDashboardPage({ params }: Props) {
   const { dashboardId } = await params;
   const session = await requireAuthSession();
-  const row = await readDashboardRowById(dashboardId);
+  let row = await readDashboardRowById(dashboardId);
+
+  // The shell's Overview is brought into being by the workspace TAB, which
+  // ensures it before it lists it. This address can arrive first: a bookmark, a
+  // second window, a link a person sends themselves. The drawing calls the
+  // Overview the row the shell ALWAYS carries, so its own surface may not
+  // depend on a tab render having happened. The ensure runs ONLY for the acting
+  // person's own Overview, and the id it compares against is composed from the
+  // session rather than read from the address, so no address can name a row
+  // this creates or opens for anybody else. Every gate below still runs. A
+  // store failure inside the ensure surfaces as a failure rather than as
+  // not-found, which is the honest answer when the store cannot be read.
+  if (!row) {
+    const ownRef = workspaceDashboardRef(session.user.id);
+    if (dashboardId === buildOverviewDashboardId(ownRef)) {
+      await ensureEntityOverviewAction(ownRef);
+      row = await readDashboardRowById(dashboardId);
+    }
+  }
   if (!row || !isWorkspaceDashboardRow(row)) notFound();
 
   const { actor } = await buildDashboardActorFromSession();
