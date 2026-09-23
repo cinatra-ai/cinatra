@@ -1501,10 +1501,16 @@ export async function writeRunSkillSelectionForActor(input: {
           projectIds: viewer.projectIds,
           teamIds: viewer.teamIds,
           organizationIds: viewer.organizationId ? [viewer.organizationId] : [],
-          // A workspace-wide keep needs an authority this seam cannot verify
-          // from the actor projection it holds, so it is not offered at all.
-          // Fail-closed: the widest scope is never the one reached by default.
-          mayWriteWorkspace: false,
+          // WORKSPACE AUTHORITY, read off the VERIFIED actor's role hints.
+          // A workspace-wide assignment is a platform-administrator act, and
+          // `platformRole` is resolved by whichever entry verified this
+          // caller (the cookie session, or the widget's own proof), so it is
+          // the same authority the kernel grants `platform_admin` from.
+          // FAIL-CLOSED: any other role, and an absent hint, is not workspace
+          // authority. The layer also stays LAST in the offered order, so
+          // widening the set never widens the DEFAULT: that remains the
+          // narrowest writable scope the confirmer holds.
+          mayWriteWorkspace: who.roleHints.platformRole === "platform_admin",
         },
         ...(input.keepRecommended.scope ? { requestedScope: input.keepRecommended.scope } : {}),
       });
