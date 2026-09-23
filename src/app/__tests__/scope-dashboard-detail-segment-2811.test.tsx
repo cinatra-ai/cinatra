@@ -67,7 +67,10 @@ describe("the team dashboard page reads its segments as the runtime hands them",
     expect(p.expectedAnchor).toEqual({ entityType: "team", entityId: "t1" });
   });
 
-  it("reads a plainly punctuated address to the same identifier", async () => {
+  // A plainly typed address reaches the page as the same escaped string, so this
+  // case holds the page's own boundary: a segment that is already plain must
+  // pass through unchanged.
+  it("reads a plainly punctuated segment to the same identifier", async () => {
     const p = props(
       await TeamDashboardDetailPage({
         params: Promise.resolve({ teamId: "t1", dashboardId: TEAM_OVERVIEW_ID }),
@@ -86,6 +89,8 @@ describe("the team dashboard page reads its segments as the runtime hands them",
     expect(p.currentPath).toBe("/teams/t1/dashboards/d-1");
   });
 
+  // The running server refuses such an address with 400 before any page code
+  // runs; this holds the page's own boundary.
   it("passes a segment that is not a valid escape sequence through, rather than throwing", async () => {
     const p = props(
       await TeamDashboardDetailPage({
@@ -128,7 +133,10 @@ describe("the organization dashboard page reads its segments as the runtime hand
     expect(p.expectedAnchor).toEqual({ entityType: "organization", entityId: "org-a" });
   });
 
-  it("reads a plainly punctuated address to the same identifier", async () => {
+  // A plainly typed address reaches the page as the same escaped string, so this
+  // case holds the page's own boundary: a segment that is already plain must
+  // pass through unchanged.
+  it("reads a plainly punctuated segment to the same identifier", async () => {
     const p = props(
       await OrganizationDashboardDetailPage({
         params: Promise.resolve({ id: "org-a", dashboardId: ORG_OVERVIEW_ID }),
@@ -137,6 +145,8 @@ describe("the organization dashboard page reads its segments as the runtime hand
     expect(p.id).toBe(ORG_OVERVIEW_ID);
   });
 
+  // The running server refuses such an address with 400 before any page code
+  // runs; this holds the page's own boundary.
   it("passes a segment that is not a valid escape sequence through, rather than throwing", async () => {
     const p = props(
       await OrganizationDashboardDetailPage({

@@ -320,7 +320,13 @@ describe("the address reaches the page escaped, and still opens the Overview", (
     expect(state.ensured).toEqual([]);
   });
 
-  it("opens the Overview when a person types the address plainly punctuated", async () => {
+  // A plainly typed address reaches the page as the SAME escaped string, because
+  // the framework escapes the segment on its way here. This case therefore holds
+  // the page's OWN boundary rather than an address form: a plain identifier must
+  // open the Overview too, which is what a params source that does not escape
+  // hands over (the fallback route params at
+  // next/dist/shared/lib/router/utils/get-dynamic-param.js:50).
+  it("opens the Overview when the segment arrives plainly punctuated", async () => {
     delete state.rows["w-ov"];
     state.rows[OWN_OVERVIEW_ID] = wsRow({ id: OWN_OVERVIEW_ID, name: "Overview", isDefault: true });
     await open(OWN_OVERVIEW_ID);
@@ -362,6 +368,10 @@ describe("the address reaches the page escaped, and still opens the Overview", (
     expect(state.ensured).toEqual([]);
   });
 
+  // On the running server such an address never reaches the page: the route
+  // match refuses it and the framework answers 400
+  // (next/dist/server/base-server.js:1601). This case holds the page's own
+  // boundary, so a value arriving any other way cannot raise here.
   it("is not found for a segment that is not a valid escape sequence, and never throws", async () => {
     await expect(open("dash%ZZworkspace")).rejects.toThrow("NEXT_NOT_FOUND");
     await expect(open("%E0%A4%A")).rejects.toThrow("NEXT_NOT_FOUND");
