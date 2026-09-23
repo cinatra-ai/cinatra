@@ -553,6 +553,10 @@ describe("POST /api/assistants/chat: the assignment-scope seams (cinatra#2815)",
       Record<string, unknown>,
     ];
     expect(threadId).toBe("th-mirrored");
-    expect(input.orgId).toBe("org-1");
+    // Creation-time evidence ONLY. An administrator continuing somebody else's
+    // conversation, or the owner with a different active organization, must not
+    // be able to stamp this row's provenance from the session of a later turn,
+    // so the seam is handed the row's identity and nothing else.
+    expect(input).toBeUndefined();
   });
 });

@@ -129,39 +129,77 @@ describe("the create", () => {
   });
 });
 
-describe("the set-once freeze", () => {
-  it("admits a NULL column only, so a live conversation can never be re-pointed", () => {
-    runPostgresQueriesSync.mockReturnValue([{ rowCount: 1, rows: [] }]);
-    const wrote = freezeAssistantThreadAssignmentScopeIfAbsent("th1", {
-      orgId: "org-1",
-      scopeActor: HUMAN,
+describe("the set-once freeze of a row this request did not create", () => {
+  // A later turn may NOT decide what an existing conversation was created
+  // under. Its participant can be an administrator continuing somebody else's
+  // conversation, or the owner with a different active organization, and either
+  // would rewrite the provenance of a row that already has one. The only
+  // evidence this seam may use is the row's OWN creation-time columns.
+  function seedRow(row: Record<string, unknown> | null) {
+    runPostgresQueriesSync.mockReset();
+    runPostgresQueriesSync
+      .mockReturnValueOnce([{ rows: row ? [row] : [] }])
+      .mockReturnValue([{ rowCount: 1, rows: [] }]);
+  }
+
+  it("derives the scopes from the row's own owner and organization", () => {
+    seedRow({ owner_user_id: "owner-1", org_id: "org-A" });
+    expect(freezeAssistantThreadAssignmentScopeIfAbsent("th1")).toBe(true);
+    const update = runPostgresQueriesSync.mock.calls[1][0].queries[0];
+    expect(JSON.parse(update.values[1] as string)).toEqual({
+      v: 1,
+      orgId: "org-A",
+      teamIds: [],
+      originatingHumanUserId: "owner-1",
     });
-    expect(wrote).toBe(true);
-    const query = runPostgresQueriesSync.mock.calls[0][0].queries[0];
-    expect(query.text).toContain("assignment_scope_snapshot IS NULL");
-    expect(JSON.parse(query.values[1] as string).originatingHumanUserId).toBe("user-1");
   });
 
-  it("reports that it wrote nothing when the row already carried a snapshot", () => {
-    runPostgresQueriesSync.mockReturnValue([{ rowCount: 0, rows: [] }]);
-    expect(
-      freezeAssistantThreadAssignmentScopeIfAbsent("th1", { orgId: "org-1", scopeActor: HUMAN }),
-    ).toBe(false);
+  it("takes NOTHING from the participant of this turn", () => {
+    // The signature carries no session at all, which is what makes the rule
+    // hold for every caller rather than for the one that remembered it.
+    expect(freezeAssistantThreadAssignmentScopeIfAbsent.length).toBe(1);
   });
 
-  it("writes nothing at all when there is no organization to anchor the scopes", () => {
-    expect(
-      freezeAssistantThreadAssignmentScopeIfAbsent("th1", { orgId: null, scopeActor: HUMAN }),
-    ).toBe(false);
-    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  it("records no project, because a conversation's project moves after creation", () => {
+    seedRow({ owner_user_id: "owner-1", org_id: "org-A", project_id: "proj-now" });
+    freezeAssistantThreadAssignmentScopeIfAbsent("th1");
+    const update = runPostgresQueriesSync.mock.calls[1][0].queries[0];
+    expect(JSON.parse(update.values[1] as string).projectId).toBeUndefined();
   });
 
-  it("degrades rather than ending the turn when the write throws", () => {
+  it("names no originating human when the row records no owner", () => {
+    seedRow({ owner_user_id: null, org_id: "org-A" });
+    freezeAssistantThreadAssignmentScopeIfAbsent("th1");
+    const update = runPostgresQueriesSync.mock.calls[1][0].queries[0];
+    expect(JSON.parse(update.values[1] as string).originatingHumanUserId).toBeUndefined();
+  });
+
+  it("admits a NULL column only, so a live conversation can never be re-pointed", () => {
+    seedRow({ owner_user_id: "owner-1", org_id: "org-A" });
+    freezeAssistantThreadAssignmentScopeIfAbsent("th1");
+    const read = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    const update = runPostgresQueriesSync.mock.calls[1][0].queries[0];
+    expect(read.text).toContain("assignment_scope_snapshot IS NULL");
+    expect(update.text).toContain("assignment_scope_snapshot IS NULL");
+  });
+
+  it("writes nothing when the row already carries a snapshot", () => {
+    seedRow(null);
+    expect(freezeAssistantThreadAssignmentScopeIfAbsent("th1")).toBe(false);
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes nothing when the row names no organization to anchor the scopes", () => {
+    seedRow({ owner_user_id: "owner-1", org_id: null });
+    expect(freezeAssistantThreadAssignmentScopeIfAbsent("th1")).toBe(false);
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades rather than ending the turn when the read throws", () => {
+    runPostgresQueriesSync.mockReset();
     runPostgresQueriesSync.mockImplementation(() => {
       throw new Error("database unreachable");
     });
-    expect(
-      freezeAssistantThreadAssignmentScopeIfAbsent("th1", { orgId: "org-1", scopeActor: HUMAN }),
-    ).toBe(false);
+    expect(freezeAssistantThreadAssignmentScopeIfAbsent("th1")).toBe(false);
   });
 });
