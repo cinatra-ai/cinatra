@@ -597,6 +597,13 @@ async function publishHoldEvent(
 export type RunForRecommendationCandidates = Pick<AgentRunRecord, "id" | "runBy" | "orgId"> & {
   sourceType?: string | null;
   dependentInstallId?: string | null;
+  /**
+   * The run's FROZEN assignment scopes (cinatra#2815 S3, epic #2812). Without
+   * them the resolution takes the sole legacy fallback, so a run's project,
+   * team and personal assignments never appear in the candidate set and the
+   * caller's own organization supplies the tenancy floor.
+   */
+  assignmentScopeSnapshot?: unknown;
 };
 
 /** The actor-scope filter shape `getAssignedSkillIdsForAgent` consumes. Kept to
@@ -685,11 +692,18 @@ export async function resolveRecommendationCandidateSkillIds(input: {
     actorFilter = undefined;
   }
 
+  // The run's own frozen scopes decide WHICH assignments this run can see, on
+  // both arms. An actor-less resolution still carries them, because the scopes
+  // belong to the run and not to whoever is asking.
+  const runScope = {
+    snapshot: run.assignmentScopeSnapshot,
+    durableOrgId: run.orgId ?? null,
+  };
   let runCapabilityIds: string[];
   try {
     runCapabilityIds = actorFilter
-      ? await getAssignedSkillIdsForAgent(packageName, actorFilter)
-      : await getAssignedSkillIdsForAgent(packageName);
+      ? await getAssignedSkillIdsForAgent(packageName, actorFilter, runScope)
+      : await getAssignedSkillIdsForAgent(packageName, undefined, runScope);
   } catch {
     return [];
   }
