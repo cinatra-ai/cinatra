@@ -89,8 +89,9 @@ export async function POST(req: Request): Promise<Response> {
     // BEST-EFFORT HERE, FAIL-CLOSED THERE. The per-slot contract above is
     // exactly as it landed and does not depend on the planner, so a manifest
     // that cannot be planned (an OAS that went unreadable, a resolver fault on
-    // a sibling slot) still serves this slot's gate — it simply serves no
-    // token, and a finalize that carries none is the pre-#2815 path unchanged.
+    // a sibling slot) still serves this slot's gate. It simply serves no token,
+    // and finalize REQUIRES one, so the selection is refused there rather than
+    // written against an allocation nobody could compute.
     let gate: GateAllocation | null = null;
     try {
       gate = await planAllocationForGate({
@@ -124,11 +125,13 @@ export async function POST(req: Request): Promise<Response> {
       selectedRefs,
       selectionMode: slotMeta.selectionMode,
       resolutionMode: slotMeta.resolutionMode,
-      // Additive (cinatra#2815 S3 part 3). `allocationToken` is what finalize
-      // compares; `plannedRefs` is what this slot was allocated by the one
-      // manifest-wide plan, so a renderer can show the planned set beside the
-      // per-slot candidates. Both are absent when the manifest could not be
-      // planned — never a guessed value.
+      // cinatra#2815 S3 part 3. `allocationToken` is what finalize compares,
+      // and `plannedRefs` is what this slot was allocated by the one
+      // manifest-wide plan. The shipped workflow carries BOTH: the token on
+      // each finalize, and the planned set to the renderer and the autonomous
+      // submission, because the pool above is wider than the allocation and a
+      // choice taken from it is a choice finalize refuses. Both are absent when
+      // the manifest could not be planned, never a guessed value.
       ...(gate
         ? {
             allocationToken: gate.token,
