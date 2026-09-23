@@ -363,11 +363,12 @@ describe("every destructive docker call under .github is hosted-only", () => {
   it("finds the call sites by walking the tree, and finds the known ones", () => {
     // Anti-vacuity. A scanner that silently stopped matching would turn the arm
     // below into a green that proves nothing, so the discovery is pinned to the
-    // sites that exist today: both reclaim steps, and nothing else.
+    // sites that exist today: two production reclaim steps and the trial copy.
     const sites = destructiveSites();
     expect(sites.map((site) => `${site.file} — ${site.name}`)).toEqual([
       ".github/workflows/build-image.yml — Free runner disk for the image build (default-runner only)",
       ".github/workflows/execution-plane-e2e.yml — Free runner disk for the image builds",
+      ".github/workflows/hosted-build-size-trial.yml — Free runner disk for the image build (default-runner only)",
     ]);
   });
 

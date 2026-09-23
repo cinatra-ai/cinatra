@@ -893,3 +893,26 @@ describe("11. THE MERGE-QUEUE CANDIDATE (engineering#658 item 1)", () => {
     expect(result.specs).toEqual([]);
   });
 });
+
+
+describe("measured component graph coverage", () => {
+  const path = "src/components/extension-card-icon-image.tsx";
+  it("selects every reached family for the measured card-icon leaf", () => {
+    const { families, routes, unresolved } = realRepo();
+    expect(unresolved).toEqual([]);
+    const expected = [...families].filter(([, files]) => files.has(path)).map(([spec]) => spec);
+    expect(expected.length).toBeGreaterThan(0);
+    expect(expected.length).toBeLessThan(families.size);
+    const result = selectFamilies({ changedFiles: [path], families, routes, unresolved });
+    expect(result.mode).toBe("subset");
+    expect(result.specs).toEqual(expected);
+    expect(result.specs).toContain("tests/e2e/design/marketplace-card-declared-logo.spec.ts");
+    expect(result.specs).toContain("tests/e2e/design/conformance/functional-acceptance.spec.ts");
+  });
+  it("widens when the mapped component loses coverage or the graph is incomplete", () => {
+    const families = new Map([["a.spec.ts", new Set(["unrelated.ts"])]]);
+    expect(selectFamilies({ changedFiles: [path], families }).mode).toBe("all");
+    families.get("a.spec.ts").add(path);
+    expect(selectFamilies({ changedFiles: [path], families, unresolved: [{ from: path, specifier: "@/unknown" }] }).mode).toBe("all");
+  });
+});
