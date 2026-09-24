@@ -152,7 +152,13 @@ const resolvedGate = (): RailEntry => ({
   label: "Review",
   status: "resolved",
   sources: ["gate"],
-  gate: { gateId: "gate-1", reviewTaskId: "task-resolved", disposition: "approved", resolved: true },
+  gate: {
+    gateId: "gate-1",
+    reviewTaskId: "task-resolved",
+    disposition: "approved",
+    settledAct: null,
+    resolved: true,
+  },
 });
 
 /** The context-selection gate the graded run was parked on: a TRAILING entry. */
@@ -163,7 +169,13 @@ const pendingGate = (): RailEntry => ({
   label: "Context selection",
   status: "pending",
   sources: ["gate"],
-  gate: { gateId: "gate-2", reviewTaskId: "task-pending", disposition: null, resolved: false },
+  gate: {
+    gateId: "gate-2",
+    reviewTaskId: "task-pending",
+    disposition: null,
+    settledAct: null,
+    resolved: false,
+  },
 });
 
 const skippedDecision = (ordinal: number): RailEntry => ({

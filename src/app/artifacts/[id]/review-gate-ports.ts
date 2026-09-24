@@ -47,6 +47,8 @@ import {
 } from "@/lib/authz/build-actor-context";
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
+import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
+import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";
 import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import {
   type PrepareReviewInput,
@@ -268,10 +270,15 @@ export async function enforceReviewDecisionAccess(args: {
 
 /**
  * The LIFECYCLE `changes_requested` binder (cinatra#2063; owner ruling 2026-07-25).
- * The review surface's prompt-window feedback (the existing Comment path) drives a
- * `changes_requested` decision on a LIFECYCLE review gate: the base gate closes and
- * a repair opens through the S2 store's `recordChangesRequested` entry point (via
- * the surface composer) — no parallel write path.
+ * REGENERATE drives it (cinatra#3080): the base gate closes as superseded and a
+ * repair opens through the S2 store's `recordChangesRequested` entry point (via
+ * the surface composer) — no parallel write path, and exactly one caller.
+ *
+ * IT USED TO BE THE COMMENT PATH, AND IS NOT ANY MORE. A non-empty comment on a
+ * single-target lifecycle gate used to reach this binder, which made the
+ * affordance that decides nothing the strongest act on the floor. Comment now
+ * annotates and only annotates; the words that ask for another go arrive here
+ * from Regenerate, which carries the terminal right that settling a gate needs.
  *
  * The ONE fact the composer needs that the surface holds is the base-revision CAS
  * witness (`currentBaseRevisionId`). It is resolved HERE through the SAME
@@ -280,16 +287,27 @@ export async function enforceReviewDecisionAccess(args: {
  * live member, and null when it was tombstoned between prepare and submit (a
  * fail-closed `tombstoned-base`). No new artifact read path is introduced.
  *
- * Authorization is the CALLER's job and is UNCHANGED from the base Comment
- * decision: the action enforces `respondToHitl` on the run for the comment op
- * BEFORE this binder is reached, exactly as it does for a plain comment.
+ * Authorization is the CALLER's job: the action enforces the TERMINAL run-access
+ * op (`approveHitl`) BEFORE this binder is reached, because what happens here
+ * settles the gate.
  */
 export async function submitReviewSurfaceChangesRequested(args: {
   runId: string;
   reviewTaskId: string;
   baseTarget: ArtifactReviewTarget;
-  /** The reviewer's typed prompt-window feedback (trimmed, non-empty). */
+  /** The reviewer's typed note (trimmed, non-empty) — what to change. */
   feedback: string;
+  /**
+   * FOR A PICTURE, THE EDITED PROMPT (cinatra#3080 item 5) — what to make.
+   *
+   * A SECOND VALUE, not a second road: it travels beside the note through the
+   * same canonical operation and is recorded as its own finding, so the
+   * producing step receives two distinct things rather than one concatenated
+   * sentence it would have to take apart again. Null for everything that is not
+   * a picture, and the request is then byte-identical to the one this binder
+   * built before the field existed.
+   */
+  prompt?: string | null;
   actorCtx: ReviewActorContext;
 }): Promise<RecordChangesRequestedResult> {
   const kernelActor = buildActorContextFromPrimitive(
@@ -313,9 +331,16 @@ export async function submitReviewSurfaceChangesRequested(args: {
     },
     currentBaseRevisionId,
     feedback: args.feedback,
+    prompt: args.prompt ?? null,
     // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
     // approve/reject commit stamps, from the context run access was enforced against.
     decidedBy: args.actorCtx.actor.userId ?? null,
+    // THE FLOOR'S REGENERATE (cinatra#3080 item 4). This binder has exactly one
+    // caller — the Regenerate branch of the floor's one entry — so the road is
+    // named here rather than guessed downstream: the canonical operation refuses
+    // a Regenerate it cannot raise a successor for, instead of settling the gate
+    // and escalating to a person the reviewer was never told about.
+    origin: "regenerate",
   });
 }
 
@@ -531,8 +556,88 @@ export async function loadReviewGateSurface(args: {
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
     agentSummary: null,
+    // cinatra#3080 item 5 — the prompt the reviewed revision records it was made
+    // from, for the screen's own field. Read off the ALREADY-PREPARED target's
+    // authorized artifact projection, so it costs no extra query and cannot be
+    // seen by a reader who may not read the row. Only a single-target gate has
+    // one to show: on a legacy multi-target gate Regenerate is refused anyway,
+    // so there is no prompt for the screen to pre-fill and nothing to send.
+    picturePrompt: await readRecordedPromptFor(targets, actorCtx),
     permissions: { canDecide: decide.ok, canComment: comment.ok },
   };
+}
+
+/**
+ * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080 item
+ * 5, cinatra#3502 item 3) — for the review SCREEN's own field, never for a
+ * display.
+ *
+ * ONE SINGLE-TARGET GATE ONLY. A gate that still pins more than one target
+ * refuses Regenerate anyway (with its own stated reason), so there is nothing to
+ * pre-fill and nothing to send; answering null there is the honest reading
+ * rather than picking one target's prompt to stand for the set. Nothing is read.
+ *
+ * THE SAME AUTHORIZED READ THE PREPARATION ALREADY RAN, FIRST. `readArtifactForDetail`
+ * is the actor-scoped, `object.read`-gated projection the prepared target above
+ * came from, so a reader who may not read the row gets null here for the same
+ * reason they see no target — and the ledger below is never read for them.
+ *
+ * THE PINNED REVISION'S OWN RECORD. A gate's pin is frozen while the artifact
+ * moves on, so the prompt belongs to the pinned REVISION, not to the live row.
+ * The per-revision record is the ledger row cinatra#3032 added: the finalized
+ * `artifact_materializations` row of the write that filed a revision carries
+ * `image_prompt`, the prompt THAT revision was made from.
+ * `readRevisionImagePrompt` reads it for exactly this organisation, artifact and
+ * pinned revision; when it records a prompt, that prompt is shown — whether or
+ * not the pin is still the row's latest revision, so an older review keeps its
+ * own revision's prompt and never the newer one.
+ *
+ * WHEN THE LEDGER RECORDS NONE for that revision, the row's own rule stands: the
+ * row's `recordedPrompt` (projected off the LIVE row) only when the pin IS the
+ * row's latest revision, else null — the screen then draws the note alone rather
+ * than a prompt the reviewed revision was never made from. A re-file
+ * (`refileRevisionOntoArtifact`) writes no ledger row and leaves the row's
+ * recorded prompt as it was, so a review pinned on a re-filed revision is still
+ * answered with the prompt the row carried before it: that limit now holds only
+ * for a revision whose ledger row records no prompt, and the unit proof beside
+ * this file pins it.
+ *
+ * A LEDGER READ THAT FAILS degrades to that same row rule with one warning and
+ * never fails the surface, like `loadPinnedCapturePair`'s store failure: a
+ * reviewer must always be able to decide even when the prompt is unavailable.
+ *
+ * EXPORTED for its own unit proof — the surface still reads it through
+ * `loadReviewGateSurface` alone.
+ */
+export async function readRecordedPromptFor(
+  targets: ReadonlyArray<PreparedReviewTarget>,
+  actorCtx: ReviewActorContext,
+): Promise<string | null> {
+  if (targets.length !== 1) return null;
+  const pinned = targets[0].target;
+  const access = readArtifactForDetail({
+    artifactId: pinned.artifactId,
+    orgId: actorCtx.orgId,
+    actor: buildActorContextFromPrimitive(actorCtx.actor, actorCtx.orgId, actorCtx.roleHints),
+  });
+  if (access.kind !== "ok") return null;
+  try {
+    const revisionPrompt = await readRevisionImagePrompt({
+      orgId: actorCtx.orgId,
+      artifactId: pinned.artifactId,
+      representationRevisionId: pinned.representationRevisionId,
+    });
+    if (revisionPrompt !== null) return revisionPrompt;
+  } catch (err) {
+    console.warn(
+      "[review-gate-ports] recorded prompt lookup failed (the review is unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  if (access.artifact.latestRepresentationRevisionId !== pinned.representationRevisionId) {
+    return null;
+  }
+  return access.artifact.recordedPrompt ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -54,7 +54,7 @@ import {
   isVerificationReopenTaskId,
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
+import { sealBatch, partitionBatchTargetsPerArtifact } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 
@@ -246,9 +246,12 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notifies (real store)", () => {
-  it("BATCH: each fresh partition gate notifies EXACTLY once — one per gate, not per target; a re-sweep never re-notifies", async () => {
-    // 60 durable artifacts from ONE producing run → the batch path, partitioned
-    // into ⌈60/50⌉ = 2 gates. Before this change the whole production was silent.
+  it("BATCH: each fresh partition gate notifies EXACTLY once — one per gate; a re-sweep never re-notifies", async () => {
+    // 60 durable artifacts from ONE producing run → the batch path, which raises
+    // ONE GATE PER ARTIFACT (cinatra#3080: "one gate per artifact, in order …
+    // never one gate combining them"). Before #2833 the whole production was
+    // silent; the invariant this file pins is unchanged — one notification per
+    // emitted GATE, never a second for the same frozen partition.
     const runId = `run-batch-${randomUUID()}`;
     const N = 60;
     const events: ArtifactProducedEvent[] = [];
@@ -275,12 +278,12 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
       })),
     });
     if (!sealed.ok) throw new Error("seal failed");
-    const partitions = partitionBatchTargets(sealed.targets);
-    expect(partitions.length).toBe(Math.ceil(N / MAX_BATCH_PARTITION)); // 2
+    const partitions = partitionBatchTargetsPerArtifact(sealed.targets);
+    expect(partitions.length).toBe(N);
     const expectedTaskIds = new Set(partitions.map((p) => batchPartitionReviewTaskId(p)));
 
-    // ONE notification per emitted GATE — 2, not 60. This is the assertion the
-    // issue's "one gate can hold up to 50 targets" clause is about.
+    // ONE notification per emitted GATE — and a gate is one artifact, so 60 gates
+    // and 60 openings, never two for one gate.
     const mine = openedFor(runId);
     expect(mine.length).toBe(partitions.length);
     expect(summary.gatesCreated).toBe(partitions.length);
@@ -321,7 +324,11 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
     await orch.sweepReviewOrchestration({ limit: 50 });
 
     const mine = openedFor(runId);
-    expect(mine.length).toBe(1); // 3 targets ⇒ ONE partition ⇒ ONE gate ⇒ ONE row
+    // 3 targets ⇒ THREE partitions ⇒ THREE gates ⇒ THREE rows (cinatra#3080:
+    // "Work that made several artifacts raises one gate per artifact, in order
+    // … never one gate combining them"). The resolve below settles ONE of them,
+    // and the clear must name that gate's own key — not the run's.
+    expect(mine.length).toBe(3);
     const openKey = mine[0];
 
     // A REAL terminal decision on that gate (not a raw UPDATE), so the
@@ -353,6 +360,15 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
       runId: openKey.runId,
       reviewTaskId: openKey.reviewTaskId,
     });
+    // AND ONLY THAT ONE. Each artifact's gate is settled on its own; deciding
+    // the first leaves its siblings' rows standing, which is what "the run
+    // waiting at each" means once the gates are one per artifact.
+    for (const other of mine.slice(1)) {
+      expect(resolved).not.toContainEqual({
+        runId: other.runId,
+        reviewTaskId: other.reviewTaskId,
+      });
+    }
   });
 
   it("REPAIR PIN: the successor gate notifies once, AFTER the finalize transaction commits; a re-drive does not re-notify", async () => {

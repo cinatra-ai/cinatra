@@ -134,6 +134,10 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
+import { ReviewTargetHeader } from "@cinatra-ai/agents/review-gate-card";
+import { preparedTargetHeader } from "@/lib/lifecycle/lifecycle-target-headers";
+import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
+import type { LifecycleTargetHeader } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { IslandHeightReporter } from "./island-height-reporter";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
@@ -298,6 +302,16 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
   const decided = surface.kind === "settled";
 
+  // EACH ARTIFACT'S OWN HEADER, keyed by the revision the gate pinned — empty
+  // for a one-target gate, whose header the CARD draws above this frame.
+  const targetHeaders = new Map<string, LifecycleTargetHeader>();
+  if (surface.targets.length > 1) {
+    for (const prepared of surface.targets as PreparedReviewTarget[]) {
+      const header = preparedTargetHeader(prepared);
+      if (header) targetHeaders.set(prepared.target.representationRevisionId, header);
+    }
+  }
+
   return (
     <div
       className={islandBodyClassName(scheme)}
@@ -326,16 +340,43 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
         </p>
       ) : null}
 
-      {/* §II/§III — every pinned target as a sibling panel, in gate order. The
-          card below the frame carries ONE floor for all of them, because the
-          decision is all-or-nothing across the gate. */}
-      {surface.targets.map((prepared) => (
+      {/* §II/§III — every pinned target, in gate order.
+          EACH ARTIFACT IS ONE BLOCK (cinatra#3080, the fix leg after the first
+          proof round; the ruling of 2026-09-13): "its header directly over its
+          own body, one after another". §IV says the same — "Every target OPENS
+          with a header ... Beneath the header sits the representation slot".
+          A gate that pins ONE target — every gate minted under
+          one-review-per-artifact — draws no header here: the CARD's own header
+          stands above this frame, where it survives the skeleton and the
+          recovery panel (#3141 item 7). A LEGACY gate that still pins several
+          targets is the one case a card outside the frame cannot draw as blocks,
+          because the bodies are composed together in this document — so here,
+          and only here, each target opens with its own header. */}
+      {surface.targets.map((prepared: PreparedReviewTarget) => (
         <Suspense
           key={`${prepared.target.artifactId}:${prepared.target.representationRevisionId}`}
           fallback={<ReviewGateLoading />}
         >
+          {/* It composes from the prepared target the island already holds — no
+              read of its own — and draws nothing when the target carries no row
+              metadata (a floor, a denied or tombstoned row), exactly as the
+              card's own composition draws nothing rather than a header it would
+              have to invent. */}
+          {targetHeaders.get(prepared.target.representationRevisionId) ? (
+            <ReviewTargetHeader
+              header={targetHeaders.get(prepared.target.representationRevisionId)!}
+            />
+          ) : null}
           <ReviewTargetPanel
             prepared={prepared}
+            // ONE PANEL PER TARGET, AND THE CARD OWNS ITS FRAME (cinatra#3080,
+            // the fix leg after the second proof round). A gate that pins ONE
+            // target is drawn by the card as the immutable header over this
+            // document inside a single border; a border here too is the nested
+            // body card §IV does not draw. Only the LEGACY multi-target reading
+            // — the one where this document pairs each header with its own body
+            // — frames its targets itself.
+            framed={surface.targets.length > 1}
             // The TRUSTED organization scope, from the reader this island just
             // authorized — never from the query string and never from the
             // display props. The form rung reads the pinned bytes under it.

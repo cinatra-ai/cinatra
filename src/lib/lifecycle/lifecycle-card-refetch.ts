@@ -94,7 +94,7 @@ function absentEnvelope<K extends LifecycleDataPartViewType>(
  * requires it to be non-enumerating, and a fixed sentence satisfies both.
  */
 export const LIFECYCLE_RESTRICTED_REASON =
-  "Approving or rejecting needs approve access on this run.";
+  "Continuing or regenerating needs decision access on this run.";
 
 // ---------------------------------------------------------------------------
 // The ref codec now lives in `@/lib/lifecycle/lifecycle-card-ref` (cinatra#2566)
@@ -139,11 +139,33 @@ async function resolveReviewGateState(
   //                      nothing.
   const gate = await readReviewGateState(runId, reviewTaskId);
   if (gate.status === "unavailable") return ABSENT;
+
+  // 2b. NO NOTES REGION IS PROJECTED (cinatra#3080, fix leg 5).
+  //
+  // This resolver briefly read the gate's advisory comments and put them on the
+  // state, which drew a third region on the review card between the target and
+  // the floor. The ratified cards drawing enumerates the card as two regions —
+  // "the target panel naming what is under review and pinning its exact
+  // revision, then the decision floor that governs it" (§II) — and puts
+  // Advisory comments on the VERIFICATION card instead, where "the reading's
+  // provenance is the body of a service comment there, not a line of its own"
+  // (§VII). Because that seam also carries the Audit lane's own
+  // service-authored diagnostic, the region drew an internal projection digest,
+  // an authorization verdict and the projected field paths onto a reviewer's
+  // decision surface.
+  //
+  // THE READ IS GONE, NOT FILTERED. Dropping only the service-authored rows
+  // would have left an undrawn region standing, one bad seam away from drawing
+  // a diagnostic again. The advisory comments are not read for a review gate at
+  // all; the diagnostic stays where it was always meant to be read — the
+  // server's own log, and the verification card the drawing gives it to.
+
   if (gate.status !== "pending") return { state: "settled" };
 
-  // 3. The decision axis (§IV `restricted`): a terminal decision needs approve
-  //    access; commenting needs respond access. Resolved against the ACTUAL
-  //    reader, never a role guess.
+  // 3. The decision axis (§IV `restricted`): a terminal decision — Continue or
+  //    Regenerate — needs the run's approve access; commenting needs respond
+  //    access. Resolved against the ACTUAL reader, never a role guess. The RIGHT
+  //    is unchanged by cinatra#3080; only the words the reader is given are.
   const [decide, comment] = await Promise.all([
     enforceReviewRunAccess(runId, actorCtx.actor, "approveHitl", actorCtx.roleHints),
     enforceReviewRunAccess(runId, actorCtx.actor, "respondToHitl", actorCtx.roleHints),

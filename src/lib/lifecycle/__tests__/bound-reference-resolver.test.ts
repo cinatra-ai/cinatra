@@ -179,10 +179,12 @@ describe("the HITL arm answers the screen the run is PARKED at", () => {
 
 describe("a card that offers no decision lends none", () => {
   it("a review lends its own three buttons", () => {
+    // cinatra#3080 — the three are Comment, Regenerate and Continue now; the
+    // retired words are resolved (or answered) at the mint, never lent.
     expect(controlsLentBy({ kind: "review", runId: RUN, reviewTaskId: GATE, pinnedTargets: [] })).toEqual([
       "comment",
-      "approve",
-      "reject",
+      "regenerate",
+      "continue",
     ]);
   });
 

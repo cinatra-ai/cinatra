@@ -287,7 +287,10 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(decideSpy.mock.invocationCallOrder[0]!).toBeLessThan(
       emitSpy.mock.invocationCallOrder[0]!,
     );
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // ONE GATE PER ARTIFACT (cinatra#3080 item 4): the marker names two
+    // artifacts, so two gates are minted — the core is still asked exactly once,
+    // and what it decided is still what gets pinned.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
   });
 
   it("pins the set the CORE decided for, never the marker's raw value", async () => {
@@ -334,7 +337,11 @@ describe("the declared review asks the one core before it pins anything", () => 
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ targets: TARGETS }));
+    // The raw value is pinned in full — as one gate PER ARTIFACT (cinatra#3080
+    // item 4), never narrowed and never combined.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ targets: [TARGETS[0]] }));
+    expect(emitSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ targets: [TARGETS[1]] }));
   });
 
   it("a firing decision keeps the surface it always had", async () => {
@@ -352,7 +359,10 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer, values] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
-    expect((values as Record<string, unknown>).targetCount).toBe(2);
+    // WHAT THIS GATE PINS, not what the step made (cinatra#3080 item 4): the
+    // redirect names the carrier gate, and a carrier pins one artifact like
+    // every other gate now does.
+    expect((values as Record<string, unknown>).targetCount).toBe(1);
   });
 
   it("an organization that FORBIDS this review pins NOTHING and falls through to the ordinary human gate", async () => {
@@ -444,7 +454,10 @@ describe("the declared review asks the one core before it pins anything", () => 
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // ONE GATE PER ARTIFACT (cinatra#3080 item 4): the marker names two
+    // artifacts, so two gates are minted — the core is still asked exactly once,
+    // and what it decided is still what gets pinned.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
     const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
   });

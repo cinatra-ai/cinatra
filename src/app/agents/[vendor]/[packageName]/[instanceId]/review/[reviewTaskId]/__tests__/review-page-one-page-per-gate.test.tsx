@@ -74,7 +74,11 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,
   readAgentTemplateById: mocks.readAgentTemplateById,
 }));
-vi.mock("@cinatra-ai/agents/run-stepper-steps", () => ({
+// PARTIAL: the projection also carries the pure reading of where a gate sits on
+// the run's rail (cinatra#3080), which the page composes for the card's header —
+// the REAL one, because a stub would make the two surfaces agree by fiat.
+vi.mock("@cinatra-ai/agents/run-stepper-steps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@cinatra-ai/agents/run-stepper-steps")>()),
   buildRunStepperSteps: mocks.buildRunStepperSteps,
 }));
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({

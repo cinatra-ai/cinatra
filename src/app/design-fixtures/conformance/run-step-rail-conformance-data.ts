@@ -59,6 +59,12 @@ export const RUN_STEP_RAIL_CONFORMANCE_ENTRIES: RunStepRailEntry[] = [
       // "records how it was settled (continued, superseded by a regeneration,
       // changes requested)" — the word the history row carries.
       disposition: "continued",
+      // The settled ACT the rail reads to word its settled row. It is derived
+      // from the disposition beside it and stated here for the same reason the
+      // disposition is: this fixture is the drawing's own reading, not the
+      // product's output, so it says what the row must show rather than letting
+      // the component infer it.
+      settledAct: "continued",
       resolved: true,
     },
   },
@@ -81,6 +87,8 @@ export const RUN_STEP_RAIL_CONFORMANCE_ENTRIES: RunStepRailEntry[] = [
       gateId: "conformance-gate-2",
       reviewTaskId: "conformance-review-2",
       disposition: null,
+      // Nothing has settled this gate, so there is no act to name.
+      settledAct: null,
       resolved: false,
     },
   },

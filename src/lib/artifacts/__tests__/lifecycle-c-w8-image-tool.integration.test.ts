@@ -568,5 +568,71 @@ describe.skipIf(!HAS_REAL_DB)(
       // The refusal left the picture at two revisions.
       expect(await revisionCount(first.artifactId)).toBe(2);
     });
+
+    it("reads back the prompt EACH revision was made from, off that revision's own ledger row (cinatra#3502 item 3)", async () => {
+      const { readRevisionImagePrompt } = await import("@/lib/artifacts/materialization-ledger");
+      const runId = nextId("run");
+      await seedRun(runId);
+      const provider = providerServing([PNG_RED, PNG_BLUE]);
+      const first = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "picture-node",
+          extension: PICTURE_EXT,
+          title: "The lighthouse",
+          prompt: "a lighthouse at dusk",
+          data: { post: "post-artifact-1", placement: "featured" },
+        },
+        provider.deps(),
+      );
+      if (!first.ok) throw new Error(first.error);
+
+      const again = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "picture-node",
+          extension: PICTURE_EXT,
+          title: "",
+          prompt: "the same lighthouse, at dawn",
+          artifactId: first.artifactId,
+          baseRepresentationRevisionId: first.representationRevisionId,
+        },
+        provider.deps(),
+      );
+      if (!again.ok) throw new Error(again.error);
+
+      // The FIRST revision keeps its own prompt after the regeneration.
+      expect(
+        await readRevisionImagePrompt({
+          orgId: ORG,
+          artifactId: first.artifactId,
+          representationRevisionId: first.representationRevisionId,
+        }),
+      ).toBe("a lighthouse at dusk");
+      // The SECOND revision answers the prompt of its own write.
+      expect(
+        await readRevisionImagePrompt({
+          orgId: ORG,
+          artifactId: first.artifactId,
+          representationRevisionId: again.representationRevisionId,
+        }),
+      ).toBe("the same lighthouse, at dawn");
+      // A revision no write made has no record.
+      expect(
+        await readRevisionImagePrompt({
+          orgId: ORG,
+          artifactId: first.artifactId,
+          representationRevisionId: nextId("rev"),
+        }),
+      ).toBeNull();
+    });
   },
 );

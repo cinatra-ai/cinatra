@@ -265,6 +265,9 @@ export type RepairLineageCode =
   | "stale-base"
   | "successor-invalid"
   | "successor-equals-base"
+  // cinatra#3080 fix leg 8 — the successor named another artifact and the
+  // producer did not declare a re-staged one.
+  | "successor-different-artifact"
   | "finding-unknown"
   | "finding-duplicate"
   | "finding-unmapped";
@@ -295,6 +298,31 @@ export function validateRepairLineage(input: {
   request: ChangesRequestedRequest;
   response: RepairResponse;
   currentBaseRevisionId: string | null;
+  /**
+   * THE HOST'S OWN ALLOWANCE FOR A RE-STAGED SUCCESSOR (cinatra#3080, fix leg 8;
+   * moved here off the producer's response by a convergence finding).
+   *
+   * The drawing fixes the ordinary shape: Regenerate "files a new revision of
+   * the same artifact, and settles this gate superseded beneath a successor over
+   * that same artifact" (Agent run & review §VI). A successor over a DIFFERENT
+   * artifact is therefore refused — that is exactly the shape the ninth proof
+   * round measured on a real run, where the reviewer decided on one artifact and
+   * the successor carried another.
+   *
+   * One road genuinely produces a different artifact: the CMS bridge, whose
+   * successor is a freshly captured snapshot of the remote page after the apply,
+   * not another revision of the reviewed staging snapshot.
+   *
+   * THIS IS NOT THE PRODUCER'S WORD. It was one, for a round: the flag rode in
+   * `RepairResponse`, which is the payload a producing run submits, so any
+   * producer could have declared its way past the rule and the refusal would
+   * have been documentary. The exception is the HOST's to grant — the
+   * core/extension border: the host owns the change road — so it is an argument
+   * the in-host caller of `submitRepairResponse` passes beside the response,
+   * never a field the response can carry. A wire-authored response has no way to
+   * set it.
+   */
+  restagedSuccessorPermitted?: boolean;
 }): RepairLineageResult {
   const { request, response, currentBaseRevisionId } = input;
 
@@ -325,6 +353,27 @@ export function validateRepairLineage(input: {
       ok: false,
       code: "successor-equals-base",
       error: "successor revision must differ from the base (a repair produces a NEW revision)",
+    };
+  }
+  // THE SUCCESSOR IS A NEW REVISION OF THE **SAME** ARTIFACT (cinatra#3080, fix
+  // leg 8). "Regenerate runs the same producing step again from the words in the
+  // note field, files a new revision of the same artifact, and settles this gate
+  // superseded beneath a successor over that same artifact" — Agent run & review
+  // §VI. The rule is kept HERE, at the one gate every repair response passes
+  // through, rather than trusted to each producer: a successor that names another
+  // artifact is a different piece of work, and a reviewer who decided on one
+  // thing would be shown another under the same lineage. The one road whose
+  // successor genuinely IS a re-staged artifact is granted the exception BY THE
+  // HOST, at its own in-host call site — never by the producer's response.
+  if (
+    response.successorTarget.artifactId !== response.baseTarget.artifactId &&
+    input.restagedSuccessorPermitted !== true
+  ) {
+    return {
+      ok: false,
+      code: "successor-different-artifact",
+      error:
+        "successor must be a new revision of the SAME artifact the review pinned — a successor over another artifact is refused unless the producer declares a re-staged successor",
     };
   }
 

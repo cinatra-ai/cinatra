@@ -379,17 +379,26 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
       .toContain(HEADER_ONE.title);
   });
 
-  it("EXACTLY ONE header per pinned target, on a gate carrying several", async () => {
+  it("a gate carrying SEVERAL targets stacks none here — each header rides its own body", async () => {
+    // MOVED, NOT RETIRED (cinatra#3080, the fix leg after the first proof
+    // round). This case used to read two headers stacked in the card over one
+    // island holding both bodies — which is the grouping the 2026-09-13 ruling
+    // forbids ("each artifact is one block, its header directly over its own
+    // body") and what the round saw on the review route. The bodies of a
+    // multi-target gate are composed together inside the island's one document,
+    // so the pairing is the island's to draw and the card draws no block over
+    // it; the reading is pinned at
+    // src/app/lifecycle/review-island/__tests__/each-target-over-its-own-body-3080.
+    // The ONE-target reading below — every gate minted from now on — is
+    // untouched and still the card's.
     const { container } = await renderPending("run_card", [HEADER_ONE, HEADER_TWO]);
-    expect(headers(container)).toHaveLength(2);
-    const revisions = [...headers(container)].map((h) =>
-      h.querySelector("[data-review-target-revision]")?.getAttribute("data-review-target-revision"),
-    );
-    expect(revisions).toEqual([HEADER_ONE.revisionId, HEADER_TWO.revisionId]);
+    expect(headers(container)).toHaveLength(0);
   });
 
   it("the conversation's card draws the header in every island state too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    // One pinned target — the ordinary reading, and the only one a gate minted
+    // under one-review-per-artifact can have (cinatra#3080 item 4).
     const { container } = await renderPending("chat_thread");
     expect(headers(container)).toHaveLength(1);
     await act(async () => {

@@ -432,14 +432,12 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     unshippedAspects: [],
     evidence: {
       absentAnchors: ["run-review-step-post"],
-      absentActions: [
-        { name: "continue-review", outcome: "resolved" },
-      ],
+      absentActions: [],
       shippedFiles: ["packages/agents/src/review-gate-card.tsx"],
       unexportedModules: [],
     },
     readiness:
-      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target, review-decision-bar and review-prompt-window anchors), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session. The floor it ships declares approve-review to resolved, reject-review to resolved and request-changes to changes-requested; continue-review to resolved — the pair the drawing binds on the run page's review step — is a literal in no file under src/ or packages/",
+      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target, review-decision-bar and review-prompt-window anchors), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session. The floor it ships now declares continue-review to resolved — the pair the drawing binds on the run page's review step — so that half of the gap is closed and this row no longer claims it open. What remains is the anchor: nothing under src/ or packages/ carries data-conformance-id=\"run-review-step-post\", so the step-hosted reading of the card is still on no element a driver could find, and the wave that draws it mounts the surface for real rather than pressing the floor somewhere else and calling it the run page",
   },
   "run-review-step-picture": {
     surface: "run-review-step-picture",

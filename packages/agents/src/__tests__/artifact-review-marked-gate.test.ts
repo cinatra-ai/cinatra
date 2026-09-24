@@ -236,14 +236,18 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       task: inputRequiredTask("Two items ready for your review."),
     });
 
-    // (1) Pinned with the run's immutable targets under the wayflow reviewTaskId.
-    expect(emitSpy).toHaveBeenCalledTimes(1);
-    expect(emitSpy).toHaveBeenCalledWith({
+    // (1) Pinned with the run's immutable targets — ONE GATE PER ARTIFACT
+    // (cinatra#3080 item 4), the first of them under the wayflow reviewTaskId
+    // every other road already names.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy).toHaveBeenNthCalledWith(1, {
       runId: "run-rev-1",
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
-      targets: TARGETS,
+      targets: [TARGETS[0]],
     });
+    expect(emitSpy.mock.calls[1]![0].targets).toEqual([TARGETS[1]]);
+    expect(emitSpy.mock.calls[1]![0].reviewTaskId).not.toBe("wayflow-task-rev-1");
 
     // (2) Routed via the redirect renderer id — NOT the legacy reviewer envelope.
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
@@ -258,7 +262,9 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       "/agents/cinatra-ai/web-research-agent/run-rev-1/review/wayflow-task-rev-1",
     );
     expect(v.reviewTaskId).toBe("wayflow-task-rev-1");
-    expect(v.targetCount).toBe(2);
+    // The gate this interrupt names pins ONE artifact now (item 4), so the
+    // count the redirect carries is that gate's own.
+    expect(v.targetCount).toBe(1);
     expect(v.agentSummary).toBe("Two items ready for your review.");
     // cinatra#1796: the host synthesizes no review envelope at all any more —
     // the synthesis was deleted with the reviewer rendering teardown. These stay
@@ -273,6 +279,88 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       undefined,
       TEST_AUTHORITY,
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // ONE REVIEW PER ARTIFACT (cinatra#3080 item 4, the fix leg after round 1).
+  //
+  // The issue's own sentence: "A gate that still pins more than one target
+  // (legacy rows from before one-review-per-artifact) refuses Regenerate with a
+  // stated reason and allows Comment and Continue; no new multi-target gate is
+  // minted." The drawing says the same twice — `app-lifecycle-cards.html` §II
+  // ("A gate pins one artifact at one reference, so a card carries one target
+  // panel over one floor. Work that made several artifacts is not gathered into
+  // a single card: it raises one review per artifact, in order") and
+  // `app-artifact-review.html` §VI ("One artifact per review, one reference per
+  // gate ... There is no combined gate and no per-target verdict to reconcile").
+  //
+  // The FIRST proof round opened a real Blog Idea Generator run whose step made
+  // three blog ideas, and the marked branch pinned all three under one gate —
+  // one card, one floor, three targets. This is the mint road, held to one gate
+  // per artifact at the only place a declared review is minted.
+  // -------------------------------------------------------------------------
+  it("opens ONE gate per artifact, in the step's own order, each pinning exactly one target", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const three = [
+      { artifactId: "idea-1", representationRevisionId: "rev-i1" },
+      { artifactId: "idea-2", representationRevisionId: "rev-i2" },
+      { artifactId: "idea-3", representationRevisionId: "rev-i3" },
+    ];
+    const run = makeRun({ reviewTargets: three });
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: inputRequiredTask("Three ideas ready for your review."),
+    });
+
+    expect(emitSpy).toHaveBeenCalledTimes(3);
+    const pinned = emitSpy.mock.calls.map(([input]) => input);
+    // NO GATE PINS MORE THAN ONE.
+    for (const input of pinned) {
+      expect(Array.isArray(input.targets)).toBe(true);
+      expect((input.targets as unknown[]).length).toBe(1);
+    }
+    // IN THE ORDER THE STEP PRODUCED THEM.
+    expect(
+      pinned.map(
+        (input) => (input.targets as Array<{ artifactId: string }>)[0]!.artifactId,
+      ),
+    ).toEqual(["idea-1", "idea-2", "idea-3"]);
+    // One gate per artifact means three DISTINCT gates, and the first of them is
+    // the run's own carrier — the id every existing road already names (the
+    // resume wire, the card ref, the deep link), so nothing that addresses this
+    // run's review moves.
+    expect(new Set(pinned.map((input) => input.reviewTaskId)).size).toBe(3);
+    expect(pinned[0]!.reviewTaskId).toBe("wayflow-task-rev-1");
+    for (const input of pinned) {
+      expect(input.runId).toBe("run-rev-1");
+      expect(input.orgId).toBe("org-rev");
+    }
+  });
+
+  it("a step that made ONE artifact is unchanged: one gate, one target, the carrier id", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const one = [{ artifactId: "art-only", representationRevisionId: "rev-only" }];
+    const run = makeRun({ reviewTargets: one });
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: inputRequiredTask("One item ready for your review."),
+    });
+
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith({
+      runId: "run-rev-1",
+      orgId: "org-rev",
+      reviewTaskId: "wayflow-task-rev-1",
+      targets: one,
+    });
   });
 
   it("an UNMARKED gate is byte-identical: never pins, keeps its own declared renderer", async () => {
@@ -423,7 +511,9 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // One emit PER ARTIFACT (cinatra#3080 item 4) and the store is idempotent
+    // on (run, task), so a re-emit re-derives the very same two gates.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });

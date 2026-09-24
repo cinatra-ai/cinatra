@@ -28,6 +28,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
+import { appendSemanticArtifactRevision } from "@/lib/artifacts/artifact-revision-append";
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
@@ -110,6 +111,51 @@ export async function materializeBlogPostBodyArtifact(
     principal: null,
   });
 
+  return {
+    artifactId: result.artifactId,
+    representationRevisionId: result.representationRevisionId,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// APPEND — the same artifact, one revision on (cinatra#3080, fix leg 8).
+//
+// The materializer above is the CREATE road: it mints a body artifact, and its
+// own header records the ref-swap contract that goes with it ("each body update
+// / save creates a NEW artifact id"). That contract is right for a save on the
+// artifact's own page, and wrong for the ONE road the review floor names:
+// Regenerate "files a new revision of the same artifact, and settles this gate
+// superseded beneath a successor over that same artifact" (Agent run & review
+// §VI). The ninth proof round measured the difference on a real run — a
+// successor pinned to an artifact the reviewer had never seen.
+//
+// So the repair road takes this door instead. Same org resolution, same declared
+// mime, same bytes-on-disk road; the artifact id is the one the review pinned,
+// and only the revision is new.
+// ---------------------------------------------------------------------------
+
+export type AppendBlogPostBodyRevisionInput = {
+  /** The artifact the review pinned — never a fresh one. */
+  artifactId: string;
+  /** UTF-8 markdown body string (the repaired draft). */
+  content: string;
+  /** Optional human-readable title for the artifact envelope. */
+  title?: string;
+  createdByRunId?: string | null;
+};
+
+export async function appendBlogPostBodyRevision(
+  input: AppendBlogPostBodyRevisionInput,
+): Promise<MaterializeBlogPostBodyResult> {
+  const orgId = await resolveSingletonBlogOrgId();
+  const result = await appendSemanticArtifactRevision({
+    orgId,
+    artifactId: input.artifactId,
+    declaredMime: "text/markdown",
+    title: input.title,
+    stream: asTextStream(Buffer.from(input.content, "utf-8")),
+    createdByRunId: input.createdByRunId ?? null,
+  });
   return {
     artifactId: result.artifactId,
     representationRevisionId: result.representationRevisionId,

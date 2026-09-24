@@ -384,14 +384,53 @@ describe("surface-readiness.json is still true of this tree", () => {
     }
   });
 
-  it("every listed action is genuinely unshipped in first-party source", () => {
+  it("every listed action is either genuinely unshipped, or pinned to the files that ship it", () => {
+    // Two shapes, and BOTH are falsifiable against the tree.
+    //
+    // Without `shippedBy` the entry says nothing carries the pair, and one file
+    // that does turns it red. With `shippedBy` the entry says the opposite —
+    // the control landed, and the surface stays undriven for the reason its
+    // other entries give — and it names EXACTLY the files that carry it, so it
+    // goes red the day the control moves, spreads to a third file, or is
+    // deleted. The second shape asks MORE of the tree than the first: an entry
+    // may not simply stop making a checkable claim once its gap is filled.
     for (const entry of entries.filter((e) => e.aspect === "action")) {
       const literal = `data-action="${entry.action} -> ${entry.outcome}"`;
-      const shipping = SOURCE.filter((s) => s.text.includes(literal)).map((s) => s.file);
+      const shipping = SOURCE.filter((s) => s.text.includes(literal))
+        .map((s) => s.file)
+        .sort();
+      if (entry.shippedBy) {
+        expect(
+          shipping,
+          `${entry.surface}: the readiness list pins ${entry.action} to ${entry.shippedBy.join(", ")}, but the tree carries it in ${shipping.join(", ") || "no file at all"} — repin the entry or put the control back`,
+        ).toEqual([...entry.shippedBy].sort());
+        continue;
+      }
       expect(
         shipping,
-        `${entry.surface}: the readiness list says ${entry.action} is not shipped, but ${shipping.join(", ")} carries it — drive the surface or restate the entry`,
+        `${entry.surface}: the readiness list says ${entry.action} is not shipped, but ${shipping.join(", ")} carries it — drive the surface, or restate the entry and pin it with shippedBy`,
       ).toEqual([]);
+    }
+  });
+
+  it("an entry that pins a shipped control names real files, and never claims the gap is still open", () => {
+    for (const entry of entries.filter((e) => e.aspect === "action" && e.shippedBy)) {
+      expect(
+        Array.isArray(entry.shippedBy) && entry.shippedBy.length > 0,
+        `${entry.surface}: shippedBy must name at least one file`,
+      ).toBe(true);
+      for (const file of entry.shippedBy) {
+        expect(
+          SOURCE.some((s) => s.file === file),
+          `${entry.surface}: shippedBy names ${file}, which is not a first-party source file of this tree`,
+        ).toBe(true);
+      }
+      // The words have to move with the claim: an entry pinning a shipped
+      // control may not go on saying nothing carries it.
+      expect(
+        /no first-party module carries a control/i.test(entry.why),
+        `${entry.surface}: the entry pins files that ship the control and still says no module carries it`,
+      ).toBe(false);
     }
   });
 
