@@ -128,7 +128,7 @@ import {
   type HitlGateContext,
 } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -1475,7 +1475,13 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            {/* cinatra#3035: a gate whose kind declares the hold keeps its Continue unavailable until a pick is made. */}
+            <Button
+              size="sm"
+              disabled={isApproving || continueAwaitsAPick(entry, bufferedHitlValue)}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -2291,6 +2297,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     reReadForAnsweredGate !== null
       ? reReadForAnsweredGate.next
       : streamInterruptContext;
+
+  // cinatra#3035: inside the run frame the rail is server-rendered, so a live advance to a gate this panel has not been shown yet asks for one server render.
+  const liveGateTaskId = effectiveInterruptContext?.reviewTaskId ?? null;
+  const gatesShownRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!railFrameDrawsTheRail || liveGateTaskId === null) return;
+    const shown = gatesShownRef.current;
+    if (shown === null) {
+      gatesShownRef.current = new Set([liveGateTaskId]);
+      return;
+    }
+    if (shown.has(liveGateTaskId)) return;
+    shown.add(liveGateTaskId);
+    router.refresh();
+  }, [railFrameDrawsTheRail, liveGateTaskId, router]);
 
   // THE ANSWERED STEP, ONCE THE RUN HAS MOVED PAST IT. The run's own read has
   // answered that it is asking nothing — the step is answered and closed — so

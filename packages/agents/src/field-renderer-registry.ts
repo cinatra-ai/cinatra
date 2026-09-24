@@ -105,6 +105,8 @@ export type FieldRendererEntry = {
    * component is mounted.
    */
   drawsOwnSubmit?: boolean;
+  /** cinatra#3035: this kind's component commits a pick as `userResponse`, and a gate drawn by it holds the card's Continue until a pick is made. */
+  holdsContinueUntilPicked?: boolean;
 };
 
 class FieldRendererRegistryImpl {
@@ -211,4 +213,14 @@ export function choiceBody(choice: OfferedChoice): string {
 /** The run-ending sentence an offer carries instead of entries, when it has one. */
 export function statedReason(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/** Whether a gate's Continue still waits for a pick: its entry declares the hold and the buffered `userResponse` is not a non-empty string (cinatra#3035). */
+export function continueAwaitsAPick(
+  entry: FieldRendererEntry | null | undefined,
+  buffered: Record<string, unknown>,
+): boolean {
+  if (entry?.holdsContinueUntilPicked !== true) return false;
+  const pick = buffered.userResponse;
+  return !(typeof pick === "string" && pick.length > 0);
 }
