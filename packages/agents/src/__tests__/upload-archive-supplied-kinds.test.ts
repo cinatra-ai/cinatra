@@ -117,6 +117,24 @@ describe("resolveSuppliedArchive accepts every live kind", () => {
     expect([...r.payload.keys()]).toEqual(["cinatra/artifact.json"]);
   });
 
+  it("accepts an ARTIFACT package shaped like the shipped ones — its inline cinatra.artifact block IS the payload (cinatra#3600)", async () => {
+    // Every artifact pack the product ships declares its configuration inline
+    // at `cinatra.artifact` and ships no descriptor file and no entrypoint,
+    // which is also the only place the artifact installer ever reads.
+    const r = await resolveFixture([
+      {
+        name: "package.json",
+        content: pkgJson({
+          name: "@acme/thing-artifact",
+          cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } } },
+        }),
+      },
+      { name: "README.md", content: "an artifact package" },
+    ]);
+    expect(r.kind).toBe("artifact");
+    expect([...r.payload.keys()]).toEqual(["package.json"]);
+  });
+
   it("accepts each kind under a single top-level folder too", async () => {
     for (const [kind, files] of Object.entries(KIND_FIXTURES)) {
       const name = JSON.parse(files[0].content).name as string;
@@ -302,7 +320,7 @@ describe("cross-kind smuggling (criterion 4)", () => {
         { name: "package.json", content: pkgJson({ name: "@acme/thing-artifact", cinatra: { kind: "artifact" } }) },
         { name: "README.md", content: "hi" },
       ]),
-    ).rejects.toThrow(/declares kind "artifact" but does not contain an artifact descriptor/);
+    ).rejects.toThrow(/declares kind "artifact" but does not contain an artifact declaration/);
   });
 });
 

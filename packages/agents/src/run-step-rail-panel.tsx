@@ -1,5 +1,6 @@
 "use client";
 
+import type { KeyboardEvent } from "react";
 import { Check } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -22,6 +23,7 @@ import {
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
   RUN_PAGE_RAIL_TITLE_CLASS,
+  useRunStepSelection,
 } from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
@@ -78,7 +80,12 @@ export function RunStepRailPanel({
    */
   stepOffset?: number;
 }) {
+  // cinatra#3035: inside a frame the step row the run is paused on opens the run detail, unless a pending review-gate row already stands for it.
+  const selection = useRunStepSelection();
   if (entries.length === 0) return null;
+  const railCarriesPendingGate = entries.some(
+    (e) => e.kind === "gate" && e.status === "pending" && e.gate != null,
+  );
   // The stepper's numeric "value" is the active display index. Map the active
   // ordinal to its 1-based position in the sorted rail; fall back to past-the-end
   // (everything completed) when nothing is active.
@@ -171,6 +178,21 @@ export function RunStepRailPanel({
               </StepperIndicator>
             );
 
+            const opensTheRunDetail =
+              selection !== null && displayStep === activeIndex && !railCarriesPendingGate;
+            const detailIsOpen = opensTheRunDetail && selection?.selected === "detail";
+            const pausedStepPress = opensTheRunDetail
+              ? {
+                  onClick: () => selection?.select("detail"),
+                  // Capture phase, so the trigger's own arrow, Home and End navigation still runs.
+                  onKeyDownCapture: (event: KeyboardEvent<HTMLButtonElement>) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    selection?.select("detail");
+                  },
+                }
+              : {};
+
             return (
               <StepperItem
                 key={entry.key}
@@ -227,7 +249,15 @@ export function RunStepRailPanel({
                       {titleNode}
                     </div>
                   ) : (
-                    <StepperTrigger className={RUN_PAGE_RAIL_ROW_CLASS} tabIndex={-1}>
+                    <StepperTrigger
+                      className={RUN_PAGE_RAIL_ROW_CLASS}
+                      tabIndex={opensTheRunDetail ? 0 : -1}
+                      aria-current={detailIsOpen ? "step" : undefined}
+                      data-run-surface-rail-selected={
+                        opensTheRunDetail ? (detailIsOpen ? "true" : "false") : undefined
+                      }
+                      {...pausedStepPress}
+                    >
                       {indicatorNode}
                       {titleNode}
                     </StepperTrigger>
