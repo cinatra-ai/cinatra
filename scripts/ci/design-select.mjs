@@ -541,6 +541,13 @@ export function specsUnderNearestDir(path, specs) {
   return [];
 }
 
+// Explicit, measured component exception. Both production importers are
+// ordinary static imports; the pinned graph reaches its card fixture families.
+// Never generalize this to src/components/** or a workspace package wholesale.
+const GRAPH_COVERED_COMPONENTS = new Set([
+  "src/components/extension-card-icon-image.tsx",
+]);
+
 const allResult = (families, summary) => ({
   mode: "all",
   specs: [...families.keys()],
@@ -579,7 +586,8 @@ export function selectFamilies({ changedFiles, families, routes = new Map(), unr
 
   for (const path of uiFiles) {
     const rule = wideningRuleFor(path);
-    if (rule) {
+    const coveredComponent = GRAPH_COVERED_COMPONENTS.has(path) && inAnyFamily(path);
+    if (rule && !coveredComponent) {
       return allResult(families, `design suite: running ALL families — ${path}: ${rule.why}`);
     }
   }

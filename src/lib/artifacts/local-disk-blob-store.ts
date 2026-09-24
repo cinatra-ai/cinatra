@@ -174,6 +174,43 @@ function absFor(storageKey: string): string {
   return abs;
 }
 
+/** The head window `put` accumulates from the stream and hands to `sniffMime`.
+ *  512 bytes is the window the sibling text probe in the detection ladder
+ *  already reads (`output-detection-ladder.ts` `isProbableText`), so the two
+ *  text readings of the artifacts area share ONE window size (that ladder's
+ *  own `sniffMime` call still passes its own 64-byte slice). It has to be this wide for the UTF-8
+ *  reading below to hold: over 16 bytes a binary file whose first 16 bytes
+ *  happen to be printable ASCII still passed as text (cinatra#3601). The cost
+ *  is bounded prefix copying while the window fills: each chunk contributes
+ *  only the bytes still missing, never the whole (possibly huge) chunk, and
+ *  once the window is full nothing is copied for the rest of the stream. */
+const SNIFF_HEAD_WINDOW_BYTES = 512;
+
+/** Is this head window valid UTF-8 text? Decoded in FATAL, STREAMING mode with
+ *  the platform's own decoder (no new deps — the sibling detection ladder
+ *  constructs the same global).
+ *
+ *  STREAMING is the load-bearing part, not an ornament: the window is a PREFIX
+ *  of the file, so its last one to three bytes may begin a multi-byte character
+ *  whose remaining bytes lie past the window. A streaming decoder HOLDS BACK
+ *  such an incomplete trailing sequence instead of throwing, while a malformed
+ *  sequence anywhere else in the window (a continuation byte with no lead byte,
+ *  an over-long form, a lead byte followed by a non-continuation byte) still
+ *  throws. Without `stream` the same truncated tail would be refused and a
+ *  genuinely textual file would be read as binary.
+ *
+ *  The decoder is constructed FRESH on every call and never hoisted to a
+ *  module-level singleton: a streaming decoder retains the bytes it held back
+ *  and would carry one window's truncated tail into the next window's reading. */
+function isValidUtf8Window(headWindow: Uint8Array): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(headWindow, { stream: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Minimal dependency-free magic-byte sniff (no new deps per repo constraint).
 // Common types only; unknown → declaredMime (if safe) → octet-stream.
 //
@@ -228,10 +265,13 @@ export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
     return "application/zip";
   }
   // Media containers. These MUST be sniffed before the UTF-8 text
-  // heuristic: several (WebM/EBML, RIFF, bare-frame MP3) can have a
-  // NUL-free 16-byte head and would otherwise mis-sniff as text/plain,
-  // which both mislabels the artifact and routes playable media to the
-  // text preview handler.
+  // reading: WebM/EBML and RIFF can have a NUL-free head window that IS
+  // valid UTF-8 and would otherwise mis-sniff as text/plain, which both
+  // mislabels the artifact and routes playable media to the text preview
+  // handler. A bare-frame MP3 or ADTS head (0xff lead) is not valid UTF-8,
+  // so it would reach the fallback below instead of the text branch — the
+  // positive reading still belongs here rather than resting on a
+  // declaration.
   //
   // ISO-BMFF (`....ftyp`): container is shared by video/mp4, audio/mp4
   // and audio/x-m4a — magic alone cannot pick the declared use, so a
@@ -270,9 +310,11 @@ export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
   if (b.length >= 2 && b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && declared === "audio/mpeg")
     return "audio/mpeg";
   // AAC in ADTS framing (0xFFF sync, layer 00), confirmed by the declared
-  // MIME — same weak-signature rule as bare-frame MP3 above. Without this,
-  // a NUL-free ADTS head declared audio/aac falls through to the UTF-8
-  // text heuristic and is stored as text/plain (mislabel + wrong handler).
+  // MIME — same weak-signature rule as bare-frame MP3 above. This branch
+  // names the type POSITIVELY: since the text reading validates UTF-8, an
+  // ADTS head (0xff lead, never a valid UTF-8 lead byte) no longer reads as
+  // text/plain, so without this branch it would reach the fallback and be
+  // honoured only because the declaration happens to be well formed.
   if (b.length >= 2 && b[0] === 0xff && (b[1] & 0xf6) === 0xf0 && declared === "audio/aac")
     return "audio/aac";
   // FLAC (`fLaC`).
@@ -281,8 +323,15 @@ export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
   // Ogg (`OggS`): container is shared by audio/ogg + video/ogg.
   if (b.length >= 4 && b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53)
     return declared === "video/ogg" ? declared : "audio/ogg";
-  // Heuristic UTF-8 text: no NUL in the head window.
-  if (b.length > 0 && !b.includes(0)) {
+  // Text: no NUL in the head window AND the window is valid UTF-8. The UTF-8
+  // reading is what keeps a binary file out of this branch. Without it EVERY
+  // NUL-free window was called text and every non-text-like declaration was
+  // replaced by `text/plain`, so a binary upload declared
+  // `application/octet-stream` was stored as text and then refused by the write
+  // boundary's accepts check against the binary artifact type (cinatra#3601).
+  // A window that is not valid text falls through to the reading below — the
+  // declaration when it is a well-formed media type, the binary base otherwise.
+  if (b.length > 0 && !b.includes(0) && isValidUtf8Window(b)) {
     if (declared && /^text\/|application\/(json|markdown|xml|csv)/.test(declared))
       return declared;
     return "text/plain";
@@ -490,10 +539,10 @@ export function createLocalDiskBlobStore(
             );
           }
           hash.update(chunk);
-          if (head.length < 16) {
+          if (head.length < SNIFF_HEAD_WINDOW_BYTES) {
             // Copy only the needed prefix, never the whole (possibly huge)
             // first chunk.
-            const slice = chunk.subarray(0, 16 - head.length);
+            const slice = chunk.subarray(0, SNIFF_HEAD_WINDOW_BYTES - head.length);
             const merged = new Uint8Array(head.length + slice.length);
             merged.set(head);
             merged.set(slice, head.length);
