@@ -114,6 +114,31 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
           ? guard.userId !== null && guard.userId === live.ownerUserId
           : actorIsAdmin));
 
+    // DOES THIS SAVE'S OWN ROW WRITE STILL STAND? Answered by the two instants
+    // the guarded write returned, matched against a row read fresh at the
+    // moment the question is asked. BOTH roads below need it, so it is asked
+    // here rather than once per road:
+    //   * the CREATION instant names the ROW. An update never moves it, so a
+    //     row saved again by somebody else is still the same row, and only a
+    //     row created again at this id is a different one.
+    //   * the UPDATE instant names THIS WRITE. Any save of the row moves it,
+    //     including a harmless one by the same person.
+    // A save that read neither holds no witness, so it answers no and writes
+    // nothing: the fail-closed direction every road here takes, where the
+    // panel is missing rather than owned by the wrong person, and the next
+    // save of that row restores it.
+    type RowStamps = { createdAt?: unknown; updatedAt?: unknown };
+    const carriesThisSavesWrite = (candidate: RowStamps | null): boolean =>
+      candidate !== null &&
+      written !== null &&
+      written.createdAt !== null &&
+      written.updatedAt !== null &&
+      normalizeExternalMcpRowStamp(candidate.createdAt) === written.createdAt &&
+      normalizeExternalMcpRowStamp(candidate.updatedAt) === written.updatedAt;
+    /** Asked at the write, against the row that stands at this very moment. */
+    const thisSavesWriteStillStands = (): boolean =>
+      carriesThisSavesWrite(getExternalMcpServerByIdFresh(serverId));
+
     if (storedCredential !== null) {
       // The row landed WITH a credential of its own, so no keyless identity may
       // stand for it: retire one if it is still live. This runs on EVERY keyed
@@ -124,17 +149,23 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
       // and writes nothing. IDENTITY-ONLY: a keyless id addresses no credential,
       // so retiring it never asks the connection service to delete one.
       //
-      // The row is read again between the identity read and the retire, and the
-      // retire addresses the identity ROW that was read: a server deleted and
-      // registered again keyless in that window keeps the identity its own save
-      // just wrote, because the fresh row no longer carries a credential.
+      // ONLY WHILE THIS SAVE IS STILL THE WRITE THAT STANDS (cinatra#3485 fix
+      // leg 6). This save did not insert the identity it is about to take away,
+      // so its whole authority to take it away is that the row it wrote is the
+      // row standing there, keyed, right now. Reading that the row carries SOME
+      // stored key is not that authority: a keyless save can write the row and
+      // CONFIRM this very identity while this retire is still on its way to the
+      // store, and the retire would then take away the panel that save just
+      // confirmed and the sharing policy hanging on it. The condition therefore
+      // travels down to the write, where the store asks it once more with its
+      // query prepared, exactly as every other retire on these roads does.
+      //
+      // The same question is asked once cheaply before the call, so a save that
+      // has plainly lost its row makes no store call at all: that read replaces
+      // the weaker "some keyed row stands" one and adds no round trip.
       const live = await readExternalMcpKeylessConnectionIdentity(keylessConnectionId);
-      if (
-        live &&
-        mayRetireIdentity(live) &&
-        (getExternalMcpServerByIdFresh(serverId)?.nangoConnectionId ?? null) !== null
-      ) {
-        await retireExternalMcpKeylessConnectionIdentityRow(live.id);
+      if (live && mayRetireIdentity(live) && thisSavesWriteStillStands()) {
+        await retireExternalMcpKeylessConnectionIdentityRow(live.id, thisSavesWriteStillStands);
       }
       return;
     }
@@ -203,11 +234,11 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
     // that separation, and only a generation the row itself carries would
     // replace it. That is a change to the schema and it is not made here.
     //
-    // THE TWO STAMPS ANSWER TWO QUESTIONS, and the roads below need one each.
-    // The CREATION instant names the ROW: an update never moves it, so a row
-    // written again by somebody else is still the same row, and only a row
-    // created again is a different one. The UPDATE instant names THIS WRITE:
-    // any save of the row moves it, including a harmless one by the same person.
+    // THE TWO STAMPS ANSWER TWO QUESTIONS, and `carriesThisSavesWrite` above
+    // asks both: the CREATION instant names the ROW, so a row saved again by
+    // somebody else is still the same row and only a row created again is a
+    // different one, and the UPDATE instant names THIS WRITE, which any save of
+    // the row moves. This road adds the identity floor underneath them.
     type RowCandidate = {
       scope: string;
       userId: string | null;
@@ -215,18 +246,9 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
       createdAt?: unknown;
       updatedAt?: unknown;
     };
-    /** The same row this save wrote, however many times it has been saved since. */
-    const isTheRowThisSaveWrote = (candidate: RowCandidate | null): boolean =>
-      describesThisSave(candidate) &&
-      written !== null &&
-      written.createdAt !== null &&
-      normalizeExternalMcpRowStamp(candidate?.createdAt) === written.createdAt;
-    /** That row, and untouched since this save wrote it. */
+    /** The row this save wrote, still describing what an identity needs of it. */
     const isThisSavesOwnWrite = (candidate: RowCandidate | null): boolean =>
-      isTheRowThisSaveWrote(candidate) &&
-      written !== null &&
-      written.updatedAt !== null &&
-      normalizeExternalMcpRowStamp(candidate?.updatedAt) === written.updatedAt;
+      describesThisSave(candidate) && carriesThisSavesWrite(candidate);
     // No witness, no write: a save that cannot tell its own row from a
     // replacement leaves the identity alone entirely.
     if (written === null || written.createdAt === null || written.updatedAt === null) return;
@@ -243,16 +265,33 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
     // seam writes the identity row and seeds its grant as two writes, so a
     // call that threw on the second has still left the first standing.
     let insertedIdentityId: string | null = null;
-    const noteRegistration = (written: { identityId: string; created: boolean }): void => {
-      if (written.created) insertedIdentityId = written.identityId;
-    };
-    // WAS THE ROW ALREADY SOMEBODY ELSE'S WHEN THIS IDENTITY LANDED? Sampled at
-    // the instant the seam returns, because that is the last moment the answer
-    // is still about THIS write. Asking it later instead would take back an
-    // identity that landed correctly and was then CONFIRMED by a perfectly
-    // ordinary next save of the same row, which would cost that save its panel
-    // and the policy on it.
+    // WAS THE ROW ALREADY SOMEBODY ELSE'S WHEN THIS IDENTITY LANDED? Sampled in
+    // the callback, at the INSERT (cinatra#3485 fix leg 6). The seam hands the
+    // row over the moment its insert returns and before it seeds the grant, and
+    // the seeding is a second store call another request can run right through.
+    // A reading taken when the whole registration returns is therefore a
+    // reading about a later moment: a perfectly ordinary next save of the same
+    // person can write the row and CONFIRM this identity inside the seeding,
+    // and the take-back would then delete an identity that landed while this
+    // save's own write stood and that the next save is relying on, costing that
+    // save its panel and the sharing policy on it. Sampled at the insert, a
+    // save whose identity landed while its write stood never takes it back on
+    // account of a write that came later.
+    //
+    // WHAT THIS STILL CANNOT SEE. The callback reads the store's answer, not
+    // the instant inside the store where the row became visible; closing that
+    // last gap needs the row write and the identity write under one
+    // coordination point, which these two stores do not share.
     let identityLandedOnALaterWrite = false;
+    const noteRegistration = (reported: { identityId: string; created: boolean }): void => {
+      if (!reported.created) return;
+      insertedIdentityId = reported.identityId;
+      // The very question the retire asks below, so the two moments are read
+      // the same way: is the row that stands right now still this save's own.
+      if (!isThisSavesOwnWrite(getExternalMcpServerByIdFresh(serverId))) {
+        identityLandedOnALaterWrite = true;
+      }
+    };
 
     /** What one pass at the identity did. */
     type Pass =
@@ -322,20 +361,15 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
           isThisSavesOwnWrite(getExternalMcpServerByIdFresh(serverId)),
         );
       }
-      try {
-        await registerExternalMcpKeylessConnectionIdentity(
-          keylessConnectionId,
-          identity,
-          noteRegistration,
-        );
-      } finally {
-        // Whether or not the seam finished: it writes the identity row and
-        // seeds its grant as two writes, so a call that threw on the second has
-        // still left the first standing.
-        if (!isThisSavesOwnWrite(getExternalMcpServerByIdFresh(serverId))) {
-          identityLandedOnALaterWrite = true;
-        }
-      }
+      // The callback carries BOTH answers out of this call, whether or not the
+      // seam finishes: it writes the identity row and seeds its grant as two
+      // writes, so a call that threw on the second has still left the first
+      // standing, already reported and already sampled.
+      await registerExternalMcpKeylessConnectionIdentity(
+        keylessConnectionId,
+        identity,
+        noteRegistration,
+      );
       return "registered";
     };
 
@@ -426,15 +460,19 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
     // writes the identity row and seeds its grant as two writes: one that threw
     // on the second still leaves the first standing.
     //
-    // TWO MOMENTS, and the take-back needs a yes at both. At the instant the
-    // identity LANDED, this save's write must already have been superseded:
-    // that is what makes the identity one that was put on a configuration
-    // somebody else wrote. At the instant of the RETIRE, it must still be
-    // superseded: a row that came back to this save's own write is a row this
-    // identity is the right one to draw a panel for. Asking only the first
-    // would take back an identity the row still needs; asking only the second
-    // would take back one that landed correctly and was merely CONFIRMED by an
-    // ordinary next save of the same row, costing that save its panel.
+    // TWO MOMENTS, and the take-back needs a yes at both. At the INSERT, this
+    // save's write must already have been superseded: that is what makes the
+    // identity one that was put on a configuration somebody else wrote. At the
+    // instant of the RETIRE, it must still be superseded: a row that came back
+    // to this save's own write is a row this identity is the right one to draw
+    // a panel for. Asking only the first would take back an identity the row
+    // still needs; asking only the second would take back one that landed
+    // correctly and was merely CONFIRMED by an ordinary next save of the same
+    // row, costing that save its panel.
+    //
+    // The FIRST moment is the insert itself, never the seam's return: the grant
+    // seed runs between the two and another save can confirm this identity
+    // inside it, which is why the reading is taken in the callback above.
     //
     // Both stamps carry each question. The CREATION instant tells a row
     // somebody registered again at this id from the row this save wrote: a

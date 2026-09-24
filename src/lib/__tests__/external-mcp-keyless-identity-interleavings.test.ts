@@ -44,6 +44,8 @@ type Boundary =
   | "authorized"
   | "identity:read"
   | "identity:register"
+  /** INSIDE the registration: the identity row stands, its grant is still being seeded */
+  | "identity:seed"
   | "identity:retire"
   | "credential:revoke";
 
@@ -364,6 +366,11 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     identities.set(row.id, row);
     report?.({ identityId: row.id, created: true });
     ops.push({ road, op: "register", identityId: row.id, created: true });
+    // THE GRANT SEED, the seam's SECOND write. The identity row is standing by
+    // now and the seed is a store call of its own, so another road runs right
+    // through this point: anything the caller reads after the registration
+    // returns is a reading about a later moment than the insert.
+    await boundary("identity:seed");
     if (seedFailsFor.has(road)) {
       seedFailsFor.delete(road);
       // The seam writes the identity row and seeds its grant as two writes:
@@ -1104,5 +1111,127 @@ describe("every other ordering the ninth round traced (cinatra#3485)", () => {
     expect(liveIdentityAt("external-mcp-second")).not.toBeNull();
     expect(credentialCalls).toEqual(["external-mcp-first"]);
     expect(invariantBreaches(["d"])).toEqual([]);
+  });
+
+  it("a SCOPE change inside the delete's own key call leaves the documented residue", async () => {
+    // THE REFERENCED-BUT-DELETED INTERVAL, written down as it is rather than
+    // claimed closed. The delete takes the stored key away first, so a change
+    // that lands while that call is in flight is past the fresh pre-delete
+    // read: the guarded row delete refuses, and the row survives pointing at a
+    // key that is gone. Its owner repairs it by deleting it again or by saving
+    // a new key. This case names a PROMOTION, which changes the scope and the
+    // owner rather than the stored key, so the interval stays visible for the
+    // road it is actually about; a later change to that road shows up here.
+    placeRow({
+      id: "srv",
+      scope: "user",
+      userId: "person-a",
+      derivedOwner: "person-a",
+      nangoConnectionId: "external-mcp-key",
+    });
+    placeIdentity("external-mcp-key", "person-a", null);
+    pauseAt("d", "credential:revoke");
+    start("d", () => deleteRoad({ serverId: "srv", actorUserId: "person-a", actorIsAdmin: false }));
+    await reaches("d", "credential:revoke");
+    const row = rows.get("srv");
+    if (row) {
+      row.scope = "global";
+      row.userId = null;
+      row.derivedOwner = "admin-a";
+      row.updatedAt = nextStamp();
+    }
+    await finish("d");
+
+    expect(refusalOf("d")).toBeInstanceOf(WriteConflict);
+    // The row stands, promoted, and still points at the key that went.
+    expect(rows.get("srv")?.scope).toBe("global");
+    expect(rows.get("srv")?.nangoConnectionId).toBe("external-mcp-key");
+    expect(deletedKeys.has("external-mcp-key")).toBe(true);
+    expect(credentialCalls).toEqual(["external-mcp-key"]);
+    expect(clauseDBreaches()).toEqual([
+      "row srv stands while the key it points at was taken away",
+    ]);
+    // Everything else holds: nothing was retired that should not have been.
+    expect(clauseBBreaches(["d"])).toEqual([]);
+    expect(clauseCBreaches(["d"])).toEqual([]);
+  });
+});
+
+describe("the two orderings the tenth round found (cinatra#3485)", () => {
+  it("finding 1: a save never takes back an identity another save CONFIRMED during its grant seed", async () => {
+    // The seam writes the identity row and seeds its grant as two calls, so
+    // "did my own write still stand when this identity landed" has to be read
+    // at the INSERT. Read after the whole registration returns, it is a reading
+    // about a later moment, and the save takes back the very row the next save
+    // is relying on, with that save's sharing policy hanging on it.
+    placeRow({ id: "srv", scope: "global", userId: null, derivedOwner: "admin-a" });
+
+    // A writes the row and INSERTS the identity while its own write stands,
+    // then pauses inside the grant seeding.
+    pauseAt("a", "identity:seed");
+    sharedSave("a", "admin-a");
+    await reaches("a", "identity:seed");
+    const policyRow = liveKeylessIdentity("srv");
+    expect(policyRow).not.toBeNull();
+
+    // An ordinary next save of the same person writes the row, CONFIRMS that
+    // identity, and reports success on it.
+    sharedSave("b", "admin-a");
+    await completes("b");
+    expect(liveKeylessIdentity("srv")?.id).toBe(policyRow?.id);
+
+    await finish("a");
+
+    // The row B confirmed is still the row, so B's policy still governs.
+    expect(identities.get(policyRow?.id ?? "")?.deletedAt).toBeNull();
+    expect(liveKeylessIdentity("srv")?.id).toBe(policyRow?.id);
+    expect(standingIdentityOwner()).toBe("admin-a");
+    expect(invariantBreaches()).toEqual([]);
+  });
+
+  it("finding 2: a KEYED save never retires an identity once its own write has stopped standing", async () => {
+    // A keyed save may retire a keyless identity because no keyless identity
+    // may stand for a row that stores a key. That authority is its own row
+    // write standing, not the mere fact that some keyed row stands: a keyless
+    // save that took the row back and confirmed the identity has to keep it.
+    placeRow({ id: "srv", scope: "user", userId: "person-a", derivedOwner: "person-a" });
+    const standing = placeIdentity(keylessIdOf("srv"), "person-a", null);
+
+    // K writes the row WITH a stored key, reads the retirable identity, and
+    // pauses inside the retire.
+    pauseAt("k", "identity:retire");
+    start("k", () =>
+      saveRoad({
+        serverId: "srv",
+        scope: "user",
+        rowUserId: "person-a",
+        ownerUserId: "person-a",
+        organizationId: null,
+        actorIsAdmin: false,
+        storedCredential: "external-mcp-key",
+      }),
+    );
+    await reaches("k", "identity:retire");
+
+    // A keyless save takes the row back and CONFIRMS that identity.
+    start("b", () =>
+      saveRoad({
+        serverId: "srv",
+        scope: "user",
+        rowUserId: "person-a",
+        ownerUserId: "person-a",
+        organizationId: null,
+        actorIsAdmin: false,
+      }),
+    );
+    await completes("b");
+
+    await finish("k");
+
+    expect(rows.get("srv")?.nangoConnectionId).toBeNull();
+    expect(identities.get(standing.id)?.deletedAt).toBeNull();
+    expect(liveKeylessIdentity("srv")?.id).toBe(standing.id);
+    expect(standingIdentityOwner()).toBe("person-a");
+    expect(invariantBreaches()).toEqual([]);
   });
 });
