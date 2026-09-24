@@ -166,9 +166,9 @@
     {
       "packageName": "@cinatra-ai/text-artifact",
       "repo": "cinatra-ai/text-artifact",
-      "resolvedSha": "e2167b0b1a952591405fed00a6a2f53e2ab3834a",
+      "resolvedSha": "0c9677b421bcfad5573e46bea091bd7a294f4b39",
       "packageVersion": "0.1.0",
-      "treeSha256": "23fbdfaf6edcbc86a8f3948f5f863b0540479c361f8270ecffdcf10abeee55bc"
+      "treeSha256": "8b7c4b53be1d49c4bec4f08bc5d2e2a87d1b20d4b2e4c628041a3aef45cf353a"
     },
     {
       "packageName": "@cinatra-ai/video-artifact",
