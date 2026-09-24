@@ -60,6 +60,11 @@ const keep = (over: Record<string, unknown> = {}) =>
     createdBy: "user-1",
     snapshot: snapshot({ originatingHumanUserId: "user-1" }),
     writable: writable(),
+    // cinatra#2815 S3 part 4: the scope is REQUIRED of every caller now, and
+    // the default arm that answered an absent one is gone. This fixture relied
+    // on that default; it names the scope those cases were written against,
+    // and each case that means another one still passes its own.
+    requestedScope: { scopeKind: "user" as const, scopeId: "user-1" },
     insert,
     ...over,
   });

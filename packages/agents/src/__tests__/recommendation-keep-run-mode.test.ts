@@ -87,7 +87,12 @@ const confirm = (over: Record<string, unknown> = {}) =>
     runId: "run-1",
     confirmedSkillIds: ["skill-a"],
     who: who as never,
-    keepRecommended: {},
+    // cinatra#2815 S3 part 4: a keep NAMES its scope. This fixture asked for
+    // one with no scope at all, which the road used to answer with the
+    // narrowest writable one; it is refused now, and these cases are about the
+    // run's mode and its tenancy, so they name the one scope this actor can
+    // actually write, which is the one the default used to pick for them.
+    keepRecommended: { scope: { scopeKind: "user" as const, scopeId: "user-1" } },
     ...over,
   });
 
@@ -101,6 +106,11 @@ beforeEach(() => {
   confirmRunSkillSelection.mockResolvedValue({
     ok: true,
     written: 1,
+    // cinatra#2815 S3 part 4: the confirm ALWAYS answers with the selection it
+    // resolved, and the keep now writes THAT rather than the submitted ids.
+    // This mock omitted the field the real function always returns, so it could
+    // no longer stand in for it.
+    selection: [{ skillId: "skill-a", skillRevisionId: "rev-a", selectionSource: "x" }],
     efficacy: { accepted: ["skill-a"], rejected: [] },
   });
   insertAssignedSkill.mockResolvedValue({ outcome: "assigned" });

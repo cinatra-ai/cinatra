@@ -127,15 +127,26 @@ describe("the offered recommendation-persistence scope set", () => {
 });
 
 describe("resolving the scope a confirm writes into", () => {
-  it("defaults to the NARROWEST writable scope", () => {
+  it("REFUSES a request that names no scope, rather than choosing one", () => {
+    // This case asserted the opposite until cinatra#2815 S3 part 4: an absent
+    // request was answered with the narrowest writable scope. That default was
+    // a real scope and a real row, written for a confirmation that selected
+    // nowhere, so it is gone. The narrowest writable scope is still what a
+    // chooser should PRESELECT, and `offeredRecommendationScopes` answers that
+    // question, which the case below pins.
     const verdict = resolveRecommendationPersistenceScope({
       snapshot: snapshot({ projectId: "proj-1", originatingHumanUserId: "user-1" }),
       writable: writable({ projectIds: ["proj-1"], organizationIds: ["org-1"] }),
+    } as never);
+    expect(verdict).toEqual({ ok: false, reason: "scope-required" });
+  });
+
+  it("still offers the narrowest writable scope FIRST, for a chooser to preselect", () => {
+    const offered = offeredRecommendationScopes({
+      snapshot: snapshot({ projectId: "proj-1", originatingHumanUserId: "user-1" }),
+      writable: writable({ projectIds: ["proj-1"], organizationIds: ["org-1"] }),
     });
-    expect(verdict).toMatchObject({
-      ok: true,
-      scope: { scopeKind: "project", scopeId: "proj-1" },
-    });
+    expect(offered[0]).toEqual({ scopeKind: "project", scopeId: "proj-1" });
   });
 
   it("a NON-ADMIN confirming on their OWN run may land in their personal scope", () => {
@@ -184,6 +195,7 @@ describe("resolving the scope a confirm writes into", () => {
       resolveRecommendationPersistenceScope({
         snapshot: snapshot({ originatingHumanUserId: "someone-else" }),
         writable: writable(),
+        requested: { scopeKind: "organization", scopeId: "org-1" },
       }),
     ).toEqual({ ok: false, reason: "no-writable-scope" });
   });

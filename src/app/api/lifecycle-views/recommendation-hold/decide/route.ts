@@ -73,6 +73,11 @@ const requestSchema = z
      * the run's own frozen snapshot intersected with this caller's
      * assignment-write authority, and refuses a scope that is not in it, so a
      * client that asks for a wider one changes nothing.
+     *
+     * THE SCOPE IS REQUIRED. An omitted one used to reach a resolver that chose
+     * the narrowest writable scope, so a confirmation that selected nowhere
+     * still had assignment rows written at a real scope. A keep names where it
+     * keeps, or it is refused at the door and nothing is written.
      */
     keepRecommended: z
       .object({
@@ -81,7 +86,7 @@ const requestSchema = z
             scopeKind: z.enum(["project", "user", "team", "organization", "workspace"]),
             scopeId: z.string().min(1).max(256),
           })
-          .optional(),
+          .strict(),
       })
       .strict()
       .optional(),

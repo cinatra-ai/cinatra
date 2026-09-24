@@ -99,6 +99,11 @@ beforeEach(() => {
   confirmRunSkillSelection.mockResolvedValue({
     ok: true,
     written: 1,
+    // cinatra#2815 S3 part 4: the confirm ALWAYS answers with the selection it
+    // resolved, and the keep now writes THAT rather than the submitted ids.
+    // This mock omitted the field the real function always returns, so it could
+    // no longer stand in for it.
+    selection: [{ skillId: "skill-a", skillRevisionId: "rev-a", selectionSource: "x" }],
     efficacy: { accepted: ["skill-a"], rejected: [] },
   });
   insertAssignedSkill.mockResolvedValue({ outcome: "assigned" });

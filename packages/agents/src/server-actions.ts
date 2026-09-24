@@ -30,7 +30,10 @@ import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-binding
 // Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
 // re-homed into core off the now-retired recommender agent binding.
 import { getRunRecommendationsForReader } from "./recommendation-interception";
-import { writeRunSkillSelectionForActor } from "./run-recommendation-core";
+import {
+  writeRunSkillSelectionForActor,
+  type KeepRecommendationResult,
+} from "./run-recommendation-core";
 import type {
   RankedRecommendation,
   RecommendationEfficacy,
@@ -325,6 +328,11 @@ export type ConfirmRunSkillSelectionActionResult = {
   ok: boolean;
   written: number;
   efficacy: RecommendationEfficacy;
+  /** cinatra#2815 S3 part 4: what the KEEP did, when the confirmation asked for
+   *  one. Declared here because a caller cannot read a field the result shape
+   *  does not name, and a keep the authority refused was therefore invisible:
+   *  the action answered a plain success while nothing had been persisted. */
+  kept?: KeepRecommendationResult;
 };
 
 export async function confirmRunSkillSelectionAction(input: {
@@ -347,7 +355,7 @@ export async function confirmRunSkillSelectionAction(input: {
    * against the run's own frozen snapshot and this caller's assignment-write
    * authority, so carrying it is not trusting it.
    */
-  keepRecommended?: { scope?: AssignmentScope };
+  keepRecommended?: { scope: AssignmentScope };
   restrictToSkillIds?: string[];
   /**
    * The hold this decision was bound to by the caller's hold-instance CAS

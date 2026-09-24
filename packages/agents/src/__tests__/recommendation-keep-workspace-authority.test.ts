@@ -55,7 +55,10 @@ vi.mock("@/lib/authz/admin-bypass", () => ({
 
 import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
 import type { AssignmentScope } from "@/lib/assignment-scope";
-import { writeRunSkillSelectionForActor } from "../run-recommendation-core";
+import {
+  offeredRecommendationScopes,
+  writeRunSkillSelectionForActor,
+} from "../run-recommendation-core";
 
 const WORKSPACE: AssignmentScope = {
   scopeKind: "workspace",
@@ -106,6 +109,11 @@ beforeEach(() => {
   confirmRunSkillSelection.mockResolvedValue({
     ok: true,
     written: 1,
+    // cinatra#2815 S3 part 4: the confirm ALWAYS answers with the selection it
+    // resolved, and the keep now writes THAT rather than the submitted ids.
+    // This mock omitted the field the real function always returns, so it could
+    // no longer stand in for it.
+    selection: [{ skillId: "skill-a", skillRevisionId: "rev-a", selectionSource: "x" }],
     efficacy: { accepted: ["skill-a"], rejected: [] },
   });
   insertAssignedSkill.mockResolvedValue({ outcome: "assigned" });
@@ -141,10 +149,17 @@ describe("the workspace layer of a recommendation keep", () => {
     expect(insertAssignedSkill).not.toHaveBeenCalled();
   });
 
-  it("a MEMBER's default keep still lands in their own personal scope, unchanged", async () => {
+  it("a MEMBER keeping in their own personal scope still lands it, unchanged", async () => {
+    // These two cases asserted the DEFAULT until cinatra#2815 S3 part 4: a keep
+    // that named no scope was answered with the narrowest writable one. That
+    // default wrote real rows for a confirmation that chose nowhere, so it is
+    // gone and a scopeless keep is refused. What the cases really pin survives:
+    // the personal scope is reachable for a member, and it stays FIRST in the
+    // offered order even once workspace joins the set, which is what a chooser
+    // preselects.
     const result = await confirm({
       who: actor({ platformRole: "member" }),
-      keepRecommended: {},
+      keepRecommended: { scope: { scopeKind: "user", scopeId: "user-1" } },
     });
     expect(result.kept).toMatchObject({
       ok: true,
@@ -153,14 +168,24 @@ describe("the workspace layer of a recommendation keep", () => {
     });
   });
 
-  it("a PLATFORM ADMINISTRATOR's default keep is still the NARROWEST writable scope", async () => {
-    // Workspace joins the offered set, but it joins it LAST. The default is
-    // the first element, which is this actor's own personal scope.
-    const result = await confirm({ keepRecommended: {} });
-    expect(result.kept).toMatchObject({
-      ok: true,
-      scope: { scopeKind: "user", scopeId: "user-1" },
+  it("a PLATFORM ADMINISTRATOR's NARROWEST writable scope is still offered first", async () => {
+    // Workspace joins the offered set, but it joins it LAST.
+    const offered = offeredRecommendationScopes({
+      snapshot: runRow().assignmentScopeSnapshot as never,
+      writable: {
+        actorUserId: "user-1",
+        mayWrite: (scope) => scope.scopeKind === "user" && scope.scopeId === "user-1",
+        mayWriteWorkspace: true,
+      },
     });
+    expect(offered[0]).toEqual({ scopeKind: "user", scopeId: "user-1" });
+    expect(offered.at(-1)).toEqual(WORKSPACE);
+  });
+
+  it("refuses a keep that names no scope at all, and writes nothing", async () => {
+    const result = await confirm({ keepRecommended: {} });
+    expect(result.kept).toEqual({ ok: false, reason: "scope-required" });
+    expect(insertAssignedSkill).not.toHaveBeenCalled();
   });
 
   it("a FOREIGN confirmer is still refused the PERSONAL scope, platform role or not", async () => {

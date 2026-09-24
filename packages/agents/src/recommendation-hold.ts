@@ -254,6 +254,22 @@ export const RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL =
 /** The TYPED outcome that rides alongside the prose above. */
 export const RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE = "recommendation_keep_not_interactive";
 
+/**
+ * A KEEP NAMES THE SCOPE IT WRITES INTO (cinatra#2815 S3 part 4).
+ *
+ * A keep request that named no scope used to reach a resolver that chose one
+ * for it, the narrowest the confirmer could write. That is a real scope and a
+ * real row: an organization administrator who asked to keep without choosing
+ * anywhere had organization-wide assignments written on their confirmation.
+ * The choice belongs to the person, so a keep without one is refused and
+ * writes nothing. The selection itself is an ordinary confirm and still lands.
+ */
+export const RECOMMENDATION_KEEP_SCOPE_REQUIRED_REFUSAL =
+  "These skills were applied to this run. Keeping them for the next one needs a scope to keep them in, so nothing was assigned.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_KEEP_SCOPE_REQUIRED_CODE = "recommendation_keep_scope_required";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;

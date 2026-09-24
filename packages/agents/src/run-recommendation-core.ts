@@ -45,6 +45,8 @@ import {
   RECOMMENDATION_SCOPE_UNDECIDABLE_CODE,
   RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE,
   RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL,
+  RECOMMENDATION_KEEP_SCOPE_REQUIRED_CODE,
+  RECOMMENDATION_KEEP_SCOPE_REQUIRED_REFUSAL,
   RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL,
   RECOMMENDATION_SKIP_NOT_RECORDED,
   RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
@@ -240,9 +242,23 @@ export type RunRecommendationSettledSelection = {
 // definition rather than three.
 export { recommendationRunHasStarted };
 
+/**
+ * cinatra#2815 S3 part 4: `kept` rides EVERY variant, because the keep and the
+ * decision can end differently. A keep the authority refused used to be thrown
+ * away here, so the caller was told the decision succeeded and could not learn
+ * that nothing had been persisted; and a release that failed AFTER a keep
+ * landed must still say what was written. The value is the write's own outcome,
+ * carried through unchanged.
+ */
 export type RunRecommendationDecisionResult =
-  | { ok: true; dispatched: boolean }
-  | { ok: false; error: string; code?: string; settingsHref?: string };
+  | { ok: true; dispatched: boolean; kept?: KeepRecommendationResult }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      settingsHref?: string;
+      kept?: KeepRecommendationResult;
+    };
 
 /** The authoritative per-run selection write, handed in by the entry. */
 export type RecommendationSelectionWrite = (input: {
@@ -271,10 +287,17 @@ export type RecommendationSelectionWrite = (input: {
    * authority, and refuses a scope that is not in it. Without the transport the
    * field existed only inside the write, so a confirmation asking to keep the
    * accepted skills wrote nothing and said nothing.
+   *
+   * THE SCOPE IS REQUIRED. A keep with none used to reach a resolver that chose
+   * one, so a confirmation that selected no scope still had rows written at the
+   * narrowest scope the confirmer could write. The person decides where their
+   * accepted skills are kept, or nothing is kept.
    */
-  keepRecommended?: { scope?: AssignmentScope };
+  keepRecommended?: { scope: AssignmentScope };
 }) => Promise<{
   ok: boolean;
+  /** What the KEEP did, when one was asked for. Carried unchanged. */
+  kept?: KeepRecommendationResult;
   /**
    * The reader-facing sentence a REFUSED write wants drawn in place of the
    * generic denial (cinatra#2906). The stale-offer refusal describes the
@@ -832,7 +855,7 @@ export async function confirmRecommendationForActor(input: {
   forcedRevisions?: Record<string, string>;
   adjustedSkillIds?: string[];
   /** The keep request this confirmation carries: see the write contract. */
-  keepRecommended?: { scope?: AssignmentScope };
+  keepRecommended?: { scope: AssignmentScope };
   holdRef?: string;
   dispatch?: RecommendationDispatch;
 }): Promise<RunRecommendationDecisionResult> {
@@ -867,10 +890,22 @@ export async function confirmRecommendationForActor(input: {
       ok: false,
       error: written.refusal ?? RECOMMENDATION_DECISION_REFUSAL,
       ...(written.refusalCode ? { code: written.refusalCode } : {}),
+      ...(written.kept ? { kept: written.kept } : {}),
     };
   }
 
-  return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined, input.dispatch);
+  // THE KEEP OUTCOME TRAVELS WITH THE DECISION (cinatra#2815 S3 part 4). It was
+  // discarded here, so a keep the authority refused still answered as a plain
+  // success and the caller had no way to learn that nothing was written. It is
+  // carried unchanged, and onto the refusal of a release too: a keep that landed
+  // before a release failed is still a fact the caller has to be told.
+  const released = await releaseAndDispatch(
+    input.runId,
+    bound.holdId,
+    input.holdRef !== undefined,
+    input.dispatch,
+  );
+  return written.kept ? { ...released, kept: written.kept } : released;
 }
 
 /**
@@ -1226,7 +1261,11 @@ export type RecommendationWritableScopes = {
   mayWriteWorkspace: boolean;
 };
 
-export type RecommendationScopeRefusal = "no-writable-scope" | "scope-not-offered";
+export type RecommendationScopeRefusal =
+  | "no-writable-scope"
+  | "scope-not-offered"
+  /** cinatra#2815 S3 part 4: the request named no usable scope at all. */
+  | "scope-required";
 
 export type RecommendationScopeVerdict =
   | { ok: true; scope: AssignmentScope; offered: AssignmentScope[] }
@@ -1324,25 +1363,49 @@ export function offeredRecommendationScopes(input: {
 }
 
 /**
- * Decide the scope a confirm writes into: the requested one when it is in the
- * offered set, otherwise the narrowest writable scope. A request for anything
- * NOT offered is a refusal — it is never quietly widened, and never quietly
- * narrowed to the default, because both would write somewhere the confirmer
- * did not choose.
+ * Decide the scope a confirm writes into: THE REQUESTED ONE, when it is in the
+ * offered set. Anything else is a refusal. It is never quietly widened, and
+ * never quietly narrowed, because both would write somewhere the confirmer did
+ * not choose.
+ *
+ * THERE IS NO DEFAULT ARM ANY MORE (cinatra#2815 S3 part 4). A request that
+ * named no scope used to be answered with the narrowest writable one, and that
+ * is a real scope and a real row: an organization administrator who asked to
+ * keep without choosing had organization-wide assignments written on their
+ * confirmation. `requested` is required of every caller, and a call that
+ * reaches here without a usable one is refused rather than decided for.
+ *
+ * The narrowest writable scope is still a perfectly good thing for a chooser to
+ * PRESELECT, and `offeredRecommendationScopes` answers that question directly.
+ * What may not happen is a write deciding it on the person's behalf.
  */
 export function resolveRecommendationPersistenceScope(input: {
   snapshot: AssignmentScopeSnapshot;
   writable: RecommendationWritableScopes;
-  requested?: AssignmentScope;
+  requested: AssignmentScope;
 }): RecommendationScopeVerdict {
+  const requested = usableAssignmentScope(input.requested);
+  if (!requested) return { ok: false, reason: "scope-required" };
   const offered = offeredRecommendationScopes(input);
   if (offered.length === 0) return { ok: false, reason: "no-writable-scope" };
-  if (!input.requested) {
-    return { ok: true, scope: offered[0], offered };
-  }
-  const match = offered.find((s) => sameScope(s, input.requested!));
+  const match = offered.find((s) => sameScope(s, requested));
   if (!match) return { ok: false, reason: "scope-not-offered" };
   return { ok: true, scope: match, offered };
+}
+
+/**
+ * The scope a request actually named, or nothing.
+ *
+ * An omitted field, an empty object and a blank id are all the same fact: the
+ * person did not choose a scope. Stated once, so the entries, the resolver and
+ * the write cannot disagree about what "chose nothing" means.
+ */
+function usableAssignmentScope(scope: AssignmentScope | undefined | null): AssignmentScope | null {
+  if (!scope || typeof scope !== "object") return null;
+  const scopeKind = typeof scope.scopeKind === "string" ? scope.scopeKind.trim() : "";
+  const scopeId = typeof scope.scopeId === "string" ? scope.scopeId.trim() : "";
+  if (!scopeKind || !scopeId) return null;
+  return { scopeKind, scopeId } as AssignmentScope;
 }
 
 // ---------------------------------------------------------------------------
@@ -1413,8 +1476,13 @@ export async function keepConfirmedRecommendationInScope(input: {
   createdBy: string;
   snapshot: AssignmentScopeSnapshot;
   writable: RecommendationWritableScopes;
-  /** The scope the confirmer chose. Absent = the narrowest writable one. */
-  requestedScope?: AssignmentScope;
+  /** The scope the confirmer CHOSE. Required: a keep with no scope is refused,
+   *  never decided for the person (cinatra#2815 S3 part 4). */
+  requestedScope: AssignmentScope;
+  /** Submitted skills this keep will NOT write, reported back under `skipped`
+   *  so the caller sees every id it named accounted for. The confirmation's own
+   *  selection decides which ids those are; see the caller. */
+  skipSkillIds?: readonly string[];
   insert?: AssignedSkillInsert;
   /**
    * The AUDITED ROAD a workspace-tier write must travel (cinatra#2813 S1).
@@ -1431,7 +1499,7 @@ export async function keepConfirmedRecommendationInScope(input: {
   const verdict = resolveRecommendationPersistenceScope({
     snapshot: input.snapshot,
     writable: input.writable,
-    ...(input.requestedScope ? { requested: input.requestedScope } : {}),
+    requested: input.requestedScope,
   });
   if (!verdict.ok) return { ok: false, reason: verdict.reason };
 
@@ -1455,7 +1523,10 @@ export async function keepConfirmedRecommendationInScope(input: {
     });
 
   let written = 0;
-  const skipped: string[] = [];
+  // Seeded with the ids the caller already knows it will not write, so a
+  // confirmation can see every skill it submitted accounted for: either kept,
+  // or named here.
+  const skipped: string[] = [...new Set(input.skipSkillIds ?? [])];
   // Deduplicated, and in the order the confirm named them: the store assigns
   // the position, and two rows must never race for one.
   for (const skillId of [...new Set(input.confirmedSkillIds)]) {
@@ -1508,10 +1579,11 @@ export async function writeRunSkillSelectionForActor(input: {
    * assignments. Present only on the INTERACTIVE confirm (a human chose a
    * scope); absent everywhere else, which leaves every landed caller writing
    * exactly the per-run selection it wrote before. `scope` is the confirmer's
-   * choice and is ENFORCED against the server-derived offered set, never
-   * trusted.
+   * choice, it is REQUIRED, and it is ENFORCED against the server-derived
+   * offered set, never trusted. A keep that names no scope is refused: the
+   * road no longer picks one on the person's behalf.
    */
-  keepRecommended?: { scope?: AssignmentScope };
+  keepRecommended?: { scope: AssignmentScope };
 }): Promise<RunSkillSelectionWriteResult> {
   const empty: RunSkillSelectionWriteResult = {
     ok: false,
@@ -1591,7 +1663,9 @@ export async function writeRunSkillSelectionForActor(input: {
     // hold that OFFERS a recommendation already gates on. The keep alone is
     // refused; the selection is an ordinary confirm and still lands.
     let keepRefusal: { refusal: string; refusalCode: string } | undefined;
+    let keepRefusalReason: "not-interactive" | "scope-required" | undefined;
     let keepSnapshot: AssignmentScopeSnapshot | undefined;
+    let keepScope: AssignmentScope | undefined;
     const keepAsked =
       Boolean(input.keepRecommended) && who.actor.actorType === "human" && Boolean(who.actor.userId);
     if (keepAsked && run.humanPresent !== true) {
@@ -1599,7 +1673,21 @@ export async function writeRunSkillSelectionForActor(input: {
         refusal: RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL,
         refusalCode: RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE,
       };
+      keepRefusalReason = "not-interactive";
+    } else if (keepAsked && !usableAssignmentScope(input.keepRecommended?.scope)) {
+      // THE SCOPE IS THE PERSON'S CHOICE (cinatra#2815 S3 part 4). A keep that
+      // names none used to fall to the narrowest writable scope, which wrote
+      // real rows nobody selected. Both entries require it now, and this is the
+      // shared write's own guard, so a caller that reaches past an entry's
+      // shape check still cannot have a scope chosen for it. The selection is
+      // an ordinary confirm and still lands.
+      keepRefusal = {
+        refusal: RECOMMENDATION_KEEP_SCOPE_REQUIRED_REFUSAL,
+        refusalCode: RECOMMENDATION_KEEP_SCOPE_REQUIRED_CODE,
+      };
+      keepRefusalReason = "scope-required";
     } else if (keepAsked) {
+      keepScope = usableAssignmentScope(input.keepRecommended?.scope) ?? undefined;
       try {
         // THE RUN'S OWN DURABLE ORGANIZATION, AND NOTHING ELSE. Falling back to
         // the confirmer's organization made the keep land in a tenancy the RUN
@@ -1672,7 +1760,23 @@ export async function writeRunSkillSelectionForActor(input: {
     // IMMUTABLE snapshot — never the actor's live memberships — intersected
     // with what this actor may write.
     let kept: KeepRecommendationResult | undefined;
-    if (input.keepRecommended && keepSnapshot && who.actor.userId) {
+    if (keepScope && keepSnapshot && who.actor.userId) {
+      // WHAT THE CONFIRMATION SELECTED, NOT WHAT THE REQUEST SUBMITTED
+      // (cinatra#2815 S3 part 4). The confirm resolves the submitted ids
+      // against the offer it must honour, and on the path with no recorded
+      // offer it scores at confirm time and drops an id its scored set does not
+      // carry. Keeping the SUBMITTED ids therefore persisted a skill the
+      // recommender's own cap had excluded, as an accepted recommendation,
+      // although the confirmation selected nothing of the sort. The ids this
+      // keep writes are the selection's own, still bounded by the run's scopes;
+      // every other submitted id is reported as skipped rather than dropped in
+      // silence.
+      const selectedIds = (result.selection ?? []).map((entry) => entry.skillId);
+      const keepIds = selectedIds.filter((skillId) => allowed.has(skillId));
+      const keepSet = new Set(keepIds);
+      const skipSkillIds = [...new Set(input.confirmedSkillIds)].filter(
+        (skillId) => !keepSet.has(skillId),
+      );
       // The kernel context of the VERIFIED confirmer, built once: the authority
       // resolver and the audited bypass must judge the same actor.
       const keepActor = buildActorContextFromPrimitive(who.actor, null, who.roleHints);
@@ -1680,7 +1784,8 @@ export async function writeRunSkillSelectionForActor(input: {
       kept = await keepConfirmedRecommendationInScope({
         agentPackageName,
         runId: input.runId,
-        confirmedSkillIds: input.confirmedSkillIds.filter((id) => allowed.has(id)),
+        confirmedSkillIds: keepIds,
+        skipSkillIds,
         createdBy: who.actor.userId,
         snapshot: keepSnapshot,
         writable: {
@@ -1716,7 +1821,7 @@ export async function writeRunSkillSelectionForActor(input: {
             "workspace_configuration",
             { runId: input.runId },
           ),
-        ...(input.keepRecommended.scope ? { requestedScope: input.keepRecommended.scope } : {}),
+        requestedScope: keepScope,
       });
     }
     // A keep the run's mode refuses. The confirm SUCCEEDED, so this rides the
@@ -1725,8 +1830,8 @@ export async function writeRunSkillSelectionForActor(input: {
     // already reads to learn what the keep did, and as the sentence a reader is
     // shown. Nothing has to infer it from a missing field, and the one caller
     // that maps `refusal` to an error reads it only when `ok` is false.
-    const keptOutcome: KeepRecommendationResult | undefined = keepRefusal
-      ? { ok: false, reason: "not-interactive" }
+    const keptOutcome: KeepRecommendationResult | undefined = keepRefusalReason
+      ? { ok: false, reason: keepRefusalReason }
       : kept;
     return {
       ok: true,
