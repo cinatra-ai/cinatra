@@ -1935,3 +1935,206 @@ describe("a settled card that does NOT know its outcome", () => {
     expect(screen.getByRole("button", { name: /refresh/i })).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3334 — THE CARD'S TWO-BOUND LOAD PROTOCOL.
+//
+// One bound over the whole island load could not tell a hung frame from a gate
+// whose targets simply take a while to prepare, so a review over several
+// targets painted "The preview did not load" over work that was fine. The card
+// now watches TWO bounds and the island reports its own progress into them: the
+// INITIAL-RESPONSE bound runs from the moment the frame is pointed at the
+// island and is cancelled by the island's early, data-free `island-ready`; the
+// IDLE-PROGRESS bound runs from `island-ready` and restarts on every
+// `panel-mounted`. The plate is painted only when a bound expires, and the
+// frame's own `load` still cancels both and heals it.
+//
+// The messages are accepted only from the island's origin, only from the frame
+// the card is currently showing, and only for the attempt the card stamped on
+// that frame — and they carry nothing else: no ref, no target id, no
+// credential.
+// ---------------------------------------------------------------------------
+
+/** Mirrors `src/app/lifecycle/review-island/island-progress.ts` — the same
+ *  mirroring the `ic` / `scheme` query keys already use across this boundary. */
+const ISLAND_PROGRESS_CHANNEL = "cinatra-review-island-progress";
+
+describe("the island's two-bound load protocol", () => {
+  function islandState(container: HTMLElement): string | null {
+    return container
+      .querySelector('[data-conformance-id="review-target-island"]')!
+      .getAttribute("data-island-load-state");
+  }
+
+  function frameOf(container: HTMLElement): HTMLIFrameElement {
+    return container.querySelector("iframe") as HTMLIFrameElement;
+  }
+
+  /** The attempt the card stamped on the frame it is currently showing. */
+  function currentAttempt(container: HTMLElement): number {
+    const name = frameOf(container).getAttribute("name") ?? "";
+    return Number(name.slice(name.indexOf(":") + 1));
+  }
+
+  function postProgress(
+    container: HTMLElement,
+    type: "island-ready" | "panel-mounted",
+    over: { origin?: string; source?: Window | null; attempt?: number } = {},
+  ): void {
+    const frame = frameOf(container);
+    const event = new MessageEvent("message", {
+      data: {
+        channel: ISLAND_PROGRESS_CHANNEL,
+        type,
+        attempt: over.attempt ?? currentAttempt(container),
+      },
+      origin: over.origin ?? window.location.origin,
+      source: (over.source === undefined ? frame.contentWindow : over.source) as Window,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+  }
+
+  async function renderIslandCard(): Promise<HTMLElement> {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    return container;
+  }
+
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /** Post a message 8 s in, then run past the 12 s INITIAL bound and report the
+   *  island's state: `loading` when the message cancelled that bound,
+   *  `timed-out` when the card refused it. */
+  async function stateAcrossTheInitialBound(
+    container: HTMLElement,
+    post: () => void,
+  ): Promise<string | null> {
+    await advance(8_000);
+    post();
+    await advance(5_000);
+    return islandState(container);
+  }
+
+  it("island-ready cancels the initial-response bound and starts the idle bound from itself", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+
+    await advance(8_000);
+    expect(islandState(container)).toBe("loading");
+    postProgress(container, "island-ready");
+
+    // Past the INITIAL bound's twelve seconds — the island answered, so nothing
+    // is painted. This is the whole defect: a gate whose targets take longer
+    // than the bound to prepare used to be declared dead here.
+    await advance(8_000);
+    expect(islandState(container)).toBe("loading");
+
+    // The IDLE bound runs from `island-ready`, and nothing has moved since.
+    await advance(5_000);
+    expect(islandState(container)).toBe("timed-out");
+  });
+
+  it("each panel-mounted restarts the idle bound — a steadily streaming island is never plated", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+
+    postProgress(container, "island-ready");
+    for (let panel = 0; panel < 3; panel += 1) {
+      await advance(8_000);
+      expect(islandState(container)).toBe("loading");
+      postProgress(container, "panel-mounted");
+    }
+    // Twenty-four seconds of real progress, no plate.
+    expect(islandState(container)).toBe("loading");
+
+    // The moment progress stops, the idle bound expires like any other.
+    await advance(12_500);
+    expect(islandState(container)).toBe("timed-out");
+  });
+
+  it("a late load heals a plate the IDLE bound painted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+
+    postProgress(container, "island-ready");
+    await advance(13_000);
+    // Painted by the idle bound, not the initial one — the initial bound was
+    // cancelled at zero and would have fired a second earlier.
+    expect(islandState(container)).toBe("timed-out");
+
+    fireEvent.load(frameOf(container));
+    await waitFor(() => expect(islandState(container)).toBe("loaded"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("ignores a message from a FOREIGN ORIGIN — only the island's own origin answers for it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const foreign = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(foreign, () =>
+        postProgress(foreign, "island-ready", { origin: "https://not-the-island.example" }),
+      ),
+    ).toBe("timed-out");
+    cleanup();
+
+    const own = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(own, () => postProgress(own, "island-ready")),
+    ).toBe("loading");
+  });
+
+  it("ignores a message from a FOREIGN SOURCE — only the frame the card is showing answers for it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const foreign = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(foreign, () =>
+        // Same origin, a window that is not this card's frame.
+        postProgress(foreign, "island-ready", { source: window }),
+      ),
+    ).toBe("timed-out");
+    cleanup();
+
+    const own = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(own, () => postProgress(own, "island-ready")),
+    ).toBe("loading");
+  });
+
+  it("ignores a message that names a STALE ATTEMPT — a dead frame cannot hold the live one open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const stale = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(stale, () =>
+        postProgress(stale, "island-ready", { attempt: currentAttempt(stale) + 1 }),
+      ),
+    ).toBe("timed-out");
+    cleanup();
+
+    const live = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(live, () => postProgress(live, "island-ready")),
+    ).toBe("loading");
+  });
+
+  it("stamps the frame with the attempt the island names back, and re-stamps it on a retry", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+    expect(currentAttempt(container)).toBe(0);
+
+    await advance(12_500);
+    expect(islandState(container)).toBe("timed-out");
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(islandState(container)).toBe("loading");
+    expect(currentAttempt(container)).toBe(1);
+  });
+});

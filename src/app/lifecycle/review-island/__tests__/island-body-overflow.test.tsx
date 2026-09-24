@@ -22,7 +22,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToPipeableStream } from "react-dom/server";
+import { Writable } from "node:stream";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
 
@@ -92,24 +93,54 @@ beforeEach(() => {
   loadReviewGateSurface.mockResolvedValue({
     kind: "ready",
     agentSummary: null,
+    // THE STREAMING SURFACE (cinatra#3334): the loader hands the page the
+    // target's identity beside the promises of its preparation and its pinned
+    // capture, and the page opens a boundary per target. The road this document
+    // asserts is unchanged by that; what it is read from is the shell.
     targets: [
       {
         target: { artifactId: "artifact-json", representationRevisionId: "rev-1" },
-        props: null,
-        mount: { kind: "floor" as const },
+        prepared: Promise.resolve({
+          target: { artifactId: "artifact-json", representationRevisionId: "rev-1" },
+          props: null,
+          mount: { kind: "floor" as const },
+        }),
+        capturePair: Promise.resolve(null),
       },
     ],
-    pinnedCapturePairs: {},
-    permissions: { canDecide: true, canComment: true },
+    permissions: Promise.resolve({ canDecide: true, canComment: true }),
   });
 });
+
+/** The document's SHELL plus everything its boundaries resolved to. Each target
+ *  now waits inside its own boundary (cinatra#3334), which a synchronous render
+ *  cannot get past, so the document is streamed exactly as it is served. */
+async function shellHtml(el: ReactElement): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    let html = "";
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        html += String(chunk);
+        callback();
+      },
+    });
+    sink.on("finish", () => resolve(html));
+    const stream = renderToPipeableStream(el, {
+      onShellReady() {
+        stream.pipe(sink);
+      },
+      onShellError: reject,
+      onError: reject,
+    });
+  });
+}
 
 /** The island body wrapper, as the document actually draws it. */
 async function islandBody(scheme?: "light" | "dark"): Promise<Element> {
   const el = (await ReviewTargetIslandPage({
     searchParams: Promise.resolve(scheme ? { ref: REF, scheme } : { ref: REF }),
   })) as ReactElement;
-  document.body.innerHTML = renderToStaticMarkup(el);
+  document.body.innerHTML = await shellHtml(el);
   const body = document.body.querySelector("[data-conformance-id='review-target-island-body']");
   if (!body) throw new Error("no island body");
   return body;

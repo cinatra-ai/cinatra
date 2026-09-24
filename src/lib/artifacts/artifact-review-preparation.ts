@@ -325,6 +325,35 @@ export type PrepareReviewResult =
   | { ok: true; prepared: PreparedReviewTarget[] }
   | { ok: false; error: PrepareReviewError };
 
+/**
+ * THE FAN-OUT CAP (cinatra#3334). The gate's targets are prepared concurrently,
+ * never more than this many at once: each target costs an artifact read, a
+ * membership read, a renderer resolve and a props build off the store, and a
+ * gate that opened all of them at once would trade a slow card for a thundering
+ * herd on the same pools. Four is the width the review surface needs — the
+ * measured gate was six targets at 720-860 ms each, which this brings inside
+ * the card's bound — and small enough that the reads stay ordinary reads.
+ */
+export const REVIEW_TARGET_FAN_OUT = 4;
+
+/** One target of a STARTED preparation: its identity, available immediately,
+ *  and the promise of its prepared display. */
+export interface ReviewTargetPreparation {
+  target: ArtifactReviewTarget;
+  prepared: Promise<PreparedReviewTarget>;
+}
+
+/**
+ * The PREFLIGHT's answer (cinatra#3334): every hard failure — an unauthorized
+ * run, a gate that is not preparable, a substituted target — decided BEFORE any
+ * target is read, and otherwise the ordered per-target preparations, already
+ * running. A caller that wants the whole set awaits them (`prepareReviewTargetsCore`);
+ * a streaming surface hands each one to its own boundary.
+ */
+export type BeginReviewResult =
+  | { ok: true; targets: ReviewTargetPreparation[] }
+  | { ok: false; error: PrepareReviewError };
+
 export interface PrepareReviewInput {
   runId: string;
   /** The gate identity (a `setup-<runId>` / `wayflow-<taskId>` reviewTaskId). */
@@ -367,11 +396,17 @@ export interface PrepareReviewInput {
  * preparable only when the caller asked for the read-only history reading
  * (`acceptResolvedGate`). Neither the run access check nor the substitution
  * check moves for it.
+ *
+ * THIS ENTRY RETURNS AT THE END OF THE PREFLIGHT (cinatra#3334), with the
+ * per-target preparations started and ordered but not awaited, so a surface can
+ * stream one target's body while the rest are still being prepared. The three
+ * hard checks above are unmoved and still run first: no target read begins
+ * before the run, the gate and the pinned set have all answered.
  */
-export async function prepareReviewTargetsCore(
+export async function beginReviewTargetsCore(
   input: PrepareReviewInput,
   ports: PrepareReviewPorts,
-): Promise<PrepareReviewResult> {
+): Promise<BeginReviewResult> {
   // 1. Validate/normalize the caller's targets (a single malformed element
   //    rejects the whole list — never silently drop a target under review).
   const normalized = normalizeReviewTargets(input.targets, { maxTargets: input.maxTargets });
@@ -420,12 +455,77 @@ export async function prepareReviewTargetsCore(
     return { ok: false, error: { kind: "target-substitution", substituted } };
   }
 
-  // 5. Per (pinned, member) target: resolve the never-blank display.
-  const prepared: PreparedReviewTarget[] = [];
-  for (const target of member) {
-    prepared.push(await prepareOneTarget(target, ports, settledReading));
-  }
-  return { ok: true, prepared };
+  // 5. Per (pinned, member) target: resolve the never-blank display —
+  //    CONCURRENTLY, capped, and in the caller's order (cinatra#3334). The
+  //    targets of one gate are independent of each other: each reads its own
+  //    artifact, its own revision and its own props, and nothing one of them
+  //    answers changes what another may be shown. Preparing them one after
+  //    another was therefore pure latency, and it was the whole of it — the
+  //    measured gate spent 4 795 ms of its 5 452 ms here.
+  const prepared = prepareWithFanOut(member, ports, settledReading);
+  return { ok: true, targets: member.map((target, index) => ({ target, prepared: prepared[index] })) };
+}
+
+/**
+ * Prepare the caller's review targets and AWAIT them all — the whole-set
+ * reading of {@link beginReviewTargetsCore}, and the contract every caller that
+ * is not a streaming surface still has: the same order, the same per-target
+ * typed degrades, and the same unguarded propagation of a port that rejects.
+ */
+export async function prepareReviewTargetsCore(
+  input: PrepareReviewInput,
+  ports: PrepareReviewPorts,
+): Promise<PrepareReviewResult> {
+  const begun = await beginReviewTargetsCore(input, ports);
+  if (!begun.ok) return { ok: false, error: begun.error };
+  return { ok: true, prepared: await Promise.all(begun.targets.map((t) => t.prepared)) };
+}
+
+/**
+ * Start every target's preparation behind a fixed window, and hand back one
+ * promise per target IN THE INPUT'S ORDER (never the completion order).
+ *
+ * A REJECTION IS NOT SWALLOWED. The documented port contract stands: a props
+ * builder that throws is a defect in the binder, not a target that quietly
+ * floors, so the failure reaches whoever awaits that target. Each promise does
+ * carry a no-op handler of its own, because a streaming caller may await only
+ * some of them and an untouched rejection must not surface as an unhandled one
+ * somewhere else entirely; attaching it changes nothing for the real awaiter.
+ */
+function prepareWithFanOut(
+  targets: readonly ArtifactReviewTarget[],
+  ports: PrepareReviewPorts,
+  settled: boolean,
+): Promise<PreparedReviewTarget>[] {
+  const settlers: Array<{
+    resolve: (value: PreparedReviewTarget) => void;
+    reject: (reason: unknown) => void;
+  }> = [];
+  const prepared = targets.map(
+    () =>
+      new Promise<PreparedReviewTarget>((resolve, reject) => {
+        settlers.push({ resolve, reject });
+      }),
+  );
+  for (const p of prepared) void p.catch(() => {});
+
+  let next = 0;
+  const pump = (): void => {
+    if (next >= targets.length) return;
+    const index = next;
+    next += 1;
+    void (async () => {
+      try {
+        settlers[index].resolve(await prepareOneTarget(targets[index], ports, settled));
+      } catch (err) {
+        settlers[index].reject(err);
+      }
+      pump();
+    })();
+  };
+  for (let i = 0; i < Math.min(REVIEW_TARGET_FAN_OUT, targets.length); i += 1) pump();
+
+  return prepared;
 }
 
 async function prepareOneTarget(

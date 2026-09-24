@@ -203,12 +203,16 @@ describe("wave 3 — the reviewed comparison is never replaced by a per-target p
     // successor's repaired one. A per-target minter can only mint the
     // successor's two, so answering there would swap the comparison the
     // reviewer is being asked about for a different one.
+    // Since cinatra#3334 the choice is made per target inside
+    // `streamReviewTargets`, one pairing enum at a time, rather than in a loop
+    // over the whole prepared set — the SAME choice, read at its new anchor.
     const source = repoFile("src/app/artifacts/[id]/review-gate-ports.ts");
-    const repairFirst = source.indexOf("const pair = repairSuccessorGateId");
+    const repairFirst = source.indexOf("switch (resolved.kind)");
     expect(repairFirst).toBeGreaterThan(-1);
     const roadsAt = source.indexOf("roads?.capturePair", repairFirst);
-    const repairAt = source.indexOf("loadPinnedRepairPair(orgId, repairSuccessorGateId", repairFirst);
+    const repairAt = source.indexOf("loadPinnedRepairPair(orgId, resolved.gateId", repairFirst);
     expect(repairAt).toBeGreaterThan(-1);
+    expect(roadsAt).toBeGreaterThan(-1);
     expect(repairAt).toBeLessThan(roadsAt);
   });
 });
