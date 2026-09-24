@@ -191,7 +191,13 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   },
   readExternalMcpKeylessConnectionIdentity: async (connectionId: string) =>
     liveIdentityAt(connectionId),
-  retireExternalMcpKeylessConnectionIdentityRow: async (identityId: string) => {
+  // cinatra#3485 fix leg 5: the caller's own condition travels down to the
+  // write, so the store asks it once more before it retires anything.
+  retireExternalMcpKeylessConnectionIdentityRow: async (
+    identityId: string,
+    onlyWhile?: () => boolean,
+  ) => {
+    if (onlyWhile !== undefined && !onlyWhile()) return;
     const row = identities.get(identityId);
     if (row && row.deletedAt === null) row.deletedAt = new Date();
   },

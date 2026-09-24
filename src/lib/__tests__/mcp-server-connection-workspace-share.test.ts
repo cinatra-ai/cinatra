@@ -78,12 +78,42 @@ let onServerRowWritten: (() => void | Promise<void>) | null = null;
 let onKeylessIdentityRegister: (() => void | Promise<void>) | null = null;
 let onAfterKeylessRetire: (() => void | Promise<void>) | null = null;
 let onAfterKeylessIdentityRead: (() => void | Promise<void>) | null = null;
+// The window BEFORE a retire writes (cinatra#3485 fix leg 5). The take-back
+// addresses the identity row the registration itself reported, so it takes no
+// read of its own any more, and this is where a racing request changes what
+// stands while the retire is on its way.
+let onBeforeKeylessRetire: (() => void | Promise<void>) | null = null;
 // The window BEFORE an identity read resolves, as against the one after it: a
 // request that runs here changes WHAT the read returns, and a request that runs
 // after it changes what stands once the caller already holds its answer.
 let onBeforeKeylessIdentityRead: (() => void | Promise<void>) | null = null;
 let keylessRetireFailsOnce = false;
 let identitySeedFailsOnce = false;
+
+/**
+ * The witnessed keyless retire the registry performs. Best-effort like the real
+ * helper: a store failure is logged and swallowed, so the caller sees a retire
+ * that retired nothing. `onlyWhile` is the caller's own condition, asked
+ * immediately before the write rather than on an earlier read.
+ */
+async function keylessRetire(
+  identityId: string,
+  onlyWhile: (() => boolean) | undefined,
+): Promise<void> {
+  const afterRetire = onAfterKeylessRetire;
+  await onBeforeKeylessRetire?.();
+  if (keylessRetireFailsOnce) {
+    keylessRetireFailsOnce = false;
+    return;
+  }
+  if (onlyWhile !== undefined && !onlyWhile()) return;
+  const row = identities.get(identityId);
+  if (row && row.deletedAt === null) row.deletedAt = new Date();
+  // The window a racing request runs in, named from the retire itself: on the
+  // delete road this is the point where the retire has happened and the row
+  // delete has not.
+  await afterRetire?.();
+}
 
 class ExternalMcpServerWriteConflictError extends Error {}
 class ExternalMcpServerManagedEndpointError extends Error {}
@@ -182,16 +212,21 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   registerExternalMcpKeylessConnectionIdentity: async (
     connectionId: string,
     identity: { ownerUserId: string; organizationId: string | null; seed: "owner" | "workspace" },
+    // cinatra#3485 fix leg 5: what THIS call did with the identity row, which
+    // only the store's own insert can answer.
+    report?: (written: { identityId: string; created: boolean }) => void,
   ) => {
     await onKeylessIdentityRegister?.();
     const { registerSavedConnectionIdentity } = await import("@/lib/connection-identity-seam");
-    await registerSavedConnectionIdentity({
+    const row = await registerSavedConnectionIdentity({
       connectorKey: "externalMcp",
       connectionId,
       ownerUserId: identity.ownerUserId,
       organizationId: identity.organizationId,
       seed: identity.seed,
+      onIdentityRow: (written) => report?.({ identityId: written.id, created: written.created }),
     });
+    return { created: row.created };
   },
   // The live identity the derived id addresses, the leaf read the handler
   // reconciles its owner and workspace against (cinatra#3485 fix leg). Exactly
@@ -218,18 +253,13 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   // by its own row id, so it retires exactly what was witnessed and passes over
   // a row already retired. Best-effort like the real helper: a store failure is
   // logged and swallowed, so the caller sees a retire that retired nothing.
-  retireExternalMcpKeylessConnectionIdentityRow: async (identityId: string) => {
-    const afterRetire = onAfterKeylessRetire;
-    if (keylessRetireFailsOnce) {
-      keylessRetireFailsOnce = false;
-      return;
-    }
-    const row = identities.get(identityId);
-    if (row && row.deletedAt === null) row.deletedAt = new Date();
-    // The window a racing request runs in, named from the retire itself: on the
-    // delete road this is the point where the retire has happened and the row
-    // delete has not.
-    await afterRetire?.();
+  // cinatra#3485 fix leg 5: the caller's own condition travels down to the
+  // write, so the store asks it once more before it retires anything.
+  retireExternalMcpKeylessConnectionIdentityRow: async (
+    identityId: string,
+    onlyWhile?: () => boolean,
+  ) => {
+    await keylessRetire(identityId, onlyWhile);
   },
   // Mirrors the real helper's IDENTITY-FIRST ordering (its credential leaf is
   // covered by `external-mcp-apikey-connection.test.ts`): soft-delete the live
@@ -265,7 +295,7 @@ vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
         r.connectionId === input.connectionId &&
         r.deletedAt === null,
     );
-    if (existing) return existing;
+    if (existing) return { ...existing, created: false };
     const row = {
       id: `identity-${++identitySeq}`,
       ...input,
@@ -273,7 +303,7 @@ vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
       deletedAt: null,
     } as NangoConnectionIdentity;
     identities.set(row.id, row);
-    return row;
+    return { ...row, created: true };
   },
   readNangoConnectionById: async (id: string) => identities.get(id) ?? null,
   readNangoConnectionByNaturalKey: async (connectorKey: string, connectionId: string) =>
@@ -465,6 +495,7 @@ beforeEach(() => {
   onServerRowWritten = null;
   onKeylessIdentityRegister = null;
   onAfterKeylessRetire = null;
+  onBeforeKeylessRetire = null;
   onAfterKeylessIdentityRead = null;
   onBeforeKeylessIdentityRead = null;
   keylessRetireFailsOnce = false;
@@ -483,6 +514,7 @@ afterEach(() => {
   onServerRowWritten = null;
   onKeylessIdentityRegister = null;
   onAfterKeylessRetire = null;
+  onBeforeKeylessRetire = null;
   onAfterKeylessIdentityRead = null;
   onBeforeKeylessIdentityRead = null;
   keylessRetireFailsOnce = false;
@@ -1082,8 +1114,8 @@ describe("the keyless identity road never retires what it may not (cinatra#3485)
         row.scope = "global";
         row.userId = null;
       }
-      onAfterKeylessIdentityRead = async () => {
-        onAfterKeylessIdentityRead = null;
+      onBeforeKeylessRetire = async () => {
+        onBeforeKeylessRetire = null;
         sessionUserId = "u1";
         sessionIsPlatformAdmin = true;
         await createServerHandler({
@@ -1229,8 +1261,8 @@ describe("no retire takes away the identity of a server registered again (cinatr
     onKeylessIdentityRegister = () => {
       onKeylessIdentityRegister = null;
       servers.delete("srv-back");
-      onAfterKeylessIdentityRead = async () => {
-        onAfterKeylessIdentityRead = null;
+      onBeforeKeylessRetire = async () => {
+        onBeforeKeylessRetire = null;
         await registerKeyless({ id: "srv-back" });
       };
     };

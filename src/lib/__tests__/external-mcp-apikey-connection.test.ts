@@ -244,6 +244,9 @@ describe("a KEYLESS external-MCP registration (cinatra#3485)", () => {
     expect(registerSavedConnectionIdentity).toHaveBeenCalledWith({
       connectorKey: "externalMcp",
       connectionId: "external-mcp-keyless-row-1",
+      // cinatra#3485 fix leg 5: the caller asks the seam to report whether
+      // THIS call inserted the identity row or confirmed a standing one.
+      onIdentityRow: expect.any(Function),
       ownerUserId: "u1",
       organizationId: null,
       seed: "owner",
@@ -271,7 +274,9 @@ describe("a KEYLESS external-MCP registration (cinatra#3485)", () => {
 
   it("its identity is retired IDENTITY-ONLY, by its own row id, and no credential is ever asked for", async () => {
     await retireExternalMcpKeylessConnectionIdentityRow("id-row");
-    expect(softDeleteNangoConnection).toHaveBeenCalledWith("id-row");
+    // cinatra#3485 fix leg 5: the caller's own condition travels with the id,
+    // and a caller that has none passes none.
+    expect(softDeleteNangoConnection).toHaveBeenCalledWith("id-row", undefined);
     // A keyless identity addresses NO vault entry: the credential road is not
     // travelled at all, and the natural key is never re-resolved, so a row
     // registered after the caller read cannot be the one retired.

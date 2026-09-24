@@ -210,7 +210,13 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     keylessIdentityOwner === null
       ? null
       : { id: `identity:${connectionId}`, ownerUserId: keylessIdentityOwner, organizationId: null },
-  retireExternalMcpKeylessConnectionIdentityRow: async (identityId: string) => {
+  // cinatra#3485 fix leg 5: the caller's own condition travels down to the
+  // write, so the store asks it once more before it retires anything.
+  retireExternalMcpKeylessConnectionIdentityRow: async (
+    identityId: string,
+    onlyWhile?: () => boolean,
+  ) => {
+    if (onlyWhile !== undefined && !onlyWhile()) return;
     retiredKeylessIdentities.push(identityId.replace(/^identity:/, ""));
   },
 }));

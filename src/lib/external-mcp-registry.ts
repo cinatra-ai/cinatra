@@ -738,20 +738,32 @@ export async function readExternalMcpKeylessConnectionIdentity(
  * keyless server never mints a second identity or resets a widened policy.
  * Its foreign-row HARD-FAIL is preserved — the caller decides what a failure
  * means for its own write.
+ *
+ * WHAT THIS CALL DID (cinatra#3485 fix leg 5). `report` is handed the identity
+ * row and whether THIS call INSERTED it or merely CONFIRMED one that was
+ * already standing. Only the first is the caller's to take back: a confirmed
+ * row was written by an earlier save and carries that save's sharing policy.
+ * The answer arrives through the callback rather than the return value alone,
+ * because the seam writes the identity row and seeds its grant as two writes:
+ * a call that threw on the second has still left the first standing.
  */
 export async function registerExternalMcpKeylessConnectionIdentity(
   connectionId: string,
   identity: { ownerUserId: string; organizationId: string | null; seed: "owner" | "workspace" },
-): Promise<void> {
+  report?: (row: { identityId: string; created: boolean }) => void,
+): Promise<{ created: boolean }> {
   assertKeylessConnectionId(connectionId, "registerExternalMcpKeylessConnectionIdentity");
   const { registerSavedConnectionIdentity } = await import("@/lib/connection-identity-seam");
-  await registerSavedConnectionIdentity({
+  const row = await registerSavedConnectionIdentity({
     connectorKey: "externalMcp",
     connectionId,
     ownerUserId: identity.ownerUserId,
     organizationId: identity.organizationId,
     seed: identity.seed,
+    onIdentityRow: (written) =>
+      report?.({ identityId: written.id, created: written.created }),
   });
+  return { created: row.created };
 }
 
 /**
@@ -764,15 +776,25 @@ export async function registerExternalMcpKeylessConnectionIdentity(
  * makes the retire a compare-and-retire: it either takes away exactly the row
  * that was witnessed, or nothing, because the store's soft delete passes over a
  * row that is already retired. Never a credential call, never a throw.
+ *
+ * `onlyWhile` carries the caller's OWN condition down to the write
+ * (cinatra#3485 fix leg 5). Every right to retire on these roads depends on
+ * state in the other store: that the row is still absent, or that the row that
+ * stands is still the one this save wrote. Asked on an earlier read, such a
+ * condition is an answer about an earlier moment, and the request that changed
+ * it in between loses its panel. The store asks it once more with its query
+ * prepared, so nothing else of this process runs between the answer and the
+ * write.
  */
 export async function retireExternalMcpKeylessConnectionIdentityRow(
   identityId: string,
+  onlyWhile?: () => boolean,
 ): Promise<void> {
   try {
     const { softDeleteNangoConnection } = await import(
       "@cinatra-ai/extensions/connection-identity-store"
     );
-    await softDeleteNangoConnection(identityId);
+    await softDeleteNangoConnection(identityId, onlyWhile);
   } catch (err) {
     console.warn(
       "[external-mcp-registry] best-effort witnessed keyless identity retire failed",
