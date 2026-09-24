@@ -217,6 +217,25 @@ describe("the keep outcome reaches the caller of the decision entry", () => {
     });
   });
 
+  it("still names the keep when the RELEASE afterwards failed", async () => {
+    // The keep landed before the release was attempted, so a release that could
+    // not be verified must not swallow what was already written.
+    readRecommendationParkForRun.mockResolvedValue({ id: "hold-1", status: "parked" });
+    const writeSelection = vi.fn().mockResolvedValue({
+      ok: true,
+      kept: { ok: true, scope: ORG_SCOPE, written: 1, skipped: [] },
+    });
+    const result = await confirmRecommendationForActor({
+      runId: "run-1",
+      confirmedSkillIds: ["skill-a"],
+      who: who as never,
+      writeSelection: writeSelection as never,
+      keepRecommended: { scope: ORG_SCOPE },
+    } as never);
+    expect(result.ok).toBe(false);
+    expect(result.kept).toEqual({ ok: true, scope: ORG_SCOPE, written: 1, skipped: [] });
+  });
+
   it("says nothing about a keep the caller never asked for", async () => {
     const writeSelection = vi.fn().mockResolvedValue({ ok: true });
     const result = await confirmRecommendationForActor({
@@ -301,5 +320,18 @@ describe("the session action carries the same two answers", () => {
       keepRecommended: { scope: ORG_SCOPE },
     };
     expect(input.keepRecommended?.scope).toEqual(ORG_SCOPE);
+  });
+
+  it("REFUSES a keep request with no scope at compile time", () => {
+    const input: Parameters<ConfirmAction>[0] = {
+      runId: "run-1",
+      agentPackageName: "@cinatra-ai/some-agent",
+      confirmedSkillIds: ["skill-a"],
+      // The pin: this line must not compile. A type check that stops reporting
+      // it fails this case, which is how the contract stays required.
+      // @ts-expect-error a keep names the scope it writes into
+      keepRecommended: {},
+    };
+    expect(input.keepRecommended).toEqual({});
   });
 });
