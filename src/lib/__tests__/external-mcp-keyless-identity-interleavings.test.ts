@@ -1325,9 +1325,11 @@ describe("the two orderings the tenth round found (cinatra#3485)", () => {
     // answered and after the create's own row landed. The create may not take
     // that identity away, because it names another person and their own delete
     // is what repairs it, so it reports success with that person's panel on its
-    // row. The end state converges: the paused save takes its own insert back
-    // once it sees its row is gone. What the two stores cannot give without one
-    // coordination point is the state at the INSTANT the create reports.
+    // row. The state settles below, when the paused save finishes and its
+    // take-back lands; both are best-effort, so a save that stops inside its
+    // registration leaves the identity there until its own person deletes it.
+    // What the two stores cannot give without one coordination point is the
+    // state at the INSTANT the create reports.
     placeRow({ id: "srv", scope: "user", userId: "person-a", derivedOwner: "person-a" });
 
     // A saves the standing row and stops on the doorstep of its insert.

@@ -426,10 +426,15 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
       // write its identity after the create's question was answered and after
       // the create's row landed. The create may not take that identity away,
       // because it names another person, so it reports success with that
-      // person's panel on its row. The end state converges, because the paused
-      // save takes its own insert back once it sees its row is gone; the
-      // INSTANT of the report is what needs one coordination point across the
-      // two stores to repair.
+      // person's panel on its row.
+      //
+      // The state settles when that save finishes and its take-back lands. Both
+      // are best-effort: a save that stops inside its registration, or whose
+      // take-back fails, leaves its identity on the new row, and neither the
+      // new owner's next save nor the orphan road may take it away while the
+      // new row stands. Its own person's delete repairs it. Repairing the
+      // INSTANT, and making the settling unconditional, both need one
+      // coordination point across the two stores.
       if (guard === undefined) break;
     }
     if (!settled && (blocked || refusal !== null)) {
