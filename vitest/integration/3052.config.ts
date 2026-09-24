@@ -48,6 +48,17 @@ export default defineConfig({
     globalSetup: ["src/lib/lifecycle/__tests__/widget-schedule-grant.setup.ts"],
     include: [
       "src/lib/lifecycle/__tests__/widget-schedule-grant.integration.test.ts",
+      // cinatra#3051 — THE WIDGET CREDENTIAL'S RENEWAL, on the same real store.
+      //
+      // It joins this tier rather than founding one of its own, deliberately: a
+      // tier config no workflow invokes runs NOWHERE, and adding a workflow step
+      // is outside a bug-fix diff. This tier is already wired and already builds
+      // exactly the floor the renewal needs — the schema, the public floor and a
+      // live sign-in row — so the second widget real-store suite runs beside the
+      // first instead of shipping a config that would never be called. STATED
+      // CONSEQUENCE: the workflow step that runs it still carries the sibling
+      // slice's name in its label.
+      "src/lib/__tests__/widget-credential-renewal.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

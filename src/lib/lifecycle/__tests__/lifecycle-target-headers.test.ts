@@ -110,6 +110,50 @@ describe("which read each reading takes", () => {
     readArtifactForDetail.mockReturnValue({ kind: "not-found" });
     expect(await read(PENDING)).toBeNull();
   });
+
+  it("a PARTLY readable multi-target gate names NONE of them rather than some (cinatra#3058, fix leg 8)", async () => {
+    // The review drawing's target section says "Every target opens with a header
+    // that names what is under review and fixes it in place" - EVERY target. A
+    // gate that pins two artifacts and can name only one would draw ONE header
+    // over an island rendering BOTH, and the reader would be told they are
+    // deciding about that one artifact. That is the card's own sentence turned on
+    // the reading as a whole: naming the wrong artifact over a review is worse
+    // than naming none. So a reading that cannot open every pinned target is the
+    // FACTLESS reading, and the card draws the header with no facts in it rather
+    // than a true half of the truth.
+    //
+    // It also keeps the floor honest: the floor line's `package` half is read off
+    // the headers the card was given, and a package inferred from the readable
+    // half of a two-package gate is exactly the invented value "never a raw error
+    // or manifest value" was written to keep off that line.
+    readReviewGate.mockResolvedValue(
+      gate([
+        { artifactId: "art-1", representationRevisionId: "rev_1" },
+        { artifactId: "art-2", representationRevisionId: "rev_2" },
+      ]),
+    );
+    readArtifactForDetail
+      .mockReturnValueOnce(artifact())
+      .mockReturnValueOnce({ kind: "not-found" });
+
+    expect(await read(PENDING)).toBeNull();
+  });
+
+  it("and still names every target of a gate it CAN open whole", async () => {
+    // The control: the refusal above is the unreadable row's doing and not the
+    // second target's. Two readable rows compose two headers.
+    readReviewGate.mockResolvedValue(
+      gate([
+        { artifactId: "art-1", representationRevisionId: "rev_1" },
+        { artifactId: "art-2", representationRevisionId: "rev_2" },
+      ]),
+    );
+    readArtifactForDetail.mockReturnValue(artifact());
+
+    const headers = await read(PENDING);
+    expect(headers).toHaveLength(2);
+    expect(lifecycleTargetHeadersSchema.safeParse(headers).success).toBe(true);
+  });
 });
 
 describe("a state that presents no target carries no header", () => {
@@ -158,10 +202,10 @@ describe("a legal row can cost the header's wording, never the card", () => {
     expect(lifecycleTargetHeadersSchema.safeParse(headers).success).toBe(true);
   });
 
-  it("never composes more headers than the wire may carry", async () => {
+  it("composes up to the wire's ceiling, and every one of them", async () => {
     readReviewGate.mockResolvedValue(
       gate(
-        Array.from({ length: LIFECYCLE_TARGET_HEADERS_MAX + 4 }, (_, i) => ({
+        Array.from({ length: LIFECYCLE_TARGET_HEADERS_MAX }, (_, i) => ({
           artifactId: `art-${i}`,
           representationRevisionId: `rev_${i}`,
         })),
@@ -170,6 +214,37 @@ describe("a legal row can cost the header's wording, never the card", () => {
     const headers = await read(PENDING);
     expect(headers).toHaveLength(LIFECYCLE_TARGET_HEADERS_MAX);
     expect(lifecycleTargetHeadersSchema.safeParse(headers).success).toBe(true);
+  });
+
+  it("a gate PAST that ceiling names NONE of its targets, never the first twelve", async () => {
+    // THE WHOLE READING OR THE FACTLESS ONE, at the ceiling exactly as at an
+    // unreadable row (cinatra#3058, fix leg 8; the convergence round on the
+    // reconciled merge). §IV says "Every target opens with a header that names
+    // what is under review and fixes it in place" — EVERY target. The card
+    // draws this gate's whole pinned set through ONE island under the headers
+    // composed here, so a set cut off at the ceiling does not name a set short
+    // by four: it tells the reader they are deciding about twelve artifacts
+    // when they are deciding about sixteen. It would also make §V's floor lie,
+    // because the card names the floor's `package` half only where one name is
+    // true of the whole island and would be reading that name off a prefix.
+    //
+    // This suite used to pin the truncation, back when an unreadable row was
+    // skipped too and a partial reading was this composer's rule throughout.
+    // It is retired by the sentence above, and by the card's own answer to it:
+    // an answer that carries no header draws §IV's header with NO facts in it,
+    // which names the READING truthfully instead of naming twelve artifacts.
+    readReviewGate.mockResolvedValue(
+      gate(
+        Array.from({ length: LIFECYCLE_TARGET_HEADERS_MAX + 4 }, (_, i) => ({
+          artifactId: `art-${i}`,
+          representationRevisionId: `rev_${i}`,
+        })),
+      ),
+    );
+    expect(await read(PENDING)).toBeNull();
+    // And it costs the reader no store read it did not need: the ceiling is a
+    // property of the gate, answered before any artifact is fetched for it.
+    expect(readArtifactForDetail).not.toHaveBeenCalled();
   });
 
   it("a store that throws costs the header, never the card", async () => {
