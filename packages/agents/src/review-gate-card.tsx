@@ -183,6 +183,7 @@ import {
   ReviewGateSettled,
 } from "./review-gate-states";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { renderRunWindowMarkdown } from "./run-window-markdown";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 // Re-exported so a HOST that mounts the card does not have to reach into the
@@ -877,6 +878,13 @@ export function ReviewGateCard({
             />
           )
         : null,
+    // §VI's "The reviewer's request and the returned revision stay in the run,
+    // in order" (cinatra#2934): the decided gate keeps the exchange, read-only,
+    // on the same hosts the window is offered on and on no other.
+    settledExchange:
+      runId != null && runId !== "" && !insideConversation ? (
+        <ReviewGateSettledExchange runId={runId} boundCardRef={view.ref} />
+      ) : null,
     islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
     islandCredentialed: heldCredential !== null,
     submit: submitAndRefresh,
@@ -930,6 +938,9 @@ function renderState(args: {
    * the request road (cinatra#3481). Taken as a factory so the one permission
    * answer the card already read decides whether it is offered. */
   promptWindow: ((canComment: boolean) => ReactElement) | null;
+  /** The run's stored exchange drawn read-only under a gate decided as changes
+   * requested, or `null` where the window itself would be `null`. */
+  settledExchange: ReactElement | null;
   islandSrc: string;
   islandCredentialed: boolean;
   submit: SubmitReviewDecisionAction;
@@ -944,6 +955,7 @@ function renderState(args: {
     state,
     targetHeaders,
     promptWindow,
+    settledExchange,
     islandSrc,
     islandCredentialed,
     submit,
@@ -1032,6 +1044,10 @@ function renderState(args: {
               reading; there is no second status after it". It names nobody
               (§VI); the disposition rides the element as a record. */}
           <ReviewGateSettled outcome={state.outcome} />
+          {/* §VI — a typed request settled this gate: the request and its reply
+              stay, in order, read-only. Nothing can be typed into a decided
+              gate, so no field, no send and no permission to ask for. */}
+          {state.outcome === "changes_requested" ? settledExchange : null}
         </>
       ) : (
         <>
@@ -2069,6 +2085,72 @@ export function ReviewGatePromptWindow({
         storageKey={storageKey}
         onSubmit={handleSubmit}
       />
+    </div>
+  );
+}
+
+/**
+ * THE DECIDED GATE KEEPS ITS EXCHANGE, READ-ONLY (cinatra#2934, CELL10).
+ *
+ * The drawing, `specs/app-artifact-review.html` §VI: "The reviewer's request
+ * and the returned revision stay in the run, in order". A typed request that
+ * settles the gate re-reads the card, the resolver answers `settled`, and the
+ * window above leaves with the pending reading — although the run's store still
+ * holds the exchange. So the settled reading draws that exchange here: the same
+ * run's entries, read the way the window reads them, in the same order and the
+ * same markup as the panel above the window's field, WITHOUT the field and
+ * WITHOUT the send control. It registers no composer binding and never sends,
+ * and it asks for no permission: nothing can be typed into a decided gate.
+ * It carries no `review-prompt-window` anchor, because it is not the window: a
+ * settled gate carries no window.
+ */
+export function ReviewGateSettledExchange({
+  runId,
+  boundCardRef,
+}: {
+  runId: string;
+  boundCardRef?: string | null;
+}): ReactElement | null {
+  const runWindow = useRunWindowConversation({
+    runId,
+    surface: "review",
+    ...(boundCardRef
+      ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
+      : {}),
+  });
+  if (runWindow.entries.length === 0) return null;
+  return (
+    <div data-review-settled-exchange="" className="px-5 pb-4 pt-6">
+      <div className="mx-auto max-w-3xl">
+        <div className="rounded-panel border border-line bg-surface p-3 shadow-sm">
+          <div className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+            {runWindow.entries.map((entry) => (
+              <div
+                key={entry.id}
+                className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                {entry.role === "user" ? (
+                  // The person's own line stays their own characters.
+                  <div
+                    data-run-window-entry="person"
+                    className="rounded-control px-3 py-2 text-sm max-w-[80%] whitespace-pre-wrap bg-primary text-primary-foreground"
+                  >
+                    {entry.content}
+                  </div>
+                ) : (
+                  // The assistant's line is drawn through the window's own
+                  // escaping renderer, exactly as the panel draws it.
+                  <div
+                    data-run-window-entry="assistant"
+                    className="rounded-control px-3 py-2 text-sm max-w-[80%] bg-surface-muted text-foreground [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+                    dangerouslySetInnerHTML={{ __html: renderRunWindowMarkdown(entry.content) }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
