@@ -48,6 +48,7 @@ import {
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
+import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";
 import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import {
   type PrepareReviewInput,
@@ -561,58 +562,57 @@ export async function loadReviewGateSurface(args: {
     // seen by a reader who may not read the row. Only a single-target gate has
     // one to show: on a legacy multi-target gate Regenerate is refused anyway,
     // so there is no prompt for the screen to pre-fill and nothing to send.
-    picturePrompt: readRecordedPromptFor(targets, actorCtx),
+    picturePrompt: await readRecordedPromptFor(targets, actorCtx),
     permissions: { canDecide: decide.ok, canComment: comment.ok },
   };
 }
 
 /**
  * THE PROMPT THE REVIEWED REVISION RECORDS IT WAS MADE FROM (cinatra#3080 item
- * 5) — for the review SCREEN's own field, never for a display.
+ * 5, cinatra#3502 item 3) — for the review SCREEN's own field, never for a
+ * display.
  *
  * ONE SINGLE-TARGET GATE ONLY. A gate that still pins more than one target
  * refuses Regenerate anyway (with its own stated reason), so there is nothing to
  * pre-fill and nothing to send; answering null there is the honest reading
- * rather than picking one target's prompt to stand for the set.
+ * rather than picking one target's prompt to stand for the set. Nothing is read.
  *
- * THE SAME AUTHORIZED READ THE PREPARATION ALREADY RAN. `readArtifactForDetail`
+ * THE SAME AUTHORIZED READ THE PREPARATION ALREADY RAN, FIRST. `readArtifactForDetail`
  * is the actor-scoped, `object.read`-gated projection the prepared target above
  * came from, so a reader who may not read the row gets null here for the same
- * reason they see no target — and this adds no read path the surface did not
- * already have. A row that records no prompt, or one this reader cannot read,
- * both answer null: the screen draws the note alone.
+ * reason they see no target — and the ledger below is never read for them.
  *
- * A PIN IS FROZEN, THE ROW IS NOT (cinatra#3080, the fix leg for the three
- * carried defects). The read above is keyed on the artifact id ALONE, and
- * `recordedPrompt` is projected off the LIVE row — so an older pinned review was
- * handed whatever prompt the artifact records NOW. A gate's pin is frozen while
- * the artifact moves on: record a new prompt for a later revision, and every
- * earlier review of that artifact would have shown that newer prompt as though
- * it were the one its own revision was made from, and re-sent it on the next
- * Regenerate. So an older pin is answered with null — the same null this already
- * uses for a row that records none: the screen draws the note alone rather than
- * a prompt the reviewed revision was never made from.
+ * THE PINNED REVISION'S OWN RECORD. A gate's pin is frozen while the artifact
+ * moves on, so the prompt belongs to the pinned REVISION, not to the live row.
+ * The per-revision record is the ledger row cinatra#3032 added: the finalized
+ * `artifact_materializations` row of the write that filed a revision carries
+ * `image_prompt`, the prompt THAT revision was made from.
+ * `readRevisionImagePrompt` reads it for exactly this organisation, artifact and
+ * pinned revision; when it records a prompt, that prompt is shown — whether or
+ * not the pin is still the row's latest revision, so an older review keeps its
+ * own revision's prompt and never the newer one.
  *
- * WHAT THIS DOES NOT AND CANNOT ESTABLISH, said plainly because the check reads
- * like provenance and is not: the ledger keeps ONE prompt per ROW, never one per
- * revision, and no writer records a prompt beside a revision. So the pin-equals-
- * latest test only rules a prompt OUT for a pin the row has moved past; it
- * cannot prove the row's prompt was the one the LATEST revision was made from.
- * A re-file (`refileRevisionOntoArtifact`) advances
- * `latestRepresentationRevisionId` and leaves the row's recorded prompt exactly
- * as it was, so a review pinned on a re-filed revision is still answered with
- * the prompt the row carried before it — unchanged by this fix, on this head
- * unknowable without a per-revision prompt record. The unit proof beside this
- * file pins that limit as well as the fix, so neither is read as more than it
- * is.
+ * WHEN THE LEDGER RECORDS NONE for that revision, the row's own rule stands: the
+ * row's `recordedPrompt` (projected off the LIVE row) only when the pin IS the
+ * row's latest revision, else null — the screen then draws the note alone rather
+ * than a prompt the reviewed revision was never made from. A re-file
+ * (`refileRevisionOntoArtifact`) writes no ledger row and leaves the row's
+ * recorded prompt as it was, so a review pinned on a re-filed revision is still
+ * answered with the prompt the row carried before it: that limit now holds only
+ * for a revision whose ledger row records no prompt, and the unit proof beside
+ * this file pins it.
+ *
+ * A LEDGER READ THAT FAILS degrades to that same row rule with one warning and
+ * never fails the surface, like `loadPinnedCapturePair`'s store failure: a
+ * reviewer must always be able to decide even when the prompt is unavailable.
  *
  * EXPORTED for its own unit proof — the surface still reads it through
- * `prepareReviewSurface` alone.
+ * `loadReviewGateSurface` alone.
  */
-export function readRecordedPromptFor(
+export async function readRecordedPromptFor(
   targets: ReadonlyArray<PreparedReviewTarget>,
   actorCtx: ReviewActorContext,
-): string | null {
+): Promise<string | null> {
   if (targets.length !== 1) return null;
   const pinned = targets[0].target;
   const access = readArtifactForDetail({
@@ -621,6 +621,19 @@ export function readRecordedPromptFor(
     actor: buildActorContextFromPrimitive(actorCtx.actor, actorCtx.orgId, actorCtx.roleHints),
   });
   if (access.kind !== "ok") return null;
+  try {
+    const revisionPrompt = await readRevisionImagePrompt({
+      orgId: actorCtx.orgId,
+      artifactId: pinned.artifactId,
+      representationRevisionId: pinned.representationRevisionId,
+    });
+    if (revisionPrompt !== null) return revisionPrompt;
+  } catch (err) {
+    console.warn(
+      "[review-gate-ports] recorded prompt lookup failed (the review is unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+  }
   if (access.artifact.latestRepresentationRevisionId !== pinned.representationRevisionId) {
     return null;
   }

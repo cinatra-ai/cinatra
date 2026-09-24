@@ -27,14 +27,23 @@ vi.mock("@/lib/artifacts/artifact-service", async (importOriginal) => {
   return { ...actual, readArtifactForDetail: vi.fn() };
 });
 
+// cinatra#3502 item 3 — the per-revision prompt the ledger records. PARTIAL like
+// the mock above: only the one reader is replaced, every other member stays real.
+vi.mock("@/lib/artifacts/materialization-ledger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/artifacts/materialization-ledger")>();
+  return { ...actual, readRevisionImagePrompt: vi.fn() };
+});
+
 import {
   readArtifactForDetail,
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
+import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";
 import { readRecordedPromptFor } from "../review-gate-ports";
 
 const readArtifact = vi.mocked(readArtifactForDetail);
+const readLedgerPrompt = vi.mocked(readRevisionImagePrompt);
 
 const ORG = "org-3080";
 const ARTIFACT = "art-picture-1";
@@ -92,6 +101,8 @@ function pinnedAt(representationRevisionId: string): PreparedReviewTarget[] {
 
 beforeEach(() => {
   readArtifact.mockReset();
+  readLedgerPrompt.mockReset();
+  readLedgerPrompt.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -99,12 +110,12 @@ afterEach(() => {
 });
 
 describe("cinatra#3080 — the picture prompt is the REVIEWED revision's, never the artifact's current one", () => {
-  it("does NOT show the newest prompt on a review pinned at an EARLIER revision", () => {
+  it("does NOT show the newest prompt on a review pinned at an EARLIER revision", async () => {
     // The row has moved on: Regenerate filed revision N+1 and recorded its own
     // prompt. The review under the reader's eyes is still pinned at N.
     readArtifact.mockReturnValue({ kind: "ok", artifact: summary() });
 
-    const prompt = readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx);
+    const prompt = await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx);
 
     // The defect was `LATEST_PROMPT` here — the instructions of a revision this
     // review never saw.
@@ -118,7 +129,7 @@ describe("cinatra#3080 — the picture prompt is the REVIEWED revision's, never 
     );
   });
 
-  it("shows the prompt when the pin IS the revision the row's prompt belongs to", () => {
+  it("shows the prompt when the pin IS the revision the row's prompt belongs to", async () => {
     readArtifact.mockReturnValue({
       kind: "ok",
       artifact: summary({
@@ -127,10 +138,10 @@ describe("cinatra#3080 — the picture prompt is the REVIEWED revision's, never 
       }),
     });
 
-    expect(readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBe(REVIEWED_PROMPT);
+    expect(await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBe(REVIEWED_PROMPT);
   });
 
-  it("a row that records no prompt answers null, pinned at its own revision", () => {
+  it("a row that records no prompt answers null, pinned at its own revision", async () => {
     readArtifact.mockReturnValue({
       kind: "ok",
       artifact: summary({
@@ -139,18 +150,19 @@ describe("cinatra#3080 — the picture prompt is the REVIEWED revision's, never 
       }),
     });
 
-    expect(readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBeNull();
+    expect(await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBeNull();
   });
 
-  it("KNOWN LIMIT: a re-filed latest revision is still answered with the row's ONE prompt", () => {
-    // Said out loud because the check reads like provenance and is not. A
-    // re-file advances `latestRepresentationRevisionId` and leaves the row's
-    // recorded prompt untouched — the ledger keeps one prompt per ROW, never one
-    // per revision — so a review pinned on the re-filed revision is answered
-    // with the prompt the row carried BEFORE it. That is the state this head
-    // can reach and cannot tell apart, unchanged by the fix above; closing it
-    // needs a per-revision prompt record, which nothing here adds. Pinned so the
-    // limit is visible in the suite rather than only in prose.
+  it("KNOWN LIMIT: a re-filed latest revision is still answered with the row's ONE prompt", async () => {
+    // Said out loud because the fallback reads like provenance and is not. A
+    // re-file advances `latestRepresentationRevisionId`, writes no ledger row
+    // and leaves the row's recorded prompt untouched — so when the ledger
+    // records no prompt for the re-filed revision (the mock's default here), a
+    // review pinned on it is answered with the prompt the row carried BEFORE it.
+    // The limit now holds only for a revision whose ledger row records no
+    // prompt; a revision whose ledger row records one is answered with its own
+    // (the cases below). Pinned so the limit is visible in the suite rather
+    // than only in prose.
     readArtifact.mockReturnValue({
       kind: "ok",
       artifact: summary({
@@ -159,19 +171,86 @@ describe("cinatra#3080 — the picture prompt is the REVIEWED revision's, never 
       }),
     });
 
-    expect(readRecordedPromptFor(pinnedAt(LATEST_REVISION), actorCtx)).toBe(REVIEWED_PROMPT);
+    expect(await readRecordedPromptFor(pinnedAt(LATEST_REVISION), actorCtx)).toBe(REVIEWED_PROMPT);
   });
 
-  it("a reader who may not read the row gets null, and no prompt leaks through the pin check", () => {
+  it("a reader who may not read the row gets null, and no prompt leaks through the pin check", async () => {
     readArtifact.mockReturnValue({ kind: "denied" });
 
-    expect(readRecordedPromptFor(pinnedAt(LATEST_REVISION), actorCtx)).toBeNull();
+    expect(await readRecordedPromptFor(pinnedAt(LATEST_REVISION), actorCtx)).toBeNull();
   });
 
-  it("a multi-target gate still answers null without reading anything", () => {
+  it("a multi-target gate still answers null without reading anything", async () => {
     const targets = [...pinnedAt(LATEST_REVISION), ...pinnedAt(LATEST_REVISION)];
 
-    expect(readRecordedPromptFor(targets, actorCtx)).toBeNull();
+    expect(await readRecordedPromptFor(targets, actorCtx)).toBeNull();
     expect(readArtifact).not.toHaveBeenCalled();
+  });
+
+  it("a review pinned at an earlier revision shows that revision's own prompt", async () => {
+    // The row has moved on to N+1 with its own prompt; the ledger row of the
+    // write that made revision N records the prompt N was made from.
+    readArtifact.mockReturnValue({ kind: "ok", artifact: summary() });
+    readLedgerPrompt.mockImplementation(async (query) =>
+      query.orgId === ORG &&
+      query.artifactId === ARTIFACT &&
+      query.representationRevisionId === REVIEWED_REVISION
+        ? REVIEWED_PROMPT
+        : null,
+    );
+
+    const prompt = await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx);
+
+    expect(prompt).toBe(REVIEWED_PROMPT);
+    expect(readLedgerPrompt).toHaveBeenCalledTimes(1);
+    expect(readLedgerPrompt).toHaveBeenCalledWith({
+      orgId: ORG,
+      artifactId: ARTIFACT,
+      representationRevisionId: REVIEWED_REVISION,
+    });
+  });
+
+  it("the latest pin shows the prompt its ledger row records when the row records none", async () => {
+    // The image tool's picture: its row carries the caller's data, never a
+    // prompt; the prompt lives on the ledger row of the write that made it.
+    readArtifact.mockReturnValue({
+      kind: "ok",
+      artifact: summary({
+        latestRepresentationRevisionId: REVIEWED_REVISION,
+        recordedPrompt: null,
+      }),
+    });
+    readLedgerPrompt.mockResolvedValue("a lighthouse at dusk");
+
+    expect(await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBe(
+      "a lighthouse at dusk",
+    );
+  });
+
+  it("a reader who may not read the row is never answered from the ledger", async () => {
+    readArtifact.mockReturnValue({ kind: "denied" });
+    readLedgerPrompt.mockResolvedValue(REVIEWED_PROMPT);
+
+    expect(await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBeNull();
+    expect(readLedgerPrompt).not.toHaveBeenCalled();
+  });
+
+  it("a ledger that fails falls back to the row's own rule", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    readArtifact.mockReturnValue({
+      kind: "ok",
+      artifact: summary({
+        latestRepresentationRevisionId: REVIEWED_REVISION,
+        recordedPrompt: REVIEWED_PROMPT,
+      }),
+    });
+    readLedgerPrompt.mockRejectedValue(new Error("ledger unavailable"));
+
+    expect(await readRecordedPromptFor(pinnedAt(REVIEWED_REVISION), actorCtx)).toBe(
+      REVIEWED_PROMPT,
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("[review-gate-ports]");
+    warn.mockRestore();
   });
 });

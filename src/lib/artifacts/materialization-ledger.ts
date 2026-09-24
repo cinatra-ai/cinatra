@@ -413,3 +413,38 @@ export function buildImageGenerationProvenanceQuery(input: {
     ],
   };
 }
+
+/**
+ * THE PROMPT ONE REVISION WAS MADE FROM, as its own ledger row records it
+ * (cinatra#3502 item 3). `image_prompt` is written per REVISION by the
+ * provenance write above — on the finalized row of the write that filed that
+ * revision (cinatra#3032) — so this is the per-revision record, never the
+ * artifact row's current one.
+ *
+ * Keyed on the organisation, the artifact AND the revision, finalized rows only,
+ * the newest first. Answers the trimmed, non-empty prompt, or null when no
+ * finalized row of that revision records one (a write that made no picture, or
+ * a re-file, which writes no ledger row). Carries no authorization of its own:
+ * the caller reads it only after its own authorized read of the artifact.
+ */
+export async function readRevisionImagePrompt(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<string | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT image_prompt
+   FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+    AND phase = 'finalized' AND image_prompt IS NOT NULL
+  ORDER BY created_at DESC
+  LIMIT 1`,
+    [input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  const row = res.rows[0] as { image_prompt: string | null } | undefined;
+  if (!row || typeof row.image_prompt !== "string") return null;
+  const prompt = row.image_prompt.trim();
+  return prompt === "" ? null : prompt;
+}
