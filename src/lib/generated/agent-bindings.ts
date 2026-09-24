@@ -41,7 +41,7 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/email-follow-up-agent:output", kind: "email-drafts-review", priority: 80, a2uiTranslator: "followups-output", declaredBy: "@cinatra-ai/email-follow-up-agent" },
   { id: "@cinatra-ai/email-outreach-agent:cta", kind: "cta", priority: 90, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-outreach-agent:gmail-sender", kind: "gmail-sender", priority: 100, declaredBy: "@cinatra-ai/email-artifacts" },
-  { id: "@cinatra-ai/email-outreach-agent:list-picker", kind: "list-picker", priority: 90, params: {"selection":"multiple","minSelected":1}, declaredBy: "@cinatra-ai/email-outreach-agent" },
+  { id: "@cinatra-ai/email-outreach-agent:list-picker", kind: "list-picker", priority: 90, params: {"selection":"multiple","minSelected":1,"question":"Which views or lists in your CRM should this run take its recipients from?","emptyState":"There are no views or lists to pick from yet. Create one in your CRM, then open this step again."}, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-outreach-agent:setup-form", kind: "wayflow-setup-form", priority: 60, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review", kind: "campaign-recipients-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-recipient-selection-agent:output", kind: "campaign-recipients-review", priority: 80, a2uiTranslator: "recipients-output", declaredBy: "@cinatra-ai/email-recipient-selection-agent" },

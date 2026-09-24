@@ -505,3 +505,92 @@ describe('"the zero-content reading is the state line and the sentence — and n
     expect(container.textContent).not.toMatch(/CRM/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE DECLARED WORDS THROUGH THE REAL BINDING (cinatra#3358). The cases above
+// hand the renderer their own `bindingParams`; these read what the Email
+// Outreach Agent itself declares, as pinned: its `cinatra.fieldRenderers[]`
+// list-picker entry, carried into the generated binding map by the generator,
+// registered by `ensureDefaultFieldRenderersRegistered()` and handed to the
+// step by the registry's own wrapper. Both expected strings are READ FROM THE
+// GENERATED MAP, never typed here.
+// ---------------------------------------------------------------------------
+describe("the list step draws the words the Email Outreach Agent declares, as pinned (cinatra#3358)", () => {
+  const OUTREACH_LIST_PICKER = "@cinatra-ai/email-outreach-agent:list-picker";
+
+  type RegistryEntry = import("../field-renderer-registry").FieldRendererEntry;
+  let registrySnapshot: readonly RegistryEntry[] = [];
+
+  beforeEach(async () => {
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    registrySnapshot = fieldRendererRegistry.list().slice();
+  });
+
+  afterEach(async () => {
+    // RESTORE WHAT THIS BLOCK REGISTERED — the registry is a module-global.
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    fieldRendererRegistry.clear();
+    for (const entry of registrySnapshot) fieldRendererRegistry.register(entry);
+    registrySnapshot = [];
+  });
+
+  /** The pinned binding's `params`, as the generator wrote them. */
+  async function pinnedParams(): Promise<Readonly<Record<string, unknown>>> {
+    const { GENERATED_FIELD_RENDERER_BINDINGS } = await import(
+      "@/lib/generated/agent-bindings"
+    );
+    const binding = GENERATED_FIELD_RENDERER_BINDINGS.find(
+      (b) => b.id === OUTREACH_LIST_PICKER,
+    );
+    expect(binding, "the pinned map carries the outreach list-picker binding").toBeDefined();
+    return binding?.params ?? {};
+  }
+
+  it("the pinned map carries the agent's declared question and empty-state message", async () => {
+    const params = await pinnedParams();
+
+    expect(typeof params.question, "params.question").toBe("string");
+    expect(String(params.question ?? "").trim(), "params.question").not.toBe("");
+    expect(typeof params.emptyState, "params.emptyState").toBe("string");
+    expect(String(params.emptyState ?? "").trim(), "params.emptyState").not.toBe("");
+    expect(params.selection).toBe("multiple");
+    expect(params.minSelected).toBe(1);
+  });
+
+  it("the step reached through the registry draws those words as written", async () => {
+    const params = await pinnedParams();
+    const { ensureDefaultFieldRenderersRegistered } = await import(
+      "../register-default-renderers"
+    );
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    ensureDefaultFieldRenderersRegistered();
+
+    const schema = { "x-renderer": OUTREACH_LIST_PICKER } as Record<string, unknown>;
+    const entry = fieldRendererRegistry.resolve("field", schema, {
+      connectedApps: [],
+    } as never);
+    expect(entry?.id).toBe(OUTREACH_LIST_PICKER);
+    const Resolved = entry!.renderer;
+
+    // No `bindingParams` of the test's own: the registry's wrapper supplies them.
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const { container } = render(
+      <Resolved {...makeProps({ label: undefined, schema })} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-state-line").textContent).toBe(
+        "Nothing to pick",
+      ),
+    );
+    expect(questionAsked()).toBe(params.question);
+    const sentence = screen.getByTestId("list-picker-empty-reading");
+    expect(sentence.textContent).toBe(params.emptyState);
+    const stateLine = screen.getByTestId("list-picker-state-line");
+    expect(
+      stateLine.compareDocumentPosition(sentence) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(container.textContent).not.toContain("Which list should this run use?");
+  });
+});
