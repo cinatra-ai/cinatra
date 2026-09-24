@@ -617,15 +617,6 @@ async function readWorkspaceCatalog({
     })),
   );
 
-  // ONE row per package, in the catalog's own order, so an anchor visible from
-  // several organizations is admitted once and two organizations' copies of one
-  // package are one offer.
-  const byPackage = new Map<string, CatalogTemplateView>();
-  for (const row of rows.sort(compareCatalogRows)) {
-    if (!byPackage.has(row.packageName)) byPackage.set(row.packageName, row);
-  }
-  const deduped = [...byPackage.values()];
-
   // ONE collision check, against the organization-free workspace collection
   // every leg resolved. `legs[0]` is as good as any: the destination does not
   // depend on the leg (see `destinationRefForSurface`'s workspace arm).
@@ -637,8 +628,23 @@ async function readWorkspaceCatalog({
     warn("workspace destination collection unreadable; rendering no catalog");
     return [];
   }
-  return deduped
-    .filter((t) => isAddableWithoutNameCollision(t.name, existingNames))
-    .sort(compareCatalogRows)
-    .slice(0, MAX_CATALOG_ROWS);
+
+  // COLLISION FIRST, THEN DEDUPE. The order matters: two organizations can
+  // carry DIFFERENTLY NAMED rows for one package, and deduplicating first could
+  // pick the one whose name is already taken here and drop the addable one,
+  // withdrawing the whole package over a name the viewer never has to use.
+  // Filtering first means the surviving representative is one that can actually
+  // be added.
+  const addable = rows.filter((t) =>
+    isAddableWithoutNameCollision(t.name, existingNames),
+  );
+
+  // ONE row per package, in the catalog's own order, so an anchor visible from
+  // several organizations is admitted once and two organizations' copies of one
+  // package are one offer.
+  const byPackage = new Map<string, CatalogTemplateView>();
+  for (const row of addable.sort(compareCatalogRows)) {
+    if (!byPackage.has(row.packageName)) byPackage.set(row.packageName, row);
+  }
+  return [...byPackage.values()].sort(compareCatalogRows).slice(0, MAX_CATALOG_ROWS);
 }

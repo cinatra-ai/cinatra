@@ -73,8 +73,15 @@ type OrgHomeAccess = {
    * never a synthesized actor. An organization the viewer has no current
    * membership in never reaches this map at all, which is what makes the
    * federation's tenant fence structural.
+   *
+   * `null` when the role lookup resolved NOTHING. The enumeration that put the
+   * organization in the vantage and the role lookup are two reads, so a
+   * membership revoked between them (or a stored role the platform does not
+   * recognize) leaves no role here. Defaulting it to `member` would MINT the
+   * very membership the catalog's first gate exists to test, so the federation
+   * simply gets no leg for that organization instead.
    */
-  readonly catalogActor: ActorContext;
+  readonly catalogActor: ActorContext | null;
 };
 
 /** Everything the workspace tab decides on, read once per request. */
@@ -95,6 +102,13 @@ export type WorkspaceViewer = {
 
 function isOrgManagerRole(role: string | undefined | null): boolean {
   return role === "org_owner" || role === "org_admin";
+}
+
+/** A role the platform recognizes. Anything else is not a membership fact. */
+function isKnownOrgRole(
+  role: string | undefined | null,
+): role is "org_owner" | "org_admin" | "member" {
+  return role === "org_owner" || role === "org_admin" || role === "member";
 }
 
 function toDashboardOrgRole(role: string | undefined | null): "owner" | "admin" | "member" {
@@ -161,11 +175,14 @@ export async function buildWorkspaceViewer(input: {
         teamRoles: {},
       },
       projectGrants,
-      catalogActor: {
+      // FAIL CLOSED: no resolved role, no actor, no leg (see the field's note).
+      catalogActor: !isKnownOrgRole(role)
+        ? null
+        : {
         principalType: "HumanUser",
         principalId: userId,
         organizationId: org.orgId,
-        orgRole: (role ?? "member") as "org_owner" | "org_admin" | "member",
+        orgRole: role,
         // A platform administrator IS one in every organization; that is a fact
         // about the principal, not an authority borrowed from this tenant.
         platformRole: input.platformAdmin ? "platform_admin" : "member",
@@ -427,7 +444,10 @@ export function workspaceCatalogMemberships(
   return viewer.vantage.organizations
     .map((org) => {
       const access = viewer.homeAccess.get(org.orgId);
-      return access ? { orgId: org.orgId, actor: access.catalogActor } : null;
+      // No resolved role means no leg: see `catalogActor`.
+      return access?.catalogActor
+        ? { orgId: org.orgId, actor: access.catalogActor }
+        : null;
     })
     .filter((m): m is WorkspaceCatalogMembership => m !== null);
 }

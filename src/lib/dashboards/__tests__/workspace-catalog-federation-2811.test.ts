@@ -355,6 +355,26 @@ describe("the collision check against the organization-free destination", () => 
     state.namesThrow = true;
     expect(await federate([membership(ORG_A)])).toEqual([]);
   });
+
+  it("keeps a package whose OTHER organization offers an addable name", async () => {
+    // One package, two organizations, two different row names. The workspace
+    // already holds the first name. Deduplicating before the collision filter
+    // would pick that one, drop the other, then remove it, and the package
+    // would vanish although the viewer could still add it.
+    state.templates = [
+      template({ id: "tmpl-a", organizationId: ORG_A, name: "Analytics" }),
+      template({ id: "tmpl-b", organizationId: ORG_B, name: "Reports" }),
+    ];
+    state.installs = [
+      install({ id: "install-a", organizationId: ORG_A, ownerId: ORG_A }),
+      install({ id: "install-b", organizationId: ORG_B, ownerId: ORG_B }),
+    ];
+    state.names.set(WORKSPACE_COLLECTION, ["Overview", "Analytics"]);
+    const rows = await federate([membership(ORG_A), membership(ORG_B)]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.name).toBe("Reports");
+    expect(rows[0]!.packageName).toBe(PKG_SHARED);
+  });
 });
 
 describe("the write", () => {

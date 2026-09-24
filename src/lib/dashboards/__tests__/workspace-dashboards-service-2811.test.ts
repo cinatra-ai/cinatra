@@ -80,6 +80,7 @@ vi.mock("@cinatra-ai/dashboards/entity-links", () => ({
 import {
   addWorkspaceReference,
   buildWorkspaceViewer,
+  workspaceCatalogMemberships,
   getWorkspaceDashboardsRows,
   listWorkspaceReferenceCandidates,
   readWorkspaceOverviewSummary,
@@ -162,6 +163,44 @@ describe("buildWorkspaceViewer", () => {
     expect([...b.curator.managedOrgIds]).toEqual([...a.curator.managedOrgIds]);
     expect([...none.curator.managedOrgIds]).toEqual([...a.curator.managedOrgIds]);
     expect(await getWorkspaceDashboardsRows(b)).toEqual(await getWorkspaceDashboardsRows(a));
+  });
+});
+
+describe("the installed catalog's per-organization memberships", () => {
+  it("carries one actor per member organization, with that organization's own standing", async () => {
+    const v = await viewer();
+    const memberships = workspaceCatalogMemberships(v);
+    expect(memberships.map((m) => m.orgId)).toEqual(["org-a", "org-b"]);
+    for (const m of memberships) {
+      // The actor is resolved FOR its own organization, never borrowed.
+      expect(m.actor.organizationId).toBe(m.orgId);
+      expect(m.actor.principalType).toBe("HumanUser");
+      expect(m.actor.principalId).toBe("u1");
+    }
+    expect(memberships[0]!.actor.orgRole).toBe(reads.roles["org-a"]);
+    expect(memberships[1]!.actor.orgRole).toBe(reads.roles["org-b"]);
+  });
+
+  it("MINTS NO ROLE: an organization whose role lookup resolves nothing gets no leg", async () => {
+    // The enumeration that put the organization in the vantage and the role
+    // lookup are two reads. A membership revoked between them resolves to no
+    // role, and defaulting it to "member" would manufacture the very
+    // membership the catalog's first gate exists to test.
+    reads.roles = { ...reads.roles, "org-b": undefined };
+    const memberships = workspaceCatalogMemberships(await viewer());
+    expect(memberships.map((m) => m.orgId)).toEqual(["org-a"]);
+  });
+
+  it("MINTS NO ROLE: an unrecognized stored role is not a membership either", async () => {
+    reads.roles = { ...reads.roles, "org-b": "something_else" };
+    const memberships = workspaceCatalogMemberships(await viewer());
+    expect(memberships.map((m) => m.orgId)).toEqual(["org-a"]);
+  });
+
+  it("reads the same under every active organization", async () => {
+    const a = await buildWorkspaceViewer({ userId: "u1", platformAdmin: false, activeOrganizationId: "org-a" });
+    const b = await buildWorkspaceViewer({ userId: "u1", platformAdmin: false, activeOrganizationId: "org-b" });
+    expect(workspaceCatalogMemberships(b)).toEqual(workspaceCatalogMemberships(a));
   });
 });
 
