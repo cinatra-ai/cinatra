@@ -11,6 +11,7 @@ import {
   catalogEntryToCardData,
   resolveCardDisplayName,
   normalizeCardDescription,
+  CARD_DESCRIPTION_NAMED_ENTITIES,
   resolveMarketplaceCardCta,
   applyRunGateInstallTruth,
   workspaceReachLabel,
@@ -471,6 +472,229 @@ describe("normalizeCardDescription", () => {
     expect(normalizeCardDescription("")).toBeNull();
     expect(normalizeCardDescription(null)).toBeNull();
     expect(normalizeCardDescription(undefined)).toBeNull();
+  });
+});
+
+// cinatra#3560: the storefront flattens each README into a single-line card
+// summary and emits the CUT as an HTML entity, so the raw seven-character text
+// of the entity reached the card's paragraph — the framework escapes text, so
+// the card drew the token's own characters and looked broken.
+// normalizeCardDescription now DECODES the entities the storefront emits
+// (ampersand LAST), THEN removes any markup tag, and only THEN runs its
+// existing leading-heading strip and trim.
+//
+// ONE table enumerates every form the pipeline handles. The LAST assertion of
+// the block below compares this table's named-form list against the decoder's
+// OWN exported table read from the module (never restated), so a form added to
+// the decoder and left out of this table fails HERE and never first in a
+// picture round.
+interface CardDescriptionEntityRow {
+  /** The decoder's own table key, for the rows that pin a NAMED form. */
+  namedForm?: string;
+  what: string;
+  raw: string;
+  expected: string;
+}
+
+const CARD_DESCRIPTION_ENTITY_ROWS: CardDescriptionEntityRow[] = [
+  {
+    namedForm: "hellip",
+    what: "the ellipsis the storefront emits where it cut the summary short",
+    raw: "Pick a chart type (bar, line, or area),&hellip;",
+    expected: "Pick a chart type (bar, line, or area),…",
+  },
+  {
+    namedForm: "lsquo",
+    what: "the left single quote",
+    raw: "A &lsquo;quick start guide for every workspace",
+    expected: "A ‘quick start guide for every workspace",
+  },
+  {
+    namedForm: "rsquo",
+    what: "the right single quote (the apostrophe the storefront emits)",
+    raw: "Cites answers across your team&rsquo;s docs",
+    expected: "Cites answers across your team’s docs",
+  },
+  {
+    namedForm: "ldquo",
+    what: "the left double quote",
+    raw: "Ships with a &ldquo;batteries included preset",
+    expected: "Ships with a “batteries included preset",
+  },
+  {
+    namedForm: "rdquo",
+    what: "the right double quote",
+    raw: "Ships it&rdquo; and reports back",
+    expected: "Ships it” and reports back",
+  },
+  {
+    namedForm: "ndash",
+    what: "the en dash",
+    raw: "Refreshes every 5&ndash;10 minutes",
+    expected: "Refreshes every 5–10 minutes",
+  },
+  {
+    namedForm: "mdash",
+    what: "the em dash",
+    raw: "Assembles itself each quarter&mdash;export to slides",
+    expected: "Assembles itself each quarter—export to slides",
+  },
+  {
+    namedForm: "nbsp",
+    what: "the non-breaking space",
+    raw: "Indexes up to 10&nbsp;GB of documents",
+    expected: "Indexes up to 10 GB of documents",
+  },
+  {
+    namedForm: "lt",
+    what: "the less-than, where it forms no markup tag",
+    raw: "Latency &lt; 100 ms on every query",
+    expected: "Latency < 100 ms on every query",
+  },
+  {
+    namedForm: "gt",
+    what: "the greater-than",
+    raw: "Uptime &gt; 99.95 percent, measured monthly",
+    expected: "Uptime > 99.95 percent, measured monthly",
+  },
+  {
+    namedForm: "quot",
+    what: "the quote",
+    raw: "The &quot;pro&quot; tier adds audit trails",
+    expected: "The \"pro\" tier adds audit trails",
+  },
+  {
+    namedForm: "amp",
+    what: "the ampersand",
+    raw: "Live revenue, churn &amp; pipeline metrics",
+    expected: "Live revenue, churn & pipeline metrics",
+  },
+  {
+    what: "a DECIMAL numeric form",
+    raw: "Pick a chart type (bar, line, or area),&#8230;",
+    expected: "Pick a chart type (bar, line, or area),…",
+  },
+  {
+    what: "a HEXADECIMAL numeric form",
+    raw: "Pick a chart type (bar, line, or area),&#x2026;",
+    expected: "Pick a chart type (bar, line, or area),…",
+  },
+  {
+    what:
+      "a DOUBLE-ENCODED ampersand sequence — the expectation IS the literal " +
+      "text a reader would see, never a character the storefront did not send, " +
+      "and the decoded ampersand is never re-read as another entity",
+    raw: "Cut short right here&amp;hellip;",
+    expected: "Cut short right here&hellip;",
+  },
+  {
+    what: "an OUT-OF-RANGE numeric token — left exactly as it stands, never thrown on",
+    raw: "&#1114112; is past the last code point and stays put",
+    expected: "&#1114112; is past the last code point and stays put",
+  },
+  {
+    what: "a SURROGATE-RANGE numeric token — left exactly as it stands",
+    raw: "&#xD800; is a lone surrogate and stays put",
+    expected: "&#xD800; is a lone surrogate and stays put",
+  },
+  {
+    what:
+      "an ENCODED markup tag — decoded by the entity step, then removed by the " +
+      "markup step, so no markup-rendering road is ever needed on the card",
+    raw: "&lt;b&gt;Bold&lt;/b&gt; summary of the tool",
+    expected: "Bold summary of the tool",
+  },
+  {
+    what:
+      "a DECODED less-than that forms no tag — it survives as the character it is",
+    raw: "We &lt;3 clean data pipelines",
+    expected: "We <3 clean data pipelines",
+  },
+  {
+    what:
+      "a NUMERICALLY ENCODED leading heading marker — decoded first, so the " +
+      "existing cinatra#205 strip removes it exactly as it removes a raw one",
+    raw: "&#35; Email Outreach Agent Run an outbound email campaign from scratch.",
+    expected: "Email Outreach Agent Run an outbound email campaign from scratch.",
+  },
+  {
+    what:
+      "a DOUBLE-ENCODED sequence whose ampersand arrived NUMERICALLY — the " +
+      "decoded ampersand is never re-read as the start of another entity",
+    raw: "Cut short right here&#38;hellip;",
+    expected: "Cut short right here&hellip;",
+  },
+  {
+    what:
+      "the same, with the ampersand arriving in the HEXADECIMAL numeric shape",
+    raw: "Cut short right here&#x26;hellip;",
+    expected: "Cut short right here&hellip;",
+  },
+  {
+    what: "a ZERO-PADDED decimal numeric form — a valid code point, decoded",
+    raw: "Pick a chart type (bar, line, or area),&#00008230;",
+    expected: "Pick a chart type (bar, line, or area),…",
+  },
+  {
+    what:
+      "a ZERO-PADDED hexadecimal numeric form — a valid code point, decoded",
+    raw: "Pick a chart type (bar, line, or area),&#x0002026;",
+    expected: "Pick a chart type (bar, line, or area),…",
+  },
+];
+
+// Any entity token still standing in a mapped description, in any shape.
+const ANY_ENTITY_TOKEN_RE = /&(?:[a-zA-Z]{2,8}|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6});/;
+
+describe("normalizeCardDescription — entity + markup normalization (cinatra#3560)", () => {
+  for (const row of CARD_DESCRIPTION_ENTITY_ROWS) {
+    it(`maps ${row.what}`, () => {
+      expect(normalizeCardDescription(row.raw)).toBe(row.expected);
+    });
+  }
+
+  it("enumerates EVERY named form the decoder's own exported table carries — read from the module, never restated", () => {
+    const pinnedByThisTable = Array.from(
+      new Set(
+        CARD_DESCRIPTION_ENTITY_ROWS.flatMap((row) =>
+          row.namedForm ? [row.namedForm] : [],
+        ),
+      ),
+    ).sort();
+    expect(pinnedByThisTable).toEqual(
+      Object.keys(CARD_DESCRIPTION_NAMED_ENTITIES).sort(),
+    );
+  });
+});
+
+describe("catalogEntryToCardData — the mapped listing description holds plain text (cinatra#3560)", () => {
+  // The end-to-end reading the issue asks for, taken through the ONE mapper the
+  // browse loader actually calls for every storefront listing.
+  it("a catalogue description ENDING in the ellipsis entity maps to the character, with no entity token left", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        description:
+          "Render any metric as a chart: pick the type (bar, line, or area),&hellip;",
+      }),
+    );
+    expect(card!.description).toBe(
+      "Render any metric as a chart: pick the type (bar, line, or area),…",
+    );
+    expect(card!.description).not.toContain("&hellip;");
+    expect(card!.description).not.toMatch(ANY_ENTITY_TOKEN_RE);
+  });
+
+  it("a catalogue description carrying the ampersand entity maps to the character, with no entity token left", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        description: "Live revenue, churn &amp; pipeline metrics on one board",
+      }),
+    );
+    expect(card!.description).toBe(
+      "Live revenue, churn & pipeline metrics on one board",
+    );
+    expect(card!.description).not.toContain("&amp;");
+    expect(card!.description).not.toMatch(ANY_ENTITY_TOKEN_RE);
   });
 });
 

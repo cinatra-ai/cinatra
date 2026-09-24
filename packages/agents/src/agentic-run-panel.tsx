@@ -23,6 +23,7 @@ import { useRunWindowConversation } from "./use-run-window-conversation";
 // with a kind, a host and a state a capture can read.
 import {
   AgentHitlScreenCard,
+  AgentHitlScreenSetupContinue,
   HITL_FIELDS_REGION_CLASS,
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
@@ -268,6 +269,17 @@ export type AgenticRunPanelProps = {
    * otherwise answer as whoever else is signed in on that browser.
    */
   readReviewSlot?: RunReviewSlotReader;
+  /**
+   * WHICH READING THIS PANEL IS DRAWING (cinatra#3484).
+   *
+   * Fires with `true` while the panel's current reading is the review screen
+   * and `false` for every other reading it has, and `false` once more when the
+   * panel unmounts. A host that has to decide whether standing this panel down
+   * takes a decision away from the reader cannot answer that for itself: the
+   * reading is chosen from the run's own gate and slot rows, which a transcript
+   * deliberately does not read. Absent on a host that does not ask.
+   */
+  onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
 };
 
 export type ChatGateField = {
@@ -470,6 +482,7 @@ export function AgenticRunPanel({
   recommendationDecided,
   initialReviewGate,
   readReviewSlot,
+  onReviewReadingChange,
   inputStepInRail = false,
   railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
@@ -876,6 +889,94 @@ export function AgenticRunPanel({
       }
     },
     [],
+  );
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3532 — THE SETUP FIELD THAT DRAWS NO CONTROL OF ITS OWN.
+  //
+  // This surface's setup-loop branch submits ON CHANGE, because the renderer's
+  // own button was the send. A renderer that declares no submit control
+  // (`FieldRendererEntry.drawsOwnSubmit` absent — the pack-bound `cta` kind is
+  // the reported one) therefore offered the reader nothing to press: every
+  // keystroke or selection went straight to the server and the field could not
+  // be passed deliberately at all.
+  //
+  // So the send MOVES rather than firing itself: where the product owns it, the
+  // same `onChange` STAGES what it would have submitted — byte for byte, the
+  // same `wrapPrimitiveSetupPayload` output under the same field name — and the
+  // card's own Continue (`AgentHitlScreenSetupContinue`, the control the
+  // fallback field's card draws) submits it through the one submit core.
+  //
+  // KEYED BY THE GATE, for the reason the card's staging is: sequential setup
+  // gates share one xRenderer and arrive with no frame between them, so an
+  // answer staged for the previous field must never be submitted for the next
+  // question. A ref rather than state: the flush below runs synchronously and a
+  // state write would not be readable in the same turn.
+  // ---------------------------------------------------------------------------
+  // WHAT THE FIELD SHOWS WHILE ITS ANSWER IS STAGED (convergence finding 1).
+  // A field renderer is CONTROLLED by the `value` prop — CtaRenderer's textarea
+  // reads it and keeps no state of its own — so a staging path that changed
+  // nothing here would clear the box after every keystroke and leave the
+  // Continue passing the last character. Held as state, not a ref, because it
+  // is drawn; keyed by the gate, so a draft never seeds the next question.
+  const [setupDraft, setSetupDraft] = useState<{ key: string; value: unknown } | null>(
+    null,
+  );
+  const setupAnswerRef = useRef<
+    { key: string; payload: unknown; payloadFieldName: string | undefined } | null
+  >(null);
+  const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
+  const setupPressRef = useRef(false);
+  const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
+    setupFlushRef.current = { key, fn };
+  }, []);
+  const submitStagedSetupAnswer = useCallback(
+    async (key: string, reviewTaskId: string, xRenderer: string) => {
+      // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
+      // the flush is asynchronous and `isApproving` is React state, so two
+      // presses in one tick would both reach the submit core.
+      if (setupPressRef.current) return;
+      setupPressRef.current = true;
+      try {
+        // ASK THE FIELD FOR ITS VALUE the way its own button would — but ONLY
+        // where it has handed nothing over yet (convergence finding 3). A
+        // registration cannot be withdrawn when its renderer unmounts, so a
+        // gate whose renderer was replaced under it (the extension wrapper's
+        // loading floor, replaced by the loaded component on the same gate key)
+        // still carries the floor's flush; flushing it over an answer the
+        // reader has already given would overwrite that answer with the
+        // departed renderer's empty one. What is staged is the reader's own
+        // input and always wins.
+        const alreadyStaged = setupAnswerRef.current;
+        if (alreadyStaged === null || alreadyStaged.key !== key) {
+          const flush = setupFlushRef.current;
+          if (flush !== null && flush.key === key) await flush.fn();
+        }
+        // NOT CLEARED BEFORE THE SEND (convergence finding 2): the submit core
+        // swallows a failed submission into a toast, so an answer dropped here
+        // would leave the reader pressing a Continue that does nothing until
+        // they retype. The staged answer belongs to this gate alone — the key
+        // check below is what keeps it off the next one — so it is simply kept.
+        const staged = setupAnswerRef.current;
+        // Nothing staged for THIS gate: a required box the renderer refused to
+        // hand over says so itself, inside the field. Nothing is sent, and the
+        // screen is left exactly as it was.
+        if (staged === null || staged.key !== key) return;
+        await performGateSubmit({
+          reviewTaskId,
+          xRenderer,
+          payload: staged.payload,
+          payloadFieldName: staged.payloadFieldName,
+          trackApproving: true,
+          suppressGate: false,
+          clearAttachmentsOnSuccess: false,
+          errorMode: "toast",
+        });
+      } finally {
+        setupPressRef.current = false;
+      }
+    },
+    [performGateSubmit],
   );
 
   // Stable submit — empty deps, reads refs. The payload discrimination
@@ -1779,6 +1880,51 @@ export function AgenticRunPanel({
       status === "running" ||
       (reviewMayStillOpen && !widgetHostedPanel));
 
+  // THE READING IS REPORTED TO WHOEVER HOSTS THIS PANEL (cinatra#3484).
+  //
+  // Exactly one of this panel's readings draws a lifecycle card that asks the
+  // reader, and it is the review screen: the working placeholder asks nothing,
+  // the progress plate asks nothing, no input screen is mounted here on a
+  // conversation host at all (`panelMountsHitlScreenCard`), and no
+  // recommendation row is mounted on any host (cinatra#3047). A container that
+  // withholds this panel is therefore withholding a decision in exactly one
+  // case, and only the panel can say which case it is in: the reading is chosen
+  // from the run's own gate and slot rows, and a transcript that resolved those
+  // for itself would be the second dispatch path the lifecycle wire exists to
+  // prevent.
+  //
+  // PUBLISHED THE WAY THE GATE CHANGE ABOVE ALREADY IS. The callback lives in a
+  // ref, so a parent that hands down a fresh function every render cannot
+  // re-fire the report; the effect is keyed on the reported VALUE alone, so this
+  // panel's own 2s tick cannot republish it. And it is declared HERE - after the
+  // two readings above are computed and before the early return below - so the
+  // hook order is identical on every reading this panel draws.
+  //
+  // NOTHING ELSE IS REPORTED, and no behaviour of this panel changes: the value
+  // is the answer to one question, and the panel draws exactly what it drew.
+  //
+  // AND THE QUESTION IS THE PANEL'S OWN READING, NOT THE CARD'S STATE. The
+  // value says this panel's current reading is its review screen - the slot it
+  // selected from the run's gate and slot rows. It does NOT say the card inside
+  // that slot resolved to a pending decision: a review the reader may not read
+  // draws no card at all, and a settled one draws a reading that asks nothing,
+  // and both of those still report a review reading here. Reporting on what the
+  // card resolved to would have to come from the card, which is a wire this
+  // change does not open; so the value is read for what it is, and a host that
+  // needs the stronger question asks it of the card.
+  const panelDrawsReview = Boolean(inPlaceReviewRef);
+  const onReviewReadingChangeRef = useRef(onReviewReadingChange);
+  onReviewReadingChangeRef.current = onReviewReadingChange;
+  useEffect(() => {
+    onReviewReadingChangeRef.current?.(runId, panelDrawsReview);
+    // A PANEL THAT LEAVES TAKES ITS ANSWER WITH IT, exactly as the gate publish
+    // above clears on unmount: a host left holding "this panel is drawing a
+    // review" for a panel that is gone would hold a stand-down open for ever.
+    return () => {
+      onReviewReadingChangeRef.current?.(runId, false);
+    };
+  }, [runId, panelDrawsReview]);
+
   // NO RECOMMENDATION CARD IS MOUNTED HERE, ON ANY HOST (cinatra#3047).
   //
   // This panel used to mount one wherever no conversation host was in scope —
@@ -1796,14 +1942,67 @@ export function AgenticRunPanel({
   // interaction is the ANSWER, and it takes it as a prop
   // (`recommendationDecided`).
 
+  // THE FRAME IS THE HOST, AND INSIDE A CONVERSATION THE FRAME IS THE THREAD
+  // (cinatra#3484).
+  //
+  // §IX of the ratified drawing: "Four hosts, one card set … Only the frame
+  // changes — the thread, the widget's panel, the run card's detail column, the
+  // gate region of the review page." When the conversation dispatched the run
+  // this panel is drawn INSIDE the transcript, so the reader meets this card
+  // between the turn's prose and the thread's composer: the frame it is in is
+  // the thread. The declaration below used to be an unconditional `run_card`
+  // literal, and on a conversation page it was the ONLY host declaration there —
+  // the card said it belonged to a frame the reader was not in.
+  //
+  // AND IT IS WHAT KEPT THE SURFACE FROM BEING GRADED AT ALL. The repository's
+  // own capture recorder states the rule
+  // (`scripts/audit/lib/chat-hitl-capture-recorder.mjs`): chat_thread needs the
+  // `/chat` URL class AND the card root's own
+  // `data-lifecycle-card-host="chat_thread"`, which
+  // `scripts/audit/chat-hitl-anchor-contract.json` carries as a required anchor
+  // on every chat_thread row. A page publishing only `run_card` fails the host
+  // anchor, so the cell could not be concluded on.
+  //
+  // THE CONVERSATION'S DECLARATION IS INHERITED, NEVER RE-MINTED: the card is
+  // mounted under no provider of its own, so the nearest one is the
+  // transcript's (`packages/chat/src/chat-messages-view.tsx`) and its host,
+  // credential and frame readings arrive unchanged. Containment was already
+  // inherited (cinatra#3481); this is the host catching up with it.
+  //
+  // EVERY OTHER HOST KEEPS THE LITERAL BELOW, and it is a literal deliberately:
+  // the host-parity ratchet's scanner
+  // (`src/lib/lifecycle/lifecycle-host-parity-ratchet.ts`) is lexical — it
+  // matches the surface provider's opening tag carrying a literal `run_card`
+  // host and collects the component tags composed inside it — so a computed
+  // declaration would read as `host-lost` for a run page that still draws the
+  // card. THAT SCANNER READS THIS PROSE TOO, because it does not strip
+  // comments: a sentence here that spelled the opening tag out would itself
+  // open a match and pull the tags below into the run page's owner set. The
+  // shape is therefore NAMED here and never quoted.
+  //
+  // SITE_WIDGET IS NOT WIDENED HERE, and the honest reason is SCOPE rather than
+  // the credential wall. cinatra#3484 is about the card a reader meets in the
+  // chat thread, and the branch above is its whole answer; the widget arm is
+  // left exactly as it stands. The wall is recorded all the same, because it
+  // rules out the OTHER shape anyone reaching for the widget would try: a
+  // `site_widget` declaration MINTED here without an `auth` prop is refused by
+  // the runtime's fail-closed credential rule (`lifecycle-card-runtime.tsx`)
+  // and would draw no card DOM at all. INHERITING an embed's own well-formed
+  // widget declaration — the way the branch above inherits the transcript's —
+  // would carry that auth along and would draw, so the widget arm is an open
+  // question this change does not answer and NOT one the wall closes.
+  // `runCardOwnsLifecycleCopy` already treats both conversation hosts alike,
+  // which is where that question belongs; it is tracked apart from this fix.
+  //
   // The review screen's ONE mount. cinatra#2566's account
   // of it is unchanged and still applies: the display-only REDIRECT card that
   // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
   // thread and the review page's gate region mount, and the reviewer decides in
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
+  const conversationHostedReview = ambientLifecycleHost === "chat_thread";
   const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
-    <LifecycleCardSurfaceProvider host="run_card">
+    conversationHostedReview ? (
       <ReviewGateCard
         view={{
           viewType: "artifact_review_gate",
@@ -1814,7 +2013,20 @@ export function AgenticRunPanel({
         // the RUN (cinatra#3141 item 1).
         runId={runId}
       />
-    </LifecycleCardSurfaceProvider>
+    ) : (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard
+          view={{
+            viewType: "artifact_review_gate",
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: inPlaceReviewRef,
+          }}
+          // §VI — the gate's conversational prompt window keeps its exchange
+          // with the RUN (cinatra#3141 item 1).
+          runId={runId}
+        />
+      </LifecycleCardSurfaceProvider>
+    )
   ) : null;
 
   if (reviewScreenNode !== null || runIsWorking) {
@@ -2010,6 +2222,27 @@ export function AgenticRunPanel({
                 const isGroupedSetup = isGroupedSetupRenderer(
                   effectiveHitlContext.xRenderer,
                 );
+                // cinatra#3532 — WHOSE CONTROL THE SEND IS ON THIS SETUP GATE.
+                // The card states the rule in `cardOwnsTheSetupSend`; read on
+                // this surface's own host it says: the run page is a PRIMARY
+                // host, so the renderer keeps whatever control it has — unless
+                // its registry entry declares none, and then the product draws
+                // its Continue and tells the renderer, through the shared props
+                // contract, to draw none. A mid-run gate (its own Continue
+                // below) and a grouped-setup form (one submit for the whole
+                // form) are untouched, and so is every renderer that declares
+                // its own control — the schema-field fallback the wizard's
+                // first field is drawn with keeps the Continue it draws itself.
+                const productOwnsSetupSend =
+                  !isMidRunHitl &&
+                  !isGroupedSetup &&
+                  hitlRendererEntry.entry.drawsOwnSubmit !== true;
+                // The gate a staged answer belongs to, and to no other.
+                const setupGateKey = [
+                  effectiveHitlContext.reviewTaskId,
+                  effectiveHitlContext.xRenderer,
+                  effectiveHitlContext.fieldName ?? "",
+                ].join("::");
                 // THE CHAT CARD CARRIES ITS OWN CONTINUE.
                 //
                 // The chat setup gate used to pass `hideSubmit`: the form was
@@ -2057,11 +2290,20 @@ export function AgenticRunPanel({
                       // the renderer sees it, and a renderer that re-derived its
                       // own slot from the envelope would still mis-seed on a
                       // sub-key name collision.
-                      value={setupFieldRendererValue(
-                        { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
-                        effectiveHitlContext.fieldName,
-                        hitlRendererEntry.fieldSchema,
-                      )}
+                      value={
+                        // The staged draft is this field's own reading while it
+                        // waits for the Continue (convergence finding 1); every
+                        // other case is the expression this surface always used.
+                        productOwnsSetupSend &&
+                        setupDraft !== null &&
+                        setupDraft.key === setupGateKey
+                          ? setupDraft.value
+                          : setupFieldRendererValue(
+                              { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
+                              effectiveHitlContext.fieldName,
+                              hitlRendererEntry.fieldSchema,
+                            )
+                      }
                       onChange={isMidRunHitl ? async (next: unknown) => {
                         // Compute nextBuffered synchronously, pass to performGateSubmit
                         // for grouped-setup immediate-submit, then setState for the visual update.
@@ -2102,6 +2344,20 @@ export function AgenticRunPanel({
                                 ?.type === "object",
                           },
                         );
+                        if (productOwnsSetupSend) {
+                          // cinatra#3532 — STAGE, do not send. The Continue
+                          // below is this field's send, and it submits exactly
+                          // this payload through the same core.
+                          setupAnswerRef.current = {
+                            key: setupGateKey,
+                            payload,
+                            payloadFieldName,
+                          };
+                          // …and the field goes on showing what the reader put
+                          // in it (convergence finding 1).
+                          setSetupDraft({ key: setupGateKey, value: next });
+                          return;
+                        }
                         await performGateSubmit({
                           reviewTaskId: effectiveHitlContext.reviewTaskId,
                           xRenderer: effectiveHitlContext.xRenderer,
@@ -2117,9 +2373,39 @@ export function AgenticRunPanel({
                       mode="edit"
                       onApply={handleApply}
                       aiSuggestions={aiSuggestions}
+                      // cinatra#3532 — where the product owns the send, the
+                      // renderer's own submit is not drawn inside the field
+                      // (the shared props contract says a renderer that draws
+                      // its own Continue must skip it), and the card's Continue
+                      // asks the field for its value through the same flush the
+                      // renderer's own button would have used.
+                      hideSubmit={productOwnsSetupSend}
+                      registerFlush={
+                        productOwnsSetupSend
+                          ? (fn: () => Promise<void>) =>
+                              registerSetupFlush(setupGateKey, fn)
+                          : undefined
+                      }
                     />
                     {/* Show the external Continue button only for non-grouped-setup midrun renderers. */}
                     {isMidRunHitl && !isGroupedSetup && approvalActionsRow}
+                    {/* cinatra#3532 — the product's Continue for a setup field
+                        whose renderer declares no submit control of its own:
+                        the same control the fallback field's card draws, and it
+                        passes the value the renderer holds. */}
+                    {productOwnsSetupSend ? (
+                      <AgentHitlScreenSetupContinue
+                        submitting={isApproving}
+                        blocked={false}
+                        onContinue={() =>
+                          submitStagedSetupAnswer(
+                            setupGateKey,
+                            effectiveHitlContext.reviewTaskId,
+                            effectiveHitlContext.xRenderer,
+                          )
+                        }
+                      />
+                    ) : null}
                   </>
                 );
               })()}

@@ -56,9 +56,11 @@ function ToggleGroup({
       orientation={orientation}
       style={{ "--gap": spacing } as React.CSSProperties}
       className={cn(
-        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-vertical:flex-col data-vertical:items-stretch",
-        // The size-dependent corner radius is resolved in JS, NOT as a
-        // `data-[size=sm]:rounded-…` variant (cinatra#2407).
+        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch",
+        // The corner radius is emitted from JS as a PLAIN utility, NOT as a
+        // `data-[size=sm]:rounded-…` variant (cinatra#2407). It used to differ
+        // by size; leg 2 took both steps to the one value the drawing states
+        // (below), and the emission road is unchanged and still load-bearing.
         //
         // As a variant it could not be overridden by a plain `rounded-*`
         // utility — the only form a consumer actually writes — in two
@@ -74,7 +76,14 @@ function ToggleGroup({
         // conflict group: `cn()` drops it whenever `className` carries its own
         // `rounded-*`, and keeps it verbatim when it does not. Nothing that
         // does not override the radius changes.
-        size === "sm" ? "rounded-[min(var(--radius-md),10px)]" : "rounded-lg",
+        //
+        // "7px radius" (cinatra#3189, leg 2). The corner is now the section's
+        // own literal on BOTH steps: the drawing states 7px for this control
+        // once, not once per size, and the size-keyed value it replaced
+        // resolved through --radius-md and so drew a different corner in each
+        // palette. The value is still emitted as a plain utility for exactly
+        // the reason above.
+        "rounded-[7px]",
         className
       )}
       {...props}
@@ -107,7 +116,7 @@ function ToggleGroupItem({
       data-size={resolvedSize}
       data-spacing={context.spacing}
       className={cn(
-        "shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 focus:z-10 focus-visible:z-10 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-lg group-data-vertical/toggle-group:data-[spacing=0]:first:rounded-t-lg group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-lg group-data-vertical/toggle-group:data-[spacing=0]:last:rounded-b-lg group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t",
+        "shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 focus:z-10 focus-visible:z-10 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:first:rounded-l-[7px] group-data-[orientation=vertical]/toggle-group:data-[spacing=0]:first:rounded-t-[7px] group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:last:rounded-r-[7px] group-data-[orientation=vertical]/toggle-group:data-[spacing=0]:last:rounded-b-[7px] group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-[orientation=vertical]/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-[orientation=horizontal]/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-[orientation=vertical]/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t",
         toggleVariants({
           variant: resolvedVariant,
           size: resolvedSize,

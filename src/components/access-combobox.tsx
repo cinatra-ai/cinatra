@@ -312,6 +312,31 @@ export function resolveAccessLabel(
 // combobox. ONE exported component, ONE import, ONE contract; each mode keeps
 // its own render treatment + data shape (adapters may remain — AC1).
 // ---------------------------------------------------------------------------
+// cinatra#3523 — the CLOSED trigger's prefix node, drawn as the ratified
+// drawing gives it (app-permissions.html §III):
+//
+//   .pk-trigger .pfx { font-size: 10px; text-transform: uppercase;
+//                      letter-spacing: 0.08em; color: var(--muted);
+//                      font-family: var(--font-mono); flex: none; }
+//
+// written in the app's OWN token utilities, never a raw value: `font-mono` IS
+// var(--font-mono); `text-badge-xs` IS the scale's 10px (the design theme's own
+// note: "The drawing's 10px tags need no token of their own: text-badge-xs IS
+// 10px"); `text-muted-foreground` IS var(--muted) (--muted-foreground:
+// var(--muted)); `shrink-0` IS the rule's `flex: none`. The `uppercase` is the
+// drawing's TEXT-TRANSFORM — the prefix STRING stays the label module's own
+// ("Workspace:", never "WORKSPACE:"), so "trigger ≡ row, verbatim" (c-3.1)
+// still holds on the DOM text, which is what the trigger-equals-row suite reads.
+//
+// The rule's 0.08em letter-spacing rides on `tracking-picker-prefix`, the named
+// token this change adds beside the scale's other tracking tokens
+// (--picker-prefix-tracking: 0.08em in the token file, mapped to the utility in
+// the @theme block): the scale carried no 0.08em lane and this repo's
+// design-system gate refuses the bracket literal (`tracking-[0.08em]` is a
+// no-restricted-syntax ERROR), so the drawing's value is NAMED, never arbitrary.
+const TRIGGER_PREFIX_CLASS =
+  "font-mono text-badge-xs uppercase tracking-picker-prefix text-muted-foreground shrink-0";
+
 export function AccessCombobox(props: AnyAccessComboboxProps) {
   if (props.selectionMode === "multiple") {
     return <AccessComboboxMultiSelect {...props} />;
@@ -518,11 +543,17 @@ function AccessComboboxSingleSelect({
   // Scope-prefixed row label (spec §2.3 / §3.2): `<Scope>: <name>`, no heading.
   // The muted title-case prefix matches the multi-mode row prefix so the two
   // modes read consistently.
+  //
+  // The literal SPACE between the two spans is part of the label, not decoration
+  // (cinatra#3204): the row reads `<Scope>: <name>` in the DOM and in every
+  // text extraction of it, not only to a reader looking at the flex gap. A
+  // white-space-only anonymous flex item is not rendered, so the pixels are
+  // unchanged and the gap keeps owning the visual spacing.
   const rowLabel = (prefix: string, name: string) => (
     <span className="flex items-baseline gap-1 min-w-0">
       <span className="text-xs tracking-wide text-muted-foreground shrink-0">
         {prefix}:
-      </span>
+      </span>{" "}
       <span className="text-foreground whitespace-nowrap">{name}</span>
     </span>
   );
@@ -788,16 +819,21 @@ function AccessComboboxSingleSelect({
             className="w-full justify-between rounded-control border-line font-normal"
           >
             {/* Trigger ≡ row, verbatim (spec c-3.1): EVERY kind carries its
-                `<Type>:` prefix, in the SAME casing as the row (no `uppercase`
-                transform — that was the old TEAM:/PROJECT: divergence from the
-                row's Team:/Project:). Both spans mirror rowLabel's structure
-                exactly; only `truncate` (vs. the row's `whitespace-nowrap`) is
-                trigger-specific overflow handling, not a text difference. */}
+                `<Type>:` prefix, in the SAME casing as the row — the prefix
+                STRING is the label module's, and the drawing's uppercase is a
+                CSS text-transform on the prefix node (cinatra#3523), never a
+                re-cased string, so this is not the old TEAM:/PROJECT: text
+                divergence from the row's Team:/Project:. Both spans mirror
+                rowLabel's structure exactly; only `truncate` (vs. the row's
+                `whitespace-nowrap`) is trigger-specific overflow handling, not
+                a text difference. */}
             <span className="flex items-center min-w-0 gap-1">
               {selected.type && (
-                <span className="text-xs tracking-wide text-muted-foreground shrink-0">
-                  {selected.type}:
-                </span>
+                <>
+                  <span className={TRIGGER_PREFIX_CLASS}>
+                    {selected.type}:
+                  </span>{" "}
+                </>
               )}
               <span className="text-foreground truncate">{selected.name}</span>
             </span>
@@ -961,9 +997,11 @@ function AccessComboboxMultiSelect({
         />
         <span className="flex items-baseline gap-1 min-w-0">
           {parts.type && (
-            <span className="text-xs tracking-wide text-muted-foreground shrink-0">
-              {parts.type}:
-            </span>
+            <>
+              <span className="text-xs tracking-wide text-muted-foreground shrink-0">
+                {parts.type}:
+              </span>{" "}
+            </>
           )}
           <span className="text-foreground whitespace-nowrap">{parts.name}</span>
         </span>
@@ -1043,11 +1081,31 @@ function AccessComboboxMultiSelect({
   const multiSummary = summarizeSelection
     ? summarizeSelection(multiSelection, scopes)
     : resolveAccessSummary(multiSelection as AgentAuthPolicyVisibility[], scopes);
-  const renderMultiTriggerLabel = () => (
-    <span className="flex items-center truncate">
-      <span className="text-foreground truncate">{multiSummary}</span>
-    </span>
-  );
+  // cinatra#3523: a selection of ONE summarises to the `<Type>: <name>` pair
+  // (resolveAccessSummary collapses to resolveAccessLabel), so this mode's
+  // closed trigger carries the same prefix node as the single mode's and draws
+  // it with the same treatment. An N>1 composed summary ("1 project, 1 team")
+  // and a caller-injected `summarizeSelection` reading carry no prefix — they
+  // stay ONE unsplit value span, so the summary line is unchanged. The literal
+  // space between the two spans keeps the trigger's DOM text identical to the
+  // unsplit reading its callers assert ("Workspace: All"); a whitespace-only
+  // child of a flex container is not rendered, so the drawn separation is the
+  // flex `gap`, exactly as in the single mode.
+  const multiTriggerParts =
+    !summarizeSelection && multiSelection.length <= 1
+      ? resolveAccessParts((multiSelection[0] ?? "owner") as AgentAuthPolicyVisibility, scopes)
+      : null;
+  const renderMultiTriggerLabel = () =>
+    multiTriggerParts?.type ? (
+      <span className="flex items-center gap-1 truncate">
+        <span className={TRIGGER_PREFIX_CLASS}>{multiTriggerParts.type}:</span>{" "}
+        <span className="text-foreground truncate">{multiTriggerParts.name}</span>
+      </span>
+    ) : (
+      <span className="flex items-center truncate">
+        <span className="text-foreground truncate">{multiSummary}</span>
+      </span>
+    );
 
   const triggerButton = (
     <Button

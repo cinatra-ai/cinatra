@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import { Check, CircleHelp, Star, TriangleAlert } from "lucide-react";
+import { Check, CircleHelp, Star, X } from "lucide-react";
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
 import { MarketplaceCardIcon } from "@/components/extension-card-icon-image";
@@ -187,15 +187,23 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
  * a badge/pill: the pinned drawing renders this identically to "Updated N ago"
  * beneath it, just a coloured icon + text, no chrome (cinatra#1003 — the same
  * rule the §V detail-modal fix already applied to its own "Compatible up to"
- * row, #995). Compatible: small check in the accent-link colour, label in
- * ink. Incompatible: warning triangle + label both in the destructive red —
- * exact spec colours. Unknown (no declared ABI range) has no drawing example;
- * it keeps the same plain anatomy in the neutral muted tone (never green).
+ * row, #995).
+ *
+ * The three readings are the maintainer's decision on cinatra#3521
+ * (2026-09-16): "the card's three readings are exactly 'Compatible' with a
+ * check icon, 'Incompatible' with a cross icon, and 'Compatibility' with a
+ * question-mark icon (the third for a package that declares no host range)".
+ * Compatible: small check in the accent-link colour, label in ink.
+ * Incompatible: cross + label both in the destructive red — exact spec
+ * colours. Compatibility (no declared ABI range) keeps the same plain anatomy
+ * in the neutral muted tone (never green). WHICH range counts as compatible is
+ * unchanged — `deriveExtensionCompatState` still owns the resolution; only the
+ * words and the icons are fixed here.
  */
 function CompatMeta({ sdkAbiRange }: { sdkAbiRange: string | null | undefined }) {
   const state = deriveExtensionCompatState(sdkAbiRange);
-  const Icon = state === "compatible" ? Check : state === "incompatible" ? TriangleAlert : CircleHelp;
-  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Compatibility unknown";
+  const Icon = state === "compatible" ? Check : state === "incompatible" ? X : CircleHelp;
+  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Compatibility";
   const textColor =
     state === "incompatible" ? "text-destructive" : state === "unknown" ? "text-muted-foreground" : "text-foreground";
   return (

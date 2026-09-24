@@ -183,14 +183,10 @@ describe("the rows read-only, no floor — a spent schedule carries no controls 
     await waitFor(() => expect(rows(container)).not.toBeNull());
     const text = rows(container)!.textContent ?? "";
     expect(text).toContain("Schedule for later");
-    // THE MOMENT IN THE READER`S OWN LOCALE (cinatra#3174 fix leg 1): the wire`s
-    // naive wall clock is what the picker EMITS, never what a reading shows.
-    expect(text).toContain(
-      new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }),
-    );
+    // THE MOMENT IN THE DRAWING`S FIXED FORMAT, DD.MM.YYYY, HH:mm (cinatra#3282;
+    // the reading is cinatra#3174 fix leg 1): the wire`s naive wall clock is
+    // what the picker EMITS, never what a reading shows.
+    expect(text).toContain("04.03.2020, 09:00");
     expect(text).toContain("Europe/Berlin");
   });
 
