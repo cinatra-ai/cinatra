@@ -651,4 +651,110 @@ describe("a required field left empty shows an error on Continue; an optional on
     expect(approveReviewTask).not.toHaveBeenCalled();
     expect(field()).not.toBeNull();
   });
+
+  // ---------------------------------------------------------------------------
+  // THE ROAD THE LIVE FIELD ACTUALLY TAKES (cinatra#3358, the fourth picture
+  // round). A required field the pack declares with `"default": ""` and no
+  // renderer of its own reaches the host's schema-field fallback, which keeps
+  // ITS OWN Continue: the host's registered floor draws it, so the host's
+  // default renderers are registered here and the REAL floor is what renders.
+  // ---------------------------------------------------------------------------
+  const FALLBACK_FIELD = "offeringCompanyWebsite";
+
+  function fallbackInput(): HTMLInputElement | null {
+    return document.querySelector<HTMLInputElement>(`#field-${FALLBACK_FIELD}`);
+  }
+
+  /** The floor's own field: the nearest box around its input that also holds
+   *  the field's own Continue. */
+  function fallbackField(): HTMLElement {
+    let el: HTMLElement | null = fallbackInput();
+    while (el !== null && el.querySelector("button") === null) el = el.parentElement;
+    return el as HTMLElement;
+  }
+
+  function ownContinue(): HTMLButtonElement | null {
+    return (
+      (Array.from(fallbackField().querySelectorAll("button")).find((b) =>
+        /^continue/i.test((b.textContent ?? "").trim()),
+      ) as HTMLButtonElement | undefined) ?? null
+    );
+  }
+
+  async function renderFallbackGate(schemaExtra: Record<string, unknown> = {}) {
+    const { SCHEMA_FIELD_FALLBACK_RENDERER_ID } = await import("../agent-builder-ids");
+    const schema = {
+      type: "string",
+      default: "",
+      description: "Offering company website",
+      "x-renderer": SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      ...schemaExtra,
+    };
+    interruptContext = {
+      schema,
+      xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      values: {},
+      reviewTaskId: "setup-run-3358",
+      fieldName: FALLBACK_FIELD,
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    await waitFor(() => expect(fallbackInput()).not.toBeNull());
+    await waitFor(() => expect(ownContinue()).not.toBeNull());
+    return schema;
+  }
+
+  it("marks a required field whose declared default is empty as required on the fallback (F1)", async () => {
+    const { ensureDefaultFieldRenderersRegistered } = await import("../register-default-renderers");
+    ensureDefaultFieldRenderersRegistered();
+    await renderFallbackGate();
+
+    const label = document.querySelector(`label[for="field-${FALLBACK_FIELD}"]`);
+    expect(label?.textContent).toBe("Offering company website *");
+    expect(fallbackField().textContent).not.toContain("(optional)");
+  });
+
+  it("refuses an empty press on the fallback field's own Continue, and sends nothing (F2)", async () => {
+    const { ensureDefaultFieldRenderersRegistered } = await import("../register-default-renderers");
+    ensureDefaultFieldRenderersRegistered();
+    const { toast } = await import("@/lib/cinatra-toast");
+    await renderFallbackGate();
+    fireEvent.click(ownContinue()!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(approveReviewTask).not.toHaveBeenCalled();
+    expect(fallbackInput()).not.toBeNull();
+  });
+
+  it("leaves a fallback field whose declared default is a real value optional, and sends it as before (F3)", async () => {
+    const { ensureDefaultFieldRenderersRegistered } = await import("../register-default-renderers");
+    ensureDefaultFieldRenderersRegistered();
+    const { toast } = await import("@/lib/cinatra-toast");
+    const schema = await renderFallbackGate({ default: "Book a demo" });
+
+    expect(fallbackField().textContent).toContain("(optional)");
+    fireEvent.click(ownContinue()!);
+
+    await waitFor(() => expect(approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(approveReviewTask.mock.calls[0]).toEqual([
+      "setup-run-3358",
+      { [FALLBACK_FIELD]: "" },
+      FALLBACK_FIELD,
+      schema,
+    ]);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty press on the fallback url field's own Continue, and sends nothing (F4)", async () => {
+    const { ensureDefaultFieldRenderersRegistered } = await import("../register-default-renderers");
+    ensureDefaultFieldRenderersRegistered();
+    const { toast } = await import("@/lib/cinatra-toast");
+    await renderFallbackGate({ format: "uri" });
+    expect(fallbackInput()!.type).toBe("url");
+    fireEvent.click(ownContinue()!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(approveReviewTask).not.toHaveBeenCalled();
+    expect(fallbackInput()).not.toBeNull();
+  });
 });

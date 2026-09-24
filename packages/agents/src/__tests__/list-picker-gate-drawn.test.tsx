@@ -155,7 +155,9 @@ describe('"the account-scope gate opens on its question heading over its state l
   // its question in every reading, the zero-content one included.
   it("opens on the drawn question when the step names none", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps({ label: undefined })} />);
+    const { container } = render(
+      <ListPickerRenderer {...makeProps({ label: undefined })} />,
+    );
 
     await waitFor(() =>
       expect(screen.getByTestId("list-picker-state-line").textContent).toBe(
@@ -163,34 +165,85 @@ describe('"the account-scope gate opens on its question heading over its state l
       ),
     );
 
-    const question = screen.getByTestId("list-picker-question");
-    const asked = questionAsked();
-    expect(asked, "the gate opened on an empty question heading").not.toBe("");
-    // It ASKS, and it asks about the thing this gate lists.
-    expect(asked.endsWith("?"), `not a question: ${asked}`).toBe(true);
-    expect(asked).toMatch(/list/i);
-    // Over the state line, as the section draws it.
-    const stateLine = screen.getByTestId("list-picker-state-line");
-    expect(
-      question.compareDocumentPosition(stateLine) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // Never an EMPTY heading (cinatra#3358): a step that declares no question
+    // and carries no label draws no heading at all, and no words of the host's
+    // own — the state line stands.
+    expect(screen.queryByTestId("list-picker-question")).toBeNull();
+    expect(container.querySelector("h3")).toBeNull();
+    expect(screen.getByTestId("list-picker-state-line")).toBeTruthy();
   });
 
   // A REQUIRED step reads the same way: the h3 appends the field's asterisk
   // after the question, and the question itself still has to ask something.
   it("reads a blank label as no question at all", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
-    render(
+    const first = render(
       <ListPickerRenderer {...makeProps({ label: "   ", required: true })} />,
     );
 
     await waitFor(() => screen.getByText("Marketing directors"));
 
-    const asked = questionAsked();
-    expect(asked, "the gate opened on a blank question heading").not.toBe("");
-    expect(asked.endsWith("?"), `not a question: ${asked}`).toBe(true);
-    expect(asked).toMatch(/list/i);
+    // A blank label with no declared question draws no heading at all.
+    expect(screen.queryByTestId("list-picker-question")).toBeNull();
+    expect(first.container.querySelector("h3")).toBeNull();
+    first.unmount();
+
+    // A blank label beside a declared question draws that question.
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(ROWS);
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          label: "   ",
+          required: true,
+          bindingParams: { question: "Which entries should this run draw from?" },
+        })}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Marketing directors"));
+    expect(questionAsked()).toBe("Which entries should this run draw from?");
+  });
+
+  // THE QUESTION IS THE AGENT'S DECLARATION (cinatra#3358, Agent run & review
+  // §I.1: "What the list holds, what each row is titled by and what the step
+  // asks are the agent's declaration too"). The binding's `params.question`
+  // reaches the renderer as `bindingParams` and is drawn as written.
+  it("asks the question the agent declared in its binding (Q1)", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const { container } = render(
+      <ListPickerRenderer
+        {...makeProps({
+          label: undefined,
+          bindingParams: { question: "Which entries should this run draw from?" },
+        })}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-state-line").textContent).toBe(
+        "Nothing to pick",
+      ),
+    );
+    expect(container.querySelectorAll("h3")).toHaveLength(1);
+    expect(screen.getByTestId("list-picker-question").tagName.toLowerCase()).toBe("h3");
+    expect(questionAsked()).toBe("Which entries should this run draw from?");
+  });
+
+  // A STEP THAT DECLARES NO QUESTION draws none of the host's own: no heading
+  // at all, never an empty one — the state line stands, so the page is not blank.
+  it("draws no question heading when the step declares none and carries no label (Q2)", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const { container } = render(
+      <ListPickerRenderer {...makeProps({ label: undefined })} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-state-line").textContent).toBe(
+        "Nothing to pick",
+      ),
+    );
+    expect(screen.queryByTestId("list-picker-question")).toBeNull();
+    expect(container.querySelectorAll("h3")).toHaveLength(0);
   });
 });
 
@@ -299,9 +352,18 @@ describe('"one or several entries ticked, and the run receives every ticked entr
 });
 
 describe('"the zero-content reading is the state line and the sentence — and no frame"', () => {
+  /** The empty-state message a step declares in its list-picker binding
+   *  (`params.emptyState`) — the drawing's own example sentence. */
+  const DECLARED_EMPTY_STATE =
+    "There is nothing to pick from yet. Add an entry where this run reads from, then open this step again.";
+
   it("draws no dashed rectangle and no dashed circle icon", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    const { container } = render(<ListPickerRenderer {...makeProps()} />);
+    const { container } = render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
 
     await waitFor(() =>
       expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
@@ -341,17 +403,17 @@ describe('"the zero-content reading is the state line and the sentence — and n
   // one when the person returns".
   it("asks the reader to create one where the views and lists live, and says the step will list it", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps()} />);
+    render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
 
     const sentence = await screen.findByRole("status");
     expect(sentence).toBe(screen.getByTestId("list-picker-empty-reading"));
-    expect(sentence.textContent).toMatch(/create one in Twenty CRM/i);
-    expect(
-      sentence.textContent,
-      "the reading does not say the step will list what the reader makes",
-    ).toMatch(/list it when you come back/i);
-    // It states the reading rather than asserting a cause the read cannot
-    // carry, and it never says the run ends here — the reader is expected back.
+    // The message is the one the agent declared, drawn as written (cinatra#3358).
+    expect(sentence.textContent).toBe(DECLARED_EMPTY_STATE);
+    // It never says the run ends here — the reader is expected back.
     expect(sentence.textContent).not.toMatch(/ends here/i);
 
     const stateLine = screen.getByTestId("list-picker-state-line");
@@ -364,7 +426,11 @@ describe('"the zero-content reading is the state line and the sentence — and n
 
   it("offers no road beneath it — no link, no button and no other agent", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    const { container } = render(<ListPickerRenderer {...makeProps()} />);
+    const { container } = render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
 
     const sentence = await screen.findByRole("status");
     // Nothing to press and nowhere to go: the step no longer sends the reader
@@ -381,16 +447,61 @@ describe('"the zero-content reading is the state line and the sentence — and n
     // The same step, re-opened after the reader made a view in the CRM: the
     // read is the live one, so the entry is simply there to tick.
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    const first = render(<ListPickerRenderer {...makeProps()} />);
+    const first = render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
     await waitFor(() =>
       expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
     );
     first.unmount();
 
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([ROWS[0]]);
-    render(<ListPickerRenderer {...makeProps()} />);
+    render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
     await waitFor(() => screen.getByText("Marketing directors"));
     expect(screen.queryByTestId("list-picker-empty-reading")).toBeNull();
     expect(chosen("Marketing directors")).toBe("false");
+  });
+
+  // THE EMPTY-STATE MESSAGE IS THE AGENT'S (cinatra#3358, §I.1: "the host draws
+  // the empty-state message the agent declared, as the agent wrote it — the host
+  // names no system and writes no message of its own").
+  it("draws the empty-state message the agent declared, as written, after the state line (E1)", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
+
+    const sentence = await screen.findByRole("status");
+    expect(sentence).toBe(screen.getByTestId("list-picker-empty-reading"));
+    expect(sentence.textContent).toBe(DECLARED_EMPTY_STATE);
+    const stateLine = screen.getByTestId("list-picker-state-line");
+    expect(stateLine.textContent).toBe("Nothing to pick");
+    expect(
+      stateLine.compareDocumentPosition(sentence) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("draws no message of the host's own when the step declares none (E2)", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
+    const { container } = render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("list-picker-state-line").textContent).toBe(
+        "Nothing to pick",
+      ),
+    );
+    expect(screen.queryByTestId("list-picker-empty-reading")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.textContent).not.toMatch(/Twenty/);
+    expect(container.textContent).not.toMatch(/CRM/);
   });
 });

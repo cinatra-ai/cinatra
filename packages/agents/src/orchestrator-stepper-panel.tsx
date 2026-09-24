@@ -1394,6 +1394,22 @@ function HitlApprovalCard({
     }
   };
 
+  // A PER-FIELD SETUP GATE'S ONE FIELD IS REQUIRED (cinatra#3358, the
+  // maintainer's rule of 2026-09-23): the setup loop asks only for required
+  // fields, and only a declared default that is itself an answer makes an empty
+  // box optional — the same reading the press refuses on (./hitl-gate-submit).
+  const isPerFieldSetupGate =
+    isSetupGateTaskId(interruptContext.reviewTaskId) &&
+    typeof interruptContext.fieldName === "string" &&
+    interruptContext.fieldName.trim() !== "";
+  const perFieldSetupRequired =
+    isPerFieldSetupGate &&
+    !setupPressAnswerReading({
+      schema: interruptContext.schema,
+      fieldName: interruptContext.fieldName,
+      staged: null,
+    }).optional;
+
   const cardBody = (
     <>
         {RendererComponent && !isGenericObjectSchema ? (
@@ -1417,6 +1433,10 @@ function HitlApprovalCard({
             // only for interrupts that genuinely carry no field name.
             fieldName={hitlRendererFieldName(interruptContext.fieldName)}
             schema={renderSchema}
+            // Drawn required (" *") where the per-field setup gate's field is
+            // required (cinatra#3358); never `false`, so every other gate keeps
+            // the reading it has today.
+            required={perFieldSetupRequired ? true : undefined}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
             // The staged draft is this field's own reading while it waits for
@@ -1582,6 +1602,21 @@ function HitlApprovalCard({
                       // …and the field goes on showing what the reader typed.
                       setSetupDraft({ key: setupGateKey, value: next });
                       return;
+                    }
+                    // AN EMPTY REQUIRED ANSWER ON THE FIELD'S OWN CONTINUE
+                    // (cinatra#3358): the error shows and nothing is sent — the
+                    // field stays as the reader left it. Every other press is
+                    // sent exactly as before.
+                    if (isPerFieldSetupGate) {
+                      const press = setupPressAnswerReading({
+                        schema: interruptContext.schema,
+                        fieldName: interruptContext.fieldName,
+                        staged: { payload, payloadFieldName },
+                      });
+                      if (press.blank && !press.optional) {
+                        toast.error(SETUP_GATE_NO_ANSWER_STAGED);
+                        return;
+                      }
                     }
                     await submitSetupFieldPayload(payload, payloadFieldName);
                   }

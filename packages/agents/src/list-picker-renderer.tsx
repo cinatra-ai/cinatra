@@ -102,20 +102,21 @@ function toListPickerValue(value: unknown): ListPickerValue {
 }
 
 // ---------------------------------------------------------------------------
-// THE QUESTION A GATE THAT LISTS OPENS ON
+// THE WORDS THE STEP DECLARES
 // ---------------------------------------------------------------------------
 
-/** The question this gate opens on when the step it draws NAMES NONE (Agent run
- *  & review §I.1, which draws the gate opening on its question — "Which idea
- *  should this run draft?" — over its state line, in every reading including
- *  the zero-content one).
- *
- *  It belongs to the RENDERER'S KIND, not to any package: every binding that
- *  raises a list-picking gate lists lists, so the question asks about a list
- *  and names no pack (the core/extension border). A step that carries its own
- *  question still wins — this is the floor under a step that carries none, and
- *  the reading it replaces was an EMPTY heading. */
-export const LIST_PICKER_QUESTION = "Which list should this run use?";
+/** A string the agent declared in its list-picker binding's `params` (reaching
+ *  this renderer as `bindingParams`), drawn exactly as written — or `null` when
+ *  the key is absent, not a string, or blank, in which case the host draws
+ *  nothing of its own in its place (Agent run & review §I.1: "the host names no
+ *  system and writes no message of its own"). */
+function declaredText(
+  params: Readonly<Record<string, unknown>> | undefined,
+  key: "question" | "emptyState",
+): string | null {
+  const v = params?.[key];
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
 
 function formatLastUpdated(iso: string | null): string {
   if (!iso) return "—";
@@ -141,6 +142,7 @@ export function ListPickerRenderer({
   label,
   description,
   context,
+  bindingParams,
 }: FieldRendererProps) {
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -220,16 +222,16 @@ export function ListPickerRenderer({
     onChangeRef.current(listPickerValue(nextIds, nextIds.map(nameOf)));
   }
 
-  // THE QUESTION THE GATE ACTUALLY OPENS ON. The step's own question wherever
-  // the gate's data carries one — the binding's resolved label — and the kind's
-  // question wherever it does not. A step whose schema titles the FIELD rather
-  // than asking the reader anything reaches this renderer with no label at all,
-  // and the heading was rendered from that label alone: the gate opened on an
-  // EMPTY h3 over its state line, which is the one reading §I.1 never draws.
+  // THE QUESTION THE GATE ASKS IS THE AGENT'S DECLARATION (cinatra#3358, §I.1:
+  // "what the step asks are the agent's declaration too"): the binding's
+  // `params.question` where it declares one, else the step's resolved label.
+  // Where neither exists NO heading is drawn — never an empty one and never
+  // words of the host's own; the state line stands, so the page is not blank.
   const question =
-    typeof label === "string" && label.trim() !== ""
-      ? label
-      : LIST_PICKER_QUESTION;
+    declaredText(bindingParams, "question") ??
+    (typeof label === "string" && label.trim() !== "" ? label : null);
+  // The empty-state message the agent declared (`params.emptyState`), if any.
+  const emptyState = declaredText(bindingParams, "emptyState");
 
   return (
     <div className="flex flex-col gap-3" data-conformance-id="gate-that-lists">
@@ -239,13 +241,15 @@ export function ListPickerRenderer({
           raised the gate — and the line beneath it says where the gate stands,
           never what to do about it. */}
       <div className="flex flex-col gap-1">
-        <h3
-          className="text-sm font-semibold text-foreground"
-          data-testid="list-picker-question"
-        >
-          {question}
-          {required ? " *" : ""}
-        </h3>
+        {question !== null ? (
+          <h3
+            className="text-sm font-semibold text-foreground"
+            data-testid="list-picker-question"
+          >
+            {question}
+            {required ? " *" : ""}
+          </h3>
+        ) : null}
         <p
           className="text-xs text-muted-foreground"
           data-testid="list-picker-state-line"
@@ -262,29 +266,23 @@ export function ListPickerRenderer({
       ) : null}
 
       {loading ? null : lists.length === 0 ? (
-        // THE ZERO-CONTENT READING IS THE STATE LINE AND THE SENTENCE, AND
-        // NOTHING FRAMES IT OR FOLLOWS IT (cinatra#3562). The ruling reads "If
-        // no views/lists are available in Twenty CRM, a message asks the user to
-        // create one in Twenty CRM", so the reading says what the reader can do
-        // about it where the views and lists actually live, and says the step
-        // will list what they make when they come back. It offers NO road: the
-        // step that used to send the reader to another agent no longer does, and
-        // the run cannot be continued from here either — that is the one shared
-        // answer-refusal doing its work (./hitl-gate-submit), not a second rule.
-        //
-        // IT ASSERTS NO CAUSE THE READING DOES NOT CARRY. An empty set comes
-        // back both from a workspace that holds no contact view and from a read
-        // that could not be made at all (list-picker-actions.ts degrades a
-        // missing capability and a throwing provider to an empty array), so the
-        // sentence states what to do rather than why there is nothing.
-        <p
-          role="status"
-          className="text-sm leading-relaxed text-foreground"
-          data-testid="list-picker-empty-reading"
-        >
-          No views or lists yet. Create one in Twenty CRM and this step will list
-          it when you come back.
-        </p>
+        // THE ZERO-CONTENT READING IS THE STATE LINE AND THE MESSAGE THE AGENT
+        // DECLARED, AND NOTHING FRAMES IT OR FOLLOWS IT (cinatra#3358, §I.1:
+        // "the host draws the empty-state message the agent declared, as the
+        // agent wrote it — the host names no system and writes no message of
+        // its own"). A step that declares none draws the state line alone. It
+        // offers NO road: the run cannot be continued from here either — that
+        // is the one shared answer-refusal doing its work (./hitl-gate-submit),
+        // not a second rule.
+        emptyState !== null ? (
+          <p
+            role="status"
+            className="text-sm leading-relaxed text-foreground"
+            data-testid="list-picker-empty-reading"
+          >
+            {emptyState}
+          </p>
+        ) : null
       ) : (
         <div className="flex flex-col gap-2">
           {lists.map((list) => {

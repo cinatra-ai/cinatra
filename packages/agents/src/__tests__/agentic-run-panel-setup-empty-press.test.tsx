@@ -324,4 +324,85 @@ describe("AgenticRunPanel — a required setup field left empty shows an error o
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
     expect(box()).not.toBeNull();
   });
+
+  // THE ROAD THE LIVE FIELD ACTUALLY TAKES (cinatra#3358, the fourth picture
+  // round): a required field declared with `"default": ""` and no renderer of
+  // its own is drawn by the host's schema-field fallback, which keeps its own
+  // Continue on this surface too.
+  function fallbackInput(): HTMLInputElement | null {
+    return document.querySelector<HTMLInputElement>("#field-offeringCompanyWebsite");
+  }
+
+  /** The floor's own field: the nearest box around its input that also holds
+   *  the field's own Continue. */
+  function fallbackField(): HTMLElement {
+    let el: HTMLElement | null = fallbackInput();
+    while (el !== null && el.querySelector("button") === null) el = el.parentElement;
+    return el as HTMLElement;
+  }
+
+  function ownContinue(): HTMLButtonElement | null {
+    return (
+      (Array.from(fallbackField().querySelectorAll("button")).find((b) =>
+        /^continue/i.test((b.textContent ?? "").trim()),
+      ) as HTMLButtonElement | undefined) ?? null
+    );
+  }
+
+  it("a required field on the fallback whose declared default is empty reads required (A1)", async () => {
+    const { SCHEMA_FIELD_FALLBACK_RENDERER_ID } = await import("../agent-builder-ids");
+    await setGate(SCHEMA_FIELD_FALLBACK_RENDERER_ID, "offeringCompanyWebsite", {
+      type: "string",
+      default: "",
+      description: "Offering company website",
+    });
+    await renderPanel();
+
+    await waitFor(() => expect(fallbackInput()).not.toBeNull());
+    await waitFor(() => expect(ownContinue()).not.toBeNull());
+    const label = document.querySelector('label[for="field-offeringCompanyWebsite"]');
+    expect(label?.textContent).toBe("Offering company website *");
+    expect(fallbackField().textContent).not.toContain("(optional)");
+  });
+
+  it("an empty press on the fallback field's own Continue: the error, and nothing sent (A2)", async () => {
+    const { SCHEMA_FIELD_FALLBACK_RENDERER_ID } = await import("../agent-builder-ids");
+    await setGate(SCHEMA_FIELD_FALLBACK_RENDERER_ID, "offeringCompanyWebsite", {
+      type: "string",
+      default: "",
+      description: "Offering company website",
+    });
+    await renderPanel();
+
+    await waitFor(() => expect(fallbackInput()).not.toBeNull());
+    await waitFor(() => expect(ownContinue()).not.toBeNull());
+    fireEvent.click(ownContinue()!);
+
+    await waitFor(() => expect(toastMock.toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(fallbackInput()).not.toBeNull();
+  });
+
+  it("a fallback field whose declared default is a real value stays optional and is sent as before (A3)", async () => {
+    const { SCHEMA_FIELD_FALLBACK_RENDERER_ID } = await import("../agent-builder-ids");
+    await setGate(SCHEMA_FIELD_FALLBACK_RENDERER_ID, "offeringCompanyWebsite", {
+      type: "string",
+      default: "Book a demo",
+      description: "Offering company website",
+    });
+    await renderPanel();
+
+    await waitFor(() => expect(fallbackInput()).not.toBeNull());
+    await waitFor(() => expect(ownContinue()).not.toBeNull());
+    expect(fallbackField().textContent).toContain("(optional)");
+    fireEvent.click(ownContinue()!);
+
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(hitlActions.approveReviewTask.mock.calls[0]).toEqual([
+      "setup-run-3532",
+      { offeringCompanyWebsite: "" },
+      "offeringCompanyWebsite",
+    ]);
+    expect(toastMock.toast.error).not.toHaveBeenCalled();
+  });
 });

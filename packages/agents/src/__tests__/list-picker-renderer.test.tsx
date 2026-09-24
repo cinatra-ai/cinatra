@@ -66,6 +66,11 @@ function makeProps(
   };
 }
 
+/** The empty-state message a step declares in its list-picker binding
+ *  (`params.emptyState`, cinatra#3358) — the drawing's own example sentence. */
+const DECLARED_EMPTY_STATE =
+  "There is nothing to pick from yet. Add an entry where this run reads from, then open this step again.";
+
 /** Is this row among the chosen? Read off the anchor the row has always
  *  carried — `data-selected`, whose meaning is unchanged. */
 function chosen(name: string): string | null {
@@ -175,7 +180,11 @@ describe("ListPickerRenderer", () => {
 
   it("renders the empty reading when the CRM holds no view or list", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...makeProps()} />);
+    render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
 
     await waitFor(() =>
       expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
@@ -510,7 +519,14 @@ describe("the run parks at the account-scope step until a list exists (cinatra#3
   it("emits no answer while the CRM holds no view or list, so the gate stays unanswered", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     const onChange = vi.fn();
-    render(<ListPickerRenderer {...makeProps({ onChange })} />);
+    render(
+      <ListPickerRenderer
+        {...makeProps({
+          onChange,
+          bindingParams: { emptyState: DECLARED_EMPTY_STATE },
+        })}
+      />,
+    );
 
     await waitFor(() =>
       expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
@@ -589,9 +605,8 @@ describe("the run parks at the account-scope step until a list exists (cinatra#3
 // suite would have to spell the removed names into.
 // ---------------------------------------------------------------------------
 describe("the road out of the step is removed (cinatra#3562)", () => {
-  it("leaves the renderer module offering only the gate's own two exports", () => {
+  it("leaves the renderer module offering only the gate's own export", () => {
     expect(Object.keys(listPickerRendererModule).sort()).toEqual([
-      "LIST_PICKER_QUESTION",
       "ListPickerRenderer",
     ]);
   });
@@ -615,7 +630,11 @@ describe("the road out of the step is removed (cinatra#3562)", () => {
 
   it("draws no link and no button anywhere on the gate, in either reading", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    const { container, unmount } = render(<ListPickerRenderer {...makeProps()} />);
+    const { container, unmount } = render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
     await waitFor(() =>
       expect(screen.getByTestId("list-picker-empty-reading")).toBeTruthy(),
     );
@@ -624,7 +643,11 @@ describe("the road out of the step is removed (cinatra#3562)", () => {
     unmount();
 
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(TWO_ROWS);
-    const withRows = render(<ListPickerRenderer {...makeProps()} />);
+    const withRows = render(
+      <ListPickerRenderer
+        {...makeProps({ bindingParams: { emptyState: DECLARED_EMPTY_STATE } })}
+      />,
+    );
     await waitFor(() => screen.getByText("Marketing directors"));
     expect(withRows.container.querySelectorAll("a")).toHaveLength(0);
   });
