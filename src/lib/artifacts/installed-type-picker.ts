@@ -6,6 +6,8 @@ import {
 
 import { mimeAcceptedByAccepts, normalizeMime } from "./upload-artifact-type-map";
 import { artifactKindLabelFor } from "./artifact-kind-label";
+import { crossNamespaceClaimantsOf } from "@cinatra-ai/objects/register-artifact-extensions";
+
 import { humanizeTypeLocalPart } from "./type-definitions-inventory";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,39 @@ export type MatcherChannelMeaningType = {
   packageName: string;
   fileMimeTypes: readonly string[];
 };
+
+/**
+ * PURE core: the EXTENSION a meaning assertion over this type is written
+ * against.
+ *
+ * The registering package when there is one. When there is NOT — a HOST-
+ * registered type, which carries no provenance by construction — the SOLE
+ * cross-namespace claimant, because that pack is what the person is naming: it
+ * owns the type's display, its manifest declares the forms it accepts, and it is
+ * the string the durable claim row already carries.
+ *
+ * SOLE, not first. Two claimants over one host type is an ambiguity no picker
+ * may resolve by itself — asserting the wrong one would name a meaning the
+ * person did not choose — so such a type contributes no candidate, exactly as a
+ * provenance-less unclaimed one does. (The claim registry admits one live
+ * claimant per type and scope, so this is a floor, not an expected state.)
+ *
+ * WHAT IT REPAIRS: `@cinatra-ai/linkedin:post-draft` is host-registered and
+ * claimed by `@cinatra-ai/linkedin-artifacts`. It carries its `isArtifact`
+ * descriptor, so the Type definitions map draws it — but the picker dropped it
+ * for having no definer, so a LinkedIn post could not be typed through the
+ * product's own Upload control and its display drew on no surface at all
+ * (measured live for issue #3033: the file landed as a markdown artifact).
+ */
+export function meaningExtensionFor(input: {
+  registeringPackage: string | null;
+  crossNamespaceClaimants: readonly string[];
+}): string | null {
+  if (input.registeringPackage != null) return input.registeringPackage;
+  return input.crossNamespaceClaimants.length === 1
+    ? input.crossNamespaceClaimants[0]!
+    : null;
+}
 
 function isUniversalAcceptEntry(accept: string): boolean {
   const a = accept.trim().toLowerCase();
@@ -221,7 +256,12 @@ export function listInstalledMeaningTypesAcceptingMime(
     .listArtifacts()
     .map((def) => ({
       objectTypeId: def.type,
-      definer: objectTypeRegistry.getRegisteringPackage(def.type),
+      // The registering package, or — for a HOST-registered type, which has none
+      // — its sole cross-namespace claimant. See `meaningExtensionFor`.
+      definer: meaningExtensionFor({
+        registeringPackage: objectTypeRegistry.getRegisteringPackage(def.type),
+        crossNamespaceClaimants: crossNamespaceClaimantsOf(def.type),
+      }),
       acceptMimes: def.isArtifact?.accepts?.file?.mimeTypes,
     }));
   const objectTypeCandidates = selectMeaningTypesAcceptingMime(
@@ -233,7 +273,10 @@ export function listInstalledMeaningTypesAcceptingMime(
   // extension (object-type sibling OR matcher candidate), since asserting it
   // would re-assert the base's own namespace owner (a no-op).
   const excludeExtension = opts?.excludeTypeId
-    ? objectTypeRegistry.getRegisteringPackage(opts.excludeTypeId) ?? undefined
+    ? meaningExtensionFor({
+        registeringPackage: objectTypeRegistry.getRegisteringPackage(opts.excludeTypeId),
+        crossNamespaceClaimants: crossNamespaceClaimantsOf(opts.excludeTypeId),
+      }) ?? undefined
     : undefined;
   const channel: MatcherChannelMeaningType[] = matcherManifestRegistry
     .list()

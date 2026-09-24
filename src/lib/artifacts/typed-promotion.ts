@@ -52,6 +52,8 @@
 
 import { createHash } from "node:crypto";
 
+import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
+
 // ---------------------------------------------------------------------------
 // The refusals — closed and named.
 // ---------------------------------------------------------------------------
@@ -203,7 +205,9 @@ export type TypedPromotionPlan =
  * someone else's: where it holds, the matcher is not consulted at all, which is
  * what "outranks" means. Where it does not, the matcher road is unchanged — a
  * high-confidence match without a confirmation retypes nothing, and a
- * confirmation on a row nothing associated retypes nothing either.
+ * confirmation on a row nothing associated retypes nothing either. It carries
+ * the whole authority by itself, so A PACK THAT SHIPS NO MATCHER AT ALL is
+ * still promotable when the person says what the file means.
  *
  * NEITHER ROAD SKIPS THE FORM. The content is shared unchanged either way, so
  * the type it lands under must still accept it.
@@ -214,9 +218,15 @@ export function planTypedPromotion(input: {
   matcher: MatcherAssociation | null;
   /** The person's confirmation, from the surface that already asks for one. */
   confirmed: boolean;
-  /** The person's OWN meaning assertion for this (row, extension) — the second
-   *  road §XI.10 gives, and the one that outranks the matcher. */
-  personAsserted: boolean;
+  /**
+   * THE PERSON'S OWN MEANING ASSERTION for this (row, extension) — the second
+   * road §XI.10 gives, and the one that outranks the matcher. The user-sourced
+   * assertion the library's §VI.1 pick writes, never the mere confirmation of a
+   * matcher's suggestion. It is an AUTHORITY OF ITS OWN, so it needs neither an
+   * association nor a threshold. Absent reads as false: a caller that names no
+   * person's assertion is on the matcher road.
+   */
+  personAsserted?: boolean;
 }): TypedPromotionPlan {
   const refuse = (reason: TypedPromotionRefusal): TypedPromotionPlan => ({ ok: false, reason });
 
@@ -225,10 +235,21 @@ export function planTypedPromotion(input: {
   if (input.row.objectType === input.ownType.typeId) return refuse("already-promoted");
   if (!input.row.latestRevision) return refuse("no-content");
 
-  // THE PERSON'S OWN ASSERTION IS ITS OWN AUTHORITY. Where it holds the matcher
-  // road is not walked at all — an assertion that outranks the matcher cannot be
-  // held back by what the matcher did or did not guess.
-  if (!input.personAsserted) {
+  // THE TWO ROADS, AND THE PERSON'S OWN ONE OUTRANKS THE MATCHER'S. The ratified
+  // drawing (app-artifact-review §XI.10, "The promoted row"): "Promotion happens
+  // only on the matcher's assertion at its threshold and with the person's
+  // confirmation, or on the person's own assertion, which outranks the matcher."
+  // So the ladder below is the MATCHER road alone: where the person's own
+  // assertion holds, the matcher road is not walked at all, which is what
+  // "outranks" means — an assertion that outranks the matcher cannot be held back
+  // by what the matcher did or did not guess. A person who chose the meaning
+  // themselves has already said what the file means: no association is owed, and
+  // no threshold applies — which is also the only road a pack that ships NO
+  // matcher can ever be promoted into, because nothing can associate a row with a
+  // classifier that does not exist. An association on its own still promotes
+  // nothing: `personAsserted` is the person's OWN assertion, and a bare
+  // confirmation of a match that was never made is still refused below.
+  if (input.personAsserted !== true) {
     if (!input.matcher) return refuse("no-matcher-assertion");
     if (input.matcher.confidence < input.matcher.threshold) return refuse("below-threshold");
     if (!input.confirmed) return refuse("not-confirmed");
@@ -307,6 +328,60 @@ export function promotionRevisionId(input: {
  * UPDATE and DELETE) and the revision is `MAX + 1`, so nothing earlier moves.
  * The resource is the BASE revision's own — the content is shared, never copied.
  */
+/**
+ * THE PROMOTION'S WHOLE WRITE: the appended revision AND the writer witness that
+ * makes it readable.
+ *
+ * WHY THE WITNESS BELONGS HERE. The promoted row is, by construction, a
+ * PACK-TYPED row that CARRIES A CLAIM — that is what a promotion is. The serve
+ * resolver's claimed-row arm (`artifact-read.ts`) admits such a row's own bytes
+ * only through the ARTIFACT-WRITER WITNESS: an `artifact_audit` `create` row
+ * naming the exact representation, written in the SAME transaction as the
+ * representation itself. Without it the promotion appended a revision that NO
+ * read path would admit — the display mounted and its byte address answered 404,
+ * measured on a live boot for the featured image of issue #3033 (the blog-image
+ * display drew an empty box while the row's PRE-promotion revision, which has the
+ * witness, served its PNG). The bytes are not new: this revision shares the base
+ * revision's own resource, and the base's witness vouches only for the base's
+ * revision id, so the append needs its own.
+ *
+ * The witness is emitted IF ABSENT, because the append is idempotent: a
+ * converging re-drive must not say the same bytes were authored twice.
+ *
+ * ORDER IS LOAD-BEARING: the representation first, the witness second, both in
+ * the caller's ONE transaction — a witness that could commit without its
+ * representation is not a witness.
+ */
+export function buildPromotionRevisionOps(
+  schema: string,
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+    sharedResourceId: string;
+    form: "file" | "connectorRef" | "dashboard";
+    createdBy: string | null;
+    /** Provenance detail for the audit row. Never authorization input — the
+     *  witness is the EXISTENCE of the row, never its payload. */
+    detail?: Record<string, unknown>;
+  },
+): { text: string; values: unknown[] }[] {
+  return [
+    buildPromotionRepresentationAppend(schema, input),
+    buildArtifactWriterWitnessOp(
+      schema.replaceAll('"', '""'),
+      {
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        representationRevisionId: input.representationRevisionId,
+        actor: input.createdBy ?? null,
+        detail: { ...(input.detail ?? {}), origin: "typed-promotion", form: input.form },
+      },
+      { ifAbsent: true },
+    ),
+  ];
+}
+
 export function buildPromotionRepresentationAppend(
   schema: string,
   input: {

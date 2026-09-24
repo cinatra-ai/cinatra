@@ -647,6 +647,25 @@ export async function approveReviewTaskInternal(
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
     );
 
+    // cinatra#3033 — WHAT THIS BRANCH MEASURED AT THE SAME SEAM, KEPT here
+    // because it is the reading the id below has to satisfy. `reviewTaskId` is
+    // `setup-<runId>`, so `resume-${reviewTaskId}` was CONSTANT for a whole run
+    // while the queue retains settled jobs (`removeOnComplete: 200`): BullMQ's
+    // HSETNX `add` handed the pre-existing job back and enqueued NOTHING, so a
+    // setup asking for two fields parked, resumed once and parked again — and
+    // the second approval flipped the run `pending_approval -> queued` and then
+    // handed it to nobody. Two things this branch proved, and neither is undone
+    // by the id below. FIRST, clearing a SETTLED entry of a shared id does not
+    // close the window: the previous leg is itself what re-parks the run and it
+    // stays ACTIVE for the rest of its own unwind after that park commits, so a
+    // press inside that window meets a LIVE job of the same id and is dropped
+    // exactly as before — only an id that is not shared closes it outright.
+    // SECOND, a COLON in a custom job id makes BullMQ throw `Custom Id cannot
+    // contain :` before it enqueues anything, which turned the whole approval
+    // into a 500 AFTER the status write had already committed: the run reached
+    // `queued` with no job and no trigger row, the same dead end by a different
+    // door. The per-confirmation id minted just below carries BOTH readings —
+    // it is unique per confirmation rather than per run, and it holds no colon.
     // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
     // REPEAT. The id this add used to carry, `resume-${reviewTaskId}`, was a
     // FALSE idempotency key: the setup gate's `reviewTaskId` is the synthetic

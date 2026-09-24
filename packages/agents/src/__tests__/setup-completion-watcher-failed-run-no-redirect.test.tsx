@@ -211,10 +211,21 @@ describe("SetupCompletionWatcher — failed/stopped runs do not redirect (cinatr
     expect(mocks.push).not.toHaveBeenCalled();
   });
 
-  it("SSE fast path DOES redirect when the fetched run status is non-failure (e.g. 'running' after setup)", async () => {
+  // This suite's negative control: the failed/stopped guard must not be
+  // over-broad - a genuine setup-success run still hands over on this road.
+  //
+  // The control used to be driven with `running`, which encoded a reading that
+  // turned out to be a defect: a run fetched back as `running` (or `queued`) has
+  // already been DISPATCHED and is past the trigger step by definition, so
+  // pushing it into the setup wizard parks it there. The control now runs on
+  // `pending_trigger` - the state a setup-success run actually ends in
+  // (cinatra#2523) - and the reading it used to assert is pinned the other way
+  // just below, so this suite proves the guard is neither over-broad nor
+  // under-broad.
+  it("SSE fast path DOES redirect on genuine setup success ('pending_trigger')", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
-      json: async () => ({ status: "running", inputParams: { topic: "AI agents" } }),
+      json: async () => ({ status: "pending_trigger", inputParams: { topic: "AI agents" } }),
     }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
@@ -225,5 +236,19 @@ describe("SetupCompletionWatcher — failed/stopped runs do not redirect (cinatr
         "/agents/cinatra-ai/blog-idea-generator-agent/d221630a-441c-4f3a-8c3c-17496603fbc0/trigger",
       ),
     );
+  });
+
+  it("SSE fast path does NOT redirect a run already dispatched past setup ('running')", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ status: "running", inputParams: { topic: "AI agents" } }),
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    driveSsePath();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.push).not.toHaveBeenCalled();
   });
 });

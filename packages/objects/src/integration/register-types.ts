@@ -584,6 +584,33 @@ function registerLinkedinObjectTypes(): void {
       sensitivity: "normal",
       mutability: "draftable",
     },
+    // ARTIFACT BY DESCRIPTOR, NOT MERELY BY DISPOSITION (cinatra#3033).
+    //
+    // The Artifacts console's Type definitions tab, the version-pinned byte
+    // SERVE resolver and every other artifact surface read
+    // `objectTypeRegistry.listArtifacts()`, which filters on THIS descriptor —
+    // never on `dispositions`. Declaring only the disposition (as this
+    // registration did) leaves the type resolvable but INVISIBLE as an artifact:
+    // measured at this branch head, the console drew three blog types where four
+    // are owed, with the LinkedIn post-draft silently missing and nothing
+    // anywhere saying why. The sibling host-owned artifact types
+    // (`cms-preview-capture`, `cms-content-snapshot`) state the same distinction
+    // for the same reason.
+    //
+    // WHY THE HOST STATES IT. The host is this type's SINGLE runtime registrar
+    // (epic #1448 principle 5, above): `@cinatra-ai/linkedin-artifacts` CLAIMS
+    // the id cross-namespace, so the bridge registers that pack's renderers for
+    // it and never the type — there is no other place the descriptor can land
+    // without minting a second registrar (which would let a pack uninstall reap
+    // a host type).
+    //
+    // It states the REPRESENTATION FORMS ONLY — the same pair the claiming pack
+    // declares, pinned against drift by a test — and NO renderer `ui` block:
+    // presentation stays the pack's, resolved through the semantic renderer
+    // registry the bridge populates from the claim.
+    isArtifact: {
+      accepts: { file: { mimeTypes: ["text/markdown", "text/plain"] } },
+    },
     category: "content",
     schema: z.object({
       content: z.string().optional(),

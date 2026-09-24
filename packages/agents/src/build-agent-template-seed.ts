@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { compileOasAgentJson } from "./oas-compiler";
+import type { CompiledAgentOas } from "./oas-compiler";
 import {
   readManifestLifecycle,
   serializeLifecycleConfig,
@@ -107,6 +108,20 @@ export type AgentTemplateInstallSeed = {
    * registry outage only fails runs whose packages actually declare bindings.
    */
   hasArtifactBindings: boolean;
+  /**
+   * The compiled per-run TRIGGER classification (cinatra#3033). The OAS compiler
+   * already derives `triggerMode` (and, for a `full` mode, the `gatedSteps` it
+   * gates) from the agent's runtime — and `mcp/handlers.ts` has always persisted
+   * both onto the row. This seed dropped them, so every template installed
+   * through the registry seed and through the boot materializer landed with
+   * `trigger_mode` NULL and `gated_steps` NULL no matter what its own OAS said.
+   * MEASURED on a development boot of this branch: all 36 seeded templates,
+   * including every blog agent, carried a NULL `trigger_mode`. Carried here so
+   * the row states what the compiler derived, on every install road.
+   */
+  triggerMode: "full" | "start-only";
+  /** The steps the trigger gate holds, [] for a `start-only` agent. */
+  gatedSteps: CompiledAgentOas["gatedSteps"];
   /**
    * The EXECUTED artifact-binding declaration as JSON-as-text (cinatra#3208),
    * persisted on `agent_templates.artifact_bindings` beside
@@ -308,6 +323,10 @@ export async function buildAgentTemplateInstallSeed(input: {
     // 10b), threaded straight through so a fresh registry install persists
     // the SAME locally-derived fact a recompile would.
     hasArtifactBindings: compiled.hasArtifactBindings,
+    // cinatra#3033 — the same treatment for the compiler's own trigger
+    // classification, which every other install road already persists.
+    triggerMode: compiled.triggerMode,
+    gatedSteps: compiled.gatedSteps,
     // cinatra#3208 — the executed declaration itself, serialized once here so
     // every install branch persists the identical JSON-as-text value.
     artifactBindings: compiled.artifactBindings
