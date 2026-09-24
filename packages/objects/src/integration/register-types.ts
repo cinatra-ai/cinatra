@@ -584,6 +584,11 @@ function registerLinkedinObjectTypes(): void {
       sensitivity: "normal",
       mutability: "draftable",
     },
+    // An artifact type by descriptor (cinatra#3033): the two text forms the claiming
+    // linkedin-artifacts pack declares and no `ui` block, so it draws through its content type's display.
+    isArtifact: {
+      accepts: { file: { mimeTypes: ["text/markdown", "text/plain"] } },
+    },
     category: "content",
     schema: z.object({
       content: z.string().optional(),

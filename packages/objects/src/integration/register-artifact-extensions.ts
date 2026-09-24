@@ -200,6 +200,8 @@ export function registerParsedArtifactManifest(
   // without provenance and are therefore never touched.
   objectTypeRegistry.removeByPackage(packageName);
   semanticRendererRegistry.removeByPackage(packageName);
+  // The cross-namespace claim ledger reconciles with them (cinatra#3033).
+  forgetCrossNamespaceClaimsOf(packageName);
   // MEANING-SURFACE channel (cinatra#1891 A3): register this pack's pack-wide
   // matcher surface iff it declares one — ORTHOGONAL to object-type
   // registration, and BEFORE the no-objectTypes early-return below, so it
@@ -243,6 +245,55 @@ export function registerParsedArtifactManifest(
     return false;
   }
   return registerDeclaredArtifactTypes(descriptor, packageName);
+}
+
+// THE CROSS-NAMESPACE CLAIM LEDGER (cinatra#3033): which pack claimed which type
+// id in another package's namespace — a reading, never a registration — anchored
+// on `Symbol.for` as a process singleton for the same cross-compilation reason
+// `objectTypeRegistry` is one (registry.ts).
+/** typeId -> the package names that claimed it without owning its namespace. */
+const CROSS_NAMESPACE_CLAIM_LEDGER_KEY = Symbol.for(
+  "@cinatra-ai/objects:cross-namespace-claim-ledger/v1",
+);
+type ClaimLedgerHolder = { [k: symbol]: Map<string, Set<string>> | undefined };
+const _claimLedgerHolder = globalThis as unknown as ClaimLedgerHolder;
+const crossNamespaceClaimLedger: Map<string, Set<string>> =
+  _claimLedgerHolder[CROSS_NAMESPACE_CLAIM_LEDGER_KEY] ??
+  (_claimLedgerHolder[CROSS_NAMESPACE_CLAIM_LEDGER_KEY] = new Map<string, Set<string>>());
+
+function recordCrossNamespaceClaim(typeId: string, claimedBy: string): void {
+  const existing = crossNamespaceClaimLedger.get(typeId);
+  if (existing) existing.add(claimedBy);
+  else crossNamespaceClaimLedger.set(typeId, new Set([claimedBy]));
+}
+
+/**
+ * Drop every claim this package made — the parity of
+ * `objectTypeRegistry.removeByPackage`: before a re-registration, and on
+ * archive/uninstall teardown and restore-abort (the host adapters call it).
+ */
+export function forgetCrossNamespaceClaimsOf(packageName: string): void {
+  for (const [typeId, claimants] of crossNamespaceClaimLedger) {
+    claimants.delete(packageName);
+    if (claimants.size === 0) crossNamespaceClaimLedger.delete(typeId);
+  }
+}
+
+/** The type ids `packageName` CLAIMED without owning their namespace, sorted —
+ *  the parity of `objectTypeRegistry.getTypesForPackage`. */
+export function crossNamespaceClaimsBy(packageName: string): readonly string[] {
+  const out: string[] = [];
+  for (const [typeId, claimants] of crossNamespaceClaimLedger) {
+    if (claimants.has(packageName)) out.push(typeId);
+  }
+  return out.sort();
+}
+
+/** The packages that CLAIMED `typeId` without owning its namespace, sorted —
+ *  the mirror of `objectTypeRegistry.getRegisteringPackage`. */
+export function crossNamespaceClaimantsOf(typeId: string): readonly string[] {
+  const claimants = crossNamespaceClaimLedger.get(typeId);
+  return claimants ? [...claimants].sort() : [];
 }
 
 /**
@@ -290,7 +341,11 @@ function registerDeclaredArtifactTypes(
     // malformed / non-namespaced id (owner === null) is skipped entirely.
     const owner = claimedTypeRegisteringPackage(claim.type);
     if (owner !== packageName) {
-      if (owner !== null) crossNamespaceRendererTypeIds.push(claim.type);
+      if (owner !== null) {
+        crossNamespaceRendererTypeIds.push(claim.type);
+        // Remembered by the claiming pack's name (cinatra#3033).
+        recordCrossNamespaceClaim(claim.type, packageName);
+      }
       continue;
     }
     // Enforce the type's inline JSON Schema when present; fall back to a permissive

@@ -31,6 +31,7 @@ import { resolveUploadArtifactType, normalizeMime } from "./upload-artifact-type
 import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { listArtifactIdsForExtension } from "./semantic-assertion-store";
+import { readFeaturedImageFields, type FeaturedImageFields } from "./featured-image-fields";
 // Effective-identity service (epic #1785): the ONE resolution point for
 // artifact identity — now TYPE-DRIVEN (the type's installed namespace-defining
 // extension, else no primary). The enrichment below resolves THROUGH it and
@@ -131,6 +132,9 @@ export type ArtifactSummary = {
   // `connectorRefSourceUrl` (http/https only). Null for every artifact
   // without a connector-ref pointer — i.e. all blob/dashboard artifacts.
   sourceUrl: string | null;
+  // The placement the row's own data names (app-artifact-review §XI.12,
+  // cinatra#3033) — present only when the data names its post and a declared placement.
+  placement?: FeaturedImageFields["placement"];
 };
 
 /**
@@ -289,6 +293,7 @@ function toSummary(
   // orgless callers), presentation identity IS the effective identity and there
   // are no suggestion chips — the same output as a row with no assertions.
   const effective = semanticIdentity?.identity ?? NO_PRIMARY_IDENTITY_FALLBACK;
+  const featured = readFeaturedImageFields(rec.data);
   return {
     artifactId: rec.id,
     latestRepresentationRevisionId: d.latestRepresentationRevisionId ?? null,
@@ -315,6 +320,7 @@ function toSummary(
     presentationIdentity: presentation?.identity ?? effective,
     presentationSuggestions: presentation?.suggestions ?? [],
     sourceUrl: connectorRefSourceUrl(rec.data),
+    ...(featured.ok ? { placement: featured.placement } : {}),
   };
 }
 
