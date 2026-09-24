@@ -13,7 +13,19 @@ import {
   loadChatThreadForActorAccess,
 } from "@/lib/chat-thread-store";
 import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
-import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import {
+  getAuthSession,
+  isPlatformAdmin,
+  resolveActorGrantsForUserInOrg,
+} from "@/lib/auth-session";
+// The project gate the conversation's creation-time scope freeze needs
+// (cinatra#2815 S3, epic #2812). `readProjectById` answers the tenancy half
+// (does this project belong to the acting organization) and
+// `assertProjectReadAccess` the readability half, which is the very check an
+// agent-run surface applies to a supplied project.
+import { readProjectById } from "@/lib/projects-store-dao";
+import { assertProjectReadAccess } from "@/lib/sealed-room";
+import type { ProjectGrant } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
 // First-class structured-thread persistence handlers on the ASSISTANTS surface
@@ -33,6 +45,57 @@ import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 // admin; legacy unowned → public; missing/denied read → 404, existence not
 // disclosed across tenants).
 // ---------------------------------------------------------------------------
+
+/**
+ * THE PROJECT A CONVERSATION IS CREATED IN IS CHECKED HERE (cinatra#2815 S3).
+ *
+ * The mirror freezes the conversation's assignment scopes as it creates the
+ * row, and the project it freezes is the one this request named. The column is
+ * written once and no later turn can correct it, so an unchecked project is a
+ * permanent grant: a person naming a project of another tenant would receive
+ * that project's assigned skills in every turn of that conversation.
+ *
+ * TWO HALVES, BOTH REQUIRED, and they are the pair an agent-run surface
+ * applies to a supplied project:
+ *
+ *   · TENANCY. The project row must belong to the acting organization. A
+ *     platform administrator does NOT bypass this half: standing lets somebody
+ *     read across projects, it does not make another tenant's project coherent
+ *     with the organization this conversation is anchored in.
+ *   · READABILITY. `assertProjectReadAccess` demands a read grant and lets a
+ *     platform administrator through, exactly as it does on every other
+ *     project-scoped surface. An unresolved grant axis fails closed there.
+ *
+ * ONE REFUSAL FOR BOTH, and it is the sealed-room answer: a project the caller
+ * cannot reach must not be disclosed to exist, so "belongs to another tenant",
+ * "no grant" and "no such row" are indistinguishable. REFUSED, never silently
+ * dropped: a save that quietly discarded the project would look accepted and
+ * leave the person with a conversation that is not in the project they named.
+ */
+async function refuseUnreachableThreadProject(input: {
+  projectId: string | null;
+  orgId: string | null;
+  projectGrants: ProjectGrant[];
+  isAdmin: boolean;
+}): Promise<Response | null> {
+  if (!input.projectId) return null;
+  const refusal = Response.json({ error: "Project not found" }, { status: 404 });
+  if (!input.orgId) return refusal;
+  const project = await readProjectById(input.projectId);
+  if (!project || project.organizationId !== input.orgId) return refusal;
+  try {
+    assertProjectReadAccess(
+      {
+        projectGrants: input.projectGrants,
+        ...(input.isAdmin ? { platformRole: "platform_admin" as const } : {}),
+      },
+      input.projectId,
+    );
+  } catch {
+    return refusal;
+  }
+  return null;
+}
 
 type ThreadSummary = {
   id: string;
@@ -112,6 +175,26 @@ export async function handleSaveAssistantThread(request: Request): Promise<Respo
   if (ownerUserId) thread.ownerUserId = ownerUserId;
   if (teamId) thread.teamId = teamId;
 
+  // ONE membership read, for TWO answers this save owes (cinatra#2815 S3): the
+  // read grants that decide whether the body's project is reachable, and the
+  // caller's teams, which the mirror freezes when it creates the conversation.
+  // It is the same resolution lineage the first turn's freeze reads, under the
+  // same active organization, so a conversation created by a save and one
+  // created by a turn cannot disagree about the scopes their creator granted.
+  const { projectGrants, teamIds } = orgId
+    ? await resolveActorGrantsForUserInOrg(callerId, orgId)
+    : { projectGrants: [] as ProjectGrant[], teamIds: [] as string[] };
+
+  // The body's project, checked before anything is written. A project this
+  // caller cannot reach is REFUSED here rather than frozen or dropped.
+  const projectRefusal = await refuseUnreachableThreadProject({
+    projectId: typeof body.projectId === "string" ? body.projectId.trim() || null : null,
+    orgId,
+    projectGrants,
+    isAdmin,
+  });
+  if (projectRefusal) return projectRefusal;
+
   // assistantMirrorOrgId anchors the structured assistant_threads mirror row
   // (cinatra#1037 P2b) to the caller's auth-derived org — distinct from the
   // pin-sync orgId. Team-owned threads mirror with a NULL org regardless (the
@@ -124,6 +207,9 @@ export async function handleSaveAssistantThread(request: Request): Promise<Respo
     orgId,
     assistantMirrorOrgId: orgId,
     actorUserId: callerId,
+    // The creator's teams for the creation-time scope freeze. Read above from
+    // this caller's own membership, never from the body.
+    creatorTeamIds: teamIds,
   });
   return Response.json({ ok: true });
 }
