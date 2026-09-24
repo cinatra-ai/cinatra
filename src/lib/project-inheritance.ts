@@ -425,6 +425,15 @@ export function resolveAssistantMirrorOrgId(
  * longer be trusted for this: a conversation moves between projects, and the
  * column would answer where it is rather than where it was created.
  *
+ * THE CREATOR'S TEAMS COME FROM THE CALLER. This module builds queries and
+ * reads no database, so the membership the freeze needs is supplied by the
+ * route that already resolves it for this person, under this conversation's
+ * own organization. It is the same read the first-turn freeze derives its
+ * teams from. An empty list is what the snapshot used to carry
+ * unconditionally, and it cost a conversation every skill somebody assigned at
+ * its creator's team: the column is written once, so a later turn cannot
+ * repair it.
+ *
  * NEVER THROWS. A conversation with no organization has no scopes to freeze,
  * and one whose project belongs elsewhere is a caller defect the builder
  * refuses. The row is created either way; the column simply stays NULL and
@@ -434,6 +443,7 @@ export function buildMirrorAssignmentScopeSnapshotText(args: {
   ownerUserId: string | null;
   orgId: string | null;
   projectId: string | null;
+  creatorTeamIds?: readonly string[] | null;
 }): string | null {
   const orgId = typeof args.orgId === "string" ? args.orgId.trim() : "";
   if (orgId === "") return null;
@@ -446,7 +456,11 @@ export function buildMirrorAssignmentScopeSnapshotText(args: {
         // The conversation's own owner is the person it is created for. A row
         // with none carries no personal layer rather than a borrowed one.
         scopeActor: ownerUserId
-          ? { principalType: "HumanUser", principalId: ownerUserId, teamIds: [] }
+          ? {
+              principalType: "HumanUser",
+              principalId: ownerUserId,
+              teamIds: args.creatorTeamIds ?? [],
+            }
           : null,
       }),
     );
@@ -493,6 +507,11 @@ export function buildAssistantThreadMirrorUpsertQuery(args: {
   ownerUserId: string | null;
   orgId: string | null;
   projectId: string | null;
+  /** The creator's team ids, for the creation-time freeze only (cinatra#2815
+   *  S3). Resolved by the route under this conversation's organization; this
+   *  module performs no read. Absent means the caller cannot name them, and
+   *  the snapshot then carries no team layer. */
+  creatorTeamIds?: readonly string[] | null;
   /** Team ownership axis (cinatra#1037 P5.6 PR2, coordinator-authorized Fork-B
    *  extension). SET-ONCE on conflict (authz axis, never wholesale-cleared). */
   teamId: string | null;
@@ -544,6 +563,7 @@ ON CONFLICT (id) DO UPDATE SET
         ownerUserId: args.ownerUserId,
         orgId: args.orgId,
         projectId: args.projectId,
+        creatorTeamIds: args.creatorTeamIds ?? null,
       }),
     ],
   };
@@ -783,6 +803,10 @@ export function buildAssistantThreadMirrorQueries(args: {
   thread: { id: string } & Record<string, unknown>;
   /** The caller's EXPLICIT mirror-org option (null when unspecified). */
   explicitMirrorOrgId: string | null;
+  /** The creator's team ids for the creation-time scope freeze (cinatra#2815
+   *  S3), resolved by the route from its own membership read. Read by the
+   *  thread upsert alone, and only on the INSERT that creates the row. */
+  creatorTeamIds?: readonly string[] | null;
   /** The TRANSPORT-VERIFIED acting writer, from the route's own session /
    *  principal — NEVER a payload field. Only the tombstone reads it, and only
    *  to refuse itself on a thread this actor does not personally own. */
@@ -805,6 +829,10 @@ export function buildAssistantThreadMirrorQueries(args: {
       orgId: resolveAssistantMirrorOrgId(thread, args.explicitMirrorOrgId),
       // Same source + trimming as buildChatThreadUpsertQuery's project_id.
       projectId: extractStringFieldFromThread(thread, "projectId"),
+      // The creator's teams, from the route's membership read. Never a payload
+      // field: a team list a request could name would be a scope the caller
+      // granted itself, frozen for the life of the conversation.
+      creatorTeamIds: args.creatorTeamIds ?? null,
       // Team ownership axis (cinatra#1037 P5.6 PR2 team-axis extension): same
       // trimmed source as the org-null resolution above (resolveAssistantMirrorOrgId
       // reads payload.teamId). SET-ONCE at the SQL layer, so a write that omits

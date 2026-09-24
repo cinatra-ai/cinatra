@@ -34,6 +34,9 @@ import {
   buildAssistantThreadMirrorQueries,
   buildAssistantThreadMirrorDeleteQuery,
 } from "@/lib/project-inheritance";
+// The delivery chain the frozen snapshot feeds, so a team case is proved by
+// what a conversation RECEIVES rather than by the payload shape alone.
+import { resolveEffectiveAssignedSkills } from "@cinatra-ai/agents/effective-assigned-skills";
 
 const SCHEMA = "cinatra";
 
@@ -705,5 +708,68 @@ describe("the mirror freezes assignment scopes AT CREATION (cinatra#2815 S3)", (
       explicitMirrorOrgId: "org-1",
     });
     expect(JSON.parse(upsert.values[9] as string).projectId).toBe("proj-1");
+  });
+});
+
+describe("the mirror freezes the CREATOR'S TEAMS too (cinatra#2815 S3)", () => {
+  // A conversation the mirror creates is frozen once, and the later turn cannot
+  // correct it. So a creator who belongs to a team must have that team in the
+  // frozen list, or every skill somebody assigned at that team is lost to this
+  // conversation for good. The ids come from the SAME membership read the
+  // first-turn freeze uses, resolved under the conversation's own organization,
+  // and they are the caller's to supply: this module builds queries and reads
+  // no database.
+  it("carries the creator's team ids into the frozen snapshot", () => {
+    const q = buildAssistantThreadMirrorUpsertQuery({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      ownerUserId: "u1",
+      orgId: "org-1",
+      projectId: null,
+      teamId: null,
+      creatorTeamIds: ["team-B", "team-A"],
+      scalars: null,
+      title: null,
+      createdAt: null,
+      updatedAt: null,
+    });
+    expect(JSON.parse(q.values[9] as string)).toEqual({
+      v: 1,
+      orgId: "org-1",
+      teamIds: ["team-A", "team-B"],
+      originatingHumanUserId: "u1",
+    });
+  });
+
+  it("carries them through the composed mirror write", () => {
+    const [upsert] = buildAssistantThreadMirrorQueries({
+      schemaName: SCHEMA,
+      thread: { id: "t1", ownerUserId: "u1", messages: [] },
+      explicitMirrorOrgId: "org-1",
+      creatorTeamIds: ["team-A"],
+    });
+    expect(JSON.parse(upsert.values[9] as string).teamIds).toEqual(["team-A"]);
+  });
+
+  it("delivers a skill assigned at the creator's team on the conversation it created", () => {
+    const [upsert] = buildAssistantThreadMirrorQueries({
+      schemaName: SCHEMA,
+      thread: { id: "t1", ownerUserId: "u1", messages: [] },
+      explicitMirrorOrgId: "org-1",
+      creatorTeamIds: ["team-A"],
+    });
+    const delivered = resolveEffectiveAssignedSkills(
+      [{ skillId: "s-team", scopeKind: "team", scopeId: "team-A" }],
+      { snapshot: upsert.values[9], durableOrgId: "org-1" },
+    );
+    expect(delivered.skillIds).toEqual(["s-team"]);
+  });
+
+  it("an absent list still freezes no team layer", () => {
+    const q = buildAssistantThreadMirrorUpsertQuery({
+      schemaName: SCHEMA, threadId: "t1", ownerUserId: "u1", orgId: "org-1", projectId: null,
+      teamId: null, scalars: null, title: null, createdAt: null, updatedAt: null,
+    });
+    expect(JSON.parse(q.values[9] as string).teamIds).toEqual([]);
   });
 });

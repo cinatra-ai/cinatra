@@ -1187,7 +1187,7 @@ export function upsertChatThreadInDatabase(
     // P2b). Distinct from `orgId` and NEVER falling back to it — option PRESENCE
     // distinguishes explicit null from "unspecified"; set-once SQL keeps it.
     assistantMirrorOrgId?: string | null;
-    actorUserId?: string | null; // TRANSPORT-VERIFIED acting writer, never a payload field — read by ONE statement: the self-harm-only truncation tombstone (src/lib/assistant-turn-supersede.ts). Null authorizes none.
+    actorUserId?: string | null; creatorTeamIds?: readonly string[] | null; // TRANSPORT-VERIFIED acting writer, never a payload field — read by ONE statement: the self-harm-only truncation tombstone (src/lib/assistant-turn-supersede.ts). Null authorizes none. cinatra#2815 S3: creatorTeamIds is the team membership the calling route resolved for this person under this thread's organization; it reaches the mirror's creation-time scope freeze and nothing else, and it rides this line because this module is at its file-size ceiling.
   },
 ) {
   ensurePostgresSchema();
@@ -1242,7 +1242,7 @@ export function upsertChatThreadInDatabase(
           options && "assistantMirrorOrgId" in options
             ? (options.assistantMirrorOrgId ?? null)
             : null,
-        actorUserId: options?.actorUserId ?? null,
+        actorUserId: options?.actorUserId ?? null, creatorTeamIds: options?.creatorTeamIds ?? null,
       }),
     ],
   });
