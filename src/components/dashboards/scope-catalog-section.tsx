@@ -40,6 +40,16 @@
  * (codex convergence r1). The WRITE does re-check that (`no-longer-declared`),
  * which is why a stale row can still be listed and still refuse on Add.
  *
+ * ── THE WORDS BELONG TO THE SURFACE ────────────────────────────────────────
+ * The sentences above are the TENANT tabs' (cinatra#2811 fix leg 4). The amended
+ * drawing gives the workspace popup its own heading and its own helper line, and
+ * a row note naming the package AND the kind it contributes, so a caller may hand
+ * this section a `words` object (`WORKSPACE_CATALOG_WORDS`). A caller that hands
+ * none keeps the landed words exactly, which is how the tenant tabs stay put
+ * while the workspace follows its drawing. The aria-label does NOT move with the
+ * heading: it already reads the drawn section name on every surface, so a test
+ * finds this section by the name the drawing gives it either way.
+ *
  * ── NO EMPTY STATE HERE, BY DESIGN ─────────────────────────────────────────
  * This component renders only when there is at least one row: the landing passes
  * `catalog={null}` for an empty (or failed) read, so no section exists at all
@@ -59,6 +69,7 @@ import {
   CATALOG_ADD_REASON_COPY,
   type CatalogTemplateView,
   type ScopeCatalogSource,
+  type ScopeCatalogWords,
 } from "@/lib/dashboards/installed-catalog-contract";
 
 import { useCatalogAddOutcome } from "./catalog-add-outcome";
@@ -69,11 +80,15 @@ export type ScopeCatalogSectionProps = {
   readonly templates: readonly CatalogTemplateView[];
   /** The bound server action (cinatra#2474 PR5). */
   readonly source: ScopeCatalogSource;
+  /** The words this SURFACE gives the section (cinatra#2811 fix leg 4). Absent
+   *  keeps the words the tenant tabs landed with. */
+  readonly words?: ScopeCatalogWords;
 };
 
 export function ScopeCatalogSection({
   templates,
   source,
+  words,
 }: ScopeCatalogSectionProps) {
   const outcome = useCatalogAddOutcome();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -120,22 +135,32 @@ export function ScopeCatalogSection({
     >
       <span>
         <span className="block text-xs font-semibold text-foreground">
-          From the installed catalog
+          {words ? words.title : "From the installed catalog"}
         </span>
         <span className="mt-0.5 block text-xs text-muted-foreground">
-          Dashboards that installed extensions have added to this workspace.{" "}
-          {canAdd ? (
-            <>
-              Adding one makes{" "}
-              <b className="font-semibold text-foreground">
-                your own copy on this page
-              </b>
-              .
-            </>
+          {words ? (
+            canAdd ? (
+              words.helper
+            ) : (
+              words.helperWithoutAuthority
+            )
           ) : (
-            <b className="font-semibold text-foreground">
-              You can&rsquo;t add dashboards here.
-            </b>
+            <>
+              Dashboards that installed extensions have added to this workspace.{" "}
+              {canAdd ? (
+                <>
+                  Adding one makes{" "}
+                  <b className="font-semibold text-foreground">
+                    your own copy on this page
+                  </b>
+                  .
+                </>
+              ) : (
+                <b className="font-semibold text-foreground">
+                  You can&rsquo;t add dashboards here.
+                </b>
+              )}
+            </>
           )}
         </span>
       </span>
@@ -155,7 +180,7 @@ export function ScopeCatalogSection({
                 {t.name}
               </span>
               <span className="mt-0.5 block truncate font-mono text-badge-2xs text-muted-foreground">
-                {t.packageName}
+                {words?.rowKind ? `${t.packageName}:${words.rowKind}` : t.packageName}
               </span>
             </span>
             {canAdd ? (

@@ -169,3 +169,50 @@ export const CATALOG_ADD_REASON_COPY: Readonly<
 export type ScopeCatalogSource = {
   readonly add: (templateId: string) => Promise<CatalogAddResult>;
 };
+
+/**
+ * The words one SURFACE gives the catalog section (cinatra#2811 fix leg 4).
+ *
+ * The section is shared, and the amended drawing does not give every surface the
+ * same copy: the workspace popup reads "Add from the installed catalog" over "A
+ * catalog dashboard homes in the workspace, exactly as a created one does.",
+ * where the tenant tabs read the words they landed with. A caller that passes
+ * nothing keeps those landed words, so this widens the section without moving
+ * any surface that already conforms.
+ *
+ * Plain strings only: the section is a client component and the workspace's node
+ * is built during a SERVER render, so everything here crosses that boundary.
+ */
+export type ScopeCatalogWords = {
+  /** The section's visible heading. Its aria-label is the drawn section name and
+   *  does not move, so a test finds the section by the name the drawing gives. */
+  readonly title: string;
+  /**
+   * The kind a row's package contributes, appended to the package name as the
+   * drawing's `<package>:<kind>` note. `null` leaves the bare package name the
+   * tenant tabs landed with.
+   */
+  readonly rowKind: string | null;
+  /** The line under the heading, for a viewer who may add. */
+  readonly helper: string;
+  /** The same line for a viewer who may not: the section still lists the rows
+   *  and states plainly that it offers them no control. */
+  readonly helperWithoutAuthority: string;
+};
+
+/**
+ * The WORKSPACE popup's third section, in the amended drawing's own words
+ * (surface `workspace-dashboards-add-popup`).
+ *
+ * A dashboard the catalog contributes is a `dashboard`, so the row note reads
+ * `<package>:dashboard`, the drawing's `<package>:<kind>` grammar, with the one
+ * kind these rows can carry.
+ */
+export const WORKSPACE_CATALOG_WORDS: ScopeCatalogWords = {
+  title: "Add from the installed catalog",
+  rowKind: "dashboard",
+  helper:
+    "A catalog dashboard homes in the workspace, exactly as a created one does.",
+  helperWithoutAuthority:
+    "A catalog dashboard homes in the workspace, exactly as a created one does. You can’t add dashboards here.",
+};

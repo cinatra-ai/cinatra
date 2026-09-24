@@ -23,6 +23,11 @@
  *     neither knows nor can name an organization. An empty or failed read
  *     arrives as `null` and the section is simply absent, never a placeholder.
  *
+ * Its words are the amended drawing's own for this surface
+ * (`WORKSPACE_ADD_WORDS` below): the drawing draws the popup once, on the
+ * workspace landing, and the shared dialog takes the words per surface rather
+ * than one wording for all of them.
+ *
  * It decides nothing: every action re-authorizes server-side.
  */
 import { useState, useTransition, type ReactElement } from "react";
@@ -36,8 +41,43 @@ import {
 import { EntityDashboardNameDialog } from "@cinatra-ai/dashboards/entity-dashboard-toolbar-controls";
 import { Button } from "@/components/ui/button";
 
-import { AddDashboardDialog } from "./add-dashboard-dialog";
+import {
+  AddDashboardDialog,
+  type AddDashboardDialogWords,
+} from "./add-dashboard-dialog";
 import type { ScopeReferenceSource } from "./scope-dashboards-contract";
+
+/**
+ * The popup's words, transcribed from the amended drawing's own surface
+ * `workspace-dashboards-add-popup` (§IX.1). The drawing draws this popup once,
+ * here, and the tenant tabs keep the words they landed with.
+ *
+ * The one glyph that differs from the drawing is the apostrophe: the drawing is
+ * raw HTML and carries a straight one, while every sibling string on these
+ * surfaces carries the typographic one. The word is the drawing's; the glyph is
+ * the house form.
+ */
+const WORKSPACE_ADD_WORDS: AddDashboardDialogWords = {
+  title: "Add dashboard",
+  opening: (
+    <>
+      One popup, three sections. A reference lists an existing dashboard here as
+      a <b className="font-semibold text-foreground">link</b> — its canonical
+      home does not move, and{" "}
+      <b className="font-semibold text-foreground">
+        nobody gains access by the listing alone
+      </b>
+      .
+    </>
+  ),
+  createTitle: "Create new",
+  createHelper: "Homes in the workspace.",
+  createButton: "Create",
+  referenceTitle: "Reference a dashboard from the scopes below",
+  referenceHelper:
+    "The link never widens access. A member reads the entry only when they already pass the target\u2019s home access, or a platform administrator marks it visible to everyone (\u00a7IX.4).",
+  referenceAdd: { idle: "Reference", busy: "Referencing\u2026" },
+};
 
 export function WorkspaceAddDashboardButton({
   createDashboard,
@@ -71,7 +111,8 @@ export function WorkspaceAddDashboardButton({
       <AddDashboardDialog
         open={addOpen}
         onOpenChange={setAddOpen}
-        scopeLabel="Workspace"
+        words={WORKSPACE_ADD_WORDS}
+        scopeLabel={null}
         canCreate
         onChooseCreate={() => {
           setAddOpen(false);

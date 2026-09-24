@@ -27,8 +27,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh, push: () => {} }),
 }));
 
+import { ScopeCatalogSection } from "@/components/dashboards/scope-catalog-section";
 import { ScopeDashboardsTab } from "@/components/dashboards/scope-dashboards-tab";
 import { WorkspaceAddDashboardButton } from "@/components/dashboards/workspace-add-dashboard-button";
+import { WORKSPACE_CATALOG_WORDS } from "@/lib/dashboards/installed-catalog-contract";
 import type {
   ScopeDashboardTabRow,
   ScopeReferenceSource,
@@ -74,7 +76,7 @@ function renderTab(rows: ScopeDashboardTabRow[], opts: { setGrant?: (id: string,
       data={{ scopeKind: "workspace", rows, canManage: true }}
       removal={{ removeListing: async () => ({ ok: true }) }}
       everyoneGrant={opts.setGrant ? { setGrant: opts.setGrant } : undefined}
-      caption={{ kind: "entity", entityLabel: "Workspace" }}
+      caption={{ kind: "workspace" }}
     />,
   );
 }
@@ -178,5 +180,164 @@ describe("the Add dashboard popup on the workspace", () => {
     fireEvent.submit(field.closest("form") as HTMLFormElement);
     await waitFor(() => expect(create).toHaveBeenCalledWith("Mine"));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The amended drawing's own words, on the four workspace surfaces
+// (workspace-dashboards-landing, workspace-dashboards-add-popup,
+// workspace-dashboards-everyone-grant, workspace-dashboards-viewer-reading).
+//
+// Each string below is the drawing's, transcribed. The one glyph that differs is
+// the apostrophe: the drawing is raw HTML and carries a straight one, while every
+// sibling string in these components carries the typographic one, so the word is
+// the drawing's and the glyph is the house form.
+// ---------------------------------------------------------------------------
+
+const DRAWN = {
+  landingCaption:
+    "Your dashboards in the whole workspace — and the ones referenced up from the scopes below.",
+  popupTitle: "Add dashboard",
+  opening:
+    "One popup, three sections. A reference lists an existing dashboard here as a link — its canonical home does not move, and nobody gains access by the listing alone.",
+  sections: [
+    "Create new",
+    "Reference a dashboard from the scopes below",
+    "Add from the installed catalog",
+  ],
+  createHelper: "Homes in the workspace.",
+  createButton: "Create",
+  nameField: "Dashboard name",
+  referenceRowNote: "homed in Team: Support",
+  referenceButton: "Reference",
+  referenceHelper:
+    "The link never widens access. A member reads the entry only when they already pass the target’s home access, or a platform administrator marks it visible to everyone (§IX.4).",
+  catalogRowNote: "@cinatra-ai/adoption-artifact:dashboard",
+  catalogButton: "Add",
+  catalogHelper:
+    "A catalog dashboard homes in the workspace, exactly as a created one does.",
+} as const;
+
+const WORKSPACE_REFERENCE: ScopeReferenceSource = {
+  listCandidates: async () => [
+    {
+      dashboardId: "a-team",
+      name: "Support load — weekly",
+      homeNote: DRAWN.referenceRowNote,
+      disposition: "addable",
+    },
+  ],
+  addListing: async () => ({ ok: true }),
+  requestPromotion: async () => ({ ok: false, reason: "invalid" }),
+};
+
+const CATALOG_TEMPLATES = [
+  {
+    templateId: "t-adopt",
+    name: "Adoption overview",
+    packageName: "@cinatra-ai/adoption-artifact",
+  },
+] as const;
+
+/** The workspace's catalog section, exactly as the page hands it down. */
+function workspaceCatalogNode() {
+  return (
+    <ScopeCatalogSection
+      templates={CATALOG_TEMPLATES}
+      source={{ add: async () => ({ ok: true, dashboard: { id: "d", name: "Adoption overview", isDefault: false, canWrite: true } }) }}
+      words={WORKSPACE_CATALOG_WORDS}
+    />
+  );
+}
+
+function openWorkspacePopup() {
+  render(
+    <WorkspaceAddDashboardButton
+      createDashboard={async () => ({ ok: true, dashboard: { id: "w-new", name: "Mine", isDefault: false, canWrite: true } })}
+      reference={WORKSPACE_REFERENCE}
+      catalog={workspaceCatalogNode()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Add dashboard/ }));
+}
+
+/** Collapse the DOM's own whitespace so a sentence assembled from several spans
+ *  is compared as the sentence a reader reads. */
+const said = (el: Element | null) =>
+  (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+describe("the landing caption (workspace-dashboards-landing)", () => {
+  it("reads the drawn sentence, not the tenant tabs' pattern", () => {
+    renderTab([OVERVIEW]);
+    expect(said(screen.getByTestId("scope-dashboards-caption"))).toBe(
+      DRAWN.landingCaption,
+    );
+  });
+});
+
+describe("the Add dashboard popup (workspace-dashboards-add-popup)", () => {
+  it("is titled and opened with the drawn lines", async () => {
+    openWorkspacePopup();
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading").textContent).toBe(
+      DRAWN.popupTitle,
+    );
+    expect(said(dialog)).toContain(DRAWN.opening);
+  });
+
+  it("carries the three drawn sections, in the drawn order, each findable by its drawn name", async () => {
+    openWorkspacePopup();
+    const dialog = await screen.findByRole("dialog");
+    const sections = dialog.querySelector('[data-slot="add-dashboard-sections"]');
+    expect(sections).not.toBeNull();
+    // The sections themselves, in DOM order, not every labelled node inside
+    // them: the picker's search field carries a label of its own.
+    const named = [...sections!.querySelectorAll(":scope > [aria-label]")].map(
+      (s) => s.getAttribute("aria-label"),
+    );
+    expect(named).toEqual([...DRAWN.sections]);
+  });
+
+  it("Create new: the drawn helper, the drawn button, and the drawn field in the prompt", async () => {
+    openWorkspacePopup();
+    const create = await screen.findByRole("region", { name: DRAWN.sections[0] });
+    expect(said(create)).toContain(DRAWN.createHelper);
+    const button = within(create).getByRole("button");
+    expect(button.textContent).toBe(DRAWN.createButton);
+    fireEvent.click(button);
+    expect(await screen.findByLabelText(DRAWN.nameField)).toBeTruthy();
+  });
+
+  it("Reference a dashboard from the scopes below: the row's home, the Reference control, the drawn helper", async () => {
+    openWorkspacePopup();
+    const section = await screen.findByRole("region", { name: DRAWN.sections[1] });
+    expect(await within(section).findByText(DRAWN.referenceRowNote)).toBeTruthy();
+    expect(
+      within(section).getByRole("button", { name: DRAWN.referenceButton }),
+    ).toBeTruthy();
+    expect(within(section).queryByRole("button", { name: "Add" })).toBeNull();
+    expect(said(section)).toContain(DRAWN.referenceHelper);
+  });
+
+  it("Add from the installed catalog: the package and its kind, the Add control, the drawn helper", async () => {
+    openWorkspacePopup();
+    const section = await screen.findByRole("region", { name: DRAWN.sections[2] });
+    expect(within(section).getByText(DRAWN.catalogRowNote)).toBeTruthy();
+    expect(
+      within(section).getByRole("button", { name: DRAWN.catalogButton }),
+    ).toBeTruthy();
+    expect(said(section)).toContain(DRAWN.catalogHelper);
+  });
+
+  it("says nothing the tenant tabs say in its place", async () => {
+    openWorkspacePopup();
+    const dialog = await screen.findByRole("dialog");
+    const text = said(dialog);
+    expect(text).not.toContain("Add a dashboard to Workspace");
+    expect(text).not.toContain("Reference an existing dashboard");
+    expect(text).not.toContain("From the installed catalog’");
+    expect(text).not.toContain(
+      "Dashboards that installed extensions have added to this workspace.",
+    );
   });
 });

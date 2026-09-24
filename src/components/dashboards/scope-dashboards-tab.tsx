@@ -55,10 +55,17 @@ import {
  * The tab body's own lede, exactly as the ratified drawing draws it: a MUTED
  * 13px line, never a bold heading, naming the ENTITY the tab belongs to.
  *
- *   - the three shared scopes and the workspace draw "The dashboards in
- *     <b>Team: Growth</b>." — the entity named in ink inside a muted line;
+ *   - the three shared scopes draw "The dashboards in <b>Team: Growth</b>.",
+ *     the entity named in ink inside a muted line;
  *   - the personal scope draws "The dashboards you own." — the acting user's
- *     own dashboards, so there is no entity to name.
+ *     own dashboards, so there is no entity to name;
+ *   - the WORKSPACE draws its own sentence (cinatra#2811 fix leg 4, the amended
+ *     §IX.3 surface `workspace-dashboards-landing`): "Your dashboards in the
+ *     <b>whole workspace</b> — and the ones referenced up from the scopes
+ *     below." It names no entity, because it names two collections: the
+ *     viewer's own workspace rows and the references brought up to them. It
+ *     read the entity pattern until this leg, which was the tenant tabs' line
+ *     on a surface the drawing writes differently.
  *
  * The KIND-named bold h2 this row carried before (cinatra#2474 PR2) is gone: it
  * is not the treatment the drawing gives, and it named the kind where the
@@ -66,7 +73,8 @@ import {
  */
 export type ScopeDashboardsCaption =
   | { readonly kind: "entity"; readonly entityLabel: string }
-  | { readonly kind: "own" };
+  | { readonly kind: "own" }
+  | { readonly kind: "workspace" };
 
 export function ScopeDashboardsTab({
   data,
@@ -119,6 +127,12 @@ export function ScopeDashboardsTab({
                 {caption.entityLabel}
               </b>
               .
+            </>
+          ) : caption.kind === "workspace" ? (
+            <>
+              Your dashboards in the{" "}
+              <b className="font-semibold text-foreground">whole workspace</b> —
+              and the ones referenced up from the scopes below.
             </>
           ) : (
             <>The dashboards you own.</>

@@ -16,6 +16,11 @@ import "server-only";
  * viewer's workspace rows (the Overview is ensured first), the viewer-filtered
  * references, the curation authority and the everyone-grant.
  *
+ * Its caption and its Add popup read the amended drawing's own words for this
+ * surface (`workspace-dashboards-landing` and `workspace-dashboards-add-popup`),
+ * which are not the tenant tabs' words; the shared components take them per
+ * surface (cinatra#2811 fix leg 4).
+ *
  * The viewer is built from the viewer's own memberships (the workspace
  * vantage), so the body reads the same under every active organization. The
  * installed-catalog section is federated over those same memberships.
@@ -47,9 +52,6 @@ import {
   workspaceSetEveryoneGrantAction,
 } from "./workspace-dashboards-actions";
 import type { ScopeReferenceSource } from "./scope-dashboards-contract";
-
-/** The entity the drawn caption names (the shell's own fallback noun). */
-const WORKSPACE_CAPTION_ENTITY = "Workspace";
 
 export async function buildWorkspaceDashboardsTabBody(): Promise<ReactElement> {
   try {
@@ -91,7 +93,7 @@ export async function buildWorkspaceDashboardsTabBody(): Promise<ReactElement> {
         data={{ scopeKind: "workspace", rows, canManage: curates }}
         removal={curates ? { removeListing: workspaceRemoveReferenceAction } : undefined}
         everyoneGrant={platformAdmin ? { setGrant: workspaceSetEveryoneGrantAction } : undefined}
-        caption={{ kind: "entity", entityLabel: WORKSPACE_CAPTION_ENTITY }}
+        caption={{ kind: "workspace" }}
         add={
           <WorkspaceAddDashboardButton
             createDashboard={createEntityDashboardAction.bind(null, ref)}
