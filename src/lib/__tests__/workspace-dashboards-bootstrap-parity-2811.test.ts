@@ -35,7 +35,6 @@ import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import {
   up as migrationUp,
   WORKSPACE_ENTITY_ID,
-  // @ts-expect-error: a plain .mjs migration module, no type declarations.
 } from "../../../migrations/core/core__0108_workspace-dashboards.mjs";
 
 /** A schema name no identifier in either half can collide with. */

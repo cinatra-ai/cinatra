@@ -57,6 +57,23 @@ export type CatalogSurface =
       readonly orgId: string;
       readonly scopeId: string;
       readonly userId: string;
+    }
+  /**
+   * The WORKSPACE tab (cinatra#2811, item 4). The workspace sits above every
+   * organization, so its catalog is a FEDERATION: one surface is built per
+   * member organization of the viewer's vantage, and each one is read fenced to
+   * that organization exactly as a tenant surface is. `orgId` is therefore the
+   * member organization this leg of the read is taken under, never a home.
+   *
+   * It carries no `scopeId`: the workspace is a single scope, and its
+   * destination is the viewer's own organization-free `__workspace__`
+   * collection, which is the same collection whichever member organization
+   * admitted the template.
+   */
+  | {
+      readonly kind: "workspace";
+      readonly orgId: string;
+      readonly userId: string;
     };
 
 /**

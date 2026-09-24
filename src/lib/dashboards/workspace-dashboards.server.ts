@@ -14,6 +14,8 @@ import "server-only";
  *   - every mutation RE-AUTHORIZES on the live facts: the render gate cannot
  *     protect a later server-action call.
  */
+import type { ActorContext } from "@/lib/authz/actor-context";
+import type { WorkspaceCatalogMembership } from "@/lib/dashboards/installed-catalog-read";
 import type { WorkspaceOverviewSummary } from "@cinatra-ai/dashboards/overview-config";
 import {
   addWorkspaceReferenceLink,
@@ -61,6 +63,18 @@ import type {
 type OrgHomeAccess = {
   readonly actor: DashboardActor;
   readonly projectGrants: readonly ProjectGrantLike[];
+  /**
+   * The same standing expressed as an `ActorContext`, for the readers that take
+   * one: the installed-catalog federation runs the landed catalog gates once
+   * per member organization and needs the viewer's role, teams and project
+   * grants AS THAT ORGANIZATION RESOLVED THEM (cinatra#2811, item 4).
+   *
+   * Built from the very reads above, so it is the viewer's real standing and
+   * never a synthesized actor. An organization the viewer has no current
+   * membership in never reaches this map at all, which is what makes the
+   * federation's tenant fence structural.
+   */
+  readonly catalogActor: ActorContext;
 };
 
 /** Everything the workspace tab decides on, read once per request. */
@@ -134,6 +148,10 @@ export async function buildWorkspaceViewer(input: {
       teamIds,
       orgRole: orgRole as "org_owner" | "org_admin" | "member",
     });
+    const projectGrants = grants.map((g) => ({
+      projectId: g.projectId,
+      effectiveRole: g.effectiveRole,
+    }));
     homeAccess.set(org.orgId, {
       actor: {
         userId,
@@ -142,7 +160,25 @@ export async function buildWorkspaceViewer(input: {
         orgRole: toDashboardOrgRole(role),
         teamRoles: {},
       },
-      projectGrants: grants.map((g) => ({ projectId: g.projectId, effectiveRole: g.effectiveRole })),
+      projectGrants,
+      catalogActor: {
+        principalType: "HumanUser",
+        principalId: userId,
+        organizationId: org.orgId,
+        orgRole: (role ?? "member") as "org_owner" | "org_admin" | "member",
+        // A platform administrator IS one in every organization; that is a fact
+        // about the principal, not an authority borrowed from this tenant.
+        platformRole: input.platformAdmin ? "platform_admin" : "member",
+        teamIds,
+        projectGrants: grants.map((g) => ({
+          projectId: g.projectId,
+          effectiveRole: g.effectiveRole,
+          accessSource: g.accessSource,
+        })),
+        // Kept in lockstep with `projectGrants`, as the kernel requires.
+        projectIds: grants.map((g) => g.projectId).sort(),
+        authSource: "ui",
+      } as ActorContext,
     });
   }
 
@@ -358,4 +394,40 @@ export async function readWorkspaceOverviewSummary(
     identity = null;
   }
   return workspaceOverviewSummaryFrom(identity, viewer.vantage);
+}
+
+/**
+ * The member organizations the installed-catalog federation may read under, for
+ * the CURRENT session (cinatra#2811, item 4).
+ *
+ * Re-resolved from the live session on every call, so the workspace catalog's
+ * write authorizes against the memberships the viewer holds NOW rather than the
+ * ones the render saw. `null` when there is no signed-in user.
+ */
+export async function buildWorkspaceCatalogMemberships(): Promise<{
+  readonly userId: string;
+  readonly memberships: readonly WorkspaceCatalogMembership[];
+} | null> {
+  const { getAuthSession, isPlatformAdmin } = await import("@/lib/auth-session");
+  const session = await getAuthSession();
+  const userId = session?.user?.id;
+  if (!session || !userId) return null;
+  const viewer = await buildWorkspaceViewer({
+    userId,
+    platformAdmin: isPlatformAdmin(session),
+  });
+  return { userId, memberships: workspaceCatalogMemberships(viewer) };
+}
+
+/** The federation's per-organization actors, taken from a viewer already built. */
+export function workspaceCatalogMemberships(
+  viewer: WorkspaceViewer,
+): readonly WorkspaceCatalogMembership[] {
+  // The vantage's own order, so two reads of one membership state agree.
+  return viewer.vantage.organizations
+    .map((org) => {
+      const access = viewer.homeAccess.get(org.orgId);
+      return access ? { orgId: org.orgId, actor: access.catalogActor } : null;
+    })
+    .filter((m): m is WorkspaceCatalogMembership => m !== null);
 }

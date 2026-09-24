@@ -17,7 +17,8 @@ import "server-only";
  * references, the curation authority and the everyone-grant.
  *
  * The viewer is built from the viewer's own memberships (the workspace
- * vantage), so the body reads the same under every active organization.
+ * vantage), so the body reads the same under every active organization. The
+ * installed-catalog section is federated over those same memberships.
  * Handles to the curation actions are handed down only where they apply
  * (capability minimization); every action re-authorizes server-side anyway.
  */
@@ -33,7 +34,9 @@ import {
   buildWorkspaceViewer,
   getWorkspaceDashboardsRows,
   viewerCuratesAnyReference,
+  workspaceCatalogMemberships,
 } from "@/lib/dashboards/workspace-dashboards.server";
+import { buildWorkspaceCatalogNode } from "./scope-catalog-node";
 import { ScopeDashboardsTab, ScopeDashboardsTabError } from "./scope-dashboards-tab";
 import { WorkspaceAddDashboardButton } from "./workspace-add-dashboard-button";
 import {
@@ -67,6 +70,15 @@ export async function buildWorkspaceDashboardsTabBody(): Promise<ReactElement> {
     });
     const rows = await getWorkspaceDashboardsRows(viewer);
     const curates = viewerCuratesAnyReference(viewer);
+    // The installed catalog, federated over the viewer's member organizations
+    // (cinatra#2811, item 4). It is NOT gated on curation: the catalog copy is
+    // the viewer's own dashboard in their own collection, so a plain member is
+    // offered it exactly as they are offered Create new. An empty or failed
+    // read is `null`, and the popup then shows no catalog section at all.
+    const catalog = await buildWorkspaceCatalogNode({
+      userId,
+      memberships: workspaceCatalogMemberships(viewer),
+    });
     const reference: ScopeReferenceSource | null = curates
       ? {
           listCandidates: workspaceListReferenceCandidatesAction,
@@ -84,6 +96,7 @@ export async function buildWorkspaceDashboardsTabBody(): Promise<ReactElement> {
           <WorkspaceAddDashboardButton
             createDashboard={createEntityDashboardAction.bind(null, ref)}
             reference={reference}
+            catalog={catalog}
           />
         }
       />

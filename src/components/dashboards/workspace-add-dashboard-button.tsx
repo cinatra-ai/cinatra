@@ -17,13 +17,15 @@
  *     handed down a reference source, which it does only for a curator
  *     (a platform administrator, or an organization admin), §IX.2 suppression
  *     applied at the source;
- *   - Add from the installed catalog: not wired on the workspace yet (the
- *     cross-organization federation is its own leg), so the section is absent,
- *     never a placeholder.
+ *   - Add from the installed catalog: the cross-organization FEDERATION
+ *     (cinatra#2811, item 4). The page builds it from the viewer's member
+ *     organizations and hands it down as a finished node, so this component
+ *     neither knows nor can name an organization. An empty or failed read
+ *     arrives as `null` and the section is simply absent, never a placeholder.
  *
  * It decides nothing: every action re-authorizes server-side.
  */
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
@@ -40,11 +42,14 @@ import type { ScopeReferenceSource } from "./scope-dashboards-contract";
 export function WorkspaceAddDashboardButton({
   createDashboard,
   reference,
+  catalog = null,
 }: {
   /** Create a workspace dashboard (bound server-side to the viewer's own ref). */
   readonly createDashboard: (name: string) => Promise<MutatedEntityDashboard>;
   /** The reference section's actions, or null for a viewer who curates none. */
   readonly reference: ScopeReferenceSource | null;
+  /** The federated installed-catalog section, or null when it has no rows. */
+  readonly catalog?: ReactElement | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -73,7 +78,7 @@ export function WorkspaceAddDashboardButton({
           setNameOpen(true);
         }}
         reference={reference}
-        catalog={null}
+        catalog={catalog}
         onReferenceAdded={() => setAddOpen(false)}
         onCatalogAdded={() => {
           setAddOpen(false);
