@@ -135,6 +135,20 @@ describe("a body project is checked before the conversation freezes it", () => {
     });
   });
 
+  it("ACCEPTS a project of the caller's own organization for an administrator with no grant", async () => {
+    // Standing bypasses the grant half and only that half. The project is in
+    // the acting organization, so the conversation may be created in it.
+    const { handleSaveAssistantThread } = await import("@/lib/assistant-thread-http");
+    isPlatformAdmin.mockReturnValue(true);
+    resolveActorGrantsForUserInOrg.mockResolvedValue({ projectGrants: [], teamIds: [] });
+    readProjectById.mockResolvedValue({ id: "proj-A", organizationId: "org-A" });
+    const res = await handleSaveAssistantThread(
+      post({ id: "new-thread", projectId: "proj-A", messages: [] }),
+    );
+    expect(res.status).toBe(200);
+    expect(upsertChatThreadInDatabase).toHaveBeenCalledTimes(1);
+  });
+
   it("asks nothing about a project when the body names none", async () => {
     const { handleSaveAssistantThread } = await import("@/lib/assistant-thread-http");
     const res = await handleSaveAssistantThread(post({ id: "new-thread", messages: [] }));
@@ -149,6 +163,16 @@ describe("the save carries the creator's teams into the freeze", () => {
     const { handleSaveAssistantThread } = await import("@/lib/assistant-thread-http");
     await handleSaveAssistantThread(post({ id: "new-thread", messages: [] }));
     expect(resolveActorGrantsForUserInOrg).toHaveBeenCalledWith("u1", "org-A");
+    expect(upsertChatThreadInDatabase.mock.calls[0][1]).toMatchObject({
+      creatorTeamIds: ["team-A"],
+    });
+  });
+
+  it("takes the teams from the membership read, never from the body", async () => {
+    const { handleSaveAssistantThread } = await import("@/lib/assistant-thread-http");
+    await handleSaveAssistantThread(
+      post({ id: "new-thread", messages: [], creatorTeamIds: ["team-Z"], teamIds: ["team-Z"] }),
+    );
     expect(upsertChatThreadInDatabase.mock.calls[0][1]).toMatchObject({
       creatorTeamIds: ["team-A"],
     });
