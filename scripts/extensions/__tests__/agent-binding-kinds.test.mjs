@@ -171,6 +171,94 @@ describe("mergeFieldRendererBindings (cross-declaration rules)", () => {
       "@cinatra-ai/z-agent:thing",
     ]);
   });
+
+  it("co-declared params merge as a union", () => {
+    const first = {
+      ...VALID,
+      kind: "list-picker",
+      priority: 90,
+      params: { selection: "multiple", minSelected: 1 },
+      declaredBy: "@cinatra-ai/a-agent",
+    };
+    const second = {
+      ...VALID,
+      kind: "list-picker",
+      priority: 90,
+      params: { selection: "multiple", minSelected: 1, question: "Q", emptyState: "E" },
+      declaredBy: "@cinatra-ai/b-agent",
+    };
+    const firstParamsBefore = structuredClone(first.params);
+    const secondParamsBefore = structuredClone(second.params);
+    const { merged, errors } = mergeFieldRendererBindings([first, second]);
+    expect(errors).toEqual([]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].params).toEqual({
+      selection: "multiple",
+      minSelected: 1,
+      question: "Q",
+      emptyState: "E",
+    });
+    expect(Object.keys(merged[0].params)).toEqual([
+      "selection",
+      "minSelected",
+      "question",
+      "emptyState",
+    ]);
+    expect(merged[0].declaredBy).toBe("@cinatra-ai/a-agent");
+    expect(merged[0].kind).toBe("list-picker");
+    expect(merged[0].priority).toBe(90);
+    // no input entry is mutated
+    expect(first.params).toEqual(firstParamsBefore);
+    expect(Object.keys(first.params)).toEqual(Object.keys(firstParamsBefore));
+    expect(second.params).toEqual(secondParamsBefore);
+  });
+
+  it("a params key with different values stays an error naming the key", () => {
+    const first = {
+      ...VALID,
+      kind: "list-picker",
+      priority: 90,
+      params: { selection: "multiple", minSelected: 1 },
+      declaredBy: "@cinatra-ai/a-agent",
+    };
+    const second = {
+      ...VALID,
+      kind: "list-picker",
+      priority: 90,
+      params: { selection: "multiple", minSelected: 2 },
+      declaredBy: "@cinatra-ai/b-agent",
+    };
+    const { merged, errors } = mergeFieldRendererBindings([first, second]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/conflicting fieldRenderers declarations for/);
+    expect(errors[0]).toContain("@cinatra-ai/a-agent");
+    expect(errors[0]).toContain("@cinatra-ai/b-agent");
+    expect(errors[0]).toContain("minSelected");
+    expect(merged).toHaveLength(1);
+    expect(merged[0].params).toEqual({ selection: "multiple", minSelected: 1 });
+  });
+
+  it("every other field stays deep-equal or error", () => {
+    const first = {
+      ...VALID,
+      kind: "list-picker",
+      priority: 90,
+      params: { selection: "multiple", minSelected: 1 },
+      declaredBy: "@cinatra-ai/a-agent",
+    };
+    const second = {
+      ...VALID,
+      kind: "list-picker",
+      priority: 50,
+      params: { selection: "multiple", minSelected: 1, question: "Q" },
+      declaredBy: "@cinatra-ai/b-agent",
+    };
+    const { merged, errors } = mergeFieldRendererBindings([first, second]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("@cinatra-ai/a-agent");
+    expect(errors[0]).toContain("@cinatra-ai/b-agent");
+    expect(merged).toEqual([first]);
+  });
 });
 
 describe("mergeRoleDeclarations", () => {
