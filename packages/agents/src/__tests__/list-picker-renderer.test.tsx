@@ -75,7 +75,7 @@ function chosen(name: string): string | null {
   );
 }
 
-const PARKED_AT = "/workspace/agents/cinatra-ai/outreach-agent/run-1";
+const PARKED_AT = "/workspace/agents/acme-example/fake-agent/run-1";
 let originalHref = "";
 
 beforeEach(() => {

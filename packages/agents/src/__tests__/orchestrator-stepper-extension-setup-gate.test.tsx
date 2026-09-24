@@ -26,6 +26,8 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -144,7 +146,7 @@ function FakeExtensionTextRenderer(props: Record<string, unknown>) {
   const value = typeof props.value === "string" ? (props.value as string) : "";
   const onChange = props.onChange as (next: unknown) => void;
   return (
-    <textarea
+    <Textarea
       data-testid="fake-extension-field"
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -183,15 +185,15 @@ function FakeFlushOnlyRenderer(props: Record<string, unknown>) {
   }, [registerFlush]);
   return (
     <div>
-      <textarea
+      <Textarea
         data-testid="fake-flush-field"
         value={local}
         onChange={(e) => setLocal(e.target.value)}
       />
       {props.hideSubmit === true ? null : (
-        <button type="button" onClick={() => onChange(localRef.current)}>
+        <Button type="button" onClick={() => onChange(localRef.current)}>
           Own Continue
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -608,5 +610,45 @@ describe("a required field left empty shows an error on Continue; an optional on
     expect(payload.callToAction).toBe("Book a meeting");
     expect(errorLineUnder("callToAction")).toBe(false);
     expect(errorLineUnder("senderName")).toBe(false);
+  });
+
+  it("refuses a required field whose declared default is empty, and sends nothing (D1)", async () => {
+    const { toast } = await import("@/lib/cinatra-toast");
+    interruptContext = {
+      schema: { type: "string", default: "", "x-renderer": FAKE_BINDING_ID },
+      xRenderer: FAKE_BINDING_ID,
+      values: {},
+      reviewTaskId: "setup-run-3358",
+      fieldName: "callToAction",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    await waitFor(() => expect(field()).not.toBeNull());
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    fireEvent.click(continueButton()!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(approveReviewTask).not.toHaveBeenCalled();
+    expect(field()).not.toBeNull();
+  });
+
+  it("refuses a required field whose declared default is whitespace only, and sends nothing (D2)", async () => {
+    const { toast } = await import("@/lib/cinatra-toast");
+    interruptContext = {
+      schema: { type: "string", default: "   ", "x-renderer": FAKE_BINDING_ID },
+      xRenderer: FAKE_BINDING_ID,
+      values: {},
+      reviewTaskId: "setup-run-3358",
+      fieldName: "callToAction",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    await waitFor(() => expect(field()).not.toBeNull());
+    await waitFor(() => expect(continueButton()).not.toBeNull());
+    fireEvent.click(continueButton()!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(approveReviewTask).not.toHaveBeenCalled();
+    expect(field()).not.toBeNull();
   });
 });

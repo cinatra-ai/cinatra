@@ -341,7 +341,9 @@ export const SETUP_GATE_NO_ANSWER_STAGED =
  * still answers is one whose own schema declares a `default` — the server
  * settles `{ [fieldName]: null }` with that default (cinatra#3452,
  * review-task-actions.ts). Without a field name the empty answer has no name
- * to travel under, so it reads as required.
+ * to travel under, so it reads as required. A declared default that is itself
+ * blank by the reading above ("", whitespace only, null, [] or {}) supplies no
+ * answer either, so that field reads as required too.
  */
 export function setupPressAnswerReading(args: {
   schema: unknown;
@@ -351,6 +353,12 @@ export function setupPressAnswerReading(args: {
   const { schema, fieldName, staged } = args;
   const isPlainObject = (v: unknown): v is Record<string, unknown> =>
     v !== null && typeof v === "object" && !Array.isArray(v);
+  const isBlank = (value: unknown): boolean =>
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.trim() === "") ||
+    (Array.isArray(value) && value.length === 0) ||
+    (isPlainObject(value) && Object.keys(value).length === 0);
   let blank = true;
   if (staged !== null) {
     const value =
@@ -359,19 +367,14 @@ export function setupPressAnswerReading(args: {
           ? staged.payload[staged.payloadFieldName]
           : undefined
         : staged.payload;
-    blank =
-      value === undefined ||
-      value === null ||
-      (typeof value === "string" && value.trim() === "") ||
-      (Array.isArray(value) && value.length === 0) ||
-      (isPlainObject(value) && Object.keys(value).length === 0);
+    blank = isBlank(value);
   }
   const optional =
     fieldName !== undefined &&
     fieldName.trim() !== "" &&
     isPlainObject(schema) &&
     Object.prototype.hasOwnProperty.call(schema, "default") &&
-    schema.default !== undefined;
+    !isBlank(schema.default);
   return { blank, optional };
 }
 

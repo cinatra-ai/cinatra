@@ -308,4 +308,20 @@ describe("AgenticRunPanel — a required setup field left empty shows an error o
       "callToAction",
     );
   });
+
+  it("a required field whose declared default is empty, left empty: the error, and nothing sent (D3)", async () => {
+    await setGate(CONTROL_LESS_RENDERER_ID, "callToAction", {
+      type: "string",
+      default: "",
+    });
+    await renderPanel();
+
+    await waitFor(() => expect(box()).not.toBeNull());
+    await waitFor(() => expect(productContinue()).not.toBeNull());
+    fireEvent.click(productContinue()!);
+
+    await waitFor(() => expect(toastMock.toast.error).toHaveBeenCalledWith(NO_ANSWER));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(box()).not.toBeNull();
+  });
 });
