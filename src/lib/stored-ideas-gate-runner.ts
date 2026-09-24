@@ -129,6 +129,10 @@ export async function reserveStoredIdea(input: {
   const written = await input.ports.insertRelationRow({
     org_id: input.orgId,
     run_id: input.runId,
+    // The organisation scope, because the offer and the one-live-row rule are both
+    // organisation-wide.
+    scope_kind: "organization",
+    scope_id: input.orgId,
     idea_artifact_id: input.idea.artifactId,
     idea_revision_id: input.idea.representationRevisionId,
     state: "reserved",

@@ -427,7 +427,18 @@ async function runStoredIdeasGate(
     },
     async insertRelationRow(row) {
       try {
-        await data({ operation: "insert", values: row });
+        // The organisation column is the host's to inject, so it comes off a row naming this
+        // run's own organisation, and a row naming any other one is never sent.
+        const orgColumn = parseDeclaredTables(context.cinatra.declaredTables, context.packageName).find(
+          (table) => table.name === IDEA_RELATION_TABLE_DECLARED,
+        )?.organizationColumn;
+        let values = row;
+        if (orgColumn !== undefined && orgColumn in row) {
+          const { [orgColumn]: rowOrg, ...rest } = row;
+          if (rowOrg !== input.run.orgId) return { ok: false, conflict: false };
+          values = rest;
+        }
+        await data({ operation: "insert", values });
         return { ok: true };
       } catch (e) {
         // The table's one-live-row-per-idea index is the race's only arbiter, so
