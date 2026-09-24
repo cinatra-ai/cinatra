@@ -420,6 +420,16 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
       // A CREATE has no supersede road: its id was answered free before the row
       // was written, and an identity that landed since belongs to the request
       // that won it. Only an update retries.
+      //
+      // THE PRICE, stated plainly and pinned by its own case. A save of the
+      // PREVIOUS row at this id, paused on the doorstep of its insert, can
+      // write its identity after the create's question was answered and after
+      // the create's row landed. The create may not take that identity away,
+      // because it names another person, so it reports success with that
+      // person's panel on its row. The end state converges, because the paused
+      // save takes its own insert back once it sees its row is gone; the
+      // INSTANT of the report is what needs one coordination point across the
+      // two stores to repair.
       if (guard === undefined) break;
     }
     if (!settled && (blocked || refusal !== null)) {

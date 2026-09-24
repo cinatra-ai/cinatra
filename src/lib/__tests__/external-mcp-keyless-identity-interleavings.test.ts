@@ -1316,4 +1316,72 @@ describe("the two orderings the tenth round found (cinatra#3485)", () => {
     expect(standingIdentityOwner()).toBeNull();
     expect(invariantBreaches()).toEqual([]);
   });
+
+  it("a CREATE at an id a paused save is about to write reports success over that identity", async () => {
+    // THE RESIDUE OF THE CREATE ROAD, pinned rather than hidden. A create asks
+    // whether the identifier is free before it writes, and that answer can go
+    // stale: a save of the OLD row at that identifier, paused on the doorstep
+    // of its insert, writes its identity after the create's question was
+    // answered and after the create's own row landed. The create may not take
+    // that identity away, because it names another person and their own delete
+    // is what repairs it, so it reports success with that person's panel on its
+    // row. The end state converges: the paused save takes its own insert back
+    // once it sees its row is gone. What the two stores cannot give without one
+    // coordination point is the state at the INSTANT the create reports.
+    placeRow({ id: "srv", scope: "user", userId: "person-a", derivedOwner: "person-a" });
+
+    // A saves the standing row and stops on the doorstep of its insert.
+    pauseAt("a", "identity:register");
+    start("a", () =>
+      saveRoad({
+        serverId: "srv",
+        scope: "user",
+        rowUserId: "person-a",
+        ownerUserId: "person-a",
+        organizationId: null,
+        actorIsAdmin: false,
+      }),
+    );
+    await reaches("a", "identity:register");
+
+    // The row is deleted, and there is no identity yet for the delete to find.
+    start("d", () => deleteRoad({ serverId: "srv", actorUserId: "person-a", actorIsAdmin: false }));
+    await completes("d");
+    expect(rows.has("srv")).toBe(false);
+
+    // Another person registers a NEW server at the same identifier. The
+    // identifier reads free, their row lands, and they stop before their insert.
+    pauseAt("b", "identity:register");
+    start("b", () =>
+      saveRoad({
+        serverId: "srv",
+        scope: "user",
+        rowUserId: "person-b",
+        ownerUserId: "person-b",
+        organizationId: null,
+        actorIsAdmin: false,
+        create: true,
+      }),
+    );
+    await reaches("b", "identity:register");
+
+    // A inserts its own identity now, on an identifier whose row is B's.
+    pauseAt("a", "identity:seed");
+    await step("a");
+    await reaches("a", "identity:seed");
+
+    // B meets that identity and reports success anyway.
+    await finish("b");
+    expect(standingIdentityOwner()).toBe("person-a");
+    expect(rows.get("srv")?.derivedOwner).toBe("person-b");
+
+    // A resumes and takes back what it installed, so the end state converges.
+    await finish("a");
+    expect(standingIdentityOwner()).toBeNull();
+    expect(ownershipBreach("srv")).toBeNull();
+    expect(clauseBBreaches([])).toEqual([]);
+    expect(clauseCBreaches([])).toEqual([]);
+    // The one moment the invariant does not hold, named.
+    expect(successReports.filter((r) => r.breach !== null).map((r) => r.road)).toEqual(["b"]);
+  });
 });
