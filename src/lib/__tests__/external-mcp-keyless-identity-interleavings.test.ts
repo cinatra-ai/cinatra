@@ -1234,4 +1234,86 @@ describe("the two orderings the tenth round found (cinatra#3485)", () => {
     expect(standingIdentityOwner()).toBe("person-a");
     expect(invariantBreaches()).toEqual([]);
   });
+
+  it("a PERSONAL row keeps the identity a save inserted once the standing save adopted it", async () => {
+    // The same loss as finding 1, reached the other way round: this save's
+    // identity landed while a LATER write already held the row, so the
+    // take-back's first moment says yes. The save that holds the row then
+    // CONFIRMS that identity and reports success on it. On a personal row the
+    // answer is readable: every save of it derives the identity from the row's
+    // own owner, so an identity naming that owner is the right one for whoever
+    // holds the row, and there is nothing to take back.
+    placeRow({ id: "srv", scope: "user", userId: "person-a", derivedOwner: "person-a" });
+
+    const personalSave = (road: string): void => {
+      start(road, () =>
+        saveRoad({
+          serverId: "srv",
+          scope: "user",
+          rowUserId: "person-a",
+          ownerUserId: "person-a",
+          organizationId: null,
+          actorIsAdmin: false,
+        }),
+      );
+    };
+
+    // A writes the row and stops on the doorstep of its insert.
+    pauseAt("a", "identity:register");
+    personalSave("a");
+    await reaches("a", "identity:register");
+    // B writes a LATER configuration of the same row and stops there too.
+    pauseAt("b", "identity:register");
+    personalSave("b");
+    await reaches("b", "identity:register");
+
+    // A inserts while B's write is the one that stands, then pauses in the seed.
+    pauseAt("a", "identity:seed");
+    await step("a");
+    await reaches("a", "identity:seed");
+    const inserted = liveKeylessIdentity("srv");
+    expect(inserted).not.toBeNull();
+
+    // B confirms that identity and reports success on it.
+    await finish("b");
+    expect(liveKeylessIdentity("srv")?.id).toBe(inserted?.id);
+
+    await finish("a");
+
+    expect(identities.get(inserted?.id ?? "")?.deletedAt).toBeNull();
+    expect(standingIdentityOwner()).toBe("person-a");
+    expect(invariantBreaches()).toEqual([]);
+  });
+
+  it("a SHARED row loses that identity instead, which the row cannot prevent", async () => {
+    // THE RESIDUE of the case above, pinned rather than hidden. A shared row
+    // records no owner at all, and its identity names the administrator whose
+    // save installed it, so a save that lost the row cannot tell one who
+    // ADOPTED its identity from one who gave up on registering its own. It
+    // takes its own insert back, and the standing save is left with no panel
+    // until its next save. Closing this needs the row to carry the person its
+    // identity names, which is a change to the schema.
+    placeRow({ id: "srv", scope: "global", userId: null, derivedOwner: "admin-a" });
+
+    pauseAt("a", "identity:register");
+    sharedSave("a", "admin-a");
+    await reaches("a", "identity:register");
+    pauseAt("b", "identity:register");
+    sharedSave("b", "admin-a");
+    await reaches("b", "identity:register");
+
+    pauseAt("a", "identity:seed");
+    await step("a");
+    await reaches("a", "identity:seed");
+    const inserted = liveKeylessIdentity("srv");
+    await finish("b");
+    expect(liveKeylessIdentity("srv")?.id).toBe(inserted?.id);
+    await finish("a");
+
+    // The panel B reported success on is gone, and the four clauses do not see
+    // it: an absent identity is the fail-closed direction they allow.
+    expect(identities.get(inserted?.id ?? "")?.deletedAt).not.toBeNull();
+    expect(standingIdentityOwner()).toBeNull();
+    expect(invariantBreaches()).toEqual([]);
+  });
 });

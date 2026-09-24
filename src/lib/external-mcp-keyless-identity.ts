@@ -128,13 +128,18 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
     // panel is missing rather than owned by the wrong person, and the next
     // save of that row restores it.
     type RowStamps = { createdAt?: unknown; updatedAt?: unknown };
-    const carriesThisSavesWrite = (candidate: RowStamps | null): boolean =>
+    /** The same ROW this save wrote, however many times it has been saved since. */
+    const carriesThisSavesRow = (candidate: RowStamps | null): boolean =>
       candidate !== null &&
       written !== null &&
       written.createdAt !== null &&
+      normalizeExternalMcpRowStamp(candidate.createdAt) === written.createdAt;
+    /** That row, and untouched since this save wrote it. */
+    const carriesThisSavesWrite = (candidate: RowStamps | null): boolean =>
+      carriesThisSavesRow(candidate) &&
+      written !== null &&
       written.updatedAt !== null &&
-      normalizeExternalMcpRowStamp(candidate.createdAt) === written.createdAt &&
-      normalizeExternalMcpRowStamp(candidate.updatedAt) === written.updatedAt;
+      normalizeExternalMcpRowStamp(candidate?.updatedAt) === written.updatedAt;
     /** Asked at the write, against the row that stands at this very moment. */
     const thisSavesWriteStillStands = (): boolean =>
       carriesThisSavesWrite(getExternalMcpServerByIdFresh(serverId));
@@ -487,17 +492,53 @@ export async function reconcileKeylessConnectionIdentityAfterSave(input: {
     // on it predates this one, and taking it away would strand that policy on a
     // retired row while the next save seeded a fresh one at the scope's
     // default. That is the ninth round's first finding.
+    //
+    // AND NOTHING TO TAKE BACK AT ALL when THE SAME ROW, saved again since,
+    // would derive THIS VERY IDENTITY for itself (cinatra#3485 fix leg 6).
+    // Every save of a PERSONAL row derives the identity from the row's own
+    // owner, so an identity naming that owner is the right identity for
+    // whoever holds the row, and the save holding it has either confirmed this
+    // one already or is about to. Taking it back there would delete a panel
+    // the standing save reported success on, with the sharing policy it seeded
+    // hanging on it.
+    //
+    // THE SAME ROW, by its creation instant, and nothing weaker. A row
+    // REGISTERED AGAIN at this id is a different server, even under the same
+    // owner: the identity would carry the DELETED server's sharing policy on
+    // to it, which its owner never chose for it. That take-back stands, and
+    // its price is pinned by its own test: the panel is missing until the next
+    // save of the new row draws it again.
+    //
+    // A SHARED row cannot be read this way, and the residue is stated rather
+    // than hidden: its identity names the administrator whose save installed
+    // it, which the row itself does not record, so a save that lost a shared
+    // row cannot tell an administrator who adopted its identity from one who
+    // gave up on registering. Closing that needs the row to carry the person
+    // its identity names, which is a change to the schema and is not made here.
+    const standingRowWouldDeriveThisIdentity = (): boolean => {
+      const standing = getExternalMcpServerByIdFresh(serverId);
+      return (
+        standing !== null &&
+        carriesThisSavesRow(standing) &&
+        standing.scope === "user" &&
+        standing.userId !== null &&
+        standing.userId === identity.ownerUserId &&
+        (standing.nangoConnectionId ?? null) === null
+      );
+    };
     if (insertedIdentityId !== null && identityLandedOnALaterWrite) {
       try {
-        // The question is asked ONE LAST TIME at the write, because this save's
-        // own write can stand again by then: a row that came back is a row
-        // whose panel this identity is the right one to draw. The retire
-        // addresses the id the registration itself reported, so it takes away
-        // exactly the row this call inserted or nothing at all, and the store's
-        // soft delete passes over a row that is already retired.
+        // Both questions are asked ONE LAST TIME at the write, because this
+        // save's own write can stand again by then, and because the row that
+        // stands can have become one this identity is exactly right for. The
+        // retire addresses the id the registration itself reported, so it takes
+        // away exactly the row this call inserted or nothing at all, and the
+        // store's soft delete passes over a row that is already retired.
         await retireExternalMcpKeylessConnectionIdentityRow(
           insertedIdentityId,
-          () => !isThisSavesOwnWrite(getExternalMcpServerByIdFresh(serverId)),
+          () =>
+            !isThisSavesOwnWrite(getExternalMcpServerByIdFresh(serverId)) &&
+            !standingRowWouldDeriveThisIdentity(),
         );
       } catch (err) {
         console.error(`${LOG} keyless connection identity take-back failed`, message(err));
