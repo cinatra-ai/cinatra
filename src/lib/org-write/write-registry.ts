@@ -1243,6 +1243,27 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     },
   },
   {
+    // cinatra#2815 S3 (epic #2812): the SET-ONCE assignment-scope freeze. A
+    // conversation's applicable scopes are decided at creation and never
+    // updated; this writer exists because a second creator (the legacy chat
+    // mirror) makes the row without them, so a first turn records what was
+    // missed. The statement admits a NULL column only, so it can never
+    // re-point a live conversation. Same family/axis as its siblings: same
+    // table, same nullable org axis, same 1939 exemption.
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "freezeAssistantThreadAssignmentScopeIfAbsent",
+    capability: "content.write",
+    orgIdExtractor: "caller-supplied org, frozen into the payload (set-once, NULL-only predicate)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
     module: "src/lib/assistant-thread-store.ts",
     exportName: "touchAssistantThread",
     capability: "content.write",
