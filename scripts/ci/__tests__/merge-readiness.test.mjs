@@ -768,3 +768,207 @@ describe("coordinated immutable queue engine pins", () => {
     expect(workflow).toContain("timeout-minutes: 115");
   });
 });
+
+describe("the expected set follows the pull request's base branch (#3653)", () => {
+  // The heavy workflows trigger only for pull requests into the default
+  // branch. A stacked pull request into a feature branch runs the light gates
+  // alone, so only those can be expected on it.
+  const HEAVY = ".github/workflows/build-image.yml";
+  const CRM = ".github/workflows/crm-migration-gate.yml";
+  const STACKED = "feat/stacked-base";
+  const everyBase = () => ({ pull_request: { branches: null, "branches-ignore": null } });
+  const stackedInventory = () => {
+    const inv = inventory();
+    inv.expected.push(
+      { context: "image", app: "github-actions", workflow: HEAVY, paths: ["**"] },
+      { context: "CRM migration gates", app: "github-actions", workflow: CRM, paths: ["**"] },
+    );
+    inv.triggers = {
+      ".github/workflows/design-visual-verify.yml": everyBase(),
+      ".github/workflows/gates.yml": everyBase(),
+      ".github/workflows/source-leak-gate.yml": everyBase(),
+      [HEAVY]: { pull_request: { branches: ["main"], "branches-ignore": null } },
+      [CRM]: { pull_request: { branches: ["main"], "branches-ignore": null } },
+    };
+    return inv;
+  };
+  const heavyChecks = () => [ok("image", "build-image.yml"), ok("CRM migration gates", "crm-migration-gate.yml")];
+  const evalBase = (baseRef, checks, inv = stackedInventory()) =>
+    evaluateReadiness({ inventory: inv, checks, changedPaths: ["src/a.ts"], eventName: "pull_request", baseRef });
+
+  it("expects only the workflows whose pull_request trigger includes a feature-branch base", () => {
+    const r = evalBase(STACKED, greenChecks());
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+    expect(r.waitedOn).toEqual(["build", "source-leak-gate / source-leak-gate", "design-visual-verify"]);
+    expect(r.notExpected).toEqual([
+      `not expected: ${HEAVY} (trigger excludes base '${STACKED}')`,
+      `not expected: ${CRM} (trigger excludes base '${STACKED}')`,
+    ]);
+  });
+
+  it("keeps the full set for a pull request into the default branch", () => {
+    const light = evalBase("main", greenChecks());
+    expect(light.verdict).toBe("FAIL");
+    expect(light.failures).toEqual([
+      `missing: no check run named 'image' reported on the candidate (expected from ${HEAVY})`,
+      `missing: no check run named 'CRM migration gates' reported on the candidate (expected from ${CRM})`,
+    ]);
+    const full = evalBase("main", [...greenChecks(), ...heavyChecks()]);
+    expect(full.verdict).toBe("PASS");
+    expect(full.waitedOn).toHaveLength(5);
+    expect(full.notExpected).toEqual([]);
+  });
+
+  it("still judges every gate that runs for a feature-branch base", () => {
+    const red = greenChecks();
+    red[0] = { ...red[0], conclusion: "failure" };
+    expect(evalBase(STACKED, red).failures).toEqual(["failed: 'build'"]);
+    expect(evalBase(STACKED, greenChecks().slice(1)).failures.join("\n")).toMatch(/^missing: no check run named 'build'/m);
+  });
+
+  it("excludes a workflow whose branches-ignore names the base, and prints the reason", () => {
+    const inv = inventory();
+    inv.triggers = {
+      ".github/workflows/source-leak-gate.yml": { pull_request: { branches: null, "branches-ignore": ["release/**"] } },
+    };
+    const light = greenChecks().filter((c) => c.name !== "source-leak-gate / source-leak-gate");
+    const r = evalBase("release/2026-09", light, inv);
+    expect(r.verdict).toBe("PASS");
+    expect(r.notExpected).toEqual([
+      "not expected: .github/workflows/source-leak-gate.yml (trigger excludes base 'release/2026-09')",
+    ]);
+    const summary = readiness.renderSummary({ candidateSha: HEAD, lookupSha: HEAD, eventName: "pull_request", result: r });
+    expect(summary.split("\n")).toContain(
+      "  not expected: .github/workflows/source-leak-gate.yml (trigger excludes base 'release/2026-09')",
+    );
+    // A base the ignore list does not name keeps the workflow expected, and a
+    // workflow with no recorded trigger is expected for every base, as before.
+    const other = evalBase("main", light, inv);
+    expect(other.failures).toEqual([
+      "missing: no check run named 'source-leak-gate / source-leak-gate' reported on the candidate (expected from .github/workflows/source-leak-gate.yml)",
+    ]);
+    expect(r.waitedOn).toEqual(["build", "design-visual-verify"]);
+  });
+
+  it("prints the base, the derived set and every excluded workflow in the job summary", () => {
+    const summary = readiness.renderSummary({
+      candidateSha: HEAD,
+      lookupSha: HEAD,
+      eventName: "pull_request",
+      result: evalBase(STACKED, greenChecks()),
+    });
+    const lines = summary.split("\n");
+    expect(lines).toContain(`  base: ${STACKED}`);
+    expect(lines).toContain(`  expected set for base '${STACKED}': 3 context(s) from 3 workflow(s)`);
+    expect(lines).toContain("    expected: build (from .github/workflows/gates.yml)");
+    expect(lines).toContain(`  not expected: ${HEAVY} (trigger excludes base '${STACKED}')`);
+    expect(lines).toContain(`  not expected: ${CRM} (trigger excludes base '${STACKED}')`);
+    expect(summary).not.toContain("expected: image");
+  });
+
+  it("settles and budgets the wait on the workflows that run for the base", () => {
+    const inv = stackedInventory();
+    inv.expected = inv.expected.map((e) => ({ ...e, timeoutMinutes: e.workflow === HEAVY ? 90 : 20 }));
+    const paths = ["src/a.ts"];
+    expect(isSettled({ inventory: inv, checks: greenChecks(), changedPaths: paths, baseRef: STACKED })).toBe(true);
+    expect(isSettled({ inventory: inv, checks: greenChecks(), changedPaths: paths, baseRef: "main" })).toBe(false);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: paths, baseRef: STACKED })).toBe(20 + WAIT_MARGIN_MINUTES);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: paths, baseRef: "main" })).toBe(90 + WAIT_MARGIN_MINUTES);
+  });
+
+  it("reads the base from the pull_request payload and fails closed without it", () => {
+    const payload = { pull_request: { number: 7, base: { ref: STACKED } } };
+    expect(readiness.resolveBaseRef({ eventName: "pull_request", payload })).toBe(STACKED);
+    expect(() => readiness.resolveBaseRef({ eventName: "pull_request", payload: {} })).toThrow(
+      /without the pull request's base branch/,
+    );
+    expect(() =>
+      readiness.resolveBaseRef({ eventName: "pull_request", payload: { pull_request: { base: { ref: "" } } } }),
+    ).toThrow(/failing closed/);
+  });
+
+  it("keeps the full set on the queue event, which reads no pull request base", () => {
+    const payload = { merge_group: { head_sha: "b".repeat(40), base_ref: "refs/heads/main" } };
+    expect(readiness.resolveBaseRef({ eventName: "merge_group", payload })).toBeNull();
+    const r = evaluateReadiness({
+      inventory: stackedInventory(),
+      checks: greenChecks(),
+      changedPaths: ["src/a.ts"],
+      eventName: "merge_group",
+      queue: queuePair(),
+      baseRef: null,
+    });
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.filter((f) => f.startsWith("missing:"))).toHaveLength(2);
+    expect(r.notExpected).toEqual([]);
+  });
+});
+
+describe("branch filters match the base as GitHub matches them (#3653)", () => {
+  const match = (patterns, branch) => readiness.matchesBranchFilter(patterns, branch);
+
+  it("keeps '*' inside one segment and lets '**' cross '/'", () => {
+    expect(match(["feature/*"], "feature/my-branch")).toBe(true);
+    expect(match(["feature/*"], "feature/beta/my-branch")).toBe(false);
+    expect(match(["feature/**"], "feature/beta/my-branch")).toBe(true);
+    expect(match(["*"], "main")).toBe(true);
+    expect(match(["*"], "releases/10")).toBe(false);
+    expect(match(["**"], "all/the/branches")).toBe(true);
+    expect(match(["**/hotfix"], "hotfix")).toBe(true);
+    expect(match(["**/hotfix"], "team/a/hotfix")).toBe(true);
+    expect(match(["main"], "main")).toBe(true);
+    expect(match(["main"], "main-next")).toBe(false);
+    expect(match(["main"], "feat/main")).toBe(false);
+  });
+
+  it("lets the last matching pattern decide: '!' excludes, a later positive match includes again", () => {
+    const filter = ["releases/**", "!releases/**-alpha"];
+    expect(match(filter, "releases/10")).toBe(true);
+    expect(match(filter, "releases/10-alpha")).toBe(false);
+    expect(match([...filter, "releases/beta-alpha"], "releases/beta-alpha")).toBe(true);
+    expect(match(["!main"], "main")).toBe(false);
+  });
+
+  it("reads '?', '+', a character class and '\\' as the filter syntax defines them", () => {
+    const stack = ["stack-[ab12].[0-9]+"];
+    expect(match(stack, "stack-a.10")).toBe(true);
+    expect(match(stack, "stack-2.7")).toBe(true);
+    expect(match(stack, "stack-c.7")).toBe(false);
+    expect(match(stack, "stack-a.")).toBe(false);
+    expect(match(stack, "stack-ax10")).toBe(false);
+    expect(match(["team-[a-c]"], "team-b")).toBe(true);
+    expect(match(["team-[a-c]"], "team-d")).toBe(false);
+    expect(match(["feat?"], "fea")).toBe(true);
+    expect(match(["feat?"], "feat")).toBe(true);
+    expect(match(["feat?"], "feats")).toBe(false);
+    expect(match(["hot\\*fix"], "hot*fix")).toBe(true);
+    expect(match(["hot\\*fix"], "hotxfix")).toBe(false);
+  });
+
+  it("accepts recorded triggers and rejects a malformed one instead of guessing", () => {
+    const withTriggers = (pull_request) => {
+      const inv = inventory();
+      inv.triggers = { ".github/workflows/gates.yml": { pull_request } };
+      return inv;
+    };
+    expect(validateInventory(withTriggers({ branches: ["main", "releases/**"], "branches-ignore": null })).ok).toBe(true);
+    expect(validateInventory(withTriggers({ branches: null, "branches-ignore": ["release/**"] })).ok).toBe(true);
+    expect(validateInventory(withTriggers(null)).ok).toBe(true);
+    for (const bad of [
+      { branches: "main", "branches-ignore": null },
+      { branches: [], "branches-ignore": null },
+      { branches: ["main", ""], "branches-ignore": null },
+      { branches: ["main"], "branches-ignore": ["release/**"] },
+      { branches: ["release-[x"], "branches-ignore": null },
+      { branches: ["release-[._]"], "branches-ignore": null },
+      { branches: ["trailing\\"], "branches-ignore": null },
+      "main",
+    ]) {
+      expect(validateInventory(withTriggers(bad)).problems.join("\n")).toMatch(/\.github\/workflows\/gates\.yml/);
+    }
+    const notAMap = inventory();
+    notAMap.triggers = [];
+    expect(validateInventory(notAMap).problems.join("\n")).toMatch(/'triggers'/);
+  });
+});

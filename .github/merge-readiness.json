@@ -5,7 +5,7 @@
   "regeneration": {
     "write": "node scripts/ci/merge-readiness-inventory.mjs --write",
     "check": "node scripts/ci/merge-readiness-inventory.mjs --check",
-    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
+    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows; 'triggers' records each workflow's pull_request branches / branches-ignore filters (null when none), against which the evaluator matches the pull request's base branch",
     "generator": "scripts/ci/merge-readiness-inventory.mjs"
   },
   "excluded": [
@@ -660,5 +660,123 @@
       "skippable": true,
       "timeoutMinutes": 25
     }
-  ]
+  ],
+  "triggers": {
+    ".github/workflows/actions-pinned-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/build-image.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/crm-migration-gate.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/dashboard-live-verify.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/design-visual-verify.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/e2e-app-suites.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/execution-plane-e2e.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/gates.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/gitignore-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/merge-readiness.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/secret-scan-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/secrets-required-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/skills-drift-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/source-leak-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/toast-banner-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/truthful-attribution-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/ui-design-system-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/works-after-proof.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    }
+  }
 }
