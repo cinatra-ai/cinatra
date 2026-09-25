@@ -963,9 +963,14 @@ for (const palette of PALETTES) {
       const orgSections = page.locator(
         '[data-slot="scope-assignment-section"][data-scope-key^="organization:"]',
       );
-      // Exactly one on a fresh instance, so the id below names the scope this
-      // reader actually belongs to rather than whichever section came first.
-      await expect(orgSections).toHaveCount(1, { timeout: 30_000 });
+      // At least one: the reader belongs to the organization the auth setup
+      // minted, and the same setup may add a second membership when the
+      // database already holds an organization with a usable GitHub
+      // connection. Any organization the reader belongs to is blind to an
+      // install anchored at the workspace under the scope reach rule, so the
+      // first section names a scope that serves the negative reading; the id
+      // is still read off the page, never guessed.
+      await expect(orgSections.first()).toBeVisible({ timeout: 30_000 });
       const orgKey = (await orgSections.first().getAttribute("data-scope-key")) ?? "";
       const orgId = encodeURIComponent(orgKey.slice("organization:".length));
       expect(orgId.length).toBeGreaterThan(0);
