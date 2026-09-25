@@ -7,6 +7,7 @@ import {
   appendAssistantTurn,
   bindThreadContainerIfUnbound,
   createAssistantThread,
+  freezeAssistantThreadAssignmentScopeIfAbsent,
   getAssistantThread,
   touchAssistantThread,
   updateAssistantTurn,
@@ -208,6 +209,19 @@ export async function streamAgUiChatTurn(params: {
    * the conversation.
    */
   producerAssistantUserId?: string | null;
+  /**
+   * The human whose act opens this conversation (cinatra#2815 S3, epic #2812).
+   *
+   * An `ActorContext` satisfies the shape. It is the source of the IMMUTABLE
+   * assignment scopes the thread freezes: the same derivation an agent run
+   * freezes at creation. Absent, the conversation carries no frozen scope and
+   * assigned-skill delivery resolves the sole legacy fallback.
+   */
+  scopeActor?: {
+    readonly principalType: string;
+    readonly principalId: string;
+    readonly teamIds?: readonly string[] | null;
+  } | null;
 }): Promise<Response> {
   const { request, threadId, mirrorOrgId, needsStructuredRow, userId, isAdmin, runProducer, container } =
     params;
@@ -236,6 +250,9 @@ export async function streamAgUiChatTurn(params: {
         orgId: mirrorOrgId,
         assistantPackage: container.assistantPackage,
         instanceId: container.instanceId,
+        // cinatra#2815 S3: the scopes this conversation is created under,
+        // frozen inside the same atomic insert as the row.
+        scopeActor: params.scopeActor ?? null,
       });
       createdHere = true;
     } catch {
@@ -273,6 +290,15 @@ export async function streamAgUiChatTurn(params: {
     // Nothing downstream reads the outcome; it is typed so the decision table is
     // testable and so a future caller cannot mistake a refusal for a bind.
     bindThreadContainerIfUnbound(threadId, container, { userId, orgId: mirrorOrgId });
+    // cinatra#2815 S3: a row created before this change still carries no
+    // scopes, and the seam records them from the ROW'S OWN creation-time
+    // columns. This turn's session is deliberately NOT passed: its participant
+    // may be an administrator continuing somebody else's conversation, or the
+    // owner working in a different organization, and either would write a
+    // provenance the conversation never had. A row the mirror creates from here
+    // on already froze its scopes in its own insert, so this call finds nothing
+    // to do for it.
+    freezeAssistantThreadAssignmentScopeIfAbsent(threadId);
   }
   const runId = randomUUID();
   const turn = appendAssistantTurn({
