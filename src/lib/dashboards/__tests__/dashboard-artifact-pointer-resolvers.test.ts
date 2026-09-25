@@ -109,6 +109,20 @@ describe("§VIII resolveDashboardArtifactPointer — authorization outcomes", ()
     expect(gate).not.toHaveBeenCalled();
   });
 
+  it("not-found: a WORKSPACE dashboard (org-NULL, no artifact twin) is never a pointer, and the gate is not consulted (cinatra#2811)", async () => {
+    readRow.mockResolvedValue(
+      dashboardRow({
+        organizationId: null,
+        ownerLevel: "user",
+        ownerId: "user-me",
+        entityType: "workspace",
+        entityId: "__workspace__",
+      }) as never,
+    );
+    await expect(resolveDashboardArtifactPointer("dash-1")).resolves.toEqual({ access: "not-found" });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
   it("not-found: a read-race (row deleted between reads) → gate dashboard_not_found → 404", async () => {
     readRow.mockResolvedValue(dashboardRow({}) as never);
     gate.mockImplementation(async () => {

@@ -63,6 +63,17 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   updateExternalMcpServerGuarded: (...a: unknown[]) => updateExternalMcpServerGuarded(...a),
   deleteExternalMcpServerGuarded: (...a: unknown[]) => deleteExternalMcpServerGuarded(...a),
   getExternalMcpServerByIdFresh: (...a: unknown[]) => getExternalMcpServerByIdFresh(...a),
+  // The identity leaves of the ONE lifecycle these actions travel
+  // (cinatra#3485). This file measures the AUTHORIZATION boundary, not the
+  // identity, so they are inert stand-ins: the identity road itself is proved
+  // in `external-mcp-connection-identity-action.test.ts` and, over the real
+  // seam, in `mcp-server-connection-workspace-share.test.ts`.
+  externalMcpKeylessConnectionId: (serverId: string) => `external-mcp-keyless-${serverId}`,
+  normalizeExternalMcpRowStamp: () => null,
+  readExternalMcpKeylessConnectionIdentity: async () => null,
+  registerExternalMcpKeylessConnectionIdentity: async () => {},
+  retireExternalMcpKeylessConnectionIdentityRow: async () => {},
+  revokeExternalMcpApiKeyConnection: async () => {},
 }));
 
 vi.mock("next/navigation", () => ({

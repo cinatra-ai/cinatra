@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { INVENTORY_PATH, validateInventory } from "../merge-readiness.mjs";
+import { INVENTORY_PATH, expectedForBase, validateInventory } from "../merge-readiness.mjs";
 import {
   SELF_CONTEXT,
   TRUSTED_APP,
@@ -145,10 +145,11 @@ const files = (keys) => keys.map((k) => ({ file: FILE_OF[k], text: WF[k] }));
 
 describe("workflow readers", () => {
   it("reads branches and paths off one event's config", () => {
-    expect(parseEventConfig(WF.pushOnly, "push")).toEqual({ present: true, branches: ["main"], paths: null });
+    expect(parseEventConfig(WF.pushOnly, "push")).toEqual({ present: true, branches: ["main"], branchesIgnore: null, paths: null });
     expect(parseEventConfig(WF.pathFiltered, "pull_request")).toEqual({
       present: true,
       branches: null,
+      branchesIgnore: null,
       paths: ["src/**", "packages/*/src/**"],
     });
     expect(parseEventConfig(WF.pushOnly, "pull_request").present).toBe(false);
@@ -211,6 +212,55 @@ describe("inventory derivation", () => {
   it("ignores a workflow that does not run on both candidate events", () => {
     expect(deriveInventory(files(["pushOnly"])).expected).toEqual([]);
     expect(deriveInventory(files(["prOnly"])).expected).toEqual([]);
+    expect(deriveInventory(files(["pushOnly", "prOnly"])).triggers).toEqual({});
+  });
+
+  it("records each workflow's pull_request branch filters for the evaluator's base check (#3653)", () => {
+    const mainOnly = `name: build-image
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+  merge_group:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+`;
+    const ignoring = `name: gates
+
+on:
+  pull_request:
+    branches-ignore:
+      - 'release/**'
+      - "hotfix/*" # never for hotfixes
+  merge_group:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+`;
+    expect(parseEventConfig(ignoring, "pull_request")).toEqual({
+      present: true,
+      branches: null,
+      branchesIgnore: ["release/**", "hotfix/*"],
+      paths: null,
+    });
+    const inv = deriveInventory([
+      { file: "build-image.yml", text: mainOnly },
+      { file: "gates.yml", text: ignoring },
+      ...files(["pathFiltered"]),
+    ]);
+    expect(inv.triggers).toEqual({
+      ".github/workflows/build-image.yml": { pull_request: { branches: ["main"], "branches-ignore": null } },
+      ".github/workflows/design-visual-verify.yml": { pull_request: { branches: null, "branches-ignore": null } },
+      ".github/workflows/gates.yml": { pull_request: { branches: null, "branches-ignore": ["release/**", "hotfix/*"] } },
+    });
+    expect(validateInventory(inv).ok).toBe(true);
+    expect(expectedForBase({ inventory: inv, baseRef: "release/2026-09" }).expected.map((e) => e.context)).toEqual([
+      "design-visual-verify",
+    ]);
   });
 
   it("never lists its own context and keeps the deadline under the queue timeout", () => {
@@ -233,5 +283,18 @@ describe("--check mode against the real repository", () => {
     expect(validateInventory(inv).ok).toBe(true);
     expect(inv.expected.map((e) => e.context)).not.toContain(SELF_CONTEXT);
     expect(inv.expected.length).toBeGreaterThan(0);
+  });
+
+  it("the committed inventory expects every workflow for the default branch, and a feature base drops the default-branch-only ones (#3653)", () => {
+    const inv = JSON.parse(fs.readFileSync(path.join(repoRoot, INVENTORY_PATH), "utf8"));
+    const main = expectedForBase({ inventory: inv, baseRef: "main" });
+    expect(main.notExpected).toEqual([]);
+    expect(main.expected).toHaveLength(inv.expected.length);
+    const stacked = expectedForBase({ inventory: inv, baseRef: "feat/stacked-base" });
+    for (const file of ["build-image.yml", "crm-migration-gate.yml", "e2e-app-suites.yml"]) {
+      expect(stacked.notExpected).toContain(`not expected: .github/workflows/${file} (trigger excludes base 'feat/stacked-base')`);
+    }
+    expect(stacked.expected.length).toBeGreaterThan(0);
+    expect(stacked.expected.length).toBeLessThan(main.expected.length);
   });
 });

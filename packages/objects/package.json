@@ -11,6 +11,7 @@
     "./module": "./src/integration/module.ts",
     "./namespace": "./src/namespace.ts",
     "./claims": "./src/claims.ts",
+    "./semantic-manifest": "./src/semantic-manifest.ts",
     "./connector-ref": "./src/connector-ref.ts",
     "./effective-identity": "./src/effective-identity.ts",
     "./presentation-identity": "./src/presentation-identity.ts",
