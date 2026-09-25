@@ -184,8 +184,8 @@ export type ScopeCatalogSource = {
  * is built during a SERVER render, so everything here crosses that boundary.
  */
 export type ScopeCatalogWords = {
-  /** The section's visible heading. Its aria-label is the drawn section name and
-   *  does not move, so a test finds the section by the name the drawing gives. */
+  /** The section's visible heading and its accessible name, so a test finds the
+   *  section by the name this surface draws. */
   readonly title: string;
   /**
    * The kind a row's package contributes, appended to the package name as the

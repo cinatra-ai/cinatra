@@ -129,7 +129,7 @@ export function ScopeCatalogSection({
 
   return (
     <section
-      aria-label="Add from the installed catalog"
+      aria-label={words ? words.title : "Add from the installed catalog"}
       data-slot="add-dashboard-catalog"
       className="flex flex-col gap-2.5"
     >

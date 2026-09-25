@@ -24,6 +24,7 @@ import type {
   CatalogAddResult,
   CatalogTemplateView,
   ScopeCatalogSource,
+  ScopeCatalogWords,
 } from "@/lib/dashboards/installed-catalog-contract";
 import { WORKSPACE_CATALOG_WORDS } from "@/lib/dashboards/installed-catalog-contract";
 
@@ -57,15 +58,17 @@ function mount({
   canAdd = true,
   onAdded = vi.fn(),
   src = source(),
+  words,
 }: {
   templates?: readonly CatalogTemplateView[];
   canAdd?: boolean;
   onAdded?: (d: typeof CREATED) => void;
   src?: ScopeCatalogSource;
+  words?: ScopeCatalogWords;
 } = {}) {
   return render(
     <CatalogAddOutcomeProvider canAdd={canAdd} onAdded={onAdded as never}>
-      <ScopeCatalogSection templates={templates} source={src} />
+      <ScopeCatalogSection templates={templates} source={src} words={words} />
     </CatalogAddOutcomeProvider>,
   );
 }
@@ -279,5 +282,26 @@ describe("<ScopeCatalogSection>: the words of the surface it renders on", () => 
     for (const b of screen.getAllByRole("button")) {
       expect(b.textContent).toBe("Add");
     }
+  });
+});
+
+describe("<ScopeCatalogSection> — the accessible name follows the surface's words", () => {
+  const WORDS: ScopeCatalogWords = {
+    title: "Catalog rows for this surface",
+    rowKind: "dashboard",
+    helper: "A copy homes here.",
+    helperWithoutAuthority: "Rows only; no control for you here.",
+  };
+
+  it("names the region by the supplied title, so one string carries the heading and the name", () => {
+    mount({ words: WORDS });
+    const section = screen.getByRole("region", { name: "Catalog rows for this surface" });
+    expect(within(section).getByText("Catalog rows for this surface")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Add from the installed catalog" })).toBeNull();
+  });
+
+  it("keeps the landed name when a caller hands no words", () => {
+    mount();
+    expect(screen.getByRole("region", { name: "Add from the installed catalog" })).toBeTruthy();
   });
 });
