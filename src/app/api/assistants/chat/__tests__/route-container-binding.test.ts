@@ -81,6 +81,10 @@ vi.mock("@/lib/assistant-thread-store", () => ({
   createAssistantThread: (...a: unknown[]) => createAssistantThread(...a),
   getAssistantThread: (id: string) => getAssistantThread(id),
   bindThreadContainerIfUnbound: (...a: unknown[]) => bindThreadContainerIfUnbound(...a),
+  // cinatra#2815 S3: the set-once scope freeze the harness runs beside the
+  // bind, for a row this request did not create. Inert here; this suite is
+  // about the container binding.
+  freezeAssistantThreadAssignmentScopeIfAbsent: () => false,
   appendAssistantTurn: (...a: unknown[]) => appendAssistantTurn(...a),
   updateAssistantTurn: (...a: unknown[]) => updateAssistantTurn(...a),
   touchAssistantThread: (id: string) => touchAssistantThread(id),

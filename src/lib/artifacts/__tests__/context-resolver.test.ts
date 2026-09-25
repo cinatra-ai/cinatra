@@ -10,6 +10,14 @@ const { runPgMock } = vi.hoisted(() => ({
 vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: runPgMock,
 }));
+// cinatra#3603: the admissible-type CLAIM read reaches the query layer through
+// the claim store, which takes `ensurePostgresSchema` from `postgres-schema-init`
+// rather than from `@/lib/database`. Substituting it here too keeps this suite's
+// stand-in for the synchronous query layer COMPLETE, so the calls it counts are
+// the statements it means and not a one-off schema-init DDL batch.
+vi.mock("@/lib/postgres-schema-init", () => ({
+  ensurePostgresSchema: () => {},
+}));
 vi.mock("@/lib/database", () => ({
   getPostgresConnectionString: () => "postgres://test",
   ensurePostgresSchema: () => {},
@@ -62,6 +70,34 @@ function stageRows(
   }>,
 ) {
   runPgMock.mockReturnValue([{ rows, rowCount: rows.length }]);
+}
+
+
+// cinatra#3603: `resolveContextSlot` now makes TWO synchronous query calls —
+// FIRST the organisation's artifact-type CLAIM read (the admissible-type source
+// the artifact WRITE side has always used, now shared by the read side), THEN
+// the context-candidate query. Every assertion below is aimed at the statement
+// it has always meant, selected by that statement's OWN text rather than by a
+// call index, so each stays exactly as strict as it was.
+function queryMatching(needle: string): { text: string; values: unknown[] } {
+  const calls = runPgMock.mock.calls as Array<
+    [{ queries: Array<{ text: string; values: unknown[] }> }]
+  >;
+  const hits = calls
+    .map((c) => c[0].queries[0])
+    .filter((q) => q.text.includes(needle));
+  expect(hits).toHaveLength(1);
+  return hits[0];
+}
+
+/** The context-candidate statement, selected by its own `visible_objects` CTE. */
+function contextQuery(): { text: string; values: unknown[] } {
+  return queryMatching("visible_objects AS");
+}
+
+/** The admissible-type CLAIM read, selected by its own org-scope-chain clause. */
+function claimQuery(): { text: string; values: unknown[] } {
+  return queryMatching("scope = 'platform' OR scope =");
 }
 
 describe("expandAcceptedViaSatisfies", () => {
@@ -165,7 +201,9 @@ describe("resolveContextSlot — boundary guards", () => {
       projectId: "proj-x",
       installedExtensions: [],
     });
-    expect(runPgMock).toHaveBeenCalledTimes(1);
+    // cinatra#3603: TWO calls now — the admissible-type claim read, then the
+    // candidate query. The candidate query itself still runs exactly once.
+    expect(runPgMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -179,7 +217,7 @@ describe("resolveContextSlot — dashboard-form exclusion (cinatra#1896, epic #1
       slot: SLOT_BASE,
       installedExtensions: [],
     });
-    const text = runPgMock.mock.calls[0][0].queries[0].text as string;
+    const text = contextQuery().text;
     // The exclusion is a NOT EXISTS over dashboard-form representations, applied
     // in the visible_objects CTE (before the assertion/representation joins), so a
     // dashboards-artifact twin never reaches the candidate set.
@@ -393,13 +431,12 @@ describe("resolveContextSlot — satisfies-graph expansion at SQL boundary", () 
         { extension: "@v/c", satisfies: [] },
       ],
     });
-    expect(runPgMock).toHaveBeenCalledTimes(1);
-    const call = runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string; values: unknown[] }>;
-    };
+    // cinatra#3603: TWO calls now — the admissible-type claim read, then the
+    // candidate query. The candidate query itself still runs exactly once.
+    expect(runPgMock).toHaveBeenCalledTimes(2);
     // The accepted-extensions param is somewhere in the values array.
     // We assert it's the expanded set (a + b), not just (a).
-    const acceptedParam = call.queries[0].values.find(
+    const acceptedParam = contextQuery().values.find(
       (v) => Array.isArray(v) && (v as string[]).includes("@v/a"),
     ) as string[];
     expect(new Set(acceptedParam)).toEqual(new Set(["@v/a", "@v/b"]));
@@ -416,9 +453,7 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       slot: SLOT_BASE,
       installedExtensions: [],
     });
-    const sql = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sql = contextQuery().text;
     expect(sql).toMatch(/sa\.eligibility = 'eligible'/);
   });
 
@@ -429,15 +464,10 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       slot: SLOT_BASE,
       installedExtensions: [],
     });
-    const sql = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sql = contextQuery().text;
     expect(sql).toMatch(/o\.type = /);
     // The artifact-type literal is parameterized; find it in the values.
-    const call = runPgMock.mock.calls[0][0] as {
-      queries: Array<{ values: unknown[] }>;
-    };
-    expect(call.queries[0].values).toContain("@cinatra-ai/artifact:object");
+    expect(contextQuery().values).toContain("@cinatra-ai/artifact:object");
   });
 
   it("issues a query that excludes tombstoned objects (deleted_at IS NULL)", () => {
@@ -447,9 +477,7 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       slot: SLOT_BASE,
       installedExtensions: [],
     });
-    const sql = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sql = contextQuery().text;
     expect(sql).toMatch(/deleted_at IS NULL/);
   });
 
@@ -461,9 +489,7 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       slot: SLOT_BASE,
       installedExtensions: [],
     });
-    const sqlNoProj = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sqlNoProj = contextQuery().text;
     expect(sqlNoProj).not.toMatch(/o\.project_id = /);
 
     runPgMock.mockReset();
@@ -475,15 +501,10 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       projectId: "proj-x",
       installedExtensions: [],
     });
-    const sqlProj = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sqlProj = contextQuery().text;
     expect(sqlProj).toMatch(/o\.project_id = /);
     // The projectId literal is parameterized.
-    const call = runPgMock.mock.calls[0][0] as {
-      queries: Array<{ values: unknown[] }>;
-    };
-    expect(call.queries[0].values).toContain("proj-x");
+    expect(contextQuery().values).toContain("proj-x");
   });
 
   // When `projectId` is
@@ -497,10 +518,22 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       slot: SLOT_BASE,
       installedExtensions: [],
     });
-    const sql = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sql = contextQuery().text;
     expect(sql).toMatch(/o\.project_id IS NULL/);
+  });
+
+  it("takes its admissible artifact types from the organisation's CLAIM chain (cinatra#3603)", () => {
+    stageRows([]);
+    resolveContextSlot({
+      actor: ACTOR_BASE,
+      slot: SLOT_BASE,
+      installedExtensions: [],
+    });
+    // The admissible-type source the artifact WRITER already used: the org's own
+    // scope chain (platform + this organisation), arbitrated by the claims leaf.
+    const claim = claimQuery();
+    expect(claim.text).toMatch(/scope = 'platform' OR scope = \$1/);
+    expect(claim.values).toContain("org:org-a");
   });
 
   it("does NOT add the project-exclusion clause when projectId IS supplied", () => {
@@ -511,9 +544,7 @@ describe("resolveContextSlot — eligibility & visibility safety nets", () => {
       projectId: "proj-x",
       installedExtensions: [],
     });
-    const sql = (runPgMock.mock.calls[0][0] as {
-      queries: Array<{ text: string }>;
-    }).queries[0].text;
+    const sql = contextQuery().text;
     expect(sql).not.toMatch(/o\.project_id IS NULL/);
   });
 });
