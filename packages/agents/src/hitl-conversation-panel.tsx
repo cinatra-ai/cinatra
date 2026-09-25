@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PromptField, type PromptFieldHandle } from "@cinatra-ai/sdk-ui";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
@@ -209,12 +209,24 @@ export function HitlConversationPanel({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [convOpen]);
 
-  // Auto-scroll to bottom on new entry / pending toggle.
-  useEffect(() => {
+  // THE PANEL HOLDS ITS NEWEST TURN IN VIEW (cinatra#2934, §IX: "The panel
+  // scrolls at its own cap and holds itself at the bottom, so the newest turn
+  // is the one in view"). The scroll area exists only while the panel is open,
+  // and a panel that opens or opens again is a fresh area at its top, so the
+  // area is brought to its end whenever it opens, when an entry is appended,
+  // when the pending turn toggles and when the reading changes, before paint.
+  // The reader's own scroll is no dependency: a re-render that adds nothing
+  // leaves the area where the reader put it. The stored exchange numbers its
+  // entries by position, so an exchange replaced by another of the same length
+  // (another run's read-back on the same screen) is told by its newest words.
+  const lastEntry = conversation[conversation.length - 1];
+  const lastEntryId = lastEntry?.id;
+  const lastEntryContent = lastEntry?.content;
+  useLayoutEffect(() => {
     if (convScrollRef.current) {
       convScrollRef.current.scrollTop = convScrollRef.current.scrollHeight;
     }
-  }, [conversation, promptPending]);
+  }, [convOpen, conversation.length, lastEntryId, lastEntryContent, promptPending, surface]);
 
   const handleFocus = useCallback(() => {
     if (conversation.length > 0) setConvOpen(true);
