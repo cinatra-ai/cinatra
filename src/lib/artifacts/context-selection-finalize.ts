@@ -8,7 +8,7 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { readAdmissibleArtifactTypeIdsForOrg } from "./resolve-bound-artifact-type";
 
 import type { RunContextSelectionRow } from "./run-context-selections-store";
 import type { ReferrerKind } from "./artifact-refs-store";
@@ -138,9 +138,15 @@ const GENERIC_ARTIFACT_OBJECT_TYPE = "@cinatra-ai/artifact:object";
  * gate admits a NON-CLAIMED pack row of one of these types; a CLAIMED pack row
  * routes through either the binding-SNAPSHOT branch (cinatra#1430) or the
  * binding-plus-WITNESS branch (cinatra#2139) — never through the bare type. Read
- * at CALL time (never a frozen module-load snapshot). */
-function registeredPackArtifactTypes(): string[] {
-  return objectTypeRegistry.listArtifacts().map((d) => d.type);
+ * at CALL time (never a frozen module-load snapshot).
+ *
+ * cinatra#3603: "registered" is no longer the whole answer — the set is the
+ * registered artifact types TOGETHER WITH `orgId`'s live, artifact-safe
+ * claim-winner types, which is the set the artifact WRITER admits. A
+ * claim-backed HOST-registered type carries no `isArtifact` and could never
+ * reach this gate before. */
+function registeredPackArtifactTypes(orgId: string): string[] {
+  return readAdmissibleArtifactTypeIdsForOrg(orgId);
 }
 
 /**
@@ -448,7 +454,7 @@ function prepareFinalizeArgs(input: FinalizeContextSelectionInput): FinalizeArgs
     createdBy: input.createdBy ?? null,
     resourceId: backing.resourceId,
     currentBindingFingerprint: readCurrentBindingFingerprint(s.orgId, s.artifactId),
-    packArtifactTypes: registeredPackArtifactTypes(),
+    packArtifactTypes: registeredPackArtifactTypes(s.orgId),
   };
 }
 

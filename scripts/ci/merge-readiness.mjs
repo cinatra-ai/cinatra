@@ -15,6 +15,14 @@
 //   EXCLUDES ITSELF, and waits for every selected context to exist and
 //   conclude `success`.
 //
+//   The expected set follows the pull request's BASE branch (#3653). A
+//   workflow whose `pull_request` trigger does not run for that base (its
+//   `branches` filter does not match the base, or its `branches-ignore`
+//   filter does) posts no check run on the candidate, so its contexts are not
+//   expected. The inventory records those filters per workflow (`triggers`);
+//   the summary prints the derived set and names each excluded workflow on
+//   its own line. The queue candidate (`merge_group`) keeps the full set.
+//
 //   It fails on missing, failed, cancelled, duplicate-source or timed-out
 //   checks. The single exception is a `skipped` conclusion on a context the
 //   inventory marks `skippable` (a job under an `if:` guard, which GitHub
@@ -128,6 +136,46 @@ export function validateInventory(inv) {
     }
     if (seen.has(inv.selfContext)) bad(`inventory 'expected' contains the job's own context '${inv.selfContext}' — the job would wait on itself`);
   }
+  // #3653: each workflow's recorded `pull_request` branch filters. Optional:
+  // a workflow with no record is expected for every base, as before. A record
+  // that is present is read strictly, because a filter this job cannot read
+  // exactly would make it guess which workflows run for a base.
+  if (inv.triggers !== undefined) {
+    if (inv.triggers === null || typeof inv.triggers !== "object" || Array.isArray(inv.triggers)) {
+      bad("inventory 'triggers' is not an object keyed by workflow path");
+    } else {
+      for (const [workflow, record] of Object.entries(inv.triggers)) {
+        if (record === null || typeof record !== "object" || Array.isArray(record)) {
+          bad(`trigger record of '${workflow}' is not an object`);
+          continue;
+        }
+        const pr = record.pull_request;
+        if (pr === undefined || pr === null) continue;
+        if (typeof pr !== "object" || Array.isArray(pr)) {
+          bad(`pull_request trigger of '${workflow}' is not an object`);
+          continue;
+        }
+        for (const key of ["branches", "branches-ignore"]) {
+          const list = pr[key];
+          if (list === undefined || list === null) continue;
+          if (!Array.isArray(list) || list.length === 0 || !list.every((p) => typeof p === "string" && p !== "")) {
+            bad(`pull_request '${key}' of '${workflow}' is malformed (null, or a non-empty array of non-empty patterns)`);
+            continue;
+          }
+          for (const p of list) {
+            try {
+              branchPatternToRegExp(p.startsWith("!") ? p.slice(1) : p);
+            } catch (err) {
+              bad(`pull_request '${key}' of '${workflow}': ${err.message}`);
+            }
+          }
+        }
+        if (Array.isArray(pr.branches) && Array.isArray(pr["branches-ignore"])) {
+          bad(`pull_request trigger of '${workflow}' sets both 'branches' and 'branches-ignore', which GitHub refuses`);
+        }
+      }
+    }
+  }
   if (inv.reportOnly !== undefined && !Array.isArray(inv.reportOnly)) bad("inventory 'reportOnly' is not an array");
   return { ok: problems.length === 0, problems };
 }
@@ -199,6 +247,22 @@ export function resolveCandidateShas({ eventName, githubSha, headSha, payload })
     );
   }
   return { lookupSha: headSha, recordedSha };
+}
+
+/**
+ * The branch the candidate's `pull_request` triggers are matched against
+ * (#3653): the pull request's BASE branch, read from the same event payload
+ * that gives the job the pull request's number. The queue event returns null,
+ * so the queue candidate keeps the full set. A pull_request payload without
+ * the base fails closed.
+ */
+export function resolveBaseRef({ eventName, payload }) {
+  if (eventName !== "pull_request" && eventName !== "pull_request_target") return null;
+  const ref = payload?.pull_request?.base?.ref;
+  if (typeof ref !== "string" || ref === "") {
+    throw new Error("merge-readiness: pull_request event without the pull request's base branch (failing closed)");
+  }
+  return ref;
 }
 
 /* Queue authority comes only from the immutable, separately checked-out engine. */
@@ -369,6 +433,119 @@ export function pathsApply(globs, changedPaths) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Base-branch applicability (#3653)
+ * ------------------------------------------------------------------ */
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A character-class range GitHub accepts: 0-9, a-z or A-Z, in order. */
+const classRange = (from, to) =>
+  from <= to && [/[0-9]/, /[a-z]/, /[A-Z]/].some((kind) => kind.test(from) && kind.test(to));
+
+/**
+ * Translate one pattern of a workflow's `branches` / `branches-ignore` filter
+ * into a RegExp, with the filter-pattern syntax GitHub documents for it:
+ *   `*`   any characters except `/`      `**`  any characters, `/` included
+ *   `?`   zero or one of the preceding character
+ *   `+`   one or more of the preceding character
+ *   `[…]` one listed letter or digit, or one from a range 0-9, a-z or A-Z
+ *   `\`   makes the next character literal; every other character is literal.
+ * A leading `!` (negation) is read by matchesBranchFilter, not here. A pattern
+ * GitHub would refuse (an unclosed or empty class, another character in a
+ * class, a trailing `\`) throws, so the inventory check rejects it.
+ */
+export function branchPatternToRegExp(pattern) {
+  const atoms = [];
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        i++;
+        if (pattern[i + 1] === "/") { i++; atoms.push("(?:[^/]+/)*"); } else { atoms.push(".*"); }
+      } else {
+        atoms.push("[^/]*");
+      }
+    } else if ((c === "?" || c === "+") && atoms.length > 0) {
+      atoms.push(`(?:${atoms.pop()})${c}`);
+    } else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      const body = end === -1 ? "" : pattern.slice(i + 1, end);
+      const parts = body.match(/[A-Za-z0-9]-[A-Za-z0-9]|[A-Za-z0-9]/g) ?? [];
+      if (body === "" || parts.join("") !== body || !parts.every((p) => p.length === 1 || classRange(p[0], p[2]))) {
+        throw new Error(
+          `branch filter '${pattern}' has a character class GitHub does not accept (letters, digits and ranges 0-9, a-z, A-Z only)`,
+        );
+      }
+      atoms.push(`[${body}]`);
+      i = end;
+    } else if (c === "\\") {
+      if (i + 1 >= pattern.length) throw new Error(`branch filter '${pattern}' ends with a lone '\\'`);
+      i++;
+      atoms.push(escapeRegExp(pattern[i]));
+    } else {
+      atoms.push(escapeRegExp(c));
+    }
+  }
+  return new RegExp(`^${atoms.join("")}$`);
+}
+
+/**
+ * Does an ordered `branches` / `branches-ignore` list match this branch? The
+ * LAST pattern that matches decides: a `!` pattern excludes what an earlier
+ * pattern matched, and a later positive pattern includes it again. This is
+ * GitHub's rule for negated filter patterns.
+ */
+export function matchesBranchFilter(patterns, branch) {
+  let matched = false;
+  for (const raw of patterns) {
+    const negated = raw.startsWith("!");
+    if (branchPatternToRegExp(negated ? raw.slice(1) : raw).test(branch)) matched = !negated;
+  }
+  return matched;
+}
+
+/**
+ * Does a workflow's recorded `pull_request` trigger run for a pull request
+ * into `baseRef`? Its `branches` list must match the base, and its
+ * `branches-ignore` list must not. A list that is null or empty filters nothing.
+ */
+export function pullRequestTriggerRunsFor(trigger, baseRef) {
+  const branches = trigger?.branches;
+  const ignored = trigger?.["branches-ignore"];
+  if (Array.isArray(branches) && branches.length > 0 && !matchesBranchFilter(branches, baseRef)) return false;
+  if (Array.isArray(ignored) && ignored.length > 0 && matchesBranchFilter(ignored, baseRef)) return false;
+  return true;
+}
+
+/**
+ * The expected set for the candidate's base branch: every inventory context
+ * except the job's own, less the contexts of each workflow whose recorded
+ * `pull_request` trigger does not run for `baseRef`. Such a workflow posts no
+ * check run on the candidate, so nothing from it can be waited on. Returns the
+ * kept entries and one `not expected` line for each excluded workflow. With no
+ * base (the queue event), and for a workflow with no recorded trigger, every
+ * context stays expected, as before.
+ */
+export function expectedForBase({ inventory, baseRef }) {
+  const all = inventory.expected.filter((e) => e.context !== inventory.selfContext);
+  if (typeof baseRef !== "string" || baseRef === "") return { expected: all, notExpected: [] };
+  const triggers = object(inventory.triggers) ? inventory.triggers : {};
+  const excluded = new Set();
+  for (const workflow of new Set(all.map((e) => e.workflow))) {
+    const trigger = Object.hasOwn(triggers, workflow) ? triggers[workflow]?.pull_request : null;
+    if (object(trigger) && !pullRequestTriggerRunsFor(trigger, baseRef)) excluded.add(workflow);
+  }
+  return {
+    expected: all.filter((e) => !excluded.has(e.workflow)),
+    notExpected: [...excluded].sort().map((workflow) => `not expected: ${workflow} (trigger excludes base '${baseRef}')`),
+  };
+}
+
+/** The contexts this candidate waits on: its base's expected set, narrowed by path applicability. */
+const applicableTo = ({ inventory, changedPaths, baseRef }) =>
+  expectedForBase({ inventory, baseRef }).expected.filter((e) => pathsApply(e.paths, changedPaths));
+
+/* ------------------------------------------------------------------ *
  * Evaluation
  * ------------------------------------------------------------------ */
 
@@ -460,18 +637,20 @@ const CONCLUSION_FAIL_LABEL = {
  * @param {object} [args.queue]     merge_group arm: authenticated { before, after } snapshots
  * @param {number} [args.waitedMinutes] the wait this run actually spent, named
  *                 in the pending text (defaults to the inventory's fallback).
- * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[]}}
+ * @param {string|null} [args.baseRef] the pull request's base branch: only the
+ *                 workflows whose `pull_request` trigger runs for it are
+ *                 expected (#3653). Null keeps the full set (the queue event).
+ * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[], base: string|null, expectedSet: {context: string, workflow: string}[], notExpected: string[]}}
  */
-export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes }) {
+export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes, baseRef = null }) {
   const failures = [];
   const pending = [];
   const reports = [];
   const waited = Number.isFinite(waitedMinutes) && waitedMinutes > 0 ? waitedMinutes : inventory.deadlineMinutes;
 
-  const applicable = inventory.expected.filter(
-    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
-  );
-  const skipped = inventory.expected.filter((e) => !applicable.includes(e) && e.context !== inventory.selfContext);
+  const derived = expectedForBase({ inventory, baseRef });
+  const applicable = derived.expected.filter((e) => pathsApply(e.paths, changedPaths));
+  const skipped = derived.expected.filter((e) => !applicable.includes(e));
   for (const e of skipped) reports.push(`not applicable to this candidate (paths ${JSON.stringify(e.paths)}): ${e.context}`);
 
   const byName = new Map();
@@ -554,6 +733,9 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
     pending,
     reports,
     waitedOn: applicable.map((e) => e.context),
+    base: typeof baseRef === "string" && baseRef !== "" ? baseRef : null,
+    expectedSet: derived.expected.map((e) => ({ context: e.context, workflow: e.workflow })),
+    notExpected: derived.notExpected,
   };
 }
 
@@ -563,12 +745,11 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
  * `timeout-minutes` of the job that reports it; GitHub's own default budget
  * when the job declares none) plus WAIT_MARGIN_MINUTES, capped at
  * MAX_WAIT_MINUTES. With no applicable context there is no budget to follow
- * and the inventory's fallback deadline is used.
+ * and the inventory's fallback deadline is used. A workflow that does not run
+ * for the base (#3653) adds no budget.
  */
-export function waitBudgetMinutes({ inventory, changedPaths }) {
-  const applicable = inventory.expected.filter(
-    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
-  );
+export function waitBudgetMinutes({ inventory, changedPaths, baseRef = null }) {
+  const applicable = applicableTo({ inventory, changedPaths, baseRef });
   if (applicable.length === 0) return Math.min(inventory.deadlineMinutes, MAX_WAIT_MINUTES);
   const longest = Math.max(
     ...applicable.map((e) =>
@@ -589,11 +770,10 @@ export function exitCodeFor(result) {
  * Polling predicate: is the candidate's check set settled enough to judge?
  * True when every applicable expected context has a COMPLETED check run —
  * missing and in-progress contexts keep the job waiting until the deadline.
+ * A workflow that does not run for the base (#3653) is not waited for.
  */
-export function isSettled({ inventory, checks, changedPaths }) {
-  const applicable = inventory.expected.filter(
-    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
-  );
+export function isSettled({ inventory, checks, changedPaths, baseRef = null }) {
+  const applicable = applicableTo({ inventory, changedPaths, baseRef });
   const byName = new Map();
   for (const c of checks ?? []) byName.set(c.name, c);
   return applicable.every((e) => byName.get(e.context)?.status === "completed");
@@ -609,6 +789,15 @@ export function renderSummary({ candidateSha, lookupSha, eventName, result }) {
   if (typeof lookupSha === "string" && lookupSha !== "" && lookupSha !== candidateSha) {
     lines.push(`  checks read from: ${lookupSha} (the head that carries the runs; the candidate above is the tree under evaluation)`);
   }
+  const base = typeof result.base === "string" && result.base !== "" ? result.base : null;
+  if (base !== null) lines.push(`  base: ${base}`);
+  if (Array.isArray(result.expectedSet)) {
+    const workflows = new Set(result.expectedSet.map((e) => e.workflow)).size;
+    const forBase = base !== null ? ` for base '${base}'` : "";
+    lines.push(`  expected set${forBase}: ${result.expectedSet.length} context(s) from ${workflows} workflow(s)`);
+    for (const e of result.expectedSet) lines.push(`    expected: ${e.context} (from ${e.workflow})`);
+  }
+  for (const n of result.notExpected ?? []) lines.push(`  ${n}`);
   lines.push(`  waited on ${result.waitedOn.length} expected context(s)`);
   for (const r of result.reports) lines.push(`  report: ${r}`);
   for (const p of result.pending ?? []) lines.push(`  ${p}`);
@@ -697,6 +886,7 @@ async function main() {
     headSha: process.env.MERGE_READINESS_HEAD_SHA,
     payload,
   });
+  const baseRef = resolveBaseRef({ eventName, payload });
 
   const prNumber = payload?.pull_request?.number ?? null;
   const queueArgs = eventName === "merge_group" ? { repo, payload, lookupSha, recordedSha,
@@ -704,14 +894,14 @@ async function main() {
   const before = queueArgs ? await readQueueEvidence(queueArgs) : null;
   const changedPaths = before ? before.changedPaths : prNumber ? await listChangedPaths(token, repo, prNumber) : null;
 
-  const budgetMinutes = waitBudgetMinutes({ inventory, changedPaths });
+  const budgetMinutes = waitBudgetMinutes({ inventory, changedPaths, baseRef });
   const startedAt = Date.now();
   const deadline = startedAt + budgetMinutes * 60_000;
   const intervalMs = Number(process.env.MERGE_READINESS_POLL_MS ?? 30_000);
   let checks = [];
   for (;;) {
     checks = await listChecks(token, repo, lookupSha);
-    if (isSettled({ inventory, checks, changedPaths })) break;
+    if (isSettled({ inventory, checks, changedPaths, baseRef })) break;
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -723,7 +913,7 @@ async function main() {
   const queue = queueArgs ? { before, after: await readQueueEvidence(queueArgs) } : undefined;
 
   const waitedMinutes = Math.max(1, Math.round((Date.now() - startedAt) / 60_000));
-  const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes });
+  const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes, baseRef });
   const summary = renderSummary({ candidateSha: recordedSha, lookupSha, eventName, result });
   console.log(summary);
   if (process.env.GITHUB_STEP_SUMMARY) {
