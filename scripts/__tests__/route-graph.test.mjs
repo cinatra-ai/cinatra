@@ -17,10 +17,13 @@
 
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// Imported as a namespace so a missing export fails only the case that reads it.
+import * as routeGraph from "../route-graph.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -177,6 +180,57 @@ describe("route-graph.mjs — package.json subpath-exports resolution", () => {
       expect(route.byOwner["@cinatra-ai/sdk-ui"]).toBeGreaterThanOrEqual(1);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("route-graph.mjs — extension-owned modules leave the core count (cinatra#3664)", () => {
+  // A pinned pack's own modules are walked (so a missing import inside a pack
+  // still fails closed) and reported, but they are not core graph pressure: the
+  // core count excludes every module under the extension tree.
+  it("an extension-tree module is extension-owned and leaves the core count; the report names the excluded count", () => {
+    const tmp = mkdtempSync(path.join(REPO_ROOT, "rg-core-fixture-"));
+    const packScope = mkdtempSync(path.join(REPO_ROOT, "extensions", "rg-pack-"));
+    try {
+      const packDir = path.join(packScope, "fixture-pack");
+      mkdirSync(packDir, { recursive: true });
+      writeFileSync(path.join(packDir, "index.ts"), 'import { helper } from "./helper";\nexport const packValue = helper;\n');
+      writeFileSync(path.join(packDir, "helper.ts"), "export const helper = 1;\n");
+      const packIndexRel = path.relative(tmp, path.join(packDir, "index")).split(path.sep).join("/");
+      const entryAbs = path.join(tmp, "entry.ts");
+      // value bindings (not `import type`) so both edges are real graph edges.
+      writeFileSync(
+        entryAbs,
+        `import { packValue } from "./${packIndexRel}";\nimport * as errors from "@cinatra-ai/errors";\nexport const use = [packValue, errors];\n`,
+      );
+      const entryRel = path.relative(REPO_ROOT, entryAbs).split(path.sep).join("/");
+      const packKey = `@${path.basename(packScope)}/fixture-pack`;
+      const outJson = path.join(tmp, "result.json");
+      const res = spawnSync("node", [SCRIPT, "--routes", entryRel, "--json", outJson], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        timeout: 120_000,
+      });
+      expect(res.status, `stderr: ${res.stderr}`).toBe(0);
+      const result = JSON.parse(readFileSync(outJson, "utf8"));
+      const route = result.routes.find((r) => r.route === entryRel);
+      expect(route).toBeDefined();
+      expect(route.ok).toBe(true);
+      expect(route.missingCount).toBe(0);
+      expect(route.extensionModuleCount).toBe(2);
+      expect(route.extensionModulesByPack).toEqual({ [packKey]: 2 });
+      expect(route.coreModuleCount).toBe(route.moduleCount - 2);
+      expect(route.byOwner["@cinatra-ai/errors"]).toBeGreaterThanOrEqual(1);
+      // The report names the excluded count beside the core count.
+      expect(res.stdout).toContain("| Core | Extension (excluded) |");
+      expect(res.stdout).toContain(`| ${entryRel} | ${entryRel} | ${route.moduleCount} | ${route.coreModuleCount} | 2 |`);
+
+      expect(routeGraph.isExtensionModule("extensions/fixture-org/pack-a/src/a.ts")).toBe(true);
+      expect(routeGraph.isExtensionModule("src/lib/a.ts")).toBe(false);
+      expect(routeGraph.isExtensionModule("packages/agents/src/a.ts")).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+      rmSync(packScope, { recursive: true, force: true });
     }
   });
 });

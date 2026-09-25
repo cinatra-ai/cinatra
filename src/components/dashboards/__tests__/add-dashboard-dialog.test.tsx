@@ -21,7 +21,7 @@
 //   pnpm exec vitest run src/components/dashboards/__tests__/add-dashboard-dialog.test.tsx
 import "../../__tests__/access-picker-jsdom-shims";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
@@ -393,5 +393,67 @@ describe("§IX.1 — adding a reference listing", () => {
       await screen.findByRole("button", { name: "Request team visibility…" }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REGRESSION PIN (cinatra#2811 fix leg 4). The workspace tab took the amended
+// drawing's own words for this popup, and it renders the SAME components. The
+// tenant tabs keep the words they landed with, so this pin must hold on both
+// sides of that change: it fails the moment a per-surface wording leaks back
+// into the shared default.
+// ---------------------------------------------------------------------------
+describe("the tenant popup keeps its landed words", () => {
+  const said = (el: Element | null) =>
+    (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  it("is titled for the scope and opens with its landed line", async () => {
+    mount({ reference: referenceSource() });
+    fireEvent.click(screen.getByRole("button", { name: /Add dashboard/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading").textContent).toBe(
+      "Add a dashboard to Team: Growth",
+    );
+    expect(said(dialog)).toContain(
+      "Create a new dashboard, or list one that already exists",
+    );
+  });
+
+  it("names its two sections as it landed them, and lists a candidate with Add", async () => {
+    mount({ reference: referenceSource() });
+    fireEvent.click(screen.getByRole("button", { name: /Add dashboard/ }));
+    const create = await screen.findByRole("region", {
+      name: "Create a new dashboard",
+    });
+    expect(said(create)).toContain("Create new");
+    expect(said(create)).toContain("A blank dashboard you name.");
+    expect(within(create).getByRole("button").textContent).toBe("Create…");
+    const reference = screen.getByRole("region", {
+      name: "Reference an existing dashboard",
+    });
+    expect(said(reference)).toContain("Reference an existing dashboard");
+    expect(said(reference)).toContain(
+      "Only dashboards this scope can already see are listable.",
+    );
+    expect(
+      await within(reference).findByRole("button", { name: "Add" }),
+    ).toBeTruthy();
+  });
+
+  it("carries none of the workspace's drawn words", async () => {
+    mount({ reference: referenceSource() });
+    fireEvent.click(screen.getByRole("button", { name: /Add dashboard/ }));
+    const dialog = await screen.findByRole("dialog");
+    const text = said(dialog);
+    for (const workspaceOnly of [
+      "One popup, three sections.",
+      "Reference a dashboard from the scopes below",
+      "Homes in the workspace.",
+      "The link never widens access.",
+      "A catalog dashboard homes in the workspace",
+    ]) {
+      expect(text).not.toContain(workspaceOnly);
+    }
+    expect(screen.queryByRole("button", { name: "Reference" })).toBeNull();
   });
 });

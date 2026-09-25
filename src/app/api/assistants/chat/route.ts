@@ -616,6 +616,12 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
       // cinatra#2240 — the harness-bound turn/run identity keys this turn's
       // durable skill-delivery record.
       turnIdentity,
+      // cinatra#2815 S3: the DURABLE thread identifier, so assigned-skill
+      // delivery resolves this conversation's frozen assignment scopes. Without
+      // it the runtime mints a per-turn binding, delivery finds no thread behind
+      // that id, and every turn of every thread falls back to the narrowest
+      // answer, losing the layers somebody granted the conversation.
+      sessionId: parsed.data.threadId,
       widgetPrincipal,
       // cinatra#2932 — the bound-card claim, re-checked inside the runtime under
       // this person's own standing. The widget is on the same road as the chat
@@ -626,6 +632,15 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   const response = await streamAgUiChatTurn({
     request,
     threadId: parsed.data.threadId,
+    // cinatra#2815 S3: the scopes a NEW conversation freezes. This branch's
+    // turn actor is floored on teams and projects by design, so the frozen
+    // snapshot names the organization and the person and no team layer: never
+    // wider than what this seam can vouch for.
+    scopeActor: {
+      principalType: "HumanUser",
+      principalId: widgetPrincipal.userId,
+      teamIds: [],
+    },
     mirrorOrgId: authz.mirrorOrgId,
     needsStructuredRow: authz.needsStructuredRow,
     userId: widgetPrincipal.userId,
@@ -820,6 +835,12 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
         signal,
         // cinatra#2240 — keys this turn's durable skill-delivery record.
         turnIdentity,
+        // cinatra#2815 S3: the DURABLE thread identifier, so assigned-skill
+        // delivery resolves this conversation's frozen assignment scopes. Without
+        // it the runtime mints a per-turn binding, delivery finds no thread behind
+        // that id, and every turn of every thread falls back to the narrowest
+        // answer, losing the layers somebody granted the conversation.
+        sessionId: threadId,
         // cinatra#2932 — the bound-card claim; re-checked inside the runtime.
         ...(boundCardClaim ? { boundCard: boundCardClaim } : {}),
       });
@@ -860,12 +881,21 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
         signal,
         // cinatra#2240 — keys this turn's durable skill-delivery record.
         turnIdentity,
+        // cinatra#2815 S3: the DURABLE thread identifier, so assigned-skill
+        // delivery resolves this conversation's frozen assignment scopes. Without
+        // it the runtime mints a per-turn binding, delivery finds no thread behind
+        // that id, and every turn of every thread falls back to the narrowest
+        // answer, losing the layers somebody granted the conversation.
+        sessionId: threadId,
       });
   }
 
   return streamAgUiChatTurn({
     request,
     threadId,
+    // cinatra#2815 S3: the scopes a NEW conversation freezes, taken from the
+    // actor this route already verified.
+    scopeActor: actorContext,
     mirrorOrgId: authz.mirrorOrgId,
     needsStructuredRow: authz.needsStructuredRow,
     userId,
