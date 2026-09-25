@@ -160,7 +160,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     action: { name: "edit-markdown", outcome: "revision-saved" },
     states: ["error", "loading"],
     readiness:
-      "the pinned markdown display draws the Code and Preview tabs, one panel at a time, the saving indicator beside them and the edit in place (read-only on a review target), but it carries none of the conformance anchors this factory addresses (no surface anchor, no content field, no declared edit-markdown control, no state mounts), and no harness mount exists for it: it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop",
+      "the pinned markdown display draws the Code and Preview tabs, one panel at a time, the saving indicator beside them and the edit in place (read-only on a review target), and it now stamps the conformance anchors this factory addresses (the surface anchor on the display root, the content field on the Code and on the Preview panel, the declared edit-markdown control on the editable Code source, and the loading and error display states while the indicator reads saving or Not saved), but no harness mount exists for it: it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop",
   },
   "binary-download-card": {
     surface: "binary-download-card",
