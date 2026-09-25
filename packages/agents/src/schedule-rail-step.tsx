@@ -140,6 +140,15 @@ export function ScheduleRailStepRow({
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
       className={RUN_SURFACE_RAIL_ROW_CLASS}
+      // On the run page the Schedule entry also carries the rail's common row markers, so the rail's one row selector counts it (cinatra#3246).
+      {...(host === "run_card"
+        ? {
+            "data-run-surface-rail-step": "",
+            "data-run-surface-rail-step-key": "schedule",
+            "data-run-surface-rail-selected": scheduleSelected ? "true" : "false",
+            "data-run-surface-rail-settled": settled ? "true" : "false",
+          }
+        : {})}
     >
       <span
         data-conformance-id="schedule-rail-indicator"

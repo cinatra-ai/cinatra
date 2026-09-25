@@ -115,7 +115,7 @@ import { RecommendationRailStepRow } from "./recommendation-rail-step";
 // own rail rows and run detail; the setup run page composes the whole frame from
 // it, with the shared row for steps that carry no anchors of their own
 // (cinatra#2970).
-import { RunSurfaceRail, RunSurfaceRailRow } from "./run-surface-rail";
+import { RunStopFollower, RunSurfaceRail, RunSurfaceRailRow } from "./run-surface-rail";
 // The step's own shape, and the setup page's step-to-row mapping. Both read from
 // modules with NO "use client" directive, never from the client one: this screen
 // is a server component and it EVALUATES them, which a client reference cannot
@@ -157,6 +157,7 @@ import {
   openRunInputStepKey,
   runAtInputMoment,
   runCarriesInputSteps,
+  runHasAnsweredInputStep,
 } from "./run-input-steps";
 // THE SCHEMA THE SETUP LOOP ACTUALLY ASKS FROM (cinatra#3068 convergence). A
 // stored `input_schema: {}` is resolved from the installed agent's OAS at
@@ -1210,6 +1211,21 @@ export function runParkedAtTrailingGate(params: {
 }
 
 /**
+ * DOES THE PAGE FOLLOW THE RUN TO THE STOP IT MAKES? (cinatra#3246.) Only a page
+ * composed while the run works -- dispatched or running -- with no gate entry
+ * and no open form on its rail; a follower mounted there refreshes the page
+ * once when the run's own row names a stop.
+ */
+export function runPageFollowsTheRunToItsStop(params: {
+  runStatus: string | null | undefined;
+  parkedGateStep: boolean;
+  openInputStepKey: RunInputStepKey | null;
+}): boolean {
+  if (params.parkedGateStep || params.openInputStepKey) return false;
+  return params.runStatus === "queued" || params.runStatus === "running";
+}
+
+/**
  * THE TWO STATUSES A RUN WAITS AT ITS SCHEDULE IN (cinatra#3221, fix leg 8).
  *
  * The coordinator's own park: `pending_trigger` while the person's choice is
@@ -1829,6 +1845,9 @@ export async function SetupScreen({
     runBetweenSetupQuestions,
   );
   const openInputStepKey = openRunInputStepKey(runInputSteps);
+  // A run stopped at a later gate after its trigger row keeps the forms it answered on the rail, above that gate (cinatra#3246).
+  const inputStepsHeldAboveALaterStop =
+    run?.status === "pending_approval" && trigger !== null && runHasAnsweredInputStep(runInputSteps);
   // TWO FACTS, NOT ONE (cinatra#3068 fix leg 2). Since the rail keeps an
   // ANSWERED form as read-only history, "the rail carries an input row" and
   // "this panel is drawing the input form" stopped being the same fact. The
@@ -2711,7 +2730,7 @@ export async function SetupScreen({
               // exception for it — it names no input step anywhere — so there
               // is no second drawn sentence to weigh, and the Skills entry
               // stands above these.
-              if (inputStepsInRail) {
+              if (inputStepsInRail || inputStepsHeldAboveALaterStop) {
                 // BENEATH THE SCHEDULE, AND NUMBERED AFTER IT (cinatra#3478).
                 // These rows number themselves from their own index, so an
                 // entry standing above them has to be counted here, or two rows
@@ -3061,6 +3080,7 @@ export async function SetupScreen({
               // surface is what it always was.
               if (railSteps.length > 0) {
                 return (
+                  <>
                   <RunSurfaceRail
                     steps={railSteps}
                     rail={railNode}
@@ -3068,6 +3088,15 @@ export async function SetupScreen({
                     initialSelection={initialStep}
                     releasedSelection={releasedStep}
                   />
+                  {/* A page composed while the run works follows it to the gate it stops at (cinatra#3246). */}
+                  {runPageFollowsTheRunToItsStop({
+                    runStatus: run.status,
+                    parkedGateStep,
+                    openInputStepKey,
+                  }) ? (
+                    <RunStopFollower runId={run.id} />
+                  ) : null}
+                  </>
                 );
               }
               return (
