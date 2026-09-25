@@ -20,10 +20,15 @@
 // RED BEFORE THE PIN MOVES: the pin it replaced drew the read-only document
 // only, with no tab at all.
 //
+// UNDER STRICT MODE: the case that mounts the display inside React's
+// StrictMode, as the development build does (mount, cleanup, mount), pins that
+// a typed change set still reaches the save road, once, at the grant's save
+// address; the file's four earlier cases are unchanged.
+//
 // The real-boot half of the same sentence is the browser spec
 // tests/e2e/artifact-markdown-editor/markdown-editor.spec.ts, which needs a dev
 // server, a sign-in and an upload, and is not run in this tier.
-import type { ComponentType } from "react";
+import { StrictMode, type ComponentType } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
@@ -184,6 +189,20 @@ describe("the markdown display at the required pin, on the artifact's own page (
     // Preview renders the EDITED document, not the one the display opened with.
     expect((body as HTMLElement).textContent).toContain("One more line.");
     expect(screen.queryByRole("textbox", { name: "Markdown source" })).toBeNull();
+  });
+
+  it("sends a typed change to the save address once under StrictMode, when the editor is left", () => {
+    render(
+      <StrictMode>
+        <MarkdownArtifactDetail {...granted()} />
+      </StrictMode>,
+    );
+    const editor = screen.getByRole("textbox", { name: "Markdown source" });
+    fireEvent.change(editor, { target: { value: `${DOCUMENT}\nStored under strict mode.\n` } });
+    fireEvent.blur(editor);
+    const save = vi.mocked(fetch);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]?.[0]).toBe("/api/artifacts/art_md_1/edit");
   });
 });
 
