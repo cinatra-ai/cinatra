@@ -1,0 +1,41 @@
+{
+  "component_type": "Flow",
+  "id": "allowed-host-tool-fixture",
+  "name": "Allowed host tool fixture",
+  "start_node": { "$component_ref": "save_object" },
+  "nodes": [
+    { "$component_ref": "save_object" },
+    { "$component_ref": "run_pack_tool" },
+    { "$component_ref": "fetch_elsewhere" }
+  ],
+  "$referenced_components": {
+    "save_object": {
+      "component_type": "ApiNode",
+      "id": "save_object",
+      "name": "Save the object",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "data": { "tool": "objects_save", "input": {}, "agent_run_id": "{{ cinatra_run_id }}" }
+    },
+    "run_pack_tool": {
+      "component_type": "ApiNode",
+      "id": "run_pack_tool",
+      "name": "Run the pack's own tool",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "data": {
+        "tool": "extension_tool",
+        "input": { "name": "a_tool_only_the_pack_declares", "input": {} },
+        "agent_run_id": "{{ cinatra_run_id }}"
+      }
+    },
+    "fetch_elsewhere": {
+      "component_type": "ApiNode",
+      "id": "fetch_elsewhere",
+      "name": "Call an endpoint that is not the passthrough",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/something-else",
+      "http_method": "POST",
+      "data": { "tool": "a_name_outside_the_passthrough" }
+    }
+  }
+}

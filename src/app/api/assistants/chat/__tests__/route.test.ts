@@ -33,6 +33,10 @@ const resolveAssistantHandles = vi.fn();
 const resolveAssistantRuntimeConfigByPrincipal = vi.fn();
 const runAssistantTurn = vi.fn();
 const isSelectedAssistantVisible = vi.fn();
+// cinatra#2815 S3: the set-once scope freeze the stream harness runs for a row
+// this request did not create.
+const freezeAssistantThreadAssignmentScopeIfAbsent = vi.fn();
+const bindThreadContainerIfUnbound = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -85,6 +89,9 @@ vi.mock("@/lib/assistant-thread-store", () => ({
   appendAssistantTurn: (...a: unknown[]) => appendAssistantTurn(...a),
   updateAssistantTurn: (...a: unknown[]) => updateAssistantTurn(...a),
   touchAssistantThread: (id: string) => touchAssistantThread(id),
+  freezeAssistantThreadAssignmentScopeIfAbsent: (...a: unknown[]) =>
+    freezeAssistantThreadAssignmentScopeIfAbsent(...a),
+  bindThreadContainerIfUnbound: (...a: unknown[]) => bindThreadContainerIfUnbound(...a),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({
   xaddRunEvent: (...a: unknown[]) => xaddRunEvent(...a),
@@ -462,5 +469,94 @@ describe("POST /api/assistants/chat — the SSE turn lifecycle", () => {
       status: "error",
       content: expect.objectContaining({ format: "assistant-turn-v1", content: "partial" }),
     });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// cinatra#2815 S3 (epic #2812): the two seams assigned-skill delivery depends
+// on, driven through the ROUTE's real call shape.
+//
+// Delivery resolves a conversation's frozen assignment scopes through the
+// session id it is handed. The route passed none, so the runtime minted a
+// per-turn binding, delivery found no thread behind it, and every turn of every
+// thread fell back to the narrowest answer, losing even the durable
+// organization floor. And a new thread's insert named no scope column, so even
+// the right id would have found nothing frozen.
+// ---------------------------------------------------------------------------
+describe("POST /api/assistants/chat: the assignment-scope seams (cinatra#2815)", () => {
+  it("hands the DURABLE thread id to the @cinatra runtime as its session", async () => {
+    const res = await POST(
+      chatReq({ threadId: "th-durable", messages: [{ role: "user", content: "hi" }] }),
+    );
+    expect(res.status).toBe(200);
+    await readSse(res);
+    expect(runChatTurn).toHaveBeenCalledTimes(1);
+    expect(runChatTurn.mock.calls[0][0].sessionId).toBe("th-durable");
+  });
+
+  it("hands the DURABLE thread id to a SELECTED assistant's runtime as its session", async () => {
+    const res = await POST(
+      chatReq({
+        threadId: "th-durable",
+        messages: [{ role: "user", content: "hi" }],
+        assistant: "wordpress",
+      }),
+    );
+    expect(res.status).toBe(200);
+    await readSse(res);
+    expect(runAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(runAssistantTurn.mock.calls[0][1].sessionId).toBe("th-durable");
+  });
+
+  it("freezes the creating human's scopes on the new thread's own insert", async () => {
+    const actor = {
+      actorType: "human",
+      source: "route",
+      userId: "user-1",
+      principalType: "HumanUser",
+      principalId: "user-1",
+      teamIds: ["team-b", "team-a"],
+    };
+    requireActorContext.mockResolvedValue(actor);
+    const res = await POST(
+      chatReq({ threadId: "th-new", messages: [{ role: "user", content: "hi" }] }),
+    );
+    expect(res.status).toBe(200);
+    await readSse(res);
+    expect(createAssistantThread).toHaveBeenCalledTimes(1);
+    const input = createAssistantThread.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.id).toBe("th-new");
+    expect(input.orgId).toBe("org-1");
+    expect(input.scopeActor).toEqual(actor);
+  });
+
+  it("freezes them SET-ONCE on a row this request did not create", async () => {
+    // The legacy chat mirror usually wins the create race, and its upsert names
+    // no scope column; without this the conversations people actually start
+    // would take the sole legacy fallback for their whole life.
+    getAssistantThread.mockReturnValue({
+      id: "th-mirrored",
+      ownerUserId: "user-1",
+      teamId: null,
+      orgId: "org-1",
+    });
+    const res = await POST(
+      chatReq({ threadId: "th-mirrored", messages: [{ role: "user", content: "hi" }] }),
+    );
+    expect(res.status).toBe(200);
+    await readSse(res);
+    expect(createAssistantThread).not.toHaveBeenCalled();
+    expect(freezeAssistantThreadAssignmentScopeIfAbsent).toHaveBeenCalledTimes(1);
+    const [threadId, input] = freezeAssistantThreadAssignmentScopeIfAbsent.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(threadId).toBe("th-mirrored");
+    // Creation-time evidence ONLY. An administrator continuing somebody else's
+    // conversation, or the owner with a different active organization, must not
+    // be able to stamp this row's provenance from the session of a later turn,
+    // so the seam is handed the row's identity and nothing else.
+    expect(input).toBeUndefined();
   });
 });

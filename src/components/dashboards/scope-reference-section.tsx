@@ -47,6 +47,12 @@
  * The one thing that still draws: a LOAD FAILURE. It renders as a plain line of
  * text, not a card — suppressing it would turn "we could not read your
  * dashboards" into "you have none", which is a different and false statement.
+ *
+ * THE CONTROL'S LABEL BELONGS TO THE SURFACE (cinatra#2811 fix leg 4). On a
+ * tenant tab an addable candidate's control reads "Add", the word the drawing
+ * gives that picker. On the WORKSPACE the same act is drawn as "Reference",
+ * because what it makes there is a link beside the target's one canonical home.
+ * The caller names the word; a caller that names none keeps "Add".
  */
 import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
@@ -61,13 +67,24 @@ import {
   type ScopeReferenceSource,
 } from "./scope-dashboards-contract";
 
+/** The word an addable candidate's control carries, idle and in flight. */
+export type ReferenceAddWords = {
+  readonly idle: string;
+  readonly busy: string;
+};
+
+const LANDED_ADD_WORDS: ReferenceAddWords = { idle: "Add", busy: "Adding\u2026" };
+
 export function ScopeReferenceSection({
   source,
   onAdded,
+  addWords = LANDED_ADD_WORDS,
 }: {
   source: ScopeReferenceSource;
   /** A listing was added — the pool is stale; the owner closes + refreshes. */
   onAdded: () => void;
+  /** The surface's own word for the add control (see the header). */
+  addWords?: ReferenceAddWords;
 }) {
   const [state, setState] = useState<AddPickerLoadState>({ status: "loading" });
   const [query, setQuery] = useState("");
@@ -199,6 +216,7 @@ export function ScopeReferenceSection({
               key={candidate.dashboardId}
               candidate={candidate}
               busy={busyId === candidate.dashboardId}
+              addWords={addWords}
               onAdd={onAdd}
               onPromote={onPromote}
             />
@@ -212,11 +230,13 @@ export function ScopeReferenceSection({
 function CandidateRow({
   candidate,
   busy,
+  addWords,
   onAdd,
   onPromote,
 }: {
   candidate: AddPickerCandidateView;
   busy: boolean;
+  addWords: ReferenceAddWords;
   onAdd: (dashboardId: string) => void;
   onPromote: (dashboardId: string) => void;
 }) {
@@ -241,7 +261,7 @@ function CandidateRow({
           data-action="add-listing -> listing-added"
           onClick={() => onAdd(candidate.dashboardId)}
         >
-          {busy ? "Adding…" : "Add"}
+          {busy ? addWords.busy : addWords.idle}
         </Button>
       ) : candidate.disposition === "promotion" ? (
         <Button

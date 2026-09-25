@@ -216,3 +216,124 @@ describe("revokeExternalMcpApiKeyConnection", () => {
     expect(deleteNangoConnection).toHaveBeenCalledWith(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, CONN);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3485 — the KEYLESS half of the same road. A server registered through
+// the MCP Servers connector's own Setup form with the API-key field left blank
+// registers its `externalMcp` connection IDENTITY (so the connector's Sharing
+// tab lists it) and NOTHING else: no integration, no import, no readback, no
+// token — the row still advertises no key and mints no bearer.
+//
+// Loaded here rather than through the import block above so every existing case
+// of this file stays exactly where and as it was written.
+// ---------------------------------------------------------------------------
+const {
+  externalMcpKeylessConnectionId,
+  readExternalMcpKeylessConnectionIdentity,
+  registerExternalMcpKeylessConnectionIdentity,
+  retireExternalMcpKeylessConnectionIdentityRow,
+} = await import("@/lib/external-mcp-registry");
+
+describe("a KEYLESS external-MCP registration (cinatra#3485)", () => {
+  it("registers the `externalMcp` identity WITHOUT importing any credential", async () => {
+    await registerExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-1"), {
+      ownerUserId: "u1",
+      organizationId: null,
+      seed: "owner",
+    });
+    expect(registerSavedConnectionIdentity).toHaveBeenCalledWith({
+      connectorKey: "externalMcp",
+      connectionId: "external-mcp-keyless-row-1",
+      // cinatra#3485 fix leg 5: the caller asks the seam to report whether
+      // THIS call inserted the identity row or confirmed a standing one.
+      onIdentityRow: expect.any(Function),
+      ownerUserId: "u1",
+      organizationId: null,
+      seed: "owner",
+    });
+    // The credential half is not travelled at all.
+    expect(ensureNangoIntegration).not.toHaveBeenCalled();
+    expect(importNangoConnection).not.toHaveBeenCalled();
+    expect(getNangoCredentials).not.toHaveBeenCalled();
+  });
+
+  it("derives a STABLE id in its own namespace — never the keyed road's credential id", () => {
+    expect(externalMcpKeylessConnectionId("row-1")).toBe(externalMcpKeylessConnectionId("row-1"));
+    expect(externalMcpKeylessConnectionId("row-1")).not.toBe(
+      externalMcpKeylessConnectionId("row-2"),
+    );
+    expect(externalMcpKeylessConnectionId("row-1")).not.toBe(CONN);
+  });
+
+  it("a keyless server mints NO bearer and never fetches a credential", async () => {
+    const keyless: ExternalMcpServerRecord = { ...bearerRow("user"), nangoConnectionId: null };
+    expect(await resolveExternalMcpServerBearer(keyless)).toBeNull();
+    expect(getNangoCredentials).not.toHaveBeenCalled();
+    expect(enforceConnectionUse).not.toHaveBeenCalled();
+  });
+
+  it("its identity is retired IDENTITY-ONLY, by its own row id, and no credential is ever asked for", async () => {
+    await retireExternalMcpKeylessConnectionIdentityRow("id-row");
+    // cinatra#3485 fix leg 5: the caller's own condition travels with the id,
+    // and a caller that has none passes none.
+    expect(softDeleteNangoConnection).toHaveBeenCalledWith("id-row", undefined);
+    // A keyless identity addresses NO vault entry: the credential road is not
+    // travelled at all, and the natural key is never re-resolved, so a row
+    // registered after the caller read cannot be the one retired.
+    expect(readNangoConnectionByNaturalKey).not.toHaveBeenCalled();
+    expect(deleteNangoConnection).not.toHaveBeenCalled();
+  });
+
+  it("a retire whose store write fails is logged and swallowed, never thrown at the save", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    softDeleteNangoConnection.mockRejectedValueOnce(new Error("the store was unreachable"));
+    await expect(retireExternalMcpKeylessConnectionIdentityRow("id-row")).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    expect(deleteNangoConnection).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("reads back the live identity the derived id addresses: its owner and its workspace, and nothing else", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValueOnce({
+      id: "id-row",
+      ownerUserId: "u2",
+      organizationId: "org-1",
+      connectorKey: "externalMcp",
+      connectionId: "external-mcp-keyless-row-1",
+      deletedAt: null,
+    });
+    expect(
+      await readExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-1")),
+    ).toEqual({ id: "id-row", ownerUserId: "u2", organizationId: "org-1" });
+    expect(readNangoConnectionByNaturalKey).toHaveBeenCalledWith(
+      "externalMcp",
+      "external-mcp-keyless-row-1",
+    );
+    // A read only: it retires nothing and asks for no credential.
+    expect(softDeleteNangoConnection).not.toHaveBeenCalled();
+    expect(deleteNangoConnection).not.toHaveBeenCalled();
+  });
+
+  it("a row with no live identity reads back as none", async () => {
+    readNangoConnectionByNaturalKey.mockResolvedValueOnce(null);
+    expect(
+      await readExternalMcpKeylessConnectionIdentity(externalMcpKeylessConnectionId("row-9")),
+    ).toBeNull();
+  });
+
+  it("REFUSES an id outside the derived namespace, so no road here can address a credential-backed connection", async () => {
+    await expect(readExternalMcpKeylessConnectionIdentity(CONN)).rejects.toThrow(
+      /not a derived keyless/i,
+    );
+    await expect(
+      registerExternalMcpKeylessConnectionIdentity(CONN, {
+        ownerUserId: "u1",
+        organizationId: null,
+        seed: "owner",
+      }),
+    ).rejects.toThrow(/not a derived keyless/i);
+    expect(registerSavedConnectionIdentity).not.toHaveBeenCalled();
+    expect(softDeleteNangoConnection).not.toHaveBeenCalled();
+    expect(deleteNangoConnection).not.toHaveBeenCalled();
+  });
+});

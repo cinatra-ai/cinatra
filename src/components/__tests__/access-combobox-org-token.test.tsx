@@ -3,7 +3,7 @@
  * access-option model (cinatra#2372, mkt-install S1).
  *
  * `resolveAccessLabel` is now a thin `{ type, name }` view over
- * `resolveFlatAccessOption` (src/components/access-scope.ts) — the model
+ * `resolveFlatAccessOption` (packages/sdk-ui/src/access/scope.ts): the model
  * whose full contract (committability, synthetic rows, all six kinds) is
  * pinned in access-scope-flat.test.ts. This file keeps the org-token-specific
  * regression coverage, updated to the trigger ≡ row vocabulary
@@ -44,7 +44,7 @@ import { describe, it, expect } from "vitest";
 import { resolveAccessLabel } from "@/components/access-combobox";
 import { pickerValueToTarget } from "@cinatra-ai/agents/auth-policy-types";
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
 
 const ORG_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_ORG_ID = "22222222-2222-4222-8222-222222222222";

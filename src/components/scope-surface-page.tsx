@@ -152,7 +152,7 @@ export function ScopeSurfacePage({
       <PageContent className="flex flex-col gap-6 pb-8">
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
         {tab === "dashboards" ? (
-          <DashboardsTabBody scope={scope} title={title} />
+          body ?? <DashboardsTabBody scope={scope} title={title} />
         ) : body != null ? (
           body
         ) : (
