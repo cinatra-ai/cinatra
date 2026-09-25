@@ -132,6 +132,21 @@ const SAVED_WORKSPACE = {
   allowRunSharing: false,
 };
 
+/** What Save changes writes when the owner declines the recommendation. */
+const SAVED_OWNER = {
+  runListVisibility: ["owner"],
+  runDataVisibility: ["owner"],
+  runExecuteVisibility: ["owner"],
+  allowRunSharing: false,
+};
+
+/**
+ * The recommendation line as section II of the connectors drawing gives it,
+ * word for word. The dash is U+2014, written as an escape here.
+ */
+const RECOMMENDATION_LINE =
+  "This connector recommends sharing with your organization \u2014 nothing is shared until you save. Currently: only you.";
+
 /** One stored `extension_access_policy` row, as the column holds it. */
 function storedPolicyRow(policy: Record<string, unknown>) {
   runPostgresQueriesSync.mockReturnValue([
@@ -210,22 +225,18 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
     expect(panel?.scopeConstraint).toBe("recommended");
     expect(
       panel?.permissions.accessScopeNote,
-    ).toBe(
-      "This connector recommends sharing with the whole workspace — nothing is shared until you save. Currently: only you.",
-    );
+    ).toBe(RECOMMENDATION_LINE);
   });
 
-  it("keeps the picker on the stored owner scope on that same seed, so the recommendation can be taken OR declined", async () => {
+  it("pre-selects the picker to the recommended scope on that same seed", async () => {
     storedPolicyRow(CONNECT_SEED);
 
     const panel = panelsOf(await drawTab())?.[0];
-    // The line reads "Currently: only you."; a picker pre-selected to the
-    // recommended scope contradicted it AND left the owner no enabled
-    // alternative to the value already selected, so Save could never write
-    // (cinatra#3408).
-    expect(
-      panel?.permissions.accessValueOverride,
-    ).toBe("owner");
+    // The picker proposes the recommended scope; the line says nothing is
+    // shared until Save and that the stored grant is still only the owner
+    // (cinatra#3408). The stored policy handed to the card stays the seed.
+    expect(panel?.permissions.accessValueOverride).toBe("workspace");
+    expect(panel?.permissions.initialPolicy?.runListVisibility).toEqual(["owner"]);
   });
 
   it("draws the SAVED scope and no recommendation line once the owner has saved", async () => {
@@ -240,5 +251,39 @@ describe("the Sharing tab draws a recommending connector's line, read from the s
     expect(
       panel?.permissions.accessValueOverride,
     ).toBe("workspace");
+  });
+
+  it("regression guard (passes without the #3408 fix too): draws the owner scope and no line once the owner has saved a decline", async () => {
+    storedPolicyRow(SAVED_OWNER);
+
+    const panel = panelsOf(await drawTab())?.[0];
+    expect(panel).toBeDefined();
+    expect(panel?.scopeConstraint).toBeNull();
+    expect(
+      panel?.permissions.accessScopeNote,
+    ).toBeUndefined();
+    expect(
+      panel?.permissions.accessValueOverride,
+    ).toBe("owner");
+  });
+
+  it("states no recommendation on a connection that belongs to no organization", async () => {
+    // A person of no organization still registers a server (cinatra#3397),
+    // and the write gate refuses a workspace grant on that row. This is the
+    // stated exception to acceptance item 1 of cinatra#3408.
+    listNangoConnectionsByOwner.mockResolvedValue([
+      { ...registeredRow, organizationId: null },
+    ]);
+    storedPolicyRow(CONNECT_SEED);
+
+    const panel = panelsOf(await drawTab())?.[0];
+    expect(panel).toBeDefined();
+    expect(panel?.scopeConstraint).toBeNull();
+    expect(
+      panel?.permissions.accessScopeNote,
+    ).toBeUndefined();
+    expect(
+      panel?.permissions.accessValueOverride,
+    ).toBe("owner");
   });
 });

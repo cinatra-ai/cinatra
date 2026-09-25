@@ -225,7 +225,7 @@ describe("route-graph.mjs — extension-owned modules leave the core count (cina
       expect(res.stdout).toContain("| Core | Extension (excluded) |");
       expect(res.stdout).toContain(`| ${entryRel} | ${entryRel} | ${route.moduleCount} | ${route.coreModuleCount} | 2 |`);
 
-      expect(routeGraph.isExtensionModule("extensions/cinatra-ai/x/src/a.ts")).toBe(true);
+      expect(routeGraph.isExtensionModule("extensions/fixture-org/pack-a/src/a.ts")).toBe(true);
       expect(routeGraph.isExtensionModule("src/lib/a.ts")).toBe(false);
       expect(routeGraph.isExtensionModule("packages/agents/src/a.ts")).toBe(false);
     } finally {
