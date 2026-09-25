@@ -15,6 +15,14 @@
 //   EXCLUDES ITSELF, and waits for every selected context to exist and
 //   conclude `success`.
 //
+//   The expected set follows the pull request's BASE branch (#3653). A
+//   workflow whose `pull_request` trigger does not run for that base (its
+//   `branches` filter does not match the base, or its `branches-ignore`
+//   filter does) posts no check run on the candidate, so its contexts are not
+//   expected. The inventory records those filters per workflow (`triggers`);
+//   the summary prints the derived set and names each excluded workflow on
+//   its own line. The queue candidate (`merge_group`) keeps the full set.
+//
 //   It fails on missing, failed, cancelled, duplicate-source or timed-out
 //   checks. The single exception is a `skipped` conclusion on a context the
 //   inventory marks `skippable` (a job under an `if:` guard, which GitHub
@@ -22,11 +30,10 @@
 //   otherwise ignored: an unknown check never joins the wait set, so the job
 //   can never wait on itself (a self-dependency would deadlock the queue).
 //
-//   On the `merge_group` event it additionally revalidates
-//     - the approved head (the queue candidate must descend from the exact
-//       head the approval was given on: a moved head fails), and
-//     - the verification-boundary predicate (the LAST boundary record for the
-//       head is `candidate` or `promoted`).
+//   On `merge_group`, immutable engine entrypoints authenticate the exact
+//   queued PR/head/base/tree and current candidate/promoted boundary. Complete
+//   file inventory and both receipts must remain identical across the wait.
+//   Editable body records and queue-ref guesses cannot supply authority.
 //
 //   Its wait is bounded by the LONGEST JOB BUDGET of the workflows it
 //   evaluates — each expected entry carries the `timeout-minutes` of the job
@@ -46,6 +53,7 @@
 // only part that talks to the GitHub API.
 
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -128,6 +136,46 @@ export function validateInventory(inv) {
     }
     if (seen.has(inv.selfContext)) bad(`inventory 'expected' contains the job's own context '${inv.selfContext}' — the job would wait on itself`);
   }
+  // #3653: each workflow's recorded `pull_request` branch filters. Optional:
+  // a workflow with no record is expected for every base, as before. A record
+  // that is present is read strictly, because a filter this job cannot read
+  // exactly would make it guess which workflows run for a base.
+  if (inv.triggers !== undefined) {
+    if (inv.triggers === null || typeof inv.triggers !== "object" || Array.isArray(inv.triggers)) {
+      bad("inventory 'triggers' is not an object keyed by workflow path");
+    } else {
+      for (const [workflow, record] of Object.entries(inv.triggers)) {
+        if (record === null || typeof record !== "object" || Array.isArray(record)) {
+          bad(`trigger record of '${workflow}' is not an object`);
+          continue;
+        }
+        const pr = record.pull_request;
+        if (pr === undefined || pr === null) continue;
+        if (typeof pr !== "object" || Array.isArray(pr)) {
+          bad(`pull_request trigger of '${workflow}' is not an object`);
+          continue;
+        }
+        for (const key of ["branches", "branches-ignore"]) {
+          const list = pr[key];
+          if (list === undefined || list === null) continue;
+          if (!Array.isArray(list) || list.length === 0 || !list.every((p) => typeof p === "string" && p !== "")) {
+            bad(`pull_request '${key}' of '${workflow}' is malformed (null, or a non-empty array of non-empty patterns)`);
+            continue;
+          }
+          for (const p of list) {
+            try {
+              branchPatternToRegExp(p.startsWith("!") ? p.slice(1) : p);
+            } catch (err) {
+              bad(`pull_request '${key}' of '${workflow}': ${err.message}`);
+            }
+          }
+        }
+        if (Array.isArray(pr.branches) && Array.isArray(pr["branches-ignore"])) {
+          bad(`pull_request trigger of '${workflow}' sets both 'branches' and 'branches-ignore', which GitHub refuses`);
+        }
+      }
+    }
+  }
   if (inv.reportOnly !== undefined && !Array.isArray(inv.reportOnly)) bad("inventory 'reportOnly' is not an array");
   return { ok: problems.length === 0, problems };
 }
@@ -147,7 +195,7 @@ export function loadInventory(repoRoot) {
 }
 
 /* ------------------------------------------------------------------ *
- * Candidate SHA + approved head
+ * Candidate SHA + authenticated queue identity
  * ------------------------------------------------------------------ */
 
 /**
@@ -202,72 +250,150 @@ export function resolveCandidateShas({ eventName, githubSha, headSha, payload })
 }
 
 /**
- * Queue-arm revalidation of the approved head: the pull request's head must
- * still be the exact commit the approval was given on. A head that moved
- * after the approval invalidates the queue entry.
+ * The branch the candidate's `pull_request` triggers are matched against
+ * (#3653): the pull request's BASE branch, read from the same event payload
+ * that gives the job the pull request's number. The queue event returns null,
+ * so the queue candidate keeps the full set. A pull_request payload without
+ * the base fails closed.
  */
-export function validateApprovedHead({ approvedHead, pullRequestHead }) {
-  if (typeof approvedHead !== "string" || approvedHead === "") {
-    return { ok: false, reason: "no approved head could be resolved for the queued pull request (failing closed)" };
+export function resolveBaseRef({ eventName, payload }) {
+  if (eventName !== "pull_request" && eventName !== "pull_request_target") return null;
+  const ref = payload?.pull_request?.base?.ref;
+  if (typeof ref !== "string" || ref === "") {
+    throw new Error("merge-readiness: pull_request event without the pull request's base branch (failing closed)");
   }
-  if (typeof pullRequestHead !== "string" || pullRequestHead === "") {
-    return { ok: false, reason: "the queued pull request reports no head sha (failing closed)" };
-  }
-  if (approvedHead !== pullRequestHead) {
-    return {
-      ok: false,
-      reason: `the approved head moved: approval is bound to ${approvedHead} but the pull request head is now ${pullRequestHead} — a new approval is required`,
-    };
-  }
-  return { ok: true, reason: null };
+  return ref;
 }
 
-/* ------------------------------------------------------------------ *
- * Verification-boundary predicate
- * ------------------------------------------------------------------ */
+/* Queue authority comes only from the immutable, separately checked-out engine. */
+export const QUEUE_ENGINE_PIN = "1e40675e1642dcc32d195f27b3deb285b4d3d6fc";
+export const QUEUE_ENGINE_DIRECTORY = ".merge-readiness-engine";
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const DIGEST = /^[0-9a-f]{64}$/;
+const positive = value => Number.isSafeInteger(value) && value > 0;
+const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const requireQueue = (condition, message) => { if (!condition) throw new Error(`merge-readiness: queue ${message}`); };
+const exactKeys = (value, keys) => object(value) && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
 
-const BOUNDARY_RE = /^Verification boundary:\s*([A-Za-z][A-Za-z-]*)\s+at\s+([0-9a-f]{7,40})/;
-
-/**
- * Parse the column-0 `Verification boundary: <state> at <sha>` records out of
- * a record text (a pull-request body, a record file). Returns the records in
- * document order as { state, sha }.
- */
-export function parseBoundaryRecords(text) {
-  if (typeof text !== "string") return [];
-  const out = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(BOUNDARY_RE);
-    if (m) out.push({ state: m[1], sha: m[2] });
-  }
-  return out;
+export function validateQueueBinding(report, expected) {
+  requireQueue(object(report) && report.arm === "merge-group" && report.mode === "enforce" && report.repo === expected.repository
+    && report.apiSkippedReason === null && report.findingCount === 0 && Array.isArray(report.findings) && report.findings.length === 0,
+  "engine did not return an authenticated enforce result");
+  const q = report.queueBinding;
+  requireQueue(exactKeys(q, ["schema", "repository", "repositoryId", "pullRequest", "headSha", "headRepositoryId", "baseRef", "baseSha", "groupHeadSha", "parents", "groupTree", "authority"]), "binding shape is invalid");
+  requireQueue(q.schema === "cinatra.queue-binding/v1" && q.repository === expected.repository
+    && positive(q.repositoryId) && positive(q.headRepositoryId) && positive(q.pullRequest)
+    && FULL_SHA.test(q.headSha) && FULL_SHA.test(q.baseSha) && FULL_SHA.test(q.groupHeadSha) && FULL_SHA.test(q.groupTree)
+    && q.groupHeadSha === expected.groupHeadSha && q.baseSha === expected.baseSha && q.baseRef === expected.baseRef
+    && Array.isArray(q.parents) && q.parents.length === 2 && q.parents[0] === q.baseSha && q.parents[1] === q.headSha
+    && ["review", "delegated-v1"].includes(q.authority), "binding does not match the event and exact candidate");
+  requireQueue(q.authority !== "delegated-v1" || q.headRepositoryId === q.repositoryId, "delegated head repository differs");
+  return Object.fromEntries(["schema", "repository", "repositoryId", "pullRequest", "headSha", "headRepositoryId", "baseRef", "baseSha", "groupHeadSha", "parents", "groupTree", "authority"].map(key => [key, q[key]]));
 }
 
-/** The states a boundary record may carry that mean "verified for merge". */
-export const BOUNDARY_MERGEABLE_STATES = ["candidate", "promoted"];
+export function validateBoundaryBinding(value, q) {
+  requireQueue(exactKeys(value, ["schema", "repository", "repositoryId", "pullRequest", "headSha", "state", "commentId", "digest"]), "boundary shape is invalid");
+  requireQueue(value.schema === "cinatra.verification-boundary-current/v1" && value.repository === q.repository
+    && value.repositoryId === q.repositoryId && value.pullRequest === q.pullRequest && value.headSha === q.headSha
+    && ["candidate", "promoted"].includes(value.state) && positive(value.commentId) && DIGEST.test(value.digest),
+  "boundary is not authenticated for the exact queued head");
+  return Object.fromEntries(["schema", "repository", "repositoryId", "pullRequest", "headSha", "state", "commentId", "digest"].map(key => [key, value[key]]));
+}
 
-/**
- * The boundary predicate: the LAST record for `head` must be `candidate` or
- * `promoted`. No record for the head, or a later non-mergeable state (for
- * example `candidate-pending-ci` or `proof-failed`), fails closed.
- */
-export function verificationBoundaryVerdict(text, head) {
-  if (typeof head !== "string" || head === "") {
-    return { ok: false, state: null, reason: "no head sha to evaluate the verification boundary against (failing closed)" };
+function engineEnvironment(token) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("GIT_") || key.startsWith("PYTHON") || ["NODE_OPTIONS", "NODE_PATH", "GH_DEBUG"].includes(key)) delete env[key];
+  return { ...env, GH_HOST: "github.com", GH_TOKEN: token, GITHUB_TOKEN: token,
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", PYTHONDONTWRITEBYTECODE: "1" };
+}
+
+export function createQueueEngineReader(repoRoot, token, execute = execFileSync) {
+  const root = path.resolve(repoRoot), engine = path.join(root, QUEUE_ENGINE_DIRECTORY);
+  const options = { cwd: root, env: engineEnvironment(token), encoding: "utf8", timeout: 90_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] };
+  const git = (cwd, ...args) => execute("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", cwd, ...args], { ...options, timeout: 3000 }).trim();
+  const verify = () => {
+    requireQueue(FULL_SHA.test(QUEUE_ENGINE_PIN), "engine merge pin is not selected");
+    requireQueue(fs.realpathSync(engine) === engine && !fs.lstatSync(engine).isSymbolicLink(), "engine path is not the fixed checkout");
+    requireQueue(git(engine, "rev-parse", "--show-toplevel") === engine && git(engine, "rev-parse", "HEAD") === QUEUE_ENGINE_PIN, "engine checkout does not match the pinned source");
+    requireQueue(git(engine, "status", "--porcelain", "--untracked-files=all", "--ignored") === "", "engine checkout is not clean");
+  };
+  return (kind, args, groupHead) => {
+    verify();
+    requireQueue(git(root, "rev-parse", "HEAD") === groupHead, "checkout is not the event candidate");
+    const script = kind === "attribution" ? "truthful-attribution-gate.mjs" : kind === "boundary" ? "verification-boundary.py" : null;
+    requireQueue(script !== null, "unknown engine operation");
+    let raw;
+    try { raw = execute(kind === "attribution" ? process.execPath : "python3", [path.join(engine, "scripts", script), ...args], options); }
+    catch { throw new Error(`merge-readiness: queue ${kind} engine refused or could not complete`); }
+    verify();
+    requireQueue(git(root, "rev-parse", "HEAD") === groupHead, "checkout changed during engine read");
+    try { return JSON.parse(raw); } catch { throw new Error(`merge-readiness: queue ${kind} result is not one JSON document`); }
+  };
+}
+
+function queuedPullIdentity(pr, q) {
+  requireQueue(object(pr) && pr.number === q.pullRequest && pr.state === "open" && pr.merged === false && pr.draft === false
+    && pr.head?.sha === q.headSha && pr.head?.repo?.id === q.headRepositoryId
+    && typeof pr.head?.ref === "string" && pr.head.ref !== ""
+    && typeof pr.head?.repo?.full_name === "string" && pr.head.repo.full_name !== ""
+    && pr.base?.ref === q.baseRef && pr.base?.repo?.id === q.repositoryId && pr.base?.repo?.full_name === q.repository
+    && Number.isSafeInteger(pr.changed_files) && pr.changed_files >= 0 && pr.changed_files <= 3000,
+  "pull identity or file count differs from verified engine binding");
+  return [pr.number, pr.state, pr.merged, pr.draft, pr.head.sha, pr.head.ref, pr.head.repo.id, pr.head.repo.full_name,
+    pr.base.ref, pr.base.repo.id, pr.base.repo.full_name, pr.changed_files];
+}
+
+export async function readQueuedFiles(get, q) {
+  const endpoint = `/repos/${q.repository}/pulls/${q.pullRequest}`;
+  const identity = queuedPullIdentity(await get(endpoint), q);
+  const files = [], seen = new Set(); let complete = false;
+  const validPath = name => typeof name === "string" && name !== "" && !name.startsWith("/") && !name.split("/").some(x => x === ".." || x === "") && !/[\x00-\x1f]/.test(name);
+  for (let page = 1; page <= 31; page++) {
+    const rows = await get(`${endpoint}/files?per_page=100&page=${page}`);
+    requireQueue(Array.isArray(rows) && rows.length <= 100, "file page is malformed");
+    for (const f of rows) {
+      requireQueue(object(f) && validPath(f.filename) && !seen.has(f.filename) && FULL_SHA.test(f.sha)
+        && ["added", "removed", "modified", "renamed", "copied", "changed", "unchanged"].includes(f.status)
+        && [f.additions, f.deletions, f.changes].every(n => Number.isSafeInteger(n) && n >= 0)
+        && (f.previous_filename == null || validPath(f.previous_filename))
+        && (f.status !== "renamed" || validPath(f.previous_filename)), "file inventory is incomplete or malformed");
+      seen.add(f.filename);
+      files.push({ filename: f.filename, previous_filename: f.previous_filename ?? null, status: f.status, sha: f.sha,
+        additions: f.additions, deletions: f.deletions, changes: f.changes });
+      requireQueue(files.length <= 3000, "file inventory exceeds API limit");
+    }
+    if (rows.length < 100) { complete = true; break; }
   }
-  const forHead = parseBoundaryRecords(text).filter((r) => head.startsWith(r.sha) || r.sha.startsWith(head));
-  if (forHead.length === 0) {
-    return { ok: false, state: null, reason: `no verification-boundary record names the head ${head} (failing closed)` };
+  requireQueue(complete && files.length === identity.at(-1), "file pagination or count is incomplete");
+  requireQueue(JSON.stringify(queuedPullIdentity(await get(endpoint), q)) === JSON.stringify(identity), "pull changed during file inventory");
+  files.sort((a, b) => a.filename < b.filename ? -1 : a.filename > b.filename ? 1 : 0);
+  return { identity, files, changedPaths: [...new Set(files.flatMap(f => [f.filename, f.previous_filename].filter(Boolean)))].sort() };
+}
+
+export async function readQueueEvidence({ repo, payload, lookupSha, recordedSha, get, engine }) {
+  const group = payload?.merge_group;
+  requireQueue(typeof repo === "string" && /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo) && !repo.includes("..")
+    && FULL_SHA.test(group?.head_sha) && FULL_SHA.test(group?.base_sha)
+    && typeof group?.base_ref === "string" && group.base_ref.startsWith("refs/heads/") && group.base_ref.length > 11
+    && lookupSha === group.head_sha && recordedSha === group.head_sha, "event does not bind full candidate/base identity");
+  const expected = { repository: repo, groupHeadSha: group.head_sha, baseSha: group.base_sha, baseRef: group.base_ref.slice(11) };
+  const binding = validateQueueBinding(engine("attribution", ["--arm", "merge-group", "--mode", "enforce", "--format", "json", "--repo", repo,
+    "--merge-group-head", expected.groupHeadSha, "--merge-group-base", expected.baseSha, "--gate-arm-wait-ms", "0"], expected.groupHeadSha), expected);
+  const boundary = validateBoundaryBinding(engine("boundary", ["--repo", repo, "--pr", String(binding.pullRequest), "--head", binding.headSha], expected.groupHeadSha), binding);
+  const inventory = await readQueuedFiles(get, binding);
+  return { binding, boundary, ...inventory };
+}
+
+export function validateQueueEvidencePair(queue) {
+  requireQueue(object(queue?.before) && object(queue?.after), "authenticated before/after evidence is missing");
+  for (const snapshot of [queue.before, queue.after]) {
+    const q = snapshot.binding;
+    validateQueueBinding({ arm: "merge-group", mode: "enforce", repo: q?.repository, apiSkippedReason: null, findingCount: 0, findings: [], queueBinding: q },
+      { repository: q?.repository, groupHeadSha: q?.groupHeadSha, baseSha: q?.baseSha, baseRef: q?.baseRef });
+    validateBoundaryBinding(snapshot.boundary, q);
+    requireQueue(Array.isArray(snapshot.files) && Array.isArray(snapshot.identity) && Array.isArray(snapshot.changedPaths), "file snapshot is missing");
   }
-  const last = forHead[forHead.length - 1];
-  if (!BOUNDARY_MERGEABLE_STATES.includes(last.state)) {
-    return {
-      ok: false,
-      state: last.state,
-      reason: `the last verification-boundary record for ${head} is '${last.state}', not one of ${BOUNDARY_MERGEABLE_STATES.join(" / ")}`,
-    };
-  }
-  return { ok: true, state: last.state, reason: null };
+  requireQueue(JSON.stringify(queue.before) === JSON.stringify(queue.after), "authority, receipt or file inventory changed while waiting");
 }
 
 /* ------------------------------------------------------------------ *
@@ -305,6 +431,119 @@ export function pathsApply(globs, changedPaths) {
   const res = globs.map(globToRegExp);
   return changedPaths.some((p) => res.some((r) => r.test(p)));
 }
+
+/* ------------------------------------------------------------------ *
+ * Base-branch applicability (#3653)
+ * ------------------------------------------------------------------ */
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A character-class range GitHub accepts: 0-9, a-z or A-Z, in order. */
+const classRange = (from, to) =>
+  from <= to && [/[0-9]/, /[a-z]/, /[A-Z]/].some((kind) => kind.test(from) && kind.test(to));
+
+/**
+ * Translate one pattern of a workflow's `branches` / `branches-ignore` filter
+ * into a RegExp, with the filter-pattern syntax GitHub documents for it:
+ *   `*`   any characters except `/`      `**`  any characters, `/` included
+ *   `?`   zero or one of the preceding character
+ *   `+`   one or more of the preceding character
+ *   `[…]` one listed letter or digit, or one from a range 0-9, a-z or A-Z
+ *   `\`   makes the next character literal; every other character is literal.
+ * A leading `!` (negation) is read by matchesBranchFilter, not here. A pattern
+ * GitHub would refuse (an unclosed or empty class, another character in a
+ * class, a trailing `\`) throws, so the inventory check rejects it.
+ */
+export function branchPatternToRegExp(pattern) {
+  const atoms = [];
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") {
+        i++;
+        if (pattern[i + 1] === "/") { i++; atoms.push("(?:[^/]+/)*"); } else { atoms.push(".*"); }
+      } else {
+        atoms.push("[^/]*");
+      }
+    } else if ((c === "?" || c === "+") && atoms.length > 0) {
+      atoms.push(`(?:${atoms.pop()})${c}`);
+    } else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      const body = end === -1 ? "" : pattern.slice(i + 1, end);
+      const parts = body.match(/[A-Za-z0-9]-[A-Za-z0-9]|[A-Za-z0-9]/g) ?? [];
+      if (body === "" || parts.join("") !== body || !parts.every((p) => p.length === 1 || classRange(p[0], p[2]))) {
+        throw new Error(
+          `branch filter '${pattern}' has a character class GitHub does not accept (letters, digits and ranges 0-9, a-z, A-Z only)`,
+        );
+      }
+      atoms.push(`[${body}]`);
+      i = end;
+    } else if (c === "\\") {
+      if (i + 1 >= pattern.length) throw new Error(`branch filter '${pattern}' ends with a lone '\\'`);
+      i++;
+      atoms.push(escapeRegExp(pattern[i]));
+    } else {
+      atoms.push(escapeRegExp(c));
+    }
+  }
+  return new RegExp(`^${atoms.join("")}$`);
+}
+
+/**
+ * Does an ordered `branches` / `branches-ignore` list match this branch? The
+ * LAST pattern that matches decides: a `!` pattern excludes what an earlier
+ * pattern matched, and a later positive pattern includes it again. This is
+ * GitHub's rule for negated filter patterns.
+ */
+export function matchesBranchFilter(patterns, branch) {
+  let matched = false;
+  for (const raw of patterns) {
+    const negated = raw.startsWith("!");
+    if (branchPatternToRegExp(negated ? raw.slice(1) : raw).test(branch)) matched = !negated;
+  }
+  return matched;
+}
+
+/**
+ * Does a workflow's recorded `pull_request` trigger run for a pull request
+ * into `baseRef`? Its `branches` list must match the base, and its
+ * `branches-ignore` list must not. A list that is null or empty filters nothing.
+ */
+export function pullRequestTriggerRunsFor(trigger, baseRef) {
+  const branches = trigger?.branches;
+  const ignored = trigger?.["branches-ignore"];
+  if (Array.isArray(branches) && branches.length > 0 && !matchesBranchFilter(branches, baseRef)) return false;
+  if (Array.isArray(ignored) && ignored.length > 0 && matchesBranchFilter(ignored, baseRef)) return false;
+  return true;
+}
+
+/**
+ * The expected set for the candidate's base branch: every inventory context
+ * except the job's own, less the contexts of each workflow whose recorded
+ * `pull_request` trigger does not run for `baseRef`. Such a workflow posts no
+ * check run on the candidate, so nothing from it can be waited on. Returns the
+ * kept entries and one `not expected` line for each excluded workflow. With no
+ * base (the queue event), and for a workflow with no recorded trigger, every
+ * context stays expected, as before.
+ */
+export function expectedForBase({ inventory, baseRef }) {
+  const all = inventory.expected.filter((e) => e.context !== inventory.selfContext);
+  if (typeof baseRef !== "string" || baseRef === "") return { expected: all, notExpected: [] };
+  const triggers = object(inventory.triggers) ? inventory.triggers : {};
+  const excluded = new Set();
+  for (const workflow of new Set(all.map((e) => e.workflow))) {
+    const trigger = Object.hasOwn(triggers, workflow) ? triggers[workflow]?.pull_request : null;
+    if (object(trigger) && !pullRequestTriggerRunsFor(trigger, baseRef)) excluded.add(workflow);
+  }
+  return {
+    expected: all.filter((e) => !excluded.has(e.workflow)),
+    notExpected: [...excluded].sort().map((workflow) => `not expected: ${workflow} (trigger excludes base '${baseRef}')`),
+  };
+}
+
+/** The contexts this candidate waits on: its base's expected set, narrowed by path applicability. */
+const applicableTo = ({ inventory, changedPaths, baseRef }) =>
+  expectedForBase({ inventory, baseRef }).expected.filter((e) => pathsApply(e.paths, changedPaths));
 
 /* ------------------------------------------------------------------ *
  * Evaluation
@@ -395,21 +634,23 @@ const CONCLUSION_FAIL_LABEL = {
  * @param {Array}  args.checks      [{ id, name, status, conclusion, completedAt, app, workflow }]
  * @param {Array|null} args.changedPaths  paths changed by the candidate (null = unknown)
  * @param {string} args.eventName
- * @param {object} [args.queue]     merge_group arm: { approvedHead, pullRequestHead, recordText }
+ * @param {object} [args.queue]     merge_group arm: authenticated { before, after } snapshots
  * @param {number} [args.waitedMinutes] the wait this run actually spent, named
  *                 in the pending text (defaults to the inventory's fallback).
- * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[]}}
+ * @param {string|null} [args.baseRef] the pull request's base branch: only the
+ *                 workflows whose `pull_request` trigger runs for it are
+ *                 expected (#3653). Null keeps the full set (the queue event).
+ * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[], base: string|null, expectedSet: {context: string, workflow: string}[], notExpected: string[]}}
  */
-export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes }) {
+export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes, baseRef = null }) {
   const failures = [];
   const pending = [];
   const reports = [];
   const waited = Number.isFinite(waitedMinutes) && waitedMinutes > 0 ? waitedMinutes : inventory.deadlineMinutes;
 
-  const applicable = inventory.expected.filter(
-    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
-  );
-  const skipped = inventory.expected.filter((e) => !applicable.includes(e) && e.context !== inventory.selfContext);
+  const derived = expectedForBase({ inventory, baseRef });
+  const applicable = derived.expected.filter((e) => pathsApply(e.paths, changedPaths));
+  const skipped = derived.expected.filter((e) => !applicable.includes(e));
   for (const e of skipped) reports.push(`not applicable to this candidate (paths ${JSON.stringify(e.paths)}): ${e.context}`);
 
   const byName = new Map();
@@ -479,13 +720,8 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
   }
 
   if (eventName === "merge_group") {
-    const head = validateApprovedHead({
-      approvedHead: queue?.approvedHead,
-      pullRequestHead: queue?.pullRequestHead,
-    });
-    if (!head.ok) failures.push(`approved-head: ${head.reason}`);
-    const boundary = verificationBoundaryVerdict(queue?.recordText, queue?.pullRequestHead);
-    if (!boundary.ok) failures.push(`verification-boundary: ${boundary.reason}`);
+    try { validateQueueEvidencePair(queue); }
+    catch (error) { failures.push(`queue-authority: ${error.message}`); }
   }
 
   // A real red outranks an unfinished run: a FAIL stays a FAIL.
@@ -497,6 +733,9 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
     pending,
     reports,
     waitedOn: applicable.map((e) => e.context),
+    base: typeof baseRef === "string" && baseRef !== "" ? baseRef : null,
+    expectedSet: derived.expected.map((e) => ({ context: e.context, workflow: e.workflow })),
+    notExpected: derived.notExpected,
   };
 }
 
@@ -506,12 +745,11 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
  * `timeout-minutes` of the job that reports it; GitHub's own default budget
  * when the job declares none) plus WAIT_MARGIN_MINUTES, capped at
  * MAX_WAIT_MINUTES. With no applicable context there is no budget to follow
- * and the inventory's fallback deadline is used.
+ * and the inventory's fallback deadline is used. A workflow that does not run
+ * for the base (#3653) adds no budget.
  */
-export function waitBudgetMinutes({ inventory, changedPaths }) {
-  const applicable = inventory.expected.filter(
-    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
-  );
+export function waitBudgetMinutes({ inventory, changedPaths, baseRef = null }) {
+  const applicable = applicableTo({ inventory, changedPaths, baseRef });
   if (applicable.length === 0) return Math.min(inventory.deadlineMinutes, MAX_WAIT_MINUTES);
   const longest = Math.max(
     ...applicable.map((e) =>
@@ -532,11 +770,10 @@ export function exitCodeFor(result) {
  * Polling predicate: is the candidate's check set settled enough to judge?
  * True when every applicable expected context has a COMPLETED check run —
  * missing and in-progress contexts keep the job waiting until the deadline.
+ * A workflow that does not run for the base (#3653) is not waited for.
  */
-export function isSettled({ inventory, checks, changedPaths }) {
-  const applicable = inventory.expected.filter(
-    (e) => e.context !== inventory.selfContext && pathsApply(e.paths, changedPaths),
-  );
+export function isSettled({ inventory, checks, changedPaths, baseRef = null }) {
+  const applicable = applicableTo({ inventory, changedPaths, baseRef });
   const byName = new Map();
   for (const c of checks ?? []) byName.set(c.name, c);
   return applicable.every((e) => byName.get(e.context)?.status === "completed");
@@ -552,6 +789,15 @@ export function renderSummary({ candidateSha, lookupSha, eventName, result }) {
   if (typeof lookupSha === "string" && lookupSha !== "" && lookupSha !== candidateSha) {
     lines.push(`  checks read from: ${lookupSha} (the head that carries the runs; the candidate above is the tree under evaluation)`);
   }
+  const base = typeof result.base === "string" && result.base !== "" ? result.base : null;
+  if (base !== null) lines.push(`  base: ${base}`);
+  if (Array.isArray(result.expectedSet)) {
+    const workflows = new Set(result.expectedSet.map((e) => e.workflow)).size;
+    const forBase = base !== null ? ` for base '${base}'` : "";
+    lines.push(`  expected set${forBase}: ${result.expectedSet.length} context(s) from ${workflows} workflow(s)`);
+    for (const e of result.expectedSet) lines.push(`    expected: ${e.context} (from ${e.workflow})`);
+  }
+  for (const n of result.notExpected ?? []) lines.push(`  ${n}`);
   lines.push(`  waited on ${result.waitedOn.length} expected context(s)`);
   for (const r of result.reports) lines.push(`  report: ${r}`);
   for (const p of result.pending ?? []) lines.push(`  ${p}`);
@@ -620,20 +866,6 @@ async function listChangedPaths(token, repo, prNumber) {
   return out;
 }
 
-/** The head sha the latest APPROVED review was given on. */
-async function resolveApprovedHead(token, repo, prNumber) {
-  const reviews = await api(token, `/repos/${repo}/pulls/${prNumber}/reviews?per_page=100`);
-  const approvals = (reviews ?? []).filter((r) => r.state === "APPROVED");
-  if (approvals.length === 0) return null;
-  return approvals[approvals.length - 1].commit_id ?? null;
-}
-
-/** The merge-group's pull request number, from the queue branch ref. */
-export function pullNumberFromQueueRef(ref) {
-  const m = /gh-readonly-queue\/[^/]+\/pr-(\d+)-/.exec(ref ?? "");
-  return m ? Number(m[1]) : null;
-}
-
 async function main() {
   const repoRoot = process.env.GITHUB_WORKSPACE ?? path.resolve(fileURLToPath(import.meta.url), "..", "..", "..");
   const repo = process.env.GITHUB_REPOSITORY;
@@ -654,20 +886,22 @@ async function main() {
     headSha: process.env.MERGE_READINESS_HEAD_SHA,
     payload,
   });
+  const baseRef = resolveBaseRef({ eventName, payload });
 
-  let prNumber = payload?.pull_request?.number ?? null;
-  if (eventName === "merge_group") prNumber = pullNumberFromQueueRef(payload?.merge_group?.head_ref);
+  const prNumber = payload?.pull_request?.number ?? null;
+  const queueArgs = eventName === "merge_group" ? { repo, payload, lookupSha, recordedSha,
+    get: endpoint => api(token, endpoint), engine: createQueueEngineReader(repoRoot, token) } : null;
+  const before = queueArgs ? await readQueueEvidence(queueArgs) : null;
+  const changedPaths = before ? before.changedPaths : prNumber ? await listChangedPaths(token, repo, prNumber) : null;
 
-  const changedPaths = prNumber ? await listChangedPaths(token, repo, prNumber) : null;
-
-  const budgetMinutes = waitBudgetMinutes({ inventory, changedPaths });
+  const budgetMinutes = waitBudgetMinutes({ inventory, changedPaths, baseRef });
   const startedAt = Date.now();
   const deadline = startedAt + budgetMinutes * 60_000;
   const intervalMs = Number(process.env.MERGE_READINESS_POLL_MS ?? 30_000);
   let checks = [];
   for (;;) {
     checks = await listChecks(token, repo, lookupSha);
-    if (isSettled({ inventory, checks, changedPaths })) break;
+    if (isSettled({ inventory, checks, changedPaths, baseRef })) break;
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -676,22 +910,10 @@ async function main() {
   // of this head to workflows before the sources are judged.
   checks = resolveCheckWorkflows(checks, await listWorkflowPaths(token, repo, lookupSha));
 
-  let queue;
-  if (eventName === "merge_group") {
-    if (!prNumber) {
-      console.error("::error::merge-readiness: could not resolve the queued pull request from merge_group.head_ref (failing closed).");
-      process.exit(1);
-    }
-    const pr = await api(token, `/repos/${repo}/pulls/${prNumber}`);
-    queue = {
-      approvedHead: await resolveApprovedHead(token, repo, prNumber),
-      pullRequestHead: pr.head?.sha ?? null,
-      recordText: pr.body ?? "",
-    };
-  }
+  const queue = queueArgs ? { before, after: await readQueueEvidence(queueArgs) } : undefined;
 
   const waitedMinutes = Math.max(1, Math.round((Date.now() - startedAt) / 60_000));
-  const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes });
+  const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes, baseRef });
   const summary = renderSummary({ candidateSha: recordedSha, lookupSha, eventName, result });
   console.log(summary);
   if (process.env.GITHUB_STEP_SUMMARY) {

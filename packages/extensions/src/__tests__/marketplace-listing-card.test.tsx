@@ -17,6 +17,7 @@
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as cheerio from "cheerio";
 
 import { Button } from "@/components/ui/button";
 import { MarketplaceListingCard } from "../screens/marketplace-listing-card";
@@ -135,11 +136,22 @@ describe("MarketplaceListingCard — the three compatibility readings (cinatra#3
     return html.slice(open, close + "</span>".length);
   }
 
-  /** The row's visible words, tags stripped — asserted EXACTLY, never by substring. */
+  /**
+   * The row's visible words, read out of the PARSED row — asserted EXACTLY,
+   * never by substring.
+   *
+   * Parsed, never tag-stripped: a single left-to-right strip pass consumes
+   * from each "<" to the FIRST ">", so any ">" that is not a tag's own
+   * closing bracket (one standing inside a quoted attribute value, an
+   * interleaved or malformed tag) makes the pass cut in the wrong place and
+   * leave markup standing in what this helper hands back as "the row's
+   * visible words". `cheerio` is the repository's established parse road for
+   * reading text out of markup (src/lib/artifacts/url-import.ts and its two
+   * siblings) and resolves here by the same upward node_modules walk this
+   * file's own `react-dom/server` import already takes.
+   */
   function compatLabel(html: string): string {
-    return compatRow(html)
-      .replace(/<[^>]*>/g, "")
-      .trim();
+    return cheerio.load(compatRow(html), null, false).root().text().trim();
   }
 
   /**
@@ -178,6 +190,20 @@ describe("MarketplaceListingCard — the three compatibility readings (cinatra#3
     // Exact equality: "Compatibility unknown" fails this, the word alone passes.
     expect(compatLabel(html)).toBe("Compatibility");
     expect(compatIconTokens(html)).toContain("lucide-circle-question-mark");
+  });
+
+  it("reads the row's visible words when an attribute value carries a '>', leaving no markup standing", () => {
+    // A single left-to-right tag-stripping pass consumes from each "<" to the
+    // FIRST ">", so a ">" standing INSIDE a quoted attribute value ends that
+    // match early and leaves the attribute's tail standing in what the helper
+    // hands back as "the row's visible words". The reading has to come from
+    // the PARSED markup, where an attribute value is an attribute and can
+    // never be mistaken for text. Hand-built row markup (not a card render),
+    // because the reading is a property of the helper, not of today's card.
+    const html =
+      '<div class="meta"><span data-slot="extension-card-compat" data-compat-state="compatible"' +
+      ' title="host range >=2"><svg class="lucide lucide-check size-[11px]"></svg>Compatible</span></div>';
+    expect(compatLabel(html)).toBe("Compatible");
   });
 });
 

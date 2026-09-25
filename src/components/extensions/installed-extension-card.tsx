@@ -10,6 +10,7 @@ import {
   type ExtensionAccent,
 } from "@/components/extension-card";
 import type { ConfigurationNeed } from "@/lib/extension-dependency-ux";
+import { extensionDescriptionText } from "@/lib/extension-description-text";
 import {
   VENDOR_BY_CONNECTIVE,
   VENDOR_MISSING_LABEL,
@@ -35,6 +36,12 @@ import type { ExtensionSourceLabel } from "@cinatra-ai/extensions/screens/extens
  *      2026-07-05: Update/Uninstall/Reinstall/admin-overflow are not in the
  *      drawing; the caller relocates that management surface into the "More
  *      details" §V modal instead of rendering it on the card).
+ *
+ * The description is drawn as its PLAIN-TEXT MEANING (cinatra#3570): a
+ * pack's description is authored in markdown, but §III draws the
+ * description as prose and §II's embedded listing detail is where the rich
+ * reading lives, so the card projects the string through
+ * `extensionDescriptionText` and never renders markup from it.
  *
  * Server-renderable (no client hooks); all interactivity lives in the slots
  * the caller provides (links / server-action forms). Colors ride the shared
@@ -396,7 +403,7 @@ export function InstalledExtensionCard({
               descriptionLineClamp === 2 ? "line-clamp-2" : "line-clamp-3",
             )}
           >
-            {description}
+            {extensionDescriptionText(description)}
           </p>
         )}
         {/* §VII "Agent card (All Agents)" (cinatra#1007) passes neither version

@@ -62,10 +62,25 @@ export const MIGRATABLE_SURFACE_ENTITY_TYPES = [
  */
 export const INSTANCE_ENTITY_TYPES = ["project", "team", "organization"] as const;
 
+/**
+ * The whole-workspace scope (cinatra#2811, per-scope surfaces S5). The one
+ * ORGANIZATION-INDEPENDENT entity: a workspace dashboard is stored with
+ * `organization_id NULL`, because the workspace sits above every organization and
+ * its rows must read the same whichever organization the session has active. The
+ * database pins the shape (`dashboards_workspace_entity_org_check` /
+ * `_shape_check`, migration core__0108).
+ */
+export const WORKSPACE_ENTITY_TYPES = ["workspace"] as const;
+
+/** The single workspace entity id every workspace dashboard and workspace
+ *  reference names (there is one workspace per installation). */
+export const WORKSPACE_DASHBOARD_ENTITY_ID = "__workspace__" as const;
+
 /** Every entityType the service accepts on create/ensure. */
 export const DASHBOARD_ENTITY_TYPES = [
   ...MIGRATABLE_SURFACE_ENTITY_TYPES,
   ...INSTANCE_ENTITY_TYPES,
+  ...WORKSPACE_ENTITY_TYPES,
 ] as const;
 
 export type DashboardEntityType = (typeof DASHBOARD_ENTITY_TYPES)[number];
@@ -84,7 +99,9 @@ export function isKnownEntityType(value: unknown): value is DashboardEntityType 
  * entity; `ownerLevel` + `ownerId` identify the owner (today always user/userId,
  * but modeled on the 4-tier axis). The organization is NOT part of the ref: it
  * is the ambient tenant, always taken from the actor's active org at the service
- * layer, so a ref can never point across tenants.
+ * layer, so a ref can never point across tenants. The one exception is the
+ * workspace ref (`isWorkspaceDashboardRef`), which has NO tenant: it is stored
+ * org-NULL and never reads the active organization at all.
  */
 export type DashboardEntityRef = {
   readonly entityType: DashboardEntityType;
@@ -92,6 +109,48 @@ export type DashboardEntityRef = {
   readonly ownerLevel: OwnerLevel;
   readonly ownerId: string;
 };
+
+/** The acting user's workspace dashboards ref: user-owned, org-free. */
+export function workspaceDashboardRef(userId: string): DashboardEntityRef {
+  return {
+    entityType: "workspace",
+    entityId: WORKSPACE_DASHBOARD_ENTITY_ID,
+    ownerLevel: "user",
+    ownerId: userId,
+  };
+}
+
+/** Is `ref` exactly the workspace shape (the only ref stored org-NULL)? A ref
+ *  that names the workspace type with any other entity or owner is NOT a
+ *  workspace ref, and the service refuses it (fail-closed). */
+export function isWorkspaceDashboardRef(ref: DashboardEntityRef): boolean {
+  return (
+    ref.entityType === "workspace" &&
+    ref.entityId === WORKSPACE_DASHBOARD_ENTITY_ID &&
+    ref.ownerLevel === "user" &&
+    typeof ref.ownerId === "string" &&
+    ref.ownerId.length > 0
+  );
+}
+
+/** Is `row` a workspace dashboard, org-NULL AND workspace-shaped? The single
+ *  predicate every org-NULL arm keys on (the access resolver, the twin-pairing
+ *  exception, the write tenancy). */
+export function isWorkspaceDashboardRow(row: {
+  readonly organizationId: string | null;
+  readonly entityType: string | null;
+  readonly entityId: string | null;
+  readonly ownerLevel: string;
+  readonly projectId: string | null;
+}): boolean {
+  return (
+    row.organizationId === null &&
+    row.entityType === "workspace" &&
+    row.entityId === WORKSPACE_DASHBOARD_ENTITY_ID &&
+    row.ownerLevel === "user" &&
+    !row.projectId
+  );
+}
 
 /**
  * Deterministic id for a FRESHLY-created Overview. The Overview is LOCATED by the
@@ -104,7 +163,9 @@ export type DashboardEntityRef = {
  * the one-time coexistence migration, AND the still-live `upsertDashboardConfig`
  * save action ALL resolve to the SAME row — no dual-id default collision, no
  * double-render, no stranded save. Other (per-instance) surfaces use the
- * dedicated `dash:…:overview` form.
+ * dedicated `dash:…:overview` form. The workspace is among them; its id carries
+ * no organization (`dash:workspace:__workspace__:user:<user>:overview`), so it is
+ * the same row under every active organization.
  */
 export function buildOverviewDashboardId(ref: DashboardEntityRef): string {
   if (

@@ -22,7 +22,7 @@
 import { getActorContext } from "@/lib/auth-session";
 import type {
   ListingScope,
-  ListingScopeKind,
+  TenantListingScopeKind,
 } from "@cinatra-ai/dashboards/entity-links";
 import {
   addScopeListing,
@@ -37,7 +37,7 @@ import type {
 
 /** The server-derived scope a bound action carries (safe: the page authors it). */
 export type ScopeActionArg = {
-  readonly kind: ListingScopeKind;
+  readonly kind: TenantListingScopeKind;
   readonly scopeId: string;
   readonly orgId: string;
 };
@@ -51,6 +51,11 @@ export type ScopeActionArg = {
 async function authorizeScopeAction(
   scope: ScopeActionArg,
 ): Promise<{ actor: NonNullable<Awaited<ReturnType<typeof getActorContext>>>; listingScope: ListingScope } | null> {
+  // The tenant kinds only (cinatra#2811): the argument is untyped at runtime,
+  // and a workspace reference is curated through its own actions, never here.
+  if (scope.kind !== "team" && scope.kind !== "organization" && scope.kind !== "project") {
+    return null;
+  }
   const actor = await getActorContext();
   if (!actor) return null;
   if (

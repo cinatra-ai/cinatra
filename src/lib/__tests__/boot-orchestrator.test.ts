@@ -101,8 +101,9 @@ vi.mock("@/lib/boot/phases/provider-connection-bootstrap", () => ({
   ],
 }));
 vi.mock("@/lib/boot/phases/dev-boot", () => ({
+  devAgentIngestPhases: () => [{ name: "dev-agent-ingest", policy: "dev-only", run: async () => {} }],
   devAwaitedPhases: () => [{ name: "a2a-dev-auto-connect", policy: "dev-only", run: async () => {} }],
-  startDetachedDevAgentsScanPhase: vi.fn(),
+  startDetachedDevExtensionsPhase: vi.fn(),
   startDetachedDevAutoSetupPhase: vi.fn(),
 }));
 
@@ -115,7 +116,7 @@ import {
   type BootStallWatchdog,
 } from "@/lib/boot/boot-stall-watchdog";
 import {
-  startDetachedDevAgentsScanPhase,
+  startDetachedDevExtensionsPhase,
   startDetachedDevAutoSetupPhase,
 } from "@/lib/boot/phases/dev-boot";
 
@@ -129,8 +130,8 @@ describe("runBoot orchestration", () => {
       order.push(phase.name);
       return undefined as never;
     });
-    (startDetachedDevAgentsScanPhase as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => order.push("[detached] dev-agents-skills-scan"),
+    (startDetachedDevExtensionsPhase as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => order.push("[detached] dev-extensions-scan"),
     );
     (startDetachedDevAutoSetupPhase as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       () => order.push("[detached] dev-auto-setup"),
@@ -156,7 +157,8 @@ describe("runBoot orchestration", () => {
       "skills-catalog-rebuild", // cinatra#1364 — explicit rebuild AFTER activation/materialization
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, AWAITED (dev + prod)
-      "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
+      "dev-agent-ingest", // cinatra#3626 — dev block 1 first half, EARLY + AWAITED
+      "[detached] dev-extensions-scan", // dev block 1 remainder — EARLY + detached
       "provider-connection-bootstrap", // env → sealed row, AFTER extension activation, BEFORE the services that read the provider
       "assistant-bootstrap",
       "otel-tracing",
@@ -181,7 +183,7 @@ describe("runBoot orchestration", () => {
 
     await runBoot({ isDevMode: () => false, runPhase });
 
-    expect(startDetachedDevAgentsScanPhase).not.toHaveBeenCalled();
+    expect(startDetachedDevExtensionsPhase).not.toHaveBeenCalled();
     expect(startDetachedDevAutoSetupPhase).not.toHaveBeenCalled();
     expect(order).toEqual([
       "core-x",
