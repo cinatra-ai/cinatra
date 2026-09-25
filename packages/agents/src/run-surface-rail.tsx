@@ -324,7 +324,8 @@ export function RunSurfaceRailRow({
   // The emphasised treatment is for the row the surface is actually on. A row
   // that cannot be opened never gets it — and neither does a row its page has
   // said the run has not reached.
-  const emphasised = Boolean(selected) && selectable && reached !== false;
+  const emphasised =
+    Boolean(selected) && (selectable || selection?.skillsReleased === true) && reached !== false;
   return (
     <Button
       type="button"
@@ -413,6 +414,7 @@ export function RunSurfaceRail({
   rail = null,
   detail = null,
   initialSelection,
+  releasedSelection,
 }: {
   /** The steps heading the rail, in the order the plan puts them. */
   steps: readonly RunSurfaceRailStep[];
@@ -425,6 +427,8 @@ export function RunSurfaceRail({
    * knows whether the agent has run and whether it is paused on a gate.
    */
   initialSelection: RunStepSelection;
+  /** The step the page's own election names once the Skills question is answered (cinatra#3285). */
+  releasedSelection?: RunStepSelection;
 }): ReactElement {
   const [selected, setSelected] = useState<RunStepSelection>(() =>
     resolveRunSurfaceSelection(steps, detail, initialSelection),
@@ -467,9 +471,15 @@ export function RunSurfaceRail({
     if (resolveRunSurfaceSelection(steps, detail, next) !== next) return;
     setSelected(next);
   };
+  // The instant the Skills decision lands, the entry reads settled and the selection moves to the step the page elects for the released run, before the refresh does (cinatra#3285).
+  const [skillsReleased, setSkillsReleased] = useState(false);
+  const releaseSkills = () => {
+    setSkillsReleased(true);
+    if (releasedSelection !== undefined) setSelected(releasedSelection);
+  };
 
   return (
-    <RunStepSelectionProvider value={{ selected, select }}>
+    <RunStepSelectionProvider value={{ selected, select, skillsReleased, releaseSkills }}>
       {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
 
           A run panel drawn inside this detail raises a live rail column of
@@ -554,7 +564,11 @@ export function RunSurfaceRail({
             as the step's own surface and suppresses the fallback — an openable
             row over an empty column, which is the one thing this rail must not
             produce. */}
-        {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
+        {open && runSurfaceNodeExists(open.surface)
+          ? open.surface
+          : runSurfaceNodeExists(detail) || !skillsReleased
+            ? detail
+            : steps.find((step) => step.key === "recommendation")?.surface}
       </div>
       </RunSurfaceRailFrameProvider>
     </RunStepSelectionProvider>

@@ -68,6 +68,7 @@ vi.mock("../server-actions", () => ({
 import { AgentInstanceNav } from "@/components/agent-instance-nav";
 
 import {
+  orderRunRailSteps,
   railDrawsUpcomingRunSteps,
   runGateStepInFrame,
   runHasExecutionRecord,
@@ -251,7 +252,7 @@ function railFor(row: RunRow): RunSurfaceRailStep[] {
       ),
     );
   }
-  return railSteps;
+  return orderRunRailSteps(railSteps);
 }
 
 /** The strip's answer, composed the way the screen composes it. */
@@ -320,7 +321,8 @@ function litTabs(container: HTMLElement): string[] {
 const boxes = (c: HTMLElement) =>
   Array.from(c.querySelectorAll<HTMLElement>("[data-skills-step-checkbox]"));
 
-const WHOLE_LIFECYCLE = ["Skills", INPUT_STEP_LABEL, "Schedule", "Review"];
+// The drawing's order, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
+const WHOLE_LIFECYCLE = ["Skills", "Schedule", INPUT_STEP_LABEL, "Review"];
 
 beforeEach(() => {
   confirmRunRecommendationAction.mockReset();

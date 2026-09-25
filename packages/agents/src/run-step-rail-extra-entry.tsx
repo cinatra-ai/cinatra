@@ -288,6 +288,10 @@ export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default opacity-60";
 export type RunStepSelectionHandle = {
   selected: RunStepSelection;
   select: (next: RunStepSelection) => void;
+  /** The Skills question was answered on this page, before the refresh lands (cinatra#3285). */
+  skillsReleased?: boolean;
+  /** The chip row's one call on a successful decision. */
+  releaseSkills?: () => void;
 };
 
 const RunStepSelectionContext = createContext<RunStepSelectionHandle | null>(null);

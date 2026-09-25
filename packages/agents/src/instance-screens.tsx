@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { cloneElement, isValidElement, type ReactNode } from "react";
 import { buildAgentInstancePath } from "@/lib/agent-url";
 import {
   canonicalRunPath,
@@ -122,6 +123,7 @@ import { RunSurfaceRail, RunSurfaceRailRow } from "./run-surface-rail";
 import {
   isRunSurfaceStepSelectable,
   runSurfaceRailNumberedCount,
+  runSurfaceRailNumerals,
   runSurfaceStepDrawsGlyph,
   type RunInputStepKey,
   type RunStepSelection,
@@ -796,6 +798,44 @@ export function upcomingRunRailStepKeys(params: {
 }
 
 /**
+ * THE RAIL'S ONE ORDER, COMPUTED ONCE (cinatra#3663): Skills, Schedule, the
+ * run's input steps in their index order, the parked trailing gate, Review --
+ * so an entry never changes place when the trigger row appears -- and the
+ * numerals are then written in that drawn order.
+ */
+const RUN_RAIL_STEP_KIND_RANK: Readonly<Record<string, number>> = {
+  recommendation: 0,
+  schedule: 1,
+  gate: 3,
+  review: 4,
+  made: 5,
+};
+
+export function orderRunRailSteps<T extends { key: string; row?: ReactNode }>(
+  steps: readonly T[],
+): T[] {
+  const rank = (key: string): [number, number] =>
+    key.startsWith("input:")
+      ? [2, Number(key.slice("input:".length))]
+      : [RUN_RAIL_STEP_KIND_RANK[key] ?? 4, 0];
+  const ordered = steps
+    .map((step, at) => ({ step, at, rank: rank(step.key) }))
+    .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.at - b.at)
+    .map(({ step }) => step);
+  const numerals = runSurfaceRailNumerals(
+    ordered.map((step) => step.key as Exclude<RunStepSelection, "detail">),
+  );
+  return ordered.map((step, index) => {
+    const numeral = numerals[index];
+    return typeof numeral === "number" &&
+      isValidElement<{ displayStep?: number | null }>(step.row) &&
+      step.row.props.displayStep !== undefined
+      ? { ...step, row: cloneElement(step.row, { displayStep: numeral }) }
+      : step;
+  });
+}
+
+/**
  * THE GATES THAT STAND AFTER THE SKILLS QUESTION — the rail keys whose presence
  * means the run has already moved past the point its skills would be asked at.
  */
@@ -1070,6 +1110,12 @@ export function runDetailInitialStep(params: {
    * entry the rail DRAWS are one answer.
    */
   parkedGateStep?: boolean;
+  /**
+   * The first input step the run still owes, where its Skills question is
+   * decided and it is in the dispatch handoff or inside its execution with
+   * nothing yet; absent or `null`, the ladder reads exactly as before.
+   */
+  inputStepAfterRelease?: RunInputStepKey | null;
 }): RunStepSelection {
   // THE RUN'S FIRST GATE OPENS FIRST (cinatra#3047 fix leg 8). The rail lists
   // the Skills entry above the run's own input forms because the drawing puts
@@ -1090,6 +1136,14 @@ export function runDetailInitialStep(params: {
   // could both read as open the one the rail draws first is the one the reader
   // is standing on.
   if (params.parkedGateStep) return "gate";
+  // The released run's current entry is the form it walks to, never no entry at all (cinatra#3285).
+  if (
+    params.hasRecommendationStep &&
+    !params.recommendationHeld &&
+    params.inputStepAfterRelease
+  ) {
+    return params.inputStepAfterRelease;
+  }
   if (
     runDetailOpensOnSchedule({
       hasScheduleStep: params.hasScheduleStep,
@@ -1681,13 +1735,6 @@ export async function SetupScreen({
     runMessageCount: completedRunMessages.length,
     streamedTextLength: (run?.streamedText ?? "").length,
   });
-  // AND THE SECOND OR TWO IN WHICH IT HAS BEEN DISPATCHED AND DONE NOTHING --
-  // the moment the page is rendered at right after the skills question is
-  // answered (cinatra#3184 fix leg 4).
-  const runBetweenSetupQuestions = runInDispatchHandoff({
-    runStatus: run?.status ?? null,
-    hasExecutionRecord: runHasExecution,
-  });
   // AND THE SAME MOMENT ONE STATUS LATER -- the run picked up, working, and
   // with none of its own rows written yet (cinatra#3246). Read here, beside the
   // other two, because it is a question about the same one fact.
@@ -1697,6 +1744,15 @@ export async function SetupScreen({
     runMessageCount: completedRunMessages.length,
     streamedTextLength: (run?.streamedText ?? "").length,
   });
+  // AND THE SECOND OR TWO IN WHICH IT HAS BEEN DISPATCHED AND DONE NOTHING --
+  // the moment the page is rendered at right after the skills question is
+  // answered (cinatra#3184 fix leg 4).
+  // The loading moment one status later is still between the run's setup questions, so the owed Setup entry rides through it too (cinatra#3246).
+  const runBetweenSetupQuestions =
+    runInDispatchHandoff({
+      runStatus: run?.status ?? null,
+      hasExecutionRecord: runHasExecution,
+    }) || runInsideExecutionWithNothingYet;
 
   // THE GATE, DERIVED BEFORE THE PAGE IS SERVED (cinatra#2729 defect 2).
   //
@@ -2197,6 +2253,9 @@ export async function SetupScreen({
         })()
       : [];
 
+  // The form the released run walks to, named only at the handoff and the loading moment (cinatra#3285).
+  const firstOwedInputStepKey = runInputSteps.find((step) => !step.answered)?.key ?? null;
+  const inputStepAfterRelease = runBetweenSetupQuestions ? firstOwedInputStepKey : null;
   const initialStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
@@ -2208,7 +2267,20 @@ export async function SetupScreen({
     hasScheduleStep: scheduleRailRef !== null || parkedScheduleStep,
     hasExecution: runHasExecution,
     parkedGateStep,
+    inputStepAfterRelease,
   });
+  // The step the frame moves to the instant a held Skills question is answered: the same election, for the released run at its handoff (cinatra#3285).
+  const releasedStep = recommendationHeld
+    ? runDetailInitialStep({
+        openInputStepKey: null,
+        hasRecommendationStep,
+        recommendationHeld: false,
+        hasScheduleStep: scheduleRailRef !== null || parkedScheduleStep,
+        hasExecution: false,
+        parkedGateStep: false,
+        inputStepAfterRelease: firstOwedInputStepKey,
+      })
+    : undefined;
 
   // The scheduling step's duration banner, computed ONLY on the branch that
   // draws it (cinatra#2952). `estimateRunDuration` falls through to an LLM
@@ -2645,7 +2717,8 @@ export async function SetupScreen({
                 // entry standing above them has to be counted here, or two rows
                 // carry the numeral 1.
                 const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
-                railSteps.push(...buildRunInputRailSteps(runInputSteps, runDetailFallback, railRowsAboveTheInputSteps));
+                const inputStepWalkedTo = initialStep === inputStepAfterRelease ? inputStepAfterRelease : null;
+                railSteps.push(...buildRunInputRailSteps(runInputSteps, runDetailFallback, railRowsAboveTheInputSteps, inputStepWalkedTo));
               }
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
@@ -2836,6 +2909,8 @@ export async function SetupScreen({
                   ),
                 );
               }
+              // THE HEAD LIST IN THE RAIL'S ONE ORDER, numbered in that order (cinatra#3663).
+              railSteps.splice(0, railSteps.length, ...orderRunRailSteps(railSteps));
               // The page's OWN rail rows. The gate rows above are drawn by
               // their own step components rather than by this rail, because the
               // frame composes them (and, where the frame draws none, the live
@@ -2991,6 +3066,7 @@ export async function SetupScreen({
                     rail={railNode}
                     detail={runDetailFallback}
                     initialSelection={initialStep}
+                    releasedSelection={releasedStep}
                   />
                 );
               }
@@ -3872,7 +3948,8 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   const setupStepsOnTheRail: SetupRailStep[] =
     railStepsWithoutAnUnreachedSkillsEntry(setupSteps);
   const setupRailSteps: RunSurfaceRailStep[] = buildSetupRailSteps(setupStepsOnTheRail, inputRailSteps.length);
-  const railSteps: RunSurfaceRailStep[] = [...inputRailSteps, ...setupRailSteps];
+  // The same one order as the run page, so the settled Setup entry stands below Skills and Schedule (cinatra#3663).
+  const railSteps: RunSurfaceRailStep[] = orderRunRailSteps([...inputRailSteps, ...setupRailSteps]);
 
   return (
     <Main className="min-h-screen">

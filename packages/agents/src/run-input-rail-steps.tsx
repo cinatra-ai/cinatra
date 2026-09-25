@@ -54,6 +54,7 @@ import type { RunInputStep } from "./run-input-steps";
 import { RunSurfaceRailRow } from "./run-surface-rail";
 import {
   isRunSurfaceStepSelectable,
+  type RunInputStepKey,
   type RunSurfaceRailStep,
 } from "./run-surface-rail-step";
 
@@ -71,8 +72,11 @@ export function buildRunInputRailSteps(
   steps: readonly RunInputStep[],
   detail: ReactNode,
   displayOffset = 0,
+  // The owed step the released run walks to reads reached and opens the run detail beside it (cinatra#3285).
+  walkingTo: RunInputStepKey | null = null,
 ): RunSurfaceRailStep[] {
   return steps.map((step, index) => {
+    const walkedTo = step.key === walkingTo;
     const railStep: RunSurfaceRailStep = {
       key: step.key,
       // THE SETTLED STEP'S OWN SCREEN, and only its own. An OPEN form is drawn
@@ -83,13 +87,13 @@ export function buildRunInputRailSteps(
       surface: step.settled ? (
         <RunInputStepAnsweredReading label={step.label} answers={step.answers} />
       ) : null,
-      reached: step.reached,
+      reached: step.reached || walkedTo,
       settled: step.settled,
       // THE PAGE'S OWN OVERRIDE, for the fact the frame cannot see: the run
       // detail behind this row holds ONE form, and it is the OPEN step's. So a
       // step opens when it is the open one -- whose screen that detail is -- or
       // when it is settled and carries the read-only reading above.
-      selectable: step.open || step.settled,
+      selectable: step.open || step.settled || walkedTo,
       row: null,
     };
     const selectable = isRunSurfaceStepSelectable(railStep, detail);
@@ -100,7 +104,7 @@ export function buildRunInputRailSteps(
           selectionKey={step.key}
           label={step.label}
           displayStep={index + 1 + displayOffset}
-          reached={step.reached}
+          reached={railStep.reached}
           settled={step.settled}
           selectable={selectable}
           conformanceId="run-surface-rail-step"
