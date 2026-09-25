@@ -16,11 +16,17 @@
  * file-size-ratchet / workspace-dep-cycles no-new-rot ratchets — same
  * fail-closed, base-ref, regenerate-to-pass-blocked shape.
  *
- * Metric: route-graph.mjs's own `analyzeRoute(entry).moduleCount` — the count
- * of distinct reachable first-party modules (under src, packages workspace src,
- * and extensions) from a route's page/route entry. We reuse the analyzer
- * (importing FIXED_ROUTES + analyzeRoute) rather than re-deriving the metric, so
- * the ratchet and the reporter can never diverge.
+ * Metric: route-graph.mjs's own `analyzeRoute(entry).coreModuleCount` — the
+ * count of distinct reachable first-party modules outside the extension tree
+ * (under src and packages workspace src) from a route's page/route entry
+ * (cinatra#3664). The walk still follows every edge through the extension tree,
+ * so a core module reached only through a pack is counted and a missing import
+ * inside a pack still fails closed; the extension-owned modules are reported
+ * per route as the excluded count and never count against a ceiling (a pinned
+ * pack's own modules are the intended cost of pinning it; each changed pack is
+ * read by the pin-advance host-tool check). We reuse the analyzer (importing
+ * FIXED_ROUTES + analyzeRoute) rather than re-deriving the metric, so the
+ * ratchet and the reporter can never diverge.
  *
  * Ratchet semantics:
  *  - A tracked route ABOVE its baseline ceiling → FAIL (the locked route's graph
@@ -87,7 +93,7 @@ const BASELINE_FILE = join(REPO_ROOT, "scripts/audit/route-graph-ratchet.baselin
 // Single source for the baseline's self-describing prose (kept in the gate so
 // `--write-baseline` regenerations cannot drift the documented contract).
 const BASELINE_NOTE =
-  "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.";
+  "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.";
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in __tests__/route-graph-ratchet.test.mjs)
@@ -327,21 +333,41 @@ export function classifyRaises(baseBaseline, committedBaseline) {
 // ---------------------------------------------------------------------------
 
 /**
+ * The ratchet's measurement of one route analysis: `moduleCount` is the CORE
+ * count (the analysis's `coreModuleCount`, null when not ok) and
+ * `excludedExtensionModules` the extension-owned modules it leaves out. An
+ * analysis without a core count is not ok (fail closed).
+ */
+export function ratchetMeasurement(analysis) {
+  const ok = analysis?.ok === true && Number.isInteger(analysis.coreModuleCount);
+  return {
+    ok,
+    moduleCount: ok ? analysis.coreModuleCount : null,
+    missingCount: ok ? analysis.missingCount : null,
+    excludedExtensionModules: ok ? analysis.extensionModuleCount : null,
+  };
+}
+
+/**
  * Run the route-graph analyzer over the LOCKED FIXED_ROUTES and return
- * Map<route, { moduleCount, ok, missingCount }>. Importing route-graph.mjs is
- * side-effect-free (its CLI is guarded behind a direct-execution check).
+ * Map<route, { ok, moduleCount, missingCount, excludedExtensionModules }>.
+ * Importing route-graph.mjs is side-effect-free (its CLI is guarded behind a
+ * direct-execution check).
  */
 function measureRoutes() {
   const counts = new Map();
   for (const { route, entry } of FIXED_ROUTES) {
-    const r = analyzeRoute(entry);
-    counts.set(route, {
-      ok: r.ok === true,
-      moduleCount: r.ok ? r.moduleCount : null,
-      missingCount: r.ok ? r.missingCount : null,
-    });
+    counts.set(route, ratchetMeasurement(analyzeRoute(entry)));
   }
   return counts;
+}
+
+// "/sign-in 0, /api/mcp 481, …" — the extension-owned modules each route leaves out.
+function excludedSummary(counts) {
+  return FIXED_ROUTES.map(({ route }) => {
+    const info = counts.get(route);
+    return `${route} ${info?.ok ? info.excludedExtensionModules : "unresolved"}`;
+  }).join(", ");
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +441,7 @@ function main() {
   }
 
   if (report) {
-    console.log(`[route-graph-ratchet] ${FIXED_ROUTES.length} tracked route(s); current count vs ceiling:`);
+    console.log(`[route-graph-ratchet] ${FIXED_ROUTES.length} tracked route(s); current core count vs ceiling (extension-owned modules excluded):`);
     const ceilings = baseline.routes ?? {};
     for (const { route } of FIXED_ROUTES) {
       const info = counts.get(route);
@@ -426,7 +452,8 @@ function main() {
           ? `${info.moduleCount}(+${info.missingCount} missing)`
           : String(info.moduleCount);
       const headroom = info.ok && info.missingCount === 0 && ceiling !== undefined ? ceiling - info.moduleCount : null;
-      console.log(`  ${countStr.padStart(20)} / ${String(ceiling ?? "-").padStart(6)}  ${headroom !== null ? `(headroom ${headroom})` : ""}  ${route}`);
+      const excluded = info.ok ? `(excluded ${info.excludedExtensionModules})` : "";
+      console.log(`  ${countStr.padStart(20)} / ${String(ceiling ?? "-").padStart(6)}  ${headroom !== null ? `(headroom ${headroom})` : ""}  ${excluded}  ${route}`);
     }
     return;
   }
@@ -484,13 +511,15 @@ function main() {
   const { over, broken } = diffAgainstBaseline(counts, baseline);
 
   if (over.length === 0 && broken.length === 0) {
-    console.log(`[route-graph-ratchet] OK — no tracked route exceeds its baseline (${FIXED_ROUTES.length} routes tracked).`);
+    console.log(`[route-graph-ratchet] OK — no tracked route exceeds its baseline (${FIXED_ROUTES.length} routes tracked; core modules only, extension-owned modules excluded: ${excludedSummary(counts)}).`);
     process.exit(0);
   }
 
   if (over.length) {
     console.error(`[route-graph-ratchet] FAIL — ${over.length} tracked route${over.length === 1 ? "" : "s"} grew beyond baseline:`);
-    for (const o of over) console.error(`  ${o.route}: ${o.count} modules (ceiling ${o.ceiling}, +${o.delta})`);
+    for (const o of over) {
+      console.error(`  ${o.route}: ${o.count} core modules (ceiling ${o.ceiling}, +${o.delta}; ${counts.get(o.route)?.excludedExtensionModules} extension-owned module(s) excluded)`);
+    }
   }
   if (broken.length) {
     console.error(`[route-graph-ratchet] FAIL — ${broken.length} tracked route${broken.length === 1 ? "" : "s"} cannot be checked:`);

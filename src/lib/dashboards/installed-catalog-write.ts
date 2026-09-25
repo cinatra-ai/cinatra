@@ -100,6 +100,8 @@ import "server-only";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { EntityDashboardSummary } from "@cinatra-ai/dashboards/entity-dashboards-contract";
 import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity";
+import { isWorkspaceDashboardRef } from "@cinatra-ai/dashboards/entity-identity";
+import type { DashboardActor } from "@cinatra-ai/dashboards/require-dashboard-access";
 
 import type {
   CatalogAddResult,
@@ -114,7 +116,10 @@ import {
   readDestinationNames,
   resolveAdmittedTemplates,
   resolveCatalogDestination,
+  resolveWorkspaceAdmitted,
   type AdmittedCatalogTemplate,
+  type CatalogDestination,
+  type ListWorkspaceCatalogInput,
 } from "./installed-catalog-read";
 
 function warn(message: string, cause?: unknown): void {
@@ -133,6 +138,8 @@ function warn(message: string, cause?: unknown): void {
 export type CatalogWriteDeps = {
   readonly resolveDestination?: typeof resolveCatalogDestination;
   readonly resolveAdmitted?: typeof resolveAdmittedTemplates;
+  /** The workspace federation's gates 1-7, per membership (cinatra#2811). */
+  readonly resolveWorkspaceLegs?: typeof resolveWorkspaceAdmitted;
   readonly readNames?: typeof readDestinationNames;
   readonly readDeclaration?: (args: {
     readonly organizationId: string;
@@ -206,7 +213,7 @@ async function runAdd(
   // ── 8. Name collision, with a verdict the user can act on ────────────────
   // Taken BEFORE gate 9: one indexed query, and the likeliest refusal for a
   // replayed add. Gate 9 walks the filesystem.
-  const existingNames = await readNames(destination.ref, destination.orgId);
+  const existingNames = await readNames(destination.ref, destination.collectionOrgId);
   // Fail closed: an unreadable destination is not permission to write into it.
   if (existingNames === null) return { ok: false, reason: "failed" };
   if (existingNames.has(name)) return { ok: false, reason: "name-taken" };
@@ -244,6 +251,115 @@ async function runAdd(
   });
 }
 
+/**
+ * THE WORKSPACE ADD (cinatra#2811, item 4): the federated twin of
+ * `addInstalledCatalogDashboard`.
+ *
+ * It differs from the tenant write in exactly one way, and reuses everything
+ * else: there is no single organization to authorize under, so gates 1 to 7 are
+ * re-run ONCE PER MEMBER ORGANIZATION through the read's own
+ * `resolveWorkspaceAdmitted`, and the template must be admitted by one of them.
+ * The organization that admitted it is then the one gate 9 reads the pack's
+ * current declaration under, because that is the tenant whose install and
+ * template row the earlier gates actually judged.
+ *
+ * Everything the tenant write proves, this proves the same way:
+ *   - eligibility at RENDER time proves nothing, so every gate runs again here;
+ *   - the destination is DERIVED (the acting user's own organization-free
+ *     workspace collection), never supplied, and gate 2 refuses a membership
+ *     whose actor is not of that organization, so the write can no more cross a
+ *     tenant fence than the read can;
+ *   - gate 8 asks the organization-free collection, which is where the row
+ *     actually lands, so a name already taken there refuses with `name-taken`
+ *     while a name taken in some tenant collection is irrelevant and ignored;
+ *   - the write goes through the SAME `createEntityDashboard` call the tenant
+ *     write uses, so one writer still covers the whole catalog.
+ */
+export type AddWorkspaceCatalogInput = ListWorkspaceCatalogInput & {
+  readonly templateId: string;
+};
+
+export async function addWorkspaceCatalogDashboard(
+  input: AddWorkspaceCatalogInput,
+  deps: CatalogWriteDeps = {},
+): Promise<CatalogAddResult> {
+  try {
+    return await runWorkspaceAdd(input, deps);
+  } catch (e) {
+    warn("workspace catalog add failed", e);
+    return { ok: false, reason: "failed" };
+  }
+}
+
+async function runWorkspaceAdd(
+  { userId, memberships, templateId }: AddWorkspaceCatalogInput,
+  deps: CatalogWriteDeps,
+): Promise<CatalogAddResult> {
+  const resolveLegs = deps.resolveWorkspaceLegs ?? resolveWorkspaceAdmitted;
+  const readNames = deps.readNames ?? readDestinationNames;
+  const readDeclaration = deps.readDeclaration ?? defaultReadDeclaration;
+  const write = deps.write ?? defaultWrite;
+
+  // An empty / non-string handle is not a lookup, it is a malformed call.
+  if (typeof templateId !== "string" || templateId.length === 0) {
+    return { ok: false, reason: "ineligible" };
+  }
+
+  // GATES 1-7, per membership, AT WRITE TIME.
+  const legs = await resolveLegs({ userId, memberships });
+  let found:
+    | { readonly destination: CatalogDestination; readonly target: AdmittedCatalogTemplate }
+    | null = null;
+  for (const leg of legs) {
+    const target = leg.admitted.find((a) => a.row.id === templateId);
+    if (target) {
+      found = { destination: leg.destination, target };
+      break;
+    }
+  }
+  // Indistinguishable from "no such template": a refusal must not tell the
+  // caller WHICH gate it tripped, which organizations they are in, or which
+  // template ids exist.
+  if (!found) return { ok: false, reason: "ineligible" };
+  const { destination, target } = found;
+
+  const name = prospectiveCopyName(target.row.name);
+  if (name === null) return { ok: false, reason: "ineligible" };
+
+  // GATE 8, against the ORGANIZATION-FREE collection the row lands in.
+  const existingNames = await readNames(destination.ref, destination.collectionOrgId);
+  if (existingNames === null) return { ok: false, reason: "failed" };
+  if (existingNames.has(name)) return { ok: false, reason: "name-taken" };
+
+  // GATE 9, currentness, under the organization whose install and template row
+  // the earlier gates judged.
+  const declaration = await readDeclaration({
+    organizationId: destination.orgId,
+    packageName: target.packageName,
+  });
+  if (!declaration) return { ok: false, reason: "no-longer-declared" };
+  if (declaration.rowName !== target.row.name) {
+    return { ok: false, reason: "no-longer-declared" };
+  }
+  // Gate 7, re-taken against what is actually being copied.
+  if (
+    !templateScopeAdmitsSurface(declaration.templateScope, {
+      kind: "workspace",
+      orgId: destination.orgId,
+      userId,
+    })
+  ) {
+    return { ok: false, reason: "ineligible" };
+  }
+
+  return write({
+    ref: destination.ref,
+    name,
+    seedConfig: declaration.config,
+    organizationId: destination.orgId,
+  });
+}
+
 /** Gate 9's real implementation. */
 async function defaultReadDeclaration(args: {
   readonly organizationId: string;
@@ -270,31 +386,42 @@ async function defaultWrite(args: {
   readonly seedConfig: unknown;
   readonly organizationId: string;
 }): Promise<CatalogAddResult> {
-  const [
-    { buildDashboardActorFromSession },
-    {
-      createEntityDashboard,
-      resolveDashboardAccess,
-      DashboardNameConflictError,
-      DashboardForbiddenError,
-      DashboardInvalidEntityError,
-      DashboardConfigInvalidError,
-      DashboardOrgWriteAuthorityError,
-      isOrgWriteRefusal,
-    },
-  ] = await Promise.all([
-    import("@/lib/dashboards/dashboard-actor"),
-    import("@cinatra-ai/dashboards/entity-dashboard-writer"),
-  ]);
+  const { buildDashboardActorFromSession } = await import(
+    "@/lib/dashboards/dashboard-actor"
+  );
 
   const { actor: authz, orgId, userId, authority } =
     await buildDashboardActorFromSession();
-  // The session must still be the tenant + principal the gates were taken for.
-  // A mid-flight org switch or a replayed bound action lands here.
+  // The acting principal must still BE the owner of the destination, on every
+  // surface. This is the invariant the permissive vantage arms rest on.
+  if (!userId || userId !== args.ref.ownerId) {
+    return { ok: false, reason: "ineligible" };
+  }
+  if (isWorkspaceDashboardRef(args.ref)) {
+    // THE WORKSPACE ARM (cinatra#2811). A workspace row is organization-free
+    // and reads the same under every active organization, so the active-org
+    // equality below would be the wrong question here: the gates ran under one
+    // MEMBER organization of the viewer's vantage, which need not be the one
+    // the session happens to have active. Requiring them to match would refuse
+    // a legitimate add for the arbitrary reason that the user was looking at
+    // another organization.
+    //
+    // Nothing is given up by skipping it. The membership that admitted the
+    // template was re-resolved on THIS request (the write re-runs the whole
+    // federation), the destination is this very user's own collection, and the
+    // actor below is the workspace actor `requireEntityDashboardActor` builds
+    // for the same ref, so the writer sees exactly what the tab's own Create
+    // gives it.
+    return writeThrough(
+      { userId, organizationId: orgId ?? null, teamIds: [] },
+      args,
+    );
+  }
+  // Every other surface: the session must still be the tenant the gates were
+  // taken for. A mid-flight org switch or a replayed bound action lands here.
   if (!orgId || orgId !== args.organizationId) {
     return { ok: false, reason: "ineligible" };
   }
-  if (userId !== args.ref.ownerId) return { ok: false, reason: "ineligible" };
 
   const orgRole =
     authz.orgRole === "owner" || authz.orgRole === "org_owner"
@@ -304,13 +431,43 @@ async function defaultWrite(args: {
         : authz.orgRole === "member"
           ? ("member" as const)
           : undefined;
-  const dashboardActor = {
-    userId,
-    organizationId: orgId,
-    teamIds: authz.teamIds ?? [],
-    ...(orgRole ? { orgRole } : {}),
-    ...(authority ? { authority } : {}),
-  };
+  return writeThrough(
+    {
+      userId,
+      organizationId: orgId ?? null,
+      teamIds: [...(authz.teamIds ?? [])],
+      ...(orgRole ? { orgRole } : {}),
+      ...(authority ? { authority } : {}),
+    },
+    args,
+  );
+}
+
+/**
+ * THE ONE WRITER, for every surface including the workspace. Both arms above
+ * reach it, so the twin-pairing exception and the AST gate that names writers
+ * by function still see a single `createEntityDashboard` call site for the
+ * installed catalog.
+ */
+async function writeThrough(
+  dashboardActor: DashboardActor,
+  args: {
+    readonly ref: DashboardEntityRef;
+    readonly name: string;
+    readonly seedConfig: unknown;
+    readonly organizationId: string;
+  },
+): Promise<CatalogAddResult> {
+  const {
+    createEntityDashboard,
+    resolveDashboardAccess,
+    DashboardNameConflictError,
+    DashboardForbiddenError,
+    DashboardInvalidEntityError,
+    DashboardConfigInvalidError,
+    DashboardOrgWriteAuthorityError,
+    isOrgWriteRefusal,
+  } = await import("@cinatra-ai/dashboards/entity-dashboard-writer");
 
   try {
     const row = await createEntityDashboard(

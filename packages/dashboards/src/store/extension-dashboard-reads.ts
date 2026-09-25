@@ -3,7 +3,7 @@
 // a narrow subpath (NOT the auth/screens barrels) to keep the route's import graph
 // light.
 import "server-only";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { dashboards, getDashboardsDb } from "./db";
 import type { DashboardRow } from "./schema";
@@ -99,14 +99,23 @@ export async function listOrgExtensionTemplateRows(
  * actor's own tenant, so this reads nothing the actor does not own.
  */
 export async function listEntityCollectionNames(key: {
-  readonly organizationId: string;
+  /**
+   * The collection's tenant, or NULL for the organization-free WORKSPACE
+   * collection (cinatra#2811). The two are different questions, not one with a
+   * missing answer: `dashboards_workspace_entity_name_uniq` is partial on
+   * `organization_id IS NULL`, so the names that would collide with a workspace
+   * create are exactly the org-NULL ones. Matching NULL with `=` would return
+   * nothing and report every name as free, so the arm is explicit.
+   */
+  readonly organizationId: string | null;
   readonly entityType: string;
   readonly entityId: string;
   readonly ownerLevel: string;
   readonly ownerId: string;
 }): Promise<string[]> {
   if (
-    !key.organizationId ||
+    key.organizationId === undefined ||
+    (key.organizationId !== null && !key.organizationId) ||
     !key.entityType ||
     !key.entityId ||
     !key.ownerLevel ||
@@ -120,7 +129,9 @@ export async function listEntityCollectionNames(key: {
     .from(dashboards)
     .where(
       and(
-        eq(dashboards.organizationId, key.organizationId),
+        key.organizationId === null
+          ? isNull(dashboards.organizationId)
+          : eq(dashboards.organizationId, key.organizationId),
         eq(dashboards.entityType, key.entityType),
         eq(dashboards.entityId, key.entityId),
         eq(dashboards.ownerLevel, key.ownerLevel),
