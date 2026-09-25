@@ -96,9 +96,15 @@ describe("a bound review lends ONE control, with the person's own words", () => 
     // only correct value the server already holds could only ever be got wrong.
     const out = await issue();
     expect(out.systemContext).toContain("lifecycle_bound_card_decide");
-    expect(out.systemContext).toContain("this message was granted exactly one control");
-    expect(out.systemContext).toContain("so you do not name it");
-    expect(out.systemContext).not.toContain('control "comment"');
+    // AMENDED AGAIN for cinatra#2853. The turn IS told which controls this
+    // message may press, because a message can now legitimately reach more than
+    // one of a card's buttons — but only ever the ones the person's own words
+    // named, cut on the server before any model reads anything. What the model
+    // still does not get is a free choice: a control outside that menu is
+    // refused, and there is still exactly ONE press per message.
+    expect(out.systemContext).toContain("You may press exactly ONE control");
+    expect(out.systemContext).toContain("This message may press: comment");
+    expect(out.systemContext).toContain("refused by the server");
     expect(out.systemContext).toContain("You supply NO text");
   });
 

@@ -7,7 +7,10 @@
 // (src/lib/assistant-runtime/__tests__/ag-ui-cutover-parity.test.ts).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AG_UI_EVENT_TYPES } from "@cinatra-ai/agent-ui-protocol";
+import {
+  AG_UI_EVENT_TYPES,
+  LIFECYCLE_CARD_REPLACEMENT_PART_KIND,
+} from "@cinatra-ai/agent-ui-protocol";
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
 import { ASSISTANT_STREAM_CONTRACT_VERSION } from "@cinatra-ai/agent-ui-protocol/contract";
 import { renderableViewType } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -501,6 +504,7 @@ function fakePort() {
   let messages: UiMessage[] = [];
   const typing: boolean[] = [];
   const refreshes: string[] = [];
+  const replacements: Array<{ supersededRef: string; replacementRef: string }> = [];
   const port: AssistantChatTurnUiPort = {
     updateMessages: (updater) => {
       messages = updater(messages);
@@ -508,8 +512,9 @@ function fakePort() {
     setTypingIndicator: (on) => typing.push(on),
     isWidgetRefreshTool: (name) => name === "widget_update",
     onWidgetRefresh: () => refreshes.push("hit"),
+    onLifecycleCardReplaced: (r) => replacements.push(r),
   };
-  return { port, get messages() { return messages; }, typing, refreshes };
+  return { port, get messages() { return messages; }, typing, refreshes, replacements };
 }
 
 describe("driveAssistantChatTurn", () => {
@@ -572,6 +577,48 @@ describe("driveAssistantChatTurn", () => {
       ui: f.port,
     });
     expect(f.refreshes).toEqual(["hit"]);
+  });
+
+  // THE CARD-REPLACEMENT ANNOUNCEMENT REACHES THE SURFACE, AND DRAWS NOTHING
+  // (cinatra#2853). The turn driver is the only path between the wire and the
+  // page's settle bus, so it is where "the replacement ref reaches the mounted
+  // card" is actually decided — and the same frames must leave the transcript
+  // with no card of their own.
+  it("hands a card-replacement announcement to the port and draws nothing for it", async () => {
+    const frames: Array<{ id: string; event: AgUiEvent }> = [
+      { id: "1-0", event: { type: "RUN_STARTED", threadId: "th1", runId: "r1" } },
+      {
+        id: "2-0",
+        event: {
+          type: "DATA_PART",
+          data: {
+            kind: LIFECYCLE_CARD_REPLACEMENT_PART_KIND,
+            cardViewType: "trigger_schedule_proposal",
+            supersededRef: "ref-0900",
+            ref: "ref-0800",
+          },
+        } as unknown as AgUiEvent,
+      },
+      { id: "3-0", event: { type: "RUN_FINISHED", threadId: "th1", runId: "r1" } },
+    ];
+    globalThis.fetch = vi.fn(async () =>
+      new Response(sseBody(frames), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const f = fakePort();
+    await driveAssistantChatTurn({
+      threadId: "th1",
+      assistantId: "a1",
+      messages: [],
+      slack: false,
+      signal: new AbortController().signal,
+      ui: f.port,
+    });
+    expect(f.replacements).toEqual([
+      { supersededRef: "ref-0900", replacementRef: "ref-0800" },
+    ]);
+    // Nothing renderable came out of it: no data part on the projected message.
+    const drawn = f.messages[0] as { parts?: unknown[]; dataParts?: unknown[] };
+    expect(drawn?.dataParts ?? []).toHaveLength(0);
   });
 
   it("surfaces a transport error on the bubble (never throws)", async () => {

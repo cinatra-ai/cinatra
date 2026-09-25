@@ -22,9 +22,14 @@ export type {
   InterruptEvent,
   ResumeEvent,
   DataPartEvent,
+  LifecycleCardReplacementDataPart,
 } from "./events";
 
 export { AG_UI_EVENT_TYPES } from "./events";
+export {
+  LIFECYCLE_CARD_REPLACEMENT_PART_KIND,
+  isLifecycleCardReplacementDataPart,
+} from "./events";
 
 export { channelFor } from "./channel";
 

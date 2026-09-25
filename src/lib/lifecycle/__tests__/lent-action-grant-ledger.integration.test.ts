@@ -114,6 +114,10 @@ async function record(row: {
       // The fixtures below write their control as a plain string; the claims
       // type names the four controls a card can lend.
       control: row.control as LentActionGrantClaims["control"],
+      // The MENU (cinatra#2853). The ledger row records the ANCHOR only, so a
+      // fixture that names one control is a one-item menu — which is exactly
+      // what every grant minted before that slice carried.
+      controls: [row.control as LentActionGrantClaims["control"]],
       expiresAt: row.expiresAt,
     },
     row.text ?? null,
@@ -294,6 +298,62 @@ maybe("the lent-action grant ledger, on a real Postgres", () => {
     expect((await spend("db-6", "u1", "o1", "fp-other", "comment")).ok).toBe(false);
     expect((await spend("db-6", "u1", "o1", "fp6", "approve")).ok).toBe(false);
     expect((await spend("db-6", "u1", "o1", "fp6", "comment")).ok).toBe(true);
+  });
+
+  it("a MENU still spends ONCE, on its anchor — cinatra#2853", async () => {
+    // The card offered three buttons and the person's words named two of them,
+    // so the signed grant carries a menu of two. The ROW still records ONE
+    // control — the anchor — and the ledger still lets exactly one spend
+    // through: which of the two was pressed is the signed grant's business, and
+    // the once-only property is the row's, unchanged by the menu above it.
+    const g = {
+      jti: "db-9", orgId: "o1", userId: "u1", messageId: "m9", fp: "fp9",
+      control: "comment", text: "approve it", expiresAt: nowSec() + 600,
+    };
+    await record(g);
+    // A press of the approve the person named spends the row on its anchor.
+    expect(await spend("db-9", "u1", "o1", "fp9", "comment")).toEqual({
+      ok: true,
+      text: "approve it",
+    });
+    // And there is no second press in that message, whichever button it names.
+    expect((await spend("db-9", "u1", "o1", "fp9", "comment")).ok).toBe(false);
+  });
+
+  it("a typed SCHEDULE ADJUST is one grant, spent ONCE — cinatra#2853, the picture leg", async () => {
+    // THE ROAD THE PICTURES FOUND UNREACHABLE. A person typed "make it 8 in the
+    // morning on weekdays" at a live schedule card and no grant was minted at
+    // all, because the card never registered itself as bindable; the assistant
+    // called the producer again and drew a SECOND proposal underneath the first.
+    // With the card in the claim, the send mints the schedule card's own
+    // `adjust` — and the ledger's whole promise is what this pins: ONE row per
+    // message, spendable ONCE, against THIS card and no other.
+    const g = {
+      jti: "db-10", orgId: "o1", userId: "u1", messageId: "m10",
+      fp: "fp-schedule-card", control: "adjust",
+      text: "make it 8 in the morning on weekdays", expiresAt: nowSec() + 600,
+    };
+    await record(g);
+
+    // ONE MESSAGE, ONE GRANT: a second mint for the same message writes no
+    // second spendable row, so a turn cannot adjust twice.
+    await record({ ...g, jti: "db-10b", fp: "fp-schedule-card", control: "adjust" });
+    expect((await spend("db-10b", "u1", "o1", "fp-schedule-card", "adjust")).ok).toBe(false);
+
+    // It is THIS card's grant: another card's fingerprint takes nothing, and
+    // the taking does not burn the row.
+    expect((await spend("db-10", "u1", "o1", "fp-a-second-proposal", "adjust")).ok).toBe(false);
+    // And another person's spend takes nothing either.
+    expect((await spend("db-10", "u2", "o1", "fp-schedule-card", "adjust")).ok).toBe(false);
+
+    // The adjust lands once, carrying the person's own words and nothing else.
+    expect(await spend("db-10", "u1", "o1", "fp-schedule-card", "adjust")).toEqual({
+      ok: true,
+      text: "make it 8 in the morning on weekdays",
+    });
+    // And there is no second decide in that message — which is what stops one
+    // typed change from becoming an adjust AND a confirm.
+    expect((await spend("db-10", "u1", "o1", "fp-schedule-card", "adjust")).ok).toBe(false);
   });
 
   it("the PERSON'S OWN WORDS come back with the spend — the model supplies none", async () => {

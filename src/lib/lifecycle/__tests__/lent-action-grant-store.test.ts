@@ -145,6 +145,9 @@ const CLAIMS: LentActionGrantClaims = {
   messageId: "msg_1",
   cardRefFingerprint: "fp-alpha",
   control: "comment",
+  // The MENU (cinatra#2853). The row records the anchor; the menu rides the
+  // signed grant, and a one-button card mints a one-item menu.
+  controls: ["comment"],
   expiresAt: dbNow + 600,
 };
 

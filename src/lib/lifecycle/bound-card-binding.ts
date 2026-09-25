@@ -21,8 +21,16 @@
 // if any. It decides NOTHING. This module re-resolves every ref under the
 // reader's own access, drops the ones that are not really theirs, and applies
 // the binding rule to what SURVIVED — so a page that offers ten refs the reader
-// cannot see binds nothing, and a page that claims one card while two are open
-// gets the ambiguous refusal anyway.
+// cannot see binds nothing, and a page that claims one REVIEW while two are open
+// gets the ambiguous refusal anyway, because the server counts those itself.
+//
+// FOR THE OTHER CARD KINDS THAT FACT IS STILL THE PAGE'S (cinatra#2853,
+// convergence round 2, finding 4). The server has no enumeration of open HITL
+// screens, scheduler forms, skills holds or schedule cards to check a claim
+// against, so a client that under-reports a second one of those wins an
+// automatic binding. `resolveBoundCard` says exactly what bounds that where the
+// rule is applied; it is named here too so the paragraph above is not read as a
+// promise the code does not make.
 //
 // THE REFUSAL IS A SENTENCE, HERE, ONCE. It is the platform's own words and the
 // assistant relays them; keeping it beside the rule that produces it is what
@@ -47,11 +55,13 @@ import {
   type LentCardControl,
 } from "@/lib/lifecycle/bound-reference-resolver";
 import {
+  LENT_ACTION_GRANT_CONTROLS,
   mintLentActionGrant,
   type LentActionControl,
   type LentActionGrantControl,
 } from "@/lib/lifecycle/lent-action-grant";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
+import { controlsNamedByThePerson } from "@/lib/lifecycle/typed-decision-words";
 import {
   recordLentActionGrant,
   sweepExpiredLentActionGrants,
@@ -126,8 +136,10 @@ export type BoundCardBinding =
  *
  * TWO HONEST BOUNDS (convergence round 2):
  *
- *   · it enumerates REVIEW gates, which is the only card class a send currently
- *     mints a control for, so it is exactly as complete as the class it guards;
+ *   · it enumerates REVIEW gates only. That WAS "the only card class a send mints
+ *     a control for" and is no longer (cinatra#2853): the other kinds bind
+ *     without consulting it, and the residual that leaves is named at the call
+ *     site. So this counter guards the review class exactly, and nothing else;
  *   · it reads a WINDOW of the organization's oldest open gates, so on a busy
  *     organization this reader's own card can sit outside it and the count comes
  *     back 0. That is why the caller treats anything other than a confirmed 1 as
@@ -185,12 +197,21 @@ export type OpenCardCount = { readonly count: number; readonly complete: boolean
  *
  * Identifier-free on purpose — it is persisted into an LLM-visible transcript —
  * and it names the way OUT, because a refusal that does not is just a wall.
+ *
+ * BOTH WAYS OUT (cinatra#2853, the picture leg). Plan (A) 2.1 writes this
+ * refusal with TWO sentences after the count, and the second one was dropped:
+ * "To keep chatting normally, press that control twice on any one of them." A
+ * person whose message went nowhere has two things they may want — to reach one
+ * of the cards, or to stop being routed at a card at all — and the refusal that
+ * named only the first left the second one undiscoverable from the one place it
+ * is ever needed. It is restored verbatim and pinned by a test.
  */
 export function severalCardsWaitingRefusal(count: number): string {
   return (
     `${count} cards are waiting for you, so nothing was done to any of them. ` +
     `Choose the one you mean — press its “Reply from the chat box” control — and ` +
-    `say it again.`
+    `say it again. To keep chatting normally, press that control twice on any ` +
+    `one of them.`
   );
 }
 
@@ -313,9 +334,32 @@ export async function resolveBoundCard(input: {
   // picture leg): the page claims nothing for it either — the server minted its
   // ref from the run the box sits under — and the counter enumerates review
   // gates, so consulting it here would refuse every schedule screen too.
+  //
+  // THE SKILLS CARD AND THE SCHEDULE CARD BIND ON THE SAME TERMS (cinatra#2853),
+  // which makes FOUR kinds that bind without consulting the review counter,
+  // and for the identical reason: the counter enumerates REVIEW gates, so asking
+  // it about a hold or a proposal would refuse every one of them with "1 cards
+  // are waiting". With a second card of any kind CLAIMED, `live.length > 1`
+  // above has already produced the ambiguous refusal.
+  //
+  // THE RESIDUAL IS INHERITED AND IS NAMED HERE (convergence round 1, finding
+  // 4): for these three kinds the ambiguity fact is still the PAGE'S, because
+  // the server has no enumeration of open holds or open proposals to check it
+  // against — a client that under-reports a second one gets an automatic
+  // binding the person did not make. That is exactly the gap the review counter
+  // exists to close, and closing it for the other kinds needs a per-kind
+  // listing this slice does not build. What bounds it meanwhile: the claim is
+  // the person's OWN page, every ref in it is re-resolved under their own
+  // access, and the binding it can win is over a card that is still readable
+  // and still decidable BY THEM — not necessarily one still on their screen, and
+  // the effect path re-checks the run again before anything lands. It is a
+  // correctness residual about WHICH of a person's own cards a message reaches,
+  // not an escalation past their permissions.
   if (
     chosen.resolution.kind === "hitl_screen" ||
     chosen.resolution.kind === "schedule_form" ||
+    chosen.resolution.kind === "recommendation_hold" ||
+    chosen.resolution.kind === "schedule_proposal" ||
     // THE ARMED FORM BINDS ON THE SAME TERMS (cinatra#2934): the page claims
     // nothing for it either — the server minted its ref from the run the box
     // sits under — and the counter enumerates review gates only.
@@ -381,12 +425,27 @@ export async function resolveBoundCard(input: {
 //   · hand back the sentence the model is told — either what it may press, or
 //     the platform's own refusal to relay.
 //
-// WHICH CONTROL IS GRANTED, AND WHY IT IS NOT THE MODEL'S CHOICE. A grant names
-// exactly one control. The plan's line is "its choices are exactly what the
-// card's own buttons offer", and WHICH button a sentence asks for is a reading
-// of the person's words — which is cinatra#2853's typed actions per card kind,
-// not this slice's. So a send mints exactly ONE control today: `comment` on a
-// bound review.
+// WHICH CONTROLS ARE GRANTED, AND WHY THE CHOICE IS SPLIT IN TWO (cinatra#2853).
+// The plan's line is "its choices are exactly what the card's own buttons
+// offer", and WHICH button a sentence asks for is a reading of the person's
+// words. W5a could not make that reading and therefore minted exactly one
+// control — `comment` on a bound review — because handing out Approve on the
+// strength of "the model chose to call the tool" would put a terminal decision
+// behind text that can reach the model from the run's own content.
+//
+// This slice answers that with TWO KEYS instead of one:
+//
+//   · the SERVER narrows the card's own buttons to the ones the PERSON'S OWN
+//     MESSAGE names (`typed-decision-words.ts`, `typedControlMenuFor`) — a rule
+//     that can only ever remove a button, never add one, and that runs before
+//     any model sees anything;
+//   · the ASSISTANT picks one item off that menu, and decides whether the
+//     sentence is an ask at all — the plan's "the assistant interprets the
+//     words; it never originates the decision".
+//
+// So a grant now names a MENU and the ledger still spends it ONCE: exactly one
+// control is pressed per message, as before. What changed is that the menu can
+// hold Approve — but only for a message whose author wrote it.
 //
 // WHAT A LENT COMMENT ACTUALLY DOES, said exactly (convergence round 2). On an active
 // single-target LIFECYCLE review, a non-empty comment is not an annotation: the
@@ -400,15 +459,13 @@ export async function resolveBoundCard(input: {
 // that telling a question from a request for changes becomes a decision the
 // product makes rather than an accident of the box being typed in.
 //
-// THE RESIDUAL, NAMED: until #2853 lands, a model that calls the tool on a turn
-// that was not asking files the person's own words as a change request. That is
-// strictly narrower than today's unconditional filing and strictly wider than
-// where #2853 leaves it. Approve, Reject and a waiting screen's Submit are
-// implemented at the handler — they are the substrate #2853 builds on — and are
-// deliberately NOT minted by a send, because handing one out on the strength of
-// "the model chose to call the tool" would put a terminal decision or a run
-// resumption behind text that can reach the model from the run's own content
-// (convergence round 1, finding 1).
+// THE RESIDUAL, NAMED, AS IT STANDS AFTER #2853. A model that calls the tool on
+// a turn that was not asking still files the person's own words as a change
+// request — that residual is W5a's and is unchanged, and it is strictly narrower
+// than what the review page's own box does with a typed sentence today. What
+// #2853 removes is the WIDER version of it: a terminal Approve or Reject can no
+// longer be reached at all unless the person's own message named that act, so an
+// induced call can at worst do what an ordinary typed sentence already does.
 //
 // AND THE WORDS ARE NOT THE MODEL'S EITHER. The person's message is stored with
 // the grant and read back at the spend, so what lands on the card is what they
@@ -492,6 +549,49 @@ export function primaryControlFor(
   // this message also placed a fill on that form.
   if (resolution.kind === "armed_schedule_form") return "save";
   return null;
+}
+
+/**
+ * THE MENU THIS MESSAGE MAY PRESS (cinatra#2853) — the card's own buttons,
+ * narrowed to the ones the PERSON'S OWN WORDS named.
+ *
+ * THIS IS THE SLICE. `primaryControlFor` above answers "which button does a
+ * sentence get for this KIND of card", which is why it could only ever mint
+ * `comment` on a review: a send has no reading of the words, so handing out
+ * Approve on the strength of "the model chose to call the tool" would put a
+ * terminal decision behind text that reaches the model from the run's own
+ * content (W5a, convergence round 1, finding 1). That reason is answered here
+ * rather than dropped, by a SECOND key the model does not hold:
+ *
+ *   · the person's own message decides what is ON the menu — deterministically,
+ *     on the server, before any model sees anything (`typed-decision-words.ts`,
+ *     which can only ever NARROW the card's lent set);
+ *   · the assistant decides which item on that menu the sentence asks for, and
+ *     whether it asks for anything at all — the plan's "the assistant interprets
+ *     the words; it never originates the decision".
+ *
+ * Neither key alone presses anything. Content reaching the model cannot put
+ * `approve` on a menu, because only the person's own message is read; and a
+ * message that says "approve it" still presses nothing until the assistant reads
+ * it as an ask and calls with the grant.
+ *
+ * THE FILL ROAD IS UNTOUCHED. A waiting screen and the scheduler form keep
+ * exactly the answer W5c gave them — `submit` bounded by the same-message fill,
+ * and `fill` with no press at all — so this slice adds no second gate to a road
+ * that is already bounded structurally.
+ */
+export function typedControlMenuFor(
+  resolution: BoundReferenceResolution,
+  words: string | null | undefined,
+): readonly LentActionGrantControl[] {
+  if (resolution.kind === "hitl_screen" || resolution.kind === "schedule_form") {
+    const granted = grantedControlFor(resolution);
+    return granted ? [granted] : [];
+  }
+  return controlsNamedByThePerson(controlsLentBy(resolution), words).filter(
+    (control): control is LentActionGrantControl =>
+      (LENT_ACTION_GRANT_CONTROLS as readonly string[]).includes(control),
+  );
 }
 
 /**
@@ -626,7 +726,13 @@ export async function issueTurnLentActionGrant(input: {
     };
   }
 
-  const control = grantedControlFor(binding.resolution);
+  // THE MENU IS READ FROM THE PERSON'S OWN WORDS (cinatra#2853), and an empty
+  // one lends nothing: a message that asked a skills card a question names no
+  // button on it, so the turn is ordinary conversation and the tool does
+  // nothing — which is the plan's "a message that is not plainly a decision is
+  // ordinary conversation that decides nothing", enforced rather than instructed.
+  const menu = typedControlMenuFor(binding.resolution, input.messageText);
+  const control = menu[0];
   if (!control) return NOT_BOUND;
 
   // WORD FOR WORD, OR NOT AT ALL (convergence round 2). The words that land are the
@@ -647,11 +753,11 @@ export async function issueTurnLentActionGrant(input: {
   // A FILL is bounded the same way a submit is, and for the same reason: the
   // person's message is never PLACED on the card, so a long description must
   // not cost them the fill road.
-  if (
-    control !== "submit" &&
-    control !== "fill" &&
-    words.length > MAX_LENT_COMMENT_CHARS
-  ) {
+  // THE BOUND IS THE COMMENT'S, AND ONLY THE COMMENT'S (cinatra#2853). It
+  // applies where the person's words are PLACED on the card — a menu holding
+  // `comment`. A confirm, a skip, an adjust, a submit and a fill place no text
+  // at all, so a long description must not cost the person those roads.
+  if (menu.includes("comment") && words.length > MAX_LENT_COMMENT_CHARS) {
     return NOT_BOUND;
   }
 
@@ -661,6 +767,7 @@ export async function issueTurnLentActionGrant(input: {
     messageId: input.messageId,
     cardRef: binding.ref,
     control,
+    controls: menu,
   });
   if (!minted) return NOT_BOUND;
 
@@ -737,6 +844,56 @@ export async function issueTurnLentActionGrant(input: {
         BOUND_ROW_VALUES_ARE_DATA +
         `Report what comes back and add nothing to it; where your sentence and the screen ` +
         `disagree, the screen is right.`,
+    };
+  }
+  if (binding.resolution.kind === "recommendation_hold") {
+    // THE SKILLS CARD (cinatra#2853). Its two buttons are Confirm and Skip;
+    // keep and drop are the SET a Confirm carries, and the ids are named here so
+    // a keep/drop addresses the skills the card is actually showing. An id the
+    // card is not offering REFUSES the whole call, so naming them is what keeps
+    // a legitimate ask from being thrown away rather than a courtesy.
+    const offered = binding.resolution.offered
+      .map((s) => `${s.skillId} (${s.name})`)
+      .join(", ");
+    return {
+      grant: minted.grant,
+      systemContext:
+        `\n\nBOUND CARD. This message was sent with the skills card the person is looking at bound ` +
+        `to the prompt window, ref "${binding.ref}".\n` +
+        `· You may press ONE of: ${menu.join(", ")} — ONCE — by calling ` +
+        `\`lifecycle_bound_card_decide\` with that ref and \`control\`. Nothing else on this card is ` +
+        `pressable, and a control that is not on that list is refused by the server.\n` +
+        `· TO KEEP OR DROP SKILLS, pass \`keep\` with the FULL list of skill ids to keep alongside ` +
+        `a confirm. The card is offering: ${offered || "no skills"}. An id the card is not offering ` +
+        `REFUSES THE WHOLE CALL and presses nothing, so name only ids from that list. Omitting ` +
+        `\`keep\` confirms everything the card offered.\n` +
+        `Do this only when the person is asking for it; a question about the card is answered as a ` +
+        `question and presses nothing. Report what comes back and add nothing to it; where your ` +
+        `sentence and the card disagree, the card is right.`,
+    };
+  }
+  if (binding.resolution.kind === "schedule_proposal") {
+    // THE SCHEDULE CARD (cinatra#2853). Adjust re-proposes and arms nothing;
+    // Confirm is the act. Both are the card's own controls, and the model is
+    // told which of them this message may reach.
+    return {
+      grant: minted.grant,
+      systemContext:
+        `\n\nBOUND CARD. This message was sent with the schedule card the person is looking at bound ` +
+        `to the prompt window, ref "${binding.ref}". It currently says: ` +
+        `${binding.resolution.summary || "no schedule set"}.\n` +
+        `· You may press ONE of: ${menu.join(", ")} — ONCE — by calling ` +
+        `\`lifecycle_bound_card_decide\` with that ref and \`control\`.\n` +
+        `· \`adjust\` re-draws the card's rows with a \`schedule\` you pass — REQUIRED for it. It ` +
+        `ARMS NOTHING and CREATES NOTHING: the new rows appear in front of the person and they ` +
+        `press the card's own Confirm. This is what a described change reaches, even when the ` +
+        `person also asked for it to be confirmed.\n` +
+        `· \`confirm\` sets the schedule THE CARD IS SHOWING. Never pass \`schedule\` with it: a ` +
+        `confirm carrying rows is REFUSED and presses nothing, because rows the person has not ` +
+        `seen must not be armed.\n` +
+        `Do this only when the person is asking for it; a question about the schedule is answered as ` +
+        `a question and presses nothing. Report what comes back and add nothing to it; where your ` +
+        `sentence and the card disagree, the card is right.`,
     };
   }
   if (binding.resolution.kind === "armed_schedule_form") {
@@ -824,8 +981,10 @@ export async function issueTurnLentActionGrant(input: {
     systemContext:
       `\n\nBOUND CARD. This message was sent with a review the person is looking at bound to the prompt window. ` +
       `You may press exactly ONE control on it, ONCE, by calling \`lifecycle_bound_card_decide\` ` +
-      `with ref "${binding.ref}" and nothing else — this message was granted exactly one control ` +
-      `and the call presses that one, so you do not name it. You supply NO text: what lands on ` +
+      `with ref "${binding.ref}". This message may press: ${menu.join(", ")} — name the one the ` +
+      `person asked for in \`control\`, or omit it for ${control}. A control that is not on that ` +
+      `list is refused by the server, so a decision the person did not state is not yours to take. ` +
+      "You supply NO text: what lands on " +
       "the card is the person's own message, held on the server. Do this only when the person " +
       "is asking for it; a question about the card is answered as a question and presses " +
       "nothing. Report what comes back and add nothing to it; where your sentence and the card " +

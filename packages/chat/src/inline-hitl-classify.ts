@@ -35,6 +35,17 @@ import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 // only ever shrinks.
 // ---------------------------------------------------------------------------
 
+/**
+ * Told when a registered gate's entry is CLEARED and the descriptor it held
+ * named a lifecycle card (cinatra#2853, the picture leg).
+ *
+ * This is the "from the gate row" half of the same-session settle: the panel
+ * publishes `null` for a run whose gate has closed, so the registry is the first
+ * thing on this page that knows a decided card is stale — earlier than the
+ * turn's own end whenever the decision was taken anywhere but this turn.
+ */
+export type ChatGateClosedListener = (cardRef: string) => void;
+
 export type ChatGateRegistry = {
   /** AgenticRunPanel's onActiveGateChange (threaded through
    *  InlineAgentRunCard). Registers an OPEN gate by runId; a `null` gate
@@ -58,7 +69,7 @@ export type ChatGateRegistry = {
  * existing runId keeps its original position), matching the previous
  * inline chat-page behavior exactly.
  */
-export function createChatGateRegistry(): ChatGateRegistry {
+export function createChatGateRegistry(onGateClosed?: ChatGateClosedListener): ChatGateRegistry {
   const gates = new Map<string, ChatGateDescriptor>();
   return {
     handleActiveGateChange(runId, gate, instanceId) {
@@ -68,6 +79,13 @@ export function createChatGateRegistry(): ChatGateRegistry {
         const current = gates.get(runId);
         if (current && current.instanceId === instanceId) {
           gates.delete(runId);
+          // THE CARD THAT GATE BELONGED TO IS NOW STALE. Only a descriptor that
+          // NAMES a card can say which one, and only the clearing that actually
+          // removed the entry says it once — a second unmount of an older
+          // instance has already been refused above.
+          if (current.kind === "review_comment" && typeof current.cardRef === "string") {
+            onGateClosed?.(current.cardRef);
+          }
         }
       }
     },

@@ -82,6 +82,11 @@ describe("the grant names the person, the message, the card and ONE control", ()
   });
 
   it("the PRESSABLE vocabulary is exactly the buttons a card draws", () => {
+    // AMENDED (cinatra#2853). The list grew with the CARDS whose buttons it
+    // names — the skills card's Confirm and Skip, and the schedule card's
+    // Adjust and Confirm — so it still says exactly what it says: the buttons a
+    // lifecycle card actually draws, and nothing else. A control no card draws
+    // is still not in it, which is what stops a grant from naming one.
     // `save` joined it with the ARMED scheduler form (cinatra#2934, the
     // armed-trigger tab): it IS a button that card draws, and the plan puts it
     // on the ask road — "one road for the press and for the ask".
@@ -90,10 +95,14 @@ describe("the grant names the person, the message, the card and ONE control", ()
       "approve",
       "reject",
       "submit",
+      "confirm",
+      "skip",
+      "adjust",
       "save",
     ]);
     expect(isLentActionControl("fill")).toBe(false);
     expect(isLentActionControl("approve")).toBe(true);
+    expect(isLentActionControl("delete")).toBe(false);
   });
 
   // AMENDED (cinatra#2934, repaired after the picture leg). This case used to
