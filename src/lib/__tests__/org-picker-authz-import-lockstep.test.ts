@@ -83,6 +83,14 @@ const UI_ALLOWLIST = new Set<string>([
   // at, so an archived organization must never be one. The write decision
   // itself is S1's exact-scope resolver, never this membership read.
   "src/lib/scope-assignment/scope-assignment-target.server.ts",
+  // The workspace Dashboards tab (cinatra#2811, per-scope surfaces S5). The
+  // same reading as the line above: the vantage this builds is what the tab
+  // OFFERS, so every organization in it becomes a row the reader can open, a
+  // candidate the reference picker lists, or a leg of the installed-catalog
+  // federation. An archived organization must be none of those. Each access
+  // decision is then taken under one concrete organization by the dashboards
+  // resolver and the extension access evaluator, never by this membership read.
+  "src/lib/dashboards/workspace-dashboards.server.ts",
 ]);
 
 function walk(dir: string, acc: string[] = []): string[] {
