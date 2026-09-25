@@ -147,6 +147,8 @@ export function ScheduleRailStepRow({
             "data-run-surface-rail-step-key": "schedule",
             "data-run-surface-rail-selected": scheduleSelected ? "true" : "false",
             "data-run-surface-rail-settled": settled ? "true" : "false",
+            // A spent Schedule entry reads as reached; an unsettled one is the step the surface is on and, like the rail row, states nothing about it.
+            ...(settled ? { "data-run-surface-rail-reached": "true" } : {}),
           }
         : {})}
     >

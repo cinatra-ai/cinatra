@@ -543,6 +543,141 @@ describe("cinatra#3246 -- the gate the run stops at after its trigger row is a w
       });
     }
   });
+
+  it("(iv) the spent Schedule entry carries the rail's common row markers, reached included, at the gate and after the walk, and opens when pressed", async () => {
+    /** The Schedule row, as the rail's one row selector counts it and as its own family reads it. */
+    const scheduleRow = (container: HTMLElement) => {
+      const column = container.querySelector<HTMLElement>("[data-run-step-rail-column]");
+      const counted = column
+        ? Array.from(column.querySelectorAll<HTMLElement>(RAIL_ROWS)).filter(
+            (el) => el.hasAttribute("data-schedule-rail-step"),
+          )
+        : [];
+      const el = counted[0] ?? null;
+      return {
+        el,
+        marks: {
+          counted: counted.length,
+          step: el?.getAttribute("data-run-surface-rail-step") ?? null,
+          key: el?.getAttribute("data-run-surface-rail-step-key") ?? null,
+          selected: el?.getAttribute("data-run-surface-rail-selected") ?? null,
+          reached: el?.getAttribute("data-run-surface-rail-reached") ?? null,
+          settled: el?.getAttribute("data-run-surface-rail-settled") ?? null,
+          current: el?.getAttribute("aria-current") ?? null,
+          host: el?.getAttribute("data-schedule-rail-host") ?? null,
+          ownSelected: el?.getAttribute("data-schedule-step-selected") ?? null,
+          ownSettled: el?.getAttribute("data-schedule-step-settled") ?? null,
+        },
+      };
+    };
+    // SPENT: the run has been through its one-off schedule and is standing elsewhere.
+    const SPENT = {
+      counted: 1,
+      step: "",
+      key: "schedule",
+      selected: "false",
+      reached: "true",
+      settled: "true",
+      current: null,
+      host: "run_card",
+      ownSelected: "false",
+      ownSettled: "true",
+    };
+    // AT (f) the scheduled run has not fired: the Schedule step is the step the
+    // surface is on, unsettled, and -- like every unsettled run_card row -- it
+    // states nothing about "reached".
+    const STANDING_ON_IT = {
+      counted: 1,
+      step: "",
+      key: "schedule",
+      selected: "true",
+      reached: null,
+      settled: "false",
+      current: "step",
+      host: "run_card",
+      ownSelected: "true",
+      ownSettled: "false",
+    };
+
+    // (f), a fresh render.
+    atMoment("f");
+    const atF = render(await serverTree());
+    await waitFor(() => {
+      expect(atF.container.querySelector("[data-run-step-rail-column]")).not.toBeNull();
+    });
+    READINGS["schedule row (iv) at (f)"] = readRail(atF.container);
+    expect.soft({ at: "(f)", ...scheduleRow(atF.container).marks }).toEqual({
+      at: "(f)",
+      ...STANDING_ON_IT,
+    });
+    cleanup();
+
+    // The context gate, a fresh render.
+    atMoment("gate");
+    const atGate = render(await serverTree());
+    await waitFor(() => {
+      expect(atGate.container.querySelector("[data-run-step-rail-column]")).not.toBeNull();
+    });
+    READINGS["schedule row (iv) at the gate"] = readRail(atGate.container);
+    expect.soft({ at: "the gate", ...scheduleRow(atGate.container).marks }).toEqual({
+      at: "the gate",
+      ...SPENT,
+    });
+
+    // ITS SELECTION STATE: pressing the spent row at the gate opens it.
+    const pressed = scheduleRow(atGate.container).el;
+    expect(pressed?.getAttribute("data-action")).toBe("open-schedule-step");
+    await act(async () => {
+      pressed?.click();
+    });
+    const afterPress = readRail(atGate.container);
+    READINGS["schedule row (iv) at the gate, pressed"] = afterPress;
+    expect.soft({ at: "pressed", ...scheduleRow(atGate.container).marks }).toEqual({
+      at: "pressed",
+      ...SPENT,
+      selected: "true",
+      current: "step",
+      ownSelected: "true",
+    });
+    expect.soft(afterPress.currentCount).toBe(1);
+    expect.soft(afterPress.selectedStep).toBe("schedule");
+    cleanup();
+
+    // THE WALK WITHOUT A RELOAD: the page rendered while the run worked, then the run stops at its gate.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ status: "pending_approval", lifecycleMoment: "hitl" }),
+      })),
+    );
+    atMoment("working");
+    const view = render(await serverTree());
+    let refreshes = 0;
+    wired.refreshed.current = () => {
+      refreshes += 1;
+    };
+    atMoment("gate");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    if (refreshes > 0) {
+      const tree = await serverTree();
+      await act(async () => {
+        view.rerender(tree);
+      });
+    }
+    READINGS["schedule row (iv) after the walk"] = readRail(view.container);
+    expect.soft(refreshes).toBe(1);
+    expect.soft({ at: "after the walk", ...scheduleRow(view.container).marks }).toEqual({
+      at: "after the walk",
+      ...SPENT,
+    });
+  });
 });
 
 describe("the pure arms", () => {
