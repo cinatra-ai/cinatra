@@ -7,12 +7,15 @@
 // that declares a ceiling, or only recommends a scope).
 //
 // WHAT IS REAL: every rendered element is the shipped implementation of the
-// surface — the host's own `ConnectorSharingPanels` (which OWNS the three
+// surface — the SDK's own `ConnectorSharingPanels` (which OWNS the three
 // conformance ids), the sdk-ui `ConnectionsStatusCard` and
-// `ConnectionsList` / `ConnectionRow` beneath it, and the app's own
-// `PermissionsForm` — the SAME access picker and ownership card the permissions
-// surface draws, never a connector-specific copy. The product route mounts
-// exactly this component tree; only the panels' DATA differs.
+// `ConnectionsList` / `ConnectionRow` beneath it, and the SDK's own
+// `PermissionsPanel` the panels component draws itself: the SAME access
+// picker and ownership card the permissions surface draws, never a
+// connector-specific copy. NO host permissions component is mounted here: the
+// fixture drives the export the way a connector pack does, with data and
+// callbacks only, so the drivers grade the parts the SDK draws. The product
+// route mounts exactly this component tree; only the panels' DATA differs.
 //
 // WHAT IS SUBSTITUTED (and why): the four server-action bindings
 // (`savePolicy`, `searchCandidates`, `addCoOwner`, `removeCoOwner`). They
@@ -33,16 +36,17 @@
 
 import * as React from "react";
 
-import {
-  PermissionsForm,
-  type OwnerView,
-  type PermissionsFormResult,
-} from "@/components/permissions-form";
-import type { AvailableScopes } from "@/components/access-scope";
+import type {
+  OwnerView,
+  PermissionsPanelPolicy,
+  PermissionsPanelProps,
+  PermissionsPanelResult,
+} from "@cinatra-ai/sdk-ui/permissions-panel";
+import type { AvailableScopes } from "@cinatra-ai/sdk-ui/access/scope";
 import {
   ConnectorSharingPanels,
   type ConnectorSharingPanelView,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 
 import {
   CONNECTOR_SHARING_ACCESS_HELPER,
@@ -96,14 +100,14 @@ const CO_OWNER: OwnerView = {
  * two visibility fields keep that floor: a panel that read the wrong field, or
  * ignored the policy altogether, draws a different label and REDS.
  */
-const INITIAL_POLICY: React.ComponentProps<typeof PermissionsForm>["initialPolicy"] = {
+const INITIAL_POLICY: PermissionsPanelPolicy = {
   runListVisibility: [CONNECTOR_SHARING_INITIAL_SCOPE],
   runDataVisibility: [CONNECTOR_SHARING_OWNER_SCOPE],
   runExecuteVisibility: [CONNECTOR_SHARING_OWNER_SCOPE],
   allowRunSharing: true,
 };
 
-const OK: PermissionsFormResult = { ok: true };
+const OK: PermissionsPanelResult = { ok: true };
 
 /** The four bindings the harness answers in the server's place. */
 function fixtureActions() {
@@ -128,7 +132,11 @@ function fixtureActions() {
   };
 }
 
-/** The connection mount's own permissions card — the app's access picker + ownership card. */
+/**
+ * The connection mount's permissions DATA and bindings: what a connector pack
+ * states, and what the product route states. The access picker and the
+ * ownership card are drawn by the SDK's own panel from exactly this.
+ */
 function sharingPermissions(options: {
   coOwners: OwnerView[];
   /**
@@ -140,27 +148,24 @@ function sharingPermissions(options: {
   accessDisabledScopes?: string[];
   accessDisabledReasons?: Record<string, string>;
   accessScopeNote?: string;
-}) {
-  return (
-    <PermissionsForm
-      resourceKind="connection"
-      canEdit
-      initialPolicy={INITIAL_POLICY}
-      owner={OWNER}
-      coOwners={options.coOwners}
-      availableScopes={SCOPES}
-      currentUserId={OWNER.userId}
-      allowSharing
-      selfRemoveRedirect="/connectors"
-      accessHelperText={CONNECTOR_SHARING_ACCESS_HELPER}
-      ownershipHelperText={CONNECTOR_SHARING_OWNERSHIP_HELPER}
-      accessValueOverride={options.accessValueOverride}
-      accessDisabledScopes={options.accessDisabledScopes}
-      accessDisabledReasons={options.accessDisabledReasons}
-      accessScopeNote={options.accessScopeNote}
-      actions={fixtureActions()}
-    />
-  );
+}): PermissionsPanelProps {
+  return {
+    canEdit: true,
+    initialPolicy: INITIAL_POLICY,
+    owner: OWNER,
+    coOwners: options.coOwners,
+    availableScopes: SCOPES,
+    currentUserId: OWNER.userId,
+    allowSharing: true,
+    selfRemoveRedirect: "/connectors",
+    accessHelperText: CONNECTOR_SHARING_ACCESS_HELPER,
+    ownershipHelperText: CONNECTOR_SHARING_OWNERSHIP_HELPER,
+    accessValueOverride: options.accessValueOverride,
+    accessDisabledScopes: options.accessDisabledScopes,
+    accessDisabledReasons: options.accessDisabledReasons,
+    accessScopeNote: options.accessScopeNote,
+    actions: fixtureActions(),
+  };
 }
 
 function panel(index: number, extra: Partial<ConnectorSharingPanelView> = {}): ConnectorSharingPanelView {

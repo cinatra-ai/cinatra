@@ -430,6 +430,13 @@ vi.mock("@cinatra-ai/sdk-ui/connections-list", () => ({
 vi.mock("@cinatra-ai/sdk-ui/connection-status-card", () => ({
   ConnectionsStatusCard: stubs.ConnectionsStatusCardStub,
 }));
+// The sharing panels live in the shared UI kit (cinatra#3385) and draw the kit's
+// permissions panel beneath each connection row, so that is the picker this
+// suite counts and reads. The app's own client stays mocked for the callers
+// that still reach it.
+vi.mock("@cinatra-ai/sdk-ui/permissions-panel", () => ({
+  PermissionsPanel: stubs.ExtensionPermissionsClientStub,
+}));
 vi.mock("@/components/extension-permissions-client", () => ({
   ExtensionPermissionsClient: stubs.ExtensionPermissionsClientStub,
 }));
@@ -445,7 +452,7 @@ const { ConnectionSharingSection } = await import(
   "@/components/extensions/connection-sharing-section"
 );
 const { ConnectorSharingPanels } = await import(
-  "@/components/extensions/connector-sharing-panels"
+  "@cinatra-ai/sdk-ui/connector-sharing-panels"
 );
 type ConnectorSharingPanelsProps = Parameters<typeof ConnectorSharingPanels>[0];
 const { getExtensionKindHooks } = await import("@cinatra-ai/extensions/permissions-kind-hooks");
@@ -708,8 +715,9 @@ describe("a KEYLESS MCP Servers registration writes its connection identity (cin
     expect(countElementsOfType(body, stubs.ConnectionRowStub)).toBe(1);
     expect(countElementsOfType(body, stubs.ExtensionPermissionsClientStub)).toBe(1);
     expect(countElementsOfType(body, stubs.ConnectionsStatusCardStub)).toBe(0);
+    // The kit's panel carries no kind; the connection copy it draws is what
+    // the two helper texts below assert.
     const [picker] = collectPropsOfType(body, stubs.ExtensionPermissionsClientStub);
-    expect(picker.kind).toBe("connection");
     expect(picker.accessHelperText).toBe("Choose who can use this connection.");
     expect(picker.ownershipHelperText).toBe(
       "Owners can change this connection's sharing and disconnect it.",
