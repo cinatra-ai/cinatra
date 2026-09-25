@@ -41,22 +41,31 @@ import { toast } from "@/lib/cinatra-toast";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { ScopeDashboardsEmptyState } from "./scope-dashboards-empty";
 import {
   SCOPE_LISTING_REASON_COPY,
   type ScopeListingRemovalSource,
   type ScopeDashboardsTabData,
   type ScopeDashboardTabRow,
+  type WorkspaceEveryoneGrantSource,
 } from "./scope-dashboards-contract";
 
 /**
  * The tab body's own lede, exactly as the ratified drawing draws it: a MUTED
  * 13px line, never a bold heading, naming the ENTITY the tab belongs to.
  *
- *   - the three shared scopes and the workspace draw "The dashboards in
- *     <b>Team: Growth</b>." — the entity named in ink inside a muted line;
+ *   - the three shared scopes draw "The dashboards in <b>Team: Growth</b>.",
+ *     the entity named in ink inside a muted line;
  *   - the personal scope draws "The dashboards you own." — the acting user's
- *     own dashboards, so there is no entity to name.
+ *     own dashboards, so there is no entity to name;
+ *   - the WORKSPACE draws its own sentence (cinatra#2811 fix leg 4, the amended
+ *     §IX.3 surface `workspace-dashboards-landing`): "Your dashboards in the
+ *     <b>whole workspace</b> — and the ones referenced up from the scopes
+ *     below." It names no entity, because it names two collections: the
+ *     viewer's own workspace rows and the references brought up to them. It
+ *     read the entity pattern until this leg, which was the tenant tabs' line
+ *     on a surface the drawing writes differently.
  *
  * The KIND-named bold h2 this row carried before (cinatra#2474 PR2) is gone: it
  * is not the treatment the drawing gives, and it named the kind where the
@@ -64,11 +73,13 @@ import {
  */
 export type ScopeDashboardsCaption =
   | { readonly kind: "entity"; readonly entityLabel: string }
-  | { readonly kind: "own" };
+  | { readonly kind: "own" }
+  | { readonly kind: "workspace" };
 
 export function ScopeDashboardsTab({
   data,
   removal,
+  everyoneGrant,
   caption,
   add,
 }: {
@@ -78,6 +89,10 @@ export function ScopeDashboardsTab({
    *  a scope that has no listings to remove (personal / workspace: "not
    *  add-to-scope targets"), where no row can ever carry Remove. */
   removal?: ScopeListingRemovalSource;
+  /** The workspace everyone-grant's action (cinatra#2811, §IX.4), handed ONLY
+   *  to a platform administrator. Absent everywhere else, where a granted
+   *  reference still shows its mark with the control muted and disabled. */
+  everyoneGrant?: WorkspaceEveryoneGrantSource;
   /** The drawn muted lede — the hosting page owns the entity's name. */
   caption: ScopeDashboardsCaption;
   /** The drawn Add affordance, in the caption row where the drawing puts it.
@@ -113,6 +128,12 @@ export function ScopeDashboardsTab({
               </b>
               .
             </>
+          ) : caption.kind === "workspace" ? (
+            <>
+              Your dashboards in the{" "}
+              <b className="font-semibold text-foreground">whole workspace</b> —
+              and the ones referenced up from the scopes below.
+            </>
           ) : (
             <>The dashboards you own.</>
           )}
@@ -129,6 +150,7 @@ export function ScopeDashboardsTab({
               key={`${row.relation}:${row.dashboardId}`}
               row={row}
               removal={removal}
+              everyoneGrant={everyoneGrant}
             />
           ))}
         </ul>
@@ -147,9 +169,11 @@ export function ScopeDashboardsTab({
 function ScopeRow({
   row,
   removal,
+  everyoneGrant,
 }: {
   row: ScopeDashboardTabRow;
   removal?: ScopeListingRemovalSource;
+  everyoneGrant?: WorkspaceEveryoneGrantSource;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-3 px-3.5 py-3">
@@ -165,6 +189,15 @@ function ScopeRow({
         </span>
         <p className="mt-0.5 text-xs text-muted-foreground">{row.metaLine}</p>
       </div>
+      {/* The §IX.4 everyone mark, on a workspace reference only (cinatra#2811):
+          an access mark on the link, never a relation badge. */}
+      {row.everyone ? (
+        <EveryoneMark
+          dashboardId={row.dashboardId}
+          mark={row.everyone}
+          everyoneGrant={everyoneGrant}
+        />
+      ) : null}
       {/* Removability is read from the presence of Remove ALONE (spec §IX):
           it renders only on a removable secondary listing (`row.canRemove` —
           listed AND manager) and never on a homed row. No Home / Listed badge.
@@ -194,6 +227,79 @@ function ScopeRow({
         </Link>
       </Button>
     </li>
+  );
+}
+
+/** §IX.4, the reason a principal who is not a platform administrator reads. */
+const EVERYONE_GRANT_REASON =
+  "Only a platform administrator can set or unset who a reference is visible to.";
+
+/**
+ * The §IX.4 "visible to everyone" mark and its control (cinatra#2811).
+ *
+ *   - a platform administrator (handed `everyoneGrant`, and `canSet`) gets a
+ *     working switch on every reference, set or unset;
+ *   - everyone else reads the mark on a GRANTED reference with the switch drawn
+ *     muted and disabled and the reason named: the drawing's one stated
+ *     exception to suppression, because the mark is information a member may
+ *     read. An ungranted reference shows them nothing.
+ */
+function EveryoneMark({
+  dashboardId,
+  mark,
+  everyoneGrant,
+}: {
+  dashboardId: string;
+  mark: NonNullable<ScopeDashboardTabRow["everyone"]>;
+  everyoneGrant?: WorkspaceEveryoneGrantSource;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [, startTransition] = useTransition();
+  const canSet = mark.canSet && everyoneGrant !== undefined;
+  if (!canSet && !mark.granted) return null;
+  const reasonId = `everyone-reason-${dashboardId}`;
+  return (
+    <span className="flex flex-none items-center gap-2">
+      {mark.granted ? (
+        <span className="text-xs font-semibold text-foreground">Visible to everyone</span>
+      ) : null}
+      <Switch
+        checked={mark.granted}
+        disabled={!canSet || busy}
+        aria-label="Visible to everyone"
+        aria-describedby={canSet ? undefined : reasonId}
+        data-action={
+          mark.granted
+            ? "everyone-grant-revoke -> everyone-grant-revoked"
+            : "everyone-grant-set -> everyone-grant-set"
+        }
+        onCheckedChange={(next) => {
+          if (!canSet || !everyoneGrant) return;
+          setBusy(true);
+          void everyoneGrant
+            .setGrant(dashboardId, next)
+            .then((res) => {
+              setBusy(false);
+              if (res.ok) {
+                toast.success(next ? "Visible to everyone" : "No longer visible to everyone");
+                startTransition(() => router.refresh());
+              } else {
+                toast.error(SCOPE_LISTING_REASON_COPY[res.reason]);
+              }
+            })
+            .catch(() => {
+              setBusy(false);
+              toast.error("Couldn\u2019t change who sees that reference. Try again.");
+            });
+        }}
+      />
+      {canSet ? null : (
+        <span id={reasonId} className="max-w-[16rem] text-xs text-muted-foreground">
+          {EVERYONE_GRANT_REASON}
+        </span>
+      )}
+    </span>
   );
 }
 

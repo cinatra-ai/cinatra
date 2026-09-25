@@ -178,6 +178,50 @@ function toRecord(row: RawRow): ExternalMcpServerRecord {
   };
 }
 
+/**
+ * ONE reading of a row timestamp, for BOTH sides of a comparison (cinatra#3485).
+ * The sync query worker hands a `timestamptz` back as a JSON string and a direct
+ * client hands back a `Date`, so comparing one against the other by value is a
+ * comparison that can never be true. Every caller that compares a stamp reads
+ * BOTH sides through this, and gets the same ISO-8601 UTC reading of the same
+ * instant. A value that is absent or unreadable is `null`, which a caller must
+ * treat as "no witness at all", never as a match.
+ *
+ * The reading carries MILLISECOND resolution: a `timestamptz` reaches JavaScript
+ * as a `Date`, which holds no finer unit. Two writes are therefore only
+ * distinguishable when more than a millisecond separates them, which every write
+ * that travels a separate query does.
+ */
+export function normalizeExternalMcpRowStamp(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
+ * What a guarded write leaves behind: the stamps of the row IT wrote
+ * (cinatra#3485). `createdAt` is the row's creation instant, which an UPDATE
+ * never moves and an INSERT mints fresh, so it tells a caller whether the row
+ * under an id is still the row it saved or a replacement somebody created at
+ * the same id. `updatedAt` is the instant THIS write stamped. Either is `null`
+ * when the store returned no readable value, and a caller that cannot read both
+ * holds no witness.
+ */
+export type ExternalMcpServerWriteStamps = {
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+function readWriteStamps(row: Record<string, unknown> | undefined): ExternalMcpServerWriteStamps {
+  return {
+    createdAt: normalizeExternalMcpRowStamp(row?.created_at),
+    updatedAt: normalizeExternalMcpRowStamp(row?.updated_at),
+  };
+}
+
 function q(text: string) {
   return text.replaceAll('"', '""');
 }
@@ -622,6 +666,144 @@ export async function revokeExternalMcpApiKeyConnection(
 }
 
 /**
+ * The connection id the `externalMcp` connection IDENTITY of a KEYLESS
+ * external-MCP server row carries (cinatra#3485).
+ *
+ * A server registered through the MCP Servers connector's own Setup form with
+ * the API-key field left blank stores NO credential — its row's
+ * `nangoConnectionId` stays null, so `apiKeyConfigured` stays false and
+ * `resolveExternalMcpServerBearer` mints nothing. The Sharing tab, however,
+ * lists connection IDENTITY rows, so a keyless registration still needs one.
+ * The id is DERIVED from the row id (stable, so the delete road addresses the
+ * identity without a stored pointer) and lives in its OWN namespace — it can
+ * never collide with the keyed road's unique `external-mcp-<uuid>` credential
+ * ids, which address a real vault entry.
+ */
+const EXTERNAL_MCP_KEYLESS_CONNECTION_PREFIX = "external-mcp-keyless-";
+
+export function externalMcpKeylessConnectionId(serverId: string): string {
+  return `${EXTERNAL_MCP_KEYLESS_CONNECTION_PREFIX}${serverId}`;
+}
+
+/**
+ * Refuse an id outside the derived keyless namespace. The three helpers below
+ * read and retire identity rows WITHOUT a credential call, and the reconciling
+ * caller retires a superseded one outright, so each of them must be unable to
+ * address a real credential-backed connection by mistake.
+ */
+function assertKeylessConnectionId(connectionId: string, operation: string): void {
+  if (!connectionId.startsWith(EXTERNAL_MCP_KEYLESS_CONNECTION_PREFIX)) {
+    throw new Error(
+      `${operation} was given "${connectionId}", which is not a derived keyless ` +
+        `external-MCP connection id. Only ids from externalMcpKeylessConnectionId ` +
+        `may travel this road.`,
+    );
+  }
+}
+
+/**
+ * The LIVE `externalMcp` identity the derived keyless id addresses, or null
+ * (cinatra#3485). The caller compares its owner and organization against the
+ * ones the row's own save derived, so a row whose owner or workspace moved
+ * does not keep an identity that describes who owned it before. A read only:
+ * it decides nothing and writes nothing.
+ */
+export async function readExternalMcpKeylessConnectionIdentity(
+  connectionId: string,
+): Promise<{ id: string; ownerUserId: string; organizationId: string | null } | null> {
+  assertKeylessConnectionId(connectionId, "readExternalMcpKeylessConnectionIdentity");
+  const { readNangoConnectionByNaturalKey } = await import(
+    "@cinatra-ai/extensions/connection-identity-store"
+  );
+  const identity = await readNangoConnectionByNaturalKey("externalMcp", connectionId);
+  return identity
+    ? {
+        id: identity.id,
+        ownerUserId: identity.ownerUserId,
+        organizationId: identity.organizationId,
+      }
+    : null;
+}
+
+/**
+ * Register the `externalMcp` connection identity of a KEYLESS external-MCP
+ * server row (cinatra#3485) — the IDENTITY half of
+ * `importExternalMcpApiKeyConnection` without its credential half: no Nango
+ * integration, no import, no readback, no token. A keyless server therefore
+ * never advertises a key it does not have, while still being one of the
+ * person's saved connections on the connector's Sharing tab.
+ *
+ * Idempotent: the seam returns an existing live identity row unchanged and
+ * seeds the one-time grant only when no policy row exists, so re-saving a
+ * keyless server never mints a second identity or resets a widened policy.
+ * Its foreign-row HARD-FAIL is preserved — the caller decides what a failure
+ * means for its own write.
+ *
+ * WHAT THIS CALL DID (cinatra#3485 fix leg 5). `report` is handed the identity
+ * row and whether THIS call INSERTED it or merely CONFIRMED one that was
+ * already standing. Only the first is the caller's to take back: a confirmed
+ * row was written by an earlier save and carries that save's sharing policy.
+ * The answer arrives through the callback rather than the return value alone,
+ * because the seam writes the identity row and seeds its grant as two writes:
+ * a call that threw on the second has still left the first standing.
+ */
+export async function registerExternalMcpKeylessConnectionIdentity(
+  connectionId: string,
+  identity: { ownerUserId: string; organizationId: string | null; seed: "owner" | "workspace" },
+  report?: (row: { identityId: string; created: boolean }) => void,
+): Promise<{ created: boolean }> {
+  assertKeylessConnectionId(connectionId, "registerExternalMcpKeylessConnectionIdentity");
+  const { registerSavedConnectionIdentity } = await import("@/lib/connection-identity-seam");
+  const row = await registerSavedConnectionIdentity({
+    connectorKey: "externalMcp",
+    connectionId,
+    ownerUserId: identity.ownerUserId,
+    organizationId: identity.organizationId,
+    seed: identity.seed,
+    onIdentityRow: (written) =>
+      report?.({ identityId: written.id, created: written.created }),
+  });
+  return { created: row.created };
+}
+
+/**
+ * Retire ONE witnessed keyless identity row, addressed by its own primary key
+ * (cinatra#3485). Pass an id that came from
+ * `readExternalMcpKeylessConnectionIdentity`, which is where the derived
+ * namespace was proved: retiring by the natural key would re-resolve it, and a
+ * concurrent request that replaced the identity in between would have its NEW
+ * row retired instead of the one the caller read. Addressing the row itself
+ * makes the retire a compare-and-retire: it either takes away exactly the row
+ * that was witnessed, or nothing, because the store's soft delete passes over a
+ * row that is already retired. Never a credential call, never a throw.
+ *
+ * `onlyWhile` carries the caller's OWN condition down to the write
+ * (cinatra#3485 fix leg 5). Every right to retire on these roads depends on
+ * state in the other store: that the row is still absent, or that the row that
+ * stands is still the one this save wrote. Asked on an earlier read, such a
+ * condition is an answer about an earlier moment, and the request that changed
+ * it in between loses its panel. The store asks it once more with its query
+ * prepared, so nothing else of this process runs between the answer and the
+ * write.
+ */
+export async function retireExternalMcpKeylessConnectionIdentityRow(
+  identityId: string,
+  onlyWhile?: () => boolean,
+): Promise<void> {
+  try {
+    const { softDeleteNangoConnection } = await import(
+      "@cinatra-ai/extensions/connection-identity-store"
+    );
+    await softDeleteNangoConnection(identityId, onlyWhile);
+  } catch (err) {
+    console.warn(
+      "[external-mcp-registry] best-effort witnessed keyless identity retire failed",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/**
  * Decide the URL to inject into the LLM provider's tool definition for an
  * external MCP server. Rows with a non-null `allowedCatalogTools` (Layer B
  * enforcement enabled) route through the cinatra-side proxy at
@@ -756,8 +938,14 @@ export type ExternalMcpServerGuard = {
  * by a concurrent worker before this insert — the plain upsert would have
  * silently clobbered it. (Detecting the conflict via `rowCount` is reliable
  * without relying on the sync worker to propagate the pg duplicate-key code.)
+ *
+ * Returns the stamps of the row it created (cinatra#3485), so a caller with more
+ * to do after the write can tell that row apart from a replacement somebody
+ * created at the same id.
  */
-export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInput): void {
+export function insertExternalMcpServerStrict(
+  input: ExternalMcpServerUpsertInput,
+): ExternalMcpServerWriteStamps {
   assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   const [result] = runPostgresQueriesSync({
@@ -767,7 +955,7 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
         text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
                ON CONFLICT (id) DO NOTHING
-               RETURNING id`,
+               RETURNING id, created_at, updated_at`,
         values: [
           input.id,
           input.label,
@@ -790,6 +978,7 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
     );
   }
   invalidateCache();
+  return readWriteStamps((result?.rows ?? [])[0] as Record<string, unknown> | undefined);
 }
 
 /**
@@ -806,11 +995,15 @@ export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInpu
  * concurrent re-key/keyless-edit that moved the connection fails closed instead
  * of resurrecting a revoked pointer (cinatra#1407). Throws
  * `ExternalMcpServerWriteConflictError` on a zero-row match.
+ *
+ * Returns the stamps of the row it wrote (cinatra#3485): the creation instant it
+ * left untouched and the update instant it stamped, which together name the row
+ * this write landed on.
  */
 export function updateExternalMcpServerGuarded(
   input: ExternalMcpServerUpsertInput,
   expected: ExternalMcpServerGuard,
-): void {
+): ExternalMcpServerWriteStamps {
   assertNotManagedConnectorEndpoint(input.serverUrl);
   ensurePostgresSchema();
   const witnessNango = expected.nangoConnectionId !== undefined;
@@ -851,7 +1044,7 @@ export function updateExternalMcpServerGuarded(
                  AND user_id IS NOT DISTINCT FROM $13${
                    witnessNango ? "\n                 AND nango_connection_id IS NOT DISTINCT FROM $14" : ""
                  }
-               RETURNING id`,
+               RETURNING id, created_at, updated_at`,
         values,
       },
     ],
@@ -860,6 +1053,7 @@ export function updateExternalMcpServerGuarded(
     throw new ExternalMcpServerWriteConflictError();
   }
   invalidateCache();
+  return readWriteStamps((result?.rows ?? [])[0] as Record<string, unknown> | undefined);
 }
 
 /**
