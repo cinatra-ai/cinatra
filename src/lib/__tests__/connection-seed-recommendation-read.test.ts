@@ -13,8 +13,9 @@
 // §II of the ratified drawing: "Where the connector only recommends a scope,
 // the line reads instead This connector recommends sharing with your
 // organization — nothing is shared until you save. Currently: only you."
-// (the drawn example declares only:"organization"; the sentence names the
-// DECLARED scope, so the second case below pins it word for word).
+// A workspace grant on a connection of an organization reaches exactly that
+// organization, so the MCP Servers connector's workspace recommendation reads
+// that sentence word for word, as an organization recommendation does.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -61,6 +62,13 @@ const CONNECT_SEED = {
   seededDefault: true,
 };
 
+/**
+ * The recommendation line as section II of the connectors drawing gives it,
+ * word for word. The dash is U+2014, written as an escape here.
+ */
+const RECOMMENDATION_LINE =
+  "This connector recommends sharing with your organization \u2014 nothing is shared until you save. Currently: only you.";
+
 /** What the first explicit Save changes writes (the marker is stripped by it). */
 const SAVED_WORKSPACE = {
   runListVisibility: ["workspace"],
@@ -94,28 +102,24 @@ afterEach(() => {
 });
 
 describe("the recommending connector's panel, read from the stored seed", () => {
-  it("an UNTOUCHED seed yields the recommendation line, the picker still on the stored owner scope", async () => {
+  it("an UNTOUCHED seed yields the drawing's line word for word and the picker pre-selected to the recommended scope", async () => {
     storedRow(CONNECT_SEED);
     const s = await surfaceFor("workspace");
     expect(s.surface).toBe("editable");
     if (s.surface !== "editable") return;
-    // "Currently: only you." — the picker says the same, and the recommended
-    // scope stays an enabled option the owner may choose and save (#3408).
-    expect(s.value).toBe("owner");
-    expect(s.recommendationNote).toBe(
-      "This connector recommends sharing with the whole workspace — nothing is shared until you save. Currently: only you.",
-    );
+    // The picker proposes the recommended scope; nothing is written until
+    // Save, and the line says the stored grant is still only you (#3408).
+    expect(s.value).toBe("workspace");
+    expect(s.recommendationNote).toBe(RECOMMENDATION_LINE);
   });
 
-  it("declares the drawing's sentence word for word for an organization recommendation", async () => {
+  it("declares the same sentence for an organization recommendation, pre-selecting the owning organization", async () => {
     storedRow(CONNECT_SEED);
     const s = await surfaceFor("organization");
     expect(s.surface).toBe("editable");
     if (s.surface !== "editable") return;
-    expect(s.value).toBe("owner");
-    expect(s.recommendationNote).toBe(
-      "This connector recommends sharing with your organization — nothing is shared until you save. Currently: only you.",
-    );
+    expect(s.value).toBe(`org:${ORG}`);
+    expect(s.recommendationNote).toBe(RECOMMENDATION_LINE);
   });
 
   it("a SAVED grant draws the saved scope and no recommendation line", async () => {

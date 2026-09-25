@@ -176,7 +176,7 @@ export function buildInstallTargets(
   if (args.includeWorkspaceScopes) {
     // `label` is DEAD for rendering (cinatra#2372): the flat AccessCombobox
     // single mode derives every row's text from the canonical flat-option
-    // model (src/components/access-scope.ts), never from this field — only
+    // model (packages/sdk-ui/src/access/scope.ts), never from this field: only
     // ownerEntityNames (org/team/project) feeds it. Kept in the audience's
     // OWN canonical vocabulary rather than the retired "Whole Workspace" /
     // bare "Admins only" copy, so nothing that reads this field in the future
