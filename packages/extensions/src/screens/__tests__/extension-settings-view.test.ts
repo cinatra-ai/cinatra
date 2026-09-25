@@ -91,8 +91,12 @@ describe("§V — Marketplace: one-way Publish, vendor-gated", () => {
     expect(VIEW).toContain("Register for marketplace");
     expect(VIEW).toContain("/configuration/environment?tab=registries");
   });
-  it("shows the published state instead of the action once public", () => {
-    expect(VIEW).toContain("Published on the marketplace.");
+  it("draws no published state: §V draws the action in three states only (cinatra#3447)", () => {
+    expect(VIEW).not.toContain("Published on the marketplace.");
+    expect(VIEW).not.toContain("isPublic");
+  });
+  it("spells the not-available reason out as visible text beside the muted action", () => {
+    expect(VIEW).toContain('data-slot="marketplace-publish-reason"');
   });
 });
 

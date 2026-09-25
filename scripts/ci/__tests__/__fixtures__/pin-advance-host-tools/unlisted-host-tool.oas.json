@@ -1,0 +1,17 @@
+{
+  "component_type": "Flow",
+  "id": "unlisted-host-tool-fixture",
+  "name": "Unlisted host tool fixture",
+  "start_node": { "$component_ref": "call_unlisted" },
+  "nodes": [{ "$component_ref": "call_unlisted" }],
+  "$referenced_components": {
+    "call_unlisted": {
+      "component_type": "ApiNode",
+      "id": "call_unlisted",
+      "name": "Call a host tool the host does not carry",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "data": { "tool": "a_tool_the_host_does_not_carry", "input": {}, "agent_run_id": "{{ cinatra_run_id }}" }
+    }
+  }
+}

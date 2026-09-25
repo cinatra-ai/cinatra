@@ -78,6 +78,11 @@ const UI_ALLOWLIST = new Set<string>([
   // evaluateExtensionAccess under each concrete organization, never by this
   // membership read.
   "src/lib/scope-surface-eligibility.server.ts",
+  // The per-scope assignment page's workspace editor (cinatra#2814): every
+  // organization the vantage carries becomes a scope the reader can assign
+  // at, so an archived organization must never be one. The write decision
+  // itself is S1's exact-scope resolver, never this membership read.
+  "src/lib/scope-assignment/scope-assignment-target.server.ts",
 ]);
 
 function walk(dir: string, acc: string[] = []): string[] {

@@ -9,6 +9,10 @@ on:
       # in-tree path filter on `agents/**` / `extensions/cinatra-ai/**` never
       # matches. Trigger on the validator + the clone-back mechanism instead.
       - 'scripts/ci-validate-agents.mjs'
+      # cinatra#3422 — the pin-advance host-tool check, its suite and fixtures:
+      - 'scripts/ci/pin-advance-host-tools.mjs'
+      - 'scripts/ci/__tests__/pin-advance-host-tools.test.mjs'
+      - 'scripts/ci/__tests__/__fixtures__/pin-advance-host-tools/**'
       - 'scripts/ci/sync-dev-extensions.mjs'
       - 'scripts/audit/lib/assert-extensions-cloned.mjs'
       # Clone-back implementation closure imported by sync-dev-extensions.mjs:
@@ -53,6 +57,10 @@ on:
       # in-tree path filter on `agents/**` / `extensions/cinatra-ai/**` never
       # matches. Trigger on the validator + the clone-back mechanism instead.
       - 'scripts/ci-validate-agents.mjs'
+      # cinatra#3422 — the pin-advance host-tool check, its suite and fixtures:
+      - 'scripts/ci/pin-advance-host-tools.mjs'
+      - 'scripts/ci/__tests__/pin-advance-host-tools.test.mjs'
+      - 'scripts/ci/__tests__/__fixtures__/pin-advance-host-tools/**'
       - 'scripts/ci/sync-dev-extensions.mjs'
       - 'scripts/audit/lib/assert-extensions-cloned.mjs'
       # Clone-back implementation closure imported by sync-dev-extensions.mjs:
@@ -114,6 +122,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pin-advance host-tool check below reads the lock files at the
+          # base: in a pull request run that is the merge ref's first parent.
+          fetch-depth: 2
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -125,6 +137,33 @@ jobs:
 
       - name: Validate agent definitions
         run: node scripts/ci-validate-agents.mjs
+
+      # cinatra#3422 — none of this workflow's jobs compares a pinned flow's
+      # host-tool names with the passthrough allowlist, so a lock bump could
+      # move a pack to a tip whose flow calls a tool the route refuses (403)
+      # and stay green. For every package whose pin CHANGES since the base, this
+      # step reads the synced flow and refuses a passthrough node whose
+      # `data.tool` the allowlist of this tree does not carry. The base comes
+      # from the event, never from a guess: the merge ref's first parent on a
+      # pull request, the head before the whole push on a push (fail-closed
+      # when that is all-zero or cannot be fetched).
+      - name: Pin-advance host-tool check (changed pins only)
+        env:
+          PIN_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            if [ -z "$PIN_BASE" ] || [ -z "${PIN_BASE//0/}" ]; then
+              echo "::error::pin-advance host-tool check: the push carries no usable base (github.event.before is '${PIN_BASE}')"
+              exit 2
+            fi
+            git fetch --no-tags --depth=1 origin "$PIN_BASE" || {
+              echo "::error::pin-advance host-tool check: cannot fetch the push base ${PIN_BASE}"
+              exit 2
+            }
+          fi
+          node scripts/ci/pin-advance-host-tools.mjs --base "$PIN_BASE"
 
   validate-runtime-invariants:
     permissions:
@@ -155,6 +194,11 @@ jobs:
 
       - name: Run hermetic runtime-invariants vitest
         run: pnpm --filter @cinatra-ai/agents exec vitest run __tests__/oas-runtime-invariants.test.ts
+
+      # cinatra#3422 — the pure core of the pin-advance host-tool check above,
+      # run under the root config after this job's own install.
+      - name: Pin-advance host-tool check unit tests
+        run: pnpm exec vitest run --config vitest.config.ts scripts/ci/__tests__/pin-advance-host-tools.test.mjs --no-coverage
 
   validate-wayflow-mount:
     permissions:
