@@ -534,9 +534,12 @@ jobs:
 
   # Design RECORD GRAMMAR (cinatra#3144 G3): every Fix-leg / graded-record
   # section of this pull request's body must name the pin it was graded
-  # against. NO EXTRA CREDENTIAL — the body is already in the workflow event
-  # payload at GITHUB_EVENT_PATH, the same door the skills-drift
-  # acknowledgement line is read through, so this job mints nothing. Landed
+  # against. The body needs no credential — it is already in the workflow
+  # event payload at GITHUB_EVENT_PATH, the same door the skills-drift
+  # acknowledgement line is read through. Reading an older graded pin as
+  # superseded (cinatra#3670) does: only the design history can show that the
+  # older value is an ancestor of this branch's pin, so this job fetches that
+  # history in full with the read-only token its two siblings mint. Landed
   # WARN-FIRST beside its two siblings: its context is not required until a
   # separate pull request adds it. See scripts/ci/design-record-grammar.mjs.
   design-record-grammar:
@@ -553,7 +556,67 @@ jobs:
         with:
           node-version: "24"
 
+      # The token step of design-pin-freshness and design-anchor-resolution,
+      # unchanged: read-only (contents: read) and scoped to the design source
+      # alone. continue-on-error here and on the fetch below, for the reason
+      # those jobs give: a missing or refused credential, or a failed fetch,
+      # must not abort the job. The checker then has no copy of the history,
+      # refuses the ancestor test and keeps the older pin a mismatch with the
+      # reason printed (fail-closed); a body that does not rest on that reading
+      # is judged exactly as before.
+      - name: Mint the design-source read token
+        id: design-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CINATRA_AGENT_APP_ID }}
+          private-key: ${{ secrets.CINATRA_AGENT_APP_PRIVATE_KEY }}
+          owner: cinatra-ai
+          repositories: design
+          permission-contents: read
+
+      # A quiet bare clone beside the workspace, not actions/checkout: checkout
+      # prints every branch and tag name and the revision it lands on, and this
+      # log is public, so it would break the disclosure rule the design-pin
+      # gates keep. Git's own output is discarded and only closed text is
+      # printed. The token reaches git through a credential helper that reads
+      # it from the environment — never a command line, never a file — and the
+      # checker reads the copy with git and never fetches. Owner and name stay
+      # apart, as the token step above and scripts/ci/lib/design-pin.mjs keep
+      # them.
+      - name: Fetch the design history
+        id: design-history
+        continue-on-error: true
+        env:
+          DESIGN_SOURCE_TOKEN: ${{ steps.design-token.outputs.token }}
+          DESIGN_SOURCE_OWNER: cinatra-ai
+          DESIGN_SOURCE_NAME: design
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          if [ -z "$DESIGN_SOURCE_TOKEN" ]; then
+            echo "::warning::no design-source read token was minted, so the design history is not at hand."
+            exit 1
+          fi
+          dir="$RUNNER_TEMP/design-history"
+          # Single-quoted: git's own shell expands these, from the environment.
+          # shellcheck disable=SC2016
+          helper='!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$DESIGN_SOURCE_TOKEN"; fi; }; f'
+          # Full history, every branch and tag: the ancestor test refuses to
+          # decide on a shallow copy.
+          if ! git -c credential.helper= -c "credential.helper=$helper" \
+            clone --quiet --bare \
+            "https://github.com/$DESIGN_SOURCE_OWNER/$DESIGN_SOURCE_NAME.git" "$dir" \
+            >/dev/null 2>&1; then
+            echo "::warning::the design history could not be fetched, so it is not at hand."
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
       - name: Design Record Grammar
+        env:
+          # Set only when the fetch above succeeded; empty otherwise, so the
+          # checker says that no copy of the history is at hand.
+          DESIGN_DRAWINGS_DIR: ${{ steps.design-history.outputs.dir }}
         run: |
           if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
             base="origin/${{ github.event.pull_request.base.ref }}"
