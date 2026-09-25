@@ -15,6 +15,14 @@
 // Traversed + counted: first-party modules under src/**, packages/*/src/**,
 // extensions/** — INCLUDING @cinatra-ai/* workspace packages (resolved via the
 // root tsconfig `paths`), because those are first-party graph pressure.
+// Extension-owned modules (every module under extensions/**, the pinned packs)
+// are walked and reported, but excluded from the core count: each route reports
+// `coreModuleCount` (the modules outside the extension tree, the entry
+// included), `extensionModuleCount` (the modules under it) and
+// `extensionModulesByPack` (those modules per pack). `moduleCount` stays the
+// whole reachable count. The walk itself does not stop at the extension tree,
+// so a core module reached only through a pack is still counted and an
+// unresolved import inside a pack is still reported as missing.
 //
 // Zero dependencies (node: builtins only). Re-run safe; same input → same output.
 
@@ -353,6 +361,22 @@ function isFirstParty(abs) {
   return false;
 }
 
+// A repository-relative path (posix separators) under the extension tree — the
+// same rule isFirstParty applies to extensions/**. Such a module is
+// extension-owned: walked and reported, never part of the core count.
+export function isExtensionModule(relPath) {
+  return typeof relPath === "string" && relPath.startsWith("extensions/");
+}
+
+// The pack an extension-owned path belongs to: `@<scope>/<name>` from
+// extensions/<scope>/<name>/….
+function extensionPackOf(relPath) {
+  const m = relPath.match(/^extensions\/([^/]+)\/([^/]+)\//);
+  return m ? `@${m[1]}/${m[2]}` : "(extensions)";
+}
+
+const byKey = ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0);
+
 function classify(abs) {
   return isFirstParty(abs) ? { kind: "first-party", abs } : { kind: "external" };
 }
@@ -461,9 +485,20 @@ export function analyzeRoute(entryRel, opts = {}) {
   // count excludes the entry itself? Include entry in graph but report both.
   const modules = [...visited];
   const byOwner = {};
+  const byPack = {};
+  let coreModuleCount = 0;
+  let extensionModuleCount = 0;
   for (const abs of modules) {
     const o = ownerOf(abs);
     byOwner[o] = (byOwner[o] || 0) + 1;
+    const rel = path.relative(REPO_ROOT, abs).split(path.sep).join("/");
+    if (isExtensionModule(rel)) {
+      extensionModuleCount += 1;
+      const pack = extensionPackOf(rel);
+      byPack[pack] = (byPack[pack] || 0) + 1;
+    } else {
+      coreModuleCount += 1;
+    }
   }
   const workspacePkgs = Object.keys(byOwner)
     .filter((o) => o.startsWith("@cinatra-ai/"))
@@ -472,6 +507,9 @@ export function analyzeRoute(entryRel, opts = {}) {
     ok: true,
     entry: entryRel,
     moduleCount: modules.length,
+    coreModuleCount,
+    extensionModuleCount,
+    extensionModulesByPack: Object.fromEntries(Object.entries(byPack).sort(byKey)),
     workspacePackageCount: workspacePkgs.length,
     workspacePackages: workspacePkgs,
     byOwner,
@@ -546,6 +584,8 @@ Usage:
 Metric: count of distinct reachable FIRST-PARTY modules (src/**, packages/*/src/**,
 extensions/**) from a route's own page/route entry. Cut-points: node_modules,
 node: builtins, serverExternalPackages. @cinatra-ai/* workspace packages ARE traversed.
+Extension-owned modules (extensions/**) are walked and reported per route as the
+excluded count, and are excluded from the core count (the route-graph ratchet's metric).
 
 Known limitations (documented):
   - No tree-shaking / "use client" boundary modelling (this is a STATIC reachable
@@ -615,14 +655,16 @@ function renderMd(result) {
     lines.push("# Route-graph (static first-party reachable-module count)");
     lines.push("");
     lines.push("");
-    lines.push("| Route | Entry | Modules | Workspace pkgs | Missing |");
-    lines.push("|---|---|---|---|---|");
+    lines.push("| Route | Entry | Modules | Core | Extension (excluded) | Workspace pkgs | Missing |");
+    lines.push("|---|---|---|---|---|---|---|");
     for (const r of result.routes) {
       if (!r.ok) {
-        lines.push(`| ${r.route} | — | ERROR | — | ${r.error} |`);
+        lines.push(`| ${r.route} | — | ERROR | — | — | — | ${r.error} |`);
         continue;
       }
-      lines.push(`| ${r.route} | ${r.entry} | ${r.moduleCount} | ${r.workspacePackageCount} | ${r.missingCount} |`);
+      lines.push(
+        `| ${r.route} | ${r.entry} | ${r.moduleCount} | ${r.coreModuleCount} | ${r.extensionModuleCount} | ${r.workspacePackageCount} | ${r.missingCount} |`,
+      );
     }
     for (const r of result.routes) {
       if (!r.ok) continue;

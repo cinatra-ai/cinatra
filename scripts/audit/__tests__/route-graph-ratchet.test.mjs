@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 import {
   diffAgainstBaseline,
@@ -13,6 +14,8 @@ import {
   classifyRaises,
   isStructurallyValidAbsorbRecord,
 } from "../route-graph-ratchet.mjs";
+// Imported as a namespace so a missing export fails only the case that reads it.
+import * as gate from "../route-graph-ratchet.mjs";
 import { FIXED_ROUTES, analyzeRoute } from "../../route-graph.mjs";
 
 const REPO_ROOT = process.cwd();
@@ -287,7 +290,7 @@ test("FIXTURE: at-baseline is clean and a one-route growth is caught", () => {
 // --- Integration: the committed baseline tracks EXACTLY the FIXED_ROUTES set,
 // each route's real analyzeRoute() resolves cleanly (ok, no missing imports —
 // i.e. the companion extension repos ARE cloned in this environment), and the
-// real count is at/below its ceiling. This is what makes the gate green on main
+// real core count is at/below its ceiling. This is what makes the gate green on main
 // and proves no set/baseline drift. ---
 test("INTEGRATION: the committed baseline covers exactly FIXED_ROUTES, each a resolvable at-or-below-ceiling route", () => {
   const baselinePath = join(HERE, "..", "route-graph-ratchet.baseline.json");
@@ -297,11 +300,12 @@ test("INTEGRATION: the committed baseline covers exactly FIXED_ROUTES, each a re
   const trackedRoutes = FIXED_ROUTES.map((r) => r.route).sort();
   assert.deepEqual(baselineKeys, trackedRoutes, "baseline keys must equal FIXED_ROUTES routes exactly");
   for (const { route, entry } of FIXED_ROUTES) {
-    const r = analyzeRoute(entry);
+    // The ratchet's own measurement: the core count (extension-owned modules excluded).
+    const r = gate.ratchetMeasurement(analyzeRoute(entry));
     assert.ok(r.ok, `route entry must resolve: ${route} (${entry})`);
     assert.equal(r.missingCount, 0, `route ${route} has ${r.missingCount} unresolved first-party import(s) — clone the companion extension repos before measuring`);
     const ceiling = baseline.routes[route];
-    assert.ok(r.moduleCount <= ceiling, `route ${route} is ${r.moduleCount} modules, over the committed ceiling ${ceiling} — narrow the graph or regenerate`);
+    assert.ok(r.moduleCount <= ceiling, `route ${route} is ${r.moduleCount} core modules, over the committed ceiling ${ceiling} — narrow the graph or regenerate`);
   }
   // The committed absorb records (if any) must be strictly valid against the
   // committed routes map — the same fail-closed structural check the gate runs
@@ -310,52 +314,78 @@ test("INTEGRATION: the committed baseline covers exactly FIXED_ROUTES, each a re
   assert.deepEqual(errors, [], `committed absorb records must validate: ${JSON.stringify(errors)}`);
 });
 
-// --- Reconciliation: a forward merge REGENERATES this baseline by measuring, and
-// a measurement lowers every ceiling to the merged tree own count. That is the
-// right direction for a route the branch narrowed and the wrong one for a route it
-// never touched: committed headroom is a decision, and re-measuring it away
-// tightens an unrelated route budget without authority while deleting the
-// annotation that explains it. The rule pinned here is the one this branch's own
-// /chat record states in this same file: a ceiling is a ceiling, and a forward
-// merge does not ratchet an untouched route down.
-//
-// /sign-in is the route that rule is about. It reaches none of the leaves the
-// appointment-schedule bridge adds, it measures far under its ceiling on both
-// trees, and the ceiling and record it carries were committed by cinatra#2988.
-// Either both survive a forward merge or neither does; a ceiling silently
-// re-measured down, or kept with its record dropped, is a merge editing a decision
-// it did not make. ---
-test("RECONCILIATION: an untouched route keeps the ceiling and the absorb record the base branch committed", () => {
-  const baselinePath = join(HERE, "..", "route-graph-ratchet.baseline.json");
-  const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-  assert.equal(
-    baseline.routes["/sign-in"],
-    223,
-    "/sign-in reaches nothing this branch adds, so its ceiling is the base branch committed 223 — a forward merge that re-measures it down to the merged tree own count ratchets an untouched route without authority",
-  );
-  const record = baseline.absorbs?.["/sign-in"];
-  assert.ok(
-    record,
-    "/sign-in keeps its cinatra#2988 absorb record: the ceiling and the annotation that explains it move together or not at all",
-  );
-  assert.deepEqual(
-    { from: record.from, to: record.to, pr: record.pr },
-    { from: 222, to: 223, pr: 2988 },
-    "the carried-forward /sign-in record is the base branch own, unedited",
-  );
-  // The numbers alone do not prove the record is UNEDITED: reason is the part the
-  // gate only checks for non-emptiness, so a rewritten history would slip past a
-  // from/to/pr comparison. Anchor on the two facts the base branch's own record
-  // asserts and that nothing on this branch may restate: the measurement base SHA
-  // it was taken at, and the issue that authorised the raise.
-  assert.match(
-    record.reason,
-    /1fb86826b078b7031c422cfab7c60c0182d9b8f3/,
-    "the /sign-in reason keeps the base branch's own measurement anchor — a rewritten reason is an edited decision even when from/to/pr still match",
-  );
-  assert.match(
-    record.reason,
-    /cinatra#2988/,
-    "the /sign-in reason still names the issue that authorised the raise",
-  );
+// --- Core-only measurement (cinatra#3664): the ceilings catch core rot; a pinned
+// pack's own modules are walked and reported, never counted against a route. ---
+const analysis = (core, ext, extra = {}) => ({
+  ok: true,
+  moduleCount: core + ext,
+  coreModuleCount: core,
+  extensionModuleCount: ext,
+  missingCount: 0,
+  ...extra,
+});
+
+test("the ratchet measures the core count, reports the excluded count, and the committed baseline carries no absorb record", () => {
+  assert.deepEqual(gate.ratchetMeasurement(analysis(100, 20)), {
+    ok: true,
+    moduleCount: 100,
+    missingCount: 0,
+    excludedExtensionModules: 20,
+  });
+  const baseline = JSON.parse(readFileSync(join(HERE, "..", "route-graph-ratchet.baseline.json"), "utf8"));
+  assert.equal("absorbs" in baseline, false, "the core-only baseline carries no absorb record");
+  for (const { route, entry } of FIXED_ROUTES) {
+    const m = gate.ratchetMeasurement(analyzeRoute(entry));
+    assert.ok(m.ok, `route entry must resolve: ${route} (${entry})`);
+    assert.equal(m.missingCount, 0, `route ${route} has ${m.missingCount} unresolved first-party import(s)`);
+    assert.ok(m.moduleCount <= baseline.routes[route], `route ${route} core count ${m.moduleCount} is over its ceiling ${baseline.routes[route]}`);
+    assert.ok(Number.isInteger(m.excludedExtensionModules) && m.excludedExtensionModules >= 0, `route ${route} reports its excluded count`);
+  }
+});
+
+test("an extension module reachable from a tracked route is not counted; a core module still is; a raise of a core count without a record still fails", () => {
+  const baseline = { routes: { "/r": 100 } };
+  // Growth inside the extension tree only: the route stays within its ceiling.
+  for (const ext of [20, 45]) {
+    const res = diffAgainstBaseline(new Map([["/r", gate.ratchetMeasurement(analysis(100, ext))]]), baseline);
+    assert.deepEqual(res.over, []);
+    assert.deepEqual(res.broken, []);
+  }
+  // One more CORE module is over by one.
+  const res = diffAgainstBaseline(new Map([["/r", gate.ratchetMeasurement(analysis(101, 45))]]), baseline);
+  assert.deepEqual(res.broken, []);
+  assert.deepEqual(res.over, [{ route: "/r", count: 101, ceiling: 100, delta: 1 }]);
+  // Raising that core ceiling without a record is still a silent raise.
+  const { violations, absorbed } = classifyRaises(baseline, { routes: { "/r": 101 } });
+  assert.deepEqual(absorbed, []);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].route, "/r");
+  assert.match(violations[0].reason, /NO absorb record/);
+});
+
+test("no tracked route is dropped; missing imports and an unresolved base ref still fail closed", () => {
+  assert.deepEqual(FIXED_ROUTES, [
+    { route: "/sign-in", entry: "src/app/sign-in/page.tsx" },
+    { route: "/api/mcp", entry: "src/app/api/mcp/route.ts" },
+    { route: "/chat", entry: "src/app/chat/[[...slug]]/page.tsx" },
+    { route: "/api/a2a", entry: "src/app/api/a2a/route.ts" },
+    { route: "/api/llm-bridge", entry: "src/app/api/llm-bridge/route.ts" },
+  ]);
+  const gateRun = spawnSync(process.execPath, [join(HERE, "..", "route-graph-ratchet.mjs")], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: { ...process.env, ROUTE_GRAPH_RATCHET_BASE: "refs/heads/no-such-base-3664" },
+  });
+  assert.equal(gateRun.status, 1, `stdout: ${gateRun.stdout}\nstderr: ${gateRun.stderr}`);
+  assert.match(gateRun.stderr, /did not resolve/);
+
+  const ceiling = { routes: { "/r": 100 } };
+  let res = diffAgainstBaseline(new Map([["/r", gate.ratchetMeasurement(analysis(50, 10, { missingCount: 7 }))]]), ceiling);
+  assert.deepEqual(res.over, []);
+  assert.equal(res.broken.length, 1);
+  assert.match(res.broken[0].reason, /unresolved/i);
+  res = diffAgainstBaseline(new Map([["/r", gate.ratchetMeasurement({ ok: false })]]), ceiling);
+  assert.deepEqual(res.over, []);
+  assert.equal(res.broken.length, 1);
+  assert.equal(res.broken[0].route, "/r");
 });
