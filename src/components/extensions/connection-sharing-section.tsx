@@ -286,6 +286,11 @@ export async function ConnectionSharingSection({
           surface.surface === "locked" ? surface.disabledReasons : undefined,
         accessScopeNote:
           surface.surface === "locked" ? surface.note : surface.recommendationNote,
+        // Section II draws the lock in front of the ceiling line only; the
+        // recommendation line carries none (cinatra#3454). The kind comes from
+        // the same test that picks the note, so the two cannot disagree.
+        accessScopeNoteKind:
+          surface.surface === "locked" ? ("locked" as const) : ("recommended" as const),
         actions: {
           savePolicy: saveExtensionAccessPolicy.bind(null, "connection", identity.id),
           searchCandidates: searchExtensionCoOwnerCandidates.bind(

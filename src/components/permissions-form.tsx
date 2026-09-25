@@ -119,6 +119,12 @@ export type PermissionsFormProps = {
   /** Rendered under the picker: the lock note ("Locked by this connector…")
    * or the default-recommendation note. */
   accessScopeNote?: string;
+  /**
+   * Which note `accessScopeNote` is (cinatra#3454). Section II of the
+   * connectors drawing puts the lock in front of the ceiling line only, so
+   * only `locked` draws it. Forwarded to the shared panel unchanged.
+   */
+  accessScopeNoteKind?: "locked" | "recommended";
 };
 
 // ---------------------------------------------------------------------------
@@ -150,6 +156,7 @@ export function PermissionsForm({
   accessDisabledScopes,
   accessDisabledReasons,
   accessScopeNote,
+  accessScopeNoteKind,
 }: PermissionsFormProps) {
   return (
     <PermissionsPanel
@@ -168,6 +175,7 @@ export function PermissionsForm({
       accessDisabledScopes={accessDisabledScopes}
       accessDisabledReasons={accessDisabledReasons}
       accessScopeNote={accessScopeNote}
+      accessScopeNoteKind={accessScopeNoteKind}
       actions={actions}
     />
   );

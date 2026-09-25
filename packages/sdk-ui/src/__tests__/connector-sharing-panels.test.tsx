@@ -252,6 +252,10 @@ describe("ConnectorSharingPanels — one panel per owned connection", () => {
               accessDisabledScopes: ["workspace"],
               accessDisabledReasons: { workspace: CEILING_LINE },
               accessScopeNote: CEILING_LINE,
+              // The lock is a claim that the connector caps the scope, so the
+              // panel draws it only where the caller states a ceiling
+              // (cinatra#3454). The Sharing tab section states the same kind.
+              accessScopeNoteKind: "locked",
             }),
           }),
           panel(1, { scopeConstraint: "recommended" }),
