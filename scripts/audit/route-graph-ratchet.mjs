@@ -17,16 +17,22 @@
  * fail-closed, base-ref, regenerate-to-pass-blocked shape.
  *
  * Metric: route-graph.mjs's own `analyzeRoute(entry).coreModuleCount` — the
- * count of distinct reachable first-party modules outside the extension tree
- * (under src and packages workspace src) from a route's page/route entry
- * (cinatra#3664). The walk still follows every edge through the extension tree,
- * so a core module reached only through a pack is counted and a missing import
- * inside a pack still fails closed; the extension-owned modules are reported
- * per route as the excluded count and never count against a ceiling (a pinned
- * pack's own modules are the intended cost of pinning it; each changed pack is
- * read by the pin-advance host-tool check). We reuse the analyzer (importing
- * FIXED_ROUTES + analyzeRoute) rather than re-deriving the metric, so the
- * ratchet and the reporter can never diverge.
+ * count of distinct first-party modules outside the extension tree (under src
+ * and packages workspace src) that a route's page/route entry reaches through
+ * modules outside the extension tree (cinatra#3664, cinatra#3669). The walk
+ * still follows every edge through the extension tree, so a missing import
+ * inside a pack still fails closed. Two parts never count against a ceiling and
+ * are reported per route beside it: the extension-owned modules (the excluded
+ * count; a pinned pack's own modules are the intended cost of pinning it, and
+ * each changed pack is read by the pin-advance host-tool check), and the core
+ * modules the walk reaches only through a pack's modules (the pack-reached
+ * reading, `reached through <pack>: <n> core modules`, listed per pack in the
+ * analyzer's generated map: a pin advance whose pack imports a further core
+ * module is that pack's cost, not the route's own growth). A core module the
+ * route also reaches through core modules counts. The measurement fails closed
+ * when the three parts do not add up to the whole walk. We reuse the analyzer
+ * (importing FIXED_ROUTES + analyzeRoute) rather than re-deriving the metric,
+ * so the ratchet and the reporter can never diverge.
  *
  * Ratchet semantics:
  *  - A tracked route ABOVE its baseline ceiling → FAIL (the locked route's graph
@@ -67,7 +73,10 @@
  *    the base (orphan), and deleting/altering a carried-forward record while
  *    keeping its raised ceiling all FAIL. Lowering the ceiling (or dropping
  *    the route) is the only way to retire a record — `--write-baseline` does
- *    that automatically.
+ *    that automatically. Every failure names the route and the record field.
+ *    The gate's tests check the COMMITTED baseline the same way
+ *    (`validateCommittedAbsorbs` against the base), so a pull request with
+ *    real core growth carries its records and passes both (cinatra#3669).
  *
  * Node-builtins-only + offline (imports route-graph.mjs, which is also
  * node-builtins-only; the base-ref ratchet shells out to `git`). No third-party
@@ -93,7 +102,7 @@ const BASELINE_FILE = join(REPO_ROOT, "scripts/audit/route-graph-ratchet.baselin
 // Single source for the baseline's self-describing prose (kept in the gate so
 // `--write-baseline` regenerations cannot drift the documented contract).
 const BASELINE_NOTE =
-  "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.";
+  "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.";
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in __tests__/route-graph-ratchet.test.mjs)
@@ -125,7 +134,7 @@ export function diffAgainstBaseline(counts, baseline) {
       continue;
     }
     if (!info.ok) {
-      broken.push({ route, reason: "route entry did not resolve (a moved entry must update route-graph FIXED_ROUTES + the baseline)" });
+      broken.push({ route, reason: info.error ?? "route entry did not resolve (a moved entry must update route-graph FIXED_ROUTES + the baseline)" });
       continue;
     }
     if (info.missingCount > 0) {
@@ -169,15 +178,36 @@ export function baselineGrowth(baseBaseline, committedBaseline) {
 // The exact key set of a well-formed absorb record.
 const ABSORB_RECORD_KEYS = ["from", "pr", "reason", "to"];
 
-/** Structural check for ONE absorb record (shape only, no baseline context). */
-export function isStructurallyValidAbsorbRecord(rec) {
-  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return false;
-  const keys = Object.keys(rec).sort();
-  if (keys.length !== ABSORB_RECORD_KEYS.length || keys.some((k, i) => k !== ABSORB_RECORD_KEYS[i])) return false;
-  if (!Number.isInteger(rec.from) || rec.from <= 0) return false;
-  if (!Number.isInteger(rec.to) || rec.to <= 0) return false;
-  if (rec.to <= rec.from) return false; // a record documents a RAISE
-  if (typeof rec.reason !== "string" || rec.reason.trim() === "") return false;
+const isPositiveInteger = (v) => Number.isInteger(v) && v > 0;
+const hasOwn = (obj, key) => obj !== null && typeof obj === "object" && Object.prototype.hasOwnProperty.call(obj, key);
+
+/**
+ * The field-level problems of ONE absorb record (shape only, no baseline
+ * context): `[{ field, reason }]`, empty for a well-formed record.
+ */
+export function absorbRecordFieldErrors(rec) {
+  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) {
+    return [{ field: "record", reason: "must be an object { from, to, reason, pr }" }];
+  }
+  const errors = [];
+  for (const key of ABSORB_RECORD_KEYS) {
+    if (!hasOwn(rec, key)) errors.push({ field: key, reason: "missing" });
+  }
+  for (const key of Object.keys(rec).sort()) {
+    if (!ABSORB_RECORD_KEYS.includes(key)) errors.push({ field: key, reason: "not a record field (a record carries exactly from, to, reason and pr)" });
+  }
+  if (hasOwn(rec, "from") && !isPositiveInteger(rec.from)) {
+    errors.push({ field: "from", reason: `must be a positive integer, is ${JSON.stringify(rec.from)}` });
+  }
+  if (hasOwn(rec, "to") && !isPositiveInteger(rec.to)) {
+    errors.push({ field: "to", reason: `must be a positive integer, is ${JSON.stringify(rec.to)}` });
+  } else if (isPositiveInteger(rec.from) && isPositiveInteger(rec.to) && rec.to <= rec.from) {
+    // a record documents a RAISE
+    errors.push({ field: "to", reason: `stale: "to" (${rec.to}) must be above "from" (${rec.from}); a record documents a raise` });
+  }
+  if (hasOwn(rec, "reason") && (typeof rec.reason !== "string" || rec.reason.trim() === "")) {
+    errors.push({ field: "reason", reason: "must be a non-empty string" });
+  }
   // `pr` — the pull request that carries the raise, and ZERO means "there is no
   // pull request yet" (cinatra#2788).
   //
@@ -194,8 +224,15 @@ export function isStructurallyValidAbsorbRecord(rec) {
   // the record must still name a tracked route, `from` must still be less than
   // `to`, and `to` must still equal the CURRENT ceiling — so a stale record is
   // still a failure and a raise still cannot pass unrecorded.
-  if (!Number.isInteger(rec.pr) || rec.pr < 0) return false;
-  return true;
+  if (hasOwn(rec, "pr") && !(Number.isInteger(rec.pr) && rec.pr >= 0)) {
+    errors.push({ field: "pr", reason: `must be a non-negative integer (the pull request carrying the raise, 0 when there is none yet), is ${JSON.stringify(rec.pr)}` });
+  }
+  return errors;
+}
+
+/** Structural check for ONE absorb record (shape only, no baseline context). */
+export function isStructurallyValidAbsorbRecord(rec) {
+  return absorbRecordFieldErrors(rec).length === 0;
 }
 
 /** Deep equality of two structurally-valid absorb records. */
@@ -203,11 +240,18 @@ function absorbRecordsEqual(a, b) {
   return a.from === b.from && a.to === b.to && a.reason === b.reason && a.pr === b.pr;
 }
 
+/** The fields in which two structurally-valid absorb records differ. */
+function differingFields(a, b) {
+  return ABSORB_RECORD_KEYS.filter((k) => a[k] !== b[k]);
+}
+
+const byRouteThenField = (a, b) => a.route.localeCompare(b.route) || String(a.field).localeCompare(String(b.field));
+
 /**
  * STRICT structural validation of a baseline's `absorbs` map (runs
  * UNCONDITIONALLY, even without a base ref — a malformed annotation must fail
- * closed everywhere). Returns sorted `{ route, reason }` errors; `absorbs`
- * absent is fine (empty result).
+ * closed everywhere). Returns sorted `{ route, field, reason }` errors;
+ * `absorbs` absent is fine (empty result).
  *
  * A record must: be an object with EXACTLY the keys { from, to, reason, pr };
  * carry positive integers `from` < `to`, and a non-negative integer `pr` (0 =
@@ -222,23 +266,24 @@ export function validateAbsorbRecords(baseline) {
   const absorbs = baseline?.absorbs;
   if (absorbs === undefined) return errors;
   if (absorbs === null || typeof absorbs !== "object" || Array.isArray(absorbs)) {
-    return [{ route: "(absorbs)", reason: '"absorbs" must be an object map of route -> { from, to, reason, pr }' }];
+    return [{ route: "(absorbs)", field: "absorbs", reason: '"absorbs" must be an object map of route -> { from, to, reason, pr }' }];
   }
   const routes = baseline?.routes ?? {};
   for (const [route, rec] of Object.entries(absorbs)) {
-    if (!isStructurallyValidAbsorbRecord(rec)) {
-      errors.push({ route, reason: "malformed absorb record — must be an object with EXACTLY { from, to, reason, pr }: positive integers from < to, non-empty reason string, non-negative integer pr (0 = no pull request yet)" });
+    const fieldErrors = absorbRecordFieldErrors(rec);
+    if (fieldErrors.length) {
+      for (const e of fieldErrors) errors.push({ route, field: e.field, reason: `malformed absorb record — "${e.field}" ${e.reason}` });
       continue;
     }
-    if (!(route in routes)) {
-      errors.push({ route, reason: 'absorb record for a route not tracked in "routes" (orphan — remove it)' });
+    if (!hasOwn(routes, route)) {
+      errors.push({ route, field: "route", reason: 'stale absorb record for a route not tracked in "routes" (the baseline no longer carries its ceiling — remove the record)' });
       continue;
     }
     if (routes[route] !== rec.to) {
-      errors.push({ route, reason: `stale absorb record — "to" (${rec.to}) must equal the route's current ceiling (${routes[route]}); the change that moved the ceiling must retire/replace the record` });
+      errors.push({ route, field: "to", reason: `stale absorb record — "to" (${rec.to}) must equal the route's current ceiling (${routes[route]}); the change that moved the ceiling must retire/replace the record` });
     }
   }
-  return errors.sort((a, b) => a.route.localeCompare(b.route));
+  return errors.sort(byRouteThenField);
 }
 
 /**
@@ -277,15 +322,18 @@ export function classifyRaises(baseBaseline, committedBaseline) {
       absorbed.push({ route: g.route, from: rec.from, to: rec.to, reason: rec.reason, pr: rec.pr });
       consumed.add(g.route);
     } else if (rec) {
-      violations.push({ route: g.route, reason: `ceiling raised ${g.base} -> ${g.committed} but the absorb record does not exactly match the raise delta (record from=${rec?.from} to=${rec?.to})` });
+      const field = rec?.from !== g.base ? "from" : "to";
+      const expected = field === "from" ? `the base ceiling (${g.base})` : `the committed ceiling (${g.committed})`;
+      violations.push({ route: g.route, field, reason: `ceiling raised ${g.base} -> ${g.committed} but the absorb record does not exactly match the raise delta (record from=${rec?.from} to=${rec?.to}): "${field}" must equal ${expected}` });
       consumed.add(g.route);
     } else {
-      violations.push({ route: g.route, reason: `ceiling RAISED ${g.base} -> ${g.committed} with NO absorb record (silent raise / regenerate-to-pass bypass)` });
+      violations.push({ route: g.route, field: "absorbs", reason: `ceiling RAISED ${g.base} -> ${g.committed} with NO absorb record (silent raise / regenerate-to-pass bypass)` });
     }
   }
 
   // 2. A committed record not consumed by a raise must be an identical
   //    carried-forward record still describing the current ceiling.
+  const baseRoutes = baseBaseline?.routes ?? {};
   for (const [route, rec] of Object.entries(committedAbsorbs)) {
     if (consumed.has(route)) continue;
     const baseRec = baseAbsorbs[route];
@@ -295,8 +343,16 @@ export function classifyRaises(baseBaseline, committedBaseline) {
       isStructurallyValidAbsorbRecord(rec) &&
       absorbRecordsEqual(baseRec, rec) &&
       committedRoutes[route] === rec.to;
-    if (!carried) {
-      violations.push({ route, reason: "orphan/stale absorb record — not matched by a ceiling raise vs the base and not an identical carried-forward record at its ceiling" });
+    if (carried) continue;
+    const orphan = "orphan/stale absorb record — not matched by a ceiling raise vs the base and not an identical carried-forward record at its ceiling";
+    if (!hasOwn(baseRoutes, route)) {
+      violations.push({ route, field: "route", reason: `${orphan}: the base tracks no ceiling for this route, and a net-new route needs no record` });
+    } else if (baseRec !== undefined && isStructurallyValidAbsorbRecord(baseRec) && isStructurallyValidAbsorbRecord(rec) && committedRoutes[route] === baseRec.to) {
+      for (const field of differingFields(baseRec, rec)) {
+        violations.push({ route, field, reason: `${orphan}: "${field}" differs from the base's record at the same ceiling (${baseRec.to})` });
+      }
+    } else {
+      violations.push({ route, field: "from", reason: `${orphan}: the ceiling did not rise from the base ceiling (${baseRoutes[route]} -> ${committedRoutes[route]}), so "from" (${rec?.from}) matches no raise` });
     }
   }
 
@@ -309,23 +365,50 @@ export function classifyRaises(baseBaseline, committedBaseline) {
     if (committedCeiling !== baseRec.to) continue; // lowered or re-raised → retired/replaced (a re-raise is checked in (1))
     const rec = committedAbsorbs[route];
     if (!rec || !isStructurallyValidAbsorbRecord(rec) || !absorbRecordsEqual(baseRec, rec)) {
-      violations.push({ route, reason: `absorb record deleted/altered while its raised ceiling (${baseRec.to}) is kept — the annotation may only be retired by lowering the ceiling, dropping the route, or a new annotated raise` });
+      const deleted = `absorb record deleted/altered while its raised ceiling (${baseRec.to}) is kept — the annotation may only be retired by lowering the ceiling, dropping the route, or a new annotated raise`;
+      if (rec && isStructurallyValidAbsorbRecord(rec)) {
+        for (const field of differingFields(baseRec, rec)) violations.push({ route, field, reason: deleted });
+      } else {
+        violations.push({ route, field: "absorbs", reason: deleted });
+      }
     }
   }
 
-  // De-duplicate (a route can trip (2) and (3) with the same root cause).
-  const seen = new Set();
-  const uniqueViolations = violations.filter((v) => {
-    const key = `${v.route} ${v.reason}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
   return {
-    violations: uniqueViolations.sort((a, b) => a.route.localeCompare(b.route)),
+    violations: uniqueErrors(violations),
     absorbed: absorbed.sort((a, b) => a.route.localeCompare(b.route)),
   };
+}
+
+// De-duplicate (a route can trip two checks with the same root cause) and sort.
+function uniqueErrors(errors) {
+  const seen = new Set();
+  return errors
+    .filter((e) => {
+      const key = `${e.route}\u0000${e.field}\u0000${e.reason}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort(byRouteThenField);
+}
+
+/**
+ * The strict check of a COMMITTED baseline's absorb records (cinatra#3669):
+ * what the gate runs, in one place, for the gate's tests. Without a base
+ * (`baseBaseline` null) only the structural check runs. With one, every
+ * committed record must be a raise record (`from` = the base ceiling, `to` =
+ * the committed ceiling) or the base's own record carried forward unchanged at
+ * the same ceiling; a raise without its record, a stale record and an orphan
+ * all fail. Returns sorted `{ route, field, reason }`; empty = valid.
+ */
+export function validateCommittedAbsorbs(baseBaseline, committedBaseline) {
+  const structural = validateAbsorbRecords(committedBaseline);
+  if (structural.some((e) => e.field === "absorbs") || !baseBaseline) return structural;
+  // A record with a structural error is reported once, by its field.
+  const flagged = new Set(structural.map((e) => e.route));
+  const { violations } = classifyRaises(baseBaseline, committedBaseline);
+  return uniqueErrors([...structural, ...violations.filter((v) => !flagged.has(v.route))]);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,40 +417,118 @@ export function classifyRaises(baseBaseline, committedBaseline) {
 
 /**
  * The ratchet's measurement of one route analysis: `moduleCount` is the CORE
- * count (the analysis's `coreModuleCount`, null when not ok) and
- * `excludedExtensionModules` the extension-owned modules it leaves out. An
- * analysis without a core count is not ok (fail closed).
+ * count (the analysis's `coreModuleCount`, null when not ok),
+ * `excludedExtensionModules` the extension-owned modules it leaves out,
+ * `excludedPackReachedCoreModules` the core modules the walk reaches only
+ * through a pack, and `packReachedCoreModulesByPack` how many of those each
+ * pack reaches (a module several packs reach counts for each). An analysis
+ * without a core count, or whose parts do not add up to its whole walk, is not
+ * ok (fail closed). An analysis that attributes nothing to packs (no
+ * `packReachedCoreModuleCount`) reads 0 there: its core count then holds every
+ * core module, the stricter reading.
  */
 export function ratchetMeasurement(analysis) {
-  const ok = analysis?.ok === true && Number.isInteger(analysis.coreModuleCount);
+  const notOk = (error) => ({
+    ok: false,
+    moduleCount: null,
+    missingCount: null,
+    excludedExtensionModules: null,
+    excludedPackReachedCoreModules: null,
+    packReachedCoreModulesByPack: null,
+    ...(error ? { error } : {}),
+  });
+  if (analysis?.ok !== true || !Number.isInteger(analysis.coreModuleCount)) return notOk();
+  const core = analysis.coreModuleCount;
+  const ext = analysis.extensionModuleCount;
+  const packReached = analysis.packReachedCoreModuleCount ?? 0;
+  const byPack = analysis.packReachedCoreModules ?? {};
+  const listsOk =
+    byPack !== null &&
+    typeof byPack === "object" &&
+    !Array.isArray(byPack) &&
+    Object.values(byPack).every((mods) => Array.isArray(mods) && mods.length > 0) &&
+    new Set(Object.values(byPack).flat()).size === packReached;
+  if (
+    !Number.isInteger(ext) ||
+    !Number.isInteger(packReached) ||
+    !Number.isInteger(analysis.moduleCount) ||
+    core + ext + packReached !== analysis.moduleCount ||
+    !listsOk
+  ) {
+    return notOk(
+      `the walk does not reconcile: ${core} core + ${ext} pack modules + ${packReached} pack-reached core modules must equal the ${analysis.moduleCount} reachable modules, and the per-pack lists must hold exactly the pack-reached core modules`,
+    );
+  }
   return {
-    ok,
-    moduleCount: ok ? analysis.coreModuleCount : null,
-    missingCount: ok ? analysis.missingCount : null,
-    excludedExtensionModules: ok ? analysis.extensionModuleCount : null,
+    ok: true,
+    moduleCount: core,
+    missingCount: analysis.missingCount,
+    excludedExtensionModules: ext,
+    excludedPackReachedCoreModules: packReached,
+    packReachedCoreModulesByPack: Object.fromEntries(
+      Object.entries(byPack)
+        .map(([pack, mods]) => [pack, mods.length])
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+    ),
   };
 }
 
 /**
+ * The per-pack reading of one measurement:
+ * "reached through <pack>: <n> core modules, …" (empty when no core module is
+ * reached only through a pack).
+ */
+export function packReachReading(measurement) {
+  return Object.entries(measurement?.packReachedCoreModulesByPack ?? {})
+    .map(([pack, n]) => `reached through ${pack}: ${n} core module${n === 1 ? "" : "s"}`)
+    .join(", ");
+}
+
+/**
  * Run the route-graph analyzer over the LOCKED FIXED_ROUTES and return
- * Map<route, { ok, moduleCount, missingCount, excludedExtensionModules }>.
+ * `counts` = Map<route, ratchetMeasurement(analysis)> and `analyses` =
+ * Map<route, analysis> (the report lists the pack-reached modules from it).
  * Importing route-graph.mjs is side-effect-free (its CLI is guarded behind a
  * direct-execution check).
  */
 function measureRoutes() {
   const counts = new Map();
+  const analyses = new Map();
   for (const { route, entry } of FIXED_ROUTES) {
-    counts.set(route, ratchetMeasurement(analyzeRoute(entry)));
+    const analysis = analyzeRoute(entry);
+    analyses.set(route, analysis);
+    counts.set(route, ratchetMeasurement(analysis));
   }
-  return counts;
+  return { counts, analyses };
 }
 
-// "/sign-in 0, /api/mcp 481, …" — the extension-owned modules each route leaves out.
+// "/sign-in 0, /api/mcp 481 + 18 pack-reached core modules, …" — what each
+// route leaves out: the extension-owned modules, and the core modules it
+// reaches only through a pack.
 function excludedSummary(counts) {
   return FIXED_ROUTES.map(({ route }) => {
     const info = counts.get(route);
-    return `${route} ${info?.ok ? info.excludedExtensionModules : "unresolved"}`;
+    if (!info?.ok) return `${route} unresolved`;
+    const n = info.excludedPackReachedCoreModules;
+    return `${route} ${info.excludedExtensionModules}${n ? ` + ${n} pack-reached core module${n === 1 ? "" : "s"}` : ""}`;
   }).join(", ");
+}
+
+/**
+ * The per-pack readings printed beside the excluded counts, one line per
+ * distinct reading with the routes that share it:
+ * "pack-reached core modules on /api/mcp, /chat: reached through <pack>: <n> core modules, …".
+ */
+export function packReachLines(counts, routes = FIXED_ROUTES.map(({ route }) => route)) {
+  const groups = new Map();
+  for (const route of routes) {
+    const info = counts.get(route);
+    const reading = info?.ok ? packReachReading(info) : "";
+    if (!reading) continue;
+    if (!groups.has(reading)) groups.set(reading, []);
+    groups.get(reading).push(route);
+  }
+  return [...groups].map(([reading, rs]) => `pack-reached core modules on ${rs.join(", ")}: ${reading}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +541,9 @@ function main() {
   const report = args.includes("--report");
 
   let counts;
+  let analyses;
   try {
-    counts = measureRoutes();
+    ({ counts, analyses } = measureRoutes());
   } catch (err) {
     console.error(`[route-graph-ratchet] scanner error: ${err?.stack ?? err}`);
     process.exit(2);
@@ -392,7 +554,7 @@ function main() {
     for (const { route } of FIXED_ROUTES) {
       const info = counts.get(route);
       if (!info.ok) {
-        console.error(`[route-graph-ratchet] cannot write baseline — route entry did not resolve: ${route}`);
+        console.error(`[route-graph-ratchet] cannot write baseline — ${info.error ?? "route entry did not resolve"}: ${route}`);
         process.exit(2);
       }
       if (info.missingCount > 0) {
@@ -436,7 +598,7 @@ function main() {
   const recordErrors = validateAbsorbRecords(baseline);
   if (recordErrors.length) {
     console.error(`[route-graph-ratchet] FAIL — ${recordErrors.length} invalid absorb record(s) in the committed baseline:`);
-    for (const e of recordErrors) console.error(`  ${e.route}: ${e.reason}`);
+    for (const e of recordErrors) console.error(`  ${e.route} [${e.field}]: ${e.reason}`);
     process.exit(1);
   }
 
@@ -452,8 +614,12 @@ function main() {
           ? `${info.moduleCount}(+${info.missingCount} missing)`
           : String(info.moduleCount);
       const headroom = info.ok && info.missingCount === 0 && ceiling !== undefined ? ceiling - info.moduleCount : null;
-      const excluded = info.ok ? `(excluded ${info.excludedExtensionModules})` : "";
+      const excluded = info.ok ? `(excluded ${info.excludedExtensionModules} pack modules + ${info.excludedPackReachedCoreModules} pack-reached core modules)` : "";
       console.log(`  ${countStr.padStart(20)} / ${String(ceiling ?? "-").padStart(6)}  ${headroom !== null ? `(headroom ${headroom})` : ""}  ${excluded}  ${route}`);
+      if (!info.ok && info.error) console.log(`${" ".repeat(24)}${info.error}`);
+      for (const [pack, mods] of Object.entries(analyses.get(route)?.packReachedCoreModules ?? {})) {
+        console.log(`${" ".repeat(24)}reached through ${pack}: ${mods.length} core module${mods.length === 1 ? "" : "s"} — ${mods.join(", ")}`);
+      }
     }
     return;
   }
@@ -501,7 +667,7 @@ function main() {
       }
       if (violations.length) {
         console.error(`[route-graph-ratchet] FAIL — committed baseline vs ${baseRef}: ${violations.length} unannotated raise(s) / invalid absorb record(s):`);
-        violations.forEach((v) => console.error(`  + ${v.route}: ${v.reason}`));
+        violations.forEach((v) => console.error(`  + ${v.route} [${v.field}]: ${v.reason}`));
         console.error(`A ceiling is never raised silently: a sanctioned raise needs a committed absorbs record { from, to, reason, pr } exactly matching the raise (see the baseline note).`);
         process.exit(1);
       }
@@ -512,14 +678,17 @@ function main() {
 
   if (over.length === 0 && broken.length === 0) {
     console.log(`[route-graph-ratchet] OK — no tracked route exceeds its baseline (${FIXED_ROUTES.length} routes tracked; core modules only, extension-owned modules excluded: ${excludedSummary(counts)}).`);
+    for (const line of packReachLines(counts)) console.log(`[route-graph-ratchet] ${line}`);
     process.exit(0);
   }
 
   if (over.length) {
     console.error(`[route-graph-ratchet] FAIL — ${over.length} tracked route${over.length === 1 ? "" : "s"} grew beyond baseline:`);
     for (const o of over) {
-      console.error(`  ${o.route}: ${o.count} core modules (ceiling ${o.ceiling}, +${o.delta}; ${counts.get(o.route)?.excludedExtensionModules} extension-owned module(s) excluded)`);
+      const info = counts.get(o.route);
+      console.error(`  ${o.route}: ${o.count} core modules (ceiling ${o.ceiling}, +${o.delta}; ${info?.excludedExtensionModules} extension-owned module(s) and ${info?.excludedPackReachedCoreModules} pack-reached core module(s) excluded)`);
     }
+    for (const line of packReachLines(counts, over.map((o) => o.route))) console.error(`  ${line}`);
   }
   if (broken.length) {
     console.error(`[route-graph-ratchet] FAIL — ${broken.length} tracked route${broken.length === 1 ? "" : "s"} cannot be checked:`);
