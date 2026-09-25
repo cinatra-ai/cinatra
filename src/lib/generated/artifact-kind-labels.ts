@@ -39,3 +39,16 @@ export const GENERATED_ARTIFACT_KIND_LABELS: Readonly<Record<string, string>> = 
   "@cinatra-ai/video-artifact": "Video",
   "@cinatra-ai/zip-artifact": "Archive",
 };
+
+// The packs' own cross-namespace claims: type id -> the one artifact package
+// that claims it. Carried declarations, never a host roster.
+export const GENERATED_ARTIFACT_KIND_CLAIMS: Readonly<Record<string, string>> = {
+  "@cinatra-ai/brand-voice:guide": "@cinatra-ai/brand-voice-artifact",
+  "@cinatra-ai/drupal:node": "@cinatra-ai/drupal-artifacts",
+  "@cinatra-ai/email:body": "@cinatra-ai/email-artifacts",
+  "@cinatra-ai/email:received-reply": "@cinatra-ai/email-artifacts",
+  "@cinatra-ai/email:recipient": "@cinatra-ai/email-artifacts",
+  "@cinatra-ai/email:sent-email": "@cinatra-ai/email-artifacts",
+  "@cinatra-ai/linkedin:post-draft": "@cinatra-ai/linkedin-artifacts",
+  "@cinatra-ai/marketing-icp:profile": "@cinatra-ai/marketing-icp-artifact",
+};

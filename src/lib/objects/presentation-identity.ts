@@ -40,6 +40,7 @@ import {
 } from "@cinatra-ai/objects/effective-identity";
 import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects/registry";
 import { claimedTypeRegisteringPackage } from "@cinatra-ai/objects/claims";
+import { crossNamespaceClaimantsOf } from "@cinatra-ai/objects/register-artifact-extensions";
 
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
@@ -59,10 +60,25 @@ const q = (): string => postgresSchema.replaceAll('"', '""');
  * liveness is resolved separately through the org-scoped active-install gate
  * (cinatra#1891 A3), unioned into the set by `buildPolicy`. */
 function buildLiveExtensionSet(): Set<string> {
+  return selectLiveExtensions(
+    objectTypeRegistry.list().map((def) => ({
+      typeId: def.type,
+      claimants: crossNamespaceClaimantsOf(def.type),
+    })),
+  );
+}
+
+/** PURE core: each registered type makes its namespace owner live AND every
+ * pack that claimed it cross-namespace (cinatra#3033), so a person's assertion
+ * of a pack that owns its type only through a claim can win tier 1. */
+export function selectLiveExtensions(
+  entries: readonly { typeId: string; claimants: readonly string[] }[],
+): Set<string> {
   const set = new Set<string>();
-  for (const def of objectTypeRegistry.list()) {
-    const ns = claimedTypeRegisteringPackage(def.type);
+  for (const entry of entries) {
+    const ns = claimedTypeRegisteringPackage(entry.typeId);
     if (ns) set.add(ns);
+    for (const claimant of entry.claimants) set.add(claimant);
   }
   return set;
 }
