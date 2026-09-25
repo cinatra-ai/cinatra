@@ -103,14 +103,19 @@ import {
   decideConnectionShareSurface,
   type ConnectionShareSurface,
 } from "@/lib/connection-share-ui";
+import {
+  addExtensionCoOwner,
+  removeExtensionCoOwner,
+  saveExtensionAccessPolicy,
+  searchExtensionCoOwnerCandidates,
+} from "@cinatra-ai/extensions/permissions-actions";
 import type { AvailableScopes } from "@/components/access-scope";
 import type { OwnerView } from "@/components/permissions-form";
-import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
 import {
   ConnectorSharingPanels,
   CONNECTOR_SHARING_INTRO,
   type ConnectorSharingPanelView,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 
 type ConnectionSharingSectionProps = {
   /** The connector package whose OWN connections the actor manages here. */
@@ -256,32 +261,42 @@ export async function ConnectionSharingSection({
           : surface.recommendationNote
             ? ("recommended" as const)
             : null,
-      permissions: (
-        <ExtensionPermissionsClient
-          kind="connection"
-          resourceId={identity.id}
-          canEdit
-          initialPolicy={policy}
-          owner={owner}
-          coOwners={coOwners}
-          availableScopes={scopes}
-          currentUserId={userId}
-          allowSharing={sharingAllowed}
-          selfRemoveRedirect="/connectors"
-          accessHelperText="Choose who can use this connection."
-          ownershipHelperText="Owners can change this connection's sharing and disconnect it."
-          accessValueOverride={surface.value}
-          accessDisabledScopes={
-            surface.surface === "locked" ? surface.disabledScopes : undefined
-          }
-          accessDisabledReasons={
-            surface.surface === "locked" ? surface.disabledReasons : undefined
-          }
-          accessScopeNote={
-            surface.surface === "locked" ? surface.note : surface.recommendationNote
-          }
-        />
-      ),
+      // The panel's DATA and its four BINDINGS. The picker and the ownership
+      // card are drawn by the shared component itself (cinatra#3385); what
+      // stays here is what only the host knows: the authorization, the reads
+      // above, and the four server actions, each bound to THIS connection so
+      // the binding crosses to the client as an action reference and never as
+      // a closure over host state.
+      permissions: {
+        canEdit: true,
+        initialPolicy: policy,
+        owner,
+        coOwners,
+        availableScopes: scopes,
+        currentUserId: userId,
+        allowSharing: sharingAllowed,
+        selfRemoveRedirect: "/connectors",
+        accessHelperText: "Choose who can use this connection.",
+        ownershipHelperText:
+          "Owners can change this connection's sharing and disconnect it.",
+        accessValueOverride: surface.value,
+        accessDisabledScopes:
+          surface.surface === "locked" ? surface.disabledScopes : undefined,
+        accessDisabledReasons:
+          surface.surface === "locked" ? surface.disabledReasons : undefined,
+        accessScopeNote:
+          surface.surface === "locked" ? surface.note : surface.recommendationNote,
+        actions: {
+          savePolicy: saveExtensionAccessPolicy.bind(null, "connection", identity.id),
+          searchCandidates: searchExtensionCoOwnerCandidates.bind(
+            null,
+            "connection",
+            identity.id,
+          ),
+          addCoOwner: addExtensionCoOwner.bind(null, "connection", identity.id),
+          removeCoOwner: removeExtensionCoOwner.bind(null, "connection", identity.id),
+        },
+      },
     }),
   );
 

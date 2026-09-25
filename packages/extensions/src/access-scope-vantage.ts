@@ -52,7 +52,13 @@ export type AccessScopeVantage =
       readonly orgId: string;
       readonly scopeId: string;
     }
-  | { readonly kind: "project"; readonly orgId: string; readonly scopeId: string };
+  | { readonly kind: "project"; readonly orgId: string; readonly scopeId: string }
+  /**
+   * The WHOLE-WORKSPACE scope (cinatra#2811). Like `personal` it carries no
+   * scope id, because the workspace is one scope rather than one of many. It is
+   * NOT read like `personal` though: see {@link visibilityAdmitsScopeVantage}.
+   */
+  | { readonly kind: "workspace"; readonly orgId: string };
 
 /**
  * Does ONE stored visibility token admit a generic member of `vantage`?
@@ -76,6 +82,22 @@ export type AccessScopeVantage =
  *   |                | owner path is an ACTOR short-circuit, and a scope has no |
  *   |                | principal to match.                                      |
  *
+ * THE WORKSPACE VANTAGE READS AS A GENERIC MEMBER OF THE TENANT, which is what
+ * the workspace scope structurally is once the caller's per-organization fence
+ * has pinned it: the whole application, seen from inside one organization the
+ * actor belongs to. So `workspace` and `org` admit it, `org:<X>` admits it for
+ * its own organization, and `team:<T>` / `project:<P>` do NOT: a generic member
+ * of the tenant is in no particular team and holds no particular project grant.
+ * That falls out of the token rules below without an arm of its own, because
+ * both of those tokens test the vantage's own KIND.
+ *
+ * It is deliberately NOT read the permissive way `personal` is. The destination
+ * of a workspace catalog copy is indeed the acting user's own collection, which
+ * is the argument that makes `personal` sound; but the doctrine this module
+ * states is that the projection carries only the axis the SCOPE structurally
+ * represents, and the workspace scope has many members rather than one. A
+ * narrowing needs no further justification; a widening would.
+ *
  * PERSONAL IS ADMITTED BY EVERY TOKEN, deliberately, and it is the one arm that
  * is not a structural projection. A personal scope has exactly ONE member — the
  * acting user — so "could a generic member of this scope reach it" and "may the
@@ -92,9 +114,13 @@ export function visibilityAdmitsScopeVantage(
   vantage: AccessScopeVantage,
 ): boolean {
   // Structurally invalid vantage → admits nothing (fail closed, mirroring
-  // `vantageFromScope`'s null return).
+  // `vantageFromScope`'s null return). `personal` and `workspace` are the two
+  // kinds that carry no scope id, because each is a single scope rather than
+  // one of many.
   if (!vantage.orgId) return false;
-  if (vantage.kind !== "personal" && !vantage.scopeId) return false;
+  if (vantage.kind !== "personal" && vantage.kind !== "workspace" && !vantage.scopeId) {
+    return false;
+  }
 
   // The single member of a personal scope is the actor the caller already
   // authorized — see the docstring.
