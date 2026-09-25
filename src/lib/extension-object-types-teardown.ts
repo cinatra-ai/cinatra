@@ -11,6 +11,7 @@ import "server-only";
 // than reaching into the objects registry directly.
 
 import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects";
+import { forgetCrossNamespaceClaimsOf } from "@cinatra-ai/objects/register-artifact-extensions";
 
 /**
  * Remove every object type the package registered (across all categories),
@@ -20,6 +21,8 @@ import { objectTypeRegistry, matcherManifestRegistry } from "@cinatra-ai/objects
  * types without a restart; durable rows (if any) are handled separately.
  */
 export function invalidateObjectTypesForPackage(packageName: string): string[] {
+  // The cross-namespace claim ledger reaps at parity (cinatra#3033).
+  forgetCrossNamespaceClaimsOf(packageName);
   return objectTypeRegistry.removeByPackage(packageName);
 }
 

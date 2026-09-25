@@ -11,8 +11,9 @@
  * has become — and puts the kind beside the title.
  *
  * THE LINE CLOSES THERE. Type, revision, owner level, visibility, MIME, updated
- * time: six facts, and the drawing names no seventh. A size is drawn where the
- * drawing draws one — inside the kinds whose own display carries a file's form
+ * time: six facts, and the drawing names no seventh, save the placement §XI.12
+ * names after the MIME for an image whose own data names one. A size is drawn
+ * where the drawing draws one — inside the kinds whose own display carries a file's form
  * and size (§V.2's download card) — and never in this header.
  *
  * PURE AND TOTAL, and the clock is injected: the page draws exactly what this
@@ -130,6 +131,8 @@ export function buildArtifactDetailHeader(input: {
       capitalized(artifact.ownerLevel),
       capitalized(artifact.visibility),
       mime || "unknown",
+      // §XI.12: the placement the image's own data names, right after the MIME (cinatra#3033).
+      ...(artifact.placement ? [artifact.placement] : []),
       updated,
     ],
   };

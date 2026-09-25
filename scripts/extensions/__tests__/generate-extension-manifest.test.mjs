@@ -1481,6 +1481,9 @@ describe("the generated display map imports through package exports, never a hos
     const ROSTER = [
       "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
+      "@cinatra-ai/blog-image-artifact/src/renderers/detail",
+      "@cinatra-ai/blog-image-artifact/src/renderers/list-row",
+      "@cinatra-ai/blog-image-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",

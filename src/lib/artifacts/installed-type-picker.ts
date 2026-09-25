@@ -4,6 +4,8 @@ import {
   matcherManifestRegistry,
 } from "@cinatra-ai/objects/registry";
 
+import { crossNamespaceClaimantsOf } from "@cinatra-ai/objects/register-artifact-extensions";
+
 import { mimeAcceptedByAccepts, normalizeMime } from "./upload-artifact-type-map";
 import { artifactKindLabelFor } from "./artifact-kind-label";
 import { humanizeTypeLocalPart } from "./type-definitions-inventory";
@@ -81,6 +83,22 @@ export type MatcherChannelMeaningType = {
   packageName: string;
   fileMimeTypes: readonly string[];
 };
+
+/**
+ * PURE core: the extension a meaning assertion over a type names (cinatra#3033)
+ * — its registering package, else its SOLE cross-namespace claimant (a
+ * host-registered type has no registering package), else null: two claimants
+ * are an ambiguity no picker resolves.
+ */
+export function meaningExtensionFor(input: {
+  registeringPackage: string | null;
+  crossNamespaceClaimants: readonly string[];
+}): string | null {
+  if (input.registeringPackage != null) return input.registeringPackage;
+  return input.crossNamespaceClaimants.length === 1
+    ? input.crossNamespaceClaimants[0]!
+    : null;
+}
 
 function isUniversalAcceptEntry(accept: string): boolean {
   const a = accept.trim().toLowerCase();
@@ -221,7 +239,10 @@ export function listInstalledMeaningTypesAcceptingMime(
     .listArtifacts()
     .map((def) => ({
       objectTypeId: def.type,
-      definer: objectTypeRegistry.getRegisteringPackage(def.type),
+      definer: meaningExtensionFor({
+        registeringPackage: objectTypeRegistry.getRegisteringPackage(def.type),
+        crossNamespaceClaimants: crossNamespaceClaimantsOf(def.type),
+      }),
       acceptMimes: def.isArtifact?.accepts?.file?.mimeTypes,
     }));
   const objectTypeCandidates = selectMeaningTypesAcceptingMime(
@@ -233,7 +254,10 @@ export function listInstalledMeaningTypesAcceptingMime(
   // extension (object-type sibling OR matcher candidate), since asserting it
   // would re-assert the base's own namespace owner (a no-op).
   const excludeExtension = opts?.excludeTypeId
-    ? objectTypeRegistry.getRegisteringPackage(opts.excludeTypeId) ?? undefined
+    ? meaningExtensionFor({
+        registeringPackage: objectTypeRegistry.getRegisteringPackage(opts.excludeTypeId),
+        crossNamespaceClaimants: crossNamespaceClaimantsOf(opts.excludeTypeId),
+      }) ?? undefined
     : undefined;
   const channel: MatcherChannelMeaningType[] = matcherManifestRegistry
     .list()
