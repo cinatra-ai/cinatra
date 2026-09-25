@@ -147,6 +147,14 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // column: a run created before the column records no start, and inventing
     // one would be recording a launch nobody made.
     launchProducer: row.launchProducer ?? null,
+    // The ASSIGNMENT SCOPES this run FROZE at creation (cinatra#2815 S3,
+    // epic #2812), surfaced AS STORED. Not decoded here: an absent,
+    // malformed or unknown-version payload has exactly ONE meaning, and the
+    // module that owns the payload states it once
+    // (`assignment-scope-snapshot.ts` -> workspace plus the durable
+    // organization and nothing else). A decoder here would be a second
+    // authority on which scopes a run may read assignments from.
+    assignmentScopeSnapshot: row.assignmentScopeSnapshot ?? null,
   };
 }
 
