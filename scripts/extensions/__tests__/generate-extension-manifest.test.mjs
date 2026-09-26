@@ -1475,6 +1475,10 @@ describe("the generated display map imports through package exports, never a hos
     // same guarded-optional road, so they stand in the roster by name too: the
     // remainder is the pre-existing guarded packs plus those two, and nothing
     // else — a re-introduced alias for any other package still fails here.
+    //
+    // The email body display joins that same guarded-optional road with the
+    // email pack's pin advance: its detail and list-row subpaths stand in the
+    // roster by name beside the others.
     const buildConfig = buildConfigAliases();
     const emitted = emittedRendererSpecifiers();
     const aliased = emitted.filter((s) => tsconfigResolves(s) || buildConfig.has(s));
@@ -1483,6 +1487,8 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
+      "@cinatra-ai/email-artifacts/src/renderers/detail",
+      "@cinatra-ai/email-artifacts/src/renderers/list-row",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
       "@cinatra-ai/screenshot-artifact/src/renderers/detail",
