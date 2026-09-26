@@ -437,7 +437,11 @@ function buildUpdateStatement(args: UpdateStmtArgs): {
   // paths replay pre-cutover snapshots; normalize before binding.
   args = { ...args, ...normalizeOwnershipVocabulary(args) };
   return {
-    text: `WITH updated AS (
+    text: `WITH base_row AS (
+             SELECT type AS prev_type
+             FROM "${schema}"."objects" WHERE id = $1
+           ),
+           updated AS (
              UPDATE "${schema}"."objects" SET
                type = $2,
                data = $5,
@@ -495,6 +499,39 @@ function buildUpdateStatement(args: UpdateStmtArgs): {
                 updated.org_id, updated.project_id, updated.owner_level, updated.owner_id, updated.visibility,
                 $30, $31, now()
              FROM updated
+           ),
+           binding_reconcile_enqueue AS (
+             -- A TYPE CHANGE written here (a typed promotion's retype, a
+             -- restore, a merge, a row promotion) queues the same per-artifact
+             -- 'binding-reconcile-write' row the objects store's
+             -- upsertObjectAndEnqueue queues on a type change (cinatra#3700),
+             -- IN THIS statement and so atomic with the write, never lost to a
+             -- crash. Without it the retype moves objects.type but leaves the
+             -- stale binding naming the OLD type, and the context road, which
+             -- trusts only the binding, drops the artifact. The prior type is
+             -- read by base_row from this statement's own snapshot. The claim
+             -- and binding arms are the objects store's, term for term; a
+             -- content-only update (same type) and a null-org write enqueue
+             -- nothing. The queue consumer (processBindingReconcileQueue)
+             -- archives the stale binding and writes the live winner's.
+             INSERT INTO "${schema}"."artifact_binding_reconcile_queue"
+               (scope, object_type_id, object_id, org_id, kind, status)
+             SELECT 'org:' || updated.org_id, updated.type, updated.id, updated.org_id,
+                    'binding-reconcile-write', 'pending'
+             FROM updated
+             WHERE updated.org_id IS NOT NULL
+               AND (SELECT prev_type FROM base_row) IS DISTINCT FROM updated.type
+               AND (
+                 EXISTS (
+                   SELECT 1 FROM "${schema}"."artifact_type_claims" c
+                   WHERE c.object_type_id = updated.type
+                     AND c.status IN ('active','retiring')
+                     AND (c.scope = 'platform' OR c.scope = 'org:' || updated.org_id))
+                 OR EXISTS (
+                   SELECT 1 FROM "${schema}"."semantic_assertion" sa
+                   WHERE sa.org_id = updated.org_id AND sa.artifact_id = updated.id
+                     AND sa.assertion_basis = 'binding' AND sa.eligibility <> 'archived')
+               )
            ),
            -- CAS ASSERT. ok MUST STAY IN THE OUTER PROJECTION; see
            -- buildCreateStatement for why removing it silently disarms it.
