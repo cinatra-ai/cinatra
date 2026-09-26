@@ -25,7 +25,9 @@ import "server-only";
  *
  * FAILURE POSTURE: never throws into a scope landing. Any failure logs and
  * yields an EMPTY list, which renders the tab's honest placeholder rather than a
- * broken page.
+ * broken page. The tab readers report that as `read: false` beside the rows
+ * (cinatra#3707), so a caller can tell a read that found nothing from a read it
+ * could not take, and only the first one may say the scope holds nothing.
  */
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 import type { AccessScopeVantage } from "@cinatra-ai/extensions/access-scope-vantage";
@@ -434,28 +436,59 @@ async function readScopeSurfaceEligibilityWithAnchor(
 }
 
 /**
- * The AGENTS tab's rows for a scope: the eligible packages, minus the assistant
- * packages (which are the Assistants tab's), with the scoped hrefs of #2809.
+ * What a tab read ANSWERED: the rows, and whether the read was taken at all
+ * (cinatra#3707).
+ *
+ * The rows alone cannot carry that difference. An empty list is the answer of
+ * a scope that reaches nothing, and it is also the fail-closed answer of a read
+ * that never ran, and the two owe the reader different sentences. A tab told
+ * `read` is
+ * true says what the scope holds; a tab told `read` is false states its own
+ * condition and claims nothing about the scope.
  */
-export async function readScopeSurfaceAgentRows(
+export type ScopeSurfaceTabRead<Row> = {
+  readonly rows: readonly Row[];
+  readonly read: boolean;
+};
+
+/**
+ * The AGENTS tab's read for a scope: the eligible packages, minus the assistant
+ * packages (which are the Assistants tab's), with the scoped hrefs of #2809,
+ * and whether the read was taken.
+ */
+export async function readScopeSurfaceAgentTab(
   scope: ScopeSurfaceRef,
-): Promise<readonly ScopeAgentCardRow[]> {
+): Promise<ScopeSurfaceTabRead<ScopeAgentCardRow>> {
   try {
-    const eligible = await readScopeSurfaceEligibility(scope);
-    if (eligible.length === 0) return [];
+    const { rows: eligible, ok } = await readScopeSurfaceEligibilityWithAnchor(scope);
+    // FAIL-CLOSED on a read that could not be TAKEN, and said so: an
+    // unresolvable anchor or a failed membership read knows nothing about this
+    // scope, so the tab may not report the scope as empty.
+    if (!ok) return { rows: [], read: false };
+    if (eligible.length === 0) return { rows: [], read: true };
     // FAIL-CLOSED: an unreadable assistants directory must not be read as "no
     // assistants", which would list every assistant as an agent.
     const assistantPackages = await readAssistantPackageNames();
     const rows = eligible.filter((row) => !assistantPackages.has(row.packageName));
-    return buildScopeSurfaceAgentRows(scope, rows);
+    return { rows: buildScopeSurfaceAgentRows(scope, rows), read: true };
   } catch (e) {
     warn("agents tab read failed; rendering no rows", e);
-    return [];
+    return { rows: [], read: false };
   }
 }
 
 /**
- * The ASSISTANTS tab's rows for a scope: the /assistants directory resolver's
+ * The AGENTS tab's rows alone, for the callers that decide nothing on the
+ * empty reading (the scope-assignment target resolver).
+ */
+export async function readScopeSurfaceAgentRows(
+  scope: ScopeSurfaceRef,
+): Promise<readonly ScopeAgentCardRow[]> {
+  return (await readScopeSurfaceAgentTab(scope)).rows;
+}
+
+/**
+ * The ASSISTANTS tab's read for a scope: the /assistants directory resolver's
  * own rows, narrowed by the viewed scope through an INJECTED predicate (never a
  * value import of `scope-filter` — the resolver is reached from /chat and three
  * ratcheted API routes), then extended with Settings and the installed-card
@@ -470,16 +503,17 @@ export async function readScopeSurfaceAgentRows(
  * INSTALLED assistant packages, and `buildScopeSurfaceAssistantRows` applies it
  * to those alone.
  */
-export async function readScopeSurfaceAssistantRows(
+export async function readScopeSurfaceAssistantTab(
   scope: ScopeSurfaceRef,
-): Promise<readonly ScopeAssistantCardRow[]> {
+): Promise<ScopeSurfaceTabRead<ScopeAssistantCardRow>> {
   try {
     const { rows: eligible, viewedOrgId, ok } = await readScopeSurfaceEligibilityWithAnchor(scope);
-    // FAIL-CLOSED on a read that could not be TAKEN. An eligible set that is
-    // empty because nothing is installed is a real answer and the directory is
-    // consulted for it; an unresolvable anchor or a failed membership read is
-    // not, and must not surface the built-in row on a tab whose fence never ran.
-    if (!ok) return [];
+    // FAIL-CLOSED on a read that could not be TAKEN, and said so. An eligible
+    // set that is empty because nothing is installed is a real answer and the
+    // directory is consulted for it; an unresolvable anchor or a failed
+    // membership read is not, and must not surface the built-in row on a tab
+    // whose fence never ran, nor let the tab report the scope as empty.
+    if (!ok) return { rows: [], read: false };
 
     const { buildAssistantsDirectoryForCurrentActor } = await import(
       "@/lib/assistants-directory.server"
@@ -487,11 +521,24 @@ export async function readScopeSurfaceAssistantRows(
     const directory = await buildAssistantsDirectoryForCurrentActor({
       scopeMatch: scopeSurfaceAudiencePredicate(scope, viewedOrgId),
     });
-    return buildScopeSurfaceAssistantRows(scope, directory, eligible);
+    return {
+      rows: buildScopeSurfaceAssistantRows(scope, directory, eligible),
+      read: true,
+    };
   } catch (e) {
     warn("assistants tab read failed; rendering no rows", e);
-    return [];
+    return { rows: [], read: false };
   }
+}
+
+/**
+ * The ASSISTANTS tab's rows alone, for the callers that decide nothing on the
+ * empty reading (the scope-assignment target resolver).
+ */
+export async function readScopeSurfaceAssistantRows(
+  scope: ScopeSurfaceRef,
+): Promise<readonly ScopeAssistantCardRow[]> {
+  return (await readScopeSurfaceAssistantTab(scope)).rows;
 }
 
 /**
