@@ -15,6 +15,18 @@
 // Traversed + counted: first-party modules under src/**, packages/*/src/**,
 // extensions/** — INCLUDING @cinatra-ai/* workspace packages (resolved via the
 // root tsconfig `paths`), because those are first-party graph pressure.
+// Extension-owned modules (every module under extensions/**, the pinned packs)
+// are walked and reported, but excluded from the core count: each route reports
+// `coreModuleCount` (the modules outside the extension tree that the route
+// reaches through modules outside it, the entry included),
+// `extensionModuleCount` (the modules under the extension tree) and
+// `extensionModulesByPack` (those modules per pack). A core module the walk
+// reaches only through a pack's modules is that pack's cost, not the route's
+// own growth (cinatra#3669): it is counted in `packReachedCoreModuleCount` and
+// listed per pack in `packReachedCoreModules` (a module several packs reach is
+// listed under each). The three parts add up to `moduleCount`, the whole
+// reachable count. The walk itself does not stop at the extension tree, so an
+// unresolved import inside a pack is still reported as missing.
 //
 // Zero dependencies (node: builtins only). Re-run safe; same input → same output.
 
@@ -353,6 +365,22 @@ function isFirstParty(abs) {
   return false;
 }
 
+// A repository-relative path (posix separators) under the extension tree — the
+// same rule isFirstParty applies to extensions/**. Such a module is
+// extension-owned: walked and reported, never part of the core count.
+export function isExtensionModule(relPath) {
+  return typeof relPath === "string" && relPath.startsWith("extensions/");
+}
+
+// The pack an extension-owned path belongs to: `@<scope>/<name>` from
+// extensions/<scope>/<name>/….
+function extensionPackOf(relPath) {
+  const m = relPath.match(/^extensions\/([^/]+)\/([^/]+)\//);
+  return m ? `@${m[1]}/${m[2]}` : "(extensions)";
+}
+
+const byKey = ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0);
+
 function classify(abs) {
   return isFirstParty(abs) ? { kind: "first-party", abs } : { kind: "external" };
 }
@@ -423,10 +451,13 @@ function ownerOf(abs) {
   return "(other)";
 }
 
-// BFS the first-party reachable graph from a set of entry files.
+// BFS the first-party reachable graph from a set of entry files. `edges` maps
+// every visited module to the first-party modules it imports (visited or not
+// yet), so the walk can be split by how each module is reached.
 function reachableFrom(entryAbsList, opts = {}) {
   const visited = new Set();
   const missing = new Set();
+  const edges = new Map();
   const queue = [...entryAbsList];
   for (const e of entryAbsList) visited.add(e);
   while (queue.length) {
@@ -438,6 +469,8 @@ function reachableFrom(entryAbsList, opts = {}) {
       continue;
     }
     if (cur.endsWith(".json")) continue; // json leaf, no imports to follow
+    const targets = new Set();
+    edges.set(cur, targets);
     for (const spec of extractSpecifiers(source, opts)) {
       const r = resolveSpecifier(spec, cur);
       if (r.kind === "missing") {
@@ -445,33 +478,128 @@ function reachableFrom(entryAbsList, opts = {}) {
         continue;
       }
       if (r.kind !== "first-party") continue;
+      targets.add(r.abs);
       if (!visited.has(r.abs)) {
         visited.add(r.abs);
         queue.push(r.abs);
       }
     }
   }
-  return { visited, missing };
+  return { visited, missing, edges };
+}
+
+/**
+ * Split one route's walk by how each module is reached (cinatra#3669). Pure:
+ * `entry` is the route's entry and `edges` maps a module to the first-party
+ * modules it imports (a Map or a plain object; repository-relative posix
+ * paths). The walk's modules are the entry and every module an edge names.
+ *
+ *  - core: the modules outside the extension tree that the entry reaches
+ *    through modules outside it only (the entry included). These count
+ *    against the route's ceiling.
+ *  - extension: the modules under the extension tree, per pack.
+ *  - pack-reached core: the modules outside the extension tree that the walk
+ *    reaches only through a pack's modules. Each is listed under every pack
+ *    that reaches it: a pack whose module imports it, directly or through
+ *    further pack-reached core modules.
+ *
+ * The three parts add up to `moduleCount`, and the per-pack lists together
+ * hold exactly the pack-reached core modules.
+ */
+export function attributeRouteWalk(entry, edges) {
+  const edgeMap = edges instanceof Map ? edges : new Map(Object.entries(edges ?? {}));
+  const targetsOf = (m) => edgeMap.get(m) ?? [];
+  const modules = new Set([entry]);
+  for (const [from, targets] of edgeMap) {
+    modules.add(from);
+    for (const t of targets) modules.add(t);
+  }
+  // The route's own reach: core module to core module from the entry.
+  const core = new Set();
+  if (!isExtensionModule(entry)) {
+    core.add(entry);
+    const queue = [entry];
+    while (queue.length) {
+      for (const t of targetsOf(queue.shift())) {
+        if (isExtensionModule(t) || core.has(t)) continue;
+        core.add(t);
+        queue.push(t);
+      }
+    }
+  }
+  const extensionByPack = {};
+  const packReached = new Set();
+  for (const m of modules) {
+    if (isExtensionModule(m)) {
+      const pack = extensionPackOf(m);
+      extensionByPack[pack] = (extensionByPack[pack] || 0) + 1;
+    } else if (!core.has(m)) {
+      packReached.add(m);
+    }
+  }
+  // Each pack's reach into the pack-reached core modules: the ones its modules
+  // import, and what those import in turn without passing another pack.
+  const reachedByPack = new Map();
+  for (const m of [...modules].sort()) {
+    if (!isExtensionModule(m)) continue;
+    const pack = extensionPackOf(m);
+    for (const t of targetsOf(m)) {
+      if (!packReached.has(t)) continue;
+      if (!reachedByPack.has(pack)) reachedByPack.set(pack, new Set());
+      reachedByPack.get(pack).add(t);
+    }
+  }
+  for (const reached of reachedByPack.values()) {
+    const queue = [...reached];
+    while (queue.length) {
+      for (const t of targetsOf(queue.shift())) {
+        if (!packReached.has(t) || reached.has(t)) continue;
+        reached.add(t);
+        queue.push(t);
+      }
+    }
+  }
+  const extensionModuleCount = Object.values(extensionByPack).reduce((a, b) => a + b, 0);
+  return {
+    moduleCount: modules.size,
+    coreModuleCount: core.size,
+    extensionModuleCount,
+    extensionModulesByPack: Object.fromEntries(Object.entries(extensionByPack).sort(byKey)),
+    packReachedCoreModuleCount: packReached.size,
+    packReachedCoreModules: Object.fromEntries(
+      [...reachedByPack].map(([pack, reached]) => [pack, [...reached].sort()]).sort(byKey),
+    ),
+  };
 }
 
 export function analyzeRoute(entryRel, opts = {}) {
   const entryAbs = tryFile(path.join(REPO_ROOT, entryRel));
   if (!entryAbs) return { ok: false, error: `entry not found: ${entryRel}` };
-  const { visited, missing } = reachableFrom([entryAbs], opts);
+  const { visited, missing, edges } = reachableFrom([entryAbs], opts);
   // count excludes the entry itself? Include entry in graph but report both.
   const modules = [...visited];
+  const relOf = (abs) => path.relative(REPO_ROOT, abs).split(path.sep).join("/");
   const byOwner = {};
   for (const abs of modules) {
     const o = ownerOf(abs);
     byOwner[o] = (byOwner[o] || 0) + 1;
   }
+  const relEdges = new Map();
+  for (const [from, targets] of edges) relEdges.set(relOf(from), [...targets].map(relOf));
+  const walk = attributeRouteWalk(relOf(entryAbs), relEdges);
   const workspacePkgs = Object.keys(byOwner)
     .filter((o) => o.startsWith("@cinatra-ai/"))
     .sort();
   return {
     ok: true,
     entry: entryRel,
+    // The whole walk; the attribution's parts add up to it.
     moduleCount: modules.length,
+    coreModuleCount: walk.coreModuleCount,
+    extensionModuleCount: walk.extensionModuleCount,
+    extensionModulesByPack: walk.extensionModulesByPack,
+    packReachedCoreModuleCount: walk.packReachedCoreModuleCount,
+    packReachedCoreModules: walk.packReachedCoreModules,
     workspacePackageCount: workspacePkgs.length,
     workspacePackages: workspacePkgs,
     byOwner,
@@ -546,6 +674,10 @@ Usage:
 Metric: count of distinct reachable FIRST-PARTY modules (src/**, packages/*/src/**,
 extensions/**) from a route's own page/route entry. Cut-points: node_modules,
 node: builtins, serverExternalPackages. @cinatra-ai/* workspace packages ARE traversed.
+Extension-owned modules (extensions/**) are walked and reported per route as the
+excluded count, and are excluded from the core count (the route-graph ratchet's metric).
+A core module the route reaches only through a pack's modules is listed under that
+pack ("reached through <pack>") and is excluded from the core count as well.
 
 Known limitations (documented):
   - No tree-shaking / "use client" boundary modelling (this is a STATIC reachable
@@ -615,19 +747,30 @@ function renderMd(result) {
     lines.push("# Route-graph (static first-party reachable-module count)");
     lines.push("");
     lines.push("");
-    lines.push("| Route | Entry | Modules | Workspace pkgs | Missing |");
-    lines.push("|---|---|---|---|---|");
+    lines.push("| Route | Entry | Modules | Core | Extension (excluded) | Reached through packs (excluded) | Workspace pkgs | Missing |");
+    lines.push("|---|---|---|---|---|---|---|---|");
     for (const r of result.routes) {
       if (!r.ok) {
-        lines.push(`| ${r.route} | — | ERROR | — | ${r.error} |`);
+        lines.push(`| ${r.route} | — | ERROR | — | — | — | — | ${r.error} |`);
         continue;
       }
-      lines.push(`| ${r.route} | ${r.entry} | ${r.moduleCount} | ${r.workspacePackageCount} | ${r.missingCount} |`);
+      lines.push(
+        `| ${r.route} | ${r.entry} | ${r.moduleCount} | ${r.coreModuleCount} | ${r.extensionModuleCount} | ${r.packReachedCoreModuleCount} | ${r.workspacePackageCount} | ${r.missingCount} |`,
+      );
     }
     for (const r of result.routes) {
       if (!r.ok) continue;
       lines.push("");
       lines.push(`### ${r.route} — ${r.moduleCount} modules`);
+      const reached = Object.entries(r.packReachedCoreModules ?? {});
+      if (reached.length) {
+        lines.push("");
+        lines.push(`Core modules reached only through a pack (${r.packReachedCoreModuleCount}, excluded from the core count):`);
+        lines.push("");
+        for (const [pack, mods] of reached) {
+          lines.push(`- reached through ${pack}: ${mods.length} core module${mods.length === 1 ? "" : "s"} — ${mods.join(", ")}`);
+        }
+      }
       const top = Object.entries(r.byOwner).sort((a, b) => b[1] - a[1]).slice(0, 18);
       lines.push("");
       lines.push("| Owner | Modules |");

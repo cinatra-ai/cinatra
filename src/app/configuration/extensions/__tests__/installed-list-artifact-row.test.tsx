@@ -79,16 +79,20 @@ vi.mock("@/lib/extension-discovery-scope", () => ({
 }));
 // The root suite maps `@cinatra-ai/registries` to a narrow stub (the real
 // barrel drags the pacote chain into the sandbox), so this factory supplies the
-// three symbols the loader reads: the catalog read (mocked — this suite is
+// four symbols the loader reads: the catalog read (mocked — this suite is
 // about the rows, not the registry), its two page budgets (plain numbers on the
 // heavy verdaccio client), and the REAL pure vendor-name resolver the byline
 // resolves through.
 vi.mock("@cinatra-ai/registries", async () => {
-  const scope = await vi.importActual<{ resolveInstalledVendorName: unknown }>(
+  const scope = await vi.importActual<{
+    resolveInstalledVendorName: unknown;
+    declaredVendorNameForScope: unknown;
+  }>(
     "../../../../../packages/registries/src/scope",
   );
   return {
     resolveInstalledVendorName: scope.resolveInstalledVendorName,
+    declaredVendorNameForScope: scope.declaredVendorNameForScope,
     listExtensionPackages: vi.fn(async () => fixture.registryPackages),
     CATALOG_PACKUMENT_TIMEOUT_MS: 8_000,
     CATALOG_HYDRATION_BUDGET_MS: 12_000,

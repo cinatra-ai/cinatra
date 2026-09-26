@@ -15,18 +15,25 @@ import {
 } from "./auth-policy";
 import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
+import type { AssignmentScope } from "@/lib/assignment-scope";
 import {
   listInstalledSkills,
   readSkillsCatalog,
   resolveEffectiveSkillAccessPolicy,
 } from "@cinatra-ai/skills";
-import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
+import {
+  buildActorContextFromPrimitive,
+  type ActorRoleHints,
+} from "@/lib/authz/build-actor-context";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 // Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
 // re-homed into core off the now-retired recommender agent binding.
-import { getRunRecommendations } from "./recommendation-interception";
-import { writeRunSkillSelectionForActor } from "./run-recommendation-core";
+import { getRunRecommendationsForReader } from "./recommendation-interception";
+import {
+  writeRunSkillSelectionForActor,
+  type KeepRecommendationResult,
+} from "./run-recommendation-core";
 import type {
   RankedRecommendation,
   RecommendationEfficacy,
@@ -263,14 +270,43 @@ export async function getRunRecommendedSkillsAction(input: {
   if (!session?.user?.id) return [];
   try {
     if (!input.agentPackageName) return [];
-    const recs = await getRunRecommendations({
+    // THE POOL IS SERVER-DERIVED (cinatra#2815 S3 part 4). `restrictToSkillIds`
+    // stays in the input for call-site compatibility and is deliberately
+    // IGNORED — exactly as `confirmRunSkillSelectionAction` below already
+    // ignores it. A client cannot widen the pool (it never could: an
+    // unassigned id is not deliverable), and it can no longer NARROW it either,
+    // which is what made the ranks a function of the caller's request rather
+    // than of the reader's own scope.
+    const kernel = await requireActorContext().catch(() => null);
+    if (!kernel) return [];
+    const viewer = buildActorContextFromPrimitive(
+      { actorType: "human", source: "ui", userId: session.user.id } as Parameters<
+        typeof buildActorContextFromPrimitive
+      >[0],
+      null,
+      {
+        ...(kernel.platformRole ? { platformRole: kernel.platformRole } : {}),
+        ...(kernel.orgRole ? { orgRole: kernel.orgRole } : {}),
+        ...(kernel.teamRoles ? { teamRoles: kernel.teamRoles } : {}),
+        ...(kernel.teamIds ? { teamIds: kernel.teamIds } : {}),
+        ...(kernel.projectGrants ? { projectGrants: kernel.projectGrants } : {}),
+        actorOrganizationId: kernel.organizationId ?? null,
+      },
+    );
+    const assignedSkillIds = await getAssignedSkillIdsForAgent(input.agentPackageName, {
+      principalId: viewer.principalId,
+      teamIds: viewer.teamIds ?? [],
+      projectIds: viewer.projectIds ?? [],
+      ...(viewer.organizationId ? { organizationId: viewer.organizationId } : {}),
+    }).catch(() => [] as string[]);
+    const { recommendations: recs } = await getRunRecommendationsForReader({
       agentId: input.agentPackageName,
       intent: {
         promptText: input.promptText,
         declaredProducedTypes: input.declaredProducedTypes,
         targetArtifactKind: input.targetArtifactKind,
       },
-      restrictToSkillIds: input.restrictToSkillIds,
+      assignedSkillIds,
     });
     return recs.map((r) => ({
       skillId: r.skillId,
@@ -292,6 +328,11 @@ export type ConfirmRunSkillSelectionActionResult = {
   ok: boolean;
   written: number;
   efficacy: RecommendationEfficacy;
+  /** cinatra#2815 S3 part 4: what the KEEP did, when the confirmation asked for
+   *  one. Declared here because a caller cannot read a field the result shape
+   *  does not name, and a keep the authority refused was therefore invisible:
+   *  the action answered a plain success while nothing had been persisted. */
+  kept?: KeepRecommendationResult;
 };
 
 export async function confirmRunSkillSelectionAction(input: {
@@ -308,6 +349,13 @@ export async function confirmRunSkillSelectionAction(input: {
    * row this caller could already write, never admits one.
    */
   adjustedSkillIds?: string[];
+  /**
+   * The keep request the confirmation carries (cinatra#2815 S3 part 4). A plain
+   * pass-through of an explicit, caller-supplied scope; the write enforces it
+   * against the run's own frozen snapshot and this caller's assignment-write
+   * authority, so carrying it is not trusting it.
+   */
+  keepRecommended?: { scope: AssignmentScope };
   restrictToSkillIds?: string[];
   /**
    * The hold this decision was bound to by the caller's hold-instance CAS
@@ -364,6 +412,7 @@ export async function confirmRunSkillSelectionAction(input: {
     ...(input.targetArtifactKind ? { targetArtifactKind: input.targetArtifactKind } : {}),
     ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
     ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+    ...(input.keepRecommended ? { keepRecommended: input.keepRecommended } : {}),
     ...(input.holdId ? { holdId: input.holdId } : {}),
   });
 }

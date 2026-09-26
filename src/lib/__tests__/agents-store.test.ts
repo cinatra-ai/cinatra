@@ -415,9 +415,14 @@ describe("getAssignedSkillIdsForAgent — A3 lifecycle runtime-delivery gate (ci
     const skills = await import("@cinatra-ai/skills");
     vi.mocked(skills.readSkillsCatalog).mockRejectedValueOnce(new Error("catalog boom"));
     const db = await import("@/lib/database");
+    // cinatra#2815 S3: the rows are ORGANIZATION-scoped. This caller names no
+    // run scope, so the chain resolves the sole legacy fallback (workspace plus
+    // the durable organization), and a personal row would be refused by SCOPE
+    // before the lifecycle gate ever saw it. The subject here is the lifecycle
+    // gate on the degraded path, so the rows sit in a layer the fallback holds.
     vi.mocked(db.readCustomSkillAssignmentsForAgent).mockResolvedValueOnce([
-      { skillId: ACTIVE, ownerType: "user", ownerId: "u1" } as any,
-      { skillId: GATED, ownerType: "user", ownerId: "u1" } as any,
+      { skillId: ACTIVE, ownerType: "organization", ownerId: "org1" } as any,
+      { skillId: GATED, ownerType: "organization", ownerId: "org1" } as any,
     ]);
     seedStates({ [GATED]: "archived" });
     const ids = await getAssignedSkillIdsForAgent(AGENT, {

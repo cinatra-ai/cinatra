@@ -5,9 +5,11 @@
 // check -> PASS with a report line; the queue event with a moved head -> FAIL.
 
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   DEADLINE_MINUTES,
@@ -766,5 +768,585 @@ describe("coordinated immutable queue engine pins", () => {
     expect(workflow).toContain("fetch-depth: ${{ github.event_name == 'merge_group' && '0' || '1' }}");
     expect(workflow).not.toMatch(/(?:contents|checks|actions|pull-requests): write/);
     expect(workflow).toContain("timeout-minutes: 115");
+  });
+});
+
+describe("the expected set follows the pull request's base branch (#3653)", () => {
+  // The heavy workflows trigger only for pull requests into the default
+  // branch. A stacked pull request into a feature branch runs the light gates
+  // alone, so only those can be expected on it.
+  const HEAVY = ".github/workflows/build-image.yml";
+  const CRM = ".github/workflows/crm-migration-gate.yml";
+  const STACKED = "feat/stacked-base";
+  const everyBase = () => ({ pull_request: { branches: null, "branches-ignore": null } });
+  const stackedInventory = () => {
+    const inv = inventory();
+    inv.expected.push(
+      { context: "image", app: "github-actions", workflow: HEAVY, paths: ["**"] },
+      { context: "CRM migration gates", app: "github-actions", workflow: CRM, paths: ["**"] },
+    );
+    inv.triggers = {
+      ".github/workflows/design-visual-verify.yml": everyBase(),
+      ".github/workflows/gates.yml": everyBase(),
+      ".github/workflows/source-leak-gate.yml": everyBase(),
+      [HEAVY]: { pull_request: { branches: ["main"], "branches-ignore": null } },
+      [CRM]: { pull_request: { branches: ["main"], "branches-ignore": null } },
+    };
+    return inv;
+  };
+  const heavyChecks = () => [ok("image", "build-image.yml"), ok("CRM migration gates", "crm-migration-gate.yml")];
+  const evalBase = (baseRef, checks, inv = stackedInventory()) =>
+    evaluateReadiness({ inventory: inv, checks, changedPaths: ["src/a.ts"], eventName: "pull_request", baseRef });
+
+  it("expects only the workflows whose pull_request trigger includes a feature-branch base", () => {
+    const r = evalBase(STACKED, greenChecks());
+    expect(r.failures).toEqual([]);
+    expect(r.verdict).toBe("PASS");
+    expect(r.waitedOn).toEqual(["build", "source-leak-gate / source-leak-gate", "design-visual-verify"]);
+    expect(r.notExpected).toEqual([
+      `not expected: ${HEAVY} (trigger excludes base '${STACKED}')`,
+      `not expected: ${CRM} (trigger excludes base '${STACKED}')`,
+    ]);
+  });
+
+  it("keeps the full set for a pull request into the default branch", () => {
+    const light = evalBase("main", greenChecks());
+    expect(light.verdict).toBe("FAIL");
+    expect(light.failures).toEqual([
+      `missing: no check run named 'image' reported on the candidate (expected from ${HEAVY})`,
+      `missing: no check run named 'CRM migration gates' reported on the candidate (expected from ${CRM})`,
+    ]);
+    const full = evalBase("main", [...greenChecks(), ...heavyChecks()]);
+    expect(full.verdict).toBe("PASS");
+    expect(full.waitedOn).toHaveLength(5);
+    expect(full.notExpected).toEqual([]);
+  });
+
+  it("still judges every gate that runs for a feature-branch base", () => {
+    const red = greenChecks();
+    red[0] = { ...red[0], conclusion: "failure" };
+    expect(evalBase(STACKED, red).failures).toEqual(["failed: 'build'"]);
+    expect(evalBase(STACKED, greenChecks().slice(1)).failures.join("\n")).toMatch(/^missing: no check run named 'build'/m);
+  });
+
+  it("excludes a workflow whose branches-ignore names the base, and prints the reason", () => {
+    const inv = inventory();
+    inv.triggers = {
+      ".github/workflows/source-leak-gate.yml": { pull_request: { branches: null, "branches-ignore": ["release/**"] } },
+    };
+    const light = greenChecks().filter((c) => c.name !== "source-leak-gate / source-leak-gate");
+    const r = evalBase("release/2026-09", light, inv);
+    expect(r.verdict).toBe("PASS");
+    expect(r.notExpected).toEqual([
+      "not expected: .github/workflows/source-leak-gate.yml (trigger excludes base 'release/2026-09')",
+    ]);
+    const summary = readiness.renderSummary({ candidateSha: HEAD, lookupSha: HEAD, eventName: "pull_request", result: r });
+    expect(summary.split("\n")).toContain(
+      "  not expected: .github/workflows/source-leak-gate.yml (trigger excludes base 'release/2026-09')",
+    );
+    // A base the ignore list does not name keeps the workflow expected, and a
+    // workflow with no recorded trigger is expected for every base, as before.
+    const other = evalBase("main", light, inv);
+    expect(other.failures).toEqual([
+      "missing: no check run named 'source-leak-gate / source-leak-gate' reported on the candidate (expected from .github/workflows/source-leak-gate.yml)",
+    ]);
+    expect(r.waitedOn).toEqual(["build", "design-visual-verify"]);
+  });
+
+  it("prints the base, the derived set and every excluded workflow in the job summary", () => {
+    const summary = readiness.renderSummary({
+      candidateSha: HEAD,
+      lookupSha: HEAD,
+      eventName: "pull_request",
+      result: evalBase(STACKED, greenChecks()),
+    });
+    const lines = summary.split("\n");
+    expect(lines).toContain(`  base: ${STACKED}`);
+    expect(lines).toContain(`  expected set for base '${STACKED}': 3 context(s) from 3 workflow(s)`);
+    expect(lines).toContain("    expected: build (from .github/workflows/gates.yml)");
+    expect(lines).toContain(`  not expected: ${HEAVY} (trigger excludes base '${STACKED}')`);
+    expect(lines).toContain(`  not expected: ${CRM} (trigger excludes base '${STACKED}')`);
+    expect(summary).not.toContain("expected: image");
+  });
+
+  it("settles and budgets the wait on the workflows that run for the base", () => {
+    const inv = stackedInventory();
+    inv.expected = inv.expected.map((e) => ({ ...e, timeoutMinutes: e.workflow === HEAVY ? 90 : 20 }));
+    const paths = ["src/a.ts"];
+    expect(isSettled({ inventory: inv, checks: greenChecks(), changedPaths: paths, baseRef: STACKED })).toBe(true);
+    expect(isSettled({ inventory: inv, checks: greenChecks(), changedPaths: paths, baseRef: "main" })).toBe(false);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: paths, baseRef: STACKED })).toBe(20 + WAIT_MARGIN_MINUTES);
+    expect(waitBudgetMinutes({ inventory: inv, changedPaths: paths, baseRef: "main" })).toBe(90 + WAIT_MARGIN_MINUTES);
+  });
+
+  it("reads the base from the pull_request payload and fails closed without it", () => {
+    const payload = { pull_request: { number: 7, base: { ref: STACKED } } };
+    expect(readiness.resolveBaseRef({ eventName: "pull_request", payload })).toBe(STACKED);
+    expect(() => readiness.resolveBaseRef({ eventName: "pull_request", payload: {} })).toThrow(
+      /without the pull request's base branch/,
+    );
+    expect(() =>
+      readiness.resolveBaseRef({ eventName: "pull_request", payload: { pull_request: { base: { ref: "" } } } }),
+    ).toThrow(/failing closed/);
+  });
+
+  it("keeps the full set on the queue event, which reads no pull request base", () => {
+    const payload = { merge_group: { head_sha: "b".repeat(40), base_ref: "refs/heads/main" } };
+    expect(readiness.resolveBaseRef({ eventName: "merge_group", payload })).toBeNull();
+    const r = evaluateReadiness({
+      inventory: stackedInventory(),
+      checks: greenChecks(),
+      changedPaths: ["src/a.ts"],
+      eventName: "merge_group",
+      queue: queuePair(),
+      baseRef: null,
+    });
+    expect(r.verdict).toBe("FAIL");
+    expect(r.failures.filter((f) => f.startsWith("missing:"))).toHaveLength(2);
+    expect(r.notExpected).toEqual([]);
+  });
+});
+
+describe("branch filters match the base as GitHub matches them (#3653)", () => {
+  const match = (patterns, branch) => readiness.matchesBranchFilter(patterns, branch);
+
+  it("keeps '*' inside one segment and lets '**' cross '/'", () => {
+    expect(match(["feature/*"], "feature/my-branch")).toBe(true);
+    expect(match(["feature/*"], "feature/beta/my-branch")).toBe(false);
+    expect(match(["feature/**"], "feature/beta/my-branch")).toBe(true);
+    expect(match(["*"], "main")).toBe(true);
+    expect(match(["*"], "releases/10")).toBe(false);
+    expect(match(["**"], "all/the/branches")).toBe(true);
+    expect(match(["**/hotfix"], "hotfix")).toBe(true);
+    expect(match(["**/hotfix"], "team/a/hotfix")).toBe(true);
+    expect(match(["main"], "main")).toBe(true);
+    expect(match(["main"], "main-next")).toBe(false);
+    expect(match(["main"], "feat/main")).toBe(false);
+  });
+
+  it("lets the last matching pattern decide: '!' excludes, a later positive match includes again", () => {
+    const filter = ["releases/**", "!releases/**-alpha"];
+    expect(match(filter, "releases/10")).toBe(true);
+    expect(match(filter, "releases/10-alpha")).toBe(false);
+    expect(match([...filter, "releases/beta-alpha"], "releases/beta-alpha")).toBe(true);
+    expect(match(["!main"], "main")).toBe(false);
+  });
+
+  it("reads '?', '+', a character class and '\\' as the filter syntax defines them", () => {
+    const stack = ["stack-[ab12].[0-9]+"];
+    expect(match(stack, "stack-a.10")).toBe(true);
+    expect(match(stack, "stack-2.7")).toBe(true);
+    expect(match(stack, "stack-c.7")).toBe(false);
+    expect(match(stack, "stack-a.")).toBe(false);
+    expect(match(stack, "stack-ax10")).toBe(false);
+    expect(match(["team-[a-c]"], "team-b")).toBe(true);
+    expect(match(["team-[a-c]"], "team-d")).toBe(false);
+    expect(match(["feat?"], "fea")).toBe(true);
+    expect(match(["feat?"], "feat")).toBe(true);
+    expect(match(["feat?"], "feats")).toBe(false);
+    expect(match(["hot\\*fix"], "hot*fix")).toBe(true);
+    expect(match(["hot\\*fix"], "hotxfix")).toBe(false);
+  });
+
+  it("accepts recorded triggers and rejects a malformed one instead of guessing", () => {
+    const withTriggers = (pull_request) => {
+      const inv = inventory();
+      inv.triggers = { ".github/workflows/gates.yml": { pull_request } };
+      return inv;
+    };
+    expect(validateInventory(withTriggers({ branches: ["main", "releases/**"], "branches-ignore": null })).ok).toBe(true);
+    expect(validateInventory(withTriggers({ branches: null, "branches-ignore": ["release/**"] })).ok).toBe(true);
+    expect(validateInventory(withTriggers(null)).ok).toBe(true);
+    for (const bad of [
+      { branches: "main", "branches-ignore": null },
+      { branches: [], "branches-ignore": null },
+      { branches: ["main", ""], "branches-ignore": null },
+      { branches: ["main"], "branches-ignore": ["release/**"] },
+      { branches: ["release-[x"], "branches-ignore": null },
+      { branches: ["release-[._]"], "branches-ignore": null },
+      { branches: ["trailing\\"], "branches-ignore": null },
+      "main",
+    ]) {
+      expect(validateInventory(withTriggers(bad)).problems.join("\n")).toMatch(/\.github\/workflows\/gates\.yml/);
+    }
+    const notAMap = inventory();
+    notAMap.triggers = [];
+    expect(validateInventory(notAMap).problems.join("\n")).toMatch(/'triggers'/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * cinatra#3673: each workflow is read from its latest run at the head
+ * ------------------------------------------------------------------ */
+
+// A draft pull request marked ready seconds after it was opened runs a
+// workflow twice at one head. Concurrency cancels the first run: its jobs end
+// cancelled, or failed when killed mid-way, while the second run has not yet
+// created every job. The fixtures are API-shaped listings of one head: its
+// check runs and its workflow runs.
+const GATES = ".github/workflows/gates.yml";
+const LEAK = ".github/workflows/source-leak-gate.yml";
+const DESIGN = ".github/workflows/design-visual-verify.yml";
+const TEST_MERGE = "e".repeat(40);
+
+/** One entry of the head's workflow runs listing. */
+const workflowRun = (id, suite, workflowPath, status = "completed", conclusion = status === "completed" ? "success" : null) =>
+  ({ id, check_suite_id: suite, path: workflowPath, head_sha: HEAD, event: "pull_request", status, conclusion });
+
+/** One entry of the head's check-runs listing, as the API returns it. */
+const checkRun = (id, suite, runId, name, status = "completed", conclusion = status === "completed" ? "success" : null) => ({
+  id,
+  name,
+  status,
+  conclusion,
+  completed_at: status === "completed" ? "2026-09-25T10:00:00Z" : null,
+  app: { slug: "github-actions" },
+  check_suite: { id: suite },
+  html_url: `https://github.com/octo-org/octo-repo/actions/runs/${runId}/job/${id}`,
+});
+
+const listing = (runs) => ({ total_count: runs.length, workflow_runs: runs });
+
+/** The leak and design gates: one green run each, on every head below. */
+const otherRuns = () => [workflowRun(300, 3000, LEAK), workflowRun(400, 4000, DESIGN)];
+const otherChecks = () => [
+  checkRun(3001, 3000, 300, "source-leak-gate / source-leak-gate"),
+  checkRun(4001, 4000, 400, "design-visual-verify"),
+];
+
+/** Heads with ONE run per workflow: the cases cinatra#3673 leaves unchanged. */
+const singleBatch = () => [
+  {
+    name: "every context green",
+    checkRuns: [checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES), ...otherRuns()],
+  },
+  {
+    name: "one context failed",
+    checkRuns: [checkRun(1001, 1000, 100, "build", "completed", "failure"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES, "completed", "failure"), ...otherRuns()],
+  },
+  {
+    name: "the only run cancelled",
+    checkRuns: [checkRun(1001, 1000, 100, "build", "completed", "cancelled"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES, "completed", "cancelled"), ...otherRuns()],
+  },
+  {
+    name: "one context still queued",
+    checkRuns: [checkRun(1001, 1000, 100, "build", "queued"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES, "in_progress"), ...otherRuns()],
+    waitedMinutes: 12,
+  },
+  {
+    name: "one context missing",
+    checkRuns: otherChecks(),
+    runs: [workflowRun(100, 1000, GATES), ...otherRuns()],
+  },
+  {
+    name: "a re-run inside one run",
+    checkRuns: [
+      checkRun(1002, 1000, 100, "build"),
+      checkRun(1001, 1000, 100, "build", "completed", "failure"),
+      ...otherChecks(),
+    ],
+    runs: [workflowRun(100, 1000, GATES), ...otherRuns()],
+  },
+  {
+    name: "unknown checks beside the expected set",
+    checkRuns: [
+      checkRun(1001, 1000, 100, "build"),
+      checkRun(1003, 1000, 100, "Detect CI impact"),
+      checkRun(5001, 5000, 500, "merge-readiness / merge-readiness", "in_progress"),
+      { ...checkRun(9001, 9000, 0, "CodeQL"), app: { slug: "code-scanning" }, html_url: "https://github.com/octo-org/octo-repo/runs/9001" },
+      ...otherChecks(),
+    ],
+    runs: [
+      workflowRun(100, 1000, GATES),
+      workflowRun(500, 5000, ".github/workflows/merge-readiness.yml", "in_progress"),
+      ...otherRuns(),
+    ],
+  },
+  {
+    name: "two workflows report one context",
+    checkRuns: [checkRun(6001, 6000, 600, "build"), checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES), workflowRun(600, 6000, ".github/workflows/gates-copy.yml"), ...otherRuns()],
+  },
+];
+
+/** What the CLI does with one poll's two listings. */
+const judgeListings = (checkRuns, runs, { waitedMinutes, baseRef = null } = {}) => {
+  const checks = readiness.resolveLatestRuns(
+    checkRuns.map(readiness.checkRunFromApi),
+    readiness.readWorkflowRuns(listing(runs), HEAD),
+  );
+  const args = { inventory: inventory(), checks, changedPaths: ["src/app/page.tsx"], baseRef };
+  const result = evaluateReadiness({ ...args, eventName: "pull_request", waitedMinutes });
+  return { result, settled: isSettled(args), readFrom: readiness.renderReadFrom(result).split("\n") };
+};
+
+// Run 100 (check suite 1000) is the first run of gates.yml at the head; run
+// 200 (check suite 2000) is the second.
+const cancelledFirstRun = () => workflowRun(100, 1000, GATES, "completed", "cancelled");
+const killedBuild = () => checkRun(1001, 1000, 100, "build", "completed", "failure");
+const SUPERSEDED = `superseded run ignored: run 100 of ${GATES} — run 200 is the latest of that workflow at the head`;
+
+describe("each workflow is read from its latest run at the head (cinatra#3673)", () => {
+  it("reads ready when the older run was cancelled with a failed job and the newer run is green", () => {
+    const { result, settled, readFrom } = judgeListings(
+      [checkRun(2001, 2000, 200, "build"), killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES), ...otherRuns()],
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.pending).toEqual([]);
+    expect(result.verdict).toBe("PASS");
+    expect(settled).toBe(true);
+    expect(result.reports).toEqual([SUPERSEDED]);
+    expect(readFrom).toContain(`  read 'build' from run 200 of ${GATES}`);
+  });
+
+  it("is pending, not failed, while the newer run still runs the job", () => {
+    const { result, settled } = judgeListings(
+      [checkRun(2001, 2000, 200, "build", "in_progress"), killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES, "in_progress"), ...otherRuns()],
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.verdict).toBe("PENDING");
+    expect(result.pending).toEqual(["pending: 'build' is still 'in_progress' after 90 minutes — not a failure"]);
+    expect(settled).toBe(false);
+  });
+
+  it("keeps a cancelled run a failure when it is the latest run of its workflow", () => {
+    const only = judgeListings(
+      [checkRun(1001, 1000, 100, "build", "completed", "cancelled"), ...otherChecks()],
+      [cancelledFirstRun(), ...otherRuns()],
+    );
+    expect(only.result.verdict).toBe("FAIL");
+    expect(only.result.failures).toEqual(["cancelled: 'build'"]);
+    expect(only.result.reports).toEqual([]);
+    expect(only.readFrom).toContain(`  read 'build' from run 100 of ${GATES}`);
+
+    // A newer run cancelled in its turn is read; the older green run does not stand in for it.
+    const newerCancelled = judgeListings(
+      [checkRun(2001, 2000, 200, "build", "completed", "cancelled"), checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+      [workflowRun(100, 1000, GATES), workflowRun(200, 2000, GATES, "completed", "cancelled"), ...otherRuns()],
+    );
+    expect(newerCancelled.result.verdict).toBe("FAIL");
+    expect(newerCancelled.result.failures).toEqual(["cancelled: 'build'"]);
+
+    // A newer run cancelled before it created the job leaves that job missing.
+    const cancelledEarly = judgeListings(
+      [checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+      [workflowRun(100, 1000, GATES), workflowRun(200, 2000, GATES, "completed", "cancelled"), ...otherRuns()],
+    );
+    expect(cancelledEarly.result.verdict).toBe("FAIL");
+    expect(cancelledEarly.result.failures).toEqual([
+      `missing: no check run named 'build' in the latest run 200 of ${GATES}, which concluded 'cancelled' (a superseded run's check run is ignored)`,
+    ]);
+  });
+
+  it("keeps a job only the older run reported pending until the newer run ends, then reads it from the newer run", () => {
+    // The measured shape: the newer run is running and has not created 'build' yet.
+    const during = judgeListings(
+      [killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES, "in_progress"), ...otherRuns()],
+      { waitedMinutes: 3 },
+    );
+    expect(during.result.failures).toEqual([]);
+    expect(during.result.verdict).toBe("PENDING");
+    expect(during.result.pending).toEqual([
+      `pending: 'build' is not yet reported by the latest run 200 of ${GATES} (still 'in_progress') after 3 minutes — not a failure`,
+    ]);
+    expect(during.result.reports).toEqual([SUPERSEDED]);
+    expect(during.settled).toBe(false);
+    expect(during.readFrom.join("\n")).not.toContain("'build'");
+
+    const after = judgeListings(
+      [checkRun(2001, 2000, 200, "build"), killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES), ...otherRuns()],
+    );
+    expect(after.result.verdict).toBe("PASS");
+    expect(after.settled).toBe(true);
+    expect(after.readFrom).toContain(`  read 'build' from run 200 of ${GATES}`);
+
+    // A newer run that ended without the job leaves it missing, never passed on the older run's word.
+    const ended = judgeListings(
+      [killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES, "completed", "failure"), ...otherRuns()],
+    );
+    expect(ended.result.verdict).toBe("FAIL");
+    expect(ended.result.failures).toEqual([
+      `missing: no check run named 'build' in the latest run 200 of ${GATES}, which concluded 'failure' (a superseded run's check run is ignored)`,
+    ]);
+  });
+
+  it("refuses a runs listing it cannot read, and names the reason", () => {
+    const run = cancelledFirstRun;
+    const other = "f".repeat(40);
+    for (const [value, reason] of [
+      [null, "the listing is not an object"],
+      [{ total_count: 1 }, "'workflow_runs' is not an array"],
+      [{ total_count: "1", workflow_runs: [run()] }, "'total_count' is not a count"],
+      [{ total_count: 3, workflow_runs: [run()] }, "the listing holds 1 of 3 runs"],
+      [listing([{ ...run(), id: "100" }]), "run #1 has no run id"],
+      [listing([run(), run()]), "run 100 is listed twice"],
+      [listing([{ ...run(), check_suite_id: null }]), "run 100 has no check suite id"],
+      [listing([run(), { ...run(), id: 101 }]), "run 101 shares check suite 1000 with another run"],
+      [listing([{ ...run(), path: "" }]), "run 100 names no workflow path"],
+      [listing([{ ...run(), status: null }]), "run 100 has no status"],
+      [listing([{ ...run(), conclusion: 1 }]), "run 100 has a malformed conclusion"],
+      [listing([{ ...run(), head_sha: other }]), `run 100 belongs to head ${other}`],
+    ]) {
+      expect(() => readiness.readWorkflowRuns(value, HEAD)).toThrow(
+        `cannot read the workflow runs of ${HEAD} (${reason}) — refusing`,
+      );
+    }
+  });
+
+  it("renders a head with one run per workflow byte-identically to the evaluator before cinatra#3673", () => {
+    // Captured from the unchanged evaluator on the same listings (its own
+    // check-run mapping, suite index and summary).
+    const head = (verdict) => [
+      `merge-readiness: ${verdict}`,
+      "  event: pull_request",
+      `  candidate: ${TEST_MERGE}`,
+      `  checks read from: ${HEAD} (the head that carries the runs; the candidate above is the tree under evaluation)`,
+      "  base: main",
+      "  expected set for base 'main': 3 context(s) from 3 workflow(s)",
+      "    expected: build (from .github/workflows/gates.yml)",
+      "    expected: source-leak-gate / source-leak-gate (from .github/workflows/source-leak-gate.yml)",
+      "    expected: design-visual-verify (from .github/workflows/design-visual-verify.yml)",
+      "  waited on 3 expected context(s)",
+    ];
+    const unknown = "  report: unknown check (not in .github/merge-readiness.json; reported, not waited on):";
+    const golden = {
+      "every context green": head("PASS"),
+      "one context failed": [...head("FAIL"), "  FAIL: failed: 'build'"],
+      "the only run cancelled": [...head("FAIL"), "  FAIL: cancelled: 'build'"],
+      "one context still queued": [...head("PENDING"), "  pending: 'build' is still 'queued' after 12 minutes — not a failure"],
+      "one context missing": [
+        ...head("FAIL"),
+        "  FAIL: missing: no check run named 'build' reported on the candidate (expected from .github/workflows/gates.yml)",
+      ],
+      "a re-run inside one run": [...head("PASS"), "  report: re-run (the latest of 2 runs from one source decides): 'build'"],
+      "unknown checks beside the expected set": [...head("PASS"), `${unknown} Detect CI impact`, `${unknown} CodeQL`],
+      "two workflows report one context": [
+        ...head("FAIL"),
+        "  FAIL: duplicate-source: 'build' was reported 2 times from 2 source(s) [github-actions:.github/workflows/gates-copy.yml, github-actions:.github/workflows/gates.yml] — which run branch protection would match is ambiguous",
+      ],
+    };
+    const cases = singleBatch();
+    expect(cases.map((s) => s.name)).toEqual(Object.keys(golden));
+    for (const s of cases) {
+      const { result } = judgeListings(s.checkRuns, s.runs, { waitedMinutes: s.waitedMinutes, baseRef: "main" });
+      const summary = readiness.renderSummary({ candidateSha: TEST_MERGE, lookupSha: HEAD, eventName: "pull_request", result });
+      expect(summary, s.name).toBe(golden[s.name].join("\n"));
+    }
+  });
+});
+
+describe("the evaluator waits for the latest run of each workflow before it judges (cinatra#3673)", () => {
+  const SCRIPT = path.resolve(import.meta.dirname, "../merge-readiness.mjs");
+  // Stands in for fetch in the evaluator's own process: every read of the
+  // check runs starts the next poll of the fixture, and the runs listing
+  // answers from that same poll.
+  const FETCH_STANDIN = `
+import fs from "node:fs";
+const fixture = JSON.parse(fs.readFileSync(process.env.READINESS_FIXTURE, "utf8"));
+let poll = 0;
+const current = () => fixture.polls[Math.min(Math.max(poll, 1), fixture.polls.length) - 1];
+const reply = (status, body) =>
+  ({ ok: status === 200, status, statusText: { 200: "OK", 403: "Forbidden" }[status] ?? "Not Found", json: async () => body });
+globalThis.fetch = async (url) => {
+  const { pathname, searchParams } = new URL(url);
+  if (pathname.endsWith("/check-runs")) {
+    if (searchParams.get("page") === "1") poll += 1;
+    return reply(200, { total_count: current().checkRuns.length, check_runs: current().checkRuns });
+  }
+  if (pathname.endsWith("/actions/runs")) return current().runsStatus ? reply(current().runsStatus, { message: "refused" }) : reply(200, current().runs);
+  if (pathname.endsWith("/files")) return reply(200, [{ filename: "src/app/page.tsx" }]);
+  return reply(404, { message: "not in the fixture" });
+};
+`;
+  const cliInventory = () => {
+    const inv = inventory();
+    inv.expected.push({ context: "Create GitHub Release", app: "github-actions", workflow: GATES, paths: ["**"] });
+    return inv;
+  };
+
+  function runEvaluator(polls) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-cli-"));
+    try {
+      fs.mkdirSync(path.join(dir, ".github"));
+      fs.writeFileSync(path.join(dir, ".github", "merge-readiness.json"), JSON.stringify(cliInventory()));
+      fs.writeFileSync(path.join(dir, "event.json"), JSON.stringify({ pull_request: { number: 7, base: { ref: "main" } } }));
+      fs.writeFileSync(path.join(dir, "fixture.json"), JSON.stringify({ polls }));
+      fs.writeFileSync(path.join(dir, "fetch-standin.mjs"), FETCH_STANDIN);
+      const run = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(dir, "fetch-standin.mjs")).href, SCRIPT], {
+        encoding: "utf8",
+        timeout: 60_000,
+        env: {
+          GITHUB_REPOSITORY: "octo-org/octo-repo",
+          GITHUB_TOKEN: "fixture-token",
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_EVENT_PATH: path.join(dir, "event.json"),
+          GITHUB_WORKSPACE: dir,
+          MERGE_READINESS_CANDIDATE_SHA: TEST_MERGE,
+          MERGE_READINESS_HEAD_SHA: HEAD,
+          MERGE_READINESS_POLL_MS: "1",
+          READINESS_FIXTURE: path.join(dir, "fixture.json"),
+        },
+      });
+      return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const releaseCancelled = () => checkRun(1002, 1000, 100, "Create GitHub Release", "completed", "cancelled");
+
+  it("passes a draft pull request made ready seconds later once the newer run is green", () => {
+    const { status, stdout, stderr } = runEvaluator([
+      // Poll 1: the first run of gates.yml was cancelled, its build killed;
+      // the second run has not created either job yet.
+      {
+        checkRuns: [releaseCancelled(), killedBuild(), ...otherChecks()],
+        runs: listing([cancelledFirstRun(), workflowRun(200, 2000, GATES, "in_progress"), ...otherRuns()]),
+      },
+      // Poll 2: the second run is green.
+      {
+        checkRuns: [
+          checkRun(2002, 2000, 200, "Create GitHub Release"),
+          checkRun(2001, 2000, 200, "build"),
+          releaseCancelled(),
+          killedBuild(),
+          ...otherChecks(),
+        ],
+        runs: listing([cancelledFirstRun(), workflowRun(200, 2000, GATES), ...otherRuns()]),
+      },
+    ]);
+    expect(stdout).toContain("merge-readiness: PASS");
+    expect(stdout).not.toContain("FAIL:");
+    expect(stdout).toContain(`  report: ${SUPERSEDED}`);
+    expect(stdout).toContain(`  read 'build' from run 200 of ${GATES}`);
+    expect(stdout).toContain(`  read 'Create GitHub Release' from run 200 of ${GATES}`);
+    expect(stderr).not.toContain("::error::");
+    expect(status).toBe(0);
+  });
+
+  it("refuses, non-zero and with the reason, when the runs listing cannot be read", () => {
+    const green = {
+      checkRuns: [checkRun(1002, 1000, 100, "Create GitHub Release"), checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+    };
+    const page = `/repos/octo-org/octo-repo/actions/runs?head_sha=${HEAD}&per_page=100&page=1`;
+    for (const [poll, reason] of [
+      [{ ...green, runs: { message: "Server Error" } }, "a page carries no 'workflow_runs' array"],
+      [{ ...green, runsStatus: 403 }, `GET ${page} -> 403 Forbidden`],
+    ]) {
+      const { status, stdout, stderr } = runEvaluator([poll]);
+      expect(stderr).toContain(`cannot read the workflow runs of ${HEAD} (${reason}) — refusing`);
+      expect(stderr).toContain("::error::");
+      expect(stdout).not.toContain("merge-readiness: PASS");
+      expect(status).toBe(1);
+    }
   });
 });

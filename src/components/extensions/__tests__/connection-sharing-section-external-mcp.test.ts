@@ -68,14 +68,14 @@ vi.mock("@/components/extension-permissions-client", () => ({
   ExtensionPermissionsClient: () => null,
 }));
 
-vi.mock("@/components/extensions/connector-sharing-panels", () => ({
+vi.mock("@cinatra-ai/sdk-ui/connector-sharing-panels", () => ({
   CONNECTOR_SHARING_INTRO: "Choose who can use each of your saved connections.",
   ConnectorSharingPanels: () => null,
 }));
 
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
-import { ConnectorSharingPanels } from "@/components/extensions/connector-sharing-panels";
-import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
+import { ConnectorSharingPanels } from "@cinatra-ai/sdk-ui/connector-sharing-panels";
+import type { PermissionsPanelProps } from "@cinatra-ai/sdk-ui/permissions-panel";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 
@@ -154,7 +154,8 @@ type PanelView = {
   name: string;
   url: string;
   scopeConstraint: string | null;
-  permissions: ReactElement;
+  /** The permissions DATA and bindings the tab states for this connection. */
+  permissions: PermissionsPanelProps;
 };
 
 /** Depth-first search of a server component's returned element tree. */
@@ -214,7 +215,9 @@ describe("ConnectionSharingSection — a server registered on the MCP Servers Se
   });
 
   it("is governed there by the MCP Servers connector's OWN access declaration", async () => {
-    listNangoConnectionsByOwner.mockResolvedValue([externalMcpRow]);
+    // The row shape a registration writes today (cinatra#3397): the
+    // recommended workspace grant is one this connection can actually save.
+    listNangoConnectionsByOwner.mockResolvedValue([externalMcpOrgRow]);
 
     const rendered = await ConnectionSharingSection({
       packageId: MCP_SERVERS_PACKAGE,
@@ -225,16 +228,39 @@ describe("ConnectionSharingSection — a server registered on the MCP Servers Se
     expect(readInstalledExtensionsByPackageName).toHaveBeenCalledWith(MCP_SERVERS_PACKAGE);
     const panel = panelsOf(rendered)?.[0];
     expect(panel?.scopeConstraint).toBe("recommended");
-    const note = (panel?.permissions.props as { accessScopeNote?: string }).accessScopeNote;
-    expect(panel?.permissions.type).toBe(ExtensionPermissionsClient);
+    const note = panel?.permissions.accessScopeNote;
+    // The panel's card is the SHARED one, drawn by the tab body from this data
+    // and these bindings (cinatra#3385), never a connector-specific copy.
+    expect(typeof panel?.permissions.actions.savePolicy).toBe("function");
     expect(note).toContain("This connector recommends sharing with");
     expect(note).toContain("nothing is shared until you save");
-    // …and the picker the tab draws OPENS on the stored owner scope: the line
-    // states what the connector proposes, the picker states what is current
-    // ("Currently: only you") — and the proposed scope stays an enabled option
-    // the owner may choose and save (cinatra#3408).
+    // …and on the untouched seed the picker the tab draws opens PRE-SELECTED
+    // to the recommended scope. Nothing is written until Save (cinatra#3408).
     expect(
-      (panel?.permissions.props as { accessValueOverride?: string }).accessValueOverride,
+      panel?.permissions.accessValueOverride,
+    ).toBe("workspace");
+  });
+
+  it("states no recommendation on a LEGACY row of no organization, which the workspace grant cannot reach", async () => {
+    listNangoConnectionsByOwner.mockResolvedValue([externalMcpRow]);
+
+    const rendered = await ConnectionSharingSection({
+      packageId: MCP_SERVERS_PACKAGE,
+      variant: "tab",
+    });
+
+    // Still listed and still governed by the page's own declaration, but the
+    // write gate refuses a workspace grant on a row of no organization, so the
+    // picker stays on the stored owner scope and no line proposes the grant.
+    expect(readInstalledExtensionsByPackageName).toHaveBeenCalledWith(MCP_SERVERS_PACKAGE);
+    const panel = panelsOf(rendered)?.[0];
+    expect(panel?.key).toBe(externalMcpRow.id);
+    expect(panel?.scopeConstraint).toBeNull();
+    expect(
+      panel?.permissions.accessScopeNote,
+    ).toBeUndefined();
+    expect(
+      panel?.permissions.accessValueOverride,
     ).toBe("owner");
   });
 

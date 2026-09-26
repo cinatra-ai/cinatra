@@ -53,6 +53,7 @@ const SCOPE_WORD: Record<ListingScopeKind, string> = {
   team: "team",
   organization: "organization",
   project: "project",
+  workspace: "workspace",
 };
 
 function updatedRel(updatedAt: Date | string | null): string {

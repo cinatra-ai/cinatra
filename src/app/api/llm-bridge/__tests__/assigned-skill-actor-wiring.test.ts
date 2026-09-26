@@ -262,7 +262,14 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — VERIFIED run"
       expect.objectContaining({ id: "run-1", runBy: "user-1", orgId: "org-1" }),
     );
     // Its actor is passed to the resolver as the 2nd argument.
-    expect(firstAssignedCall()).toEqual(["agent-x", SCOPED_ACTOR]);
+    // cinatra#2815 S3 — the run's FROZEN assignment scopes ride the same vetted
+    // handle as the owner: a vetted run contributes its organization floor, an
+    // unattributable dispatch contributes none and the chain stays narrow.
+    expect(firstAssignedCall()).toEqual([
+      "agent-x",
+      SCOPED_ACTOR,
+      { snapshot: undefined, durableOrgId: "org-1" },
+    ]);
   });
 
   it("RETIRED (#1193): the context-id channel selects NO run, so the assignment resolves ACTOR-LESS", async () => {
@@ -274,7 +281,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — VERIFIED run"
     resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
     await POST(makeRequestH({ user: "hi", agent_id: "agent-x" }, { "x-cinatra-a2a-context-id": "ctx-1" }));
     expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
-    expect(firstAssignedCall()).toEqual(["agent-x"]);
+    expect(firstAssignedCall()).toEqual([
+      "agent-x",
+      undefined,
+      { snapshot: undefined, durableOrgId: null },
+    ]);
   });
 });
 
@@ -285,7 +296,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
     resolveAssignedSkillsActorForRunMock.mockResolvedValue(undefined); // e.g. nonmember / build failure
     await POST(makeRequestH({ user: "hi", agent_id: "agent-x" }, { "x-cinatra-run-token": RUN_TOKEN }));
     expect(resolveAssignedSkillsActorForRunMock).toHaveBeenCalledOnce();
-    expect(firstAssignedCall()).toEqual(["agent-x"]);
+    expect(firstAssignedCall()).toEqual([
+      "agent-x",
+      undefined,
+      { snapshot: undefined, durableOrgId: "org-1" },
+    ]);
   });
 
   it("ABSENT run ⇒ resolver handed null, delivery is ACTOR-LESS (regression pin)", async () => {
@@ -295,7 +310,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
     // (arity 1), which is the SAME delivery this pinned, reached one step
     // earlier and strictly more fail-closed.
     expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
-    expect(firstAssignedCall()).toEqual(["agent-x"]);
+    expect(firstAssignedCall()).toEqual([
+      "agent-x",
+      undefined,
+      { snapshot: undefined, durableOrgId: null },
+    ]);
   });
 
   it("a caller-supplied body.agent_run_id alone never promotes a run — and is now REFUSED (#1193)", async () => {
@@ -322,7 +341,11 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
     // (arity 1), which is the SAME delivery this pinned, reached one step
     // earlier and strictly more fail-closed.
     expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
-    expect(firstAssignedCall()).toEqual(["agent-x"]);
+    expect(firstAssignedCall()).toEqual([
+      "agent-x",
+      undefined,
+      { snapshot: undefined, durableOrgId: null },
+    ]);
   });
 
   it("does NOT resolve assigned skills (or derive an actor) when agent_id is omitted", async () => {
