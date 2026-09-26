@@ -55,6 +55,15 @@ export type AgentRunsTable = {
    * owns even if they were triggered outside the caller's active org.
    */
   readonly runBy: AnyColumn;
+  /**
+   * `launch_scope_anchor` — the immutable JSON record of the vantage a run was
+   * launched from (`{v:1, kind, id?}`), read by the `launch_scope` dimension so
+   * a scope's Executions tab can list the runs started in that scope
+   * (cinatra#3693). OPTIONAL: a host that does not pass it gets a dimension that
+   * reads empty for every run. It is a LISTING dimension, never part of the
+   * access predicate below.
+   */
+  readonly launchScopeAnchor?: AnyColumn;
 };
 
 /**
@@ -124,6 +133,11 @@ export const AGENT_RUNS_CUBE_DESCRIPTOR: CubeDescriptor = {
     { id: "package_name", displayName: "Package", type: "string" },
     { id: "status", displayName: "Status", type: "string" },
     { id: "created_at", displayName: "Created at", type: "date" },
+    // The scope the run was launched from (cinatra#3693), `<kind>:<id>` — e.g.
+    // `organization:<id>`, `team:<id>`, `project:<id>`, `user:<id>` — or
+    // `workspace`, and empty for an unanchored run. A LISTING filter for a
+    // scope's Executions tab; it never widens or narrows what a caller may read.
+    { id: "launch_scope", displayName: "Launch scope", type: "string" },
   ],
   measures: [
     { id: "count", displayName: "Run count", type: "count" },
@@ -291,6 +305,11 @@ export function createAgentRunsCube(
       package_name: sql<string>`coalesce(substring(${templateColumns.packageName} from '^@[^/]+/(.+)$'), ${templateColumns.packageName})`,
       status: columns.status,
       created_at: columns.createdAt,
+      // `concat_ws` skips a missing id (the workspace arm) and never yields
+      // NULL, so an unanchored run reads as the empty string.
+      launch_scope: columns.launchScopeAnchor
+        ? sql<string>`concat_ws(':', ${columns.launchScopeAnchor}->>'kind', ${columns.launchScopeAnchor}->>'id')`
+        : sql<string>`''`,
     },
     measureSql: {
       count: columns.id,

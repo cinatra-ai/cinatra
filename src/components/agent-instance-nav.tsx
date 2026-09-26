@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Tabs, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
+import { buildAgentPackageBasePath } from "@/lib/agent-url";
 
 export type AgentInstanceNavProps = {
   agentId: string;
@@ -43,15 +44,29 @@ export type AgentInstanceNavProps = {
    * Hidden for immediate runs, unstarted runs, and runs with no trigger configured.
    */
   showTriggerTab?: boolean;
+  /**
+   * The scope base the run is read under (cinatra#3693): the tabs of a run
+   * that lives under a scope stay under it. Absent on the bare route, where
+   * every href is exactly what it was.
+   */
+  scopeBase?: string | null;
 };
 
-export function AgentInstanceNav({ agentId, instanceId, activeTab, showTriggerTab = false }: AgentInstanceNavProps) {
+export function AgentInstanceNav({
+  agentId,
+  instanceId,
+  activeTab,
+  showTriggerTab = false,
+  scopeBase,
+}: AgentInstanceNavProps) {
   // agentId may be "vendor/packageName" (new package-name routing) — split and
   // encode each segment separately so the slash is preserved as a path separator.
   const agentPath = agentId.includes("/")
     ? agentId.split("/").map(encodeURIComponent).join("/")
     : encodeURIComponent(agentId);
-  const base = `/agents/${agentPath}/${encodeURIComponent(instanceId)}`;
+  // Through the package builder rather than the instance one: the strip is
+  // also drawn for the reserved `new` launcher (the Permissions empty state).
+  const base = `${buildAgentPackageBasePath(agentPath, { scopeBase: scopeBase ?? null })}/${encodeURIComponent(instanceId)}`;
 
   // Application Design — Agents §I: the strip is part of the constant frame, so
   // the SAME run must offer the SAME tabs on EVERY route — otherwise the

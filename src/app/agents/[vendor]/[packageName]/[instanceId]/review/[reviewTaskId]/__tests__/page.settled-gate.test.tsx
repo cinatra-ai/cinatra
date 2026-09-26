@@ -286,13 +286,24 @@ describe("the run-step rail beside the review reads the run's own record (cinatr
     // list is identical on the run page and here. The run page names a step
     // whose declaration names nothing by the run's record of it; this route
     // must hand the same record over, or the same step reads blank here.
-    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+    // A SETTLED gate: a pending gate whose run is readable now lands on the run
+    // page itself (cinatra#3693 — "a pending review still opens in place on the
+    // run page"), so this rail is drawn beside a decided gate.
+    mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled" });
     const stepResults = [{ output_data: { title: "Fetched Q3 cohort" } }];
     mocks.readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tmpl-1", stepResults } as never);
     const steps = [{ stepNumber: 1, xRenderer: "r" }];
     mocks.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", approvalPolicy: { steps } } as never);
 
-    await renderPage();
+    try {
+      await renderPage();
+    } finally {
+      // The readable run is this case's own: a pending gate whose run is
+      // readable lands on the run page (cinatra#3693), so it must not reach
+      // the pending cases below.
+      mocks.readAgentRunById.mockResolvedValue(null);
+      mocks.readAgentTemplateById.mockResolvedValue(null);
+    }
 
     expect(mocks.buildRunStepperSteps).toHaveBeenCalledWith(steps, { stepResults });
   });

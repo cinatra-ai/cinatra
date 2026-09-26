@@ -23,6 +23,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { toast } from "@/lib/cinatra-toast";
+import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { createAndTriggerRun, readRunOutputEvidence } from "./run-actions";
 import {
   resolveRunTerminalOutcome,
@@ -31,13 +32,24 @@ import {
 
 export type StartNewRunButtonProps = {
   agentId: string;
+  /**
+   * The scope base the finished run lives under (cinatra#3693). A run launched
+   * from a scope keeps its next run in that scope: the press opens the scope's
+   * own launcher, which mints the scope's anchor itself. Absent on the bare
+   * route, where the press creates the run exactly as it always has.
+   */
+  scopeBase?: string | null;
 };
 
-export function StartNewRunButton({ agentId }: StartNewRunButtonProps) {
+export function StartNewRunButton({ agentId, scopeBase }: StartNewRunButtonProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
   const handleClick = () => {
+    if (scopeBase) {
+      router.push(buildAgentWorkspacePath(agentId, { scopeBase }));
+      return;
+    }
     startTransition(async () => {
       const result = await createAndTriggerRun({ templateSlug: agentId });
       if (result.ok) {
@@ -107,6 +119,8 @@ export type RunCompletionCardProps = {
    * never adds one", and this control is one the card's own section draws.
    */
   agentId?: string;
+  /** The scope base the run lives under, for "Start new run" (cinatra#3693). */
+  scopeBase?: string | null;
   outputHint: RunOutputHint;
   /**
    * THE HOST'S OWN SYNCHRONOUS FACT (cinatra#3002, fix leg 4): the host is
@@ -125,6 +139,7 @@ export type RunCompletionCardProps = {
 export function RunCompletionCard({
   runId,
   agentId,
+  scopeBase,
   outputHint,
   initialEvidence,
   transcriptCarriesOutput,
@@ -323,7 +338,7 @@ export function RunCompletionCard({
             stretches to the full card width. */}
         {agentId ? (
           <div className="flex flex-wrap items-center gap-2">
-            <StartNewRunButton agentId={agentId} />
+            <StartNewRunButton agentId={agentId} scopeBase={scopeBase} />
           </div>
         ) : null}
       </CardContent>

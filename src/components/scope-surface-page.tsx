@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
 import { domainIcons, type DomainIcon } from "@/components/domain-icons";
+import { AgentsTabNav } from "@/components/agents-tab-nav";
 import { ScopeDashboardsTab } from "@/components/dashboards/scope-dashboards-tab";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
@@ -21,6 +22,7 @@ import {
   SCOPE_SURFACE_KIND_LABEL,
   SCOPE_SURFACE_TAB_ACTION,
   scopeSurfaceCrumbEntries,
+  scopeSurfaceBase,
   scopeSurfaceEmptyTestId,
   scopeSurfaceSettingsHref,
   scopeSurfaceTabHrefs,
@@ -94,6 +96,7 @@ export function ScopeSurfacePage({
   title,
   description,
   body,
+  agentsTab = "all",
 }: {
   scope: ScopeSurfaceRef;
   tab: ScopeSurfaceTab | "dashboards";
@@ -110,6 +113,12 @@ export function ScopeSurfacePage({
    * condition rather than claiming the scope holds nothing.
    */
   body?: ReactNode;
+  /**
+   * Which tab of the Agents strip is selected (cinatra#3693) — `all` on the
+   * scope's Agents tab, `executions` on its Executions tab. Read only on the
+   * Agents tab.
+   */
+  agentsTab?: "all" | "executions";
 }) {
   const hrefs = scopeSurfaceTabHrefs(scope);
   const settingsHref = scopeSurfaceSettingsHref(scope);
@@ -127,6 +136,14 @@ export function ScopeSurfacePage({
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
+        {/* THE AGENTS TAB CARRIES ITS OWN STRIP (cinatra#3693). The drawing:
+            "The Agents tab of every scope carries its own strip, All Agents |
+            Executions: Executions lists the runs started in that scope". It is
+            drawn above the rows and above the empty state alike, under this
+            scope's base, so neither tab walks the reader out of the scope. */}
+        {tab === "agents" ? (
+          <AgentsTabNav activeTab={agentsTab} scopeBase={scopeSurfaceBase(scope)} />
+        ) : null}
         {tab === "dashboards" ? (
           body ?? <DashboardsTabBody scope={scope} title={title} />
         ) : body != null ? (

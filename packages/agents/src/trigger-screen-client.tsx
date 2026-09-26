@@ -26,6 +26,7 @@ import { format } from "date-fns";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
+import { buildAgentPackageBasePath } from "@/lib/agent-url";
 import type { DurationEstimate } from "./trigger-duration-estimate";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
@@ -232,6 +233,12 @@ export function scheduleFormDefaults(
 export type TriggerScreenClientProps = {
   agentId: string;
   instanceId: string;
+  /**
+   * The scope base the run is read under (cinatra#3693), so the return to the
+   * run after **Run right after setup** stays in the run's scope. Absent on
+   * the bare route.
+   */
+  scopeBase?: string | null;
   templateId: string;
   isAdmin?: boolean;
   /** The run this screen's schedule belongs to, when one exists (cinatra#2933). */
@@ -606,7 +613,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         router.refresh();
         return;
       }
-      router.push(`/agents/${props.agentId}/${encodeURIComponent(props.instanceId)}`);
+      router.push(
+        `${buildAgentPackageBasePath(props.agentId, { scopeBase: props.scopeBase ?? null })}/${encodeURIComponent(props.instanceId)}`,
+      );
     });
   };
 

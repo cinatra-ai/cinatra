@@ -120,7 +120,28 @@ type AgentInstanceScreen = (props: {
   searchParams?: Promise<SearchParams> | undefined;
 }) => Promise<React.ReactNode>;
 
-/** `<scope-base>/agents/…` — the launcher, the settings shell, an instance. */
+/**
+ * The registry screen an instance SUB-ROUTE names (cinatra#3693), or null for
+ * a shape with no page under a scope. Results and optimization have no screen
+ * in the registry, and the skills page is a page of its own with no scope, so
+ * they stay not-found here.
+ */
+function instanceSubScreenKey(rest: readonly string[]): string | null {
+  if (rest.length !== 1) return null;
+  switch (rest[0]) {
+    case "trigger":
+      return "instanceTrigger";
+    case "permissions":
+      return "instancePermissions";
+    case "data":
+      return "instanceData";
+    default:
+      return null;
+  }
+}
+
+/** `<scope-base>/agents/…` — the launcher, the settings shell, an instance and
+ *  its sub-routes. */
 export async function ScopedAgentsRoute({
   scope,
   segments,
@@ -140,6 +161,27 @@ export async function ScopedAgentsRoute({
   // it gets the id abbreviation on all of them alike.
   const scopeTitle = await readScopeName(scope);
 
+  if (route.kind === "executions") {
+    // THE SCOPE'S EXECUTIONS TAB (cinatra#3693): "Each scope carries an
+    // **Executions** tab that lists that scope's runs." The scope's own page,
+    // on its Agents tab with the strip at Executions, and the Executions body
+    // handed the scope it lists. Both travel behind `await import(...)` for the
+    // reason the header above gives.
+    const [{ ScopeSurfacePage }, { ScopedAgentsExecutionsBody }] = await Promise.all([
+      import("@/components/scope-surface-page"),
+      import("@cinatra-ai/dashboards/screens"),
+    ]);
+    return (
+      <ScopeSurfacePage
+        scope={scope}
+        tab="agents"
+        agentsTab="executions"
+        title={scopeTitle ?? undefined}
+        body={<ScopedAgentsExecutionsBody launchScope={scope} />}
+      />
+    );
+  }
+
   if (route.kind === "settings") {
     // #2809's shell, filled with the per-scope assignment page (cinatra#2814).
     return renderScopeSurfaceSettingsShell({
@@ -151,18 +193,44 @@ export async function ScopedAgentsRoute({
     });
   }
 
-  // The sub-routes of an instance (its schedule, its results, its review) are
-  // still mounted on the bare tree alone. They are deliberately NOT forked
-  // here: an instance reached at its canonical home addresses them from there,
-  // and the slice that moves them moves them once, for all five bases.
-  if (route.kind === "instance" && route.rest.length > 0) notFound();
+  // THE SUB-ROUTES OF AN INSTANCE (cinatra#3693) — its schedule, its
+  // permissions and its review — moved here once, for all five bases. Each is
+  // handed the same scope, vantage and name as the run page, because each runs
+  // the same home check after its own access door: an instance reached under a
+  // scope that is not its home is sent there, sub-path and all.
+  if (route.kind === "instance" && route.rest[0] === "review") {
+    if (route.rest.length !== 2) notFound();
+    // A page of its own on the bare tree, reached the way the chat mount is:
+    // behind `await import(...)`, so no entry's build graph carries it.
+    const { default: AgentRunReviewPage } = await import(
+      "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page"
+    );
+    return AgentRunReviewPage({
+      params: Promise.resolve({
+        vendor: route.vendor,
+        packageName: route.packageName,
+        instanceId: route.instanceId,
+        reviewTaskId: route.rest[1],
+      }),
+      searchParams,
+      scopeBase,
+      launchScope: scope,
+      scopeTitle,
+    });
+  }
+  const screenKey =
+    route.kind === "instance" && route.rest.length > 0
+      ? instanceSubScreenKey(route.rest)
+      : "instanceSetup";
+  if (!screenKey) notFound();
 
   const instanceId = route.kind === "launch" ? AGENT_LAUNCH_SEGMENT : route.instanceId;
   const { resolveAgentScreensWithA2AFallback } = await import("@/app/plugins-registry");
   const screens = await resolveAgentScreensWithA2AFallback(route.agentId);
   if (!screens) notFound();
-  if (!("instanceSetup" in screens) || !screens.instanceSetup) notFound();
-  return (screens.instanceSetup as AgentInstanceScreen)({
+  const screen = (screens as Record<string, unknown>)[screenKey];
+  if (!screen) notFound();
+  return (screen as AgentInstanceScreen)({
     agentId: route.agentId,
     instanceId,
     scopeBase,

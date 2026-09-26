@@ -113,48 +113,27 @@ describe("D-3 — the admin console surfaces the tab", () => {
   });
 });
 
-describe("row 9 — gate volume is visible to a REVIEWER, not only an admin", () => {
-  it("the reviewer's queue page exists at /agents/reviews", () => {
-    expect(exists(REVIEWS_PAGE)).toBe(true);
-    const page = read(REVIEWS_PAGE);
-    expect(page).toMatch(/readOrgReviewGateVolume/);
-    expect(page).toMatch(/GateVolumePanel/);
+describe("row 9 — gate volume stays readable on the admin console; the reviewer's queue page is gone", () => {
+  // cinatra#3693: the owner retired the queue page — "reviews are reached
+  // through the Notifications page for every scope, so the workspace-wide
+  // Reviews tab under `/agents` and the standalone review page go away".
+  it("the reviewer's queue page at /agents/reviews is gone, with no page left in its place", () => {
+    expect(exists(REVIEWS_PAGE)).toBe(false);
   });
 
-  it("it is NOT admin-gated — a plain member reviewer can reach it", () => {
-    const page = read(REVIEWS_PAGE);
-    expect(page).not.toMatch(/requireAdminSession/);
-    expect(page).not.toMatch(/isPlatformAdmin/);
-    expect(page).toMatch(/resolveGateVolumeReadAccess/);
+  it("the admin console keeps its gate-volume reading, behind its own read access", () => {
+    const tab = read(TAB);
+    expect(tab).toMatch(/GateVolumePanel/);
+    expect(tab).toMatch(/resolveGateVolumeReadAccess/);
+    // The admin mount answers "is this survivable?" (rollup only).
+    expect(tab).toMatch(/showListing=\{false\}/);
   });
 
-  it("the LISTING is re-checked against run access before it names any run", () => {
-    const page = read(REVIEWS_PAGE);
-    expect(page).toMatch(/enforceReviewRunAccess\(row\.runId, actor, "read", roleHints\)/);
-    // Fail-closed: an unresolvable actor or a thrown check drops the row.
-    expect(page).toMatch(/if \(!session \|\| !kernel\) return \[\];/);
-    expect(page).toMatch(/catch \{\s*return false;/);
-    // The rendered listing is the FILTERED set, never the raw read.
-    expect(page).toMatch(/openGates: visible/);
-  });
-
-  it("it is navigation + volume only — it ships NO decision affordance", () => {
-    const page = read(REVIEWS_PAGE);
+  it("the panel is navigation + volume only — it ships NO decision affordance", () => {
     const panel = read(PANEL);
     for (const banned of [/commitReviewDecision/, /submitReviewDecision/, /Approve</, /Reject</]) {
-      expect(page).not.toMatch(banned);
       expect(panel).not.toMatch(banned);
     }
-  });
-
-  it("ONE rollup serves both audiences — the panel is mounted by both surfaces", () => {
-    for (const rel of [TAB, REVIEWS_PAGE]) {
-      expect(read(rel)).toMatch(/GateVolumePanel/);
-    }
-    // The admin mount answers "is this survivable?" (rollup only); the reviewer
-    // mount also lists the backlog head.
-    expect(read(TAB)).toMatch(/showListing=\{false\}/);
-    expect(read(REVIEWS_PAGE)).not.toMatch(/showListing/);
   });
 
   it("the rollup is cut along the POLICY KEY's own axes (that is what makes it tunable)", () => {

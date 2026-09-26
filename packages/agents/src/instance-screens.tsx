@@ -4,7 +4,9 @@ import {
   canonicalRunPath,
   homeRedirectFor,
   launchScopeAnchorForScope,
+  launchScopeInstanceLabel,
   parseLaunchScopeAnchor,
+  readLaunchScopeAnchor,
 } from "@/lib/launch-scope-anchor";
 import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
@@ -1282,6 +1284,44 @@ function buildExtensionHeaderLink(
   };
 }
 
+/**
+ * THE HOME CHECK OF AN INSTANCE SUB-ROUTE (cinatra#3693) — the run page's own
+ * check, asked by a screen mounted BELOW the instance. It compares this
+ * screen's own address (its scope base plus its own sub-path) with the run's
+ * canonical home plus the SAME sub-path, both built from the same instance id:
+ * comparing a bare path with a scoped one would redirect for ever. Asked AFTER
+ * the screen's access door, before any instance content.
+ */
+function subRouteHomeRedirect(input: {
+  agentId: string;
+  instanceId: string;
+  scopeBase?: string | null;
+  launchScopeAnchor: unknown;
+  subPath: "trigger" | "permissions";
+}): string | null {
+  const suffix = `/${input.subPath}`;
+  return homeRedirectFor(
+    `${buildAgentInstancePath(input.agentId, input.instanceId, { scopeBase: input.scopeBase ?? null })}${suffix}`,
+    `${canonicalRunPath({
+      agentPackageName: input.agentId,
+      instanceId: input.instanceId,
+      anchor: parseLaunchScopeAnchor(input.launchScopeAnchor),
+    })}${suffix}`,
+  );
+}
+
+/**
+ * The owner label a run's crumb carries beside its name (cinatra#3693), or
+ * null. cinatra#2809: PERSONAL-anchored runs "stay on the bare routes, labeled
+ * ... Personal (owner)" — `/personal` means "mine" to whoever reads it, so the
+ * run's page says whose it is. Only that label is drawn here; Global and
+ * Legacy would relabel every existing bare run page.
+ */
+function personalOwnerLabel(launchScopeAnchor: unknown): string | null {
+  const label = launchScopeInstanceLabel(readLaunchScopeAnchor(launchScopeAnchor), {});
+  return label === "Personal (owner)" ? label : null;
+}
+
 async function resolveTemplateForActor(agentId: string) {
   const session = await getAuthSession();
   // admin-parity P4 (cinatra#1129): resolve the actor's admin-standing bag so a
@@ -1323,6 +1363,39 @@ function serializeRunMessages(
   }));
 }
 
+/**
+ * THE ORGANIZATION A SCOPED LAUNCH CREATES ITS RUN IN (cinatra#3693).
+ *
+ * The owner's decision: "A run started from the Agents tab of an organization's,
+ * team's or project's scope belongs to **that scope's organization**, whatever
+ * the session's active organization is." So those three kinds resolve the
+ * scope's organization as the scope's own Agents tab resolves it — through the
+ * reader's membership-fenced vantage, which answers nothing for a scope the
+ * reader reaches no member organization from; the launcher then answers
+ * not-found and creates nothing. The create still mints the member authority in
+ * that organization itself, unchanged. The workspace and personal scopes and
+ * the bare launcher keep the session's active organization.
+ *
+ * The read travels behind `await import(...)`: it reaches the membership
+ * stores, and only a launch from one of those three scopes needs it.
+ */
+async function launchOrganizationFor(
+  launchScope: ScopeSurfaceRef | null,
+  activeOrganizationId: string | null,
+): Promise<string | null> {
+  if (
+    launchScope?.kind === "organization" ||
+    launchScope?.kind === "team" ||
+    launchScope?.kind === "project"
+  ) {
+    const { readScopeSurfaceOrganizationId } = await import(
+      "@/lib/scope-surface-eligibility.server"
+    );
+    return readScopeSurfaceOrganizationId(launchScope);
+  }
+  return activeOrganizationId;
+}
+
 export async function SetupScreen({
   agentId,
   instanceId,
@@ -1340,8 +1413,13 @@ export async function SetupScreen({
     if (!actorUserId) notFound();
     // orgId is required at agent_runs insert time.
     // createAndTriggerRunWithContext takes (userId, orgId, template) — we
-    // resolve orgId here from the same session we already have in scope.
-    const actorOrgId = session?.session?.activeOrganizationId ?? null;
+    // resolve orgId here from the same session we already have in scope, or,
+    // for a launch made from an organization's, a team's or a project's scope,
+    // from that scope (cinatra#3693).
+    const actorOrgId = await launchOrganizationFor(
+      launchScope ?? null,
+      session?.session?.activeOrganizationId ?? null,
+    );
     if (!actorOrgId) notFound();
     const template = await readAgentTemplateBySlug(agentId, {
       actorUserId,
@@ -1789,7 +1867,11 @@ export async function SetupScreen({
         })),
       })
     : { entries: [], activeOrdinal: null };
-  const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
+  // Under the run's own scope base (cinatra#3693): after the home check above,
+  // `scopeBase` IS the run's canonical base, and null for a flat run.
+  const reviewHrefBase = run
+    ? `${buildAgentInstancePath(agentId, encodeURIComponent(run.id), { scopeBase: scopeBase ?? null })}/review`
+    : "";
   // ── §VII's audit card, on the `run_card` host (cinatra#2789, epic #2784 S9e) ──
   //
   // THE MOUNT. The rail above already weaves an "Audit" ENTRY beneath
@@ -2122,6 +2204,7 @@ export async function SetupScreen({
             ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
             : undefined
         }
+        ownerLabel={run ? personalOwnerLabel(run.launchScopeAnchor) : null}
         activeTab={runPageActiveTab({
           inputStepIsOpen,
           inputStepsInRail,
@@ -2146,7 +2229,9 @@ export async function SetupScreen({
               agentName={template.name}
               allStepsComplete={true}
               runStatus={run.status}
-              redirectTo={`/agents/${agentId}/${encodeURIComponent(run.id)}`}
+              redirectTo={buildAgentInstancePath(agentId, encodeURIComponent(run.id), {
+                scopeBase: scopeBase ?? null,
+              })}
             />
           ) : undefined
         }
@@ -2272,6 +2357,7 @@ export async function SetupScreen({
                     // names, and presence is one of its two inputs. The reading
                     // itself is `schedulePresenceForRun` above.
                     humanPresent={schedulePresenceForRun(run)}
+                    scopeBase={scopeBase ?? null}
                   />
                 </AgentPanelBody>
               ) : null}
@@ -2328,12 +2414,14 @@ export async function SetupScreen({
                     // this panel's own column down — or the page draws two
                     // rails again.
                     railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
+                    scopeBase={scopeBase ?? null}
                   />
                 ) : (
                   <SetupCompletionWatcher
                     runId={run.id}
                     agentId={agentId}
                     instanceId={instanceId}
+                    scopeBase={scopeBase ?? null}
                     // cinatra#2933 (lifecycle-b W5b) -- the run page is one of
                     // the five windows, and this watcher is the panel it is
                     // drawn by. Both halves travel together: the template the
@@ -2900,7 +2988,13 @@ export async function SetupScreen({
 // BOTH template classes — so this dead screen and its dead mapping are removed
 // (see agentPluginScreens in screens.tsx).
 
-export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
+export async function PermissionsScreen({
+  agentId,
+  instanceId,
+  scopeBase,
+  launchScope,
+  scopeTitle,
+}: ScreenProps) {
   const template = await resolveTemplateForActor(agentId);
   if (!template) notFound();
   const extensionHeaderLink = buildExtensionHeaderLink(
@@ -2980,6 +3074,15 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
     if (err instanceof AuthzError) notFound();
     throw err;
   }
+  // ONE CANONICAL HOME (cinatra#3693), after the access door above.
+  const permissionsHome = subRouteHomeRedirect({
+    agentId,
+    instanceId,
+    scopeBase,
+    launchScopeAnchor: run.launchScopeAnchor,
+    subPath: "permissions",
+  });
+  if (permissionsHome) redirect(permissionsHome);
 
   // Resolve co-owner status for canEdit check below (readAgentRunById already
   // loaded co-owners internally for enforcement; re-read here for the UI flag).
@@ -3151,6 +3254,13 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
         agentId={agentId}
         instanceId={instanceId}
         activeTab="permissions"
+        scopeBase={scopeBase ?? null}
+        scopeCrumbEntries={
+          launchScope
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            : undefined
+        }
+        ownerLabel={personalOwnerLabel(run.launchScopeAnchor)}
         templateName={template.name}
         initialRunName={run.title ?? ""}
         runId={run.id}
@@ -3210,7 +3320,13 @@ export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps
   );
 }
 
-export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
+export async function TriggerScreen({
+  agentId,
+  instanceId,
+  scopeBase,
+  launchScope,
+  scopeTitle,
+}: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
   // Admin override for cross-screen consistency.
@@ -3249,6 +3365,15 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
       if (err instanceof AuthzError) notFound();
       throw err;
     }
+    // ONE CANONICAL HOME (cinatra#3693), after the access door above.
+    const scheduleHome = subRouteHomeRedirect({
+      agentId,
+      instanceId,
+      scopeBase,
+      launchScopeAnchor: run.launchScopeAnchor,
+      subPath: "trigger",
+    });
+    if (scheduleHome) redirect(scheduleHome);
   }
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
@@ -3475,7 +3600,9 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           </h2>
           <p className="text-sm text-muted-foreground">{finishedNotice.body}</p>
           <Link
-            href={`/agents/${agentId}/${encodeURIComponent(instanceId)}`}
+            href={buildAgentInstancePath(agentId, encodeURIComponent(instanceId), {
+              scopeBase: scopeBase ?? null,
+            })}
             className="text-sm font-medium text-primary underline-offset-4 hover:underline"
             data-action="open-finished-run"
           >
@@ -3513,6 +3640,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         durationEstimate={durationEstimate}
         declaredStepCount={template.approvalPolicy?.steps?.length ?? 0}
         readOnly={scheduleFrozen || scheduleTabSurface}
+        scopeBase={scopeBase ?? null}
       />
     </AgentPanelBody>
   );
@@ -3755,6 +3883,13 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         agentId={agentId}
         instanceId={instanceId}
         activeTab={scheduleRouteActiveTab({ persistentScheduleTab: showPersistentTab })}
+        scopeBase={scopeBase ?? null}
+        scopeCrumbEntries={
+          launchScope
+            ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)
+            : undefined
+        }
+        ownerLabel={run ? personalOwnerLabel(run.launchScopeAnchor) : null}
         templateName={template.name}
         initialRunName={run?.title ?? ""}
         runId={run?.id ?? null}

@@ -77,6 +77,11 @@ import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ReviewRunSurface } from "./review-run-surface";
 import { VerificationView } from "./verification-view";
+import {
+  reviewPageHomeRedirect,
+  reviewPageScopeCrumbs,
+  type ReviewPageScopeProps,
+} from "./review-page-body";
 
 export const dynamic = "force-dynamic";
 
@@ -127,8 +132,19 @@ async function loadRunStepsContext(
   return { steps, activeStep: reviewIndex, templateId };
 }
 
-export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
-  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+export default async function AgentRunReviewPage({
+  params,
+  searchParams,
+  scopeBase,
+  launchScope,
+  scopeTitle,
+}: PageProps & ReviewPageScopeProps) {
+  const {
+    vendor,
+    packageName,
+    instanceId: rawInstanceId,
+    reviewTaskId: rawTaskId,
+  } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
@@ -140,6 +156,31 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   const actorCtx = await resolveReviewActorContext();
   if (!actorCtx) redirect(await signInRedirectTarget());
 
+  // THE RUN'S HOME, AFTER THE ACCESS DOOR (cinatra#3693). The review is a
+  // sub-route of its run, so it lives where the run lives: an anchored run's
+  // review read at the bare address or under another scope is sent to the run's
+  // canonical home plus this same sub-path — and only once the reader has
+  // cleared the door below, so a refused reader learns nothing about where the
+  // run lives. The scope's own crumbs travel with the page for the same reason
+  // the run page publishes them: the trail's head is the run's HOME scope.
+  //
+  // A PENDING gate's reader is sent to the run page itself (cinatra#3693): "a
+  // pending review still opens in place on the run page, as the run-page
+  // drawing says" — and the run page opens on the gate it is parked at.
+  const sendReaderHome = async (pendingGate = false) => {
+    const home = await reviewPageHomeRedirect({
+      agentId: `${vendor}/${packageName}`,
+      rawInstanceId,
+      rawTaskId,
+      runId,
+      scopeBase,
+      verificationView: isVerificationView,
+      pendingGate,
+    });
+    if (home) redirect(home);
+  };
+  const scopeCrumbs = reviewPageScopeCrumbs({ launchScope, scopeTitle });
+
   // S4 (cinatra#2042): the run rail's "Audit" entry deep-links here with
   // `?view=verification` — the before/after field diff of a repaired revision. It
   // is READ-ONLY and works for a resolved gate (unlike the pending-gate decision
@@ -148,10 +189,11 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   if (isVerificationView) {
     const access = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
     if (!access.ok) return <ReviewNotAuthorizedPanel />;
+    await sendReaderHome();
     const gate = await readReviewGate(runId, reviewTaskId);
     if (!gate) {
       return (
-        <ReviewShell>
+        <ReviewShell crumbs={scopeCrumbs}>
           <ReviewGateBlocked reason="no-longer-pending" />
         </ReviewShell>
       );
@@ -185,7 +227,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     // gate by route params and has no envelope to read.
     const verificationCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
     return (
-      <ReviewShell>
+      <ReviewShell crumbs={scopeCrumbs}>
         {record ? (
           <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
         ) : (
@@ -210,6 +252,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;
   }
+  await sendReaderHome(surface.kind === "ready");
 
   // The generic blocked panel is still the page's answer for a gate it cannot
   // show: `targets-mismatch` (a stale or tampered view) and the `unavailable`
@@ -218,7 +261,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (cinatra#2904, AC 4 + AC 5).
   if (surface.kind === "blocked") {
     return (
-      <ReviewShell>
+      <ReviewShell crumbs={scopeCrumbs}>
         <ReviewGateBlocked reason={surface.reason} />
       </ReviewShell>
     );
@@ -347,7 +390,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   });
 
   return (
-    <ReviewShell>
+    <ReviewShell crumbs={scopeCrumbs}>
       <div className="flex items-start gap-6" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
@@ -466,9 +509,16 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
  * with no page title on the bus). Both are kept here with zero drawn pixels: an
  * `sr-only` heading and the same title broadcast the removed header mounted.
  */
-function ReviewShell({ children }: { children: React.ReactNode }) {
+function ReviewShell({
+  children,
+  crumbs,
+}: {
+  children: React.ReactNode;
+  crumbs?: React.ReactNode;
+}) {
   return (
     <Main className="min-h-screen">
+      {crumbs}
       <h1 className="sr-only">Review</h1>
       <PageHeaderTitleSync title="Review" />
       <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">
