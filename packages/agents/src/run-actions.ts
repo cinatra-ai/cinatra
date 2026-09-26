@@ -712,6 +712,61 @@ const MAX_LINKED_OUTPUTS = 10;
  */
 const MAX_OUTPUT_SCAN = 100;
 
+/**
+ * THE ARTIFACT IDS THE RUN'S OWN RECORD CARRIES — the WRITTEN half of the
+ * materialization ledger, ids alone (cinatra#3449).
+ *
+ * WHY THE IDS, AND NOT THE RECORD STEP'S OWN READER. The run page's last rail
+ * entry lists this same ledger through `@/lib/artifacts/run-made-artifacts`,
+ * and calling that reader from here is the obvious shape. It cannot be had:
+ * this module is reachable from four ratchet-locked routes (/api/a2a,
+ * /api/llm-bridge, /api/mcp, /chat), and that one edge put the record module
+ * into all four first-party graphs — `scripts/audit/route-graph-ratchet.mjs`
+ * measured +1 module on each, and a locked ceiling may only ever shrink. So the
+ * edge is narrowed to the one fact the card needs: WHICH ARTIFACTS THE RUN
+ * WROTE. Everything the record step draws around that fact — the title, the
+ * type that owns it, the revision the run filed, and the rows the run merely
+ * READ (marked used there) — stays that step's own read. The card links what
+ * the run PRODUCED, so the used half is not read here at all, and each id is
+ * resolved through the artifact gate below exactly as a provenance row is.
+ *
+ * Ordered and de-duplicated the way the record step orders its written half —
+ * by when the run first wrote each artifact — and bounded by the caller's scan
+ * window, so this read can never be larger than the one it joins.
+ */
+async function readRecordedRunOutputArtifactIds(input: {
+  orgId: string;
+  runId: string;
+  limit: number;
+}): Promise<string[]> {
+  const { getPooledDb } = await import("@/lib/db/pooled");
+  const { getPostgresConnectionString, postgresSchema } = await import(
+    "@/lib/postgres-config"
+  );
+  const { ensurePostgresSchema } = await import("@/lib/postgres-schema-init");
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  // The record step's own pool, by name, rather than a second pool onto the
+  // same ledger.
+  const pool = getPooledDb({
+    name: "run-made-artifacts",
+    connectionString: () => getPostgresConnectionString(),
+  });
+  const written = await pool.query(
+    `SELECT m.artifact_id, MIN(m.created_at) AS first_written_at
+       FROM "${s}"."artifact_materializations" m
+      WHERE m.org_id = $1 AND m.run_id = $2 AND m.phase = 'finalized'
+        AND m.artifact_id IS NOT NULL
+      GROUP BY m.artifact_id
+      ORDER BY first_written_at ASC
+      LIMIT $3`,
+    [input.orgId, input.runId, input.limit],
+  );
+  return (written.rows as Array<{ artifact_id: string }>)
+    .map((row) => row.artifact_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
 export async function readRunOutputEvidence(args: {
   runId: string;
 }): Promise<ReadRunOutputEvidenceResult> {
@@ -793,6 +848,83 @@ export async function readRunOutputEvidence(args: {
           deriveProducedOutputTitle({ data: row.data, type: row.type, id: row.id }),
       });
     }
+    // AND THE RUN'S OWN RECORD (cinatra#3449). The read above finds what
+    // carries an `objects.run_id`. The run page's LAST rail entry lists what
+    // the run wrote from a different journal — the finalized
+    // `artifact_materializations` rows, the one ledger every write path claims
+    // through — so a run whose writes are recorded there and carry no
+    // provenance column came back from this read empty. The card then told the
+    // reader its output "was recorded during the run, but it is not part of
+    // this run's transcript" while the run's own record step listed that output
+    // one rail entry away. The card asks the run's record too, and the two
+    // readings of one finished run stop disagreeing.
+    //
+    // Bounds and authority are the ones this read already keeps, deliberately:
+    // ONE `MAX_OUTPUT_SCAN` window shared with the provenance read, the same
+    // `MAX_LINKED_OUTPUTS` display cap, an artifact reachable on both roads
+    // de-duplicated to one row, and —
+    // load-bearing — the SAME `readArtifactForDetail` gate with the SAME
+    // viewer. The ledger read is scoped to the run's org and id with no actor
+    // filter of its own, so gating each row here is what keeps this surface
+    // from widening what its caller may already read.
+    //
+    // CONVERGENCE-ROUND FINDINGS, both about the bounds this second road must
+    // not break.
+    //
+    // ONE SCAN WINDOW ACROSS BOTH ROADS. `MAX_OUTPUT_SCAN` is the number of
+    // candidates this read will CONSIDER, not a per-road allowance: handing the
+    // ledger its own 100 on top of the provenance read's 100 would put 200
+    // artifact-gate reads behind one card render. The ledger takes what the
+    // provenance scan left of the one window, and takes nothing when that
+    // window is spent or the display cap is already full.
+    //
+    // AND ITS FAILURE NEVER DESTROYS WHAT THE FIRST ROAD ALREADY LINKED. The
+    // block's shared `catch` resets `outputs` to none and reports the read as
+    // unavailable — right for the provenance read, which is this card's only
+    // source of rows, but wrong for a second road: a run with ten readable
+    // provenance outputs would have lost all ten to a ledger hiccup and been
+    // told again that its output "is not part of this run's transcript". So the
+    // record read carries its own `catch`: the rows already gated and linked
+    // stand, and the failure is reported as `outputsUnavailable` — "could not
+    // look for more", never "there is nothing".
+    let recordedIds: string[] = [];
+    const recordScanWindow = Math.max(0, MAX_OUTPUT_SCAN - produced.length);
+    if (outputs.length < MAX_LINKED_OUTPUTS && recordScanWindow > 0) {
+      try {
+        recordedIds = await readRecordedRunOutputArtifactIds({
+          orgId: run.orgId,
+          runId: run.id,
+          limit: recordScanWindow,
+        });
+      } catch (err) {
+        console.warn(
+          "[readRunOutputEvidence] run-record read failed for run",
+          args.runId,
+          "— keeping the rows the provenance read linked and reporting the rest as UNAVAILABLE:",
+          err instanceof Error ? err.message : String(err),
+        );
+        outputsUnavailable = true;
+      }
+      for (const artifactId of recordedIds) {
+        if (outputs.length >= MAX_LINKED_OUTPUTS) break;
+        if (outputs.some((seen) => seen.id === artifactId)) continue;
+        const access = readArtifactForDetail({
+          artifactId,
+          orgId: run.orgId,
+          actor: viewer,
+        });
+        if (access.kind !== "ok") continue;
+        const type = access.artifact.artifactType || "";
+        outputs.push({
+          id: artifactId,
+          type,
+          title:
+            access.artifact.title?.trim() ||
+            deriveProducedOutputTitle({ data: null, type, id: artifactId }),
+        });
+      }
+    }
+
     // CONFIRMATION-ROUND FINDING. The artifact gate above is deliberately
     // strict, so a run whose every provenance row is non-artifact-typed or
     // read-denied (and whose scan window filled with such rows) came out of
@@ -802,7 +934,10 @@ export async function readRunOutputEvidence(args: {
     // That is the same false claim the artifact gate itself was added to
     // prevent, arriving from the other side. Rows existed but none survived ⇒
     // say so; the resolver takes the conservative branch.
-    unlinkableOutputs = produced.length > 0 && outputs.length === 0;
+    // …counted over BOTH roads (cinatra#3449): a recorded row the gate refused
+    // is a row that existed and could not be linked, exactly as a provenance
+    // row is.
+    unlinkableOutputs = produced.length + recordedIds.length > 0 && outputs.length === 0;
   } catch (err) {
     console.warn(
       "[readRunOutputEvidence] produced-output read failed for run",
