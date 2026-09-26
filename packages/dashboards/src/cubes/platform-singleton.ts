@@ -135,6 +135,9 @@ function buildBundledCubesById(): Map<string, RegisteredCube> {
         title: agentRuns.title,
         orgId: agentRuns.orgId,
         runBy: agentRuns.runBy,
+        // The launch scope — the `launch_scope` listing dimension a scope's
+        // Executions tab filters on (cinatra#3693).
+        launchScopeAnchor: agentRuns.launchScopeAnchor,
       },
       // LEFT JOIN target for the agent_name / run_name / vendor /
       // package_name dimensions.

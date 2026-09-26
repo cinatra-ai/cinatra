@@ -18,8 +18,10 @@
  *        scope's name; every other shape stays not-found.
  *   A2 — the review page, the one sub-route that is a page of its own, runs
  *        the home check after its access door: the bare address or another
- *        scope's address of an anchored run redirects to the run's canonical
- *        home plus the same sub-path, and the home address renders.
+ *        scope's address of an anchored run's PENDING review lands on the run
+ *        page at the run's canonical home (cinatra#3693, the owner's decision:
+ *        "a pending review still opens in place on the run page"), and a
+ *        settled gate goes to that home plus the same sub-path and renders.
  *
  * Only the I/O at the edges is stubbed: the registry, the name read, the stores
  * and the review page's own collaborators.
@@ -362,13 +364,13 @@ describe("A1: a scoped instance sub-route resolves through the same delegation (
 // A2 — the review page's home check, after its access door.
 // ---------------------------------------------------------------------------
 
-describe("A2: the review page redirects an anchored run to its home after the access door (cinatra#3693)", () => {
-  it("the bare address of an organization-anchored run redirects to the scoped review", async () => {
+describe("A2: the review page sends an anchored run's reader home after the access door (cinatra#3693)", () => {
+  it("the bare address of an organization-anchored run's pending review lands on the scoped run page", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}/review/${TASK_ID}`);
+    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}`);
     // AFTER the access door, never before it.
     expect(mocks.loadReviewGateSurface).toHaveBeenCalledTimes(1);
   });
@@ -384,7 +386,7 @@ describe("A2: the review page redirects an anchored run to its home after the ac
     expect(mocks.enforceReviewRunAccess).toHaveBeenCalledTimes(1);
   });
 
-  it("another scope's address redirects to the run's own home", async () => {
+  it("another scope's address lands on the run page at the run's own home", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     const message = await thrownBy(() =>
       ScopedAgentsRoute({
@@ -393,11 +395,12 @@ describe("A2: the review page redirects an anchored run to its home after the ac
         searchParams: Promise.resolve({}),
       }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}/review/${TASK_ID}`);
+    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}`);
   });
 
-  it("renders at the home address, and names the scope in the trail", async () => {
+  it("renders a settled gate at the home address, and names the scope in the trail", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
+    mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled", targets: [], pinnedCapturePairs: {}, agentSummary: null });
     const tree = await ScopedAgentsRoute({
       scope: ORG_SCOPE,
       segments: [VENDOR, PACKAGE, RUN_ID, "review", TASK_ID],
@@ -421,8 +424,17 @@ describe("A2: the review page redirects an anchored run to its home after the ac
     expect(renderToStaticMarkup(tree as React.ReactElement)).toContain("Not authorized");
   });
 
-  it("an unanchored run's review stays on the bare address, as it always has", async () => {
+  it("an unanchored run's pending review lands on the bare run page", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(null));
+    const message = await thrownBy(() =>
+      AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
+    );
+    expect(message).toBe(`REDIRECT:/agents/${AGENT_ID}/${RUN_ID}`);
+  });
+
+  it("an unanchored run's settled review stays on the bare address, as it always has", async () => {
+    mocks.readAgentRunById.mockResolvedValue(runRow(null));
+    mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled", targets: [], pinnedCapturePairs: {}, agentSummary: null });
     const tree = await AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) });
     const html = renderToStaticMarkup(tree as React.ReactElement);
     expect(html).toContain('data-testid="review-gate-card"');

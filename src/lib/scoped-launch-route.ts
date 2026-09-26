@@ -17,9 +17,19 @@
 // launcher, `settings` the agent's settings surface at this scope. Below, and
 // nowhere else: a package genuinely named `new` occupies the pair's second
 // half, and its launcher is `…/acme/new/new`, which is exactly right.
+//
+// ONE WORD ANSWERS AT THE TOP (cinatra#3693): `executions`, the scope's own
+// Executions tab — "Each scope carries an **Executions** tab that lists that
+// scope's runs". It is a ONE-segment shape, which was the vendor routing
+// container and has no page of its own, so a vendor literally named
+// `executions` loses nothing: its package, launcher and run paths all have
+// three segments or more and resolve exactly as before.
 // ---------------------------------------------------------------------------
 
 import { AGENT_LAUNCH_SEGMENT, AGENT_SETTINGS_SEGMENT } from "@/lib/agent-url";
+
+/** The scope's Executions tab, `<base>/agents/executions` (cinatra#3693). */
+export const SCOPED_AGENTS_EXECUTIONS_SEGMENT = "executions";
 
 /** A segment is valid when non-empty and slash/whitespace-free — the same rule
  *  the chat codec applies, so the two trees cannot disagree about a path. */
@@ -50,6 +60,8 @@ export type ScopedAgentRoute =
       instanceId: string;
       rest: string[];
     }
+  /** `<base>/agents/executions` — the scope's Executions tab (cinatra#3693). */
+  | { kind: "executions" }
   /** Every shape with no page: the bare tab, the vendor container, a too-long
    *  tail, a malformed segment. The shell calls `notFound()`. */
   | { kind: "not-found" };
@@ -59,8 +71,11 @@ export function resolveScopedAgentRoute(
   segments: readonly (string | undefined)[] | undefined,
 ): ScopedAgentRoute {
   const segs = clean(segments);
+  if (segs?.length === 1 && segs[0] === SCOPED_AGENTS_EXECUTIONS_SEGMENT) {
+    return { kind: "executions" };
+  }
   // 0 = the scope's Agents TAB, which is its own page (cinatra#2807).
-  // 1 = the vendor, a routing container with no page.
+  // 1 = the vendor, a routing container with no page — `executions` apart.
   // 2 = the vendor/package pair, which has no index page either.
   if (!segs || segs.length < 3) return { kind: "not-found" };
   const [vendor, packageName, third, ...rest] = segs;

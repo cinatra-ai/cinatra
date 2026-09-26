@@ -528,13 +528,15 @@ describe("the parked review opens in the run detail, under the same rail (cinatr
     }
   });
 
-  it("keeps the review's own page reachable — Agents → Reviews, and the settled gate's link", async () => {
-    // C29. Nothing of the review's own navigation is touched by this leg: the
-    // Agents tab strip still carries Reviews, and a gate the run has already
-    // decided keeps the deep link that replays it read-only on that page.
-    expect(
-      AGENTS_NAV.some((tab) => tab.href === "/agents/reviews" && tab.label === "Reviews"),
-    ).toBe(true);
+  it("keeps no Reviews tab on the Agents strip, and keeps the settled gate's link", async () => {
+    // C29. The owner retired the Reviews list (cinatra#3693): "reviews are
+    // reached through the Notifications page for every scope, so the
+    // workspace-wide Reviews tab under `/agents` and the standalone review page
+    // go away". A gate the run has already decided still keeps the deep link
+    // that replays it read-only on its review address.
+    expect(AGENTS_NAV.some((tab) => tab.href === "/agents/reviews" || tab.label === "Reviews")).toBe(
+      false,
+    );
 
     reviewGates.rows = [gateRow("resolved")];
     stream.interruptContext = null;

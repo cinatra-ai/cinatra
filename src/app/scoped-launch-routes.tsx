@@ -161,6 +161,27 @@ export async function ScopedAgentsRoute({
   // it gets the id abbreviation on all of them alike.
   const scopeTitle = await readScopeName(scope);
 
+  if (route.kind === "executions") {
+    // THE SCOPE'S EXECUTIONS TAB (cinatra#3693): "Each scope carries an
+    // **Executions** tab that lists that scope's runs." The scope's own page,
+    // on its Agents tab with the strip at Executions, and the Executions body
+    // handed the scope it lists. Both travel behind `await import(...)` for the
+    // reason the header above gives.
+    const [{ ScopeSurfacePage }, { ScopedAgentsExecutionsBody }] = await Promise.all([
+      import("@/components/scope-surface-page"),
+      import("@cinatra-ai/dashboards/screens"),
+    ]);
+    return (
+      <ScopeSurfacePage
+        scope={scope}
+        tab="agents"
+        agentsTab="executions"
+        title={scopeTitle ?? undefined}
+        body={<ScopedAgentsExecutionsBody launchScope={scope} />}
+      />
+    );
+  }
+
   if (route.kind === "settings") {
     // #2809's shell, filled with the per-scope assignment page (cinatra#2814).
     return renderScopeSurfaceSettingsShell({

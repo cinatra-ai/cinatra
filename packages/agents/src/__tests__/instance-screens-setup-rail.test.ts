@@ -249,6 +249,8 @@ describe("the setup run page draws the run surface, not a single column", () => 
       // minted is a reading too — it must not offer to arm a schedule the
       // reader cannot currently see.
       "readOnly={scheduleFrozen || scheduleTabSurface}",
+      // cinatra#3693: the form starts a scoped run under the screen's scope base.
+      "scopeBase={scopeBase ?? null}",
     ]);
     // ONE mount in the whole screen: the step owns the form, and no second
     // column draws a copy of it.

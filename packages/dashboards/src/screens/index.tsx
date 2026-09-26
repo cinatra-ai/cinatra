@@ -1,4 +1,4 @@
-export { AgentsDashboardPage } from "./agents-dashboard";
+export { AgentsDashboardPage, ScopedAgentsExecutionsBody } from "./agents-dashboard";
 export { PersonalDashboardPage } from "./personal-dashboard";
 export { ProjectsDashboardPage } from "./projects-dashboard";
 export { TeamsDashboardPage } from "./teams-dashboard";

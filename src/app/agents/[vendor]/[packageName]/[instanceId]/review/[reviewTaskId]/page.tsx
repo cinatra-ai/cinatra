@@ -163,7 +163,11 @@ export default async function AgentRunReviewPage({
   // cleared the door below, so a refused reader learns nothing about where the
   // run lives. The scope's own crumbs travel with the page for the same reason
   // the run page publishes them: the trail's head is the run's HOME scope.
-  const sendReaderHome = async () => {
+  //
+  // A PENDING gate's reader is sent to the run page itself (cinatra#3693): "a
+  // pending review still opens in place on the run page, as the run-page
+  // drawing says" — and the run page opens on the gate it is parked at.
+  const sendReaderHome = async (pendingGate = false) => {
     const home = await reviewPageHomeRedirect({
       agentId: `${vendor}/${packageName}`,
       rawInstanceId,
@@ -171,6 +175,7 @@ export default async function AgentRunReviewPage({
       runId,
       scopeBase,
       verificationView: isVerificationView,
+      pendingGate,
     });
     if (home) redirect(home);
   };
@@ -247,7 +252,7 @@ export default async function AgentRunReviewPage({
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;
   }
-  await sendReaderHome();
+  await sendReaderHome(surface.kind === "ready");
 
   // The generic blocked panel is still the page's answer for a gate it cannot
   // show: `targets-mismatch` (a stale or tampered view) and the `unavailable`

@@ -139,6 +139,27 @@ async function resolveAnchor(scope: ScopeSurfaceRef): Promise<ScopeSurfaceAnchor
 }
 
 /**
+ * THE ORGANIZATION A SCOPE BELONGS TO, for the reader (cinatra#3693).
+ *
+ * The owner's decision on cinatra#3693: "A run started from the Agents tab of an
+ * organization's, team's or project's scope belongs to **that scope's
+ * organization**, whatever the session's active organization is." The scoped
+ * launcher asks here, so a launch resolves the scope's organization EXACTLY as
+ * that scope's own Agents tab reads it — from the reader's membership-fenced
+ * vantage: an organization's own id, a team's organization, a project's stored
+ * or owner-derived organization. `null` when the reader reaches no member
+ * organization from the scope (not a member, archived, unknown), and for the
+ * workspace scope, which belongs to no single organization.
+ */
+export async function readScopeSurfaceOrganizationId(
+  scope: ScopeSurfaceRef,
+): Promise<string | null> {
+  if (scope.kind === "workspace") return null;
+  const anchor = await resolveAnchor(scope);
+  return anchor?.viewedOrgId ?? null;
+}
+
+/**
  * The actor-visible projects of each member organization, EACH UNDER ITS OWN
  * ORGANIZATION (cinatra#3529).
  *

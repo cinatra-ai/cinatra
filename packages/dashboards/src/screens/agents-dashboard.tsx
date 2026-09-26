@@ -45,7 +45,9 @@ import { type DashboardConfigV1_1 } from "../store/dashboard-config";
 import { readDcConfigFromRow } from "../v12-envelope";
 import {
   AGENTS_DEFAULT_CONFIG,
+  agentsExecutionsConfigForScope,
   buildAgentsDashboardId,
+  type AgentsExecutionsScope,
 } from "../components/seed-configs/agents-default";
 import { EmbeddedDrizzleCubeDashboardGrid } from "../components/embedded-drizzle-cube-dashboard-grid";
 import { saveAgentsDashboardAction } from "../actions";
@@ -164,5 +166,36 @@ export async function AgentsDashboardPage() {
         />
       </PageContent>
     </Main>
+  );
+}
+
+/**
+ * The Executions tab of a SCOPE (cinatra#3693): "Each scope carries an
+ * **Executions** tab that lists that scope's runs." The scope's own page draws
+ * the chrome (its header, its tabs and the All Agents | Executions strip); this
+ * is the body below them — the seed's two portlets narrowed to the runs
+ * launched from that scope (`agentsExecutionsConfigForScope`).
+ *
+ * READ-ONLY, AND NO ROUTE TOOLBAR. The bare tab saves its layout into ONE row
+ * per organization and user (`buildAgentsDashboardId`); a save from here would
+ * write this scope's filter into it. And the toolbar's route actions address
+ * the bare Agents tree, which would walk the reader out of the scope. So the
+ * grid is mounted as the embedded read-only grid, as the entity detail
+ * dashboards are, and no saved layout is read.
+ */
+export async function ScopedAgentsExecutionsBody({
+  launchScope,
+}: {
+  launchScope: AgentsExecutionsScope;
+}) {
+  const session = await getAuthSession();
+  const ctx = buildSecurityContextFromSession(session);
+  if (!ctx) {
+    redirect(await signInRedirectTarget());
+  }
+  return (
+    <EmbeddedDrizzleCubeDashboardGrid
+      dashboard={agentsExecutionsConfigForScope(launchScope, ctx.userId)}
+    />
   );
 }

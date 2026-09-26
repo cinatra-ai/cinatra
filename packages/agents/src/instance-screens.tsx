@@ -1363,6 +1363,39 @@ function serializeRunMessages(
   }));
 }
 
+/**
+ * THE ORGANIZATION A SCOPED LAUNCH CREATES ITS RUN IN (cinatra#3693).
+ *
+ * The owner's decision: "A run started from the Agents tab of an organization's,
+ * team's or project's scope belongs to **that scope's organization**, whatever
+ * the session's active organization is." So those three kinds resolve the
+ * scope's organization as the scope's own Agents tab resolves it — through the
+ * reader's membership-fenced vantage, which answers nothing for a scope the
+ * reader reaches no member organization from; the launcher then answers
+ * not-found and creates nothing. The create still mints the member authority in
+ * that organization itself, unchanged. The workspace and personal scopes and
+ * the bare launcher keep the session's active organization.
+ *
+ * The read travels behind `await import(...)`: it reaches the membership
+ * stores, and only a launch from one of those three scopes needs it.
+ */
+async function launchOrganizationFor(
+  launchScope: ScopeSurfaceRef | null,
+  activeOrganizationId: string | null,
+): Promise<string | null> {
+  if (
+    launchScope?.kind === "organization" ||
+    launchScope?.kind === "team" ||
+    launchScope?.kind === "project"
+  ) {
+    const { readScopeSurfaceOrganizationId } = await import(
+      "@/lib/scope-surface-eligibility.server"
+    );
+    return readScopeSurfaceOrganizationId(launchScope);
+  }
+  return activeOrganizationId;
+}
+
 export async function SetupScreen({
   agentId,
   instanceId,
@@ -1380,8 +1413,13 @@ export async function SetupScreen({
     if (!actorUserId) notFound();
     // orgId is required at agent_runs insert time.
     // createAndTriggerRunWithContext takes (userId, orgId, template) — we
-    // resolve orgId here from the same session we already have in scope.
-    const actorOrgId = session?.session?.activeOrganizationId ?? null;
+    // resolve orgId here from the same session we already have in scope, or,
+    // for a launch made from an organization's, a team's or a project's scope,
+    // from that scope (cinatra#3693).
+    const actorOrgId = await launchOrganizationFor(
+      launchScope ?? null,
+      session?.session?.activeOrganizationId ?? null,
+    );
     if (!actorOrgId) notFound();
     const template = await readAgentTemplateBySlug(agentId, {
       actorUserId,
@@ -3602,6 +3640,7 @@ export async function TriggerScreen({
         durationEstimate={durationEstimate}
         declaredStepCount={template.approvalPolicy?.steps?.length ?? 0}
         readOnly={scheduleFrozen || scheduleTabSurface}
+        scopeBase={scopeBase ?? null}
       />
     </AgentPanelBody>
   );
