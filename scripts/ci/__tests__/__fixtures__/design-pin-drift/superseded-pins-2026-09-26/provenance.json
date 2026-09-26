@@ -1,0 +1,15 @@
+{
+  "$comment": "PROVENANCE for the manifest artifact this repository pinned BEFORE the 2026-09-26 hashes-only reconciliation. The body beside this receipt is the verbatim committed copy of tests/e2e/design/conformance/manifests/FILE at sourceCommit — the artifact its superseded pin named, so `sha256` and `contentHash` below ARE the hashes conformance-pins.json carried for app-extensions before the reconciliation. Re-derive the row by hand with: git show SOURCE_COMMIT:tests/e2e/design/conformance/manifests/FILE | shasum -a 256. ONE row, not five: this reconciliation moved app-extensions alone — the design source changed the wording of its drawing and republished its spec with every declared surface unchanged, and app, app-components, app-connectors and app-notifications kept the pins they had. This body is the one the 2026-09-18 adoption took. It is a drift input of its own: run against the pin as it now stands, it must still classify as drift, in both hashes.",
+  "supersededOn": "2026-09-26",
+  "sourceCommit": "0a9064c77717e53f223a759b05f40d7596a64e52",
+  "manifests": [
+    {
+      "file": "app-extensions.json",
+      "repoPath": "tests/e2e/design/conformance/manifests/app-extensions.json",
+      "byteLength": 5023,
+      "sha256": "6b8a18a21c3d3e859b4c9adfca6561d4ff69b1326177a51164a0935d67ec4d8c",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:e3750c2ffe277089e4de5f191b4287882d141760d5442610e13487f97c23530f"
+    }
+  ]
+}
