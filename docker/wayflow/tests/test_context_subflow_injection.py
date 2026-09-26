@@ -871,3 +871,300 @@ def test_composed_slim_doc_deserializes_with_real_pyagentspec() -> None:
     )
     agent = AgentSpecLoader().load_json(text)
     assert agent is not None
+
+
+# ---------------------------------------------------------------------------
+# cinatra#3685 — the allocation token filled into author-placed subflows.
+#
+# /api/context-finalize refuses with 422 allocation_token_required: "finalize
+# requires the allocationToken /api/context-resolve returned for this gate".
+# The pinned first-party packs carry author-placed context subflows (a marker
+# FlowNode plus its hand-copied subflow) written before the token existed, so
+# their resolve step declares no allocationToken output and their finalize
+# bodies send none. The loader fills exactly that plumbing from the template
+# at load time; a definition that already carries the token is untouched.
+# The fixture is a verbatim copy of blog-draft-writer-agent's own subflow and
+# marker at its pinned lock sha.
+# ---------------------------------------------------------------------------
+
+_TOKEN = "allocationToken"
+_PINNED_SLOT = "draftContext"
+_PINNED_SUBFLOW = "context-draftContext-subflow"
+_RESOLVE = "ctx-draftContext-resolve_context"
+_FINALIZE_INTERACTIVE = "ctx-draftContext-finalize_interactive"
+_FINALIZE_AUTONOMOUS = "ctx-draftContext-finalize_autonomous"
+
+
+def _pinned() -> Dict[str, Any]:
+    with open(FIXTURES / "pinned_blog_draft_writer_context_subflow.json") as fh:
+        return json.load(fh)
+
+
+def _pinned_leaf_doc() -> Dict[str, Any]:
+    """The pinned blog-draft-writer shape: a root declaring draftContext and
+    carrying the author-placed marker plus its token-less subflow."""
+    pinned = _pinned()
+    doc = _slim_spec(
+        [_slot(_PINNED_SLOT)], package_name="@cinatra-ai/blog-draft-writer-agent"
+    )
+    refs = doc["$referenced_components"]
+    refs[_PINNED_SUBFLOW] = copy.deepcopy(pinned["subflow"])
+    refs["context_draftContext"] = copy.deepcopy(pinned["marker"])
+    doc["nodes"].append({"$component_ref": "context_draftContext"})
+    return doc
+
+
+def _template_token_parts() -> Dict[str, Any]:
+    """The template's own token plumbing, rendered for the pinned slot."""
+    tmpl = build_context_subflow(_PINNED_SLOT)
+    rc = tmpl["$referenced_components"]
+    return {
+        "output": next(o for o in rc[_RESOLVE]["outputs"] if o["title"] == _TOKEN),
+        "input": next(
+            i for i in rc[_FINALIZE_INTERACTIVE]["inputs"] if i["title"] == _TOKEN
+        ),
+        "value": rc[_FINALIZE_INTERACTIVE]["data"][_TOKEN],
+        "edges": [
+            e for e in tmpl["data_flow_connections"] if e["source_output"] == _TOKEN
+        ],
+    }
+
+
+def _strip_token_plumbing(subflow: Dict[str, Any]) -> None:
+    """Remove every allocationToken output, input, data field and edge."""
+    for node in subflow["$referenced_components"].values():
+        for key in ("outputs", "inputs"):
+            if isinstance(node.get(key), list):
+                node[key] = [x for x in node[key] if x.get("title") != _TOKEN]
+        if isinstance(node.get("data"), dict):
+            node["data"].pop(_TOKEN, None)
+    subflow["data_flow_connections"] = [
+        e
+        for e in subflow["data_flow_connections"]
+        if e.get("source_output") != _TOKEN and e.get("destination_input") != _TOKEN
+    ]
+
+
+def _assert_token_plumbing(subflow: Dict[str, Any]) -> None:
+    parts = _template_token_parts()
+    rc = subflow["$referenced_components"]
+    outputs = rc[_RESOLVE]["outputs"]
+    assert [o for o in outputs if o["title"] == _TOKEN] == [parts["output"]]
+    assert outputs[-1] == parts["output"]
+    for finalize in (_FINALIZE_INTERACTIVE, _FINALIZE_AUTONOMOUS):
+        node = rc[finalize]
+        assert node["data"][_TOKEN] == "{{ allocationToken }}" == parts["value"]
+        assert [i for i in node["inputs"] if i["title"] == _TOKEN] == [parts["input"]]
+    dedges = _data_edges(subflow)
+    assert (_RESOLVE, _TOKEN, _FINALIZE_INTERACTIVE, _TOKEN) in dedges
+    assert (_RESOLVE, _TOKEN, _FINALIZE_AUTONOMOUS, _TOKEN) in dedges
+    token_edges = [
+        e for e in subflow["data_flow_connections"] if e["source_output"] == _TOKEN
+    ]
+    # Shaped as the template's edges, plus the name the real loader requires.
+    assert len(token_edges) == 2
+    for edge in token_edges:
+        assert isinstance(edge.get("name"), str) and edge["name"]
+        assert {k: v for k, v in edge.items() if k != "name"} in parts["edges"]
+
+
+def test_3685_pinned_fixture_is_the_token_less_legacy_shape() -> None:
+    pinned = _pinned()
+    assert pinned["marker"]["metadata"]["cinatra"]["purpose"] == (
+        "author-placed-context-resolution-for-draftContext"
+    )
+    assert pinned["marker"]["subflow"] == {"$component_ref": _PINNED_SUBFLOW}
+    assert _TOKEN not in json.dumps(pinned)
+
+
+def test_3685_pinned_leaf_subflow_gets_the_allocation_token_filled() -> None:
+    doc = _pinned_leaf_doc()
+    before = copy.deepcopy(doc)
+    out, report = inject_context_subflows(doc, "t")
+
+    assert out is not doc
+    assert doc == before  # the input is never mutated
+    subflow = out["$referenced_components"][_PINNED_SUBFLOW]
+    _assert_token_plumbing(subflow)
+    assert report == [
+        {
+            "slot": _PINNED_SLOT,
+            "definition": "slim-agent-flow",
+            "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+            "filled": [_TOKEN],
+        }
+    ]
+    # No full-template injection: no loader-injected node, the root topology
+    # is the author's own.
+    assert _control_edges(out) == _control_edges(before)
+    assert _data_edges(out) == _data_edges(before)
+    assert out["nodes"] == before["nodes"]
+    # Nothing else of the author-placed subflow moves.
+    stripped = copy.deepcopy(out)
+    _strip_token_plumbing(stripped["$referenced_components"][_PINNED_SUBFLOW])
+    assert stripped == before
+
+
+def test_3685_compiled_orchestrator_nested_subflow_gets_the_token_filled() -> None:
+    """blog-pipeline shape: the root declares no contextSlots; the marker and
+    its prefixed subflow sit in a nested definition that declares none."""
+    pinned = _pinned()
+    prefix = "blog-draft-writer-agent__"
+    nested_subflow = copy.deepcopy(pinned["subflow"])
+    nested_subflow["id"] = prefix + _PINNED_SUBFLOW
+    marker = copy.deepcopy(pinned["marker"])
+    marker["id"] = prefix + "context_draftContext"
+    marker["subflow"] = {"$component_ref": prefix + _PINNED_SUBFLOW}
+    nested = {
+        "agentspec_version": "26.1.0",
+        "component_type": "Flow",
+        "id": "blog-draft-writer-agent-subflow",
+        "name": "Blog draft writer",
+        "start_node": {"$component_ref": prefix + "context_draftContext"},
+        "nodes": [{"$component_ref": prefix + "context_draftContext"}],
+        "control_flow_connections": [],
+        "data_flow_connections": [],
+        "$referenced_components": {
+            prefix + _PINNED_SUBFLOW: nested_subflow,
+            prefix + "context_draftContext": marker,
+        },
+    }
+    root = _slim_spec([], consumer_inputs=[], package_name="@cinatra-ai/blog-pipeline-agent")
+    root["metadata"]["cinatra"].pop("contextSlots")
+    root["$referenced_components"]["blog-draft-writer-agent-subflow"] = nested
+    before = copy.deepcopy(root)
+
+    out, report = inject_context_subflows(root, "t")
+
+    assert out is not root and root == before
+    filled = out["$referenced_components"]["blog-draft-writer-agent-subflow"][
+        "$referenced_components"
+    ][prefix + _PINNED_SUBFLOW]
+    _assert_token_plumbing(filled)
+    assert report == [
+        {
+            "slot": _PINNED_SLOT,
+            "definition": "blog-draft-writer-agent-subflow",
+            "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+            "filled": [_TOKEN],
+        }
+    ]
+    stripped = copy.deepcopy(out)
+    _strip_token_plumbing(
+        stripped["$referenced_components"]["blog-draft-writer-agent-subflow"][
+            "$referenced_components"
+        ][prefix + _PINNED_SUBFLOW]
+    )
+    assert stripped == before
+
+
+def test_3685_mount_sends_the_filled_token_to_load_json(
+    monkeypatch, tmp_path: Path
+) -> None:
+    doc = _pinned_leaf_doc()
+    raw, fake_loader, mounted = _mount(monkeypatch, tmp_path, doc)
+
+    assert len(fake_loader.loaded) == 1
+    loaded = json.loads(fake_loader.loaded[0])
+    rc = loaded["$referenced_components"][_PINNED_SUBFLOW]["$referenced_components"]
+    assert _TOKEN in [o["title"] for o in rc[_RESOLVE]["outputs"]]
+    for finalize in (_FINALIZE_INTERACTIVE, _FINALIZE_AUTONOMOUS):
+        assert rc[finalize]["data"][_TOKEN] == "{{ allocationToken }}"
+        assert "{{CINATRA_BASE_URL}}" not in rc[finalize]["url"]
+    assert mounted.composed_oas is not None
+    assert [r["slot"] for r in mounted.context_injection] == [_PINNED_SLOT]
+    assert getattr(mounted.server.agent, "_cinatra_context_injection", None) == {
+        "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+        "slots": [_PINNED_SLOT],
+    }
+
+
+def test_3685_partial_plumbing_only_the_missing_pieces_are_added() -> None:
+    parts = _template_token_parts()
+    doc = _pinned_leaf_doc()
+    subflow = doc["$referenced_components"][_PINNED_SUBFLOW]
+    rc = subflow["$referenced_components"]
+    rc[_RESOLVE]["outputs"].append(copy.deepcopy(parts["output"]))
+    rc[_FINALIZE_INTERACTIVE]["data"][_TOKEN] = parts["value"]
+    rc[_FINALIZE_INTERACTIVE]["inputs"].append(copy.deepcopy(parts["input"]))
+    subflow["data_flow_connections"].append(
+        {**copy.deepcopy(parts["edges"][0]), "name": "author_wired_token"}
+    )
+    before = copy.deepcopy(doc)
+
+    out, report = inject_context_subflows(doc, "t")
+
+    assert out is not doc and doc == before
+    out_subflow = out["$referenced_components"][_PINNED_SUBFLOW]
+    _assert_token_plumbing(out_subflow)
+    out_rc = out_subflow["$referenced_components"]
+    before_rc = before["$referenced_components"][_PINNED_SUBFLOW][
+        "$referenced_components"
+    ]
+    assert out_rc[_RESOLVE] == before_rc[_RESOLVE]
+    assert out_rc[_FINALIZE_INTERACTIVE] == before_rc[_FINALIZE_INTERACTIVE]
+    before_edges = before["$referenced_components"][_PINNED_SUBFLOW][
+        "data_flow_connections"
+    ]
+    out_edges = out_subflow["data_flow_connections"]
+    assert out_edges[: len(before_edges)] == before_edges
+    assert len(out_edges) == len(before_edges) + 1
+    added = {k: v for k, v in out_edges[-1].items() if k != "name"}
+    assert added == parts["edges"][1]
+    assert [r["slot"] for r in report] == [_PINNED_SLOT]
+
+
+def test_3685_definition_already_carrying_the_token_is_untouched() -> None:
+    """An author-placed marker whose subflow is the template's own shape
+    (the token already declared, sent and wired)."""
+    hand = _hand_authored()
+    doc = _slim_spec([_slot()])
+    refs = doc["$referenced_components"]
+    refs["context-ideaContext-subflow"] = build_context_subflow("ideaContext")
+    refs["context_ideaContext"] = copy.deepcopy(hand["marker"])
+    doc["nodes"].append({"$component_ref": "context_ideaContext"})
+    text = json.dumps(doc)
+    out, report = inject_context_subflows(doc, "t")
+    assert out is doc and report == []
+    assert json.dumps(out) == text
+
+
+def test_3685_second_pass_over_a_filled_document_is_a_noop() -> None:
+    once, report = inject_context_subflows(_pinned_leaf_doc(), "t")
+    assert report
+    twice, report2 = inject_context_subflows(once, "t")
+    assert twice is once
+    assert report2 == []
+
+
+def test_3685_marker_less_declaration_still_gets_the_full_template() -> None:
+    doc = _slim_spec([_slot(_PINNED_SLOT)])
+    composed, report = inject_context_subflows(doc, "t")
+    assert report == [
+        {
+            "slot": _PINNED_SLOT,
+            "definition": "slim-agent-flow",
+            "packageName": "@cinatra-ai/slim-agent",
+            "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+        }
+    ]
+    assert composed["$referenced_components"][_PINNED_SUBFLOW] == (
+        build_context_subflow(_PINNED_SLOT)
+    )
+
+
+def test_3685_context_api_nodes_without_a_marker_are_untouched() -> None:
+    """The context-selection-agent shape (trimmed): its own resolve and
+    finalize ApiNodes, no marker, an empty declaration."""
+    doc = copy.deepcopy(_pinned()["subflow"])
+    doc["id"] = "context-agent-flow"
+    doc["metadata"] = {
+        "cinatra": {
+            "packageName": "@cinatra-ai/context-selection-agent",
+            "contextSlots": [],
+        }
+    }
+    text = json.dumps(doc)
+    out, report = inject_context_subflows(doc, "t")
+    assert out is doc and report == []
+    assert json.dumps(out) == text

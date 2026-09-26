@@ -4,6 +4,10 @@ import {
   requireActorContext,
   isPlatformAdmin,
   resolveOrgRoleForSession,
+  // cinatra#3692: the session-lineage ActorContext RESOLVER, aliased as the
+  // in-process A2A action aliases it — it is not the ALS frame reader of the
+  // same name in `@cinatra-ai/llm/actor-context`.
+  getActorContext as resolveSessionActorContext,
 } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
 // cinatra#1939 wave 2 (§2a): every run-status transition here is grounded by the
@@ -58,6 +62,44 @@ import {
  */
 export type TriggerAgentRunArgs = RunStartDispatchArgs;
 export type TriggerAgentRunResult = RunStartDispatchResult;
+
+/**
+ * THE HUMAN WHO STARTED A RUN FROM THE RUN PAGE (cinatra#3692).
+ *
+ * The run's frozen assignment-scope snapshot names its originating human ONLY
+ * from an explicit `HumanUser` scope actor on the create input, and the context
+ * routes apply the person's own (user-level) layer only when that human is the
+ * run's owner. The run page's producers used to pass none, so every run started
+ * here froze a snapshot that named nobody and its context gate silently lost the
+ * personal layer. They now pass the session's own actor, resolved the way the
+ * in-process A2A producer resolves it.
+ *
+ * Accepted ONLY when it is the same human in the same organization as the
+ * session the run is being created for; otherwise — no session actor, another
+ * principal, another org, a non-human principal — the answer is `undefined` and
+ * the run is created exactly as before, with no scope actor. Never synthesized,
+ * never borrowed. The scope gate re-resolves this human live, and since it is
+ * the run owner (`runBy`) too, that is the one check the owner already gets.
+ * A resolver that fails (its grant or team reads) is "no resolvable actor"
+ * too: the run is created as before rather than refused where it succeeded.
+ */
+async function resolveRunPageScopeActor(userId: string, orgId: string) {
+  let actor: Awaited<ReturnType<typeof resolveSessionActorContext>>;
+  try {
+    actor = await resolveSessionActorContext();
+  } catch {
+    return undefined;
+  }
+  if (
+    !actor ||
+    actor.principalType !== "HumanUser" ||
+    actor.principalId !== userId ||
+    actor.organizationId !== orgId
+  ) {
+    return undefined;
+  }
+  return actor;
+}
 
 /**
  * THE COOKIE HOST'S RUN-START DISPATCH (the Run button, the run dialog, and the
@@ -129,6 +171,8 @@ export async function createPendingRunForZeroInputTemplate(
   // function never mints one today (it stays pending_input, no later
   // transition), so mint the member session authority up front.
   const authority = await verifySessionAuthority(userId, orgId);
+  // cinatra#3692: the originating human, so the frozen snapshot names them.
+  const scopeActor = await resolveRunPageScopeActor(userId, orgId);
 
   // Create an empty pending_input run owned by the actor. The setup loop in
   // execution.ts will emit INTERRUPTs for any required fields when the user
@@ -151,6 +195,7 @@ export async function createPendingRunForZeroInputTemplate(
         runBy: userId,
         inputParams: {},
         orgId,
+        ...(scopeActor ? { scopeActor } : {}),
       },
     },
     dispatch: {
@@ -196,6 +241,10 @@ async function createAndTriggerRunCore(
   // pending_input→queued transition (was previously minted only for the
   // transition, after the — then unguarded — create).
   const authority = await verifySessionAuthority(userId, orgId);
+  // cinatra#3692: the originating human, so the frozen snapshot names them.
+  // Resolved from THIS request's session and accepted only when it is the
+  // caller-supplied `userId` in the caller-supplied `orgId`.
+  const scopeActor = await resolveRunPageScopeActor(userId, orgId);
 
   // ONE ORDERING, IN ONE PLACE (cinatra#2928). This function used to carry its
   // own copy of create-parked → evaluate the recommendation → release-or-park →
@@ -230,6 +279,7 @@ async function createAndTriggerRunCore(
           runBy: userId,
           inputParams: {},
           orgId,
+          ...(scopeActor ? { scopeActor } : {}),
         },
       },
       dispatch: {
@@ -460,6 +510,8 @@ export async function startDevChildPreviewRun(
   // this function (the mint at the former call site, after creation, is
   // removed to avoid a duplicate membership read).
   const authority = await verifySessionAuthority(userId, orgId);
+  // cinatra#3692: the originating human, so the frozen snapshot names them.
+  const scopeActor = await resolveRunPageScopeActor(userId, orgId);
 
   // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
   // so router.push paths match /agents/[vendor]/[pkg]/... routing.
@@ -508,6 +560,7 @@ export async function startDevChildPreviewRun(
           runBy: userId,
           inputParams: {},
           orgId,
+          ...(scopeActor ? { scopeActor } : {}),
         },
       },
       dispatch: { kind: "enqueue", options: (run) => ({ jobId: run.id }) },
