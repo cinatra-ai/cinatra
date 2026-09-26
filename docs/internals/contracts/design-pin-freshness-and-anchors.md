@@ -140,10 +140,15 @@ A capture graded against an unnamed drawing cannot be re-checked by anyone and
 cannot be invalidated by a later ratification. So every graded section of a pull
 request body must carry a literal `design@<40-hex>` equal to the pin on that
 branch. The body is read from the workflow event payload (`pull_request.body`),
-so the gate needs no extra credential. A payload it cannot read or parse is
-**not** a body it passed: an unreadable payload, a missing payload file and an
-unreadable `--body-file` each exit `2`, while an event that genuinely carries no
-pull request passes.
+so reading it needs no credential. Telling an older revision of the pin from a
+foreign value needs the design history, so the job fetches that history in
+full with the same read-only credential the freshness gate runs with — quietly,
+so that nothing about the source reaches a public log — and names the copy in
+`DESIGN_DRAWINGS_DIR`; where the fetch fails, that test refuses rather than
+passes (cinatra#3670). A payload it cannot read or parse is **not** a body it
+passed: an unreadable payload, a missing payload file and an unreadable
+`--body-file` each exit `2`, while an event that genuinely carries no pull
+request passes.
 
 **The grammar is defined by the gate, not inferred.** A *graded section* opens at
 a Markdown ATX heading (`#` through `######`, with up to three leading spaces —
