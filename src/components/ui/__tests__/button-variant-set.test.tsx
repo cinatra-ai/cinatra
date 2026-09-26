@@ -1,30 +1,32 @@
 // @vitest-environment jsdom
 //
-// Button — the components drawing's variant ROSTER, the one clause of that
-// section this leg is answerable for (cinatra#3189, shared-primitives wave,
-// leg 2).
+// Button vs its own section in the components drawing (cinatra#3189, audit leg 1).
 //
 //   pnpm exec vitest run src/components/ui/__tests__/button-variant-set.test.tsx
 //
-// The clause, quoted verbatim from the section's chrome line and its prose:
+// The section states the variant set twice — once as a count ("7 variants") and
+// once by name ("Primary, default, outline, secondary, destructive, ghost,
+// link") — and the primitive shipped six of the seven: `primary`, the word the
+// same section pins the indigo fill to ("Indigo primary"), had no spelling in
+// the cva object at all, so a call site could not ask for it by the drawing's
+// own name.
 //
-//   "7 variants"
-//   "Primary, default, outline, secondary, destructive, ghost, link."
-//   "Indigo primary"
-//
-// SCOPE. This file grades the roster and nothing else. The section's remaining
-// sentences — the corner, the box, and the per-variant grounds and strokes —
-// are graded on the sibling change that owns them.
-//
-// ONE DEPARTURE RECORDED, NOT FIXED. See the `RECORDED DEPARTURE` block: the
-// roster is one name short, and closing it is a cross-repository change rather
-// than a host edit.
-import { describe, expect, it } from "vitest";
+// jsdom applies no stylesheet, so this asserts the CONTRACT that produces the
+// chrome — the class each named variant renders. The COMPUTED colours behind
+// those classes are measured in the real browser by
+// tests/e2e/design/conformance/primitive-chrome.spec.ts.
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
-import { buttonVariants } from "@/components/ui/button";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render } from "@testing-library/react";
 
-/** The roster the drawing lists, in its own order and spelling. */
-const ROSTER = [
+import { Button, buttonVariants } from "@/components/ui/button";
+
+afterEach(cleanup);
+
+/** The seven names the drawing's Button section lists, in its own order. */
+const DRAWN_VARIANTS = [
   "primary",
   "default",
   "outline",
@@ -34,111 +36,190 @@ const ROSTER = [
   "link",
 ] as const;
 
-/** The names the recipe answers to today. */
-const SHIPPED = [
-  "default",
-  "outline",
-  "secondary",
-  "destructive",
-  "ghost",
-  "link",
-] as const;
+/** "Sizes: default, xs, sm, lg, icon (xs/sm/lg)" — five named sizes. */
+const DRAWN_SIZES = ["default", "xs", "sm", "lg", "icon"] as const;
 
-type ShippedVariant = (typeof SHIPPED)[number];
-
-/**
- * The class list a variant resolves to, with the size held constant.
- *
- * The cast is deliberate and is the point of the departure below: `primary` is
- * not a key of the recipe, so it cannot be passed without one. cva answers an
- * unknown key with the base classes alone, which is exactly the measurement the
- * recorded case takes.
- */
-function recipe(variant: (typeof ROSTER)[number]): string {
-  return buttonVariants({ variant: variant as ShippedVariant, size: "default" });
+function renderButton(props: Record<string, unknown>) {
+  const { container } = render(<Button {...props}>Label</Button>);
+  const el = container.querySelector('[data-slot="button"]');
+  if (!el) throw new Error("Button rendered no [data-slot=button]");
+  return el;
 }
 
-describe('clause: "Primary, default, outline, secondary, destructive, ghost, link."', () => {
-  it("draws each of the six names it does carry as its own recipe", () => {
-    const recipes = new Set(SHIPPED.map((v) => recipe(v)));
-    expect(recipes.size).toBe(SHIPPED.length);
+/**
+ * cva silently falls back to the base recipe for a key it does not know, so
+ * "does this variant exist" cannot be asked by rendering it and reading back
+ * the prop. It is asked by comparing against a control the recipe provably
+ * does NOT know: a variant that resolves to the same classes as the control
+ * is a variant the primitive cannot spell.
+ */
+const UNKNOWN = "__not-a-variant__";
+
+describe("Button — components drawing, Button section", () => {
+  it("renders all seven variants the drawing names, each as its own variant", () => {
+    const control = buttonVariants({ variant: UNKNOWN as never });
+    const missing = DRAWN_VARIANTS.filter(
+      (variant) => buttonVariants({ variant }) === control,
+    );
+    expect(
+      missing,
+      `the drawing names 7 variants; the primitive cannot spell: ${missing.join(", ")}`,
+    ).toEqual([]);
+    for (const variant of DRAWN_VARIANTS) {
+      expect(renderButton({ variant }).getAttribute("data-variant")).toBe(variant);
+    }
   });
 
-  it('gives the indigo fill to the name it does carry for it, "default"', () => {
-    // "Indigo primary" — the fill itself is correct and is not in question
-    // here; only the NAME the drawing puts it on is.
-    expect(recipe("default")).toContain("bg-primary");
+  it("draws primary as the indigo fill the drawing pins to that word", () => {
+    const primary = renderButton({ variant: "primary" });
+    expect(primary.className).toContain("bg-primary");
+    expect(primary.className).toContain("text-primary-foreground");
+  });
+
+  it("leaves what default draws byte-identical to the new primary", () => {
+    // `primary` NAMES the fill `default` already drew; adding the name must not
+    // restyle the 200-plus call sites that ask for `default`.
+    const asDefault = renderButton({ variant: "default" }).className;
+    cleanup();
+    const asPrimary = renderButton({ variant: "primary" }).className;
+    expect(asPrimary).toBe(asDefault);
+  });
+
+  it("draws destructive as red-on-tint, never a solid red fill", () => {
+    const el = renderButton({ variant: "destructive" });
+    expect(el.className).toContain("bg-destructive/10");
+    expect(el.className).toContain("text-destructive");
+    expect(el.className).not.toMatch(/(^|\s)bg-destructive(\s|$)/);
+  });
+
+  it("renders the five sizes the drawing names", () => {
+    const control = buttonVariants({ size: UNKNOWN as never });
+    const missing = DRAWN_SIZES.filter(
+      (size) => buttonVariants({ size }) === control,
+    );
+    expect(missing, `sizes the primitive cannot spell: ${missing.join(", ")}`).toEqual(
+      [],
+    );
+    for (const size of DRAWN_SIZES) {
+      expect(renderButton({ size }).getAttribute("data-size")).toBe(size);
+    }
   });
 });
 
-describe('RECORDED DEPARTURE (cross-repository follow-up): clause "7 variants" / the name "Primary"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // cross-repository follow-up this departure names lands, this case stops
-  // throwing, the suite goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (cross-repository follow-up): answers to the drawing\'s first name — clause "7 variants"', () => {
-    // MEASURED: the recipe names SIX variants (default, outline, secondary,
-    // destructive, ghost, link). The drawing's chrome line says "7 variants"
-    // and its prose lists them — "Primary, default, outline, secondary,
-    // destructive, ghost, link" — putting the indigo fill on the first word.
-    // `primary` is not a key at all, so a call site asking the drawing's own
-    // question gets the base recipe with no variant classes on it, and in
-    // TypeScript gets a type error instead of a button.
-    //
-    // WHAT THE DRAWING ACTUALLY SAYS, and it is not an alias. The prose puts
-    // the two names side by side and then separates them: "Primary, default,
-    // outline, secondary, destructive, ghost, link" and, one sentence later,
-    // "Indigo primary, ink default border". So the drawing draws `primary` as
-    // the indigo FILL and `default` as the INK-BORDERED button — two
-    // treatments, not one under two names.
-    //
-    // MEASURED HERE: the shipped `default` recipe carries `bg-primary` — the
-    // indigo fill — so the roster is not merely one key short, it is SHIFTED:
-    // what the drawing calls `primary` ships under the name `default`, and the
-    // drawing's ink-bordered `default` has no key at all. This case grades the
-    // half this leg is answerable for — that a call site asking the drawing's
-    // own first name gets the indigo button — and states the shift so the
-    // follow-up is not written as a one-line alias. The larger half, which
-    // re-treats `default` and every other variant's ground and stroke, is the
-    // sibling change's work and is named in this leg's record rather than
-    // re-derived here.
-    //
-    // WHY IT IS RECORDED AND NOT APPLIED. `button.tsx` is the most widely
-    // VENDORED primitive in the product: sixteen extension repositories carry a
-    // byte-identical copy, and
-    // `scripts/extensions/vendor-extension-primitives.mjs --check` is a
-    // standing CI provenance gate that requires every one of those copies to
-    // equal this source modulo the import rewrite. Editing this file turns that
-    // gate red for as long as any consumer is still pinned at the pre-change
-    // copy. The sibling change that carries the rest of this section had to run
-    // exactly that cascade — its extension-lock diff bumps the resolved sha of
-    // precisely the repositories that vendor what it touched — and that cascade
-    // cannot be completed from a change whose boundary forbids writing under
-    // `/extensions/`. This is the wall the wave first met on badge, where
-    // it was cleared by stating the clause on the DOM seam instead — a road
-    // a variant NAME cannot take, because a name is not a rendered value and
-    // no scope can declare one.
-    //
-    // ROAD: add the `primary` key here, re-vendor the sixteen extension
-    // repositories in their own repositories, land each, then bump
-    // cinatra-dev-extensions.lock.json to the new shas — in that order, before
-    // the host edit merges.
-    // The roster the drawing lists is SEVEN long; the recipe answers to six.
-    expect(ROSTER).toHaveLength(7);
-    expect(SHIPPED).toHaveLength(6);
-    // The drawing's first name has to answer with the indigo fill it draws.
-    expect(recipe("primary")).toContain("bg-primary");
+/* ────────────────────────────────────────────────────────────────────────────
+ * Fix leg 2 (cinatra#3192) — the class contract behind the chrome the aborted
+ * 2026-09-03 round measured wrong. The COLOURS these classes resolve to are
+ * measured in a real browser, in both palettes, by
+ * tests/e2e/design/conformance/primitive-chrome.spec.ts; jsdom applies no
+ * stylesheet, so what is assertable here is which class each clause rides.
+ * ──────────────────────────────────────────────────────────────────────────── */
+const REPO_ROOT = path.resolve(__dirname, "../../../..");
+const HOST_RECIPE = path.join(REPO_ROOT, "src/components/ui/button.tsx");
+const SDK_RECIPE = path.join(REPO_ROOT, "packages/sdk-ui/src/ui/button.tsx");
+
+describe("Button — fix leg 2, the drawing's box and edges", () => {
+  it("draws the 7px corner `.btn` pins, on every size", () => {
+    // "border-radius: 7px" — one corner for the whole roster. The recipe used
+    // to ride `rounded-lg`, which resolves through `--radius` and therefore
+    // differed BETWEEN palettes: 6px under the app's light theme, 8px under
+    // dark. A drawn constant cannot be a variable.
+    expect(renderButton({}).className).toContain("rounded-[7px]");
+    for (const size of DRAWN_SIZES) {
+      cleanup();
+      const el = renderButton({ size });
+      const corners = el.className.split(/\s+/).filter((c) => c.includes("rounded-"));
+      expect(corners, `size ${size} must not re-corner the button`).toEqual([
+        "rounded-[7px]",
+      ]);
+    }
   });
 
-  it("measures which shipped name currently carries the indigo fill", () => {
-    // Passes today; recorded alongside the failure as the measurement that
-    // makes the shift above readable. The indigo recipe EXISTS — it is simply
-    // filed under the drawing's second name — which is why the follow-up adds
-    // a key rather than inventing a treatment, and why it cannot be a bare
-    // alias: `default` also has to become the ink-bordered button the drawing
-    // draws, and that is a rendered change at every one of its call sites.
-    expect(recipe("default")).toContain("bg-primary");
-    expect(recipe("default")).toContain("text-primary-foreground");
+  it("leaves no conditional corner in either recipe's size block", () => {
+    // The per-size `rounded-[min(--radius-md,…)]` overrides are gone from the
+    // rendered class list above, but a MODIFIER corner is invisible to a render
+    // that does not put the button in the state it keys on: four sizes carried
+    // `in-data-[slot=button-group]:rounded-lg`, which re-cornered exactly the
+    // grouped button and sent it back through `--radius` — the variable the
+    // drawn 7px constant exists to stop being. The size block is read as SOURCE
+    // so a modifier cannot hide behind a state no test thought to mount.
+    for (const file of [HOST_RECIPE, SDK_RECIPE]) {
+      const source = readFileSync(file, "utf8");
+      const start = source.indexOf("      size: {");
+      expect(start, `${file} has no size block`).toBeGreaterThan(0);
+      const end = source.indexOf("\n      },", start);
+      expect(end, `${file} size block is not closed`).toBeGreaterThan(start);
+      const block = source.slice(start, end);
+      expect(block, `${file} re-corners the button inside its size block`).not.toContain(
+        "rounded-",
+      );
+    }
+  });
+
+  it("draws the drawing's 7px 14px box rather than a fixed height", () => {
+    // "padding: 7px 14px". The recipe used to state a fixed `h-8` with
+    // horizontal padding only, so the measured box read `0px 10px`. The height
+    // the drawing's own numbers produce — 7 + 7 + two 1px edges + a 16px line —
+    // is the 32px the button already stood at, so the box is unchanged while
+    // the padding becomes the thing that makes it.
+    const el = renderButton({});
+    expect(el.className).toContain("px-[14px]");
+    expect(el.className).toContain("py-[7px]");
+    expect(el.className).toContain("text-sm/4");
+    expect(el.className).not.toMatch(/(^|\s)h-8(\s|$)/);
+  });
+
+  it("puts the primary edge on the blue, not on the navy", () => {
+    // ".btn.primary { background: var(--blue); color: var(--surface-strong);
+    //   border-color: var(--blue); }" — the navy edge the recipe carried is the
+    // one the drawing gives the UNFILLED `.btn`, never the indigo fill.
+    for (const variant of ["primary", "default"] as const) {
+      cleanup();
+      const el = renderButton({ variant });
+      expect(el.className, `${variant} edge`).toContain("border-primary");
+      expect(el.className, `${variant} edge`).not.toContain("border-line-strong");
+      expect(el.className).toContain("bg-primary");
+      expect(el.className).toContain("text-primary-foreground");
+    }
+  });
+
+  it("draws outline on the surface, in ink, on the strong line", () => {
+    // ".btn.outline { background: var(--surface); color: var(--ink);
+    //   border-color: var(--line-strong); }" — measured white / indigo-at-0.9 /
+    // a 0.14-alpha hairline before this leg.
+    const el = renderButton({ variant: "outline" }).className;
+    expect(el).toContain("bg-surface");
+    expect(el).toContain("text-foreground");
+    expect(el).toContain("border-line-strong-control");
+    expect(el).not.toContain("bg-background");
+    expect(el).not.toMatch(/(^|\s)border-border(\s|$)/);
+    // The dark ramp gets the SAME rules through the palette's own tokens, so
+    // there is no dark-only ground or edge left on this variant.
+    expect(el).not.toContain("dark:border-input");
+    expect(el).not.toContain("dark:bg-input-fill");
+  });
+
+  it("states the ghost's transparent ground rather than leaving it to the page", () => {
+    // ".btn.ghost { background: transparent; border-color: transparent; }"
+    const el = renderButton({ variant: "ghost" }).className;
+    expect(el).toContain("bg-transparent");
+    expect(el).toContain("text-foreground");
+  });
+
+  it("gives destructive the tinted edge the drawing draws", () => {
+    // "border-color: rgba(166,56,79,0.24)" — the tint carries an edge of its
+    // own; the recipe drew none at all.
+    expect(renderButton({ variant: "destructive" }).className).toContain(
+      "border-destructive/24",
+    );
+  });
+
+  it("underlines the link variant at the drawn 3px offset", () => {
+    // ".btn.link { … text-decoration: underline; text-underline-offset: 3px;
+    //   padding: 7px 4px; }" — drawn underlined at rest, not on hover.
+    const el = renderButton({ variant: "link" });
+    expect(el.className).toMatch(/(^|\s)underline(\s|$)/);
+    expect(el.className).toContain("underline-offset-[3px]");
+    expect(el.className).not.toContain("hover:underline");
+    expect(el.className).toContain("data-[variant=link]:px-[4px]");
   });
 });

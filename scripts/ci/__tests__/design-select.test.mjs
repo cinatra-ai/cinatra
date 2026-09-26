@@ -419,7 +419,11 @@ describe("5. THE INVOCATION and THIS repo", () => {
     expect(specs.length).toBeGreaterThan(9);
     expect(specs.every((spec) => spec.endsWith(".spec.ts"))).toBe(true);
     expect(specs).toContain("tests/e2e/design/conformance/functional-acceptance.spec.ts");
-    expect(specs).toContain("tests/e2e/design/design-fixtures.spec.ts");
+    // The fixtures-page family this line used to name is retired: the drawings
+    // are the only source of truth, so tests/e2e/design/design-fixtures.spec.ts
+    // is gone and the expectation moves with the retirement to a family that
+    // exists — the primitive-chrome conformance spec that replaced it.
+    expect(specs).toContain("tests/e2e/design/conformance/primitive-chrome.spec.ts");
   });
 
   it("resolves every in-repo import of THIS repo's families", () => {

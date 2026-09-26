@@ -24,6 +24,8 @@
   --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
+  --color-line-strong-control: var(--line-strong-control);
+  --color-accent-ink: var(--accent-ink);
   --color-accent-soft: var(--accent-soft);
   /* Fabric stripe utility tokens. */
   --color-stripe-mid: var(--stripe-mid);

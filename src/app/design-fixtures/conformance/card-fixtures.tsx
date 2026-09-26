@@ -16,7 +16,7 @@
 // /configuration/extensions screen renders; the server-side install effect is
 // owned by the seeded-fixture gate (cinatra#986).
 //
-// Kept OFF the pixel-diffed /design-fixtures index page (same convention as
+// Kept OFF the now-retired /design-fixtures catalog page (same convention as
 // the §V detail-modal fixture route): coverage here is assertion-based —
 // tests/e2e/design/conformance/functional-acceptance.spec.ts.
 // ---------------------------------------------------------------------------

@@ -225,7 +225,12 @@ describe("lifecycle D W6 — the fleet as pinned passes the blocking gate", () =
   const EXPECTED_PINNED_PRODUCERS = [
     "@cinatra-ai/blog-draft-writer-agent",
     "@cinatra-ai/blog-idea-generator-agent",
-    "@cinatra-ai/blog-linkedin-publish-agent",
+    // @cinatra-ai/blog-linkedin-publish-agent was named here while it declared
+    // a produced post-draft its own OAS never materialized. Its repository
+    // retired that declaration (its flow now takes an artifact reference and
+    // writes the published address back), so at the pin this tree carries it
+    // declares `produces: []` and is not a producer to read. Measured, not
+    // assumed: `node -e` over the pinned package.json at the lock sha.
     "@cinatra-ai/blog-pipeline-agent",
     "@cinatra-ai/email-drafting-agent",
     "@cinatra-ai/email-follow-up-agent",

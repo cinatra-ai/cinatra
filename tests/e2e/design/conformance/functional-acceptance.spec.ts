@@ -17,8 +17,8 @@
  *   - A pin/manifest hash mismatch is a distinct "PIN INTEGRITY" red; a
  *     published-manifest/pin mismatch is a distinct "UPSTREAM DRIFT" red
  *     (active once conformance-pins.json flips source to "published").
- *   - Pixel-diff + axe (design-fixtures.spec.ts) remain supporting evidence,
- *     never the sole gate.
+ *   - The per-surface assertion specs beside this one remain supporting
+ *     evidence, never the sole gate.
  */
 import { test, expect } from "@playwright/test";
 
