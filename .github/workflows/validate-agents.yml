@@ -291,11 +291,45 @@ jobs:
           # agent is a BOUNDED xfail there — the single source of truth), and
           # `test_gate_mount_both_paths` pins the standalone vs orchestrated
           # gate encodings against the same ruled contract (cinatra#2140).
+          #
+          # `test_context_subflow_injection` joins them (cinatra#3690). The
+          # context subflow the loader injects is only worth anything when the
+          # REAL loader accepts it, and the test that proves that asks
+          # pyagentspec itself. This is the only job that runs the repo's own
+          # test files inside the runtime, so a test can reach the wayflowcore
+          # pin here and nowhere else, and a template edge the loader refuses
+          # stayed green in every other job until a runtime met it. (The
+          # works-after proof also builds this image, but it fires on upgrade
+          # paths only and runs no test file from `tests/`.) The file needs no
+          # extra environment: it drives the injector and the loader in
+          # process, and never seeds a temp agents tree.
+          #
+          # The loader test guards itself with `importorskip("wayflowcore")`,
+          # which SKIPS rather than fails when the pin is missing. A skip here
+          # would be a vacuous green of the one thing this job adds, so the
+          # import is asserted first and the job goes red when the pin is gone.
+          #
+          # Three tests of that file are DESELECTED by name because they are
+          # red on main for a reason this job must not claim to cover. Each
+          # compares the rendered template against the hand-authored fixture,
+          # and cinatra#3418 renamed the resolve step's output (`selectedRefs`
+          # to `plannedRefs`) and added the allocation token inputs in the
+          # template without catching the fixture up. The fixture is the
+          # derived artifact, so regenerating it against the current template
+          # is what closes the drift; measured on 2026-09-26, the fix in flight
+          # for cinatra#3685 advances that fixture but does not yet close it.
+          # Drop each deselection when a fixture makes it pass, never by
+          # editing the assertion. Until then these three cover nothing here.
+          docker exec -w /app wayflow-mount-guard python -c 'import wayflowcore'
           docker exec -e CINATRA_AGENTS_DIR=/agents wayflow-mount-guard \
             python -m pytest -q \
             tests/test_input_message_gate_reconcile.py \
             tests/test_repo_agents_load.py \
-            tests/test_gate_mount_both_paths.py
+            tests/test_gate_mount_both_paths.py \
+            tests/test_context_subflow_injection.py \
+            --deselect tests/test_context_subflow_injection.py::test_template_byte_parity_with_hand_authored_subflow \
+            --deselect tests/test_context_subflow_injection.py::test_slim_leaf_injection_structure \
+            --deselect tests/test_context_subflow_injection.py::test_slim_injection_reproduces_hand_authored_topology
 
       - name: Runtime logs
         if: always()
