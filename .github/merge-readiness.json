@@ -5,7 +5,7 @@
   "regeneration": {
     "write": "node scripts/ci/merge-readiness-inventory.mjs --write",
     "check": "node scripts/ci/merge-readiness-inventory.mjs --check",
-    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
+    "derivedFrom": "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows; 'triggers' records each workflow's pull_request branches / branches-ignore filters (null when none), against which the evaluator matches the pull request's base branch",
     "generator": "scripts/ci/merge-readiness-inventory.mjs"
   },
   "excluded": [
@@ -13,6 +13,11 @@
       "context": "${{ matrix.name }}",
       "workflow": ".github/workflows/execution-plane-e2e.yml",
       "reason": "dynamic-name: the job name is a ${{ }} expression (a matrix leg), so the check-run name is not knowable statically"
+    },
+    {
+      "context": "design-anchor-resolution",
+      "workflow": ".github/workflows/gates.yml",
+      "reason": "report-only: the job declares continue-on-error: true"
     },
     {
       "context": "merge-readiness / merge-readiness",
@@ -36,46 +41,7 @@
       "app": "github-actions",
       "workflow": ".github/workflows/design-visual-verify.yml",
       "paths": [
-        "src/components/ui/**",
-        "src/components/extension-card.tsx",
-        "src/components/brand-mark.tsx",
-        "src/components/status-pill.tsx",
-        "src/components/page-header.tsx",
-        "src/components/page-content.tsx",
-        "src/components/layout/**",
-        "src/lib/cinatra-toast.ts",
-        "src/lib/extension-accent.ts",
-        "src/lib/status-adapter.ts",
-        "src/app/globals.css",
-        "src/app/design-fixtures/**",
-        "packages/extensions/src/screens/**",
-        "packages/extensions/package.json",
-        "packages/registries/src/version-compare.ts",
-        "src/lib/extension-compat-badge.ts",
-        "src/lib/auth-route-guard.ts",
-        "src/lib/test-support/conformance-seed-fence.ts",
-        "src/lib/test-support/seed-capability.ts",
-        "src/components/extension-card-icon-image.tsx",
-        "src/components/extension-kind-emblem.tsx",
-        "src/components/extensions/installed-extension-card.tsx",
-        "src/components/extensions/extensions-tab-select.tsx",
-        "packages/connectors/src/**",
-        "packages/connectors/package.json",
-        "src/components/extensions/schema-config-connector-form.tsx",
-        "src/components/extensions/connector-status-probe-card.tsx",
-        "packages/sdk-ui/src/connector-setup-columns.tsx",
-        "packages/sdk-ui/src/connections-list.tsx",
-        "packages/sdk-ui/src/connection-status-card.tsx",
-        "packages/sdk-ui/src/connection-status-badge.tsx",
-        "scripts/design/**",
-        "tests/e2e/config/design.config.ts",
-        "tests/e2e/config/base.ts",
-        "tests/e2e/design/**",
-        "scripts/ci/design-select.mjs",
-        "scripts/ci/__tests__/design-select.test.mjs",
-        "scripts/ci/__tests__/design-select-workflow.test.mjs",
-        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
-        ".github/workflows/design-visual-verify.yml"
+        "**"
       ],
       "skippable": true,
       "timeoutMinutes": 70
@@ -157,7 +123,7 @@
       "paths": [
         "**"
       ],
-      "skippable": true,
+      "skippable": false,
       "timeoutMinutes": 5
     },
     {
@@ -225,46 +191,7 @@
       "app": "github-actions",
       "workflow": ".github/workflows/design-visual-verify.yml",
       "paths": [
-        "src/components/ui/**",
-        "src/components/extension-card.tsx",
-        "src/components/brand-mark.tsx",
-        "src/components/status-pill.tsx",
-        "src/components/page-header.tsx",
-        "src/components/page-content.tsx",
-        "src/components/layout/**",
-        "src/lib/cinatra-toast.ts",
-        "src/lib/extension-accent.ts",
-        "src/lib/status-adapter.ts",
-        "src/app/globals.css",
-        "src/app/design-fixtures/**",
-        "packages/extensions/src/screens/**",
-        "packages/extensions/package.json",
-        "packages/registries/src/version-compare.ts",
-        "src/lib/extension-compat-badge.ts",
-        "src/lib/auth-route-guard.ts",
-        "src/lib/test-support/conformance-seed-fence.ts",
-        "src/lib/test-support/seed-capability.ts",
-        "src/components/extension-card-icon-image.tsx",
-        "src/components/extension-kind-emblem.tsx",
-        "src/components/extensions/installed-extension-card.tsx",
-        "src/components/extensions/extensions-tab-select.tsx",
-        "packages/connectors/src/**",
-        "packages/connectors/package.json",
-        "src/components/extensions/schema-config-connector-form.tsx",
-        "src/components/extensions/connector-status-probe-card.tsx",
-        "packages/sdk-ui/src/connector-setup-columns.tsx",
-        "packages/sdk-ui/src/connections-list.tsx",
-        "packages/sdk-ui/src/connection-status-card.tsx",
-        "packages/sdk-ui/src/connection-status-badge.tsx",
-        "scripts/design/**",
-        "tests/e2e/config/design.config.ts",
-        "tests/e2e/config/base.ts",
-        "tests/e2e/design/**",
-        "scripts/ci/design-select.mjs",
-        "scripts/ci/__tests__/design-select.test.mjs",
-        "scripts/ci/__tests__/design-select-workflow.test.mjs",
-        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
-        ".github/workflows/design-visual-verify.yml"
+        "**"
       ],
       "skippable": false,
       "timeoutMinutes": 10
@@ -274,46 +201,7 @@
       "app": "github-actions",
       "workflow": ".github/workflows/design-visual-verify.yml",
       "paths": [
-        "src/components/ui/**",
-        "src/components/extension-card.tsx",
-        "src/components/brand-mark.tsx",
-        "src/components/status-pill.tsx",
-        "src/components/page-header.tsx",
-        "src/components/page-content.tsx",
-        "src/components/layout/**",
-        "src/lib/cinatra-toast.ts",
-        "src/lib/extension-accent.ts",
-        "src/lib/status-adapter.ts",
-        "src/app/globals.css",
-        "src/app/design-fixtures/**",
-        "packages/extensions/src/screens/**",
-        "packages/extensions/package.json",
-        "packages/registries/src/version-compare.ts",
-        "src/lib/extension-compat-badge.ts",
-        "src/lib/auth-route-guard.ts",
-        "src/lib/test-support/conformance-seed-fence.ts",
-        "src/lib/test-support/seed-capability.ts",
-        "src/components/extension-card-icon-image.tsx",
-        "src/components/extension-kind-emblem.tsx",
-        "src/components/extensions/installed-extension-card.tsx",
-        "src/components/extensions/extensions-tab-select.tsx",
-        "packages/connectors/src/**",
-        "packages/connectors/package.json",
-        "src/components/extensions/schema-config-connector-form.tsx",
-        "src/components/extensions/connector-status-probe-card.tsx",
-        "packages/sdk-ui/src/connector-setup-columns.tsx",
-        "packages/sdk-ui/src/connections-list.tsx",
-        "packages/sdk-ui/src/connection-status-card.tsx",
-        "packages/sdk-ui/src/connection-status-badge.tsx",
-        "scripts/design/**",
-        "tests/e2e/config/design.config.ts",
-        "tests/e2e/config/base.ts",
-        "tests/e2e/design/**",
-        "scripts/ci/design-select.mjs",
-        "scripts/ci/__tests__/design-select.test.mjs",
-        "scripts/ci/__tests__/design-select-workflow.test.mjs",
-        "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs",
-        ".github/workflows/design-visual-verify.yml"
+        "**"
       ],
       "skippable": false,
       "timeoutMinutes": 5
@@ -330,6 +218,16 @@
     },
     {
       "context": "design-pin-freshness",
+      "app": "github-actions",
+      "workflow": ".github/workflows/gates.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": false,
+      "timeoutMinutes": 10
+    },
+    {
+      "context": "design-record-grammar",
       "app": "github-actions",
       "workflow": ".github/workflows/gates.yml",
       "paths": [
@@ -369,7 +267,7 @@
       "timeoutMinutes": 5
     },
     {
-      "context": "Detect skip — docs-only or draft (build-image)",
+      "context": "Detect CI impact (build-image)",
       "app": "github-actions",
       "workflow": ".github/workflows/build-image.yml",
       "paths": [
@@ -379,7 +277,7 @@
       "timeoutMinutes": 5
     },
     {
-      "context": "Detect skip — docs-only or draft (e2e-app-suites)",
+      "context": "Detect CI impact (e2e-app-suites)",
       "app": "github-actions",
       "workflow": ".github/workflows/e2e-app-suites.yml",
       "paths": [
@@ -762,5 +660,123 @@
       "skippable": true,
       "timeoutMinutes": 25
     }
-  ]
+  ],
+  "triggers": {
+    ".github/workflows/actions-pinned-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/build-image.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/crm-migration-gate.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/dashboard-live-verify.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/design-visual-verify.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/e2e-app-suites.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/execution-plane-e2e.yml": {
+      "pull_request": {
+        "branches": [
+          "main"
+        ],
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/gates.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/gitignore-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/merge-readiness.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/secret-scan-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/secrets-required-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/skills-drift-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/source-leak-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/toast-banner-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/truthful-attribution-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/ui-design-system-gate.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/works-after-proof.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    }
+  }
 }

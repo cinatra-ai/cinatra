@@ -37,8 +37,15 @@
  * Workspace-owned rows are stored at the DB layer like org-owned rows because
  * there is no dedicated `cinatra.workspaces` table. The row shape is kept so
  * workspace ownership can split when the Workspace tier lands.
+ *
+ * WORKSPACE DASHBOARDS (cinatra#2811) are the one ORG-NULL row shape: the
+ * user-owned `(workspace, __workspace__)` entity, stored with no tenant. They
+ * take their own arm, FIRST: the owner alone reads and writes them, whatever
+ * organization the session has active (or none). A user's own workspace
+ * dashboards stay private, and they read identically under active-org switches.
  */
 import type { DashboardRow, OwnerLevel } from "./store/schema";
+import { isWorkspaceDashboardRow } from "./store/entity-identity";
 // Pure OBO scope-ceiling helper (zero-dep subpath — no transport runtime pulled).
 import {
   resourceWithinCeiling,
@@ -52,8 +59,10 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 /** Actor envelope. Subset of PrimitiveActorContext to keep this module Cinatra-decoupled. */
 export type DashboardActor = {
   readonly userId: string;
-  /** The actor's currently-active org. */
-  readonly organizationId: string;
+  /** The actor's currently-active org, or NULL when the session has none. Only
+   *  the org-NULL WORKSPACE arm (cinatra#2811) can admit such an actor; every
+   *  organization arm compares it against the row's tenant and fails closed. */
+  readonly organizationId: string | null;
   /** Team IDs the actor belongs to (resolved by the MCP/route layer). */
   readonly teamIds: readonly string[];
   /** Better Auth role in the active org: 'owner' | 'admin' | 'member'. */
@@ -90,7 +99,9 @@ export type DashboardAccess = {
  * (`owner_level`/`owner_id`, CHECK-constrained to user/team/organization/
  * workspace) plus an optional `project_id` refinement — a direct mapping.
  */
-function dashboardRowToCeilingFacets(row: DashboardRow): CeilingResource {
+function dashboardRowToCeilingFacets(
+  row: DashboardRow & { readonly organizationId: string },
+): CeilingResource {
   return {
     orgId: row.organizationId,
     owner: {
@@ -152,6 +163,27 @@ export function resolveDashboardAccess(
   row: DashboardRow,
   actor: DashboardActor,
 ): DashboardAccess {
+  // The ORG-NULL arm (cinatra#2811), evaluated FIRST because an org-NULL row
+  // has no tenant for any gate below to compare. Only a workspace-shaped row may
+  // be org-NULL (the DB CHECK pins it; this re-checks in depth), and only its
+  // owner reads or writes it. The active organization is deliberately NOT read:
+  // the same row answers the same way under every organization, or none. An
+  // OBO-delegated agent actor is refused outright: its ceiling is anchored in
+  // an organization, and the workspace sits above every anchor.
+  if (row.organizationId === null) {
+    if (actor.oboCeiling) return { canRead: false, canWrite: false };
+    const own =
+      isWorkspaceDashboardRow(row) &&
+      typeof actor.userId === "string" &&
+      actor.userId.length > 0 &&
+      row.ownerId === actor.userId;
+    return { canRead: own, canWrite: own };
+  }
+  // A workspace-typed row that carries a tenant is malformed (the CHECK forbids
+  // it); never let it read as an ordinary user row of that tenant.
+  if (row.entityType === "workspace") return { canRead: false, canWrite: false };
+  const tenantRow = row as DashboardRow & { readonly organizationId: string };
+
   // OBO scope-ceiling containment — evaluated FIRST, before the cross-org gate
   // and every owner/member short-circuit below, so a delegated agent run cannot
   // read/write a dashboard outside the agent's anchored scope even when the
@@ -159,13 +191,14 @@ export function resolveDashboardAccess(
   // undefined ⇒ no-op for human/session callers.
   if (
     actor.oboCeiling &&
-    !resourceWithinCeiling(dashboardRowToCeilingFacets(row), actor.oboCeiling)
+    !resourceWithinCeiling(dashboardRowToCeilingFacets(tenantRow), actor.oboCeiling)
   ) {
     return { canRead: false, canWrite: false };
   }
 
   // Cross-org check is the first gate — no further evaluation needed.
-  if (row.organizationId !== actor.organizationId) {
+  // (An actor with no active organization, null, never matches a tenant row.)
+  if (actor.organizationId === null || row.organizationId !== actor.organizationId) {
     return { canRead: false, canWrite: false };
   }
 

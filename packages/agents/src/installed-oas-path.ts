@@ -22,7 +22,7 @@
 // ── cinatra#2297 — the DEV second read root ──────────────────────────────────
 //
 // A stock dev install (`make setup` → `pnpm setup:dev`) ingests its agents
-// GIT-NATIVELY from `<cwd>/extensions` (dev-boot's `dev-agents-skills-scan`).
+// GIT-NATIVELY from `<cwd>/extensions` (dev-boot's `dev-agent-ingest`).
 // That is not an install, so NOTHING on the stock dev path ever writes the
 // runtime mount: the explicit package installer never runs, the boot
 // projection selects only `source.type === "verdaccio"` finalized rows (a

@@ -380,6 +380,71 @@ export async function deleteAssignedContext(
   return { deleted: rows.length > 0 };
 }
 
+export type ReorderAssignedContextResult =
+  | { outcome: "reordered" }
+  /** The given order is not exactly the slot's current rows at this scope. */
+  | { outcome: "stale-order" };
+
+/**
+ * Reorder ONE slot's attachments at ONE exact scope (cinatra#2814, per-scope
+ * assignment S2: "add, remove, and reorder rows for THIS scope").
+ *
+ * Runs under the same per-(package, scope) advisory lock the insert takes, in
+ * one transaction, so a concurrent attachment cannot interleave with it.
+ * Positions are numbered per scope tuple across the scope's slots, so the new
+ * order REUSES this slot's own position values, sorted: no other slot's row
+ * moves, and the scope's position space stays what it was.
+ *
+ * `orderedArtifactIds` must be exactly the slot's current rows, each once. A
+ * stale or forged order is refused whole and nothing is written: a partial
+ * reorder would leave an order nobody chose.
+ */
+export async function reorderAssignedContext(
+  input: {
+    agentPackageName: string;
+    slotId: string;
+    scope: { scopeKind: string; scopeId: string };
+    orderedArtifactIds: readonly string[];
+  },
+  deps?: AgentAssignedContextStoreDeps,
+): Promise<ReorderAssignedContextResult> {
+  const { transaction, table } = resolveDeps(deps);
+  const scope = assertAssignmentScope(input.scope);
+  const ordered = [...input.orderedArtifactIds];
+  return transaction<ReorderAssignedContextResult>(async (tx) => {
+    await tx(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+      assignmentScopeLockKey(ADVISORY_LOCK_NAMESPACE, input.agentPackageName, scope),
+    ]);
+    // FOR UPDATE: a remove takes no advisory lock, so the slot's rows are
+    // locked for this transaction instead. A delete that lands first is seen
+    // (the order is then stale and refused); one that comes later waits.
+    const rows = await tx<{ artifact_id: string; position: number | string }>(
+      `SELECT artifact_id, "position" FROM ${table}
+        WHERE agent_package_name = $1 AND slot_id = $2 AND scope_kind = $3 AND scope_id = $4
+        ORDER BY "position" ASC, artifact_id ASC
+        FOR UPDATE`,
+      [input.agentPackageName, input.slotId, scope.scopeKind, scope.scopeId],
+    );
+    const currentIds = rows.map((r) => r.artifact_id);
+    const sameSet =
+      ordered.length === currentIds.length &&
+      new Set(ordered).size === ordered.length &&
+      ordered.every((id) => currentIds.includes(id));
+    if (!sameSet) return { outcome: "stale-order" };
+    if (ordered.every((id, i) => id === currentIds[i])) return { outcome: "reordered" };
+
+    const positions = rows.map((r) => Number(r.position)).sort((a, b) => a - b);
+    await tx(
+      `UPDATE ${table} AS t SET "position" = v.position
+         FROM unnest($5::text[], $6::int[]) AS v(artifact_id, position)
+        WHERE t.agent_package_name = $1 AND t.slot_id = $2
+          AND t.scope_kind = $3 AND t.scope_id = $4 AND t.artifact_id = v.artifact_id`,
+      [input.agentPackageName, input.slotId, scope.scopeKind, scope.scopeId, ordered, positions],
+    );
+    return { outcome: "reordered" };
+  });
+}
+
 /** One removed attachment, reported back so a teardown can log what it swept. */
 export type RemovedAssignedContext = {
   agentPackageName: string;

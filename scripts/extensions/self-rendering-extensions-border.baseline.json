@@ -83,9 +83,6 @@
       "src/components/ui/input.tsx",
       "src/components/ui/label.tsx"
     ],
-    "linkedin-connector": [
-      "src/components/ui/alert.tsx"
-    ],
     "linkedin-oauth-connector": [
       "src/components/ui/button.tsx",
       "src/components/ui/card.tsx",
@@ -127,9 +124,6 @@
       "src/components/ui/label.tsx",
       "src/components/ui/separator.tsx",
       "src/components/ui/textarea.tsx"
-    ],
-    "twenty-connector": [
-      "src/components/ui/card.tsx"
     ],
     "wordpress-assistant-connector": [
       "src/components/ui/badge.tsx",

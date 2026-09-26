@@ -44,7 +44,7 @@ services:
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "node -e \"fetch('http://127.0.0.1:3010/.health').then(r => process.exit(r.ok || r.status === 503 ? 0 : 1)).catch(() => process.exit(1))\""
+        - "python3 -c \"import urllib.request,json; r=urllib.request.urlopen('http://localhost:3010/.health'); j=json.loads(r.read()); exit(0 if j.get('status') in ('ok','degraded') else 1)\""
       interval: 5s
       timeout: 3s
       retries: 20

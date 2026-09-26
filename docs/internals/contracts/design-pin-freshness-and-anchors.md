@@ -164,6 +164,14 @@ A section carrying the right value *and* a wrong one is red: a record that names
 two pins names none. The message prints both values that disagree — both are
 content this repository already tracks, or that the body itself published.
 
+A section graded under an **older** revision of the same design reads as
+superseded, and passes with a notice, when it is not the newest graded section,
+names that one value, a later graded or `Visual proof` section names the
+branch's pin alone, and the local copy of the design history that
+`DESIGN_DRAWINGS_DIR` names shows the value as an ancestor of the pin — with no
+such copy, or one too shallow to decide, the section stays a mismatch with the
+reason printed (cinatra#3670).
+
 ## `adopt-design-pin` — the adoption the three make safe
 
 [`scripts/audit/adopt-design-pin.mjs`](../../../scripts/audit/adopt-design-pin.mjs)

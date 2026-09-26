@@ -218,6 +218,7 @@ function reviewSlotReader(
 export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
+  onReviewReadingChange,
   recommendationDecided,
 }: {
   runId: string;
@@ -244,6 +245,12 @@ export function InlineAgentRunCard({
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  /**
+   * Forwarded to AgenticRunPanel so the turn that hosts this panel can read
+   * which reading the panel is drawing. Fires with `true` only while that
+   * reading is the review screen, and `false` for every other one.
+   */
+  onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
 }) {
   const [seed, setSeed] = useState<SeedData | null>(null);
   const [loadError, setLoadError] = useState<LoadFailureReason | null>(null);
@@ -380,6 +387,7 @@ export function InlineAgentRunCard({
         templateId={seed.templateId}
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
+        onReviewReadingChange={onReviewReadingChange}
         recommendationDecided={recommendationDecided}
         surface="chat"
         initialReviewGate={seed.reviewGate ?? null}

@@ -18,6 +18,7 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
 import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
 import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context";
+import { resolveAssignmentScopeChain } from "@cinatra-ai/agents/effective-assigned-skills";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
   deriveOboCeilingChain,
@@ -98,6 +99,17 @@ async function readInstalledOas(
     });
     return null;
   }
+}
+
+/** The trusted installed OAS for a package, or null when it is missing or
+ *  unreadable (both already logged by the miss recorder above). Exported for
+ *  the manifest-wide allocation gate (cinatra#2815 S3 part 3), which must read
+ *  EVERY declared slot rather than the one a callback names — it reads through
+ *  this so there is still exactly ONE trust root for an installed OAS. */
+export async function readInstalledOasForPackage(
+  packageName: string,
+): Promise<Record<string, unknown> | null> {
+  return readInstalledOas(packageName);
 }
 
 /** Load + validate the trusted slot from the parent package's installed OAS.
@@ -475,12 +487,72 @@ export async function deriveContextRouteContext(
         : recomputedCeiling;
   }
 
-  // projectId: the run's project is authoritative; fall back to the normalized
-  // body value. Normalize both (a stored "" must not fail-close the resolver).
-  const projectId =
-    normalizeProjectId(run.projectId) ?? normalizeProjectId(body.projectId);
+  // THE PERSONAL LAYER BELONGS TO A PERSON (cinatra#2815 S3, epic #2812).
+  //
+  // The actor above is built from `run.runBy`, which is durable OWNERSHIP and
+  // not evidence that a person started THIS run: a schedule, a trigger or an
+  // orchestrator child all keep a human owner. So a headless run was handed its
+  // owner's own user axis, and the ownership filter then admitted that person's
+  // PRIVATE artifacts into a run nobody was watching.
+  //
+  // The run's frozen snapshot is the authority on whether a person started it,
+  // exactly as it is for assigned skills. When it names no originating human,
+  // or names a different one, the user axis is REMOVED. Only that axis moves:
+  // the team, project, organization and platform-role axes are what the run
+  // legitimately carries, and the OBO ceiling above still narrows all of them.
+  //
+  // The filter binds `principalId ?? null`, and `owner_id = NULL` matches no
+  // row, so an absent axis contributes nothing rather than matching something
+  // else. This actor is used for candidate resolution only; the audit rows take
+  // their creator from the run, not from here.
+  const originatingHumanUserId = resolveAssignmentScopeChain({
+    snapshot: run.assignmentScopeSnapshot,
+    durableOrgId: run.orgId,
+  }).snapshot.originatingHumanUserId;
 
-  return { actor, run, projectId, servedBy, trustedPackageName, trustedSlotPackageName };
+  const contextActor: ActorContext =
+    originatingHumanUserId && originatingHumanUserId === run.runBy
+      ? actor
+      : ({ ...actor, principalId: undefined } as unknown as ActorContext);
+
+  // THE RUN'S FROZEN SCOPES DECIDE THE PROJECT (cinatra#2815 S3, epic #2812).
+  //
+  // The body value used to FILL IN for a run that names no project, so a caller
+  // chose which project's context an agent run read: a run with none, whose
+  // owner can reach project P, was narrowed to P on the strength of a request
+  // field. The run's own scope is the authority, and a body project it does not
+  // name is REFUSED rather than quietly honoured or quietly dropped, because a
+  // caller that asked for a different project must learn that it did not get
+  // one. Both routes derive their context here, so resolve and finalize answer
+  // the same way by construction.
+  //
+  // The frozen snapshot is preferred, and the mutable column is the fallback
+  // for a run whose payload predates it: that is the same order every other
+  // scope decision on this road takes.
+  const scopeChain = resolveAssignmentScopeChain({
+    snapshot: run.assignmentScopeSnapshot,
+    durableOrgId: run.orgId,
+  });
+  const projectId = scopeChain.usedFallback
+    ? normalizeProjectId(run.projectId)
+    : normalizeProjectId(scopeChain.snapshot.projectId ?? null);
+  const requestedProjectId = normalizeProjectId(body.projectId);
+  if (requestedProjectId !== undefined && requestedProjectId !== projectId) {
+    throw new ContextRouteError(
+      422,
+      "project_outside_run_scope",
+      `project '${requestedProjectId}' is not the project this run was created in`,
+    );
+  }
+
+  return {
+    actor: contextActor,
+    run,
+    projectId,
+    servedBy,
+    trustedPackageName,
+    trustedSlotPackageName,
+  };
 }
 
 /** Resolve candidates for a slot via the existing resolver + server-side
@@ -496,6 +568,9 @@ export async function resolveCandidates(input: {
   actor: ActorContext;
   slot: AgentContextSlot;
   projectId: string | undefined;
+  /** Forwarded to the resolver. The manifest-wide planner asks for `false`,
+   *  because it applies `maxItems` itself after its cross-slot dedupe. */
+  applyMaxItems?: boolean;
 }): Promise<ContextCandidate[]> {
   const installedExtensions = getInstalledExtensionDescriptors();
   const capture = await captureSnapshotsForContextSlot({
@@ -512,6 +587,7 @@ export async function resolveCandidates(input: {
     // Claimed rows resolve ONLY through the snapshots pinned at THIS
     // resolution (never "latest revision") — see ResolveContextSlotInput.
     snapshotPins: capture.pins,
+    ...(input.applyMaxItems !== undefined ? { applyMaxItems: input.applyMaxItems } : {}),
   });
   return refs as ContextCandidate[];
 }

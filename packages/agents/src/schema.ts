@@ -398,6 +398,17 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // assignmentScopeSnapshot above (which scopes assignments, not addresses).
   // Migration: src/lib/drizzle-store.ts entry + core__0102.
   launchScopeAnchor: jsonb("launch_scope_anchor"),
+  // WHAT STARTED THIS RUN (cinatra#3450, epic #3248): the producer key the
+  // launch fence received, from the inventory `RUN_PRODUCERS` records. Written
+  // ONCE at creation by the one creation entry every product road goes
+  // through, never inferred from another column, never backfilled and never
+  // updated. NULL for a row that predates the column — the honest record of a
+  // start nobody wrote down. Deliberately NOT `producer_run_id`, which is a
+  // different table's column naming the run that PRODUCED an artifact, and
+  // deliberately not a trigger record: the ABSENCE of an `agent_run_triggers`
+  // row is the shipped signal for "no schedule chosen yet".
+  // Migration: src/lib/drizzle-store.ts entry + core__0107.
+  launchProducer: text("launch_producer"),
   // Persisted agent-run OBO scope-ceiling chain (JSON-as-text). Derived at run
   // creation from the LOCKED template owner anchor + org + project launch, and
   // re-derived + containment-checked at MCP-token mint. NULL only for a corrupt

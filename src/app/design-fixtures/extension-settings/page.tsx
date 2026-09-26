@@ -7,7 +7,7 @@
 // pixel-diffed /design-fixtures index. Every state variant §V specifies is
 // rendered: editable Permissions (connector), the deferred-note Permissions
 // (agent/skill), the not-a-registered-vendor Marketplace state, the
-// registered-vendor Publish state, the already-published state, the FOUR
+// registered-vendor Publish state, the registered-vendor not-available state, the FOUR
 // Maintenance update-row states (update available / up to date / incompatible
 // / non-comparable — the per-state wording lives HERE, never on the card), the
 // complementary Archive/Activate pair, and the locked / system
@@ -103,7 +103,6 @@ export default async function ExtensionSettingsFixturePage() {
           activateDisabled="Already active"
           reinstallDisabled={null}
           forceDeleteDisabled={null}
-          isPublic={false}
           isRegisteredVendor={false}
           canPublish={false}
           permissions={<EditablePermissions />}
@@ -128,7 +127,6 @@ export default async function ExtensionSettingsFixturePage() {
           activateDisabled="Already active"
           reinstallDisabled={null}
           forceDeleteDisabled={null}
-          isPublic={false}
           isRegisteredVendor
           canPublish
           permissions={
@@ -139,8 +137,9 @@ export default async function ExtensionSettingsFixturePage() {
       </Case>
 
       {/* Case C — locked / system connector: Archive / Reinstall / Force-delete
-          disabled-in-place (Update stays available), already published. */}
-      <Case id="connector-locked" label="Connector · locked (system) · published">
+          disabled-in-place (Update stays available); a registered vendor viewing a
+          kind that can't be published yet (the Marketplace reason as visible text). */}
+      <Case id="connector-locked" label="Connector · locked (system) · publishing not available">
         <ExtensionSettingsView
           kind="connector"
           packageName="@acme/directory-sync"
@@ -154,7 +153,6 @@ export default async function ExtensionSettingsFixturePage() {
           activateDisabled="Already active"
           reinstallDisabled="Cannot uninstall — locked; archive instead"
           forceDeleteDisabled="Cannot force delete — locked & required-in-prod"
-          isPublic
           isRegisteredVendor
           canPublish={false}
           permissions={<EditablePermissions />}
@@ -179,7 +177,6 @@ export default async function ExtensionSettingsFixturePage() {
           activateDisabled={null}
           reinstallDisabled={null}
           forceDeleteDisabled={null}
-          isPublic={false}
           isRegisteredVendor={false}
           canPublish={false}
           permissions={<EditablePermissions />}
@@ -206,7 +203,6 @@ export default async function ExtensionSettingsFixturePage() {
           activateDisabled="Already active"
           reinstallDisabled={null}
           forceDeleteDisabled={null}
-          isPublic={false}
           isRegisteredVendor={false}
           canPublish={false}
           permissions={
@@ -233,7 +229,6 @@ export default async function ExtensionSettingsFixturePage() {
           activateDisabled="Already active"
           reinstallDisabled={null}
           forceDeleteDisabled={null}
-          isPublic={false}
           isRegisteredVendor={false}
           canPublish={false}
           permissions={<EditablePermissions />}
@@ -275,7 +270,6 @@ export default async function ExtensionSettingsFixturePage() {
             reinstall:
               "Installed for the whole platform. Only a platform administrator with no active organization can act on it.",
           }}
-          isPublic={false}
           isRegisteredVendor={false}
           canPublish={false}
           permissions={<EditablePermissions />}

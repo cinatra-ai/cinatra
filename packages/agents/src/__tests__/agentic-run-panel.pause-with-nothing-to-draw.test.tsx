@@ -352,16 +352,13 @@ describe("the window between the answered question and the park's first look", (
     // context. The condition therefore consults the RAW reading too: no
     // interrupt on file, not merely none being drawn.
     //
-    // THE CASE MOVED TO THE RUN PAGE (cinatra#3046, fix leg 17; cinatra#3290,
-    // #3291, #3292). It used to be pinned in a conversation, as a proxy — the
-    // suppressed shape it is really about is not reachable under this suite's
-    // mocks on either host. The proxy no longer holds there, and the sibling
-    // case below says why: in a transcript this panel draws NO question at all
-    // (`runCardOwnsLifecycleCopy` is false for `chat_thread`), so the box was
-    // burying nothing, and the reading it drew instead — a status word and an
-    // empty-transcript line — is the one the ratified drawing forbids outright.
-    // The run page is where the panel IS the screen, so it is where the property
-    // has teeth, and it is pinned here unchanged.
+    // THE CASE MOVED TO THE RUN PAGE (cinatra#3046). It used to be pinned in a
+    // conversation, as a proxy — the suppressed shape it is really about is not
+    // reachable under this suite's mocks on either host. In a conversation the
+    // same state draws the run progress panel under the cinatra#3484 contract,
+    // because the thread's own screen card asks the question (the sibling case
+    // below pins that); the run page is where the panel IS the screen, so it is
+    // where this property has teeth, and it is pinned here unchanged.
     const body = seedBody({ hitlContext: SETUP_ASK, reviewGate: NOT_PARKED });
     stubFetch(() => body);
     a2aSnapshot.value = {
@@ -399,29 +396,12 @@ describe("the window between the answered question and the park's first look", (
     ).toBeNull();
   }, 60_000);
 
-  it("conversation — a question ON FILE gets the quiet box, and is still published", async () => {
-    // THE OTHER HALF, AND WHY THE PROPERTY ABOVE IS THE RUN PAGE'S
-    // (cinatra#3046, fix leg 17; cinatra#3290, #3291, #3292).
-    //
-    // The thirteenth graded reading measured this exact state on a conversation
-    // surface held open before the gate existed, in both palettes: a run
-    // `pending_approval` with a setup question still on its row, and the box the
-    // review will land in drawing the run-progress reading — the heading, an
-    // "Awaiting input" status badge, and "No messages yet." — with no arc
-    // anywhere. The drawing gives that box one reading and forbids all three of
-    // those: "while the run is working that card is a placeholder for the review
-    // screen: the card frame, and a spinning icon … It names no status, reports
-    // no result and draws nothing to press."
-    //
-    // NOTHING IS BURIED BY THE QUIET BOX HERE, which is the whole difference
-    // from the run page. This panel draws no question in a transcript at all —
-    // `runCardOwnsLifecycleCopy` is false for `chat_thread` — so the reading it
-    // used to draw was a status word over a question it was not showing either.
-    // The thread mounts `AgentHitlScreenCard` for the same run as a SIBLING of
-    // this panel, and this panel keeps publishing the gate descriptor the
-    // composer binds to. That second road is asserted below, so the property the
-    // run-page case protects is proved to still hold here by the means this host
-    // actually uses.
+  it("conversation — a question ON FILE draws the run progress panel, and is still published (cinatra#3484: a gate that needs input - asks nothing: nothing of its own inside a conversation - the turn's own screen card owns it)", async () => {
+    // THE CINATRA#3484 CONTRACT GOVERNS THIS STATE: a run `pending_approval`
+    // with a setup question on its row, inside a conversation, is asked by the
+    // thread's own screen card, so this panel draws its run progress reading and
+    // never the quiet placeholder. The gate is still published for the composer,
+    // which is asserted below.
     const body = seedBody({ hitlContext: SETUP_ASK, reviewGate: NOT_PARKED });
     stubFetch(() => body);
     a2aSnapshot.value = {
@@ -446,19 +426,15 @@ describe("the window between the answered question and the park's first look", (
       </LifecycleCardSurfaceProvider>,
     );
 
-    const placeholder = await waitFor(
+    await waitFor(
       () => {
-        const el = document.querySelector(PLACEHOLDER);
-        if (!el) throw new Error("no placeholder");
-        return el as HTMLElement;
+        if (!document.querySelector("[data-run-progress-panel]")) {
+          throw new Error("no run progress panel");
+        }
       },
       { timeout: 20_000 },
     );
-    // The drawing's own two things, and the three it forbids.
-    expect(placeholder.querySelectorAll("svg.animate-spin").length).toBe(1);
-    expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
-    expect(screen.queryByText(/Awaiting input/i)).toBeNull();
-    expect(screen.queryByText(/No messages yet/i)).toBeNull();
+    expect(document.querySelector(PLACEHOLDER)).toBeNull();
     // AND THE QUESTION IS STILL REACHABLE: the descriptor the composer binds to
     // is published for this run, unchanged by the box going quiet.
     await waitFor(
