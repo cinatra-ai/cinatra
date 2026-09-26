@@ -1786,7 +1786,10 @@ jobs:
     # recent runs, 14m38s rounded up to 15, + the 5-minute margin. This job also
     # carries the worst measured setup phase of the fleet (16m44s), which is
     # where the 17 above comes from.
-    timeout-minutes: 37
+    # 2026-09-26: on the shared six-runner box the install and setup alone took 26 minutes
+    # (a loaded pool), so the root suite hit this budget at 37 without a verdict; 60 covers the
+    # measured setup plus the suite with the same margin the design suite received.
+    timeout-minutes: 60
     steps:
       # Hard-fail (definitive RED, never a non-failing "skip") when detect did
       # not pass. No-ops on the success path; its failure short-circuits every
