@@ -1,0 +1,49 @@
+# Dedicated fixture; never joins or renames the shared developer CMS containers.
+# Supply a checked-out wordpress-plugin and private, per-fixture credentials.
+services:
+  db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: ${WIDGET_DB_PASSWORD:?set a fixture database password}
+      MARIADB_ROOT_PASSWORD: ${WIDGET_DB_ROOT_PASSWORD:?set a fixture root password}
+    volumes:
+      - database:/var/lib/mysql
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  wordpress:
+    image: cinatra-wordpress-dev:6.9-php8.3
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WIDGET_WP_PORT:-8087}:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${WIDGET_DB_PASSWORD:?set a fixture database password}
+      WORDPRESS_CONFIG_EXTRA: "define('WP_ENVIRONMENT_TYPE', 'local');"
+      WP_DEV_URL: ${WIDGET_WP_ORIGIN:-http://localhost:8087}
+      WP_DEV_ADMIN_USER: ${WIDGET_WP_USER:-admin}
+      WP_DEV_ADMIN_PASS: ${WIDGET_WP_PASSWORD:?set a fixture administrator password}
+      WP_DEV_ADMIN_EMAIL: widget-proof@example.com
+      CINATRA_BASE_URL: ${WIDGET_APP_SERVER_URL:?set the container-reachable application URL}
+    extra_hosts:
+      - "host.docker.internal:${WIDGET_HOST_GATEWAY:-host-gateway}"
+    volumes:
+      - wordpress:/var/www/html
+      - ${WIDGET_WP_PLUGIN_PATH:?set the checked-out plugin directory}:/var/www/html/wp-content/plugins/cinatra:ro
+      - ../wordpress-entrypoint.sh:/usr/local/bin/cinatra-wp-entrypoint.sh:ro
+      - ../../docker/wordpress/fixture-plugin:/var/www/html/wp-content/plugins/fixture-thirdparty-mcp:ro
+      - ../../docker/wordpress/seed-content.php:/opt/cinatra-dev-content/seed-content.php:ro
+      - ./external-instances.dev-content.json:/opt/cinatra-dev-content/external-instances.dev-content.json:ro
+    entrypoint: [bash, /usr/local/bin/cinatra-wp-entrypoint.sh]
+    command: [apache2-foreground]
+volumes:
+  database:
+  wordpress:
