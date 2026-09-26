@@ -318,10 +318,13 @@ export async function ConnectionSharingSection({
         <h2 className="text-base font-semibold text-foreground">Connection sharing</h2>
         <p className="text-xs text-muted-foreground">{CONNECTOR_SHARING_INTRO}</p>
       </div>
-      {/* The roll-up heads the list only when there is more than one
-          connection to roll up (§II) — one rule for every mount, the Sharing
-          tab and the pages that draw no tab strip alike. */}
-      <ConnectorSharingPanels panels={panelViews} />
+      {/* The SINGLE shape, on every page this section is mounted on. The
+          generated connector page draws no Connections tab: its strip reads
+          Setup · Sharing · Help. The pages with no tab strip at all draw
+          none either, so neither carries the Connections status card the
+          roll-up repeats. The tab therefore lists its panels alone, however
+          many connections the owner saved (cinatra#3454). */}
+      <ConnectorSharingPanels panels={panelViews} pageShape="single" />
     </section>
   );
 }

@@ -11,7 +11,8 @@
 //
 // This is the package's own rendering test of the anatomy the ratified drawing
 // pins for the tab (§II, the Sharing tab): the roll-up card above the list it
-// counts, and only where there is more than one connection to roll up; one
+// counts, on a many-connections page (the maintainer's ruling of 2026-09-26,
+// cinatra#3454) and only where there is more than one connection to roll up; one
 // panel per owned connection (its identity row — name and mono
 // line, no status badge and no per-row action — over the access picker and
 // ownership card THIS package draws from data and callbacks), the locked and
@@ -169,7 +170,7 @@ describe("ConnectorSharingPanels — the roll-up card", () => {
     // there is more than one connection to roll up". One connection is nothing
     // to roll up, so the list starts with that connection's own panel — one
     // rule for every page that draws this component.
-    await render(<ConnectorSharingPanels panels={[panel(0)]} />);
+    await render(<ConnectorSharingPanels panels={[panel(0)]} pageShape="many" />);
     expect(
       container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
     ).toBeNull();
@@ -179,8 +180,38 @@ describe("ConnectorSharingPanels — the roll-up card", () => {
     expect(accessTrigger(first!)).toBeTruthy();
   });
 
-  it("heads the list once a SECOND connection is listed, with no Check and no link", async () => {
+  it("draws NO card on a SINGLE-shape page, however many panels it lists", async () => {
+    // The maintainer's ruling of 2026-09-26 (cinatra#3454): the roll-up
+    // follows the page's SHAPE, not the count. The roll-up card is "the
+    // Connections status card of the Setup tab", and a page whose tab strip
+    // has no Connections tab carries no such card, so it heads its Sharing
+    // list with nothing, even above several panels.
+    await render(<ConnectorSharingPanels panels={[panel(0), panel(1)]} pageShape="single" />);
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+    // The panels themselves are untouched: the list simply starts with the
+    // first one.
+    expect(
+      container.querySelectorAll('[data-conformance-id="connector-sharing"]').length,
+    ).toBe(2);
+  });
+
+  it("takes the SINGLE shape when the caller states none", async () => {
+    // No production page carries the many-connections shape today, so the
+    // default is the shape the pages actually have. A caller that says
+    // nothing gets no roll-up.
     await render(<ConnectorSharingPanels panels={[panel(0), panel(1)]} />);
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+    expect(componentSrc).toContain('pageShape = "single"');
+  });
+
+  it("heads the list once a SECOND connection is listed, with no Check and no link", async () => {
+    await render(
+      <ConnectorSharingPanels panels={[panel(0), panel(1)]} pageShape="many" />,
+    );
     const rollup = container.querySelector(
       '[data-conformance-id="connector-sharing-rollup"]',
     );
@@ -208,10 +239,13 @@ describe("ConnectorSharingPanels — the roll-up card", () => {
     expect(componentSrc).not.toContain('from "@/');
   });
 
-  it("carries no mode switch at all — the component takes no `rollup` prop", () => {
-    // ONE rule for every mount, so there is nothing for a caller to choose.
+  it("states the page's SHAPE, never the caller's wish for a card", () => {
+    // The one thing a caller may state is what its page is, not whether it
+    // wants the card: the shape decides, and the drawing's own "more than one
+    // connection to roll up" still decides beside it.
+    expect(componentSrc).toContain('pageShape?: "single" | "many"');
     expect(componentSrc).not.toContain("rollup ===");
-    expect(componentSrc).toContain("panels.length > 1 ?");
+    expect(componentSrc).toContain("panels.length > 1");
   });
 });
 
