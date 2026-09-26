@@ -21,6 +21,8 @@
 //   * the branch is main, the event is a push / dispatch / merge group,
 //   * the diff base does not resolve (a fetch-depth misconfiguration) or git
 //     fails at all,
+//   * a pull request run whose event payload names no head, or whose checkout
+//     is not the merge of exactly that head (the range paragraph below),
 //   * an in-repo import inside a family's graph does not resolve (then the
 //     graph is not trustworthy and NOTHING is judged against it, not even a
 //     documentation-only diff),
@@ -35,6 +37,14 @@
 // take (DESIGN_PIN_DRIFT_DIFF_BASE there, DESIGN_SELECT_DIFF_BASE here): verify
 // the base resolves in THIS checkout, fetch it once if the checkout is shallow,
 // and never diff against nothing.
+//
+// The range is the change's OWN (cinatra#3667). A pull request run checks out
+// the merge ref, whose first parent is the tip of main when that merge was made,
+// while the base it is handed was frozen when the event fired: once main moves,
+// the range up to HEAD carries main's changes as if they were the pull request's.
+// So a pull request run takes its head from the event payload, requires HEAD to
+// be the merge of exactly that head, and diffs merge-base(base, head)..head. A
+// merge queue run keeps HEAD: the group head is a real commit on its base.
 //
 // What this selector does NOT do: it never touches a pin gate. The pin
 // freshness / drift / testid / ratchet gates are separate steps and separate
@@ -675,12 +685,45 @@ const ALWAYS_ALL_EVENTS = new Set(["push", "workflow_dispatch", "schedule"]);
 // honest diff — so it is used as one, and the widening stays only for the
 // events that genuinely have no range (a push, a dispatch, a schedule).
 const QUEUE_EVENT = "merge_group";
+// A pull_request run's HEAD is the merge ref, not the change (cinatra#3667).
+const PULL_REQUEST_EVENT = "pull_request";
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const short = (rev) => (FULL_SHA.test(rev) ? rev.slice(0, 12) : rev);
+
+/**
+ * The pull request's head commit, as this run's event payload names it: {sha}
+ * or {error}. An absent or unreadable payload, or one that names no full commit
+ * id, is an error the caller widens on. The head is never guessed.
+ */
+function pullRequestHead({ env, readFile }) {
+  const eventPath = (env.GITHUB_EVENT_PATH ?? "").trim();
+  if (eventPath === "") {
+    return { error: "the pull_request event payload is absent (GITHUB_EVENT_PATH is not set)" };
+  }
+  let payload;
+  try {
+    payload = JSON.parse(readFile(eventPath, "utf8"));
+  } catch (error) {
+    return { error: `the pull_request event payload could not be read (${error.message})` };
+  }
+  const sha = payload?.pull_request?.head?.sha;
+  if (typeof sha !== "string" || !FULL_SHA.test(sha.toLowerCase())) {
+    return { error: "the pull_request event payload names no pull_request.head.sha" };
+  }
+  return { sha: sha.toLowerCase() };
+}
 
 /**
  * The diff to classify. Returns {mode:"all", reason} whenever the diff cannot
- * be computed honestly, and {mode:"diff", files, reason} otherwise.
+ * be computed honestly, and {mode:"diff", files, reason} otherwise. A
+ * pull_request run in CI reads the pull request's own range (its head from the
+ * event payload); every other run reads HEAD against its merge base with the base.
  */
-export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}) {
+export function resolveChangedFiles({
+  env = process.env,
+  git = defaultGit,
+  readFile = readFileSync,
+} = {}) {
   if ((env.DESIGN_SELECT ?? "").trim() === "all") {
     return { mode: "all", files: [], reason: "DESIGN_SELECT=all (documented override)" };
   }
@@ -739,12 +782,49 @@ export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}
         };
       }
     }
-    const mergeBase = git(["merge-base", base, "HEAD"]).trim();
+    // The head of the range. A pull_request run in CI takes the head the event
+    // payload names, and only when HEAD is the merge of exactly that head;
+    // anything else it finds is a doubt, and a doubt widens.
+    let head = "HEAD";
+    if (env.CI && event === PULL_REQUEST_EVENT) {
+      const own = pullRequestHead({ env, readFile });
+      if (own.error) {
+        return {
+          mode: "all",
+          files: [],
+          reason: `${own.error}, so the pull request's own range is unknown`,
+        };
+      }
+      const [checkout = "", ...parents] = git(["rev-list", "--parents", "-n", "1", "HEAD"])
+        .trim()
+        .split(/\s+/);
+      if (parents.length !== 2) {
+        const count = `${parents.length} parent${parents.length === 1 ? "" : "s"} visible`;
+        return {
+          mode: "all",
+          files: [],
+          reason:
+            `the checkout ${short(checkout)} is not a two-parent merge commit (${count}), ` +
+            `so the pull request head ${short(own.sha)} cannot be matched to it`,
+        };
+      }
+      if (parents[1].toLowerCase() !== own.sha) {
+        return {
+          mode: "all",
+          files: [],
+          reason:
+            `the checkout ${short(checkout)} merges ${short(parents[1])}, ` +
+            `not the pull request head ${short(own.sha)} the event names`,
+        };
+      }
+      head = own.sha;
+    }
+    const mergeBase = git(["merge-base", base, head]).trim();
     if (mergeBase === "") {
       return { mode: "all", files: [], reason: `no merge base with ${base}` };
     }
     const files = new Set(
-      git(["diff", "--name-only", mergeBase, "HEAD"])
+      git(["diff", "--name-only", mergeBase, head])
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean),
@@ -757,7 +837,12 @@ export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}
         if (path) files.add(path.includes(" -> ") ? path.split(" -> ")[1] : path);
       }
     }
-    return { mode: "diff", files: [...files], reason: `diff against ${base} (${mergeBase})` };
+    const reason =
+      head === "HEAD"
+        ? `diff against ${base} (${mergeBase})`
+        : `${short(mergeBase)}..${short(head)}, the pull request's own commits ` +
+          `(merge base with ${short(base)})`;
+    return { mode: "diff", files: [...files], reason };
   } catch (error) {
     return { mode: "all", files: [], reason: `git could not compute the diff (${error.message})` };
   }
