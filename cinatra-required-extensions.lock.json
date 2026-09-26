@@ -110,9 +110,9 @@
     {
       "packageName": "@cinatra-ai/json-artifact",
       "repo": "cinatra-ai/json-artifact",
-      "resolvedSha": "f54f31f85a8cde3511be221b77e829bc5f7ce83e",
-      "packageVersion": "0.1.0",
-      "treeSha256": "b578f511de79733aa421d3514fb48aba7dddfa4ba11194639b6c6545c77b910a"
+      "resolvedSha": "742686607c4ccf1d35611e2aa3d523a5d7659922",
+      "packageVersion": "0.1.1",
+      "treeSha256": "662364db55312a3b23297967a8fb8ba4de0c73004b772ff2a4bb2ce6c0fdc8a7"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
