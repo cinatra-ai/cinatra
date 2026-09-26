@@ -229,9 +229,19 @@ export function comparableFieldRendererBinding(e) {
 
 /**
  * Merge per-package validated entries with the cross-declaration rules:
- *   - duplicate id with DEEP-EQUAL (kind, priority, midRunHitl,
- *     a2uiTranslator, params) -> dedupe (first declarer recorded);
- *   - duplicate id with ANY divergence -> error naming both declarers.
+ *   - duplicate id whose kind, priority, midRunHitl, a2uiTranslator and
+ *     component are NOT deep-equal -> error naming both declarers;
+ *   - duplicate id otherwise -> its `params` merge as a UNION: a key declared
+ *     by only one declarer is taken; a key declared by several with deep-equal
+ *     values (equal JSON text) is taken once; a key declared with DIFFERENT
+ *     values is an error naming both declarers and `params.<key>`;
+ *   - the union's key order is the first declarer's keys, then each key a
+ *     later declarer adds, in that declarer's order (deterministic emission);
+ *   - a conflicting later declarer contributes nothing (first declarer wins);
+ *     the merged entry records the first declarer. A single-declarer entry
+ *     passes through unchanged; a co-declared id's merged entry is a new object
+ *     that carries `params` only when the union has a key; no input entry is
+ *     mutated.
  * Input: array of entries (each carrying `declaredBy`). Output:
  * `{ merged: [...], errors: [...] }` with `merged` sorted by id for
  * deterministic emission.
@@ -239,22 +249,58 @@ export function comparableFieldRendererBinding(e) {
 export function mergeFieldRendererBindings(allEntries) {
   const errors = [];
   const byId = new Map();
-  const comparable = comparableFieldRendererBinding;
+  const comparableWithoutParams = (e) =>
+    comparableFieldRendererBinding({ ...e, params: undefined });
+  // an own data property even for a key such as `__proto__`
+  const setOwn = (obj, key, value) =>
+    Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
   for (const e of allEntries) {
     const prev = byId.get(e.id);
     if (!prev) {
-      byId.set(e.id, e);
+      byId.set(e.id, { entry: e, union: null, keyDeclarers: null });
       continue;
     }
-    if (comparable(prev) !== comparable(e)) {
+    if (prev.union === null) {
+      prev.union = { ...(prev.entry.params ?? {}) };
+      prev.keyDeclarers = new Map(Object.keys(prev.union).map((k) => [k, prev.entry.declaredBy]));
+    }
+    const { union, keyDeclarers } = prev;
+    if (comparableWithoutParams(prev.entry) !== comparableWithoutParams(e)) {
       errors.push(
         `conflicting fieldRenderers declarations for ${e.id}: ` +
-          `${prev.declaredBy} vs ${e.declaredBy} disagree on kind/priority/flags/params`,
+          `${prev.entry.declaredBy} vs ${e.declaredBy} disagree on kind/priority/flags/params`,
       );
+      continue;
     }
-    // deep-equal duplicate -> keep first declarer
+    const conflicts = [];
+    const added = [];
+    for (const [key, value] of Object.entries(e.params ?? {})) {
+      if (!Object.hasOwn(union, key)) added.push(key);
+      else if (JSON.stringify(union[key]) !== JSON.stringify(value)) conflicts.push(key);
+    }
+    if (conflicts.length > 0) {
+      errors.push(
+        `conflicting fieldRenderers declarations for ${e.id}: ` +
+          conflicts
+            .map((key) => `${keyDeclarers.get(key)} vs ${e.declaredBy} disagree on params.${key}`)
+            .join("; "),
+      );
+      continue;
+    }
+    for (const key of added) {
+      setOwn(union, key, e.params[key]);
+      keyDeclarers.set(key, e.declaredBy);
+    }
   }
-  const merged = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const merged = [...byId.values()]
+    .map(({ entry, union }) => {
+      if (union === null) return entry;
+      if (Object.keys(union).length > 0) return { ...entry, params: union };
+      const copy = { ...entry };
+      delete copy.params;
+      return copy;
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
   return { merged, errors };
 }
 

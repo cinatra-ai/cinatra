@@ -1323,6 +1323,59 @@ function serializeRunMessages(
   }));
 }
 
+// ---------------------------------------------------------------------------
+// WHAT A REFUSED LAUNCH ANSWERS (cinatra#3358).
+//
+// The generic `/agents/{vendor}/{packageName}/new` launcher below asks the run
+// coordinator to create-and-trigger a run. For ANY refusal it answered, the
+// screen used to render the instance "not found" — a 404 page on a link the
+// product itself had drawn. A refusal is not an absence: the package is there,
+// the route is there, and the coordinator said WHY it will not start (a
+// runtime-lifecycle or provisioning verdict carries its own actionable
+// sentence). This reading keeps that distinction, so the launcher can say what
+// happened instead of denying the page exists.
+//
+// GENERIC BY CONSTRUCTION: the outcome is read off the coordinator's own answer
+// and names no package. Exported so the rule is readable on its own — the same
+// way this screen's other decisions are — rather than buried in a branch.
+// ---------------------------------------------------------------------------
+
+/** What the generic new-run launcher does with the coordinator's answer. */
+export type NewRunLaunchOutcome =
+  /** The coordinator created the run — the launcher sends the reader to it. */
+  | { kind: "created"; runId: string }
+  /**
+   * The coordinator REFUSED to start the run and said why. NEVER a not-found:
+   * the page exists and the reader is owed the reason (cinatra#3358).
+   */
+  | { kind: "refused"; message: string };
+
+/** The refusal sentence shown when a refusal arrives with no reason attached. */
+export const NEW_RUN_REFUSAL_FALLBACK =
+  "This agent cannot start a run right now.";
+
+/**
+ * Read the run coordinator's create-and-trigger answer as the launcher's own
+ * outcome. A refusal keeps its sentence; a refusal with an empty or absent
+ * sentence gets the fallback, so the launcher always has something to show.
+ */
+export function newRunLaunchOutcome(
+  result:
+    | { ok: true; runId: string }
+    | { ok: false; error?: string | null }
+    | null
+    | undefined,
+): NewRunLaunchOutcome {
+  if (result && result.ok === true && typeof result.runId === "string" && result.runId.length > 0) {
+    return { kind: "created", runId: result.runId };
+  }
+  const error =
+    result && result.ok === false && typeof result.error === "string"
+      ? result.error.trim()
+      : "";
+  return { kind: "refused", message: error.length > 0 ? error : NEW_RUN_REFUSAL_FALLBACK };
+}
+
 export async function SetupScreen({
   agentId,
   instanceId,
@@ -1359,17 +1412,65 @@ export async function SetupScreen({
       template,
       launchScopeAnchorForScope(launchScope ?? null, actorUserId),
     );
-    if (result.ok) {
+    // A REFUSED LAUNCH IS NOT A MISSING PAGE (cinatra#3358). This branch used to
+    // read `if (result.ok) redirect(...)` and then fall into `notFound()`, so
+    // EVERY refusal the run coordinator can answer — a runtime-lifecycle verdict,
+    // a provisioning verdict naming an uninstalled required dependency, an
+    // actionable connector/provider preflight — was drawn as "404 — Page not
+    // found" on a link the product itself had offered. Measured on a development
+    // boot with both packages installed: the same road answered 200 and created a
+    // run for a package the coordinator accepted, and the 404 page for one whose
+    // required dependency had no canonical install record. The refusal carries its
+    // own actionable sentence; the reader is owed it, not a denial that the page
+    // exists. No package is named here — the outcome is read off the coordinator's
+    // answer, so the road stays generic for every installed package.
+    const outcome = newRunLaunchOutcome(result);
+    if (outcome.kind === "created") {
       // THROUGH THE HELPER (cinatra#2809), never a hand-written route: a run
       // launched from a vantage belongs to it, so the fresh run's address is
       // this launcher's own scope base plus the one agent-path grammar.
       redirect(
-        buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
+        buildAgentInstancePath(agentId, encodeURIComponent(outcome.runId), {
           scopeBase: scopeBase ?? null,
         }),
       );
     }
-    notFound();
+    return (
+      <Main className="min-h-screen">
+        <AgentPageLayout
+          agentId={agentId}
+          instanceId={instanceId}
+          scopeBase={scopeBase ?? null}
+          // THE ANSWER, NEVER THE LITERAL (Application Design — Agents, the run
+          // view's conditional-tab section, and the screen's own pin for it).
+          // This launcher draws no step inside the frame — there is no run yet —
+          // so it asks the same reading every other tab strip on this screen
+          // asks, with every step span empty.
+          activeTab={runPageActiveTab({
+            inputStepIsOpen: false,
+            inputStepsInRail: false,
+            scheduleStepInFrame: false,
+            gateStepInFrame: false,
+          })}
+          templateName={template.name}
+          initialRunName=""
+          runId={null}
+          isPublished={template.status === "published"}
+        >
+          <AgentPanelBody role="frame">
+            <div
+              className="soft-panel rounded-card p-6 flex flex-col gap-2"
+              data-testid="new-run-refused"
+            >
+              <h2 className="text-base font-semibold text-foreground">
+                This agent cannot start a run
+              </h2>
+              <p className="text-sm text-muted-foreground">{outcome.message}</p>
+            </div>
+          </AgentPanelBody>
+        </AgentPageLayout>
+      </Main>
+    );
   }
 
   // Better Auth stores role as "user,admin" for multi-role users; naive
@@ -2139,16 +2240,18 @@ export async function SetupScreen({
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
         actions={
-          run && run.status === "pending_input" && !recommendationHeld ? (
-            <RunAgentButton
-              runId={run.id}
-              templateSlug={agentId}
-              agentName={template.name}
-              allStepsComplete={true}
-              runStatus={run.status}
-              redirectTo={`/agents/${agentId}/${encodeURIComponent(run.id)}`}
-            />
-          ) : undefined
+          <>
+            {run && run.status === "pending_input" && !recommendationHeld ? (
+              <RunAgentButton
+                runId={run.id}
+                templateSlug={agentId}
+                agentName={template.name}
+                allStepsComplete={true}
+                runStatus={run.status}
+                redirectTo={`/agents/${agentId}/${encodeURIComponent(run.id)}`}
+              />
+            ) : null}
+          </>
         }
       >
         {run ? (

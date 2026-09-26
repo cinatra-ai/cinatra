@@ -27,12 +27,20 @@ import {
   // setup- branch already runs through `resumeRunFromSetupApproval`.
   transitionRunStatus,
   writeHitlPrompt,
+  type AgentRunRecord,
 } from "./store";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
+// The ONE shared rule both submit ends ask (cinatra#3358): may this gate be
+// continued, or does its answer still name nothing? Pure leaf module, no React.
+import {
+  resumeAnswerIncompleteReason,
+  resumeTextForAnswer,
+  type ResumeGateContract,
+} from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -178,6 +186,34 @@ async function assertRunScopeOrDeny(
       throw new Error("Run access denied.");
     }
     throw err;
+  }
+}
+
+/**
+ * THE PENDING GATE A RESUME IS ABOUT TO ANSWER, as the refusal rule reads it —
+ * derived from the run the seam already holds, for BOTH resume seams (this
+ * file's UI path and the MCP run-resume path in mcp/handlers.ts), so the rule
+ * is handed the same contract wherever a resume arrives.
+ *
+ * `expectReviewTaskId`, when given, keeps the reading to THIS gate: a run whose
+ * pending gate is a different review task is not the gate being answered.
+ *
+ * Fail-soft by design: a derivation that cannot answer (no interrupt row yet, a
+ * store read that throws) must never break a legitimate resume — the rule's
+ * reading of the answer's own contract still stands on its own.
+ */
+export async function resumeGateContractForRun(
+  run: AgentRunRecord,
+  expectReviewTaskId?: string | null,
+): Promise<ResumeGateContract | null> {
+  try {
+    const { deriveRunHitlContext } = await import("./hitl-context");
+    const pendingGate = await deriveRunHitlContext(run);
+    if (!pendingGate) return null;
+    if (expectReviewTaskId != null && pendingGate.reviewTaskId !== expectReviewTaskId) return null;
+    return { xRenderer: pendingGate.xRenderer, currentValues: pendingGate.currentValues };
+  } catch {
+    return null;
   }
 }
 
@@ -941,14 +977,42 @@ export async function approveReviewTaskInternal(
     const approvalNoteRaw = valuesObj?.approvalNote;
     const trimmedNote = typeof approvalNoteRaw === "string" ? approvalNoteRaw.trim() : "";
 
-    let resumeText: string;
-    if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
-      resumeText = userResponseRaw;
-    } else if (trimmedNote.length > 0) {
-      resumeText = trimmedNote;
-    } else {
-      resumeText = "[Approved by operator]";
+    // A RUN DOES NOT WALK PAST A REVIEW STEP ON AN ANSWER THAT NAMES NOTHING
+    // (cinatra#3358 acceptance 2). Measured: a run started on an account holding
+    // no list reached its account-scope step and was continued with nothing
+    // chosen — the resume dispatched on a snapshot naming an EMPTY list and the
+    // run walked past that review step and the one after it, completing without
+    // ever raising a gate on the missing list. This is where that stops, BEFORE
+    // the prompt write, the provenance mint and the resume dispatch, so a
+    // refusal leaves the run exactly where it was: parked at this step, the gate
+    // still pending and still the reader's to answer.
+    //
+    // NOT a `GateNotPendingError`: the gate IS pending — that is the whole
+    // point — so this must not be classified as the stale-gate block the
+    // surface draws (hitl-gate-submit `classifyGateRejection`). It is an
+    // ordinary incomplete-answer refusal, and the surface's own guard says the
+    // same sentence before the reader ever gets here.
+    //
+    // Generic: the rule reads the answer's own declared contract, never a
+    // package, a template or a renderer id (./hitl-gate-submit).
+    //
+    // THE GATE ITSELF SAYS WHAT THIS STEP ASKS FOR, so the rule does not trust
+    // only the payload it was handed: a supported surface reaches this seam with
+    // NO values at all (the lifecycle card's Continue submits the form as it
+    // stands), and a payload-only reading let exactly that walk a listless run
+    // past its step. The pending gate is derived from the run this seam already
+    // holds and is only used when it IS this gate; fail-soft, because a
+    // derivation that cannot answer must never break a legitimate resume — the
+    // answer-contract reading inside the rule still stands on its own.
+    const resumeGate = await resumeGateContractForRun(run, reviewTaskId);
+    const incompleteAnswer = resumeAnswerIncompleteReason(values, resumeGate);
+    if (incompleteAnswer) {
+      throw new Error(
+        `[approveReviewTaskInternal] run ${run.id} stays at this review step: ${incompleteAnswer}`,
+      );
     }
+
+    const resumeText = resumeTextForAnswer(userResponseRaw, trimmedNote);
 
     // Extract structured submission payload (parsed userResponse JSON, else
     // values minus userResponse, else null).

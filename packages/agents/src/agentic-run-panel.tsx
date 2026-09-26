@@ -64,7 +64,9 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  SETUP_GATE_NO_ANSWER_STAGED,
   setupFieldRendererValue,
+  setupPressAnswerReading,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
@@ -931,7 +933,13 @@ export function AgenticRunPanel({
     setupFlushRef.current = { key, fn };
   }, []);
   const submitStagedSetupAnswer = useCallback(
-    async (key: string, reviewTaskId: string, xRenderer: string) => {
+    async (
+      key: string,
+      reviewTaskId: string,
+      xRenderer: string,
+      fieldSchema: unknown,
+      fieldName: string | undefined,
+    ) => {
       // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
       // the flush is asynchronous and `isApproving` is React state, so two
       // presses in one tick would both reach the submit core.
@@ -957,10 +965,27 @@ export function AgenticRunPanel({
         // would leave the reader pressing a Continue that does nothing until
         // they retype. The staged answer belongs to this gate alone — the key
         // check below is what keeps it off the next one — so it is simply kept.
-        const staged = setupAnswerRef.current;
-        // Nothing staged for THIS gate: a required box the renderer refused to
-        // hand over says so itself, inside the field. Nothing is sent, and the
-        // screen is left exactly as it was.
+        const stagedNow = setupAnswerRef.current;
+        // AN EMPTY ANSWER (cinatra#3358, the maintainer's rule of 2026-09-23):
+        // a required field left empty shows an error on Continue and nothing is
+        // sent — the screen is left exactly as it was; an optional one (its own
+        // schema declares a `default`) does not, and the step is sent as
+        // `{ [fieldName]: null }`, which the server settles with that default.
+        const press = setupPressAnswerReading({
+          schema: fieldSchema,
+          fieldName,
+          staged: stagedNow !== null && stagedNow.key === key ? stagedNow : null,
+        });
+        if (press.blank && !press.optional) {
+          // The refused blank is not kept, so the next press asks the field
+          // for its value anew instead of re-reading the empty one.
+          if (stagedNow !== null && stagedNow.key === key) setupAnswerRef.current = null;
+          toast.error(SETUP_GATE_NO_ANSWER_STAGED);
+          return;
+        }
+        const staged = press.blank
+          ? { key, ...wrapPrimitiveSetupPayload(fieldName, undefined) }
+          : stagedNow;
         if (staged === null || staged.key !== key) return;
         await performGateSubmit({
           reviewTaskId,
@@ -2263,6 +2288,21 @@ export function AgenticRunPanel({
                   effectiveHitlContext.xRenderer,
                   effectiveHitlContext.fieldName ?? "",
                 ].join("::");
+                // A PER-FIELD SETUP GATE'S ONE FIELD IS REQUIRED (cinatra#3358,
+                // the maintainer's rule of 2026-09-23) unless its own schema
+                // declares a default that is itself an answer — the same
+                // reading the press refuses on (./hitl-gate-submit).
+                const isPerFieldSetupGate =
+                  isSetupGateTaskId(effectiveHitlContext.reviewTaskId) &&
+                  typeof effectiveHitlContext.fieldName === "string" &&
+                  effectiveHitlContext.fieldName.trim() !== "";
+                const perFieldSetupRequired =
+                  isPerFieldSetupGate &&
+                  !setupPressAnswerReading({
+                    schema: hitlRendererEntry.fieldSchema,
+                    fieldName: effectiveHitlContext.fieldName,
+                    staged: null,
+                  }).optional;
                 // THE CHAT CARD CARRIES ITS OWN CONTINUE.
                 //
                 // The chat setup gate used to pass `hideSubmit`: the form was
@@ -2303,6 +2343,10 @@ export function AgenticRunPanel({
                       // interrupts that carry no field name (mid-run gates).
                       fieldName={hitlRendererFieldName(effectiveHitlContext.fieldName)}
                       schema={hitlRendererEntry.fieldSchema}
+                      // Drawn required (" *") where the per-field setup gate's
+                      // field is required (cinatra#3358); never `false`, so
+                      // every other gate keeps the reading it has today.
+                      required={perFieldSetupRequired ? true : undefined}
                       // An OBJECT-typed setup field gets its OWN value, not the
                       // whole currentValues envelope (cinatra#2484). The
                       // unwrapping stays at the CALLER even now that the renderer
@@ -2378,6 +2422,21 @@ export function AgenticRunPanel({
                           setSetupDraft({ key: setupGateKey, value: next });
                           return;
                         }
+                        // AN EMPTY REQUIRED ANSWER ON THE FIELD'S OWN CONTINUE
+                        // (cinatra#3358): the error shows and nothing is sent —
+                        // the field stays as the reader left it. Every other
+                        // press is sent exactly as before.
+                        if (isPerFieldSetupGate) {
+                          const press = setupPressAnswerReading({
+                            schema: hitlRendererEntry.fieldSchema,
+                            fieldName: effectiveHitlContext.fieldName,
+                            staged: { payload, payloadFieldName },
+                          });
+                          if (press.blank && !press.optional) {
+                            toast.error(SETUP_GATE_NO_ANSWER_STAGED);
+                            return;
+                          }
+                        }
                         await performGateSubmit({
                           reviewTaskId: effectiveHitlContext.reviewTaskId,
                           xRenderer: effectiveHitlContext.xRenderer,
@@ -2422,6 +2481,8 @@ export function AgenticRunPanel({
                             setupGateKey,
                             effectiveHitlContext.reviewTaskId,
                             effectiveHitlContext.xRenderer,
+                            effectiveHitlContext.inputSchema,
+                            effectiveHitlContext.fieldName,
                           )
                         }
                       />

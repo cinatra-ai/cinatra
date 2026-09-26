@@ -152,6 +152,9 @@ function sqlConditionToString(condition: unknown): string {
 // ---------------------------------------------------------------------------
 // 1. "setup-{runId}" synthetic path (setup interrupt loop)
 // ---------------------------------------------------------------------------
+// cinatra#3468: the tail of every setup-resume job id — a random UUID.
+const UUID_SUFFIX = /-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   beforeEach(() => {
     // resetAllMocks (NOT clearAllMocks): clearAllMocks keeps queued
@@ -207,6 +210,86 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       // of one run can ask the queue for the same id.
       { jobId: expect.stringMatching(/^resume-[0-9a-f-]{36}$/) },
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // cinatra#3468 — per-field setup gates: EVERY answer must get its own resume.
+  //
+  // The setup path's synthetic review-task id is `setup-{runId}` — the SAME id
+  // for every field of one run. A resume job id derived from it alone therefore
+  // repeated, and the queue's job-id de-duplication (queue.add is HSETNX-shaped:
+  // an id that already exists is silently not added) dropped every resume after
+  // the first: the run accepted its first field, then sat in `queued` forever
+  // with no execution attempt and no trigger row. Measured twice on two runs.
+  // ---------------------------------------------------------------------------
+  it("REGRESSION (#3468): two consecutive per-field answers of ONE run enqueue TWO resume jobs", async () => {
+    // Answer 1 — the first setup field of a run with nothing merged yet.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3468",
+      templateId: "tpl-3468",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    await approveReviewTaskInternal(
+      "setup-run-3468",
+      "actor-1",
+      { offeringCompanyWebsite: "https://example.com" },
+      "offeringCompanyWebsite",
+    );
+
+    // Answer 2 — the setup loop parked the same run on its NEXT field, so the
+    // run is pending_approval again and the first value is already merged.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3468",
+      templateId: "tpl-3468",
+      status: "pending_approval",
+      inputParams: { offeringCompanyWebsite: "https://example.com" },
+    });
+    await approveReviewTaskInternal(
+      "setup-run-3468",
+      "actor-1",
+      { callToAction: "Book a call" },
+      "callToAction",
+    );
+
+    // TWO resume jobs, and the queue can tell them apart — the second answer's
+    // job must not collide with the first answer's id.
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(2);
+    const firstId = bgJobs.enqueueBackgroundJob.mock.calls[0]?.[2]?.jobId as string;
+    const secondId = bgJobs.enqueueBackgroundJob.mock.calls[1]?.[2]?.jobId as string;
+    expect(firstId).toMatch(/^resume-[0-9a-f-]{36}$/);
+    expect(secondId).toMatch(/^resume-[0-9a-f-]{36}$/);
+    expect(secondId).not.toBe(firstId);
+    // The per-answer suffix is RANDOM, never a wall clock plus a per-process
+    // counter: the host runs as more than one process and a counter resets on a
+    // restart, so a time+counter suffix repeats across processes and across a
+    // restart — which is the defect itself. Pin the shape so it cannot come back.
+    expect(firstId).toMatch(UUID_SUFFIX);
+    expect(secondId).toMatch(UUID_SUFFIX);
+  });
+
+  // The same rule with no fieldName in play: the grouped / envelope-only leg
+  // can also be answered more than once for one run (an envelope-only approval
+  // merges nothing, so the setup loop re-raises its gate), and its resume id
+  // must not repeat either.
+  it("REGRESSION (#3468): two answers with no fieldName still enqueue two distinct resume jobs", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-3468g",
+      templateId: "tpl-3468g",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-3468g", "actor-1", undefined);
+    await approveReviewTaskInternal("setup-run-3468g", "actor-1", undefined);
+
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(2);
+    const firstId = bgJobs.enqueueBackgroundJob.mock.calls[0]?.[2]?.jobId as string;
+    const secondId = bgJobs.enqueueBackgroundJob.mock.calls[1]?.[2]?.jobId as string;
+    expect(firstId).toMatch(/^resume-[0-9a-f-]{36}$/);
+    expect(secondId).not.toBe(firstId);
+    expect(firstId).toMatch(UUID_SUFFIX);
+    expect(secondId).toMatch(UUID_SUFFIX);
   });
 
   // Regression: assert the SQL fragment serializes only values[fieldName],

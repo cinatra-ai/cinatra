@@ -103,3 +103,52 @@ export function buildAgentPackageBasePath(
 ): string {
   return `${normalizeScopeBase(scope)}/agents/${packageSegments(agentPackageName)}`;
 }
+
+// ---------------------------------------------------------------------------
+// READING THE SCOPE OFF AN ADDRESS (cinatra#2809, per-scope surfaces S3).
+//
+// Everything above WRITES an address from a scope. This reads one back: given
+// the address a surface is standing on, it answers which scope base that
+// address belongs to, so a link offered from that surface is minted at the SAME
+// scope rather than at a guess.
+//
+// It is here, in the grammar, because it is the inverse of the prefix rule
+// directly above it — the two must agree about what a base is, and a second
+// module would be a second opinion (and a new leaf in four locked route
+// graphs). Zero imports, exactly like the rest of this leaf.
+//
+// MEASURED on a development boot with both packages installed, one session,
+// both orders, twice: the SCOPELESS launcher does not exist.
+//
+//   GET /agents/cinatra-ai/list-curator-agent/new
+//     -> HTTP/1.1 200 OK, no Location, no run created; the crumb reads
+//        "Agents / New" over an empty body, because the bare vendor/package
+//        pair carries only `[instanceId]` and `new` is read as one.
+//   GET /workspace/agents/cinatra-ai/list-curator-agent/new
+//     -> HTTP/1.1 307, location: /workspace/agents/cinatra-ai/list-curator-agent/<fresh run id>
+//
+// So an address with no scope of its own gets the WORKSPACE base rather than
+// the bare road: a launcher that answers nothing is not an offer.
+// ---------------------------------------------------------------------------
+
+/** The scope base of the workspace — the floor a scopeless address falls to. */
+export const WORKSPACE_SCOPE_BASE = "/workspace";
+
+/**
+ * The scope base the given address belongs to: everything in front of the
+ * `/agents` segment of the grammar above. An address that names no scope of its
+ * own — the bare tree, or a path that is no agent address at all — answers with
+ * the workspace base, which is the one scope every reader's Agents surface has.
+ */
+export function agentPathScopeBase(pathname: string): string {
+  if (typeof pathname !== "string") return WORKSPACE_SCOPE_BASE;
+  const path = pathname.split("?", 1)[0].split("#", 1)[0];
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  const agentsAt = segments.indexOf("agents");
+  // -1 = not an agent address; 0 = the bare tree, which has no launcher.
+  if (agentsAt <= 0) return WORKSPACE_SCOPE_BASE;
+  const base = `/${segments.slice(0, agentsAt).join("/")}`;
+  // The base has to survive the same validation a written address applies to
+  // it, or the two halves of this grammar would disagree about what a base is.
+  return /^(?:\/[^/\s\\]+)+$/.test(base) ? base : WORKSPACE_SCOPE_BASE;
+}
