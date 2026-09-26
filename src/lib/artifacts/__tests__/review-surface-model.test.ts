@@ -27,13 +27,6 @@ import {
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
-const form: ReviewTargetMount = {
-  kind: "form",
-  slot: "detail",
-  arm: "first-party",
-  form: "markdown",
-};
-
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
   slot: "detail",
@@ -73,25 +66,12 @@ describe("§V — provenance conformance id from the OPAQUE mount kind", () => {
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
   });
 
-  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): the built-in
-  // markdown / plain-text rendering carries NO label above the reviewed work.
-  // §V of the pinned review spec draws a provenance strip for the two renderer
-  // tiers a PACKAGE supplies and for the floor; the host's own text rendering is
-  // none of those three, and it is not given a fourth strip — it is given none.
-  // The reviewer sees the draft, and nothing above the draft.
-  it("the form rung has NO provenance region at all — no fourth strip, no reused one", () => {
-    expect(reviewProvenanceConformanceId(form)).toBeNull();
-  });
-
   it("only a floor has a label to print — a rendered target names nothing", () => {
     expect(reviewProvenanceLabel(buildMap)).toBeNull();
     expect(reviewProvenanceLabel(runtime)).toBeNull();
     expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
   });
 
-  it("the form rung has no provenance label to print", () => {
-    expect(reviewProvenanceLabel(form)).toBeNull();
-  });
 });
 
 describe("§II — the immutable header projections", () => {

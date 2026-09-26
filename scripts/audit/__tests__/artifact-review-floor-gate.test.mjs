@@ -12,8 +12,6 @@ import {
   InfraError,
   CANONICAL_SOURCES,
   readMimeAllowlist,
-  readHandlerMap,
-  readConsumedFormArms,
   readDashboardMime,
   readGeneratedRendererEntries,
   representationMatchSpecificity,
@@ -81,49 +79,6 @@ test("the allowlist reader REFUSES a set literal it cannot fully account for", (
   const doctored =
     'const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([\n  "text/plain",\n  ...EXTRA_MIMES,\n]);';
   assert.throws(() => readMimeAllowlist(doctored), InfraError);
-});
-
-test("the MIME->handler arms are the COMPLETE live pickHandler map", () => {
-  const map = readHandlerMap(src(CANONICAL_SOURCES.handlerMap));
-  assert.deepEqual(
-    [...map.entries()].sort(),
-    [
-      ["text/markdown", "markdown"],
-      ["text/plain", "text"],
-      ["text/x-markdown", "markdown"],
-    ],
-    "every host-owned arm is derived — a missed arm would silently classify a live form as a fallback",
-  );
-});
-
-test("the handler reader REFUSES a statement it cannot parse (no silently narrower map)", () => {
-  // The exact silent-narrowing shape: the markdown arm moves behind a set
-  // membership test, so a MIME-literal scan of the body would find nothing to
-  // complain about while the derived map quietly loses two live forms.
-  const doctored = [
-    "export function pickHandler(mime: string): HandlerKind {",
-    "  if (MARKDOWN_MIMES.has(mime)) return \"markdown\";",
-    '  if (mime === "text/plain") return "text";',
-    '  return "fallback";',
-    "}",
-  ].join("\n");
-  assert.throws(() => readHandlerMap(doctored), InfraError);
-
-  // A multi-line but still structurally-flat arm is derived, not refused.
-  const reformatted = [
-    "export function pickHandler(mime: string): HandlerKind {",
-    "  if (",
-    '    mime === "text/markdown" ||',
-    '    mime === "text/x-markdown"',
-    '  ) return "markdown";',
-    '  return "fallback";',
-    "}",
-  ].join("\n");
-  assert.deepEqual([...readHandlerMap(reformatted).keys()].sort(), ["text/markdown", "text/x-markdown"]);
-});
-
-test("the consumed form arms are the COMPLETE set the review binder's rung takes", () => {
-  assert.deepEqual([...readConsumedFormArms(src(CANONICAL_SOURCES.reviewBinder))].sort(), ["markdown", "text"]);
 });
 
 test("the dashboard form's MIME is read from the host twin writer", () => {
@@ -264,8 +219,6 @@ test("a cross-namespace claim is still a live type; a malformed id is skipped as
 
 const RULES = {
   mimeAllowlist: ALLOW,
-  handlerMap: new Map([["text/markdown", "markdown"], ["text/x-markdown", "markdown"], ["text/plain", "text"]]),
-  consumedFormArms: new Set(["markdown", "text"]),
   dashboardMime: "application/vnd.cinatra.dashboard+json",
 };
 const classify = (packs, generatedEntries = []) => classifyDeclaredTypes({ ...RULES, packs, generatedEntries });
@@ -277,11 +230,27 @@ test("RED — a type with no renderer and a form no rung renders IS a floor type
   assert.deepEqual(floorTypes.map((f) => f.type), ["@acme/thing-artifact:thing"]);
 });
 
-test("a pack with NO display file is not counted when its declared text form renders", () => {
-  const { floorTypes } = classify([
+// cinatra#3319 acceptance 2: "The floor audit no longer counts a host form
+// handler as coverage." The host's own text and markdown viewers retired, so a
+// declared text form no installed pack provides for is what a reader would
+// actually meet — the floor — and the gate says so.
+test("a declared text form NO pack provides for is a floor, not host coverage", () => {
+  const { floorTypes, rows } = classify([
     { packageName: "@acme/note-artifact", types: ["@acme/note-artifact:note"], accepts: { file: { mimeTypes: ["text/markdown"] } } },
   ]);
-  assert.deepEqual(floorTypes, [], "the form rung renders it — 'not packages missing a display file'");
+  assert.deepEqual(floorTypes.map((f) => f.type), ["@acme/note-artifact:note"]);
+  assert.ok(
+    rows.every((r) => !String(r.rung).startsWith("form")),
+    "no row may be classified through a host form rung any more",
+  );
+});
+
+test("the gate reads no host handler map and no consumed form rung at all", async () => {
+  const gate = await import("../artifact-review-floor-gate.mjs");
+  assert.equal(gate.readHandlerMap, undefined);
+  assert.equal(gate.readConsumedFormArms, undefined);
+  assert.ok(!("handlerMap" in gate.CANONICAL_SOURCES));
+  assert.ok(!src("scripts/audit/artifact-review-floor-gate.mjs").includes("pick-handler.ts"));
 });
 
 test("a pack with no renderer is not counted when a BOUND system provider covers its form", () => {
@@ -304,13 +273,21 @@ test("RED — a form outside the safe-transport set is NOT covered by a wildcard
   assert.deepEqual(floorTypes.map((f) => f.type), ["@acme/bmp-artifact:bmp"], "image/* must not claim a MIME the preview route refuses");
 });
 
-test("a form the build carries no renderer for falls through to the form rung, not a defensive read", () => {
+test("a declared form a PACK's display covers is still coverage", () => {
   const { floorTypes, rows } = classify(
     [{ packageName: "@acme/note-artifact", types: ["@acme/note-artifact:note"], accepts: { file: { mimeTypes: ["text/markdown"] } } }],
-    [],
+    [
+      {
+        key: "@cinatra-ai/markdown-artifact::detail",
+        resolution: "required",
+        packageName: "@cinatra-ai/markdown-artifact",
+        slot: "detail",
+        representations: ["text/markdown"],
+      },
+    ],
   );
   assert.deepEqual(floorTypes, []);
-  assert.equal(rows[0].rung, "form:markdown");
+  assert.equal(rows[0].rung, "representation");
 });
 
 test("the semantic rung is evaluated at the BASE identity — the type id's namespace definer", () => {
@@ -563,17 +540,6 @@ test("the on-disk scan names every artifact pack dir, typed or not", (t) => {
 // ---------------------------------------------------------------------------
 // Remaining parser fail-closed pins.
 // ---------------------------------------------------------------------------
-
-test("the handler reader recognizes the allowlist guard by its EXACT identifier", () => {
-  const other = [
-    "export function pickHandler(mime: string): HandlerKind {",
-    '  if (!PREVIEW_INLINE_MIME_ALLOWLIST_NARROWED.has(mime)) return "fallback";',
-    '  if (mime === "text/plain") return "text";',
-    '  return "fallback";',
-    "}",
-  ].join("\n");
-  assert.throws(() => readHandlerMap(other), InfraError, "a differently-named guard is not the one the classifier models");
-});
 
 test("the generated-map reader REFUSES table residue it cannot account for", () => {
   const doctored =

@@ -265,10 +265,10 @@ export type ReviewDisposition = "approve" | "reject" | "comment";
  * type — never accepted from the client. `digest` is set only for a runtime
  * (main-realm dynamic) load — the exact package + content digest. */
 export interface ReviewRendererProvenance {
-  /** `first-party` is the FORM RUNG (plan (B) §5): the host's own renderer for a
-   * declared text form. It is recorded as its own kind and never as `floor`,
-   * because a rendered draft is not a review that fell through — and the floor
-   * gate counts `floor` rows. */
+  /** `first-party` is a RETIRED reading: it recorded the host's own renderer for
+   * a declared text form, and the host draws no artifact content any more. The
+   * value stays in the vocabulary because audit rows written before the
+   * retirement carry it; nothing writes it now. */
   kind: "build-map" | "runtime" | "first-party" | "floor";
   packageName: string | null;
   digest: string | null;
@@ -287,8 +287,6 @@ export function rendererProvenanceFromMount(mount: ReviewTargetMount): ReviewRen
         packageName: mount.packageName,
         digest: mount.descriptor.tuple.digest,
       };
-    case "form":
-      return { kind: "first-party", packageName: null, digest: null };
     case "floor":
       return { kind: "floor", packageName: mount.packageName, digest: null };
   }
