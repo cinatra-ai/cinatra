@@ -209,3 +209,52 @@ describe("the resolved panel installs what the person typed, not the name it res
     expect(JSON.stringify(sent)).not.toContain("@cinatra-ai/web-research-skill");
   });
 });
+
+/**
+ * THE DRAWN DESCRIPTION OF THE REPOSITORY FIELD (cinatra#3576; design spec
+ * Extensions §VIII, the clause headed "The repository field.").
+ *
+ * The drawing gives that description with an ASCII HYPHEN-MINUS between
+ * "artifact package" and "the repository page". The constant below is quoted
+ * from the DRAWING and never copied out of the product file: a constant taken
+ * from the source would pass on the defect it is meant to catch.
+ */
+const DRAWN_REPOSITORY_FIELD_DESCRIPTION =
+  "A link to a public github.com repository holding an agent, skill, connector or artifact package - the repository page, a branch, a release page, or the archive ZIP link. The archive is downloaded without signing in to GitHub. The package declares its own kind; this instance reads it from the archive.";
+
+/** The attributes the shared description primitive gives its node, and no others. */
+const PRIMITIVE_DESCRIPTION_ATTRIBUTES = ["class", "data-slot"];
+
+const EM_DASH = "—";
+
+describe("the repository field's description reads the drawing's sentence", () => {
+  it("draws the drawn sentence character for character, with no em dash in it", () => {
+    const { container } = render(<ImportPackageFromGitHubForm installScope={INSTALL_SCOPE} />);
+
+    // The node is found by the shared description primitive's own `data-slot`
+    // value and by the sentence's own opening words — never by a line number,
+    // and never by the character under repair.
+    const descriptions = Array.from(container.querySelectorAll('[data-slot="field-description"]'));
+    const description = descriptions.find((node) =>
+      (node.textContent ?? "").startsWith("A link to a public github.com repository"),
+    );
+    expect(description, "the Repository URL field draws its own description").toBeTruthy();
+    const text = description!.textContent ?? "";
+
+    // The drawing's sentence, character for character.
+    expect(text).toBe(DRAWN_REPOSITORY_FIELD_DESCRIPTION);
+    // ...which means not one em dash anywhere in it.
+    expect(text).not.toContain(EM_DASH);
+    expect(text.split(EM_DASH).length - 1).toBe(0);
+
+    // The drawn node keeps the shape the drawing and the primitive give it: ONE
+    // text-only node, holding no child element, carrying exactly the attributes
+    // the primitive already gives it and not one of its own.
+    expect(description!.children).toHaveLength(0);
+    expect(description!.childNodes).toHaveLength(1);
+    expect(description!.childNodes[0]!.nodeType).toBe(Node.TEXT_NODE);
+    expect(description!.getAttributeNames().slice().sort()).toEqual(
+      PRIMITIVE_DESCRIPTION_ATTRIBUTES,
+    );
+  });
+});
