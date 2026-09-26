@@ -159,8 +159,31 @@ describe("the conformance harness mount for the recommendation card", () => {
     }
 
     // The card is the whole card: the mount holds the row and nothing else.
+    //
+    // READ AGAINST THE §V ANATOMY (cinatra#3062). The row is still the ONE thing
+    // the mount holds — that half of this assertion is unchanged and is what the
+    // "and nothing else" is about. Inside the row the anatomy now has two parts
+    // rather than one: the list of checkbox pills and the row's own Continue,
+    // which is the card's single control and belongs to the card. Counting the
+    // row's CHILDREN therefore no longer states the property this test is for,
+    // so the two halves are asserted for what each of them means: exactly one
+    // card under the mount, and inside it the pill list and the Continue and
+    // nothing besides.
     const paused = mountEl(container, "recommendation-paused");
-    expect(paused.querySelectorAll(":scope > * > *").length).toBe(1);
+    const pausedCards = [...paused.children];
+    expect(pausedCards.length, "the mount holds ONE card and nothing beside it").toBe(1);
+    const pausedCard = pausedCards[0]!;
+    expect(pausedCard.matches("[data-run-recommendation-chip-row]")).toBe(true);
+    expect(
+      [...pausedCard.children].map((el) =>
+        el.matches("[data-skills-step-list]")
+          ? "list"
+          : el.matches("[data-skills-step-floor]")
+            ? "continue"
+            : el.tagName.toLowerCase(),
+      ),
+      "the held card is the pill list and its one Continue, and nothing else",
+    ).toEqual(["list", "continue"]);
 
     const readings = mountEl(container, "recommendation-readings");
     for (const reading of LIFECYCLE_RECOMMENDATION_READINGS) {
@@ -177,7 +200,26 @@ describe("the conformance harness mount for the recommendation card", () => {
     expect(row.getAttribute("data-lifecycle-card-state")).toBe("decided");
     expect(row.getAttribute("data-run-recommendation-settled")).toBe("true");
     // Nothing is left to press once the run has started.
-    expect(row.querySelectorAll("button").length).toBe(0);
+    //
+    // READ AGAINST THE §V ANATOMY (cinatra#3062). The started reading no longer
+    // withdraws its controls from the tree: the drawing keeps ONE checkbox per
+    // skill in every reading and makes the read-only reading `disabled`, so a
+    // reader on assistive technology is told the box is unavailable instead of
+    // being handed a box that silently refuses. The property this line asserts
+    // is unchanged — nothing on this row can be pressed — and it is now asserted
+    // over the controls that ARE there: one box per skill, every one of them
+    // disabled, and no Continue anywhere on a settled row.
+    const settledControls = [...row.querySelectorAll("button")];
+    expect(settledControls.length, "one box per skill, still drawn").toBe(
+      LIFECYCLE_RECOMMENDATION_CHIP_KINDS.length,
+    );
+    for (const control of settledControls) {
+      expect(
+        control.hasAttribute("disabled"),
+        "every control on the started reading is disabled",
+      ).toBe(true);
+    }
+    expect(row.querySelector("[data-skills-step-continue]")).toBeNull();
 
     for (const kind of LIFECYCLE_RECOMMENDATION_CHIP_KINDS) {
       const chip = row.querySelector<HTMLElement>(
@@ -185,7 +227,15 @@ describe("the conformance harness mount for the recommendation card", () => {
       );
       expect(chip, `the started reading draws a pill for "${kind}"`).not.toBeNull();
       const applied = LIFECYCLE_RECOMMENDATION_APPLIED_KINDS.includes(kind);
-      expect(chip!.getAttribute("data-chip-mark")).toBe(applied ? "confirmed" : "skipped");
+      // READ AGAINST THE §V ANATOMY (cinatra#3062). The outcome per skill is
+      // unchanged and so is this assertion's subject: a skill the run applied
+      // against a skill it did not. What states it moved with the drawing. The
+      // recorded WORD beside the name is gone — with the boxes editable until
+      // the run starts, a word there would state a decision the reader may still
+      // change, and a checkbox has no "skipped" ACT to report — so the pill
+      // states its outcome as the position of its box, on the pill root as
+      // `data-skill-applied`, which is what a graded picture reads too.
+      expect(chip!.getAttribute("data-skill-applied")).toBe(applied ? "true" : "false");
       expect(chip!.textContent).toContain(LIFECYCLE_RECOMMENDATION_SKILL_NAME[kind]);
     }
 

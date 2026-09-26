@@ -100,6 +100,83 @@ export function recommendationRunHasStarted(status: string | null | undefined): 
   return !PRE_EXECUTION_RUN_STATUSES.has(status);
 }
 
+/**
+ * THE ONE STATUS THAT CANNOT ANSWER THE QUESTION ON ITS OWN (cinatra#3062).
+ *
+ * `pending_approval` has TWO producers in the transition table below, and that
+ * table's own comments name them: `queued->pending_approval` is "the setup
+ * interrupt, nothing has executed", and `running->pending_approval` is "an
+ * interrupt raised mid-flight". One of those moments is BEFORE the run has
+ * executed and the other is AFTER it, and the status string is byte-identical in
+ * both. `RUN_START_AWAITING_APPROVAL_CLAUSE` below already says so in words: its
+ * sentence "does not claim the run has yet to start" precisely because the
+ * status alone cannot tell.
+ *
+ * The skills recommendation hold parks the run on the FIRST of the two, so the
+ * status-only boundary above read a run held at the very question the card is
+ * asking as "started" — and the card then drew the once-it-has-started reading
+ * over a run that had not started.
+ *
+ * The ROW settles it. `started_at` is stamped inside the `queued->running`
+ * dispatch CAS and nowhere else, so a `pending_approval` row with no stamp has
+ * not executed and one with a stamp has.
+ */
+export const START_AMBIGUOUS_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "pending_approval",
+]);
+
+/**
+ * HAS THIS RUN STARTED RUNNING — ASKED OF THE ROW (cinatra#3062).
+ *
+ * THE AUTHORITY IS THE RUN'S OWN `started_at`, never a status string alone and
+ * never a local flag a screen kept across a reload. The stamp is written once,
+ * inside the `queued->running` dispatch CAS, so its presence is the fact "this
+ * run has executed".
+ *
+ * The status is still read, for the two things the stamp cannot answer by
+ * itself:
+ *
+ *   - a status in `START_AMBIGUOUS_RUN_STATUSES` with NO stamp has NOT started
+ *     — the case the card was getting wrong;
+ *   - anything else with no stamp keeps the status-only answer
+ *     `recommendationRunHasStarted` gives, so a row whose stamp is missing for
+ *     any other reason never becomes editable on that account.
+ *
+ * `recommendationRunHasStarted` is unchanged and is still the boundary for a
+ * caller holding nothing but a status. This is THE SAME BOUNDARY asked of a
+ * caller that holds the row — which is what the resolver holds, on every read
+ * and therefore on every reload.
+ */
+export function recommendationRunHasStartedForRow(
+  run: { status?: string | null; startedAt?: Date | string | null } | null | undefined,
+): boolean {
+  if (!run) return false;
+  if (run.startedAt !== null && run.startedAt !== undefined) return true;
+  const status = run.status;
+  if (typeof status === "string" && START_AMBIGUOUS_RUN_STATUSES.has(status)) return false;
+  return recommendationRunHasStarted(status);
+}
+
+/**
+ * THE SAME BOUNDARY, FOR A GUARD THAT LIVES IN SQL (cinatra#3062).
+ *
+ * A statement cannot call the function above, and the pre-start selection write
+ * puts its status test INSIDE the DELETE and the INSERT on purpose — so a
+ * dispatch cannot land between a status read and the write. That statement needs
+ * the boundary as a VALUE, and this is it: the statuses a run can hold while it
+ * has not executed. Paired with `started_at IS NULL` in the same predicate it is
+ * exactly `recommendationRunHasStartedForRow` negated, expressed in SQL.
+ *
+ * `pending_approval` is in it because the recommendation hold's own park is
+ * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is
+ * what refused a returning reader's change on a run that had not started, while
+ * the screen was offering them the box to make it with.
+ */
+export const PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP: ReadonlySet<string> = new Set<string>([
+  ...PRE_EXECUTION_RUN_STATUSES,
+  ...START_AMBIGUOUS_RUN_STATUSES,
+]);
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.

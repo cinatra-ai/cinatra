@@ -26,7 +26,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
-import { PRE_EXECUTION_RUN_STATUSES } from "@cinatra-ai/agents/run-status";
+import { PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP } from "@cinatra-ai/agents/run-status";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
@@ -139,14 +139,21 @@ export function readRunSelectedSkillRevisions(
  * nothing — its selection is still the reader's answer to a question, and the
  * Skills step lets them change that answer until the run starts.
  *
- * THE BOUNDARY IS IN THE STATEMENT, NOT IN THE CALLER. The status test is a
- * join inside the DELETE, against `PRE_EXECUTION_RUN_STATUSES` — the platform's
- * own set of the statuses a run holds BEFORE it has ever run (`pending_input`,
- * `pending_trigger`, `armed`). So a caller that asks to clear a started run's
- * rows deletes NOTHING, whatever it believed about the run when it asked, and
- * there is no window between a status read and the write for the run to be
- * dispatched in. The first status outside that set is `queued`, which is the
- * dispatch CAS itself.
+ * THE BOUNDARY IS IN THE STATEMENT, NOT IN THE CALLER. The test is a join
+ * inside the DELETE, against the run's OWN `started_at` — stamped once, at the
+ * `queued->running` dispatch CAS — together with
+ * `PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP`, the platform's set of the
+ * statuses a run can hold while it has not executed. So a caller that asks to
+ * clear a started run's rows deletes NOTHING, whatever it believed about the run
+ * when it asked, and there is no window between a status read and the write for
+ * the run to be dispatched in.
+ *
+ * THE STAMP, NOT THE STATUS ALONE (cinatra#3062). The test used to be the status
+ * set by itself, which left `pending_approval` out — and that is the status the
+ * skills hold's own park puts a NOT-YET-EXECUTED run into. A returning reader was
+ * therefore offered a live box on a run that had not started and had their change
+ * refused by this statement when they used it. The stamp tells the hold's park
+ * apart from an interrupt raised mid-flight, which the status cannot.
  *
  * SCOPED TO THE NAMED SKILLS, never to the run. The caller names the skills its
  * own decision is authoritative for — the hold's offered set — so a selection
@@ -172,8 +179,13 @@ export function clearRunSelectedSkillRevisionsBeforeStart(input: {
                WHERE s.run_id = $1
                  AND r.id = s.run_id
                  AND s.skill_id = ANY($2::text[])
+                 AND r.started_at IS NULL
                  AND r.status = ANY($3::text[])`,
-        values: [input.runId, [...input.skillIds], [...PRE_EXECUTION_RUN_STATUSES]],
+        values: [
+          input.runId,
+          [...input.skillIds],
+          [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP],
+        ],
       },
     ],
   });
@@ -216,7 +228,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
   const schema = postgresSchema.replaceAll('"', '""');
   const table = `"${schema}"."run_selected_skill_revisions"`;
   const runs = `"${schema}"."agent_runs"`;
-  const preStart = [...PRE_EXECUTION_RUN_STATUSES];
+  const preStart = [...PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP];
   const kept = new Set(input.selections.map((s) => s.skillId));
   const dropped = input.scopeSkillIds.filter((skillId) => !kept.has(skillId));
 
@@ -225,7 +237,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
     //    writes, so "it applied" is the transaction's own view and not a probe
     //    taken a moment earlier.
     {
-      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND status = ANY($2::text[])`,
+      text: `SELECT 1 FROM ${runs} WHERE id = $1 AND started_at IS NULL AND status = ANY($2::text[])`,
       values: [input.runId, preStart],
     },
   ];
@@ -236,6 +248,7 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
              WHERE s.run_id = $1
                AND r.id = s.run_id
                AND s.skill_id = ANY($2::text[])
+               AND r.started_at IS NULL
                AND r.status = ANY($3::text[])`,
       values: [input.runId, dropped, preStart],
     });
@@ -258,7 +271,9 @@ export function replaceRunSelectedSkillRevisionsBeforeStart(input: {
                AS v(id, run_id, skill_id, skill_revision_id, selection_source)
              WHERE EXISTS (
                SELECT 1 FROM ${runs} r
-               WHERE r.id = ${runIdParam} AND r.status = ANY(${statusParam}::text[])
+               WHERE r.id = ${runIdParam}
+                 AND r.started_at IS NULL
+                 AND r.status = ANY(${statusParam}::text[])
              )
              ON CONFLICT (run_id, skill_id) DO NOTHING`,
       values,
