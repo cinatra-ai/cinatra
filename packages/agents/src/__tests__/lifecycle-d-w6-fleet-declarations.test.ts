@@ -14,22 +14,19 @@
  * Every case names the acceptance sentence it pins. Several parts of the wave
  * are NOT here as assertions of presence but as pinned ABSENCES carrying their
  * reason — the same shape the previous slice used — the outreach parent's typed
- * produces and the transcript and feed-lister declarations among them, because
+ * produces and the feed-lister declarations among them, because
  * landing them under the now-blocking gate would refuse a package at its own
  * publish seam.
  *
  * Run `node scripts/ci/sync-dev-extensions.mjs --pinned` before this suite or
  * its first case fails by design.
  *
- * ONE PIN IS HELD at its previous sha, and the held part is recorded below as
- * a pinned absence carrying its reason. The wave's own change in that
- * repository also carries a defect the host refuses, and the border keeps the
- * remedy in the package's own repository rather than in a host special case:
- *
- *   - media-transcript-agent: its head declares a preferred model outside the
- *     host provider policy allowlist, which the L1 service-description check
- *     refuses. The model arrived in a later, unrelated change in
- *     that repository, not in the declaration itself.
+ * media-transcript-agent's pin is no longer held: its advanced head declares a
+ * preferred model inside the host provider policy allowlist, which the
+ * allowlist change that advances the pin admits, and the same head carries the
+ * typed text id on its entry, mirror and binding, the dependency edge on the
+ * text kind and a gate claim true to its flow, so this file follows that
+ * declaration below instead of pinning the gap.
  *
  * email-delivery-agent's pin is no longer held: its advanced head declares the
  * send screen under `@cinatra-ai/email-delivery-agent:send-confirmation` and
@@ -363,31 +360,39 @@ describe("acceptance 2 — the outreach parent's typed produces and five declare
 
 describe("acceptance 2 — the transcript agent's typed id, binding, dependency edge and gate claim", () => {
   // All four parts are written and merged in cinatra-ai/media-transcript-agent,
-  // and the same head carries a preferred model the host provider policy does
-  // not allow, which the L1 check refuses outright. The pin is therefore held
-  // and every part below is a pinned absence: it reddens the moment a follow-up
-  // in that repository brings the head back inside the allowlist and the pin
-  // advances.
-  it("the transcript agent's typed id is ABSENT at this pin, and the absence carries its reason", () => {
+  // and its advanced head declares a preferred model inside the host provider
+  // policy allowlist, so the pin is no longer held and every part below is a
+  // pinned presence: a later pin that loses any one of them reddens here.
+  it("the transcript agent carries the typed text id on entry, mirror and binding", () => {
     const a = agent("media-transcript-agent");
-    expect(a.produces.map((e) => e.objectTypeId)).not.toContain(TEXT_ARTIFACT_TYPE);
-    expect(a.producesMirror).toEqual([]);
-    expect(a.bindings.filter((b) => b.extension === TEXT_ARTIFACT)).toEqual([]);
+    expect(a.produces).toEqual([{ extension: TEXT_ARTIFACT, objectTypeId: TEXT_ARTIFACT_TYPE }]);
+    expect(a.producesMirror).toEqual(a.produces);
+    const bound = a.bindings.filter((b) => b.extension === TEXT_ARTIFACT);
+    expect(bound).toEqual([
+      {
+        outputId: "transcript",
+        extension: TEXT_ARTIFACT,
+        objectTypeId: TEXT_ARTIFACT_TYPE,
+        titleFrom: "mediaUrl",
+        contentFrom: "transcript",
+      },
+    ]);
   });
 
-  it("the transcript agent still names the retired target and carries no dependency edge", () => {
+  it("the transcript agent names the text kind instead of the retired target and carries its dependency edge", () => {
     const a = agent("media-transcript-agent");
-    expect(a.artifactEdges).toEqual([]);
-    // The retired target the pinned manifest names is exactly the grandfathered
-    // pair the produced-artifact ratchet still tolerates for this package.
-    expect(a.produces.map((p) => p.extension)).toEqual(["@cinatra-ai/default-artifact"]);
+    expect(a.artifactEdges).toEqual([
+      { packageName: TEXT_ARTIFACT, requirement: "required", edgeType: "runtime" },
+    ]);
+    // The retired @cinatra-ai/default-artifact target is gone from the manifest.
+    expect(a.produces.map((p) => p.extension)).toEqual([TEXT_ARTIFACT]);
   });
 
-  it("the transcript agent's gate claim is still the untrue one — its flow has no pause", () => {
+  it("the transcript agent's gate claim is corrected — its flow has no pause", () => {
     const a = agent("media-transcript-agent");
     expect(a.approvalNodes).toBe(0);
     expect(a.declaredPauses).toEqual([]);
-    expect(a.gateClaim).toBe(true);
+    expect(a.gateClaim).toBe(false);
   });
 });
 
@@ -517,15 +522,14 @@ describe("acceptance 2 — nothing declared by the six data agents and the lint 
 // ---------------------------------------------------------------------------
 
 describe("acceptance 2 — a manifest never claims a gate its flow lacks", () => {
-  it("every in-scope agent claiming an approval gate really has one, but for the one held pin", () => {
+  it("every in-scope agent claiming an approval gate really has one", () => {
     const lying = IN_SCOPE.map((slug) => agent(slug))
       .filter((a) => a.gateClaim === true && a.approvalNodes === 0)
       .map((a) => a.packageName);
-    // The scraper's claim is corrected at its advanced pin; the transcript
-    // agent's correction rides the head this leg holds back, so it is the one
-    // remaining untrue claim and it is named here rather than tolerated
-    // silently.
-    expect(lying).toEqual(["@cinatra-ai/media-transcript-agent"]);
+    // The scraper's claim is corrected at its advanced pin, and so is the
+    // transcript agent's now that its pin is no longer held: no in-scope agent
+    // claims a gate its flow lacks.
+    expect(lying).toEqual([]);
   });
 });
 
