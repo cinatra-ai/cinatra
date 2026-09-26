@@ -55,8 +55,8 @@ export type AgentAllCardRow = {
   /**
    * The per-entry SETTINGS text link (cinatra#2808, per-scope surfaces S2): the
    * §VII assignment page for this package AT this scope, addressed by #2809's
-   * href contract. EXTENDED BY NAME — the /agents "All Agents" tab passes none,
-   * so that surface keeps Run plus More details alone.
+   * href contract. The /agents "All Agents" tab passes the WORKSPACE-scope
+   * address (cinatra#3683); a row without a package name passes none.
    */
   settingsHref?: string | null;
   /**
@@ -177,8 +177,8 @@ export function AgentAllCard({
               {/* The per-entry Settings TEXT LINK (cinatra#2808): the §VII
                   assignment page for this package at this scope, in the same
                   class and style as "More details" beside it. Rendered only
-                  where the caller supplied the href, so the /agents card is
-                  unchanged. */}
+                  where the caller supplied the href; the /agents card
+                  supplies the workspace-scope address (cinatra#3683). */}
               {row.settingsHref && (
                 <Link
                   href={row.settingsHref}
