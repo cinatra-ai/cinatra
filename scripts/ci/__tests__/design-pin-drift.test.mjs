@@ -10,9 +10,9 @@
 // The suite is organised by the six acceptance criteria of cinatra#3057 and
 // pins each of them against REAL inputs wherever a real input exists:
 //
-//   1. OUTCOMES. The FROZEN published manifests (fetched 2026-09-18,
-//      2026-09-17, 2026-09-13, 2026-09-12, 2026-09-10 and 2026-08-28,
-//      committed verbatim under
+//   1. OUTCOMES. The FROZEN published manifests (fetched 2026-09-26,
+//      2026-09-18, 2026-09-17, 2026-09-13, 2026-09-12, 2026-09-10 and
+//      2026-08-28, committed verbatim under
 //      __fixtures__) are run against the REAL conformance-pins.json, each pin
 //      served the body of the NEWEST capture that carries its file. The
 //      2026-09-12 reconciliation re-pinned app, app-components and
@@ -25,7 +25,10 @@
 //      first app-extensions round that is NOT hashes-only — the published body
 //      declares three surfaces the pinned one did not (the drawing's section
 //      VIII Upload screen), so the pin moved together with the drivers and the
-//      harness mounts that answer them.
+//      harness mounts that answer them. The 2026-09-26 reconciliation re-pinned
+//      app-extensions hashes-only again, after the design source changed the
+//      wording of its drawing and republished it with all sixteen surfaces
+//      unchanged.
 //      So all five are the zero-drift set together with the committed manifest
 //      copies they are byte-identical to, and that identity IS the adoption
 //      record. The drift path keeps real inputs of its own: the SUPERSEDED
@@ -93,7 +96,15 @@ const FIXTURES = path.join(
   "__fixtures__",
   "design-pin-drift",
 );
-const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-09-18");
+const FROZEN_PUBLISHED = path.join(FIXTURES, "published-2026-09-26");
+/**
+ * The published set frozen by the 2026-09-18 adoption of app-extensions with
+ * its three Upload surfaces. It is still the record of THAT adoption — the test
+ * that compares what app-extensions superseded on 2026-09-18 declared against
+ * the body adopted in its place reads it — and nothing about the 2026-09-26
+ * hashes-only re-pin of app-extensions retires it.
+ */
+const FROZEN_PUBLISHED_2026_09_18 = path.join(FIXTURES, "published-2026-09-18");
 /**
  * The published set frozen by the 2026-09-17 hashes-only reconciliation. It is
  * still the record of THAT adoption — the test that compares what
@@ -129,9 +140,12 @@ const FROZEN_PUBLISHED_2026_08_28 = path.join(FIXTURES, "published-2026-08-28");
  * Every capture directory, NEWEST FIRST. Each reconciliation and each adoption
  * freezes the body it adopted in a capture of its own beside its own receipt,
  * so the ADOPTED body of a pin is the one in the newest capture that carries
- * its file: `published-2026-09-18` holds the app-extensions body the section
- * VIII adoption took (and, byte-identical, the four bodies that round left
- * where they were), `published-2026-09-17` holds the app-extensions body the
+ * its file: `published-2026-09-26` holds the app-extensions body the fourth
+ * hashes-only re-pin adopted (and, byte-identical, the four bodies that round
+ * left where they were, all five fetched that day), `published-2026-09-18`
+ * holds the app-extensions body the section VIII adoption took (and,
+ * byte-identical, the four bodies that round left where they were),
+ * `published-2026-09-17` holds the app-extensions body the
  * third hashes-only re-pin adopted, `published-2026-09-13` holds the body the second
  * hashes-only re-pin adopted, `published-2026-09-12` holds the app, app-components
  * and app-extensions bodies the first hashes-only re-pin adopted,
@@ -146,6 +160,7 @@ const FROZEN_PUBLISHED_2026_08_28 = path.join(FIXTURES, "published-2026-08-28");
  */
 const CAPTURES = [
   FROZEN_PUBLISHED,
+  FROZEN_PUBLISHED_2026_09_18,
   FROZEN_PUBLISHED_2026_09_17,
   FROZEN_PUBLISHED_2026_09_13,
   FROZEN_PUBLISHED_2026_09_12,
@@ -198,6 +213,16 @@ const SUPERSEDED_2026_09_17 = path.join(FIXTURES, "superseded-pins-2026-09-17");
  * this one never did.
  */
 const SUPERSEDED_2026_09_18 = path.join(FIXTURES, "superseded-pins-2026-09-18");
+/**
+ * The one artifact the pin named before the 2026-09-26 hashes-only
+ * reconciliation. ONE, not three: that round moved app-extensions alone — the
+ * design source changed the wording of its drawing and republished its spec
+ * with all sixteen declared surfaces unchanged, so only the embedded
+ * contentHash moved. app, app-components, app-connectors and app-notifications
+ * answered that round's fetch byte-identical to the bodies they were already
+ * pinned at.
+ */
+const SUPERSEDED_2026_09_26 = path.join(FIXTURES, "superseded-pins-2026-09-26");
 const MALFORMED = path.join(FIXTURES, "malformed");
 
 const pins = loadPins(REPO_ROOT);
@@ -753,7 +778,7 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
           ]),
         );
       const before = surfacesOf(bytes);
-      const after = surfacesOf(readFileSync(path.join(FROZEN_PUBLISHED, row.file)));
+      const after = surfacesOf(readFileSync(path.join(FROZEN_PUBLISHED_2026_09_18, row.file)));
       expect(before.size, row.file).toBe(13);
       expect([...after.keys()].filter((id) => !before.has(id))).toEqual([
         "upload-extension-screen",
@@ -772,9 +797,67 @@ describe("criterion 1 — the five outcomes are reported, never silently passed"
         delete object.surfaces;
         return JSON.stringify(object);
       };
-      expect(envelope(readFileSync(path.join(FROZEN_PUBLISHED, row.file))), row.file).toBe(
-        envelope(bytes),
+      expect(
+        envelope(readFileSync(path.join(FROZEN_PUBLISHED_2026_09_18, row.file))),
+        row.file,
+      ).toBe(envelope(bytes));
+    }
+  });
+
+  it("the 2026-09-26 superseded artifact drifts against the one pin that reconciliation moved", () => {
+    // The drift input of the FIFTH app-extensions round, and the fourth that
+    // is hashes-only: the body app-extensions named before it — which is the
+    // body the 2026-09-18 adoption had just taken. The design source changed
+    // the wording of its drawing and republished the manifest, and a
+    // superseded artifact that still matched its pin would mean nothing was
+    // re-pinned at all.
+    const receipt = JSON.parse(
+      readFileSync(path.join(SUPERSEDED_2026_09_26, "provenance.json"), "utf8"),
+    );
+    expect(receipt.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(receipt.supersededOn).toBe("2026-09-26");
+    // ONE row: this reconciliation moved app-extensions and nothing else, and
+    // the receipt is where that claim is checkable rather than asserted.
+    expect(receipt.manifests.map((m) => m.file)).toEqual(["app-extensions.json"]);
+    for (const row of receipt.manifests) {
+      const bytes = readFileSync(path.join(SUPERSEDED_2026_09_26, row.file));
+      expect(row.repoPath, row.file).toBe(
+        `tests/e2e/design/conformance/manifests/${row.file}`,
       );
+      expect(bytes.length, row.file).toBe(row.byteLength);
+      expect(createHash("sha256").update(bytes).digest("hex"), row.file).toBe(row.sha256);
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      expect(parsed.schemaVersion, row.file).toBe(row.schemaVersion);
+      expect(parsed.contentHash, row.file).toBe(row.contentHash);
+
+      const pin = pins.manifests.find((p) => p.file === row.file);
+      const result = classifyPin({
+        pin,
+        url: publishedUrlFor(pins, pin),
+        fetched: { ok: true, status: 200, body: bytes },
+      });
+      expect(result.outcome, row.file).toBe("drift");
+      expect(result.detail, row.file).toContain("manifestSha256");
+      expect(result.detail, row.file).toContain("specContentHash");
+
+      // And this round's whole finding, as an assertion: the body adopted in
+      // its place redeclares nothing — the same sixteen surfaces, field for
+      // field, under the same schemaVersion and spec. Only the two hashes
+      // moved, so only this gate saw it.
+      const adopted = readFileSync(path.join(FROZEN_PUBLISHED, row.file));
+      const declarations = (buffer) => {
+        const object = JSON.parse(buffer.toString("utf8"));
+        delete object.contentHash;
+        return JSON.stringify(object);
+      };
+      expect(declarations(adopted), row.file).toBe(declarations(bytes));
+      expect(JSON.parse(adopted.toString("utf8")).surfaces, row.file).toHaveLength(16);
+      expect(JSON.parse(adopted.toString("utf8")).contentHash, row.file).not.toBe(
+        parsed.contentHash,
+      );
+      // The superseded body is the one the PREVIOUS round adopted: this is a
+      // republication after the section VIII adoption, not a re-run of it.
+      expect(bytes).toEqual(readFileSync(path.join(FROZEN_PUBLISHED_2026_09_18, row.file)));
     }
   });
 
