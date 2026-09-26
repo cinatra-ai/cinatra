@@ -137,17 +137,20 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
     );
   });
 
-  it("heads the list with the roll-up card only when it counts more than one connection, and gives it NO action", () => {
-    // §II, the Sharing tab: "the roll-up card heads the list, and only when
-    // there is more than one connection to roll up" — and "The roll-up card is
-    // the Connections status card of the Setup tab, with no Check and no All
-    // connections link: the list it counts is directly beneath it."
-    // ONE rule for every mount — the tab and the pages that draw no tab strip
-    // (bundled-react, the error treatments) alike — so the panels component
-    // carries no mode branch and the section hands down no switch (cinatra#3374).
-    expect(SHARING_PANELS).toContain("panels.length > 1 ?");
+  it("heads the list with the roll-up card only on a many-connections page that counts more than one, and gives it NO action", () => {
+    // §II, the Sharing tab: "The roll-up card is the Connections status card
+    // of the Setup tab, with no Check and no All connections link: the list it
+    // counts is directly beneath it." The maintainer's ruling of 2026-09-26
+    // (cinatra#3454) reads that as the page's SHAPE and not the count: only a
+    // connector that holds many connections has that Setup card, and only its
+    // page heads the Sharing list with the roll-up. So the panels component
+    // takes the shape, and this section states the single one, because the
+    // generated connector page it draws carries no Connections tab.
+    expect(SHARING_PANELS).toContain('pageShape = "single"');
+    expect(SHARING_PANELS).toContain('pageShape === "many" && panels.length > 1');
     expect(SHARING_PANELS).not.toContain("rollup ===");
     expect(SHARING_SECTION).not.toContain("rollup=");
+    expect(SHARING_SECTION).toContain('pageShape="single"');
     const cardStart = SHARING_PANELS.indexOf("<ConnectionsStatusCard");
     expect(cardStart).toBeGreaterThan(-1);
     const card = SHARING_PANELS.slice(cardStart, SHARING_PANELS.indexOf("/>", cardStart));
