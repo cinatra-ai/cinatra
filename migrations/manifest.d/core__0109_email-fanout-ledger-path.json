@@ -1,0 +1,9 @@
+{
+  "seq": "0109",
+  "file": "core/core__0109_email-fanout-ledger-path.mjs",
+  "summary": "The email fan-out's own ledger path (cinatra#3089, epic #3087 W1). The path CHECK on artifact_materializations gains 'email_fanout': the send boundary writes one markdown revision per draft item of a send through the materialization ledger, keyed by the message identity and the content hash, so a retried send reuses the row instead of writing a copy; the fan-out needs a path of its own because the ledger's unique key excludes path and the write core refuses to alias a row of a different path. Rewriting a CHECK constraint is a constraint change, not a data rewrite: no row is touched and every existing row satisfies the widened predicate. No backfill: historical raw body rows and their associations stay as they are (a forward-only cutover). Idempotent twin of the fresh-install bootstrap DDL in artifactMaterializationLedgerSchemaQueries (src/lib/artifact-claim-schema.ts), shipped in the SAME PR (core__0103 precedent). down() narrows the CHECK again and is reversible only while no email_fanout row exists; it never deletes rows. DECLARED DESTRUCTIVE: the widened path CHECK rewrites a constraint on a deployed table, which the core-store schema migration gate classifies destructive (its add-constraint rule).",
+  "destructive": true,
+  "tables": [
+    "artifact_materializations"
+  ]
+}
