@@ -400,7 +400,7 @@ const TYPE_BAN_SPECS = [
     // start-of-string or a non-word char, so it never matches mid-token.
     pattern: "(^|[^a-zA-Z0-9_-])-?tracking-\\[",
     message:
-      "Arbitrary tracking-[…] letter-spacing — use the named tracking tokens (tracking-title-tight, tracking-kicker, tracking-kicker-wide, tracking-page-label). See cinatra#886 for the migration of pre-existing sites.",
+      "Arbitrary tracking-[…] letter-spacing — use the named tracking tokens (tracking-title-tight, tracking-kicker, tracking-kicker-wide, tracking-page-label, tracking-picker-prefix). See cinatra#886 for the migration of pre-existing sites.",
   },
 ];
 const TYPE_BANS = TYPE_BAN_SPECS.flatMap(({ pattern, message }) => [
@@ -442,7 +442,7 @@ const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
   "packages/chat/src/chat-messages-view.tsx",
   "packages/mcp-server/src/index.tsx",
   "packages/agents/src/campaign-recipients-review-renderer.tsx",
-  "packages/agents/src/import-skill-from-github-form.tsx",
+  "packages/agents/src/upload-repository-link-form.tsx",
   "packages/permissions/src/user-impersonation-panel.tsx",
   "packages/permissions/src/impersonation-banner.tsx",
   "packages/extensions/src/screens/extension-resolution-panel.tsx",

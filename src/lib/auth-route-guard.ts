@@ -177,6 +177,18 @@ const PUBLIC_EXACT_PATHS = [
 // reason the header-rule entry above is: without it guardAppRoute 307s the
 // unauthenticated harness to /sign-in before the fixture renders, and every
 // assertion then fails on a fixture that never rendered.
+// "/design-fixtures/conformance/upload" (cinatra#3546): the §VIII Upload
+// Extension conformance harness route — the three published Upload surfaces
+// (the screen's own extracted JSX body, the shipped GitHub form and the resolved
+// install panel) on a sub-page of their own, because two of them mount a
+// resolved install panel that takes focus and scrolls a shared page under every
+// other mount on it. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no session, no user data; the two bound server calls are
+// substituted by the mount). It is listed here for the SAME reason the
+// header-rule and overlay-header-band entries above are: without it
+// guardAppRoute 307s the unauthenticated harness to /sign-in under the
+// production-standalone build, and every assertion then fails on a fixture that
+// never rendered.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/marketplace-detail-modal",
   "/design-fixtures/conformance",
@@ -187,6 +199,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/extension-settings",
   "/design-fixtures/run-step-rail",
   "/design-fixtures/overlay-header-band",
+  "/design-fixtures/conformance/upload",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

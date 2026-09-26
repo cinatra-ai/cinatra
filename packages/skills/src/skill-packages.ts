@@ -706,3 +706,279 @@ export function assertPersonalSkillOwnership(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Co-owner ROW store — the persisted sharing rows for skill packages and for
+// individual skills (cinatra#3204 leg 3).
+//
+// Moved out of skills-store.ts, which was over its file-size ceiling, and
+// co-located HERE for the same reason the access-policy helpers above are: this
+// module is ALREADY reachable from every locked route bundle, so the extraction
+// adds NO new node to the route graph (a new sibling file measured +1 module on
+// /api/a2a, /api/llm-bridge, /api/mcp and /chat, and a route ceiling may only
+// ever shrink). skills-store.ts re-exports every name below unchanged, so no
+// call site moves.
+//
+// These are the pure-SQL readers and writers of the two dedicated tables —
+// `cinatra.skill_package_co_owners` (package-level sharing) and
+// `cinatra.skill_co_owners` (per-skill sharing) — plus the polymorphic
+// `extension_co_owners` / `extension_access_policy` cleanup a skill-package
+// uninstall owes those rows. The tables are the only persisted state for
+// co-ownership; the ACCESS POLICY itself lives in the catalog payload, so its
+// readers and writers stay in skills-store.ts where the catalog read/rewrite
+// lives, and only the row access moves here.
+// ---------------------------------------------------------------------------
+
+/**
+ * Lazy DB coupling for the row helpers below.
+ *
+ * They are the ONLY database-coupled code in this module, and this module is
+ * imported by many pure resolution paths that never touch a table. A STATIC
+ * `@/lib/database` import drags drizzle + pg into every one of them (measured:
+ * it doubled the skills suite's module-import time), so the coupling is loaded
+ * on FIRST CALL instead. ESM caches the module, so the cost is paid once and
+ * only by a caller that actually reads or writes the co-owner tables.
+ */
+async function rowStore() {
+  const [{ getPostgresConnectionString, postgresSchema }, { runPostgresQueriesSync }] =
+    await Promise.all([import("@/lib/database"), import("@/lib/postgres-sync")]);
+  return {
+    connectionString: getPostgresConnectionString(),
+    schema: postgresSchema,
+    runPostgresQueriesSync,
+  };
+}
+
+export type SkillPackageCoOwnerRow = {
+  packageId: string;
+  userId: string;
+  grantedBy: string;
+  grantedAt: Date;
+};
+
+export async function readSkillPackageCoOwners(
+  packageId: string,
+): Promise<SkillPackageCoOwnerRow[]> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT package_id, user_id, granted_by, granted_at
+               FROM "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
+               WHERE package_id = $1
+               ORDER BY granted_at ASC`,
+        values: [packageId],
+      },
+    ],
+  });
+  type Row = { package_id: string; user_id: string; granted_by: string; granted_at: string | Date };
+  const rows = (result?.rows ?? []) as Row[];
+  return rows.map((r) => ({
+    packageId: r.package_id,
+    userId: r.user_id,
+    grantedBy: r.granted_by,
+    grantedAt: r.granted_at instanceof Date ? r.granted_at : new Date(r.granted_at),
+  }));
+}
+
+export async function addSkillPackageCoOwner(
+  packageId: string,
+  userId: string,
+  grantedBy: string,
+): Promise<{ ok: boolean }> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `INSERT INTO "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
+                 (package_id, user_id, granted_by)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (package_id, user_id) DO NOTHING`,
+        values: [packageId, userId, grantedBy],
+      },
+    ],
+  });
+  return { ok: true };
+}
+
+export async function removeSkillPackageCoOwner(
+  packageId: string,
+  userId: string,
+): Promise<{ ok: boolean }> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
+               WHERE package_id = $1 AND user_id = $2`,
+        values: [packageId, userId],
+      },
+    ],
+  });
+  return { ok: true };
+}
+
+/**
+ * Remove ALL co-owner rows for a package.
+ *
+ * Used by `uninstallSkillPackage()` to explicitly clean up the sibling
+ * `skill_package_co_owners` rows BEFORE the catalog's package row is
+ * deleted by `replaceSkillCatalogInDatabase()`. The FK changed from
+ * CASCADE to RESTRICT (so the catalog rewrite no longer silently wipes
+ * co-owners), and explicit uninstall — by user intent — should also clear
+ * the sharing entries.
+ */
+export async function removeAllSkillPackageCoOwners(packageId: string): Promise<void> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_package_co_owners"
+               WHERE package_id = $1`,
+        values: [packageId],
+      },
+    ],
+  });
+}
+
+/**
+ * Remove ALL skill-level co-owner rows for every
+ * skill belonging to the given package.
+ *
+ * `skill_co_owners.skill_id` is FK to `cinatra.skills(id)` with
+ * ON DELETE RESTRICT. When a package is uninstalled, its skill rows are
+ * dropped by the catalog rewrite. If any of those skills still have
+ * skill-level co-owners, the FK rejects the rewrite and the transaction rolls
+ * back. Call this first to clear the sibling rows by user intent.
+ */
+export async function removeAllSkillCoOwnersForPackage(packageId: string): Promise<void> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  // Delete by joining through the skills payload — co-owner rows whose
+  // skill_id matches any skill whose payload.packageId is the uninstalled
+  // package. payload is text holding JSON; cast to jsonb for `->>` lookup.
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_co_owners"
+               WHERE skill_id IN (
+                 SELECT id FROM "${schema.replaceAll('"', '""')}"."skills"
+                 WHERE (payload::jsonb)->>'packageId' = $1
+               )`,
+        values: [packageId],
+      },
+    ],
+  });
+}
+
+/**
+ * Remove ALL polymorphic
+ * `extension_co_owners` + `extension_access_policy` rows for every skill
+ * belonging to the given package.
+ *
+ * The polymorphic backend has no FK on `resource_id` (one FK
+ * can't span multiple kind-specific resource tables), so an
+ * uninstallSkillPackage must also clean polymorphic rows keyed by
+ * `resource_kind='skill'` for each child skill — otherwise those rows
+ * orphan and could re-apply grants if the same skill id is later reused.
+ */
+export async function removeAllPolymorphicSkillPermissionsForPackage(packageId: string): Promise<void> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."extension_co_owners"
+               WHERE resource_kind = 'skill'
+                 AND resource_id IN (
+                   SELECT id FROM "${schema.replaceAll('"', '""')}"."skills"
+                   WHERE (payload::jsonb)->>'packageId' = $1
+                 )`,
+        values: [packageId],
+      },
+      {
+        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."extension_access_policy"
+               WHERE resource_kind = 'skill'
+                 AND resource_id IN (
+                   SELECT id FROM "${schema.replaceAll('"', '""')}"."skills"
+                   WHERE (payload::jsonb)->>'packageId' = $1
+                 )`,
+        values: [packageId],
+      },
+    ],
+  });
+}
+
+export type SkillCoOwnerRow = {
+  skillId: string;
+  userId: string;
+  grantedBy: string;
+  grantedAt: Date;
+};
+
+export async function readSkillCoOwners(skillId: string): Promise<SkillCoOwnerRow[]> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT skill_id, user_id, granted_by, granted_at
+               FROM "${schema.replaceAll('"', '""')}"."skill_co_owners"
+               WHERE skill_id = $1
+               ORDER BY granted_at ASC`,
+        values: [skillId],
+      },
+    ],
+  });
+  type Row = { skill_id: string; user_id: string; granted_by: string; granted_at: string | Date };
+  const rows = (result?.rows ?? []) as Row[];
+  return rows.map((r) => ({
+    skillId: r.skill_id,
+    userId: r.user_id,
+    grantedBy: r.granted_by,
+    grantedAt: r.granted_at instanceof Date ? r.granted_at : new Date(r.granted_at),
+  }));
+}
+
+export async function addSkillCoOwner(
+  skillId: string,
+  userId: string,
+  grantedBy: string,
+): Promise<{ ok: boolean }> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `INSERT INTO "${schema.replaceAll('"', '""')}"."skill_co_owners"
+                 (skill_id, user_id, granted_by)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (skill_id, user_id) DO NOTHING`,
+        values: [skillId, userId, grantedBy],
+      },
+    ],
+  });
+  return { ok: true };
+}
+
+export async function removeSkillCoOwner(
+  skillId: string,
+  userId: string,
+): Promise<{ ok: boolean }> {
+  const { connectionString, schema, runPostgresQueriesSync } = await rowStore();
+  runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `DELETE FROM "${schema.replaceAll('"', '""')}"."skill_co_owners"
+               WHERE skill_id = $1 AND user_id = $2`,
+        values: [skillId, userId],
+      },
+    ],
+  });
+  return { ok: true };
+}

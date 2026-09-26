@@ -14,19 +14,36 @@
  * the page removed. What remains here asserts named clauses against the pinned
  * conformance manifests and the real components.
  *
- * The harness routes are STATIC (no DB queries). `cinatra setup branch` is NOT
- * required before these tests run in CI. The `webServer` block below boots
- * `pnpm dev` directly on a dedicated port.
+ * The suite includes static picture fixtures AND mutable database-backed
+ * conformance surfaces. Seed capabilities, isolated database state and Redis
+ * are required for the latter. CI normally supplies a production standalone
+ * server; opt-in partitions verify that server's identity before any tests.
  */
+import { isAbsolute, resolve, sep } from "node:path";
+import { designPartition } from "../../../src/lib/test-support/design-partition";
 import { defineConfig } from "@playwright/test";
 import { baseUse, desktopChrome, suitePath, REPO_ROOT, repoPath } from "./base";
+
+const partition = designPartition();
+if (partition) {
+  process.env.CINATRA_CONFORMANCE_RUN_ID = partition.runId;
+  process.env.E2E_DESIGN_PORT = String(partition.port);
+  process.env.E2E_DESIGN_BASE_URL = partition.baseURL;
+}
+const artifactRoot = process.env.CINATRA_DESIGN_ARTIFACT_ROOT;
+if (partition && (!artifactRoot || !isAbsolute(artifactRoot) || resolve(artifactRoot).startsWith(resolve(REPO_ROOT) + sep) || resolve(artifactRoot) === resolve(REPO_ROOT))) {
+  throw new Error("partition artifacts require an absolute private directory outside the product checkout");
+}
+const artifacts = (name: string) => partition ? resolve(artifactRoot!, partition.runId, name) : repoPath(name);
 
 const PORT = Number(process.env.E2E_DESIGN_PORT ?? 3101);
 const BASE_URL = process.env.E2E_DESIGN_BASE_URL ?? `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: suitePath("design"),
-  outputDir: repoPath("test-results"),
+  globalSetup: partition ? repoPath("tests/e2e/design/partition-setup.ts") : undefined,
+  outputDir: artifacts("test-results"),
+  shard: partition ? { current: partition.current, total: partition.total } : undefined,
   // A first assertion can take a moment on a cold dev server.
   timeout: 120_000,
   // Snapshot plumbing for the ONE remaining snapshot consumer: the opt-in
@@ -49,21 +66,25 @@ export default defineConfig({
     },
   },
   retries: process.env.CI ? 1 : 0,
+  // A concluded failure already makes the gate red; stop dependent browser
+  // work after that failure (retries still get their normal opportunity).
+  maxFailures: process.env.CI ? 1 : 0,
   // Serial ON PURPOSE, and left serial by the diff-selective runner
   // (scripts/ci/design-select.mjs): the conformance families are NOT read-only
   // pages. They provision one seeded namespace per run (the SEEDED_* exact
   // counts in tests/e2e/design/conformance/contract.ts) and drive real actions
   // through it, so a second worker would race the counts the drivers assert.
   // The selector buys its time back by running FEWER families, never by running
-  // the same families in parallel; a workers knob here would need a read-only
-  // proof this suite cannot give today.
+  // the same mutable namespace in parallel. Opt-in partitioning instead uses
+  // independent databases, Redis databases, app ports and run namespaces, with
+  // one worker in each partition; the default remains this serial run.
   fullyParallel: false,
   workers: 1,
 
   reporter: process.env.CI
     ? [
         ["github"],
-        ["html", { open: "never", outputFolder: repoPath("playwright-report-design") }],
+        ["html", { open: "never", outputFolder: artifacts("playwright-report-design") }],
       ]
     : [["list"]],
 
@@ -89,7 +110,7 @@ export default defineConfig({
         cwd: REPO_ROOT,
         url: BASE_URL,
         timeout: 240_000,
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: partition ? false : !process.env.CI,
         stdout: "pipe",
         stderr: "pipe",
       },

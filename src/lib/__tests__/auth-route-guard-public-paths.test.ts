@@ -1598,6 +1598,11 @@ describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harnes
     expect(isNext(res)).toBe(true);
   });
 
+  it("/design-fixtures/conformance/upload is public in non-production (§VIII Upload Extension harness route, cinatra#3546)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures/conformance/upload"));
+    expect(isNext(res)).toBe(true);
+  });
+
   it("CONTROL: an arbitrary /design-fixtures/* sibling is NOT public (exact-path list, no prefix wildcard)", async () => {
     const res = await guardAppRoute(fakeRequest("/design-fixtures/anything-else"));
     expect(res.status).toBe(307);

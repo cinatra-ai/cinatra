@@ -78,7 +78,7 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
 
   it("a compose pin bump without a matrix update FAILS (pin drift)", () => {
     const drifted = composeText.replace(
-      "image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15",
+      "image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2",
       "image: postgres:19-alpine",
     );
     expect(drifted).not.toBe(composeText); // the pin we expect to exist was found

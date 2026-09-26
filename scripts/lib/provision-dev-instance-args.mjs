@@ -1,5 +1,6 @@
-// The ARGUMENT SURFACE of the development instance-provisioning command, kept
-// dependency-free so it can be tested without the application graph.
+// The ARGUMENT AND OUTCOME SURFACE of the development instance-provisioning
+// command — what an operator types at it and the one line it prints back —
+// kept dependency-free so both can be tested without the application graph.
 //
 // The one property this module exists to hold: there is NO flag that can carry
 // a secret. A secret-looking flag is REFUSED rather than ignored, because an
@@ -10,10 +11,15 @@
 // printed to the terminal, and a mistyped credential is exactly the thing that
 // would otherwise be echoed there.
 
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 export const SECRET_TRAVEL_RULE =
-  "Secret values (the provider key, the connector-service secret) reach this command " +
-  "over stdin only — never as a command-line argument, never through an environment " +
-  "file written to disk, never logged.";
+  "Secret values (the provider key, the connector-service secret, the first " +
+  "administrator's password) reach this command over stdin only — never as a " +
+  "command-line argument, never through an environment file written to disk, never " +
+  "logged.";
 
 export const PROVISIONABLE_PROVIDERS = Object.freeze(["openai", "anthropic"]);
 
@@ -27,15 +33,26 @@ export class SecretInArgumentsError extends Error {
   }
 }
 
-/** Anything whose NAME suggests it carries a credential. */
-const SECRET_FLAG_PATTERN = /(key|secret|token|password|credential|passphrase)/i;
+/** Anything whose NAME suggests it carries a credential. Exported so the suite
+ *  can assert the INVARIANT rather than a list of examples: no accepted flag's
+ *  name may read as a secret. */
+export const SECRET_FLAG_PATTERN = /(key|secret|token|password|credential|passphrase)/i;
 
+// An ADDRESS IS NOT A SECRET, and neither is a display name: both are ordinary
+// flags. The administrator's PASSWORD is a secret and therefore has no flag at
+// all — `--admin-password` and every other secret-looking spelling of it falls
+// through to the refusal below, exactly like `--api-key`.
 const VALUE_FLAGS = new Map([
   ["--namespace", "namespace"],
   ["--display-name", "displayName"],
   ["--public-origin", "publicOrigin"],
   ["--provider", "provider"],
+  ["--admin-email", "adminEmail"],
+  ["--admin-name", "adminName"],
 ]);
+
+/** Every flag this command accepts a value for. See SECRET_FLAG_PATTERN. */
+export const PROVISION_VALUE_FLAGS = Object.freeze([...VALUE_FLAGS.keys()]);
 
 export function parseProvisionInstanceArgs(argv) {
   const parsed = {
@@ -43,10 +60,20 @@ export function parseProvisionInstanceArgs(argv) {
     displayName: undefined,
     publicOrigin: undefined,
     provider: undefined,
+    adminEmail: undefined,
+    adminName: undefined,
   };
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = String(argv[i]);
+  // A LEADING bare `--` is the package manager's, not the operator's:
+  // `pnpm provision:dev-instance -- --namespace acme-dev` is the invocation
+  // this command documents, and the pinned pnpm forwards the separator to the
+  // script verbatim. It is dropped in the first position and nowhere else, so
+  // a `--` the operator typed later is still an unknown argument, and a `--`
+  // standing in a VALUE position is still that flag's value.
+  const tokens = argv.length > 0 && String(argv[0]) === "--" ? argv.slice(1) : argv;
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = String(tokens[i]);
     if (!token.startsWith("--")) {
       // The token is NOT echoed: a stray positional is exactly the shape an
       // accidentally-pasted credential takes, and this message is printed.
@@ -60,7 +87,7 @@ export function parseProvisionInstanceArgs(argv) {
       if (SECRET_FLAG_PATTERN.test(flag)) throw new SecretInArgumentsError(flag);
       throw new Error(`unknown argument "${flag}".`);
     }
-    const value = inlineValue ?? argv[(i += 1)];
+    const value = inlineValue ?? tokens[(i += 1)];
     if (value === undefined) throw new Error(`"${flag}" needs a value.`);
     parsed[VALUE_FLAGS.get(flag)] = String(value).trim();
   }
@@ -79,12 +106,18 @@ function splitFlag(token) {
   return equals === -1 ? [token, undefined] : [token.slice(0, equals), token.slice(equals + 1)];
 }
 
+/** Secrets stored EXACTLY as given. A password is bytes, not a name. */
+const UNTRIMMED_SECRET_KEYS = Object.freeze(["adminPassword"]);
+
 const SECRET_KEYS = Object.freeze([
   "providerApiKey",
   "providerProjectId",
   "providerOrganizationId",
   "connectorServiceSecretKey",
   "connectorServiceUrl",
+  // The first administrator's password. The ADDRESS travels as an ordinary
+  // flag beside it; only the password comes this way.
+  "adminPassword",
 ]);
 
 /**
@@ -120,10 +153,54 @@ export function parseProvisionSecretsPayload(text) {
     const value = parsed[key];
     if (value === undefined || value === null) continue;
     if (typeof value !== "string") throw new Error(`"${key}" must be a string.`);
-    const value_ = value.trim();
-    if (value_.length > 0) out[key] = value_;
+
+    if (UNTRIMMED_SECRET_KEYS.includes(key)) {
+      // A PASSWORD IS BYTES, NOT A NAME. Trimming one stores a different secret
+      // than the operator typed, and the account then refuses the password they
+      // wrote down, with nothing anywhere to say why. A blank one is REFUSED
+      // rather than dropped as "absent": "absent" would send the operator
+      // hunting for a key that is right there in the document.
+      if (value.trim().length === 0) {
+        throw new Error(
+          `"${key}" on stdin is empty or only whitespace. It is stored exactly as given, so a ` +
+            "blank one is refused rather than silently dropped. The value is not echoed.",
+        );
+      }
+      out[key] = value;
+      continue;
+    }
+
+    const trimmed = value.trim();
+    if (trimmed.length > 0) out[key] = trimmed;
   }
   return out;
+}
+
+/**
+ * The one line the command closes on, and the code it exits with.
+ *
+ * THE OUTCOME THAT MUST NOT LOOK LIKE SUCCESS: an account created but not
+ * promoted. The instance did write something, so a plain "provisioned" would be
+ * literally true and completely misleading — an unattended caller reads the
+ * exit code, and would carry on against an instance whose operator has no
+ * administrator rights.
+ */
+export function summarizeRunForExit(report) {
+  const seat = report?.firstAdministrator ?? null;
+  if (seat && seat.written && !seat.alreadySeated && !seat.administrator) {
+    return {
+      line:
+        "done, but NOT finished — the administrator account was created and this instance " +
+        "declined to promote it, so it is not an administrator. Nothing further was assumed.",
+      exitCode: 1,
+    };
+  }
+  return {
+    line: report?.wrote
+      ? "done — the instance was provisioned."
+      : "done — nothing to do; the instance already stood.",
+    exitCode: 0,
+  };
 }
 
 /** PRESENCE, never a value — this is the only thing the command says about a
@@ -133,6 +210,7 @@ export function summarizeSecretsForLog(payload) {
   return [
     `provider API key: ${present(payload?.providerApiKey)}`,
     `connector-service secret: ${present(payload?.connectorServiceSecretKey)}`,
+    `administrator password: ${present(payload?.adminPassword)}`,
   ].join(", ");
 }
 
@@ -142,4 +220,31 @@ export async function readAllText(stream) {
   const chunks = [];
   for await (const chunk of stream) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Is this module file the one the process was STARTED with?
+ *
+ * The command file is both the command and a module the suite drives, so it
+ * must run its own body only when it IS the command. Paths are compared through
+ * `realpathSync` in both directions, because a package script names the file
+ * relative to the repository root while the loader reports a resolved URL, and
+ * a checkout may sit behind a symlink. A path that is not there resolves as
+ * itself rather than throwing: an entry point that does not exist is simply not
+ * this file.
+ */
+export function isCommandEntryPoint(entry, moduleUrl) {
+  if (typeof entry !== "string" || entry.length === 0) return false;
+  const real = (value) => {
+    try {
+      return realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  try {
+    return real(path.resolve(entry)) === real(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
 }

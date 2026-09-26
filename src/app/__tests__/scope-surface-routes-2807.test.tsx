@@ -10,7 +10,7 @@
 // Assistants/Agents tabs (#2808) and of the Artifacts/Skills tabs (#2810) are
 // their own slices, so what these shells render is an honest placeholder.
 import { createElement, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("next/link", () => ({
@@ -73,6 +73,14 @@ vi.mock("@/lib/generated/extensions.server", () => ({
   GENERATED_CONNECTOR_MCP_MODULES: {},
   GENERATED_WIDGET_STREAM_AGENTS: {},
 }));
+
+// The workspace Dashboards tab BODY (cinatra#2811) is stood in for here: the
+// subject of this suite is the shell the tab belongs to, and the body's own
+// reads and rows are proven in the workspace dashboards suites.
+const workspaceBody = vi.hoisted(() => ({
+  buildWorkspaceDashboardsTabBody: vi.fn(async () => null as unknown),
+}));
+vi.mock("@/components/dashboards/workspace-dashboards-section", () => workspaceBody);
 
 const FIVE_TABS = ["Dashboards", "Assistants", "Agents", "Artifacts", "Skills"] as const;
 const NEW_TABS = ["assistants", "agents", "artifacts", "skills"] as const;
@@ -174,6 +182,23 @@ async function renderRoute(load: Loader, props: unknown) {
   render(tree as ReactNode);
 }
 
+// Whichever case runs first would otherwise pay the cold transform of this
+// file's whole page-module tree inside its own per-case hook, which trips the
+// run's hook budget on a loaded runner (cinatra#3550). Resolve every one of the
+// matrix's route modules and the landing page once here, so each per-case hook
+// is a module-cache hit. This hook carries its own budget for that one cold
+// cost; the per-case hooks keep the run's, tight enough to still fail a
+// genuinely hung render. The mock registry is hoisted above every import of
+// this graph, so these resolve exactly what the per-case hooks resolve today.
+beforeAll(async () => {
+  for (const entry of MATRIX) {
+    for (const load of Object.values(entry[5])) {
+      await load();
+    }
+  }
+  await import("../workspace/page");
+}, 180_000);
+
 beforeEach(() => {
   auth.requireAuthSession.mockClear();
 });
@@ -246,6 +271,10 @@ describe("the 5x4 scoped tab routes render the shared strip and their empty stat
 
 describe("the /workspace landing opens on Dashboards (#2807)", () => {
   beforeEach(async () => {
+    workspaceBody.buildWorkspaceDashboardsTabBody.mockClear();
+    workspaceBody.buildWorkspaceDashboardsTabBody.mockResolvedValue(
+      createElement("div", { "data-testid": "workspace-dashboards-body" }),
+    );
     const mod = await import("../workspace/page");
     render((await mod.default()) as ReactNode);
   });
@@ -270,34 +299,17 @@ describe("the /workspace landing opens on Dashboards (#2807)", () => {
     }
   });
 
-  // The Workspace section sends this tab's body to the Dashboards tab section:
-  // "The body below the strip is the ordinary entity-page body of that same
-  // section" - so the tab reads that section's own panel, not the shared Empty
-  // pattern the four scoped tabs read.
-  it("draws the Dashboards tab's own panel, not the scoped-tab placeholder", () => {
-    const panel = document.querySelector(
-      '[data-conformance-id="scope-dashboards-tab"]',
-    );
-    expect(panel).toBeTruthy();
-    expect(panel!.querySelector('[data-slot="empty"]')).toBeNull();
-    expect(screen.getByTestId("scope-dashboards-empty")).toBeTruthy();
-  });
-
-  it("reads the drawn empty wording for the Dashboards tab", () => {
-    const copy = screen.getByTestId("scope-dashboards-empty").textContent ?? "";
-    expect(copy).toContain("No dashboards in this scope yet");
-  });
-
-  // "a personal user scope and the whole-workspace scope are not add-to-scope
-  // targets - they carry no Add". So no Add affordance is drawn, and the helper
-  // never promises the manager recourse the drawing words for the three shared
-  // scopes.
-  it("carries no Add affordance and never names the manager recourse", () => {
-    const panel = document.querySelector(
-      '[data-conformance-id="scope-dashboards-tab"]',
-    )!;
-    expect(panel.querySelectorAll("a, button").length).toBe(0);
-    expect(panel.textContent ?? "").not.toMatch(/\bAdd\b/);
+  // AMENDED by cinatra#2811: the drawing's §IX now reads "The whole-workspace
+  // scope is a reference target: its Dashboards tab behaves exactly like the
+  // other scopes' Dashboards tab (§IX.3)", with its Overview, the Add popup and
+  // the references. The landing therefore mounts the workspace dashboards body
+  // that slice builds, in place of the empty panel S1 drew, and never the
+  // scoped-tab placeholder.
+  it("mounts the workspace dashboards body the slice builds, not a placeholder", () => {
+    expect(workspaceBody.buildWorkspaceDashboardsTabBody).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("workspace-dashboards-body")).toBeTruthy();
+    expect(document.querySelector('[data-slot="empty"]')).toBeNull();
+    expect(screen.queryByTestId("scope-dashboards-empty")).toBeNull();
   });
 
   // "the tab points, it never renders a dashboard inline".

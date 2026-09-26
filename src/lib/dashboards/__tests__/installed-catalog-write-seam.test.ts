@@ -51,14 +51,32 @@ describe("the `use server` module", () => {
     expect(strip(ACTIONS)).not.toMatch(/^export\s+(type|const|interface)/m);
   });
 
-  it("exposes exactly ONE action", () => {
+  it("exposes exactly ONE action PER SURFACE FAMILY, and no others", () => {
     const fns = [...strip(ACTIONS).matchAll(/^export async function (\w+)/gm)];
-    expect(fns.map((m) => m[1])).toEqual(["addInstalledCatalogDashboardAction"]);
+    // Two, and only two: the tenant surfaces share one bound action, and the
+    // workspace has its own because it binds no scope at all (cinatra#2811,
+    // item 4). A third name here is a new client-reachable entry point and
+    // must be justified before it lands.
+    expect(fns.map((m) => m[1])).toEqual([
+      "addInstalledCatalogDashboardAction",
+      "addWorkspaceCatalogDashboardAction",
+    ]);
   });
 
   it("resolves the actor from the LIVE session, never from an argument", () => {
     expect(ACTIONS).toMatch(/const actor = await getActorContext\(\)/);
     expect(strip(ACTIONS)).not.toMatch(/actor\s*[:,]\s*ActorContext/);
+  });
+
+  it("takes NOTHING but a template handle on the workspace action", () => {
+    // The workspace action has no bound descriptor to replay: it names no
+    // organization, no scope and no destination, and re-resolves the viewer's
+    // memberships from the live session on the request that calls it.
+    const signature = /export async function addWorkspaceCatalogDashboardAction\(\s*templateId: string,\s*\)/;
+    expect(strip(ACTIONS)).toMatch(signature);
+    expect(strip(ACTIONS)).not.toMatch(
+      /addWorkspaceCatalogDashboardAction\([^)]*(surface|orgId|organizationId|ref)/,
+    );
   });
 });
 
