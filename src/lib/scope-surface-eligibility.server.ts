@@ -23,11 +23,15 @@ import "server-only";
  * permissions store and its Postgres connection; nothing pays for that until a
  * candidate actually needs authorizing.
  *
- * FAILURE POSTURE: never throws into a scope landing. Any failure logs and
- * yields an EMPTY list, which renders the tab's honest placeholder rather than a
- * broken page. The tab readers report that as `read: false` beside the rows
- * (cinatra#3707), so a caller can tell a read that found nothing from a read it
- * could not take, and only the first one may say the scope holds nothing.
+ * FAILURE POSTURE: never throws into a scope landing. A failure of the read
+ * itself logs and yields an EMPTY list, which renders the tab's honest
+ * placeholder rather than a broken page. A failure of one CONTRIBUTING source
+ * that only ever adds rows logs and yields the narrower list instead, so the
+ * tab still draws what was reached.
+ *
+ * Every failure is reported, though, as `read: false` beside the rows
+ * (cinatra#3707). A caller can then tell a read that found nothing from a read
+ * that could not answer, and only the first may say the scope holds nothing.
  */
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 import type { AccessScopeVantage } from "@cinatra-ai/extensions/access-scope-vantage";
@@ -293,7 +297,9 @@ async function readProjectBindings(
   return { bindings: out, complete: true };
 }
 
-/** Every eligible row for a scope, or `[]` on any failure. */
+/** Every eligible row for a scope: `[]` where the read itself failed, and the
+ *  narrower list where one contributing source did. The rows alone, so a caller
+ *  that needs to know whether the read answered takes the tab reader instead. */
 export async function readScopeSurfaceEligibility(
   scope: ScopeSurfaceRef,
 ): Promise<readonly ScopeSurfaceEligibilityRow[]> {
