@@ -86,6 +86,7 @@ import {
   hitlRecoveryReason,
   isHitlRecoveryVisible,
   reduceHitlDerivation,
+  HITL_RECOVERY_MIN_ATTEMPTS,
   INITIAL_HITL_DERIVATION_STATE,
   type HitlDerivationOutcome,
   type HitlDerivationState,
@@ -453,6 +454,21 @@ function ThreadRow({ message }: { message: SerializedAgentRunMessage }) {
  * ticket the server minted for a card to address its gate with; it is never a
  * field, never content, and never something a model should see.
  */
+/**
+ * The identity of ONE gate, as the panel answers it (cinatra#3699). The
+ * review-task id alone is not it: every WayFlow gate of a run carries the same
+ * `wayflow-<taskId>`, and every setup field the same `setup-<runId>` — so the
+ * renderer and the field are part of the key, exactly as the setup staging's
+ * own key is.
+ */
+function gateIdentityKey(gate: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return `${gate.reviewTaskId}::${gate.xRenderer}::${gate.fieldName ?? ""}`;
+}
+
 function withoutLifecycleCardRef(
   values: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -781,6 +797,57 @@ export function AgenticRunPanel({
   }
   const effectiveHitlContext: HitlContext | null = suppression.context;
 
+  // THE GATE THIS MOUNT HAS JUST ANSWERED (cinatra#3699).
+  //
+  // "After a gate's Continue, the run detail draws the run-progress placeholder
+  // (or the next step's card) and never a paused reading whose approval step
+  // 'could not be loaded'." After the reader's own Continue the status this
+  // panel holds can go on reading `pending_approval` — the stream clears the
+  // answered gate on RESUME and keeps its status until its next frame — while
+  // there is no gate to draw. The plate then fell to the paused arm, and once
+  // the hydration book-keeping was past its attempts it told the reader that
+  // the approval step "could not be loaded", for a step the reader had just
+  // answered.
+  //
+  // So a successful submit records WHICH gate it answered and the stream frame
+  // it answered it on. While the run still reads paused, the stream has sent no
+  // new frame, and the context held is none or the answered gate's own stale
+  // one, the reading is WORKING. A context of any other gate, a new stream frame
+  // or any other status ends that, and the record is dropped: the next gate's
+  // own card and every other reading draw exactly as they did. A mount that
+  // answered nothing never holds a record, so it keeps its paused reading, its
+  // Review approval and its Re-check unchanged.
+  //
+  // WITHOUT A STREAM THE WINDOW IS BOUNDED. On the poll road no new frame can
+  // tell a stale reading of the answered gate from the run parked again on a
+  // gate with the same identity, so there the window lasts at most the same
+  // three reads of the run the recovery state tolerates; after them the panel
+  // draws what it drew before, Re-check and all, and the reader is never left
+  // in front of a spinner with nothing to press.
+  const [answeredGate, setAnsweredGate] = useState<{
+    key: string;
+    frame: unknown;
+    attempts: number;
+  } | null>(null);
+  const derivationAttemptsRef = useRef(0);
+  useEffect(() => {
+    derivationAttemptsRef.current = derivation.attempts;
+  }, [derivation.attempts]);
+  const streamFrame: unknown = streamEnabled ? (streamResult.interruptContext ?? null) : null;
+  const streamFrameRef = useRef<unknown>(null);
+  useEffect(() => {
+    streamFrameRef.current = streamFrame;
+  }, [streamFrame]);
+  const answeredGateWindow =
+    answeredGate !== null &&
+    isPendingApproval &&
+    (streamFrame === null || streamFrame === answeredGate.frame) &&
+    (streamEnabled ||
+      derivation.attempts - answeredGate.attempts < HITL_RECOVERY_MIN_ATTEMPTS) &&
+    (rawEffectiveHitlContext === null ||
+      gateIdentityKey(rawEffectiveHitlContext) === answeredGate.key);
+  if (answeredGate !== null && !answeredGateWindow) setAnsweredGate(null);
+
   // THE BADGE READS THE RUN'S OWN MOMENT (cinatra#2930, epic #2926 W3).
   //
   // The plan: "No screen re-derives a moment from a task id or from the shape of
@@ -859,6 +926,23 @@ export function AgenticRunPanel({
     }) => {
       if (args.trackApproving) setIsApproving(true);
       if (args.suppressGate) justSubmittedXRendererRef.current = args.xRenderer;
+      // cinatra#3699 — the gate this press answers, taken BEFORE the await: by
+      // the time the answer lands the stream may already have moved on.
+      const held = latestHitlContextRef.current;
+      const answered = {
+        key: gateIdentityKey({
+          reviewTaskId: args.reviewTaskId,
+          xRenderer: args.xRenderer,
+          fieldName:
+            held !== null &&
+            held.reviewTaskId === args.reviewTaskId &&
+            held.xRenderer === args.xRenderer
+              ? held.fieldName
+              : undefined,
+        }),
+        frame: streamFrameRef.current,
+        attempts: derivationAttemptsRef.current,
+      };
       try {
         const outcome = await approveReviewTask(
           args.reviewTaskId,
@@ -877,6 +961,9 @@ export function AgenticRunPanel({
           return;
         }
         if (args.clearAttachmentsOnSuccess) pendingAttachmentsRef.current = [];
+        // Only a submit that WENT THROUGH is an answer: a blocked outcome, an
+        // "already resolved" race and a throw keep the readings they had.
+        setAnsweredGate(answered);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
         if (!isAlreadyResolvedError(msg)) {
@@ -1864,7 +1951,9 @@ export function AgenticRunPanel({
   const markedReviewGate =
     isPendingApproval &&
     effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID;
-  const blockedOnInputGate = isPendingApproval && !markedReviewGate;
+  // …and a gate this mount has just answered is not one it is blocked on
+  // (cinatra#3699): until the next gate arrives the run is working.
+  const blockedOnInputGate = isPendingApproval && !markedReviewGate && !answeredGateWindow;
   //
   // AND IT IS THE RUN'S CURRENT READING OR IT IS NOTHING. The slot's ref is
   // deliberately NOT enough on its own: a run carries its gate for ever, so a
@@ -1898,6 +1987,7 @@ export function AgenticRunPanel({
     !blockedOnInputGate &&
     (status === "queued" ||
       status === "running" ||
+      answeredGateWindow ||
       (reviewMayStillOpen && !widgetHostedPanel));
 
   // THE READING IS REPORTED TO WHOEVER HOSTS THIS PANEL (cinatra#3484).
