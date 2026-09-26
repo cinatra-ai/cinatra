@@ -64,6 +64,8 @@ const loader = vi.hoisted(() => {
 });
 vi.mock("@/lib/scope-surface-eligibility.server", () => loader);
 
+import { scopeSurfaceTabBody } from "@/components/scope-surfaces/scope-surface-tab-body";
+
 const PLACEHOLDER = "This tab is not ready yet";
 
 /** The honest empty reading of each wired tab, held here as its own oracle. */
@@ -131,4 +133,29 @@ describe("an empty read draws the tab's own empty reading (#3707)", () => {
       });
     });
   }
+});
+
+// The rule the ten routes share, held directly. A read that lost one
+// contributing source keeps the rows it DID reach: those rows are a floor, so
+// they are drawn, and only the emptiness claim is withheld. Hiding them would
+// turn a partial answer into a blank tab, which is the larger falsehood.
+describe("the body a wired tab hands the shell (#3707)", () => {
+  const list = (rows: readonly string[]) =>
+    createElement("ul", { "data-testid": "rows" }, rows.length);
+
+  it("draws the rows a read did reach, even where the read does not stand", () => {
+    const body = scopeSurfaceTabBody("agents", { rows: ["a", "b"], read: false }, list);
+    render(body as ReactNode);
+    expect(screen.getByTestId("rows").textContent).toBe("2");
+    expect(screen.queryByTestId("scope-agents-empty")).toBeNull();
+  });
+
+  it("draws the rows on a read that stands", () => {
+    render(scopeSurfaceTabBody("agents", { rows: ["a"], read: true }, list) as ReactNode);
+    expect(screen.getByTestId("rows").textContent).toBe("1");
+  });
+
+  it("hands the shell no body at all where an empty read does not stand", () => {
+    expect(scopeSurfaceTabBody("agents", { rows: [], read: false }, list)).toBeUndefined();
+  });
 });

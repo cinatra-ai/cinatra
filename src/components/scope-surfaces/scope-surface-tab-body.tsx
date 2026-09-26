@@ -9,9 +9,14 @@
  *
  *   the read listed rows          -> the tab's own list
  *   the read answered, no rows    -> the tab's own empty reading
- *   the read could not be taken   -> no body, and the shell keeps the
+ *   the read does not stand       -> no body, and the shell keeps the
  *                                    placeholder, which claims nothing about
  *                                    the scope
+ *
+ * Rows come first, and deliberately. A read that lost one contributing source
+ * keeps the rows it did reach and reports `read` false, because that list is a
+ * floor and not an inventory. Drawing those rows is right; calling the tab
+ * empty on the strength of them is not.
  *
  * The Artifacts and Skills tabs reach the same end through their own tab
  * components, which take the read themselves. These two take theirs in the
@@ -27,8 +32,9 @@ export function scopeSurfaceTabBody<Row>(
   answer: { readonly rows: readonly Row[]; readonly read: boolean },
   list: (rows: readonly Row[]) => ReactNode,
 ): ReactNode | undefined {
-  // No read, no statement. The shell then draws its own condition.
+  if (answer.rows.length > 0) return list(answer.rows);
+  // Nothing to list, and nothing the read established. The shell then draws its
+  // own condition, which claims nothing about the scope.
   if (!answer.read) return undefined;
-  if (answer.rows.length === 0) return <ScopeSurfaceTabEmpty tab={tab} read />;
-  return list(answer.rows);
+  return <ScopeSurfaceTabEmpty tab={tab} read />;
 }
