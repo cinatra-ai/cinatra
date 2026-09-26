@@ -31,6 +31,7 @@ import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
 import { createLifecyclePullMcpModule } from "@/lib/lifecycle/lifecycle-pull-mcp";
 import { createLentActionMcpModule } from "@/lib/lifecycle/lent-action-mcp";
 import { createNamedAgentStartMcpModule } from "@/lib/lifecycle/named-agent-start-mcp";
+import { createBoundScreenFillMcpModule } from "@/lib/lifecycle/bound-screen-fill-mcp";
 import { createScheduleProposalMcpModule } from "@/lib/lifecycle/schedule-proposal-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createConnectorInventoryMcpModule } from "@/lib/connector-inventory-mcp";
@@ -181,6 +182,15 @@ const postConnectorPlatformModules = [
   // enforced rather than exempting the scanner.
   createLentActionMcpModule(),
   createNamedAgentStartMcpModule(),
+  // THE FILL ROAD (cinatra#2934, lifecycle-b W5c):
+  // lifecycle_bound_screen_fill — the OTHER half of what a waiting screen lends.
+  // It is NOT a decision primitive and carries no deciding verb, because it
+  // takes no decision: it places the values the person described in the fields
+  // of the screen THEIR message was bound to, and the person presses the
+  // screen's own button. It reads the turn's grant to know the screen was bound
+  // and never spends it — that is what lets one message fill and, when the
+  // person asks in so many words, submit.
+  createBoundScreenFillMcpModule(),
   // The schedule PROPOSAL producer (cinatra#2569, epic #2564 S5):
   // schedule_proposal_render — the tool that fills S1's deliberately empty
   // `trigger_schedule_proposal` producer allowlist. Read-only in the same sense

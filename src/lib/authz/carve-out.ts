@@ -194,6 +194,21 @@ export const CARVE_OUTS: readonly CarveOut[] = [
     reviewedAt: "2026-08-25",
     reviewerId: "platform-authz-reviewer",
   },
+  // cinatra#2934 (lifecycle-b W5c) — THE FILL. The other half of what a waiting
+  // screen lends, and the typed twin of the disclosed entries in both delegated
+  // tool policies.
+  {
+    primitiveName: "lifecycle_bound_screen_fill",
+    resourceType: "agent_run",
+    action: "update",
+    boundary: "delegated_chat_token",
+    reason:
+      "The screen lends the assistant its FILL (PLAN: Agents Lifecycle (B) section 4: \"the assistant returns the filled values, the screen writes them into its own fields, and nothing is submitted until you press the button\"). It RESOLVES NOTHING: no gate is touched, no run is resumed, no form value the run reads is written — the values are recorded beside the run\u2019s own window conversation and the screen writes them into the fields in front of the person, who presses the button. The token-policy gate (perimeter 5) is what this entry opens. The handler (src/lib/lifecycle/bound-screen-fill-mcp.ts) refuses unless the request frame carries a server-minted, signed grant matching the person, the organization and that card \u2014 verified but NEVER spent and never matched on its control, because filling is not a press and consuming would make \u201cfill, then submit when asked\u201d impossible in one message. It then resolves the person\u2019s OWN live standing (never the delegated token\u2019s weaker hints), re-resolves the screen under it through the read-only actor-checked bound-reference resolver, refuses anything that is not a screen lending `fill`, and drops every key the form does not declare. A prompt-injected model holds no grant and the primitive does nothing for it.",
+    risk: "medium",
+    owningTeam: "platform-authz",
+    reviewedAt: "2026-08-25",
+    reviewerId: "platform-authz-reviewer",
+  },
   {
     primitiveName: "agent_creation_request_get",
     resourceType: "agent",

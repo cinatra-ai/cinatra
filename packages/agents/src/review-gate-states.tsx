@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
+import { CircleX } from "lucide-react";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { Button } from "@/components/ui/button";
@@ -64,16 +64,36 @@ export function ReviewGateBlocked({
 }
 
 /**
- * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
- * §4.2). The card that knows what happened says so: "Approved by …" /
- * "Rejected by …" / "Changes requested by …", over the shipped sentence for
- * that outcome, and with the recorded suggestion chips still drawn above it by
- * the caller.
+ * The gate-level SETTLED state — the drawing's ONE marker (cinatra#2934, fix
+ * leg 12; Lifecycle cards §XIII.1).
+ *
+ * WHAT IT DRAWS. "Continued", and beside it "Decided on the revision above." —
+ * the marker §XIII.1 puts below the whole card once it is decided, in a
+ * conversation and outside one alike ("the frame changes and nothing else
+ * does"). One reading, whatever was decided: "Continued is the only settled
+ * reading; there is no second status after it."
+ *
+ * WHAT IT NO LONGER DRAWS, AND WHY. It used to read the outcome back as a title
+ * with the decider interpolated into it — "Approved by …" / "Rejected by …" —
+ * over a per-outcome status glyph and tone (a green check, a red circled-X, an
+ * amber rotate). The dev-boot proof round of 2026-09-04 measured exactly that:
+ * a red circled-X card reading "Rejected by Proof Admin", on both surfaces and
+ * in both palettes. Two ratified sentences close it. §XIII.1 leaves one settled
+ * reading, so the three-way glyph WAS the second status it forbids; and the
+ * review drawing's §VI says the review "draws no card that names who requested
+ * changes", so no settled card on this surface carries a person's name. There is
+ * no `decidedByName` prop any more — not a name this component declines to use,
+ * but no place on the surface to put one.
+ *
+ * THE DISPOSITION IS STILL RECORDED, and that is the distinction the change
+ * turns on: `data-review-outcome` keeps the outcome as a machine-readable fact
+ * for the conformance suites and the audit trail, exactly as the run's own rows
+ * keep it. A record is not a reading.
  *
  * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
  * copy cannot say which of two things happened, so a fresh pull is the reader's
  * only way to find out. Here the pull has already answered. A Refresh beside a
- * named outcome would offer to resolve an ambiguity that is not there, and
+ * settled marker would offer to resolve an ambiguity that is not there, and
  * invite the reader to press it as though something might still change.
  *
  * A gate this build cannot read an outcome for never reaches this component:
@@ -83,35 +103,26 @@ export function ReviewGateBlocked({
  */
 export function ReviewGateSettled({
   outcome,
-  decidedByName,
 }: {
+  /** The RECORDED disposition. It is stamped on the element and read by nothing
+   *  on screen — the marker beside it is the same for all three. */
   outcome: ReviewSettledOutcome;
-  /** A SURFACE-SAFE display name. Never an id — the resolver drops a decider it
-   *  cannot name safely, and the copy then states the outcome alone. */
-  decidedByName?: string;
 }) {
-  const copy = reviewSettledCopy(outcome, decidedByName);
-  const Icon =
-    outcome === "approved" ? CheckCheck : outcome === "rejected" ? CircleX : RotateCcw;
-  // The status palette's own tokens (`--success` / `--destructive` / `--warning`),
-  // in the tint-over-token shape the shipped status chips already use.
-  const tone =
-    outcome === "approved"
-      ? "bg-success/10 text-success"
-      : outcome === "rejected"
-        ? "bg-destructive/10 text-destructive"
-        : "bg-warning/10 text-warning";
+  const copy = reviewSettledCopy(outcome);
   return (
     <div
       data-conformance-id="review-gate-settled"
       data-review-outcome={outcome}
-      className="rounded-control border border-line bg-surface-strong px-4 py-5 text-center"
+      className="flex flex-wrap items-center gap-2 rounded-control border border-line bg-surface-strong px-3 py-2.5"
     >
-      <div className={`mx-auto mb-2.5 grid size-9 place-items-center rounded-lg ${tone}`}>
-        <Icon aria-hidden="true" className="size-[18px]" />
-      </div>
-      <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
-      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
+      {/* The marker's pill — the drawing's dot and label, one face for every
+          disposition. Not a status glyph: a status glyph per outcome is the
+          "second status" §XIII.1 says there is not. */}
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-0.5 text-badge-xs font-semibold whitespace-nowrap text-success">
+        <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+        {copy.title}
+      </span>
+      <span className="text-xs text-muted-foreground">{copy.body}</span>
     </div>
   );
 }

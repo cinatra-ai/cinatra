@@ -143,9 +143,20 @@ export type ChatSystemPromptFragments = {
    * VOLATILE and POLICY-BEARING, so it sits in the tail after the
    * user-controlled fragment: it is derived on the server from the reader's own
    * access, it differs per turn by construction, and it constrains what the
-   * turn may do. It is NOT user-controlled — nothing in it is text a person
-   * typed; the only variable parts are an opaque server-minted ref, a control
-   * name from a closed vocabulary and a count.
+   * turn may do. Its variable parts are an opaque server-minted ref, a control
+   * name from a closed vocabulary, a count — and, since cinatra#2934, a BOUNDED
+   * QUOTED ECHO of what the person's own bound form rows are holding, which is
+   * what makes a described change computable at all.
+   *
+   * THAT ECHO IS THE ONE PERSON-WRITTEN THING IN HERE, and it is carried the
+   * way the whole prompt carries user text: each value is capped and
+   * JSON-quoted where it is built, so it cannot open a section of its own, and
+   * the fragment ENDS with its own constant notice that the quoted values are
+   * data rather than instructions — after which the composer's own policy
+   * trailer is still the last thing the model reads. It is not listed in
+   * `CHAT_SYSTEM_USER_CONTROLLED_FRAGMENTS`, which orders whole fragments: this
+   * one is policy-bearing AND carries the echo, so it closes over its own text
+   * instead of leading the tail.
    */
   boundCardContext: string;
   /** The conversation-only degrade notice for tool-less providers, or `""`. */

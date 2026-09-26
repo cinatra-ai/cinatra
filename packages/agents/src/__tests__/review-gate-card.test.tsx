@@ -718,9 +718,15 @@ describe("a marked review gate never feeds the field-assist LLM path", () => {
     );
   });
 
-  it("strips the card ref out of the assist payload as defence in depth", () => {
-    expect(PANEL).toMatch(/currentValue: withoutLifecycleCardRef\(/);
-    expect(PANEL).toMatch(/function withoutLifecycleCardRef\(/);
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). The payload this case guarded is
+  // GONE: the panel no longer serializes the gate's values into a prompt for a
+  // second model, because the route that did it is retired. The rule it existed
+  // for is now satisfied by construction rather than by a strip — the panel
+  // builds no model-visible payload at all, so there is nothing for a ref to
+  // leak into.
+  it("builds no model-visible payload for the gate's values at all", () => {
+    expect(PANEL).not.toMatch(/currentValue:/);
+    expect(PANEL).not.toContain("hitl-assist");
   });
 
   it("reads the ref ONLY to address the card — never into a submitted payload", () => {
@@ -1687,12 +1693,15 @@ describe("a settled card that knows its outcome", () => {
     return container;
   }
 
-  it("names the outcome AND the decider", async () => {
+  // RE-PINNED (cinatra#2934, fix leg 12). Lifecycle cards §XIII.1: "Continued is
+  // the only settled reading; there is no second status after it" — drawn as the
+  // marker "Continued" over "Decided on the revision above." The disposition
+  // stays a RECORD on the element, never a reading, and no settled card on this
+  // surface carries a person's name (Artifact review §VI).
+  it("draws the drawing's marker, and records the disposition beside it", async () => {
     const container = await settledWith("approved", "Dana Okonkwo");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
-    expect(container.textContent).toContain(
-      "The gate is resolved and the run has been released to continue.",
-    );
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).toContain("Decided on the revision above.");
     expect(
       container
         .querySelector('[data-conformance-id="review-gate-settled"]')
@@ -1700,15 +1709,22 @@ describe("a settled card that knows its outcome", () => {
     ).toBe("approved");
   });
 
-  it("names each of the three recorded outcomes", async () => {
-    const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
-      ["approved", "Approved by Dana Okonkwo"],
-      ["rejected", "Rejected by Dana Okonkwo"],
-      ["changes_requested", "Changes requested by Dana Okonkwo"],
-    ];
-    for (const [outcome, title] of cases) {
+  it("reads the SAME marker for each of the three recorded outcomes", async () => {
+    for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
       const container = await settledWith(outcome, "Dana Okonkwo");
-      expect(container.textContent).toContain(title);
+      const marker = container.querySelector('[data-conformance-id="review-gate-settled"]')!;
+      expect(marker.textContent).toContain("Continued");
+      expect(marker.textContent).toContain("Decided on the revision above.");
+      expect(marker.getAttribute("data-review-outcome")).toBe(outcome);
+      cleanup();
+    }
+  });
+
+  it("draws no card naming who decided — on any disposition", async () => {
+    for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
+      const container = await settledWith(outcome, "Dana Okonkwo");
+      expect(container.textContent).not.toContain("Dana Okonkwo");
+      expect(container.textContent).not.toContain("Changes requested by");
       cleanup();
     }
   });
@@ -1737,13 +1753,12 @@ describe("a settled card that knows its outcome", () => {
     ).not.toBeNull();
   });
 
-  it("states the outcome ALONE when no decider can be named", async () => {
-    // The resolver drops a decider it cannot name safely rather than reaching
-    // for an identifier, so the card must read as a finished sentence without
-    // one — never "Approved by" and a dangling nothing.
+  it("reads the same whether or not the record carried a decider", async () => {
+    // The resolver drops a decider it cannot name safely; the marker never had
+    // anywhere to put one either way, so both records read alike.
     const container = await settledWith("approved");
-    expect(container.textContent).toContain("Approved");
-    expect(container.textContent).not.toContain("Approved by");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Approved");
     expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
   });
 
@@ -1759,7 +1774,7 @@ describe("a settled card that knows its outcome", () => {
     }
     for (const html of drawn) {
       expect(html).toBe(drawn[0]);
-      expect(html).toContain("Approved by Dana Okonkwo");
+      expect(html).toContain("Continued");
     }
   });
 
@@ -1785,7 +1800,7 @@ describe("a settled card that knows its outcome", () => {
       ).not.toBeNull(),
     );
     expect(container.textContent).toContain("content.body");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued");
   });
 });
 
@@ -1819,10 +1834,12 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
 
   // The two TERMINAL dispositions the issue was measured on, plus the third the
   // spec holds distinct from both.
+  // fix leg 12 — one marker for all three; the disposition is the RECORD the
+  // element carries, and the line beneath the card is the drawing's own.
   const DISPOSITIONS = [
-    ["approved", "Approved by Dana Okonkwo"],
-    ["rejected", "Rejected by Dana Okonkwo"],
-    ["changes_requested", "Changes requested by Dana Okonkwo"],
+    ["approved", "Continued"],
+    ["rejected", "Continued"],
+    ["changes_requested", "Continued"],
   ] as const;
 
   for (const [outcome, line] of DISPOSITIONS) {
@@ -1875,7 +1892,7 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
         `no floor on ${host}`,
       ).toBeNull();
-      expect(container.textContent).toContain("Approved by Dana Okonkwo");
+      expect(container.textContent).toContain("Continued");
       cleanup();
     }
   });

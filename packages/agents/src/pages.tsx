@@ -203,7 +203,7 @@ export async function NewAgentPage() {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="Run agent"
+        title="Agent run"
         description="Run an agent with a human-in-the-loop step, one of its sub-agents, or any agent from a connected external A2A server."
         divider={false}
       />
