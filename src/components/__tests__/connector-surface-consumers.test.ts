@@ -45,13 +45,17 @@ const SHARING_SECTION = readFileSync(
 );
 
 /**
- * The Sharing TAB's body (cinatra#3374). The composition claim moved here with
- * the surface: the section still resolves each panel's data, and this
- * presentational component draws the roll-up, the identity rows and the three
- * conformance ids — so it is the file that composes the sdk-ui primitives.
+ * The Sharing TAB's body (cinatra#3374), offered by the SDK as ONE component
+ * (cinatra#3385). The composition claim moved with the surface: the section
+ * still resolves each panel's data, and this presentational component draws
+ * the roll-up, the identity rows and the three conformance ids — so it is the
+ * file that composes the sdk-ui primitives. It lives IN sdk-ui because a
+ * connector that draws its own setup page has no seam for the app to inject a
+ * tab into, so both pages draw this one component; the app page consumes it
+ * from its dedicated subpath and keeps no copy of its own.
  */
 const SHARING_PANELS = readFileSync(
-  join(ROOT, "components", "extensions", "connector-sharing-panels.tsx"),
+  join(ROOT, "..", "packages", "sdk-ui", "src", "connector-sharing-panels.tsx"),
   "utf8",
 );
 
@@ -90,14 +94,19 @@ describe("connector dispatch route — the §II error treatment has a PRODUCTION
 });
 
 describe("ConnectionSharingSection — the REAL consumer of the §II connection primitives", () => {
-  it("imports the shipped primitives from sdk-ui", () => {
+  it("composes the shipped primitives, as their own sibling in sdk-ui", () => {
     expect(SHARING_PANELS).toContain(
-      'import { ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card"',
+      'import { ConnectionsStatusCard } from "./connection-status-card"',
     );
     expect(SHARING_PANELS).toContain(
-      'import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list"',
+      'import { ConnectionsList, ConnectionRow } from "./connections-list"',
     );
-    // …and the section still mounts them, through the panels component.
+    // …and the section still mounts them, through the panels component —
+    // imported from the SDK's dedicated subpath (cinatra#3385): the app page
+    // CONSUMES the one implementation and holds no second copy of it.
+    expect(SHARING_SECTION).toContain(
+      'from "@cinatra-ai/sdk-ui/connector-sharing-panels"',
+    );
     expect(SHARING_SECTION).toContain("<ConnectorSharingPanels");
     expect(SHARING_SECTION).toContain("panels={panelViews}");
   });
@@ -185,8 +194,9 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
 //
 //   • the sharing MODEL is unchanged — only its place and its drawing. Shared
 //     use still acts through the owner's connected account and is still
-//     audited, because the panels still mount the app's OWN permissions client
-//     bound to the connection, never a connector-specific copy of it.
+//     audited, because each panel's four bindings are still the app's OWN
+//     server actions, each bound to that connection, and the card they drive
+//     is the SHARED one, never a connector-specific copy of it.
 //   • the tab is drawn on the GENERATED setup page only. A bundled-react
 //     connector draws its own page whole, so this change does not reach it:
 //     those branches keep the standalone section they already mounted.
@@ -195,22 +205,33 @@ describe("ConnectionSharingSection — the REAL consumer of the §II connection 
 const UI_RENDER = readFileSync(join(ROOT, "lib", "connector-ui-render.ts"), "utf8");
 
 describe("the Sharing tab move — what it must NOT change", () => {
-  it("keeps the audited road: the app's own permissions client, bound to the connection", () => {
-    // Each panel view carries the permissions node the SECTION builds…
-    expect(SHARING_SECTION).toMatch(/permissions: \(\s*<ExtensionPermissionsClient/);
-    // …and it is the shared client, kind-discriminated to the CONNECTION and
-    // addressed by that connection's own id — the same binding as before the
-    // move, so the grant it writes is still audited through the owner's
-    // connected account.
-    expect(SHARING_SECTION).toContain('kind="connection"');
-    expect(SHARING_SECTION).toContain("resourceId={identity.id}");
-    expect(SHARING_SECTION).toContain("owner={owner}");
-    expect(SHARING_SECTION).toContain("currentUserId={userId}");
-    // The presentational tab body takes that node and mounts NO client of its
-    // own: a connector-specific copy of the two controls is exactly what §II
-    // forbids ("never a connector-specific copy of them").
+  it("keeps the audited road: the app's own server actions, bound to the connection", () => {
+    // Each panel view carries the permissions DATA and BINDINGS the SECTION
+    // builds…
+    expect(SHARING_SECTION).toMatch(/permissions: \{/);
+    // …and every one of the four is the app's own action, kind-discriminated
+    // to the CONNECTION and addressed by that connection's own id: the same
+    // binding as before the extraction, so the grant it writes is still
+    // audited through the owner's connected account.
+    for (const action of [
+      "saveExtensionAccessPolicy",
+      "searchExtensionCoOwnerCandidates",
+      "addExtensionCoOwner",
+      "removeExtensionCoOwner",
+    ]) {
+      expect(SHARING_SECTION).toContain(action);
+    }
+    expect(SHARING_SECTION).toContain('.bind(null, "connection", identity.id)');
+    expect(SHARING_SECTION).toContain("owner,");
+    expect(SHARING_SECTION).toContain("currentUserId: userId,");
+    // The tab body draws the SHARED permissions panel from that data, so a
+    // connector-specific copy of the two controls, exactly what §II forbids
+    // ("never a connector-specific copy of them"), cannot arise, and a pack
+    // gets the controls instead of an empty slot (cinatra#3385).
     expect(SHARING_PANELS).not.toContain("<ExtensionPermissionsClient");
-    expect(SHARING_PANELS).toContain("{panel.permissions}");
+    expect(SHARING_PANELS).toContain("<PermissionsPanel {...panel.permissions} />");
+    // Nothing in the shared package reaches the app.
+    expect(SHARING_PANELS).not.toContain('from "@/');
   });
 
   it("hands the Sharing TAB to the generated setup page only", () => {

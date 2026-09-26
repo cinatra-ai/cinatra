@@ -118,7 +118,7 @@ export const CONNECTOR_SHARING_OWNERSHIP_HELPER =
 
 /**
  * The picker's own `Type: Name` labels for the three seeded scope values
- * (src/components/access-scope.ts `resolveAccessParts`). The trigger renders the
+ * (packages/sdk-ui/src/access/scope.ts `resolveAccessParts`). The trigger renders the
  * type and the name as two sibling elements, so their text carries no
  * separating space — the drivers match with the suite's own pair pattern.
  */

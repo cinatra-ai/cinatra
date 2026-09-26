@@ -69,16 +69,46 @@ async function readScopeName(scope: ScopeSurfaceRef): Promise<string | null> {
   return readScopeSurfaceEntityName(scope);
 }
 
-/** The settings pane's shell, rendered at request time. */
+/**
+ * The settings route's page, rendered at request time: the per-scope
+ * assignment page (cinatra#2814) inside the #2809 shell.
+ *
+ * The page model is resolved HERE, on the server, from the route alone: the
+ * package pair is re-resolved against the rows this scope's tab lists for the
+ * reader, the scope is the route's, and the reader's authority is re-read in
+ * the scope's own organization. A pair the reader does not reach at this scope
+ * (forged, uninstalled, out of scope, or an assistant addressed through the
+ * agents tree) is not found. Both modules travel behind `await import(...)`
+ * for the reason the header above gives.
+ */
 async function renderScopeSurfaceSettingsShell(props: {
   scope: ScopeSurfaceRef;
   scopeTitle?: string | null;
   subject: ScopeSurfaceSettingsSubject;
+  pair: { vendor: string; name: string };
+  searchParams?: Promise<SearchParams>;
 }): Promise<React.ReactNode> {
-  const { ScopeSurfaceSettingsShell } = await import(
-    "@/components/scope-surface-settings-shell"
+  const [{ loadScopeAssignmentPage }, { ScopeSurfaceSettingsShell }] = await Promise.all([
+    import("@/lib/scope-assignment/scope-assignment-page.server"),
+    import("@/components/scope-surface-settings-shell"),
+  ]);
+  const query = (await props.searchParams) ?? {};
+  const page = await loadScopeAssignmentPage({
+    surface: props.subject.kind,
+    scope: props.scope,
+    vendor: props.pair.vendor,
+    name: props.pair.name,
+    tab: query.tab,
+  });
+  if (!page) notFound();
+  return (
+    <ScopeSurfaceSettingsShell
+      scope={props.scope}
+      scopeTitle={props.scopeTitle}
+      subject={props.subject}
+      page={page}
+    />
   );
-  return <ScopeSurfaceSettingsShell {...props} />;
 }
 
 type AgentInstanceScreen = (props: {
@@ -111,13 +141,13 @@ export async function ScopedAgentsRoute({
   const scopeTitle = await readScopeName(scope);
 
   if (route.kind === "settings") {
-    // The SHELL only. This epic pins the settings HREF and proves it resolves;
-    // the pane's contents and their end-to-end navigation acceptance belong to
-    // the assignment epic, which fills it in place.
+    // #2809's shell, filled with the per-scope assignment page (cinatra#2814).
     return renderScopeSurfaceSettingsShell({
       scope,
       scopeTitle,
       subject: { kind: "agent", packageName: `@${route.vendor}/${route.packageName}` },
+      pair: { vendor: route.vendor, name: route.packageName },
+      searchParams,
     });
   }
 
@@ -162,10 +192,13 @@ export async function ScopedAssistantsRoute({
   if (route.kind === "not-found") notFound();
 
   if (route.kind === "settings") {
+    // Skills only: the assistant page normalizes every `?tab=` to Skills.
     return renderScopeSurfaceSettingsShell({
       scope,
       scopeTitle: await readScopeName(scope),
       subject: { kind: "assistant", packageName: route.assistantPackageName },
+      pair: { vendor: route.vendor, name: route.slug },
+      searchParams,
     });
   }
 

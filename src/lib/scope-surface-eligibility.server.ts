@@ -35,10 +35,16 @@ import {
   requireActorContext,
   resolveActorGrantsForUserInOrg,
 } from "@/lib/auth-session";
-import { readOrgsWithTeamsForUserActiveOnly, readProjectsForUser } from "@/lib/better-auth-db";
+import {
+  readOrgsWithTeamsForUserActiveOnly,
+  readProjectAgentTemplateBindings,
+  readProjectOrganizationFacts,
+  readProjectsForUser,
+} from "@/lib/better-auth-db";
 import {
   resolveScopeSurfaceEligibility,
   type ScopeSurfaceAnchor,
+  type ScopeSurfaceBinding,
   type ScopeSurfaceEligibilityRow,
   type ScopeSurfaceInstall,
   type ScopeSurfaceStatus,
@@ -69,6 +75,8 @@ const LIVE_STATUSES = new Set<string>(["active", "locked"]);
  *  which permissions resource carries its access policy. */
 type PackageFacts = {
   readonly templateId: string;
+  /** Every template row of the package: a project binding names one of them. */
+  readonly templateIds: readonly string[];
   readonly name: string;
   readonly description: string | null;
 };
@@ -99,18 +107,11 @@ async function resolveAnchor(scope: ScopeSurfaceRef): Promise<ScopeSurfaceAnchor
   // current membership in (or an archived one) resolves to nothing at all.
   const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
   const teamIdsByOrg: Record<string, string[]> = {};
-  const projectIdsByOrg: Record<string, string[]> = {};
+  for (const org of orgs) teamIdsByOrg[org.id] = org.teams.map((t) => t.id);
   // The project axis is read only where a scope actually decides on it (the
   // project scope's own resolution, and the workspace union).
   const needsProjects = scope.kind === "project" || scope.kind === "workspace";
-  for (const org of orgs) {
-    teamIdsByOrg[org.id] = org.teams.map((t) => t.id);
-    // The actor-visible project reader, per organization — never every
-    // project in the tenant.
-    projectIdsByOrg[org.id] = needsProjects
-      ? (await readProjectsForUser(userId, org.id)).map((p) => p.id)
-      : [];
-  }
+  const projectIdsByOrg = needsProjects ? await readProjectIdsByOrganization(userId, orgs) : {};
   const workspace = buildWorkspaceVantage({
     userId,
     memberships: orgs.map((org) => ({ orgId: org.id })),
@@ -137,9 +138,56 @@ async function resolveAnchor(scope: ScopeSurfaceRef): Promise<ScopeSurfaceAnchor
   return { userId, viewedOrgId, workspace: null };
 }
 
+/**
+ * The actor-visible projects of each member organization, EACH UNDER ITS OWN
+ * ORGANIZATION (cinatra#3529).
+ *
+ * `readProjectsForUser` is the actor-visible project reader, but it is a
+ * multi-organization union that never reads its organization argument. Taken
+ * per organization as it stands, it put every project the reader sees into
+ * every organization's list, and a project page was then read under whichever
+ * member organization sorted first, not the one the project belongs to. So
+ * each project is kept only under the organization it belongs to: the stored
+ * `organization_id`, or, where an older row carries none, the organization of
+ * its owning organization or team. A project that resolves to no member
+ * organization is kept under none, and its tab lists nothing.
+ */
+async function readProjectIdsByOrganization(
+  userId: string,
+  orgs: readonly { id: string; teams: readonly { id: string }[] }[],
+): Promise<Record<string, string[]>> {
+  const visibleByOrg = new Map<string, Set<string>>();
+  const allIds = new Set<string>();
+  for (const org of orgs) {
+    // Still read per organization, so the result stays right if the reader
+    // ever narrows to the organization it is given.
+    const ids = (await readProjectsForUser(userId, org.id)).map((p) => p.id);
+    visibleByOrg.set(org.id, new Set(ids));
+    for (const id of ids) allIds.add(id);
+  }
+  const out: Record<string, string[]> = {};
+  for (const org of orgs) out[org.id] = [];
+  if (allIds.size === 0) return out;
+
+  const orgOfTeam = new Map<string, string>();
+  for (const org of orgs) for (const team of org.teams) orgOfTeam.set(team.id, org.id);
+  for (const fact of await readProjectOrganizationFacts([...allIds])) {
+    const orgId =
+      fact.organizationId ??
+      (fact.ownerLevel === "organization"
+        ? fact.ownerId
+        : fact.ownerLevel === "team"
+          ? (orgOfTeam.get(fact.ownerId) ?? null)
+          : null);
+    if (orgId && visibleByOrg.get(orgId)?.has(fact.id)) out[orgId]!.push(fact.id);
+  }
+  return out;
+}
+
 /** The live agent install rows, projected to what the decision and the cards need. */
 async function readLiveAgentInstalls(
   facts: ReadonlyMap<string, PackageFacts>,
+  bindings: ReadonlyMap<string, readonly ScopeSurfaceBinding[]>,
 ): Promise<readonly ScopeSurfaceInstall[]> {
   const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
   const rows = await listInstalledExtensions({ kind: "agent" });
@@ -160,7 +208,7 @@ async function readLiveAgentInstalls(
       ownerId: row.ownerId,
       status: row.status as ScopeSurfaceStatus,
       version: row.version ?? null,
-      bindings: [],
+      bindings: bindings.get(row.packageName) ?? [],
     });
   }
   return out;
@@ -170,17 +218,68 @@ async function readLiveAgentInstalls(
 async function readPackageFacts(): Promise<ReadonlyMap<string, PackageFacts>> {
   const { readInstalledAgentTemplates } = await import("@cinatra-ai/agents/store");
   const templates = await readInstalledAgentTemplates();
-  const facts = new Map<string, PackageFacts>();
+  const facts = new Map<string, PackageFacts & { templateIds: string[] }>();
   for (const template of templates) {
     const packageName = template.packageName ?? null;
-    if (!packageName || facts.has(packageName)) continue;
+    if (!packageName) continue;
+    const known = facts.get(packageName);
+    if (known) {
+      known.templateIds.push(template.id);
+      continue;
+    }
     facts.set(packageName, {
       templateId: template.id,
+      templateIds: [template.id],
       name: template.name,
       description: template.description ?? null,
     });
   }
   return facts;
+}
+
+/**
+ * The PROJECT scope's bindings, per package, in the shape the pure core reads
+ * (cinatra#2808 change item 1: "exact-project installs + non-hidden project
+ * bindings + exact-org (hidden bindings never surface)").
+ *
+ * Only a project scope reads any: a binding is a project fact, and no other
+ * scope's rule consults one. The pure core drops a hidden binding before any
+ * rule reads it; this read only has to say which bindings are hidden. It does
+ * so FAIL-CLOSED: a binding is visible only when its stored visibility is one
+ * the table names as surfaced (`visible`, `project-private`).
+ *
+ * A binding only ever ADDS a row, so a failed read degrades to "no bindings"
+ * (the narrower list), never to an empty tab: the project keeps its exact-org
+ * and exact-project rows, and the Assistants tab, which reads the same
+ * eligibility, is not blanked either.
+ */
+async function readProjectBindings(
+  scope: ScopeSurfaceRef,
+  facts: ReadonlyMap<string, PackageFacts>,
+): Promise<ReadonlyMap<string, readonly ScopeSurfaceBinding[]>> {
+  const out = new Map<string, ScopeSurfaceBinding[]>();
+  if (scope.kind !== "project") return out;
+  let rows: Awaited<ReturnType<typeof readProjectAgentTemplateBindings>>;
+  try {
+    rows = await readProjectAgentTemplateBindings(scope.id);
+  } catch (e) {
+    warn("project binding read failed; listing the project without bound packages", e);
+    return out;
+  }
+  if (rows.length === 0) return out;
+  const packageOfTemplate = new Map<string, string>();
+  for (const [packageName, fact] of facts) {
+    for (const templateId of fact.templateIds) packageOfTemplate.set(templateId, packageName);
+  }
+  for (const row of rows) {
+    const packageName = packageOfTemplate.get(row.agentTemplateId);
+    if (!packageName) continue;
+    const surfaced = row.visibility === "visible" || row.visibility === "project-private";
+    const list = out.get(packageName) ?? [];
+    list.push({ kind: "project", id: scope.id, hidden: !surfaced });
+    out.set(packageName, list);
+  }
+  return out;
 }
 
 /** Every eligible row for a scope, or `[]` on any failure. */
@@ -213,7 +312,7 @@ async function readScopeSurfaceEligibilityWithAnchor(
     const viewedOrgId = anchor.viewedOrgId;
     const facts = await readPackageFacts();
     if (facts.size === 0) return { rows: [], viewedOrgId, ok: true };
-    const installs = await readLiveAgentInstalls(facts);
+    const installs = await readLiveAgentInstalls(facts, await readProjectBindings(scope, facts));
     if (installs.length === 0) return { rows: [], viewedOrgId, ok: true };
 
     const [

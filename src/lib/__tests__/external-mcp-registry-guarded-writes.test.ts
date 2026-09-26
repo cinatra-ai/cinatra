@@ -103,6 +103,38 @@ describe("insertExternalMcpServerStrict", () => {
     expect(lastQueries[0].text).not.toMatch(/DO UPDATE/);
   });
 
+  // cinatra#3485: the stamps of the row the write created are what a caller
+  // with more to do afterwards tells that row apart from a replacement created
+  // at the same id by.
+  it("RETURNS the created row's stamps, reading a string and a Date the same way", () => {
+    nextResult = {
+      rows: [
+        {
+          id: "row-1",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: new Date("2026-01-01T00:00:00.000Z"),
+        },
+      ],
+      rowCount: 1,
+    };
+    const stamps = insertExternalMcpServerStrict(baseInput);
+    expect(lastQueries[0].text).toMatch(/RETURNING id, created_at, updated_at/);
+    expect(stamps).toEqual({
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("returns NO witness when the store hands back no stamps at all", () => {
+    // A caller that cannot read both stamps holds no witness, and every road
+    // that reads one treats that as "not my row" rather than as a match.
+    nextResult = { rows: [{ id: "row-1" }], rowCount: 1 };
+    expect(insertExternalMcpServerStrict(baseInput)).toEqual({
+      createdAt: null,
+      updatedAt: null,
+    });
+  });
+
   it("throws a write-conflict when the id already exists (zero rows inserted)", () => {
     nextResult = { rows: [], rowCount: 0 };
     expect(() => insertExternalMcpServerStrict(baseInput)).toThrow(
@@ -139,6 +171,25 @@ describe("updateExternalMcpServerGuarded", () => {
     expect(() =>
       updateExternalMcpServerGuarded(baseInput, { scope: "user", userId: "u1" }),
     ).toThrow(ExternalMcpServerWriteConflictError);
+  });
+
+  it("RETURNS the creation instant it left standing and the update instant it stamped", () => {
+    nextResult = {
+      rows: [
+        {
+          id: "row-1",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-02-02T03:04:05.000Z",
+        },
+      ],
+      rowCount: 1,
+    };
+    const stamps = updateExternalMcpServerGuarded(baseInput, { scope: "user", userId: "u1" });
+    expect(lastQueries[0].text).toMatch(/RETURNING id, created_at, updated_at/);
+    expect(stamps).toEqual({
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-02-02T03:04:05.000Z",
+    });
   });
 
   it("passes a NULL expected owner through for a global/shared guard", () => {

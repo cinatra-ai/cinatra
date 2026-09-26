@@ -253,6 +253,9 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "deleteAllChatThreadsFromDatabase#1939",
       "deleteChatThreadFromDatabase#1939",
       "ensureThreadSlug#1939",
+      // cinatra#2815 S3: the set-once assignment-scope freeze joins the
+      // chat-thread family: same table, same nullable org axis, same ruling.
+      "freezeAssistantThreadAssignmentScopeIfAbsent#1939",
       "insertAuthorizationCode#1939",
       "issueUserAuthCode#1939",
       "loadActiveTransaction#1939",

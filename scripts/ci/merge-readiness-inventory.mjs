@@ -59,6 +59,13 @@
 //        `${{ }}` expression. The evaluator's wait follows the longest of them
 //        (cinatra#3391) instead of a fixed deadline.
 //
+//     7. `triggers` records, per workflow, the `branches` and `branches-ignore`
+//        filters of its `pull_request` trigger (null when the trigger sets
+//        none). The evaluator matches the pull request's BASE branch against
+//        them and expects a workflow's contexts only when that workflow runs
+//        for the base (#3653): a stacked pull request into a feature branch
+//        never runs the workflows that trigger for the default branch only.
+//
 //   The trusted GitHub App is `github-actions` for every workflow-produced
 //   check run in this repository.
 //
@@ -131,7 +138,8 @@ function readList(lines, from, keyIndent) {
 
 /**
  * Config of one trigger inside the top-level `on:` block:
- * { present, branches, paths }. `present:false` when the event is absent.
+ * { present, branches, branchesIgnore, paths }. `present:false` when the
+ * event is absent.
  */
 export function parseEventConfig(text, event) {
   const block = onBlock(text);
@@ -139,7 +147,7 @@ export function parseEventConfig(text, event) {
     // Scalar / flow form (`on: push`, `on: [push, pull_request]`) carries no
     // branch or path filters.
     const triggers = parseTriggers(text) ?? [];
-    return { present: triggers.includes(event), branches: null, paths: null };
+    return { present: triggers.includes(event), branches: null, branchesIgnore: null, paths: null };
   }
   let baseIndent = null;
   for (const l of block) {
@@ -147,7 +155,7 @@ export function parseEventConfig(text, event) {
     baseIndent = l.match(/^(\s*)/)[1].length;
     break;
   }
-  if (baseIndent === null) return { present: false, branches: null, paths: null };
+  if (baseIndent === null) return { present: false, branches: null, branchesIgnore: null, paths: null };
   let start = -1;
   for (let i = 0; i < block.length; i++) {
     const l = block[i];
@@ -156,8 +164,9 @@ export function parseEventConfig(text, event) {
     if (!m || m[1].length !== baseIndent) continue;
     if (m[3] === event) { start = i; break; }
   }
-  if (start === -1) return { present: false, branches: null, paths: null };
+  if (start === -1) return { present: false, branches: null, branchesIgnore: null, paths: null };
   let branches = null;
+  let branchesIgnore = null;
   let paths = null;
   for (let i = start + 1; i < block.length; i++) {
     const l = block[i];
@@ -167,9 +176,10 @@ export function parseEventConfig(text, event) {
     if (m[1].length <= baseIndent) break;
     if (m[1].length !== baseIndent + 2) continue;
     if (m[3] === "branches") branches = readList(block, i, m[1].length);
+    if (m[3] === "branches-ignore") branchesIgnore = readList(block, i, m[1].length);
     if (m[3] === "paths") paths = readList(block, i, m[1].length);
   }
-  return { present: true, branches, paths };
+  return { present: true, branches, branchesIgnore, paths };
 }
 
 /**
@@ -276,11 +286,21 @@ export function deriveInventory(workflows) {
 
   const expected = [];
   const excluded = [];
+  const triggers = {};
   for (const { file, text } of [...workflows].sort((a, b) => a.file.localeCompare(b.file))) {
     const pr = parseEventConfig(text, "pull_request");
     const queue = parseEventConfig(text, "merge_group");
     if (!pr.present || !queue.present) continue;
     const workflow = `.github/workflows/${file}`;
+    // The branch filters the evaluator matches the pull request's base against
+    // (#3653). An empty or unread list is recorded as null, so the workflow
+    // stays expected for every base: a parse gap never drops a workflow.
+    triggers[workflow] = {
+      pull_request: {
+        branches: pr.branches?.length ? pr.branches : null,
+        "branches-ignore": pr.branchesIgnore?.length ? pr.branchesIgnore : null,
+      },
+    };
     const reportOnlyRule = isReportOnlyName(file);
     const paths = pr.paths ?? ["**"];
     for (const c of contextsOf({ file, text, readWorkflow })) {
@@ -311,11 +331,12 @@ export function deriveInventory(workflows) {
       write: "node scripts/ci/merge-readiness-inventory.mjs --write",
       check: "node scripts/ci/merge-readiness-inventory.mjs --check",
       derivedFrom:
-        "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
+        "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows; 'triggers' records each workflow's pull_request branches / branches-ignore filters (null when none), against which the evaluator matches the pull request's base branch",
       generator: "scripts/ci/merge-readiness-inventory.mjs",
     },
     excluded,
     expected,
+    triggers,
   };
 }
 

@@ -46,7 +46,8 @@ import type { ExtensionKind, InstalledExtension } from "../canonical-types";
 import { applyInstallRowPrecedence } from "../static-bundle-anchor";
 import { sourceVersion } from "../lifecycle-ui";
 import { isRegistryUnreachable } from "./registry-failure-class";
-import { resolveInstalledVendorName } from "./installed-vendor";
+import { declaredVendorNameForScope, resolveInstalledVendorName } from "./installed-vendor";
+import { resolveInstalledRowVisibility } from "./installed-visibility";
 import { resolveInstalledDisplayName } from "./installed-display-name";
 // §VI source indicator (cinatra#1572) — the pure provenance classifier + the
 // resolver that maps the instance-identity registry slots to the two
@@ -122,8 +123,10 @@ export function rowKey(kind: string, packageName: string): string {
 /**
  * Vendor byline (§VI "{Type} by {Vendor}", cinatra#948 reopen gap 3): the
  * manifest-declared `cinatra.vendor` name, else the registry `author`, else
- * null (the byline drops the "by"). The raw npm scope segment NEVER renders
- * as the vendor.
+ * the vendor identity the package's own scope declares in that same manifest
+ * (cinatra#3447 — no agent entry declares one of its own), else null (the
+ * byline drops the "by"). The raw npm scope segment NEVER renders as the
+ * vendor.
  */
 export function vendorFor(
   summary: AgentPackageSummary | undefined,
@@ -132,6 +135,10 @@ export function vendorFor(
   return resolveInstalledVendorName({
     manifestVendorName: STATIC_EXTENSION_MANIFEST[packageName]?.vendor?.name ?? null,
     author: summary?.author ?? null,
+    scopeVendorName: declaredVendorNameForScope(
+      Object.values(STATIC_EXTENSION_MANIFEST),
+      packageName,
+    ),
   });
 }
 
@@ -268,8 +275,17 @@ function collapseKindRows(input: {
       status,
       requiredInProd: canonical?.requiredInProd ?? false,
       settingsHref,
-      visibility:
-        nativeVisibility ?? (origin?.visibility === "private" ? "private" : "public"),
+      // cinatra#3447: an ABSENT origin is not a public visibility — an
+      // extension nothing ever published has no marketplace publication to
+      // report, and the §V page draws the gated publish action for it.
+      visibility: resolveInstalledRowVisibility({
+        nativeVisibility,
+        origin,
+        // A catalog summary with no origin block is a LEGACY published package,
+        // grandfathered public by the registries contract; no summary at all
+        // means nothing ever published this extension.
+        hasCatalogSummary: summary != null,
+      }),
     });
   }
 
