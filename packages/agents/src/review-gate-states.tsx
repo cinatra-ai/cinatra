@@ -28,6 +28,20 @@ import {
  * card sitting in a chat transcript must re-resolve ITSELF — refreshing the
  * whole thread route would neither re-authorize the gate nor keep the reader's
  * place. The copy, the anchors and the page behaviour are untouched.
+ *
+ * cinatra#3238: THE REFRESH IS PHRASING CONTENT, NOT A BLOCK UNDER THE
+ * SENTENCE. The drawing writes the second sentence and its way out as one
+ * paragraph -- "The gate was already decided or the run moved on. Refresh" --
+ * with the two words drawn by the shared link rule (`.btn.link`: the link
+ * accent, underlined). It shipped as a sibling `Button` carrying `mt-1`, which
+ * opens a line box of its own, and whose underline arrived only on hover, so at
+ * rest it read as a plain word. The control now sits INSIDE the paragraph and
+ * takes the line's own metrics (`inline h-auto p-0 align-baseline text-xs`)
+ * over the design system's link variant, whose `text-primary` is the accent the
+ * palette in force calls a link -- with the underline drawn at rest, at the
+ * drawing's own `text-underline-offset: 3px` (the same transcription
+ * `run-made-step-surface.tsx` already makes of that rule). The copy
+ * is untouched, and no new component exists.
  */
 export function ReviewGateBlocked({
   reason,
@@ -49,16 +63,18 @@ export function ReviewGateBlocked({
         <CircleX aria-hidden="true" className="size-[18px]" />
       </div>
       <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
-      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
-      <Button
-        variant="link"
-        size="sm"
-        className="mt-1"
-        data-action="refresh-gate -> live-gate"
-        onClick={() => (onRefresh ? onRefresh() : router.refresh())}
-      >
-        Refresh
-      </Button>
+      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
+        {copy.body}{" "}
+        <Button
+          variant="link"
+          size="sm"
+          className="inline h-auto p-0 align-baseline text-xs underline underline-offset-[3px]"
+          data-action="refresh-gate -> live-gate"
+          onClick={() => (onRefresh ? onRefresh() : router.refresh())}
+        >
+          Refresh
+        </Button>
+      </p>
     </div>
   );
 }
