@@ -89,6 +89,7 @@ vi.mock("@/lib/assistants-directory.server", () => ({
 
 import {
   readScopeSurfaceAgentRows,
+  readScopeSurfaceAgentTab,
   readScopeSurfaceEligibility,
 } from "@/lib/scope-surface-eligibility.server";
 import {
@@ -508,6 +509,50 @@ describe("project bindings", () => {
     expect(await listed({ kind: "project", id: PROJECT_A1 })).toEqual(
       ["org-a-wide", "project-a1-only"].sort(),
     );
+  });
+
+  // cinatra#3707. Those narrowed rows are a floor, not an inventory, and the
+  // tab needs to be told which it is holding: the empty-state wording turns on
+  // it. A binding read that failed must never let a tab say the scope reaches
+  // nothing, because that scope's bound packages were never looked at.
+  it("a FAILED binding read does not stand behind the list it hands back", async () => {
+    mocks.readProjectAgentTemplateBindings.mockRejectedValue(new Error("bindings read down"));
+    const answer = await readScopeSurfaceAgentTab({ kind: "project", id: PROJECT_A1 });
+    expect(answer.rows.length).toBeGreaterThan(0);
+    expect(answer.read).toBe(false);
+  });
+
+  it("a FAILED binding read on a project whose rows are ALL bound reports no read", async () => {
+    // The install set is narrowed to the bound package alone, so the binding is
+    // the project's only route to a row. Losing the binding read empties the
+    // list, and the tab must keep the honest placeholder rather than report an
+    // emptiness this read never established.
+    mocks.listInstalledExtensions.mockResolvedValue([
+      {
+        id: "install-bound-platform",
+        packageName: pkg("bound-platform"),
+        organizationId: null,
+        ownerLevel: "workspace",
+        ownerId: WORKSPACE_OWNER,
+        status: "active",
+        version: "1.0.0",
+      },
+    ]);
+    const scope = { kind: "project", id: PROJECT_A1 } as const;
+    // The binding read intact: the row is reachable, and the read stands.
+    const reached = await readScopeSurfaceAgentTab(scope);
+    expect(reached.rows.map((r) => r.packageName)).toEqual([pkg("bound-platform")]);
+    expect(reached.read).toBe(true);
+
+    mocks.readProjectAgentTemplateBindings.mockRejectedValue(new Error("bindings read down"));
+    const lost = await readScopeSurfaceAgentTab(scope);
+    expect(lost.rows).toEqual([]);
+    expect(lost.read).toBe(false);
+  });
+
+  it("a project read that ANSWERED stands behind its list", async () => {
+    const answer = await readScopeSurfaceAgentTab({ kind: "project", id: PROJECT_A1 });
+    expect(answer.read).toBe(true);
   });
 });
 
