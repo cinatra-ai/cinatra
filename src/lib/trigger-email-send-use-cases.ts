@@ -95,8 +95,9 @@ export type TriggerEmailSendDeps = {
   ) => Promise<ObjectsEnvelope | null>;
   // Pipeline-owned per-email artifact projection (cinatra#1455). The SINGLE
   // write authority for the `email:body` / `email:recipient` per-item
-  // projections derived from the run-scoped bundles. Best-effort: a projection
-  // failure never fails the send. Defaults to the objects-client materializer.
+  // projections derived from the run-scoped bundles. A body the ledgered writer
+  // refuses fails the send visibly (cinatra#3089); any other projection failure
+  // is warned and the send goes on. Defaults to the ledger-backed materializer.
   emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 };
 
@@ -427,6 +428,37 @@ export type EmailFanoutSaveFn = (input: {
   typeHint: string;
 }) => Promise<EmailFanoutSaveResult>;
 
+/** One body of a send, written as a markdown revision on the materialization
+ *  ledger (cinatra#3089): `outputId` is the message identity. */
+export type EmailFanoutBodyWrite = {
+  runId: string;
+  outputId: string;
+  title: string;
+  markdown: string;
+  /** The body type's own declared fields — `bodyMarkdown` carries the text. */
+  typedData: Record<string, unknown>;
+};
+
+export type EmailFanoutBodyWriteResult =
+  | { ok: true; artifactId: string; representationRevisionId: string; deduped: boolean }
+  | { ok: false; error: string };
+
+export type EmailFanoutBodyWriteFn = (
+  input: EmailFanoutBodyWrite,
+) => Promise<EmailFanoutBodyWriteResult>;
+
+/**
+ * A body the ledgered writer refused or could not file (cinatra#3089). The send
+ * boundary lets it through, so the send fails with the refusal named instead of
+ * warning and sending on.
+ */
+export class EmailBodyRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EmailBodyRefusedError";
+  }
+}
+
 export type EmailFanoutInput = {
   /** At least the campaign run id; the campaign id is the stable fallback. */
   runScopeId: string;
@@ -460,14 +492,21 @@ export type EmailFanoutResult = {
  * one `email:recipient` per confirmed recipient, each carrying an explicit
  * `externalId` so a retried run updates rather than duplicates.
  *
- * `save` performs the typed write (the objects deterministic client in
- * production; a fake in tests). `registeredTypes` is the installed-type gate:
+ * `save` performs the recipient write (the objects deterministic client in
+ * production; a fake in tests). `writeBody` files each body as a markdown
+ * revision on the materialization ledger (cinatra#3089): the message identity
+ * and the content hash key it, so a retry reuses the row, and a refusal throws
+ * `EmailBodyRefusedError`. `registeredTypes` is the installed-type gate:
  * a type absent from it is skipped, keeping this seam dormant until the #1454
  * pack registers the claim — no dynamic-type minting.
  */
 export async function materializeEmailFanout(
   input: EmailFanoutInput,
-  deps: { save: EmailFanoutSaveFn; registeredTypes: ReadonlySet<string> },
+  deps: {
+    save: EmailFanoutSaveFn;
+    writeBody?: EmailFanoutBodyWriteFn;
+    registeredTypes: ReadonlySet<string>;
+  },
 ): Promise<EmailFanoutResult> {
   const { runScopeId, campaignId, drafts, recipients } = input;
   const bodies: EmailFanoutEmission[] = [];
@@ -476,8 +515,16 @@ export async function materializeEmailFanout(
   const canBody = deps.registeredTypes.has(EMAIL_BODY_TYPE_ID);
   const canRecipient = deps.registeredTypes.has(EMAIL_RECIPIENT_TYPE_ID);
 
-  // One `email:body` artifact per draft item, keyed (runScopeId, draftItemId).
+  // One `email:body` markdown revision per draft item, written through the
+  // materialization ledger keyed (run, message identity, content hash)
+  // (cinatra#3089). The text lands under the declared `bodyMarkdown` field.
   if (canBody) {
+    const writeBody: EmailFanoutBodyWriteFn =
+      deps.writeBody ??
+      (async () => ({
+        ok: false,
+        error: "the email fan-out has no ledgered body writer, so no body of this send can be filed",
+      }));
     let index = 0;
     for (const draft of drafts) {
       const draftItemId = deriveDraftItemId(draft, index);
@@ -487,27 +534,42 @@ export async function materializeEmailFanout(
         typeof draft.contactId === "string" && draft.contactId.trim() !== ""
           ? draft.contactId.trim()
           : undefined;
-      const rawData: Record<string, unknown> = {
-        externalId,
+      const subject = draft.subject ?? "";
+      const markdown = draft.body ?? draft.bodyHtml ?? "";
+      const typedData: Record<string, unknown> = {
         runId: runScopeId,
         campaignId,
-        draftItemId,
-        subject: draft.subject ?? "",
-        body: draft.body ?? draft.bodyHtml ?? "",
+        subject,
+        bodyMarkdown: markdown,
         // Soft-provenance correlation ONLY (atomicity, epic #1448 rule 2): a
         // plain contact-id string, never an artifact-id reference. No recipient
         // address is stored on the body projection — the address lives on the
         // `email:recipient` record (projection:none), keeping PII off this
         // draftable surface.
         ...(contactId ? { contactId } : {}),
-        ...(draft.step !== undefined ? { step: draft.step } : {}),
       };
-      const res = await deps.save({ rawData, typeHint: EMAIL_BODY_TYPE_ID });
+      let res: EmailFanoutBodyWriteResult;
+      try {
+        res = await writeBody({
+          runId: runScopeId,
+          outputId: externalId,
+          title: subject.trim() !== "" ? subject : "(no subject)",
+          markdown,
+          typedData,
+        });
+      } catch (err) {
+        throw new EmailBodyRefusedError(
+          `the email body ${externalId} could not be filed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!res.ok) {
+        throw new EmailBodyRefusedError(`the email body ${externalId} was refused: ${res.error}`);
+      }
       bodies.push({
         typeId: EMAIL_BODY_TYPE_ID,
         externalId,
-        objectId: res.objectId,
-        isNew: res.isNew,
+        objectId: res.artifactId,
+        isNew: !res.deduped,
       });
     }
   }
@@ -557,7 +619,8 @@ export async function materializeEmailFanout(
 
 // Lazy default projection: resolves registered types via the objects client
 // (claim-registered artifact types surface through `objects_types_list`), then
-// runs the materializer with the deterministic objects-save write path.
+// runs the materializer with the ledgered body writer (cinatra#3089) and the
+// deterministic objects-save write path for the recipients.
 async function loadDefaultEmitEmailFanout(): Promise<
   NonNullable<TriggerEmailSendDeps["emitEmailFanout"]>
 > {
@@ -582,6 +645,28 @@ async function loadDefaultEmitEmailFanout(): Promise<
       },
       {
         save: (inp) => client.save(inp) as Promise<EmailFanoutSaveResult>,
+        writeBody: async (w) => {
+          const orgId = args.actor.orgId;
+          if (!orgId) {
+            return {
+              ok: false,
+              error: "the sending actor carries no organization, so the body cannot be filed on its run",
+            };
+          }
+          const { materializeFanoutMessageRevision } = await import(
+            "./artifacts/run-artifact-materializer"
+          );
+          return materializeFanoutMessageRevision({
+            runId: w.runId,
+            orgId,
+            createdBy: args.actor.userId ?? null,
+            objectTypeId: EMAIL_BODY_TYPE_ID,
+            outputId: w.outputId,
+            title: w.title,
+            markdown: w.markdown,
+            typedData: w.typedData,
+          });
+        },
         registeredTypes,
       },
     );
@@ -682,9 +767,10 @@ async function runInitialSend(args: {
     // where the run-scoped bundle is dissolved into individual items, BEFORE
     // the per-email send. `email:body` is draftable and `email:recipient` is
     // the confirmed-recipient snapshot, so the projection captures the
-    // CONFIRMED campaign set independent of the send outcome. Best-effort: a
-    // projection failure NEVER fails the send — the send is the critical path;
-    // the artifacts are the derived, idempotent projection.
+    // CONFIRMED campaign set independent of the send outcome. A body the
+    // ledgered writer refuses is a visible failure of the send (cinatra#3089):
+    // it is let through to the outer catch, so nothing is sent and the refusal
+    // is named. Any other projection failure is warned and the send goes on.
     const runScopeId = resolveRunScopeId(draftEnv, recipEnv);
     if (runScopeId) {
       try {
@@ -696,6 +782,7 @@ async function runInitialSend(args: {
           actor,
         });
       } catch (fanoutErr) {
+        if (fanoutErr instanceof EmailBodyRefusedError) throw fanoutErr;
         console.warn(
           "[trigger-email-send] per-email artifact fan-out failed (send unaffected):",
           fanoutErr instanceof Error ? fanoutErr.message : String(fanoutErr),

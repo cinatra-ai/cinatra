@@ -23,6 +23,8 @@ import {
   EMAIL_BODY_TYPE_ID,
   EMAIL_RECIPIENT_TYPE_ID,
   type EmailFanoutArgs,
+  type EmailFanoutBodyWrite,
+  type EmailFanoutBodyWriteFn,
   type EmailFanoutResult,
   type EmailFanoutSaveFn,
 } from "../trigger-email-send-use-cases";
@@ -62,7 +64,22 @@ function makeFakeStore() {
     if (externalId.trim() !== "") rows.set(key, row);
     return { objectId: id, type: typeHint, isNew: true, wasMerged: false };
   };
-  return { save, calls, rows };
+  // The bodies go through the ledgered writer (cinatra#3089): one artifact per
+  // (run, message identity, content) — a re-write of the same key reuses it.
+  const bodyWrites: EmailFanoutBodyWrite[] = [];
+  const bodyArtifacts = new Map<string, string>();
+  const writeBody: EmailFanoutBodyWriteFn = async (w) => {
+    bodyWrites.push(w);
+    const key = `${w.runId}|${w.outputId}|${w.markdown}`;
+    const existing = bodyArtifacts.get(key);
+    if (existing) {
+      return { ok: true, artifactId: existing, representationRevisionId: `${existing}-rev`, deduped: true };
+    }
+    const artifactId = `art-${bodyArtifacts.size + 1}`;
+    bodyArtifacts.set(key, artifactId);
+    return { ok: true, artifactId, representationRevisionId: `${artifactId}-rev`, deduped: false };
+  };
+  return { save, calls, rows, writeBody, bodyWrites, bodyArtifacts };
 }
 
 const ALL_TYPES = new Set([EMAIL_BODY_TYPE_ID, EMAIL_RECIPIENT_TYPE_ID]);
@@ -78,10 +95,10 @@ const twoRecipients = [
 
 describe("materializeEmailFanout — per-item emission", () => {
   it("emits one email:body per draft and one email:recipient per recipient", async () => {
-    const { save, calls } = makeFakeStore();
+    const { save, calls, writeBody, bodyWrites } = makeFakeStore();
     const result = await materializeEmailFanout(
       { runScopeId: "run-1", campaignId: "camp-1", drafts: twoDrafts, recipients: twoRecipients },
-      { save, registeredTypes: ALL_TYPES },
+      { save, writeBody, registeredTypes: ALL_TYPES },
     );
 
     expect(result.bodies).toHaveLength(2);
@@ -91,22 +108,29 @@ describe("materializeEmailFanout — per-item emission", () => {
     // Every write targets a per-item ARTIFACT type — never a bundle type.
     const bodyCalls = calls.filter((c) => c.typeHint === EMAIL_BODY_TYPE_ID);
     const recipCalls = calls.filter((c) => c.typeHint === EMAIL_RECIPIENT_TYPE_ID);
-    expect(bodyCalls).toHaveLength(2);
+    // Bodies go through the ledgered writer, never the raw objects save.
+    expect(bodyCalls).toHaveLength(0);
+    expect(bodyWrites).toHaveLength(2);
     expect(recipCalls).toHaveLength(2);
 
-    // email:body keyed (runScopeId, draftItemId); carries content + soft
-    // provenance, NOT the recipient address (PII stays off the body surface).
-    expect(bodyCalls[0].rawData).toMatchObject({
-      externalId: emailBodyExternalId("run-1", "d1"),
+    // email:body keyed (runScopeId, draftItemId); carries content under the
+    // declared bodyMarkdown + soft provenance, NOT the recipient address (PII
+    // stays off the body surface).
+    expect(bodyWrites[0]).toMatchObject({
       runId: "run-1",
-      campaignId: "camp-1",
-      draftItemId: "d1",
-      subject: "Hello One",
-      body: "Body one",
-      contactId: "c1",
+      outputId: emailBodyExternalId("run-1", "d1"),
+      markdown: "Body one",
+      typedData: {
+        runId: "run-1",
+        campaignId: "camp-1",
+        subject: "Hello One",
+        bodyMarkdown: "Body one",
+        contactId: "c1",
+      },
     });
-    expect(bodyCalls[0].rawData.email).toBeUndefined();
-    expect(bodyCalls[0].rawData.recipientEmail).toBeUndefined();
+    expect(bodyWrites[0].typedData.email).toBeUndefined();
+    expect(bodyWrites[0].typedData.recipientEmail).toBeUndefined();
+    expect(bodyWrites[0].typedData.body).toBeUndefined();
 
     // email:recipient keyed (runScopeId, contact key); minimum fields.
     expect(recipCalls[0].rawData).toMatchObject({
@@ -120,10 +144,10 @@ describe("materializeEmailFanout — per-item emission", () => {
   });
 
   it("every emitted type is a claimed artifact type — no bundle type is ever an artifact", async () => {
-    const { save, calls } = makeFakeStore();
+    const { save, calls, writeBody } = makeFakeStore();
     await materializeEmailFanout(
       { runScopeId: "run-1", campaignId: "camp-1", drafts: twoDrafts, recipients: twoRecipients },
-      { save, registeredTypes: ALL_TYPES },
+      { save, writeBody, registeredTypes: ALL_TYPES },
     );
     const bundleTypeFragments = ["bundle", "campaigns:recipients", "dynamic:", "send-attempt"];
     for (const c of calls) {
@@ -147,6 +171,7 @@ describe("materializeEmailFanout — idempotent re-run (the fan-out identity)", 
 
     const first = await materializeEmailFanout(input, {
       save: store.save,
+      writeBody: store.writeBody,
       registeredTypes: ALL_TYPES,
     });
     // First run inserts everything.
@@ -155,20 +180,23 @@ describe("materializeEmailFanout — idempotent re-run (the fan-out identity)", 
 
     const second = await materializeEmailFanout(input, {
       save: store.save,
+      writeBody: store.writeBody,
       registeredTypes: ALL_TYPES,
     });
     // Second run updates in place — nothing is new.
     expect(second.bodies.every((b) => !b.isNew)).toBe(true);
     expect(second.recipients.every((r) => !r.isNew)).toBe(true);
 
-    // Same object ids across runs, and exactly 4 durable rows (2 bodies + 2
-    // recipients) — no duplication despite 8 save calls.
+    // Same object ids across runs, and exactly 2 body artifacts + 2 recipient
+    // rows — no duplication despite 4 body writes and 4 recipient saves.
     expect(second.bodies.map((b) => b.objectId)).toEqual(first.bodies.map((b) => b.objectId));
     expect(second.recipients.map((r) => r.objectId)).toEqual(
       first.recipients.map((r) => r.objectId),
     );
-    expect(store.rows.size).toBe(4);
-    expect(store.calls).toHaveLength(8);
+    expect(store.bodyArtifacts.size).toBe(2);
+    expect(store.bodyWrites).toHaveLength(4);
+    expect(store.rows.size).toBe(2);
+    expect(store.calls).toHaveLength(4);
   });
 
   it("the fan-out externalId is deterministic across independent calls", async () => {
@@ -180,8 +208,16 @@ describe("materializeEmailFanout — idempotent re-run (the fan-out identity)", 
       drafts: twoDrafts,
       recipients: twoRecipients,
     };
-    const ra = await materializeEmailFanout(input, { save: a.save, registeredTypes: ALL_TYPES });
-    const rb = await materializeEmailFanout(input, { save: b.save, registeredTypes: ALL_TYPES });
+    const ra = await materializeEmailFanout(input, {
+      save: a.save,
+      writeBody: a.writeBody,
+      registeredTypes: ALL_TYPES,
+    });
+    const rb = await materializeEmailFanout(input, {
+      save: b.save,
+      writeBody: b.writeBody,
+      registeredTypes: ALL_TYPES,
+    });
     expect(ra.bodies.map((x) => x.externalId)).toEqual(rb.bodies.map((x) => x.externalId));
     expect(ra.recipients.map((x) => x.externalId)).toEqual(rb.recipients.map((x) => x.externalId));
     // Distinct items get distinct keys.
@@ -204,21 +240,23 @@ describe("materializeEmailFanout — registration seam (coupling with #1454)", (
   });
 
   it("emits only the registered half when the pack partially registers", async () => {
-    const { save, calls } = makeFakeStore();
+    const { save, calls, writeBody, bodyWrites } = makeFakeStore();
     const result = await materializeEmailFanout(
       { runScopeId: "run-1", campaignId: "camp-1", drafts: twoDrafts, recipients: twoRecipients },
-      { save, registeredTypes: new Set([EMAIL_BODY_TYPE_ID]) },
+      { save, writeBody, registeredTypes: new Set([EMAIL_BODY_TYPE_ID]) },
     );
     expect(result.bodies).toHaveLength(2);
     expect(result.recipients).toHaveLength(0);
     expect(result.skipped).toEqual({ bodies: false, recipients: true });
-    expect(calls.every((c) => c.typeHint === EMAIL_BODY_TYPE_ID)).toBe(true);
+    // Only the body half ran: two ledgered body writes, no recipient save.
+    expect(bodyWrites).toHaveLength(2);
+    expect(calls).toHaveLength(0);
   });
 });
 
 describe("materializeEmailFanout — draft-item identity (non-PII, no collapse)", () => {
   it("keys body on the explicit draft id, never on contactId or the recipient email", async () => {
-    const { save, calls } = makeFakeStore();
+    const { save, writeBody, bodyWrites } = makeFakeStore();
     // Two drafts targeting the SAME contact, each with its own draft id — they
     // must NOT collapse to one artifact, and neither the contactId nor the email
     // may appear in the body identity fields (PII stays off the body surface).
@@ -232,22 +270,21 @@ describe("materializeEmailFanout — draft-item identity (non-PII, no collapse)"
         ],
         recipients: [],
       },
-      { save, registeredTypes: ALL_TYPES },
+      { save, writeBody, registeredTypes: ALL_TYPES },
     );
-    expect(calls).toHaveLength(2);
-    expect(calls[0].rawData.externalId).toBe(emailBodyExternalId("run-1", "d1"));
-    expect(calls[1].rawData.externalId).toBe(emailBodyExternalId("run-1", "d2"));
-    for (const c of calls) {
-      expect(String(c.rawData.externalId)).not.toContain("person@example.com");
-      expect(String(c.rawData.draftItemId)).not.toContain("person@example.com");
-      expect(String(c.rawData.externalId)).not.toContain("same");
-      expect(c.rawData.email).toBeUndefined();
-      expect(c.rawData.recipientEmail).toBeUndefined();
+    expect(bodyWrites).toHaveLength(2);
+    expect(bodyWrites[0].outputId).toBe(emailBodyExternalId("run-1", "d1"));
+    expect(bodyWrites[1].outputId).toBe(emailBodyExternalId("run-1", "d2"));
+    for (const w of bodyWrites) {
+      expect(w.outputId).not.toContain("person@example.com");
+      expect(w.outputId).not.toContain("same");
+      expect(w.typedData.email).toBeUndefined();
+      expect(w.typedData.recipientEmail).toBeUndefined();
     }
   });
 
   it("falls back to the positional index when a draft has no explicit id (no PII fallback)", async () => {
-    const { save, calls } = makeFakeStore();
+    const { save, writeBody, bodyWrites } = makeFakeStore();
     await materializeEmailFanout(
       {
         runScopeId: "run-1",
@@ -257,11 +294,10 @@ describe("materializeEmailFanout — draft-item identity (non-PII, no collapse)"
         ],
         recipients: [],
       },
-      { save, registeredTypes: ALL_TYPES },
+      { save, writeBody, registeredTypes: ALL_TYPES },
     );
-    expect(calls[0].rawData.draftItemId).toBe("idx-0");
-    expect(calls[0].rawData.externalId).toBe(emailBodyExternalId("run-1", "idx-0"));
-    expect(String(calls[0].rawData.externalId)).not.toContain("leak@example.com");
+    expect(bodyWrites[0].outputId).toBe(emailBodyExternalId("run-1", "idx-0"));
+    expect(bodyWrites[0].outputId).not.toContain("leak@example.com");
   });
 });
 
