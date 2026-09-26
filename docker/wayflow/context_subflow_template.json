@@ -426,6 +426,7 @@
    },
    {
     "component_type": "DataFlowEdge",
+    "name": "ctx-__SLOT__-resolve_allocationToken_to_finalize_interactive",
     "source_node": {
      "$component_ref": "ctx-__SLOT__-resolve_context"
     },
@@ -437,6 +438,7 @@
    },
    {
     "component_type": "DataFlowEdge",
+    "name": "ctx-__SLOT__-resolve_allocationToken_to_finalize_autonomous",
     "source_node": {
      "$component_ref": "ctx-__SLOT__-resolve_context"
     },
