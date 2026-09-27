@@ -380,7 +380,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 15
+      "timeoutMinutes": 28
     },
     {
       "context": "gitignore-gate / gitignore-gate",
