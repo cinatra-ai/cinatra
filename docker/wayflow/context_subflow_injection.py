@@ -1333,10 +1333,12 @@ def _fill_allocation_token_plumbing(
                 edge["source_node"] = {"$component_ref": resolve_id}
                 edge["destination_node"] = {"$component_ref": node_id}
                 # The real pyagentspec loader refuses a DataFlowEdge without a
-                # name, so the added edge carries one.
-                edge.setdefault(
-                    "name", f"{resolve_id}_{_ALLOCATION_TOKEN}_to_{node_id}"
-                )
+                # name, so the added edge carries one. The template edge holds
+                # the name the template's own rendering gives it, which is why
+                # the copy is renamed here rather than kept: an added edge is
+                # named after its own endpoints, so two added edges never share
+                # a name and never carry the unrendered slot placeholder.
+                edge["name"] = f"{resolve_id}_{_ALLOCATION_TOKEN}_to_{node_id}"
                 subflow["data_flow_connections"].append(edge)
         report.append(
             {
