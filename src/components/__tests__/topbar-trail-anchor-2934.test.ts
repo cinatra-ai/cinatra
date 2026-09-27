@@ -95,16 +95,38 @@ describe("the top-bar's left element is the trail, at the standard gutter", () =
  * itself — a published label can be the short-id placeholder.
  */
 describe("the left edge below sm, and the single title decision point", () => {
-  it("keeps the sidebar toggle at the left only where the trail is not drawn", () => {
+  it("draws the sidebar toggle once, first in the right-hand cluster", () => {
+    // ONE element carries the sidebar-trigger slot at every width. Two
+    // mounts, each hidden by a class at the other's widths, are both in the
+    // document, and a strict locator on that slot resolves to two.
+    const mounts = source.match(/<SidebarTrigger\b/g) ?? [];
+    expect(mounts).toHaveLength(1);
     const row = topbarRow();
     const trail = row.indexOf("<Breadcrumb");
+    expect(trail).toBeGreaterThan(-1);
     const ahead = row.slice(0, trail);
-    // Below sm the toggle is the left element; at sm and up it is gone from
-    // the left, so the trail alone sits at the gutter.
-    expect(ahead).toContain("<SidebarTrigger");
-    expect(/<SidebarTrigger[^>]*sm:hidden/.test(ahead)).toBe(true);
-    // …and it must not be joined by a divider that would inset it further.
+    // Nothing of the row stands ahead of the trail: no toggle, no divider.
+    expect(ahead).not.toContain("<SidebarTrigger");
     expect(ahead).not.toContain("<Separator");
+    // The right-hand cluster keeps its place at sm and up (ml-auto) and spans
+    // the row below sm (max-sm:flex-1), so its first child stands at the
+    // row's left gutter there, where the trail is not drawn.
+    const marker = source.indexOf('data-testid="app-shell-topbar-right"');
+    expect(marker).toBeGreaterThan(-1);
+    const open = source.lastIndexOf("<", marker);
+    const openEnd = source.indexOf(">", marker);
+    const clusterTag = source.slice(open, openEnd + 1);
+    const clusterClasses = (/className="([^"]*)"/.exec(clusterTag)?.[1] ?? "").split(/\s+/);
+    expect(clusterClasses).toContain("ml-auto");
+    expect(clusterClasses).toContain("max-sm:flex-1");
+    // The toggle is the cluster's first tag, shown at every width, and below
+    // sm it pushes the rest of the cluster to the right edge.
+    const first = /<[A-Za-z][^>]*>/.exec(source.slice(openEnd + 1))?.[0] ?? "";
+    expect(first.startsWith("<SidebarTrigger")).toBe(true);
+    const toggleClasses = (/className="([^"]*)"/.exec(first)?.[1] ?? "").split(/\s+/);
+    expect(toggleClasses).toContain("max-sm:mr-auto");
+    expect(first).not.toContain("sm:hidden");
+    expect(toggleClasses).not.toContain("max-sm:hidden");
     // The trail itself is still the sm-and-up left element.
     expect(row).toContain('data-testid="app-shell-topbar-left"');
   });
