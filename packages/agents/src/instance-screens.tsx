@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { buildAgentInstancePath } from "@/lib/agent-url";
+import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildRunStepPath } from "@/lib/agent-url";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -128,6 +128,10 @@ import {
   type RunInputStepKey,
   type RunStepSelection,
   type RunSurfaceRailStep,
+  parseRunStepSelection,
+  runReviewAuditStepKey,
+  runReviewGateStepKey,
+  runStepDrawingTheAddressedGate,
 } from "./run-surface-rail-step";
 import { buildSetupRailSteps, type SetupRailStep } from "./setup-run-surface-steps";
 // The labels come from a module with NO "use client" directive, deliberately:
@@ -1402,6 +1406,11 @@ export async function SetupScreen({
   scopeBase,
   launchScope,
   scopeTitle,
+  // THE STEP THE ADDRESS NAMES (cinatra#3693). A reader sent to one review
+  // arrives at this run's address with the step on it, and the run detail has to
+  // open there on FIRST render or the reader lands on whatever step the run
+  // would otherwise have elected. Read below, beside the election it overrides.
+  searchParams,
 }: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -1505,7 +1514,20 @@ export async function SetupScreen({
         anchor: parseLaunchScopeAnchor(run.launchScopeAnchor),
       }),
     );
-    if (home) redirect(home);
+    // AND THE STEP THE ADDRESS NAMED SURVIVES THE HOP (cinatra#3693, convergence
+    // round 1, finding 3). The home check compares PATHS and answers a path, so
+    // a reader sent to one review at a bare address — which is what a caller that
+    // reads no run anchor mints, the admin console among them — arrived at the
+    // run's scoped home with the gate forgotten and had to find the review
+    // themselves. The selection travels with the redirect.
+    //
+    // ONLY THE STEP, and only a step this build's own vocabulary admits: the
+    // value is re-read through the same closed parse the page reads it with, so
+    // no other query and no unrecognised value is carried anywhere.
+    if (home) {
+      const named = parseRunStepSelection(searchParams?.[RUN_STEP_QUERY_KEY]);
+      redirect(named ? buildRunStepPath(home, named) : home);
+    }
   }
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
@@ -1931,6 +1953,92 @@ export async function SetupScreen({
         awaiting: Boolean(runReviewSlot?.awaiting),
       }
     : null;
+  // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────
+  //
+  // The rail has always carried a run's review gates and their audits as
+  // entries, and those entries were the one kind that NAVIGATED: a settled gate
+  // opened the review's own page, and an Audit row deep-linked into that page's
+  // verification reading. The ratified drawing gives neither a page of its own:
+  // "a pending review renders the review gate in the run detail, under the same
+  // rail, never as a standalone document", and "there is no review page view
+  // outside the run's route".
+  //
+  // So each of those entries becomes a SELECTION with a surface, keyed by its
+  // review task (`runReviewGateStepKey`, `runReviewAuditStepKey`). The rows are
+  // unchanged and are still drawn where they always were — by the rail's own
+  // entry component, from the gate list above — so these steps carry NO row:
+  // the frame draws a row only where one exists, and a second row here would be
+  // the same entry twice.
+  //
+  // THE PENDING GATE IS NOT AMONG THEM. A run is paused at one place and that
+  // gate is already the run detail's own reading (`initialReviewGate`, handed to
+  // the panel before first paint), so its row selects the detail and this list
+  // is the gates the run has PASSED.
+  //
+  // THE SETTLED READING IS THE SHIPPED CARD, not a second drawing. It is the
+  // same `ReviewGateCard`, addressed by the same server-minted ref over
+  // (runId, reviewTaskId), on the same `run_card` host this page already
+  // declares — the reading the review page drew, read here instead.
+  const settledGateSelectionSteps: RunSurfaceRailStep[] = run
+    ? railGates
+        .filter((gate) => gate.status === "resolved")
+        .map((gate) => ({
+          reviewTaskId: gate.reviewTaskId,
+          ref: encodeLifecycleGateRef({ runId: run.id, reviewTaskId: gate.reviewTaskId }),
+        }))
+        // A run whose instance cannot mint a ref draws no card, so the step is
+        // not composed at all rather than opening an empty column — the same
+        // rule the audit cards above are minted under.
+        .filter((entry): entry is { reviewTaskId: string; ref: string } => entry.ref !== null)
+        .map((entry) => ({
+          key: runReviewGateStepKey(entry.reviewTaskId),
+          row: null,
+          // The run has been through this gate, so the reader may open it
+          // wherever the run now stands.
+          reached: true,
+          settled: true,
+          surface: (
+            <LifecycleCardSurfaceProvider host="run_card">
+              <ReviewGateCard
+                view={{
+                  viewType: "artifact_review_gate",
+                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                  ref: entry.ref,
+                }}
+                // §VI — the gate's conversational prompt window keeps its
+                // exchange with the RUN (cinatra#3141 item 1), so the mount that
+                // names the gate names the run it opened on too.
+                runId={run.id}
+              />
+            </LifecycleCardSurfaceProvider>
+          ),
+        }))
+    : [];
+  // AND THE AUDIT ROW OPENS THE ONE RECORD IT NAMES. The run detail already
+  // draws every record this run carries, in one column; the row stands for ONE
+  // of them, so its step draws that one and not the column — which is what
+  // "selecting a step opens that step's page in the run detail" asks of it.
+  const auditSelectionSteps: RunSurfaceRailStep[] = verificationCardRefs.map((entry) => ({
+    key: runReviewAuditStepKey(entry.reviewTaskId),
+    row: null,
+    reached: true,
+    settled: true,
+    surface: (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <VerificationSummaryCard
+          view={{
+            viewType: "verification_summary",
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: entry.ref,
+          }}
+        />
+      </LifecycleCardSurfaceProvider>
+    ),
+  }));
+  const reviewSelectionSteps: RunSurfaceRailStep[] = [
+    ...settledGateSelectionSteps,
+    ...auditSelectionSteps,
+  ];
   // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their
   // verifications, lifecycle policy decisions, and any surplus stepResult row
   // past the policy spine. On the stepper branch the panel's own LIVE column is
@@ -2051,7 +2159,15 @@ export async function SetupScreen({
     hasRecommendationStep ||
     scheduleRailRef !== null ||
     parkedScheduleStep ||
-    parkedGateStep;
+    parkedGateStep ||
+    // AND A REVIEW ROW THAT OPENS IN PLACE NEEDS THE FRAME TO OPEN INTO
+    // (cinatra#3693). The settled-gate and Audit rows select a step of the run
+    // detail, and the selection only exists inside the frame: without it the
+    // rows fall back to the deep link they used to carry and the reader is taken
+    // off the run page again. A run whose rail carries one of those entries
+    // therefore frames its detail, exactly as a run carrying any other gate
+    // entry does.
+    reviewSelectionSteps.length > 0;
   // WAS THE QUESTION ANSWERED? Passed DOWN to the run panel, which draws no
   // skill picker inside itself for a run whose skills were decided on the card
   // ("The agentic run progress card appears once the skills are decided; no
@@ -2161,7 +2277,28 @@ export async function SetupScreen({
         })()
       : [];
 
-  const initialStep = runDetailInitialStep({
+  // THE STEP THE ADDRESS NAMES WINS OVER THE PAGE'S OWN ELECTION
+  // (cinatra#3693). A reader sent to one review arrives here with the step on the
+  // address, and the run detail has to open on it at FIRST render — the frame
+  // takes this as its `initialSelection`, so there is no paint on the elected
+  // step and no click for the reader to make.
+  //
+  // IT IS NOT TRUSTED, only read. `parseRunStepSelection` is closed over the
+  // rail's own vocabulary and answers `null` for anything else, and the frame
+  // then asks `resolveRunSurfaceSelection` whether the named step can be opened
+  // at all — so an address naming a review this run does not carry falls back to
+  // the election below exactly as a refused press does.
+  //
+  // AND A GATE THE RUN IS STILL HOLDING IS DRAWN BY THE RUN DETAIL, not by a
+  // step of its own (the convergence round's finding 2). Both roads that mint
+  // this address -- the run engine's interrupt and a review notification -- mint
+  // it while the gate is PENDING, and a pending gate's in-place home IS the
+  // detail. One rule, in one place: `runStepDrawingTheAddressedGate`.
+  const addressedStep = runStepDrawingTheAddressedGate(
+    parseRunStepSelection(searchParams?.[RUN_STEP_QUERY_KEY]),
+    railGates.filter((gate) => gate.status !== "resolved").map((gate) => gate.reviewTaskId),
+  );
+  const electedStep = runDetailInitialStep({
     openInputStepKey,
     hasRecommendationStep,
     recommendationHeld,
@@ -2173,6 +2310,7 @@ export async function SetupScreen({
     hasExecution: runHasExecution,
     parkedGateStep,
   });
+  const initialStep = addressedStep ?? electedStep;
 
   // The scheduling step's duration banner, computed ONLY on the branch that
   // draws it (cinatra#2952). `estimateRunDuration` falls through to an LLM
@@ -2863,7 +3001,16 @@ export async function SetupScreen({
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
-                gateStepCount: railSteps.length + (railCarriesMadeStep ? 1 : 0),
+                // AND THE REVIEW ROWS' OWN STEPS COUNT TOO (cinatra#3693). They
+                // draw no row of their own, but they DO make the frame draw a
+                // rail column — so the page's own rows have to come back into
+                // that column, exactly as they do for every other frame row, or
+                // a run whose only gate entry is a settled review draws its work
+                // steps in neither column.
+                gateStepCount:
+                  railSteps.length +
+                  (railCarriesMadeStep ? 1 : 0) +
+                  reviewSelectionSteps.length,
                 panel: runDetailPanel,
                 stepperStepCount: stepperSteps.length,
               });
@@ -2940,6 +3087,13 @@ export async function SetupScreen({
                   ),
                 });
               }
+              // AND THE REVIEW ROWS' OWN STEPS GO IN LAST (cinatra#3693).
+              // LAST, and deliberately: every numeral above is computed from the
+              // keys in this list, and these steps draw no row and carry no
+              // numeral. Pushed anywhere earlier they would consume one, and the
+              // rows a reader can see would be numbered around an entry that
+              // shows no number.
+              railSteps.push(...reviewSelectionSteps);
               // THE TWO COLUMNS. With a gate step, the frame owns them: the
               // steps head the rail and they open ON THE RIGHT, in the run
               // detail, never under their own row (plan (A) §6.2 and §7.2 step 5,
