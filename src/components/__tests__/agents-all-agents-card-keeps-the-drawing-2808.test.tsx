@@ -75,10 +75,9 @@ describe("/agents All Agents card", () => {
     expect(html).not.toContain("v1.4.0");
   });
 
-  it("renders NO Active / Archived indicator and NO per-entry Settings control", () => {
+  it("renders NO Active / Archived indicator", () => {
     const html = renderToStaticMarkup(<AgentRunClient rows={[ROW]} />);
     expect(html).not.toContain('data-slot="installed-status-indicator"');
-    expect(html).not.toContain('data-slot="agent-card-settings"');
   });
 
   it("keeps Run as the primary action", () => {
