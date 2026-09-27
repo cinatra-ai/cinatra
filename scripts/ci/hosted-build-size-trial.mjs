@@ -13,7 +13,7 @@ export const GROUP = "ci-build-trial-3316";
 export const LABEL = "ci-build-trial-3316-8core";
 export const API_VERSION = "2026-03-10";
 export const CLASSES = Object.freeze({
-  design: { file: "design-visual-verify.yml", job: "pixel-diff", cap: 70,
+  design: { file: "design-visual-verify.yml", job: "pixel-diff", cap: 90,
     build: "Build (standalone production server)", suite: "run functional acceptance + pixel-diff + axe" },
   dashboard: { file: "dashboard-live-verify.yml", job: "smoke", cap: 45,
     build: "Build app (production)", suite: "Assert smoke passed" },

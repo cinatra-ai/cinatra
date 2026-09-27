@@ -23,6 +23,16 @@
 //   the summary prints the derived set and names each excluded workflow on
 //   its own line. The queue candidate (`merge_group`) keeps the full set.
 //
+//   Each check run is read against the LATEST run of its workflow at the head
+//   (cinatra#3673): the highest run id per workflow path in the head's
+//   workflow runs listing, to which a check run maps through its check suite.
+//   A check run of a superseded run — the batch concurrency cancels when a
+//   draft pull request is marked ready seconds after it was opened — is
+//   neither a failure nor a pass: it is ignored, and its context is pending
+//   until the latest run reports it. A runs listing the job cannot read
+//   completely is a refusal, never a fall back to reading every check run at
+//   the head as current. The log names the run each context was read from.
+//
 //   It fails on missing, failed, cancelled, duplicate-source or timed-out
 //   checks. The single exception is a `skipped` conclusion on a context the
 //   inventory marks `skippable` (a job under an `if:` guard, which GitHub
@@ -561,11 +571,29 @@ const applicableTo = ({ inventory, changedPaths, baseRef }) =>
 export const sourceOf = (c) => `${c.app ?? "?"}:${c.workflow ?? "?"}`;
 
 /**
+ * One entry of the check-runs listing (`GET /repos/{repo}/commits/{sha}/check-runs`)
+ * in the shape the evaluation reads. `workflow` stands in as the source until
+ * the check suite is resolved to the workflow that produced it.
+ */
+export function checkRunFromApi(c) {
+  return {
+    id: typeof c.id === "number" ? c.id : null,
+    name: c.name,
+    status: c.status,
+    conclusion: c.conclusion,
+    completedAt: c.completed_at ?? null,
+    app: c.app?.slug ?? null,
+    checkSuiteId: typeof c.check_suite?.id === "number" ? c.check_suite.id : null,
+    workflow: c.check_suite?.id != null ? `check_suite:${c.check_suite.id}` : (c.html_url ?? "?"),
+  };
+}
+
+/**
  * Index one head's workflow-run listing (`GET /repos/{repo}/actions/runs?head_sha=`)
  * by check-suite id: `check_suite_id` -> the run's repo-relative workflow `path`.
- * Several runs of one workflow at one head (a re-run, a draft-to-ready flip, a
- * synchronize) carry DIFFERENT check-suite ids and the SAME path, so the index
- * is what collapses them to one source.
+ * Several runs of one workflow at one head (a draft-to-ready flip runs it
+ * twice) carry DIFFERENT check-suite ids and the SAME path, so the index is
+ * what collapses them to one source.
  */
 export function workflowPathsBySuite(runs) {
   const bySuite = new Map();
@@ -592,6 +620,82 @@ export function resolveCheckWorkflows(checks, suiteWorkflows) {
     const wfPath = c?.checkSuiteId != null ? bySuite.get(c.checkSuiteId) : undefined;
     if (typeof wfPath !== "string" || wfPath === "") return { ...c, workflowResolved: false };
     return { ...c, workflow: wfPath, workflowResolved: true };
+  });
+}
+
+/** The refusal to judge a head whose workflow runs cannot be read (cinatra#3673). */
+const workflowRunsRefusal = (sha, reason) =>
+  new Error(
+    `merge-readiness: cannot read the workflow runs of ${sha} (${reason}) — refusing to judge its check runs without each workflow's latest run (failing closed)`,
+  );
+
+/**
+ * Read one head's workflow runs listing strictly — every page of
+ * `GET /repos/{repo}/actions/runs?head_sha=` merged into one
+ * `{ total_count, workflow_runs }` — and return its runs (cinatra#3673).
+ * Every check run is judged against the latest run of its workflow, so a
+ * listing this job cannot read completely is a refusal that names the reason,
+ * never a fall back to reading every check run at the head as current.
+ */
+export function readWorkflowRuns(listing, headSha) {
+  const refuse = (reason) => {
+    throw workflowRunsRefusal(headSha, reason);
+  };
+  if (!object(listing)) refuse("the listing is not an object");
+  const runs = listing.workflow_runs;
+  if (!Array.isArray(runs)) refuse("'workflow_runs' is not an array");
+  if (!Number.isSafeInteger(listing.total_count) || listing.total_count < 0) refuse("'total_count' is not a count");
+  if (runs.length !== listing.total_count) refuse(`the listing holds ${runs.length} of ${listing.total_count} runs`);
+  const ids = new Set();
+  const suites = new Set();
+  runs.forEach((r, i) => {
+    if (!object(r) || !positive(r.id)) refuse(`run #${i + 1} has no run id`);
+    if (ids.has(r.id)) refuse(`run ${r.id} is listed twice`);
+    ids.add(r.id);
+    if (!positive(r.check_suite_id)) refuse(`run ${r.id} has no check suite id`);
+    if (suites.has(r.check_suite_id)) refuse(`run ${r.id} shares check suite ${r.check_suite_id} with another run`);
+    suites.add(r.check_suite_id);
+    if (typeof r.path !== "string" || r.path === "") refuse(`run ${r.id} names no workflow path`);
+    if (typeof r.status !== "string" || r.status === "") refuse(`run ${r.id} has no status`);
+    if (r.conclusion !== null && typeof r.conclusion !== "string") refuse(`run ${r.id} has a malformed conclusion`);
+    if (r.head_sha !== headSha) refuse(`run ${r.id} belongs to head ${r.head_sha}`);
+  });
+  return runs;
+}
+
+/**
+ * Judge every check run against the LATEST run of its workflow at the head
+ * (cinatra#3673). A draft pull request marked ready seconds after it was
+ * opened runs a workflow twice at one head: concurrency cancels the first
+ * run, whose jobs end `cancelled` — or `failure` when killed mid-way — while
+ * the second run has not yet created every job. The highest run id per
+ * workflow path is that workflow's latest run; a check run of an older run is
+ * marked `superseded`, and the evaluation ignores it: neither a failure nor a
+ * pass. A re-run keeps its run id and check suite, so the attempts of one run
+ * stay one run here. A check run maps to its run through its check suite, as
+ * resolveCheckWorkflows maps it to its workflow; a check run no listed run
+ * owns (an app outside Actions) is left exactly as that leaves it.
+ *
+ * @param {Array} checks check runs as checkRunFromApi shapes them
+ * @param {Array} runs   the head's workflow runs, as readWorkflowRuns accepted them
+ */
+export function resolveLatestRuns(checks, runs) {
+  const latestByWorkflow = new Map();
+  for (const r of runs) {
+    const seen = latestByWorkflow.get(r.path);
+    if (seen === undefined || r.id > seen.id) latestByWorkflow.set(r.path, r);
+  }
+  const runBySuite = new Map(runs.map((r) => [r.check_suite_id, r]));
+  return resolveCheckWorkflows(checks, workflowPathsBySuite(runs)).map((c) => {
+    const run = c.workflowResolved === true ? runBySuite.get(c.checkSuiteId) : undefined;
+    if (run === undefined) return c;
+    const latest = latestByWorkflow.get(run.path);
+    return {
+      ...c,
+      runId: run.id,
+      superseded: run.id !== latest.id,
+      latestRun: { id: latest.id, status: latest.status, conclusion: latest.conclusion },
+    };
   });
 }
 
@@ -631,7 +735,9 @@ const CONCLUSION_FAIL_LABEL = {
  *
  * @param {object} args
  * @param {object} args.inventory   parsed .github/merge-readiness.json
- * @param {Array}  args.checks      [{ id, name, status, conclusion, completedAt, app, workflow }]
+ * @param {Array}  args.checks      [{ id, name, status, conclusion, completedAt, app, workflow }],
+ *                 plus `runId`, `superseded` and `latestRun` where resolveLatestRuns
+ *                 mapped the check run to its workflow run (cinatra#3673)
  * @param {Array|null} args.changedPaths  paths changed by the candidate (null = unknown)
  * @param {string} args.eventName
  * @param {object} [args.queue]     merge_group arm: authenticated { before, after } snapshots
@@ -640,18 +746,30 @@ const CONCLUSION_FAIL_LABEL = {
  * @param {string|null} [args.baseRef] the pull request's base branch: only the
  *                 workflows whose `pull_request` trigger runs for it are
  *                 expected (#3653). Null keeps the full set (the queue event).
- * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[], base: string|null, expectedSet: {context: string, workflow: string}[], notExpected: string[]}}
+ * @returns {{ok: boolean, verdict: "PASS"|"PENDING"|"FAIL", failures: string[], pending: string[], reports: string[], waitedOn: string[], base: string|null, expectedSet: {context: string, workflow: string}[], notExpected: string[], readFrom: {context: string, runId: number|null, workflow: string|null}[]}}
  */
 export function evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes, baseRef = null }) {
   const failures = [];
   const pending = [];
   const reports = [];
+  const readFrom = [];
   const waited = Number.isFinite(waitedMinutes) && waitedMinutes > 0 ? waitedMinutes : inventory.deadlineMinutes;
 
   const derived = expectedForBase({ inventory, baseRef });
   const applicable = derived.expected.filter((e) => pathsApply(e.paths, changedPaths));
   const skipped = derived.expected.filter((e) => !applicable.includes(e));
   for (const e of skipped) reports.push(`not applicable to this candidate (paths ${JSON.stringify(e.paths)}): ${e.context}`);
+
+  // cinatra#3673: name each superseded workflow run once; its check runs are ignored below.
+  const superseded = new Map();
+  for (const c of checks ?? []) {
+    if (c?.superseded === true && !superseded.has(c.runId)) superseded.set(c.runId, c);
+  }
+  for (const c of [...superseded.values()].sort((a, b) => a.runId - b.runId)) {
+    reports.push(
+      `superseded run ignored: run ${c.runId} of ${c.workflow} — run ${c.latestRun.id} is the latest of that workflow at the head`,
+    );
+  }
 
   const byName = new Map();
   for (const c of checks ?? []) {
@@ -672,12 +790,16 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
       );
       continue;
     }
-    // Several runs of one name from ONE source are a re-run: branch protection
-    // matches the latest of them, so the latest one's conclusion decides here too.
-    const run = latestRun(runs);
-    if (runs.length > 1) {
-      reports.push(`re-run (the latest of ${runs.length} runs from one source decides): '${e.context}'`);
+    // A check run of a superseded workflow run is neither a failure nor a pass
+    // (cinatra#3673). Of the rest, several runs of one name from ONE source are
+    // a re-run: branch protection matches the latest of them, so the latest
+    // one's conclusion decides here too.
+    const current = runs.filter((c) => c.superseded !== true);
+    const run = latestRun(current.length > 0 ? current : runs);
+    if (current.length > 1) {
+      reports.push(`re-run (the latest of ${current.length} runs from one source decides): '${e.context}'`);
     }
+    if (current.length > 0) readFrom.push({ context: e.context, runId: run.runId ?? null, workflow: run.workflow ?? null });
     if (run.app !== e.app) {
       failures.push(`untrusted-source: '${e.context}' was reported by app '${run.app}', but the inventory trusts '${e.app}'`);
       continue;
@@ -689,6 +811,22 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
       failures.push(
         `untrusted-source: '${e.context}' was reported by workflow '${run.workflow}', but the inventory expects '${e.workflow}'`,
       );
+      continue;
+    }
+    if (current.length === 0) {
+      // Only a superseded run reported this context: it is pending until the
+      // latest run of its workflow reports it, and missing once that run has
+      // completed without it.
+      const latest = run.latestRun;
+      if (latest.status !== "completed") {
+        pending.push(
+          `pending: '${e.context}' is not yet reported by the latest run ${latest.id} of ${run.workflow} (still '${latest.status}') after ${waited} minutes — not a failure`,
+        );
+      } else {
+        failures.push(
+          `missing: no check run named '${e.context}' in the latest run ${latest.id} of ${run.workflow}, which concluded '${latest.conclusion}' (a superseded run's check run is ignored)`,
+        );
+      }
       continue;
     }
     if (run.status !== "completed") {
@@ -736,6 +874,7 @@ export function evaluateReadiness({ inventory, checks, changedPaths, eventName, 
     base: typeof baseRef === "string" && baseRef !== "" ? baseRef : null,
     expectedSet: derived.expected.map((e) => ({ context: e.context, workflow: e.workflow })),
     notExpected: derived.notExpected,
+    readFrom,
   };
 }
 
@@ -770,12 +909,18 @@ export function exitCodeFor(result) {
  * Polling predicate: is the candidate's check set settled enough to judge?
  * True when every applicable expected context has a COMPLETED check run —
  * missing and in-progress contexts keep the job waiting until the deadline.
- * A workflow that does not run for the base (#3653) is not waited for.
+ * A workflow that does not run for the base (#3653) is not waited for. A
+ * check run of a superseded workflow run never settles a context
+ * (cinatra#3673); of the rest, the one the evaluation reads decides.
  */
 export function isSettled({ inventory, checks, changedPaths, baseRef = null }) {
   const applicable = applicableTo({ inventory, changedPaths, baseRef });
   const byName = new Map();
-  for (const c of checks ?? []) byName.set(c.name, c);
+  for (const c of checks ?? []) {
+    if (c?.superseded === true) continue;
+    const seen = byName.get(c.name);
+    byName.set(c.name, seen === undefined ? c : latestRun([seen, c]));
+  }
   return applicable.every((e) => byName.get(e.context)?.status === "completed");
 }
 
@@ -805,6 +950,25 @@ export function renderSummary({ candidateSha, lookupSha, eventName, result }) {
   return lines.join("\n");
 }
 
+/**
+ * The runs an evaluation read (cinatra#3673): one line for each context read
+ * from a check run, naming the workflow run that check run belongs to. It is
+ * logged after the summary, so the summary of a head with one run per
+ * workflow reads exactly as before. Empty when no context was read.
+ */
+export function renderReadFrom(result) {
+  const read = result?.readFrom ?? [];
+  if (read.length === 0) return "";
+  return [
+    "merge-readiness: check runs read",
+    ...read.map((r) =>
+      r.runId !== null
+        ? `  read '${r.context}' from run ${r.runId} of ${r.workflow}`
+        : `  read '${r.context}' from ${r.workflow ?? "an unknown source"} (no workflow run of this head owns it)`,
+    ),
+  ].join("\n");
+}
+
 /* ------------------------------------------------------------------ *
  * CLI (the only part that talks to the GitHub API)
  * ------------------------------------------------------------------ */
@@ -827,33 +991,34 @@ async function listChecks(token, repo, sha) {
   const out = [];
   for (let page = 1; page <= 10; page++) {
     const body = await api(token, `/repos/${repo}/commits/${sha}/check-runs?per_page=100&page=${page}`);
-    for (const c of body.check_runs ?? []) {
-      out.push({
-        id: typeof c.id === "number" ? c.id : null,
-        name: c.name,
-        status: c.status,
-        conclusion: c.conclusion,
-        completedAt: c.completed_at ?? null,
-        app: c.app?.slug ?? null,
-        checkSuiteId: typeof c.check_suite?.id === "number" ? c.check_suite.id : null,
-        workflow: c.check_suite?.id != null ? `check_suite:${c.check_suite.id}` : (c.html_url ?? "?"),
-      });
-    }
+    for (const c of body.check_runs ?? []) out.push(checkRunFromApi(c));
     if ((body.check_runs ?? []).length < 100) break;
   }
   return out;
 }
 
-/** The workflow runs of one head, indexed by check-suite id (see workflowPathsBySuite). */
-async function listWorkflowPaths(token, repo, sha) {
+/**
+ * The workflow runs of one head, every page, read strictly (see
+ * readWorkflowRuns). A request that fails is the same refusal (cinatra#3673).
+ */
+async function listWorkflowRuns(token, repo, sha) {
   const runs = [];
+  let total = null;
   for (let page = 1; page <= 10; page++) {
-    const body = await api(token, `/repos/${repo}/actions/runs?head_sha=${sha}&per_page=100&page=${page}`);
-    const got = body.workflow_runs ?? [];
-    for (const r of got) runs.push(r);
-    if (got.length < 100) break;
+    let body;
+    try {
+      body = await api(token, `/repos/${repo}/actions/runs?head_sha=${sha}&per_page=100&page=${page}`);
+    } catch (err) {
+      throw workflowRunsRefusal(sha, err.message.replace(/^merge-readiness: /, ""));
+    }
+    if (!object(body) || !Array.isArray(body.workflow_runs)) {
+      throw workflowRunsRefusal(sha, "a page carries no 'workflow_runs' array");
+    }
+    runs.push(...body.workflow_runs);
+    total = body.total_count;
+    if (body.workflow_runs.length < 100) break;
   }
-  return workflowPathsBySuite(runs);
+  return readWorkflowRuns({ total_count: total, workflow_runs: runs }, sha);
 }
 
 async function listChangedPaths(token, repo, prNumber) {
@@ -900,15 +1065,21 @@ async function main() {
   const intervalMs = Number(process.env.MERGE_READINESS_POLL_MS ?? 30_000);
   let checks = [];
   for (;;) {
-    checks = await listChecks(token, repo, lookupSha);
-    if (isSettled({ inventory, checks, changedPaths, baseRef })) break;
-    if (Date.now() >= deadline) break;
+    const listed = await listChecks(token, repo, lookupSha);
+    const expired = Date.now() >= deadline;
+    // The wait can end only once every applicable context has a completed
+    // check run somewhere at the head; from then on each poll also reads the
+    // head's workflow runs, after its check runs so that the run of every
+    // listed check run is in that listing. A check run names its check suite,
+    // never its workflow: each is resolved to its workflow run, and the wait
+    // follows the latest run of each workflow (cinatra#3673).
+    const completed = listed.filter((c) => c.status === "completed");
+    if (expired || isSettled({ inventory, checks: completed, changedPaths, baseRef })) {
+      checks = resolveLatestRuns(listed, await listWorkflowRuns(token, repo, lookupSha));
+      if (expired || isSettled({ inventory, checks, changedPaths, baseRef })) break;
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-
-  // A check run names its check suite, never its workflow: resolve the suites
-  // of this head to workflows before the sources are judged.
-  checks = resolveCheckWorkflows(checks, await listWorkflowPaths(token, repo, lookupSha));
 
   const queue = queueArgs ? { before, after: await readQueueEvidence(queueArgs) } : undefined;
 
@@ -916,6 +1087,9 @@ async function main() {
   const result = evaluateReadiness({ inventory, checks, changedPaths, eventName, queue, waitedMinutes, baseRef });
   const summary = renderSummary({ candidateSha: recordedSha, lookupSha, eventName, result });
   console.log(summary);
+  // The log names the run each context was read from (cinatra#3673).
+  const readFrom = renderReadFrom(result);
+  if (readFrom !== "") console.log(readFrom);
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n\`\`\`\n${summary}\n\`\`\`\n`);
   }

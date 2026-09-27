@@ -7,9 +7,13 @@
 // of the workflow, and 8m45s on the unit-tier job whose test step a 10-minute
 // budget cancelled, so a budget sized for the tests alone cancels them while
 // they are running normally. Every job that resolves to the self-hosted runner
-// classes therefore budgets the measured worst setup phase (17) plus its own
+// classes therefore budgets the measured worst setup phase plus its own
 // longest measured test phase, rounded up to a minute, plus a 5-minute margin,
-// and stays under the queue's 120-minute limit.
+// and stays under the queue's 120-minute limit. The setup figure was 17 until
+// 2026-09-26, when the shared six-runner box measured 20 (the Node setup alone
+// took 12 minutes under load); the perpetual core job's root suite (15 measured)
+// carries a loaded-pool allowance of twice that, because the pool cancelled it
+// at the old budget without a verdict.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,20 +46,20 @@ const QUEUE_LIMIT_MINUTES = 120;
 // job id -> the budget it must carry, each one measured:
 // MEASURED_WORST_SETUP_MINUTES + the job's own measured test phase + MARGIN.
 const SELF_HOSTED_BUDGETS = {
-  test: 30,
-  "skills-unit": 24,
-  "a2a-unit": 23,
-  "execution-plane-unit": 23,
-  "rbac-authz-unit": 24,
-  "context-resolve-route-shape": 23,
-  "auth-schema-drift": 24,
-  "v64-invariants": 23,
-  "package-unit-suites": 25,
-  "hosted-mcp-wire-gate": 23,
-  "devperf-invariants": 24,
-  "perpetual-core": 37,
-  "perpetual-extension-suites": 24,
-  "presence-degraded-build": 31,
+  test: 33,
+  "skills-unit": 27,
+  "a2a-unit": 26,
+  "execution-plane-unit": 26,
+  "rbac-authz-unit": 27,
+  "context-resolve-route-shape": 26,
+  "auth-schema-drift": 27,
+  "v64-invariants": 26,
+  "package-unit-suites": 28,
+  "hosted-mcp-wire-gate": 26,
+  "devperf-invariants": 27,
+  "perpetual-core": 55,
+  "perpetual-extension-suites": 27,
+  "presence-degraded-build": 34,
 };
 
 const jobsSection = workflow.slice(workflow.search(/^jobs:$/m));
