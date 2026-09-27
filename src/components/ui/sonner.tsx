@@ -15,12 +15,70 @@ function resolveSonnerTheme(theme: string | undefined): SonnerTheme {
   return 'light'
 }
 
+// THE TOAST IS NOT DRAWN ON THE APPLICATION HEADER (cinatra#3358).
+//
+// THE MEASURED DEFECT. The toast island opens at the top-right on the library's
+// own 24px offset, and the application header is a 64px sticky band across that
+// same corner — so a raised toast and the header's own controls occupied the
+// same pixels. Read on a magnified crop of a real boot: the header's wrench, its
+// add control, the palette control and the bell read THROUGH the toast body, the
+// message text was overprinted by them, and the toast's Close came to rest on
+// top of the bell and its unread badge. Neither surface is legible in that
+// overlap, and the drawing gives the toast an OPAQUE POPOVER GROUND
+// (Components § Toast/Sonner — "popover bg, status-coloured text + border"),
+// which is a ground with nothing of another surface in it.
+//
+// THE FIX IS GEOMETRY, NOT A Z-INDEX RACE. Lifting the island over the header
+// would have covered the header's controls instead of being covered by them —
+// the same illegible pair, the other way round. The island is therefore opened
+// BELOW the header band, where its ground is its own; the offset is the header's
+// own height plus the island's ordinary gutter, so a header that changes height
+// moves this with it.
+//
+// AND THE GROUND IS PINNED, not merely routed. The variants below hand the
+// library `var(--popover)` for every ground, but the library paints those
+// through its own unlayered stylesheet, which a variant rule can reach past.
+// The ground is therefore also asserted on the toast itself, so "popover bg" is
+// what the toast carries rather than what it asks for.
+
+/** The application header's own height — `h-16` on the sticky topbar. */
+const APP_HEADER_HEIGHT = '4rem'
+/** The island's ordinary gutter beneath it. */
+const TOAST_GUTTER = '1rem'
+
+export const TOASTER_OFFSET = {
+  top: `calc(${APP_HEADER_HEIGHT} + ${TOAST_GUTTER})`,
+  right: TOAST_GUTTER,
+  bottom: TOAST_GUTTER,
+  left: TOAST_GUTTER,
+} as const
+
+// AND THE NARROW VIEWPORT IS THE SAME BAND. The library keeps a SECOND offset
+// for narrow viewports: it writes `--offset-*` and `--mobile-offset-*` from two
+// separate props, and under 600px its own stylesheet positions the island from
+// `--mobile-offset-top` alone, which defaults to the library's small gutter. So
+// an island moved below the header on a wide viewport opened right back inside
+// the header band on a narrow one. The header band is the same height there, so
+// the narrow offset is the same offset.
+export const TOASTER_MOBILE_OFFSET = TOASTER_OFFSET
+
+/** The drawn ground, carried by the toast and by the close control on it. */
+export const TOAST_OPAQUE_GROUND_CLASS = '!bg-popover'
+
 export function Toaster({ ...props }: ToasterProps) {
   const { theme = 'system' } = useTheme()
 
   return (
     <Sonner
       theme={resolveSonnerTheme(theme)}
+      offset={TOASTER_OFFSET}
+      mobileOffset={TOASTER_MOBILE_OFFSET}
+      toastOptions={{
+        classNames: {
+          toast: TOAST_OPAQUE_GROUND_CLASS,
+          closeButton: TOAST_OPAQUE_GROUND_CLASS,
+        },
+      }}
       className='toaster group [&_div[data-content]]:w-full'
       style={
         {
