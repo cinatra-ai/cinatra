@@ -2,8 +2,8 @@
  "subflow": {
   "agentspec_version": "26.1.0",
   "component_type": "Flow",
-  "id": "context-ideaContext-subflow",
-  "name": "Context Agent (ideaContext)",
+  "id": "context-draftContext-subflow",
+  "name": "Context Agent (draftContext)",
   "inputs": [
    {
     "title": "parentRunId",
@@ -35,424 +35,400 @@
    }
   ],
   "start_node": {
-   "$component_ref": "ctx-ideaContext-start"
+   "$component_ref": "ctx-draftContext-start"
   },
   "nodes": [
    {
-    "$component_ref": "ctx-ideaContext-start"
+    "$component_ref": "ctx-draftContext-start"
    },
    {
-    "$component_ref": "ctx-ideaContext-resolve_context"
+    "$component_ref": "ctx-draftContext-resolve_context"
    },
    {
-    "$component_ref": "ctx-ideaContext-select_mode"
+    "$component_ref": "ctx-draftContext-select_mode"
    },
    {
-    "$component_ref": "ctx-ideaContext-emit_context_payload"
+    "$component_ref": "ctx-draftContext-emit_context_payload"
    },
    {
-    "$component_ref": "ctx-ideaContext-context_select_gate"
+    "$component_ref": "ctx-draftContext-context_select_gate"
    },
    {
-    "$component_ref": "ctx-ideaContext-finalize_interactive"
+    "$component_ref": "ctx-draftContext-finalize_interactive"
    },
    {
-    "$component_ref": "ctx-ideaContext-finalize_autonomous"
+    "$component_ref": "ctx-draftContext-finalize_autonomous"
    },
    {
-    "$component_ref": "ctx-ideaContext-end"
+    "$component_ref": "ctx-draftContext-end"
    }
   ],
   "control_flow_connections": [
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-start_to_resolve",
+    "name": "ctx-draftContext-start_to_resolve",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     }
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-resolve_to_select",
+    "name": "ctx-draftContext-resolve_to_select",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-select_mode"
+     "$component_ref": "ctx-draftContext-select_mode"
     }
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-select_default_to_emit",
+    "name": "ctx-draftContext-select_default_to_emit",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-select_mode"
+     "$component_ref": "ctx-draftContext-select_mode"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-emit_context_payload"
+     "$component_ref": "ctx-draftContext-emit_context_payload"
     },
     "from_branch": "default"
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-emit_to_gate",
+    "name": "ctx-draftContext-emit_to_gate",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-emit_context_payload"
+     "$component_ref": "ctx-draftContext-emit_context_payload"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-context_select_gate"
+     "$component_ref": "ctx-draftContext-context_select_gate"
     }
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-gate_to_finalize_interactive",
+    "name": "ctx-draftContext-gate_to_finalize_interactive",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-context_select_gate"
+     "$component_ref": "ctx-draftContext-context_select_gate"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     }
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-finalize_interactive_to_end",
+    "name": "ctx-draftContext-finalize_interactive_to_end",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-end"
+     "$component_ref": "ctx-draftContext-end"
     }
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-select_autonomous_to_finalize",
+    "name": "ctx-draftContext-select_autonomous_to_finalize",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-select_mode"
+     "$component_ref": "ctx-draftContext-select_mode"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "from_branch": "autonomous"
    },
    {
     "component_type": "ControlFlowEdge",
-    "name": "ctx-ideaContext-finalize_autonomous_to_end",
+    "name": "ctx-draftContext-finalize_autonomous_to_end",
     "from_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "to_node": {
-     "$component_ref": "ctx-ideaContext-end"
+     "$component_ref": "ctx-draftContext-end"
     }
    }
   ],
   "data_flow_connections": [
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_parentRunId_to_resolve",
+    "name": "ctx-draftContext-start_parentRunId_to_resolve",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "parentRunId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "destination_input": "parentRunId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_parentPackageName_to_resolve",
+    "name": "ctx-draftContext-start_parentPackageName_to_resolve",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "parentPackageName",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "destination_input": "parentPackageName"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_slotId_to_resolve",
+    "name": "ctx-draftContext-start_slotId_to_resolve",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "slotId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "destination_input": "slotId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_projectId_to_resolve",
+    "name": "ctx-draftContext-start_projectId_to_resolve",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "projectId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "destination_input": "projectId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_selectionMode_to_select",
+    "name": "ctx-draftContext-resolve_selectionMode_to_select",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "selectionMode",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-select_mode"
+     "$component_ref": "ctx-draftContext-select_mode"
     },
     "destination_input": "selectionMode"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_candidates_to_emit",
+    "name": "ctx-draftContext-resolve_candidates_to_emit",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "candidates",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-emit_context_payload"
+     "$component_ref": "ctx-draftContext-emit_context_payload"
     },
     "destination_input": "candidates"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_slotMeta_to_emit",
+    "name": "ctx-draftContext-resolve_slotMeta_to_emit",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "slotMeta",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-emit_context_payload"
+     "$component_ref": "ctx-draftContext-emit_context_payload"
     },
     "destination_input": "slotMeta"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_selectedRefs_to_emit",
+    "name": "ctx-draftContext-resolve_selectedRefs_to_emit",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "selectedRefs",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-emit_context_payload"
+     "$component_ref": "ctx-draftContext-emit_context_payload"
     },
     "destination_input": "selectedRefs"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-gate_userResponse_to_finalize_interactive",
+    "name": "ctx-draftContext-gate_userResponse_to_finalize_interactive",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-context_select_gate"
+     "$component_ref": "ctx-draftContext-context_select_gate"
     },
     "source_output": "userResponse",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "destination_input": "userResponse"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_parentRunId_to_finalize_interactive",
+    "name": "ctx-draftContext-start_parentRunId_to_finalize_interactive",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "parentRunId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "destination_input": "parentRunId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_parentPackageName_to_finalize_interactive",
+    "name": "ctx-draftContext-start_parentPackageName_to_finalize_interactive",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "parentPackageName",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "destination_input": "parentPackageName"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_slotId_to_finalize_interactive",
+    "name": "ctx-draftContext-start_slotId_to_finalize_interactive",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "slotId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "destination_input": "slotId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_projectId_to_finalize_interactive",
+    "name": "ctx-draftContext-start_projectId_to_finalize_interactive",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "projectId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "destination_input": "projectId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_selectionMode_to_finalize_interactive",
+    "name": "ctx-draftContext-resolve_selectionMode_to_finalize_interactive",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "selectionMode",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "destination_input": "selectionMode"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_parentRunId_to_finalize_autonomous",
+    "name": "ctx-draftContext-start_parentRunId_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "parentRunId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "parentRunId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_parentPackageName_to_finalize_autonomous",
+    "name": "ctx-draftContext-start_parentPackageName_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "parentPackageName",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "parentPackageName"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_slotId_to_finalize_autonomous",
+    "name": "ctx-draftContext-start_slotId_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "slotId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "slotId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-start_projectId_to_finalize_autonomous",
+    "name": "ctx-draftContext-start_projectId_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-start"
+     "$component_ref": "ctx-draftContext-start"
     },
     "source_output": "projectId",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "projectId"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_selectionMode_to_finalize_autonomous",
+    "name": "ctx-draftContext-resolve_selectionMode_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "selectionMode",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "selectionMode"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_resolutionMode_to_finalize_autonomous",
+    "name": "ctx-draftContext-resolve_resolutionMode_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "resolutionMode",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "resolutionMode"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-resolve_selectedRefs_to_finalize_autonomous",
+    "name": "ctx-draftContext-resolve_selectedRefs_to_finalize_autonomous",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
+     "$component_ref": "ctx-draftContext-resolve_context"
     },
     "source_output": "selectedRefs",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "destination_input": "selectedRefs"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-finalize_interactive_to_end",
+    "name": "ctx-draftContext-finalize_interactive_to_end",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
+     "$component_ref": "ctx-draftContext-finalize_interactive"
     },
     "source_output": "contextSlotBindings",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-end"
+     "$component_ref": "ctx-draftContext-end"
     },
     "destination_input": "contextSlotBindings"
    },
    {
     "component_type": "DataFlowEdge",
-    "name": "ctx-ideaContext-finalize_autonomous_to_end",
+    "name": "ctx-draftContext-finalize_autonomous_to_end",
     "source_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+     "$component_ref": "ctx-draftContext-finalize_autonomous"
     },
     "source_output": "contextSlotBindings",
     "destination_node": {
-     "$component_ref": "ctx-ideaContext-end"
+     "$component_ref": "ctx-draftContext-end"
     },
     "destination_input": "contextSlotBindings"
-   },
-   {
-    "component_type": "DataFlowEdge",
-    "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
-    },
-    "source_output": "allocationToken",
-    "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_interactive"
-    },
-    "destination_input": "allocationToken",
-    "name": "ctx-ideaContext-resolve_context_allocationToken_to_ctx-ideaContext-finalize_interactive"
-   },
-   {
-    "component_type": "DataFlowEdge",
-    "source_node": {
-     "$component_ref": "ctx-ideaContext-resolve_context"
-    },
-    "source_output": "allocationToken",
-    "destination_node": {
-     "$component_ref": "ctx-ideaContext-finalize_autonomous"
-    },
-    "destination_input": "allocationToken",
-    "name": "ctx-ideaContext-resolve_context_allocationToken_to_ctx-ideaContext-finalize_autonomous"
    }
   ],
   "$referenced_components": {
-   "ctx-ideaContext-start": {
+   "ctx-draftContext-start": {
     "component_type": "StartNode",
-    "id": "ctx-ideaContext-start",
+    "id": "ctx-draftContext-start",
     "name": "Inputs",
     "metadata": {
      "cinatra": {
@@ -489,9 +465,9 @@
      }
     ]
    },
-   "ctx-ideaContext-resolve_context": {
+   "ctx-draftContext-resolve_context": {
     "component_type": "ApiNode",
-    "id": "ctx-ideaContext-resolve_context",
+    "id": "ctx-draftContext-resolve_context",
     "name": "Resolve context candidates",
     "url": "{{CINATRA_BASE_URL}}/api/context-resolve",
     "http_method": "POST",
@@ -550,16 +526,12 @@
      {
       "title": "resolutionMode",
       "type": "string"
-     },
-     {
-      "title": "allocationToken",
-      "type": "string"
      }
     ]
    },
-   "ctx-ideaContext-select_mode": {
+   "ctx-draftContext-select_mode": {
     "component_type": "BranchingNode",
-    "id": "ctx-ideaContext-select_mode",
+    "id": "ctx-draftContext-select_mode",
     "name": "Branch on selection mode",
     "metadata": {
      "cinatra": {
@@ -581,9 +553,9 @@
      "autonomous": "autonomous"
     }
    },
-   "ctx-ideaContext-emit_context_payload": {
+   "ctx-draftContext-emit_context_payload": {
     "component_type": "OutputMessageNode",
-    "id": "ctx-ideaContext-emit_context_payload",
+    "id": "ctx-draftContext-emit_context_payload",
     "name": "Emit resolved context as agent message",
     "inputs": [
      {
@@ -611,9 +583,9 @@
     ],
     "message": "{# pyagentspec-input-hint (do not remove): {{ candidates }} {{ slotMeta }} {{ selectedRefs }} #}{\"candidates\":{{ candidates | tojson }},\"slotMeta\":{{ slotMeta | tojson }},\"selectedRefs\":{{ selectedRefs | tojson }}}"
    },
-   "ctx-ideaContext-context_select_gate": {
+   "ctx-draftContext-context_select_gate": {
     "component_type": "InputMessageNode",
-    "id": "ctx-ideaContext-context_select_gate",
+    "id": "ctx-draftContext-context_select_gate",
     "name": "Select context",
     "metadata": {
      "cinatra": {
@@ -630,9 +602,9 @@
      }
     ]
    },
-   "ctx-ideaContext-finalize_interactive": {
+   "ctx-draftContext-finalize_interactive": {
     "component_type": "ApiNode",
-    "id": "ctx-ideaContext-finalize_interactive",
+    "id": "ctx-draftContext-finalize_interactive",
     "name": "Finalize selected context (interactive)",
     "url": "{{CINATRA_BASE_URL}}/api/context-finalize",
     "http_method": "POST",
@@ -642,8 +614,7 @@
      "slotId": "{{ slotId }}",
      "projectId": "{{ projectId }}",
      "selectionMode": "{{ selectionMode }}",
-     "userResponse": "{{ userResponse }}",
-     "allocationToken": "{{ allocationToken }}"
+     "userResponse": "{{ userResponse }}"
     },
     "inputs": [
      {
@@ -670,10 +641,6 @@
      {
       "title": "userResponse",
       "type": "string"
-     },
-     {
-      "title": "allocationToken",
-      "type": "string"
      }
     ],
     "outputs": [
@@ -688,9 +655,9 @@
      }
     ]
    },
-   "ctx-ideaContext-finalize_autonomous": {
+   "ctx-draftContext-finalize_autonomous": {
     "component_type": "ApiNode",
-    "id": "ctx-ideaContext-finalize_autonomous",
+    "id": "ctx-draftContext-finalize_autonomous",
     "name": "Finalize selected context (autonomous)",
     "url": "{{CINATRA_BASE_URL}}/api/context-finalize",
     "http_method": "POST",
@@ -700,8 +667,7 @@
      "slotId": "{{ slotId }}",
      "projectId": "{{ projectId }}",
      "selectionMode": "{{ selectionMode }}",
-     "userResponse": "{# pyagentspec-input-hint (do not remove): {{ slotId }} {{ resolutionMode }} {{ selectedRefs }} #}{\"slotId\":{{ slotId | tojson }},\"resolutionMode\":{{ resolutionMode | tojson }},\"selectedRefs\":{{ selectedRefs | tojson }}}",
-     "allocationToken": "{{ allocationToken }}"
+     "userResponse": "{# pyagentspec-input-hint (do not remove): {{ slotId }} {{ resolutionMode }} {{ selectedRefs }} #}{\"slotId\":{{ slotId | tojson }},\"resolutionMode\":{{ resolutionMode | tojson }},\"selectedRefs\":{{ selectedRefs | tojson }}}"
     },
     "inputs": [
      {
@@ -737,10 +703,6 @@
         "type": "object"
        }
       }
-     },
-     {
-      "title": "allocationToken",
-      "type": "string"
      }
     ],
     "outputs": [
@@ -755,9 +717,9 @@
      }
     ]
    },
-   "ctx-ideaContext-end": {
+   "ctx-draftContext-end": {
     "component_type": "EndNode",
-    "id": "ctx-ideaContext-end",
+    "id": "ctx-draftContext-end",
     "name": "Outputs",
     "outputs": [
      {
@@ -786,14 +748,14 @@
  },
  "marker": {
   "component_type": "FlowNode",
-  "id": "context_ideaContext",
-  "name": "Resolve ideaContext",
+  "id": "context_draftContext",
+  "name": "Resolve draftContext",
   "subflow": {
-   "$component_ref": "context-ideaContext-subflow"
+   "$component_ref": "context-draftContext-subflow"
   },
   "metadata": {
    "cinatra": {
-    "purpose": "author-placed-context-resolution-for-ideaContext"
+    "purpose": "author-placed-context-resolution-for-draftContext"
    }
   }
  }

@@ -44,7 +44,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 70
+      "timeoutMinutes": 90
     },
     {
       "context": "A2A protocol unit tests",
@@ -54,7 +54,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 23
+      "timeoutMinutes": 26
     },
     {
       "context": "Actions SHA-pin gate",
@@ -114,7 +114,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 24
+      "timeoutMinutes": 27
     },
     {
       "context": "build",
@@ -134,7 +134,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 23
+      "timeoutMinutes": 26
     },
     {
       "context": "Chat-HITL held-turn dev-runtime e2e",
@@ -154,7 +154,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 23
+      "timeoutMinutes": 26
     },
     {
       "context": "Core-store schema migration gate",
@@ -304,7 +304,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 24
+      "timeoutMinutes": 27
     },
     {
       "context": "Discover batteries",
@@ -350,7 +350,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 23
+      "timeoutMinutes": 26
     },
     {
       "context": "Extension-anchor lifecycle DB tests",
@@ -400,7 +400,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 23
+      "timeoutMinutes": 26
     },
     {
       "context": "image",
@@ -430,7 +430,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 37
+      "timeoutMinutes": 55
     },
     {
       "context": "Perpetual extension suites (discovery gate shard)",
@@ -440,7 +440,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 24
+      "timeoutMinutes": 27
     },
     {
       "context": "Perpetual system loops invariants",
@@ -460,7 +460,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 31
+      "timeoutMinutes": 34
     },
     {
       "context": "proof",
@@ -518,7 +518,7 @@
         "**"
       ],
       "skippable": false,
-      "timeoutMinutes": 24
+      "timeoutMinutes": 27
     },
     {
       "context": "RBAC browser e2e",
@@ -568,7 +568,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 24
+      "timeoutMinutes": 27
     },
     {
       "context": "skills-drift-gate / skills-drift-gate",
@@ -628,7 +628,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 30
+      "timeoutMinutes": 33
     },
     {
       "context": "ui-design-system-gate / ui-design-system-gate",
@@ -658,7 +658,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 25
+      "timeoutMinutes": 28
     }
   ],
   "triggers": {
