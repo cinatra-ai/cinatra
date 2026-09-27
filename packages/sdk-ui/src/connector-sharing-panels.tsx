@@ -12,6 +12,22 @@
 // roll-up card is the Connections status card of the Setup tab, with no Check
 // and no All connections link: the list it counts is directly beneath it."
 //
+// WHICH PAGES HEAD THEIR LIST WITH IT (cinatra#3454). The maintainer decided on
+// 2026-09-26: the multi-connection roll-up follows the page's shape, not the
+// count, and a page whose tab strip has no Connections tab draws no roll-up on
+// its Sharing tab. The drawing gives that reading: the roll-up "is the
+// Connections status card of the Setup tab", and only a connector that holds
+// many connections has one. Such a connector "adds Connections after
+// Sharing", and the drawing's own example of a Sharing tab with more than one
+// connection is that connector's page. A page with no Connections tab has no
+// Setup card to repeat, so it lists its panels alone, however many it lists.
+// The caller therefore states its page's SHAPE in `pageShape`, and the card
+// draws only where the shape is the many-connections one AND there is more
+// than one connection to roll up. The default is `"single"`, because no
+// production page carries the many-connections shape today: the generated
+// connector page never draws a Connections tab, so a caller that says nothing
+// gets the shape its page actually has.
+//
 // WHY IT LIVES HERE and not in the app (cinatra#3385). The app GENERATES the
 // setup page of the connectors whose pack declares the `schema-config` UI
 // surface, and #3374 put the Sharing tab on that page. A connector that ships
@@ -90,12 +106,23 @@ export type ConnectorSharingPanelsProps = {
    * each panel's permissions data and bindings as `permissions`.
    */
   panels: ConnectorSharingPanelView[];
+  /**
+   * What SHAPE the page that mounts this tab has (cinatra#3454). `"many"` = a
+   * connector that holds many connections, whose tab strip reads Setup ·
+   * Sharing · Connections and whose Setup tab carries the Connections status
+   * card the roll-up repeats. `"single"` = a page with no Connections tab,
+   * which draws no roll-up on Sharing at all. The default is `"single"`: the
+   * app's generated connector page draws no Connections tab, so a caller that
+   * says nothing gets the shape its page has.
+   */
+  pageShape?: "single" | "many";
   /** `loading` renders the declared loading treatment in the list's place. */
   state?: "ready" | "loading";
 };
 
 export function ConnectorSharingPanels({
   panels,
+  pageShape = "single",
   state = "ready",
 }: ConnectorSharingPanelsProps) {
   if (state === "loading") {
@@ -113,14 +140,14 @@ export function ConnectorSharingPanels({
   }
   return (
     <>
-      {/* The roll-up card, ABOVE the list it counts — and ONLY when there is
-          more than one connection to roll up: a single connection heads no
-          roll-up, so the list starts with that connection's own panel. No
-          Check, no "All connections" link — the list is directly beneath it.
-          One rule for every mount: the Sharing tab, the pages that draw no tab
-          strip (the invalid-schema-config and rebuild treatments and the
-          bundled-react setup pages) and a pack's own setup page alike. */}
-      {panels.length > 1 ? (
+      {/* The roll-up card, ABOVE the list it counts, on a many-connections
+          page, and ONLY when there is more than one connection to roll up: a
+          single connection heads no roll-up, so the list starts with that
+          connection's own panel. A single-shape page heads its list with
+          nothing at all, because it has no Connections status card on Setup
+          for this one to repeat (cinatra#3454). No Check and no "All
+          connections" link: the list is directly beneath it. */}
+      {pageShape === "many" && panels.length > 1 ? (
         <ConnectionsStatusCard
           data-conformance-id="connector-sharing-rollup"
           counts={{ connected: panels.length }}
