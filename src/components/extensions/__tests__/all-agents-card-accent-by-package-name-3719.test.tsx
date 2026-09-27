@@ -80,9 +80,9 @@ afterAll(() => {
 // each hand it to their card.
 // ---------------------------------------------------------------------------
 
-const PACKAGE_NAME = "@cinatra-ai/research-assistant";
+const PACKAGE_NAME = "@cinatra-ai/web-research-agent";
 /** The All Agents loader keys a local row as `local:${id}` (packages/agents/src/pages.tsx). */
-const ROW_KEY = "local:research-assistant-1";
+const ROW_KEY = "local:web-research-agent-1";
 
 const LIST_SCOPE = {
   renderStatus: (row: InstalledCardRow) => <InstalledStatusIndicator status={row.status} />,
@@ -94,7 +94,7 @@ const LIST_SCOPE = {
 const INSTALLED_ROW: InstalledCardRow = {
   kind: "agent",
   packageName: PACKAGE_NAME,
-  displayName: "Research Assistant",
+  displayName: "Web Research Agent",
   description: "Gathers sources, summarises, and cites answers grounded in your team's own documents.",
   versionLabel: "0.4.2",
   rawVersion: "0.4.2",
@@ -112,10 +112,10 @@ function allAgentsRow(overrides: Partial<AgentAllCardRow> = {}): AgentAllCardRow
     name: "Research Assistant",
     description: "Gathers sources, summarises, and cites answers grounded in your team's own documents.",
     host: "local",
-    runHref: "/agents/research-assistant/new",
+    runHref: "/agents/web-research-agent/new",
     packageName: PACKAGE_NAME,
     detailHref: `/configuration/marketplace/${PACKAGE_NAME}`,
-    settingsHref: "/workspace/agents/cinatra-ai/research-assistant/settings?tab=skills",
+    settingsHref: "/workspace/agents/cinatra-ai/web-research-agent/settings?tab=skills",
     unavailable: null,
     ...overrides,
   };
