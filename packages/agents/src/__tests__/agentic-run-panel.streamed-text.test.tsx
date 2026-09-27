@@ -28,6 +28,10 @@ const hookState = vi.hoisted(() => ({
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
+  // The working placeholder's arc (cinatra#3051). Its own anatomy is pinned in
+  // `review-gate-placeholder-as-drawn.test.tsx`; here it only has to exist, so
+  // the panel's import graph resolves.
+  SpinnerArc: () => null,
 }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },

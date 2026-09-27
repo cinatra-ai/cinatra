@@ -73,11 +73,27 @@ export type FrameSignInResult =
   | { ok: true; credential: FrameWidgetCredential }
   | { ok: false; reason: FrameSignInFailure };
 
+/** A renewal answers one of two ways and says nothing else. There is one
+ *  failure name, deliberately: the frame does exactly the same thing for every
+ *  refusal — keeps the pair it has and stops asking — so a second name would be
+ *  a distinction nothing acts on and an oracle a page could read. */
+export type FrameRenewResult =
+  | { ok: true; credential: FrameWidgetCredential }
+  | { ok: false; reason: "renew_failed" };
+
 /** The message the hosted return step posts to this origin. */
 export const WIDGET_AUTH_MESSAGE_TYPE = "cinatra-widget-auth";
 
 export const FRAME_INIT_PATH = "/api/widget-auth/frame/init";
 export const FRAME_TOKEN_PATH = "/api/widget-auth/frame/token";
+/** The RENEWAL road (cinatra#3051). Same origin, same document, same rules
+ *  as the mint above — the only road on which this frame ever presents the
+ *  bearer it holds back to Cinatra. */
+export const FRAME_RENEW_PATH = "/api/widget-auth/frame/renew";
+/** The header the bearer travels on — here and on every turn. A credential
+ *  belongs in a header and not in a body a log can swallow, and having ONE
+ *  way to present it is what keeps that true. */
+export const WIDGET_USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
 
 /** base64url without padding — the PKCE encoding. */
 function base64url(bytes: Uint8Array): string {
@@ -277,4 +293,144 @@ export async function runFrameSignIn(
   } catch {
     return { ok: false, reason: "redeem_failed" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE RENEWAL (cinatra#3051), beside the mint and deliberately much smaller.
+//
+// The ceremony above exists because a credential has to be CREATED out of a
+// person's sign-in, and that takes a popup, a verifier, a code and four hops.
+// A renewal creates nothing: it presents the pair this document already holds
+// and asks for the same authorization with a fresh life. So it is one
+// same-origin round trip with no window, no listener and no secret of its own —
+// and the smallness is the property, not a shortcut. Everything that decides
+// whether it is allowed is on the server, in the same module that decided it
+// the first time.
+//
+// WHAT THE FRAME DOES WITH A REFUSAL: nothing visible. It keeps the pair it has
+// until that pair's own life ends, and the column degrades exactly as it did
+// before this existed. A person who has signed out somewhere else, a site that
+// was revoked, a network that was down for the one moment this asked — all of
+// them look the same from here, and all of them mean "stop asking".
+// ---------------------------------------------------------------------------
+
+/** The seams a test replaces for the renewal. The default is the real browser. */
+export type FrameRenewEnvironment = {
+  fetchImpl?: typeof fetch;
+};
+
+/**
+ * Present the held bearer and adopt the pair that comes back, or refuse.
+ *
+ * BOTH OR NOTHING, like the redeem: a half pair cannot drive a turn, and
+ * adopting one half would swap a working credential for a broken one — the
+ * failure mode this whole leg exists to remove, arrived at from the other side.
+ */
+export async function renewFrameCredential(
+  selectors: FrameSignInSelectors,
+  credential: FrameWidgetCredential,
+  env: FrameRenewEnvironment = {},
+): Promise<FrameRenewResult> {
+  const doFetch = env.fetchImpl ?? fetch;
+  if (!credential?.userToken) return { ok: false, reason: "renew_failed" };
+  // A HUNG ASK IS A REFUSAL, not a wait without end. Without this, a request
+  // that never settles takes the chain with it: the attempt never completes, the
+  // next one is never armed, and the column dies at its current expiry with no
+  // further ask ever made. The ceiling is generous enough that a slow network
+  // still renews and short enough that the retry above it still has room inside
+  // the life being renewed.
+  const controller = new AbortController();
+  const bell = setTimeout(() => controller.abort(), RENEW_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await doFetch(FRAME_RENEW_PATH, {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // THE BEARER, on the header. It is never a body field — see the route.
+        [WIDGET_USER_TOKEN_HEADER]: credential.userToken,
+      },
+      credentials: "same-origin",
+      body: JSON.stringify({
+        grantType: "widget_token_renewal",
+        // SELECTORS ONLY, exactly as at the mint: the server re-derives the
+        // site, origin and agent from its own rows and judges the renewal
+        // against those. Nothing here is authority.
+        assistant: selectors.assistant,
+        instanceId: selectors.instanceId,
+        ...(selectors.siteId ? { siteId: selectors.siteId } : {}),
+      }),
+    });
+    if (!response.ok) return { ok: false, reason: "renew_failed" };
+    const body = (await response.json()) as {
+      userToken?: unknown;
+      transportToken?: unknown;
+      expiresIn?: unknown;
+    };
+    const userToken = typeof body.userToken === "string" ? body.userToken : "";
+    const transportToken =
+      typeof body.transportToken === "string" ? body.transportToken : "";
+    if (!userToken || !transportToken) return { ok: false, reason: "renew_failed" };
+    const expiresIn =
+      typeof body.expiresIn === "number" && Number.isFinite(body.expiresIn)
+        ? body.expiresIn
+        : 0;
+    return { ok: true, credential: { userToken, transportToken, expiresIn } };
+  } catch {
+    return { ok: false, reason: "renew_failed" };
+  } finally {
+    clearTimeout(bell);
+  }
+}
+
+/** The floor under the schedule below, in milliseconds. A server that stated an
+ *  absurdly short life must not turn the renewal into a spin. */
+const RENEW_FLOOR_MS = 5_000;
+
+/** How long one renewal ask may take before it counts as refused. */
+const RENEW_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * WHEN to ask, from the life the server stated.
+ *
+ * Two thirds of the way through, so a refused attempt still leaves the pair
+ * usable for the last third and the column keeps working while the chain gives
+ * up quietly. `null` when the server stated no life at all — there is nothing to
+ * schedule against, and guessing a number here would be inventing a clock the
+ * server never gave us.
+ */
+export function frameCredentialRenewDelayMs(expiresIn: number): number | null {
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0) return null;
+  return Math.max(RENEW_FLOOR_MS, Math.floor((expiresIn * 1000 * 2) / 3));
+}
+
+// ---------------------------------------------------------------------------
+// A REFUSAL IS NOT ALWAYS AN ANSWER (cinatra#3051 convergence).
+//
+// The first shape of this chain treated every failure as terminal, which reads
+// as caution and is not: a signed-out person and a network that was down for one
+// second look identical from here, and treating both as final means ONE dropped
+// request ends a column that would have gone on working for hours. The pair is
+// asked for with a third of its life still ahead of it, so there is room for a
+// few short retries inside that third and no room at all for more than a few.
+//
+// So a failed ask is retried on a short fixed delay, a bounded number of times,
+// and only then does the chain stop. A person who really has signed out costs
+// the server three refused asks and nothing else.
+// ---------------------------------------------------------------------------
+
+/** How many further asks a failed renewal may make before the chain gives up. */
+export const FRAME_RENEW_RETRY_LIMIT = 3;
+
+/**
+ * WHEN to ask again after a refusal — or `null` once the tries are spent.
+ *
+ * A fixed short delay rather than a growing one: the whole retry budget has to
+ * fit inside the last third of a life that may be as short as a few minutes, and
+ * a backoff that grew would spend that third waiting rather than asking.
+ */
+export function frameCredentialRenewRetryDelayMs(failures: number): number | null {
+  if (!Number.isFinite(failures) || failures < 1) return null;
+  if (failures > FRAME_RENEW_RETRY_LIMIT) return null;
+  return 15_000;
 }

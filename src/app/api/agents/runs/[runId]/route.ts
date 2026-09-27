@@ -152,6 +152,7 @@ async function seedResponse(
   const reviewSlot = await readRunReviewSlot(run.id).catch(() => ({
     reviewTaskId: null,
     awaiting: false,
+    pending: false,
   }));
   const reviewGateRef = reviewSlot.reviewTaskId
     ? encodeLifecycleGateRef({ runId: run.id, reviewTaskId: reviewSlot.reviewTaskId })
@@ -210,7 +211,16 @@ async function seedResponse(
       createdAt: m.createdAt.toISOString(),
     })),
     hitlContext,
-    reviewGate: { ref: reviewGateRef, awaiting: reviewSlot.awaiting },
+    // AND WHETHER THE QUESTION IS STILL OPEN (cinatra#3051). The gate the slot
+    // names is the run's most recent one, pending or settled; a surface that
+    // has to choose between drawing it and drawing the run's own current
+    // rendering cannot make that choice from the ref alone. Same fail-soft
+    // reading as the ref above: an unread slot answers "not open".
+    reviewGate: {
+      ref: reviewGateRef,
+      awaiting: reviewSlot.awaiting,
+      pending: reviewSlot.pending,
+    },
   });
 }
 

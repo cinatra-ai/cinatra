@@ -70,8 +70,10 @@ import {
 //      POST /api/widget-auth/token when the CMS BACKEND redeems the code (PKCE
 //      verifier + the same `cnx_` whose site/org the code is bound to). It is
 //      an OPAQUE `cwu_` bearer bound to {userId, orgId, siteOrigin, agentSlug,
-//      instanceId, aud, scope, exp, jti, siteId}. NO refresh token — on expiry
-//      the widget re-runs the login flow.
+//      instanceId, aud, scope, exp, jti, siteId}. It RENEWS rather than
+//      expiring a still-open column out of its session (cinatra#3051): see
+//      `renewUserWidgetToken`, which re-issues the SAME claims for as long as
+//      the parent sign-in lives and re-decides none of them.
 //
 // DESIGN — OPAQUE server-side-tracked artifacts (NOT JWTs), mirroring the
 // site-scoped widget-token-broker.ts: single-issuer/single-verifier, instant
@@ -98,7 +100,10 @@ import {
 
 // TTLs. The transaction + code are single-leg, short-lived (mirrors the connect
 // AUTH_CODE_TTL_MS of 120s). The user token is the browser-held bearer: short
-// (15m), NO refresh — re-login on expiry (spec).
+// (15m), and short is the point — it is RENEWED (cinatra#3051), which keeps the
+// window a leaked bearer is usable in exactly as narrow as it always was while
+// letting an open column outlive it. The bound on the chain is the person's own
+// sign-in, not this number.
 const TRANSACTION_TTL_SECONDS = 600; // 10 min — covers the interactive login
 const CODE_TTL_SECONDS = 120; // 2 min — code→token redeem window
 const USER_TOKEN_TTL_SECONDS = 15 * 60; // 15 min — browser-held bearer
@@ -1159,6 +1164,228 @@ export function consumeUserWidgetToken(input: {
       jti: String(row.jti ?? ""),
       grantedScopes: grantedExtensionScopesFromScopeColumn(row.scope),
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// USER TOKEN RENEWAL — cinatra#3051 (the fourth leg of the widget-review fix).
+//
+// THE DEFECT THIS CLOSES. The bearer above is minted with a fixed 15-minute
+// life and, until now, with no second act at all: the header of this module
+// still says "NO refresh token — re-login on expiry", and that sentence is what
+// a person on a third-party page pays for. A widget column opened at 10:00 and
+// left open is dead at 10:15 — every read it makes from then on is refused —
+// so a run released at 10:20 could never reach it however long the page stayed
+// open. Re-login is not an answer for a column that is ALREADY open: nobody
+// asked it to sign out.
+//
+// WHAT A RENEWAL IS HERE, AND WHAT IT IS NOT. It is a RE-ISSUE of exactly the
+// authorization the presented bearer already carries, and it is not a new
+// decision about that authorization. Every claim on the successor is COPIED
+// COLUMN FOR COLUMN off the predecessor's own row — person, organisation, site,
+// origin, client, agent, instance, credential generation, audience, issuer,
+// scope set, and the sign-in that authorized all of it. `mintWidgetTokenScope`
+// and `mintWidgetTokenAudience` are deliberately NOT called: there is no
+// expression in this function through which a grant could become wider than the
+// one the sign-in wrote, which is the "no broadening" rule stated as code rather
+// than as a comment.
+//
+// WHAT STILL HAS TO BE TRUE, checked live at the renewal exactly as it is
+// checked at every consume: the bearer is unexpired, it is this agent's, the
+// request comes from the origin it is bound to, the PARENT SIGN-IN IS STILL
+// LIVE (the same `widget-session-binding` predicate every other reader of this
+// credential family uses — a signed-out person renews nothing), and the bound
+// connect site is still active with the same org, origin, client and credential
+// GENERATION. A person who signs out, or a site that is revoked or reconnected,
+// ends the chain at the next renewal exactly as it ends the next turn.
+//
+// IT ROTATES. The successor is written and the predecessor deleted in ONE
+// transaction, so a column that stays open for a day leaves exactly one live
+// bearer behind it rather than one per renewal. The delete is keyed on the
+// presented token's own hash and can reach no other session's row.
+//
+// A REFUSED RENEWAL DESTROYS NOTHING. The reaping of dead rows belongs to the
+// consume path (and to the sweep); a renewal that says no leaves the bearer
+// exactly as it found it, so a database blip cannot sign somebody out of a
+// credential that was still good.
+// ---------------------------------------------------------------------------
+
+export type RenewUserTokenResult =
+  | {
+      ok: true;
+      token: string;
+      tokenType: "Bearer";
+      expiresIn: number;
+      scope: string;
+    }
+  | { ok: false; reason: RenewRejectReason };
+
+/** Named for the audit trail only. The route answers ONE generic shape for
+ *  every one of them, so nothing here is an oracle to a caller. */
+export type RenewRejectReason =
+  | "not_cwu_token"
+  | "not_found"
+  | "expired"
+  | "agent_mismatch"
+  | "origin_mismatch"
+  | "session_revoked"
+  | "site_revoked"
+  // cinatra#3051 convergence: two presentations of the SAME bearer raced, and
+  // this one lost. The rotation is a single statement whose insert is fed by
+  // its own delete, so exactly ONE of the racers writes a successor and the
+  // other is told here — never two live credentials out of one predecessor.
+  | "already_rotated";
+
+/**
+ * Re-issue the presented `cwu_` with the SAME claims and a fresh life.
+ *
+ * The presented bearer is the whole authority: it is the credential this frame
+ * already holds and already turns with. What this function adds to that is the
+ * live re-check of the two things that can have changed underneath it — the
+ * person's own sign-in and the connected site — which is why a renewal can never
+ * be granted where the next turn would have been refused.
+ */
+export function renewUserWidgetToken(input: {
+  token: string;
+  agentSlug: string;
+  requestOrigin: string | null;
+}): RenewUserTokenResult {
+  if (!input.token || !input.token.startsWith(USER_TOKEN_PREFIX)) {
+    return { ok: false, reason: "not_cwu_token" };
+  }
+  ensurePostgresSchema();
+  const tokenHash = sha256Hex(input.token);
+
+  // EVERY column, because every column is copied. A renewal that re-derived any
+  // of them would be making a decision, and the decision was made at the
+  // sign-in.
+  const [read] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text:
+          `SELECT user_id, site_id, client, org_id, site_origin, agent_slug, ` +
+          `instance_id, credential_version, aud, iss, scope, ` +
+          `${WIDGET_AUTH_SESSION_COLUMN}, ` +
+          `(expires_at > now()) AS not_expired ` +
+          `FROM ${qTable(USER_TOKEN_TABLE)} WHERE token_hash = $1 LIMIT 1`,
+        values: [tokenHash],
+      },
+    ],
+  });
+
+  const row = read?.rows?.[0] as Record<string, unknown> | undefined;
+  if (!row) return { ok: false, reason: "not_found" };
+  // AN EXPIRED BEARER RENEWS NOTHING. The row is left where it is — the consume
+  // path owns the reaping, and a renewal must not be a second thing that
+  // deletes rows on the way to saying no.
+  if (row.not_expired !== true) return { ok: false, reason: "expired" };
+
+  if (String(row.agent_slug ?? "") !== input.agentSlug) {
+    return { ok: false, reason: "agent_mismatch" };
+  }
+
+  const storedOrigin = normalizeOriginStrict(String(row.site_origin ?? ""));
+  const requestOriginNorm = normalizeOriginStrict(input.requestOrigin);
+  if (!requestOriginNorm || requestOriginNorm !== storedOrigin) {
+    return { ok: false, reason: "origin_mismatch" };
+  }
+
+  // THE PARENT SIGN-IN, read through the one predicate this credential family
+  // shares (`widget-session-binding`). `dead` and `unknown` both refuse, and
+  // neither destroys anything here — see the note at the top of this block.
+  const liveness = readWidgetAuthSessionLiveness(row[WIDGET_AUTH_SESSION_COLUMN]);
+  if (liveness !== "live") return { ok: false, reason: "session_revoked" };
+
+  // The live site, on exactly the terms the consume checks it: still active,
+  // same org, same origin, same client, same credential GENERATION. A reconnect
+  // that rotated the site's credential ends the chain here.
+  const siteId = String(row.site_id ?? "");
+  const siteRow = siteId ? getActiveConnectSiteById(siteId) : null;
+  const liveCtx = siteContextFromRow(siteRow);
+  const tokenCredentialVersion = Number(row.credential_version);
+  if (
+    !liveCtx ||
+    liveCtx.orgId !== String(row.org_id ?? "") ||
+    liveCtx.siteOrigin !== storedOrigin ||
+    liveCtx.client !== String(row.client ?? "") ||
+    !Number.isFinite(tokenCredentialVersion) ||
+    liveCtx.credentialVersion !== tokenCredentialVersion
+  ) {
+    return { ok: false, reason: "site_revoked" };
+  }
+
+  const successor = USER_TOKEN_PREFIX + randomBytes(TOKEN_RANDOM_BYTES).toString("base64url");
+  const successorHash = sha256Hex(successor);
+  const jti = randomUUID();
+  // The SCOPE STRING as the row holds it. Not re-composed, not re-narrowed, not
+  // re-parsed into a set and back: the successor's column is byte-identical to
+  // the predecessor's, which is what makes "the same authorization" checkable.
+  const scope = String(row.scope ?? "");
+  const aud = String(row.aud ?? "");
+  const iss = String(row.iss ?? "");
+
+  // ONE STATEMENT, AND THE DELETE IS THE CLAIM. The successor row is fed by the
+  // predecessor's own DELETE: the insert produces a row only if THIS call is the
+  // one that took the predecessor away. Two concurrent presentations of the same
+  // bearer therefore cannot both succeed — the second finds nothing to claim,
+  // writes nothing, and is refused — which is the single-use rotation the
+  // sibling consume path already keeps, expressed the same way (a read followed
+  // by a write in a transaction would still have decided on a row it had
+  // already let go of).
+  //
+  // Either the successor exists and the predecessor is gone, or neither
+  // happened: a column is never left holding two live bearers, and a failed
+  // write never leaves it holding none.
+  const [rotation] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text:
+          `WITH claimed AS (` +
+          `DELETE FROM ${qTable(USER_TOKEN_TABLE)} WHERE token_hash = $1 RETURNING token_hash` +
+          `) INSERT INTO ${qTable(USER_TOKEN_TABLE)} (` +
+          `token_hash, jti, user_id, site_id, client, org_id, site_origin, agent_slug, ` +
+          `instance_id, credential_version, aud, iss, scope, ` +
+          `${WIDGET_AUTH_SESSION_COLUMN}, expires_at, created_at` +
+          `) SELECT $2::text, $3::text, $4::text, $5::uuid, $6::text, $7::text, $8::text, ` +
+          `$9::text, $10::text, $11::integer, $12::text, $13::text, $14::text, $15::text, ` +
+          `now() + make_interval(secs => $16), now() FROM claimed`,
+        values: [
+          tokenHash,
+          successorHash,
+          jti,
+          String(row.user_id ?? ""),
+          siteId,
+          String(row.client ?? ""),
+          String(row.org_id ?? ""),
+          storedOrigin,
+          String(row.agent_slug ?? ""),
+          String(row.instance_id ?? ""),
+          tokenCredentialVersion,
+          aud,
+          iss,
+          scope,
+          normalizeWidgetAuthSessionId(row[WIDGET_AUTH_SESSION_COLUMN]),
+          USER_TOKEN_TTL_SECONDS,
+        ],
+      },
+    ],
+  });
+  // NOTHING WAS CLAIMED means another presentation of this same bearer got there
+  // first. It wrote its own successor and this call wrote none, so the honest
+  // answer is a refusal: handing back a token this statement did not write would
+  // hand back a token that does not exist.
+  if ((rotation?.rowCount ?? 0) !== 1) {
+    return { ok: false, reason: "already_rotated" };
+  }
+
+  return {
+    ok: true,
+    token: successor,
+    tokenType: "Bearer",
+    expiresIn: USER_TOKEN_TTL_SECONDS,
+    scope,
   };
 }
 

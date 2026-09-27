@@ -214,6 +214,56 @@ describe("the run is bound to the credential", () => {
     expect(Array.isArray(body.messages)).toBe(true);
   });
 
+  // WHY A COLUMN OPEN BEFORE THE RUN IS NOT AN AUTHORIZATION PROBLEM
+  // (cinatra#3051, third capture). A third-party page that was already open when
+  // the run was released read 401 for the run's whole life, and only ever drew
+  // the review after the page was re-opened. That looks like a claim that does
+  // not cover a run created after it was minted — and it is not. Nothing on this
+  // branch is scoped to when the run appeared: the credential admits the reader
+  // to the SURFACE, and `readAgentRunById` then answers about the ROW, on the
+  // same ladder the first-party read runs. A run created a minute or an hour
+  // after the credential was minted is served exactly like any other.
+  //
+  // WHAT THE 401 IS INSTEAD, stated no wider than the evidence. The route
+  // answers 401 when the credential consume fails and 404 for every refusal
+  // about the ROW, so the refusal the capture photographed happened before the
+  // run was ever read. One credential failure fits an open page exactly: the
+  // widget's bearer lives `USER_TOKEN_TTL_SECONDS` (fifteen minutes) and the
+  // frame has no way to renew it, and that expiry is pinned where it lives, at
+  // the consume (`src/lib/__tests__/widget-user-auth.test.ts`, "rejects an
+  // expired token"). It is NOT proved to be the only one: the consume collapses
+  // expiry, revocation, a binding mismatch and a missing grant into the same
+  // answer, and one of the capture's two reproductions ran for twelve minutes,
+  // inside that fifteen — so the reading is "a credential failure", and which
+  // one needs the audit reason read off a real refusal.
+  //
+  // AND IT IS NOT THE WHOLE DEFECT. A column that predates the run does not fail
+  // to READ the run; it never learns the run exists. The embed frame restores
+  // its transcript exactly once, at mount, and the conversation column seeds its
+  // message list from that restore with a lazy initial state — so a page sitting
+  // open holds the projection it opened with, and the run card is drawn from a
+  // message part that projection never gains. Re-opening the page is what
+  // performs the missing restore, which is exactly what the capture measured.
+  // Neither remedy is on this branch: the renewal is a credential-issuance path
+  // this leg is fenced out of, and the transcript refresh is its own change with
+  // its own red-first proof. Both are named rather than half-built.
+  it("serves a run that did not exist when the credential was minted", async () => {
+    // The credential is the one the column mounted with; the run row is younger
+    // than it. The branch never asks, and cannot ask, which came first.
+    readAgentRunById.mockResolvedValue({
+      ...RUN_ROW,
+      startedAt: new Date("2026-08-29T14:42:18.302Z"),
+    });
+    const res = await GET(widgetRequest(), ctx(RUN));
+    expect(res.status).toBe(200);
+    expect(authenticateWidgetConversationRequest).toHaveBeenCalled();
+    // The run was bound to the TOKEN'S actor and the TOKEN'S org — never to a
+    // session's active org, and never to a moment.
+    const [, actor, hints] = readAgentRunById.mock.calls.at(-1)!;
+    expect(actor).toEqual(WIDGET_CALLER.actorCtx.actor);
+    expect(hints).toEqual(WIDGET_CALLER.actorCtx.roleHints);
+  });
+
   it("a run in another tenant is refused BEFORE any message or template is read", async () => {
     readAgentRunById.mockRejectedValue(
       new AuthzError({ statusCode: 403, reason: "forbidden", message: "Run access denied." }),

@@ -66,6 +66,9 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
+  // The review-gate placeholder draws the design system's own arc, so a TOTAL
+  // factory for this module has to declare it too.
+  SpinnerArc: () => null,
   PromptField: ({ placeholder }: { placeholder?: string }) => (
     <div data-testid="run-window-prompt">{placeholder}</div>
   ),
