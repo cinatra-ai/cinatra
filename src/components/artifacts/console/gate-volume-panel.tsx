@@ -4,9 +4,9 @@
  * The acceptance row exists to answer two questions that had NO surface at all:
  * a reviewer's "how many reviews are open?" and an administrator's "are the
  * policy defaults generating a survivable volume?". Both are answered by the same
- * org-scoped rollup, so this is ONE presentational component with two mounts —
- * the reviewer's Reviews page (`/agents/reviews`) and the admin console's Review
- * policy tab, where it sits beside the bounds that would change it.
+ * org-scoped rollup, so this is ONE presentational component. It has one mount
+ * now, the admin console's Review policy tab, where it sits beside the bounds
+ * that would change it; the reviewer's queue page retired with cinatra#3693.
  *
  * Pure presentation over a plain data object: no data access, no session, no
  * client runtime — the two mounts own authorization and pass the read in. The

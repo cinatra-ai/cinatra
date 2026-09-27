@@ -144,26 +144,32 @@ describe("row 9 — gate volume stays readable on the admin console; the reviewe
   });
 });
 
-describe("row 9 — the review deep-link keeps the run-embedded route's shape", () => {
-  it("builds the five-segment /agents/{vendor}/{pkg}/{runId}/review/{taskId} path", async () => {
+describe("row 9 — the review deep-link is the run's own address with the gate named on it (cinatra#3693)", () => {
+  // The review has no page of its own any more: the console addresses the RUN and
+  // names the gate as the rail's selection key under the one query name, exactly
+  // as the run engine's interrupt and the review notification do.
+  it("builds the run's four-segment /agents/{vendor}/{pkg}/{runId} address and names the gate on it", async () => {
     const { gateReviewHref } = await import("../gate-volume-panel");
-    expect(gateReviewHref("run-1", "task-1", "@cinatra-ai/blog-draft-writer-agent")).toBe(
-      "/agents/cinatra-ai/blog-draft-writer-agent/run-1/review/task-1",
+    expect(gateReviewHref("run-1", "task-1", "@fixture-vendor/blog-draft-writer-agent")).toBe(
+      "/agents/fixture-vendor/blog-draft-writer-agent/run-1?step=review%3Atask-1",
     );
   });
 
   it("degrades to placeholder segments (never a shorter, 404-ing path) for an orphan run", async () => {
     const { gateReviewHref } = await import("../gate-volume-panel");
     const href = gateReviewHref("run-2", "task-2", null);
-    expect(href).toBe("/agents/unknown/unknown/run-2/review/task-2");
-    // The page keys ONLY on the run id, so the five-segment shape must survive.
-    expect(href.split("/").filter(Boolean)).toHaveLength(6);
+    expect(href).toBe("/agents/unknown/unknown/run-2?step=review%3Atask-2");
+    // The run page keys ONLY on the instance slot, so the four-segment run
+    // address must survive, and the gate travels in the query, never as a segment.
+    const [pathname, query] = href.split("?");
+    expect(pathname.split("/").filter(Boolean)).toHaveLength(4);
+    expect(query).toBe("step=review%3Atask-2");
   });
 
-  it("encodes ids that would otherwise break the path", async () => {
+  it("encodes ids that would otherwise break the path or the query", async () => {
     const { gateReviewHref } = await import("../gate-volume-panel");
     expect(gateReviewHref("lifecycle-orphan:abc", "auto/review", null)).toBe(
-      "/agents/unknown/unknown/lifecycle-orphan%3Aabc/review/auto%2Freview",
+      "/agents/unknown/unknown/lifecycle-orphan%3Aabc?step=review%3Aauto%2Freview",
     );
   });
 });
