@@ -963,9 +963,14 @@ def _assert_token_plumbing(subflow: Dict[str, Any]) -> None:
     ]
     # Shaped as the template's edges, plus the name the real loader requires.
     assert len(token_edges) == 2
+    # The template names its token edges so the runtime loader accepts them, and
+    # the fill keeps the template's own name, so this check drops the name on both
+    # sides and compares the plumbing alone.
     for edge in token_edges:
         assert isinstance(edge.get("name"), str) and edge["name"]
-        assert {k: v for k, v in edge.items() if k != "name"} in parts["edges"]
+        assert {k: v for k, v in edge.items() if k != "name"} in [
+            {k: v for k, v in e.items() if k != "name"} for e in parts["edges"]
+        ]
 
 
 def test_3685_pinned_fixture_is_the_token_less_legacy_shape() -> None:
@@ -1110,7 +1115,7 @@ def test_3685_partial_plumbing_only_the_missing_pieces_are_added() -> None:
     assert out_edges[: len(before_edges)] == before_edges
     assert len(out_edges) == len(before_edges) + 1
     added = {k: v for k, v in out_edges[-1].items() if k != "name"}
-    assert added == parts["edges"][1]
+    assert added == {k: v for k, v in parts["edges"][1].items() if k != "name"}
     assert [r["slot"] for r in report] == [_PINNED_SLOT]
 
 
