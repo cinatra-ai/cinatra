@@ -1207,18 +1207,89 @@ export type HandleWayflowTaskStateArgs = {
   };
 };
 
+/** The anchor version this build vouches for. Copy of
+ *  `LAUNCH_SCOPE_ANCHOR_VERSION`. */
+const LAUNCH_SCOPE_ANCHOR_VERSION = 1;
+
+/** The reserved id no scope may use. Copy of `WORKSPACE_SCOPE_SENTINEL`. */
+const WORKSPACE_SCOPE_SENTINEL = "__workspace__";
+
+/** The scope base each anchor kind addresses. Copy of
+ *  `launchScopeAnchorBase`'s four-kind map. The `user` kind is FLAT BY DESIGN:
+ *  `/personal` means "mine" to whoever reads it, so it is not an address. */
+const LAUNCH_SCOPE_ANCHOR_BASE: Readonly<Record<string, ((id: string) => string) | null>> = {
+  workspace: () => "/workspace",
+  organization: (id) => `/organizations/${encodeURIComponent(id)}`,
+  team: (id) => `/teams/${encodeURIComponent(id)}`,
+  project: (id) => `/projects/${encodeURIComponent(id)}`,
+  user: null,
+};
+
+/**
+ * The scope base a stored anchor addresses, or `null` for a flat run. That is
+ * both the personal anchor's answer and the answer for every payload this
+ * build cannot vouch for. Verbatim copy of the host's
+ * `launchScopeAnchorBase(parseLaunchScopeAnchor(raw))`, decoder included.
+ *
+ * Exported for the agreement test only; every caller here goes through
+ * `buildAgentInstancePath`.
+ */
+export function launchScopeAnchorBaseCopy(raw: unknown): string | null {
+  if (raw == null) return null;
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.v !== LAUNCH_SCOPE_ANCHOR_VERSION) return null;
+  if (typeof obj.kind !== "string") return null;
+  if (!Object.prototype.hasOwnProperty.call(LAUNCH_SCOPE_ANCHOR_BASE, obj.kind)) return null;
+  const base = LAUNCH_SCOPE_ANCHOR_BASE[obj.kind];
+  if (obj.kind === "workspace") {
+    // The union's workspace arm has NO `id` field, so a payload that carries
+    // the key at all, `null` included, is one no mint can have produced.
+    return Object.prototype.hasOwnProperty.call(obj, "id") ? null : base!("");
+  }
+  if (typeof obj.id !== "string") return null;
+  const id = obj.id.trim();
+  if (id.length === 0 || id === WORKSPACE_SCOPE_SENTINEL) return null;
+  return base ? base(id) : null;
+}
+
 /**
  * Build the run's canonical `/agents/{vendor}/{pkg}/{runId}` base path from a
- * scoped package name. A VERBATIM copy of `src/lib/agent-url.ts`'s
- * `buildAgentInstancePath` (4 lines, zero deps) — inlined so the universally-
- * reachable execution path grows no new first-party module edge (the route-graph
- * ratchet guards this hot path), mirroring the same duplication precedent in
+ * scoped package name, UNDER THE SCOPE BASE ITS ANCHOR NAMES (cinatra#3693).
+ * A VERBATIM copy of `src/lib/agent-url.ts`'s `buildAgentInstancePath` (zero
+ * deps), inlined so the universally-reachable execution path grows no new
+ * first-party module edge (the route-graph ratchet guards this hot path),
+ * mirroring the same duplication precedent in
  * packages/notifications/src/agent-run-href.ts.
+ *
+ * THE INTERRUPT'S ADDRESS IS THE RUN'S OWN HOME. Before this, a gate on a run
+ * launched from a scope emitted the BARE address, so the reader it notified was
+ * carried out of the scope with nothing said. The anchor is the run's immutable
+ * record of where it was launched from, so it decides the base. A run with no
+ * anchor keeps the bare address, unchanged.
+ *
+ * The copied rule above is the host decoder's, FAIL-CLOSED arms included, and
+ * its agreement with the host's originals, and with the identical copy in
+ * packages/notifications, is pinned by
+ * `src/lib/__tests__/launch-scope-copies-agree-3693.test.ts`.
  */
-function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+function buildReviewRunBasePath(
+  agentPackageName: string,
+  instanceId: string,
+  launchScopeAnchor?: unknown,
+): string {
+  const base = launchScopeAnchorBaseCopy(launchScopeAnchor) ?? "";
   const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `/agents/${agentPackageName}/${instanceId}`;
+  if (match) return `${base}/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `${base}/agents/${agentPackageName}/${instanceId}`;
 }
 
 /**
@@ -1716,8 +1787,12 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           typeof reviewTemplate?.packageName === "string" && reviewTemplate.packageName.trim().length > 0
             ? reviewTemplate.packageName.trim()
             : null;
+        // The run's own home decides the base (cinatra#3693). The degraded
+        // arm keeps the bare shape: with no package name there is no canonical
+        // address to scope, and the route's five segments still have to be
+        // emitted or the review page 404s.
         const reviewRunBase = reviewPackageName
-          ? buildReviewRunBasePath(reviewPackageName, runId)
+          ? buildReviewRunBasePath(reviewPackageName, runId, run.launchScopeAnchor)
           : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
         const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
         // cinatra#2566 (epic #2564 S2) — the gate's LIFECYCLE CARD REF. The run
