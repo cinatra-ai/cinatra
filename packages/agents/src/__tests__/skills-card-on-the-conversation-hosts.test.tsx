@@ -380,14 +380,17 @@ describe("the chat host draws the checkbox row and one Continue", () => {
     // §V: "Once the run is running, the selection is fixed and the row is
     // read-only… No Continue is left beneath it, and nothing is left to press."
     //
-    // `dispatched: true` IS that moment — the release crossed into execution —
-    // and the card knows it a whole authority re-read before the resolver does.
-    // Handing the editable reading back on it drew live boxes over a running run
-    // and let a second decision be taken on a hold the run had already left.
+    // A running run must never be handed live boxes, nor a second decision on
+    // a hold the run has already left. WHICH ANSWER SAYS "RUNNING" (cinatra#3062):
+    // the authority's `runStarted: true`, read off the run's own row — never the
+    // release's `dispatched: true` alone, which is only the dispatcher's
+    // acceptance of a run that can still be held at its next gate. So the press
+    // answers `dispatched: true` AND the authority's next reading says started.
     confirmMock.mockResolvedValueOnce({ ok: true, dispatched: true });
     const { container } = mount("chat_thread");
     await waitFor(() => expect(pills(container)).toHaveLength(2));
 
+    holdStateMock.mockResolvedValue(settled(true));
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
 

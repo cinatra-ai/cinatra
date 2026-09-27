@@ -230,11 +230,13 @@ describe("Continue on the held Skills step", () => {
     // read-only: each pill states in its own box whether that skill was applied
     // to the run. No Continue is left beneath it, and nothing is left to press."
     //
-    // `{ ok: true, dispatched: true }` is that moment: the release crossed into
-    // execution. Handing the guards back on it drew live boxes and a live
-    // Continue over a running run, and a second press was genuinely takeable —
-    // the Skip path would then write durable skip evidence for a run dispatched
-    // on a Confirm.
+    // A running run must never be handed live boxes and a live Continue — the
+    // Skip path would then write durable skip evidence for a run dispatched on
+    // a Confirm. WHICH ANSWER SAYS "RUNNING" (cinatra#3062): the authority's
+    // `runStarted: true`, read off the run's own row. `dispatched: true` alone
+    // is only the dispatcher's acceptance — a run can be held at its next gate
+    // with no work step run — so the press answers it AND the authority's next
+    // reading says the run has started.
     let settle: (v: { ok: true; dispatched: boolean }) => void = () => {};
     confirmRunRecommendationAction.mockImplementation(
       () => new Promise((resolve) => { settle = resolve as typeof settle; }),
@@ -244,6 +246,22 @@ describe("Continue on the held Skills step", () => {
 
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
+    holdStateMock.mockResolvedValue({
+      ...SETTLED,
+      holdRef: HOLD_REF,
+      canDecide: true,
+      runStarted: true,
+      candidates: [
+        {
+          skillId: "skill-blog",
+          skillRevisionId: "skill-blog@1",
+          name: "Blog content",
+          vendorName: null,
+          rank: 1,
+          recommended: true,
+        },
+      ],
+    });
     await act(async () => {
       settle({ ok: true, dispatched: true });
       await Promise.resolve();

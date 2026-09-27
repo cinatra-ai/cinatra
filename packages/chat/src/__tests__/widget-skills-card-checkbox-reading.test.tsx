@@ -359,11 +359,18 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
   it("takes §V's started reading the moment the press starts the run", async () => {
     // §V: "Once the run is running, the selection is fixed and the row is
     // read-only… No Continue is left beneath it, and nothing is left to press."
-    // `dispatched: true` is that moment, and the widget knows it a whole
-    // authority re-read before the resolver does.
+    // WHICH ANSWER SAYS "RUNNING" (cinatra#3062): the authority's
+    // `runStarted: true`, read through the widget's own broker — never the
+    // release's `dispatched: true` alone, which is only the dispatcher's
+    // acceptance of a run that can still be held at its next gate. So the press
+    // answers `dispatched: true` AND the broker's next reading says started.
+    let pressed = false;
     const { stub, root } = await mountWidget(
-      () => HELD,
-      () => ({ ok: true, dispatched: true }),
+      () => (pressed ? SETTLED_RUNNING : HELD),
+      () => {
+        pressed = true;
+        return { ok: true, dispatched: true };
+      },
     );
     try {
       const cont = root.querySelector<HTMLButtonElement>("[data-skills-step-continue]")!;
@@ -374,6 +381,10 @@ describe("the widget draws §V's checkbox card inside a third-party page", () =>
         expect(root.querySelector("[data-skills-step-continue]")).toBeNull(),
       );
       expect(root.querySelector("[data-skills-step-floor]")).toBeNull();
+      expect(root.getAttribute("data-skills-step-editable")).toBe("false");
+      for (const box of root.querySelectorAll<HTMLButtonElement>("[data-skills-step-checkbox]")) {
+        expect(box.disabled).toBe(true);
+      }
       expect(decisionCalls(stub)).toHaveLength(1);
     } finally {
       stub.restore();

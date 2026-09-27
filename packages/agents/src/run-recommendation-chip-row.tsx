@@ -970,29 +970,25 @@ export function RunRecommendationChipRow({
    */
   const [submitted, setSubmitted] = useState(false);
   /**
-   * THIS PRESS STARTED THE RUN (cinatra#3062, convergence round).
+   * THE STARTED READING IS THE RUN'S OWN, NEVER THIS PRESS'S (cinatra#3062).
    *
-   * §V draws three readings and no fourth: "Once the run is running, the
-   * selection is fixed and the row is read-only: each pill states in its own box
-   * whether that skill was applied to the run. No Continue is left beneath it,
-   * and nothing is left to press."
+   * §V: "the run is dispatched and held at that gate, and none of its work steps
+   * has run, which is what before the run starts means throughout this section"
+   * — and "For as long as the run has not started, a reader who comes back to
+   * the Skills step is shown the same pills with the boxes still able to take a
+   * change and Continue still beneath them".
    *
-   * A decision that comes back `{ ok: true, dispatched: true }` is the run
-   * CROSSING INTO EXECUTION — `releaseRecommendationHold` answers `dispatched`
-   * true only after the dispatcher accepted it. The authority's own answer says
-   * so too, but it arrives a re-read later, and the whole reason this leg exists
-   * is that the answer can stay stale. Between the two the row was handing the
-   * editable reading back on a run that had already started: §V's read-only
-   * reading redrawn with live boxes and a live Continue, and a second decision
-   * genuinely takeable on it — the Skip path would then write durable skip
-   * evidence for a run dispatched on a Confirm, which is the double-counted
-   * telemetry the decision path documents as its residual race.
-   *
-   * So the reading follows the outcome that is already known here, and the
-   * authority's later answer confirms it. Cleared when the authority's reading
-   * changes — a re-park mints a new hold, and that hold is decidable again.
+   * A release that answers `{ ok: true, dispatched: true }` says only that the
+   * dispatcher ACCEPTED the run. The run can then stop at the agent's next gate
+   * before any work step has run, with no start stamp on its row — which the
+   * branch's own rule (`recommendationRunHasStartedForRow`) reads as NOT
+   * started. The card used to take that answer as the start and draw the
+   * started reading until the authority's next reading handed the editable one
+   * back; a measured round saw it stand for about fifteen seconds. So nothing
+   * here guesses: the started reading is drawn only from the authority's
+   * `runStarted === true`, and a press on a run that has really started
+   * meanwhile is refused by the store and said through the refusal line.
    */
-  const [startedHere, setStartedHere] = useState(false);
   /**
    * THE GUARDS BELONG TO ONE DECISION, NOT TO THE MOUNT (cinatra#3062).
    *
@@ -1046,10 +1042,6 @@ export function RunRecommendationChipRow({
      */
     if (inFlightRef.current) return;
     releasedRef.current = false;
-    // The authority has spoken, so this reader's own knowledge that the run
-    // started is no longer the newer of the two; `decision.runStarted` carries
-    // the reading from here.
-    setStartedHere((was) => (was ? false : was));
     // Functional updaters, because this effect now fires on a re-park as well
     // as on a settle: returning the value it was handed lets React bail out, so
     // a reading that has nothing to reset costs no render.
@@ -1148,11 +1140,10 @@ export function RunRecommendationChipRow({
     /**
      * Told HOW the decision landed — see `releasedRef` (cinatra#3047).
      *
-     * THE WHOLE RESULT, NOT A BOOLEAN (cinatra#3062, convergence round).
-     * `{ ok: true, dispatched: true }` means the release crossed into execution:
-     * the run HAS started, which §V draws as read-only with no Continue at all.
-     * Flattening it to `ok` handed the editable reading back on exactly that
-     * outcome, so the row offered a second decision on a run already running.
+     * THE WHOLE RESULT. `dispatched` is the dispatcher's acceptance, not the
+     * run's start — a dispatched run can be held at its next gate with no work
+     * step run — so the row's reading never follows it (cinatra#3062); the
+     * authority's `runStarted` does.
      */
     onOutcome?: (outcome: { ok: boolean; dispatched: boolean }) => void,
   ) => {
@@ -1353,17 +1344,8 @@ export function RunRecommendationChipRow({
     }
     chipsRef.current = next;
     setChips(next);
-    release(next, stepCandidates, (outcome) => {
+    release(next, stepCandidates, () => {
       inFlightRef.current = false;
-      if (outcome.ok && outcome.dispatched) {
-        // THE RUN STARTED ON THIS PRESS (cinatra#3062, convergence round). §V
-        // leaves NOTHING to press on a started run, so the guards stay closed
-        // and the row takes the read-only reading at once rather than flickering
-        // through an editable one the drawing does not draw.
-        setStartedHere(true);
-        setSubmitted(false);
-        return;
-      }
       // THE GUARDS BELONG TO THE IN-FLIGHT WINDOW, AND TO NOTHING LONGER
       // (cinatra#3062, the second capture).
       //
@@ -1584,7 +1566,7 @@ export function RunRecommendationChipRow({
        * re-decision could resolve against, and falls to the read-only reading.
        */
       const beforeTheRunStarts =
-        settledInputs.runNotStarted && !startedHere && stepCandidates.length > 0;
+        settledInputs.runNotStarted && stepCandidates.length > 0;
       if (beforeTheRunStarts) {
         return skillsStep({
           cardState: "decided",
@@ -1705,13 +1687,12 @@ export function RunRecommendationChipRow({
       // memory can only reach this branch through a conversation host, which is
       // the only host that remembers; the reading it replays is the question as
       // it stood, so the answering waits for the resolver.
-      editable: canDecide && !submitted && !startedHere && !replayedQuestion,
+      editable: canDecide && !submitted && !replayedQuestion,
       ready: loaded,
-      // NOTHING TO PRESS ONCE THE RUN HAS STARTED (cinatra#3062, convergence
-      // round) — §V's started reading keeps the pills and drops the floor. And
-      // nothing to press on a REPLAYED question either, for the reason the
-      // `editable` line above gives.
-      control: loaded && !startedHere && !replayedQuestion,
+      // Nothing to press on a REPLAYED question, for the reason the `editable`
+      // line above gives. A LIVE hold is a run that has not started, so its
+      // Continue stands whatever the release answered (cinatra#3062).
+      control: loaded && !replayedQuestion,
     });
   }
 
