@@ -63,8 +63,8 @@ describe("B1: the Agents strip lists no reviews, and the Reviews page is gone (c
 
 describe("B4: every review link is built on the review address (cinatra#3693)", () => {
   it("the admin console's gate-volume rows address the run's review route", () => {
-    expect(gateReviewHref("run-1", "task-1", "@cinatra-ai/blog-draft-writer-agent")).toBe(
-      "/agents/cinatra-ai/blog-draft-writer-agent/run-1/review/task-1",
+    expect(gateReviewHref("run-1", "task-1", "@fixture-vendor/blog-draft-writer-agent")).toBe(
+      "/agents/fixture-vendor/blog-draft-writer-agent/run-1/review/task-1",
     );
   });
 
@@ -88,9 +88,9 @@ describe("B4: every review link is built on the review address (cinatra#3693)", 
 describe("B5: a pending review's notification opens the run page (cinatra#3693, pinned)", () => {
   it("resolves the bare run page — never a review address", async () => {
     readAgentRunById.mockResolvedValue({ id: "R1", templateId: "T1" });
-    readAgentTemplateById.mockResolvedValue({ id: "T1", packageName: "@cinatra-ai/foo" });
+    readAgentTemplateById.mockResolvedValue({ id: "T1", packageName: "@fixture-vendor/foo" });
     const href = await resolveAgentRunHref({ runId: "R1" });
-    expect(href).toBe("/agents/cinatra-ai/foo/R1");
+    expect(href).toBe("/agents/fixture-vendor/foo/R1");
     expect(href).not.toContain("/review/");
   });
 

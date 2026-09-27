@@ -21,7 +21,7 @@
  * reference via the factory parameter — sdk-dashboard never imports
  * `@cinatra-ai/agents/schema` directly.
  */
-import { eq, inArray, or, sql, type AnyColumn } from "drizzle-orm";
+import { eq, inArray, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import type { BaseQueryDefinition, QueryContext } from "drizzle-cube/server";
 
 import type { CubeDescriptor } from "../../../types/cube";
@@ -83,6 +83,86 @@ export type AgentTemplatesTable = {
    */
   readonly packageName: AnyColumn;
 };
+
+/**
+ * THE HOST DECODER'S RULE, SPELLED IN SQL (cinatra#3693).
+ *
+ * `src/lib/launch-scope-anchor.ts`'s `parseLaunchScopeAnchor` decides whether a
+ * stored anchor names a scope at all, and it FAILS CLOSED: an unknown version,
+ * a kind outside the union, a workspace arm that carries an `id` key at all, a
+ * non-string id, and an empty or sentinel id each read as UNANCHORED. The
+ * per-scope Executions list filters on this dimension, so the same rule has to
+ * hold in SQL too. Otherwise a row the host would call unanchored appears in
+ * a scope it was never launched from.
+ *
+ * This package may not import the host's `@/`, so the three facts the rule
+ * turns on are spelled here and the agreement with the host's own constants is
+ * pinned by a unit test, the way `launchScopeAnchorBase` pins its copy of the
+ * scope bases. Keep them in step.
+ */
+export const AGENT_RUNS_LAUNCH_SCOPE_ANCHOR_VERSION = 1;
+
+/** The four kinds that carry an id. The workspace arm carries none. */
+export const AGENT_RUNS_LAUNCH_SCOPE_ID_KINDS = [
+  "organization",
+  "team",
+  "project",
+  "user",
+] as const;
+
+/** The reserved id the host refuses as a scope id (`WORKSPACE_SCOPE_SENTINEL`). */
+export const AGENT_RUNS_LAUNCH_SCOPE_WORKSPACE_SENTINEL = "__workspace__";
+
+/**
+ * The decoder trims the id with JavaScript's `String.prototype.trim`, which
+ * strips every ASCII whitespace character and not the space alone. Postgres
+ * `btrim(x)` with one argument strips SPACES only, so it is the wrong tool
+ * here: a stored id of `"\tt1\n"` reads as `t1` in the decoder and would read
+ * as `\tt1\n` under `btrim`, and the run would list in no scope at all.
+ *
+ * This POSIX class covers space, tab, newline, carriage return, form feed and
+ * vertical tab, which is what `trim` removes. The one divergence left is an id whose
+ * only padding is NON-ASCII whitespace (a no-break space, say): `trim` strips
+ * it and this expression may not. No mint can store such an id, because
+ * `buildLaunchScopeAnchor` trims with the same `trim` before it writes; and a
+ * hand-edited row carrying one reads as the empty string here, which lists it
+ * in NO scope. That is the safe direction, and it is the direction the whole
+ * expression errs in.
+ */
+const TRIM_PATTERN = "^[[:space:]]+|[[:space:]]+$";
+
+/**
+ * `<kind>:<id>` for an anchor the host decoder would read as anchored,
+ * `workspace` for its workspace arm, and the empty string for everything else.
+ *
+ * Every literal below is part of the STATEMENT, not a caller value: the kinds,
+ * the version, the sentinel and the trim pattern are this module's own
+ * constants, so nothing a request carries reaches the SQL text. The scope a
+ * reader filters FOR still arrives as a bound parameter through the filter,
+ * untouched by this.
+ */
+function launchScopeDimensionSql(anchorColumn: AnyColumn): SQL<string> {
+  const version = sql.raw(`'${AGENT_RUNS_LAUNCH_SCOPE_ANCHOR_VERSION}'::jsonb`);
+  const idKinds = sql.raw(
+    AGENT_RUNS_LAUNCH_SCOPE_ID_KINDS.map((kind) => `'${kind}'`).join(", "),
+  );
+  const sentinel = sql.raw(`'${AGENT_RUNS_LAUNCH_SCOPE_WORKSPACE_SENTINEL}'`);
+  // The decoder's `obj.id.trim()`, in SQL. Spelled once, read three times.
+  const id = sql<string>`regexp_replace(${anchorColumn}->>'id', ${sql.raw(`'${TRIM_PATTERN}'`)}, '', 'g')`;
+  return sql<string>`case
+    when ${anchorColumn}->'v' = ${version}
+     and ${anchorColumn}->>'kind' = 'workspace'
+     and ${anchorColumn}->'id' is null
+    then 'workspace'
+    when ${anchorColumn}->'v' = ${version}
+     and ${anchorColumn}->>'kind' in (${idKinds})
+     and jsonb_typeof(${anchorColumn}->'id') = 'string'
+     and ${id} <> ''
+     and ${id} <> ${sentinel}
+    then ${anchorColumn}->>'kind' || ':' || ${id}
+    else ''
+  end`;
+}
 
 /**
  * Factory arguments for `createAgentRunsCube`.
@@ -305,10 +385,13 @@ export function createAgentRunsCube(
       package_name: sql<string>`coalesce(substring(${templateColumns.packageName} from '^@[^/]+/(.+)$'), ${templateColumns.packageName})`,
       status: columns.status,
       created_at: columns.createdAt,
-      // `concat_ws` skips a missing id (the workspace arm) and never yields
-      // NULL, so an unanchored run reads as the empty string.
+      // FAIL-CLOSED, EXACTLY AS THE HOST DECODER IS (cinatra#3693). See
+      // `AGENT_RUNS_LAUNCH_SCOPE_ID_KINDS` above for why the rule is spelled
+      // twice. Anything this expression cannot vouch for reads as the empty
+      // string, which no scope's filter value equals, so a malformed row lists
+      // in no scope at all.
       launch_scope: columns.launchScopeAnchor
-        ? sql<string>`concat_ws(':', ${columns.launchScopeAnchor}->>'kind', ${columns.launchScopeAnchor}->>'id')`
+        ? launchScopeDimensionSql(columns.launchScopeAnchor)
         : sql<string>`''`,
     },
     measureSql: {

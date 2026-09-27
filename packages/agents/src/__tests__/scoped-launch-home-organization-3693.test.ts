@@ -31,7 +31,7 @@ import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 
 const ORG_A = "org-A";
 const ORG_B = "org-B";
-const AGENT_ID = "cinatra-ai/blog-idea-generator";
+const AGENT_ID = "fixture-vendor/blog-idea-generator";
 
 const mocks = vi.hoisted(() => ({
   createAndTriggerRunWithContext: vi.fn(),
@@ -78,7 +78,7 @@ vi.mock("../store", () => ({
   readAgentTemplateBySlug: vi.fn(async () => ({
     id: "tmpl-3693",
     name: "Blog Idea Generator",
-    packageName: "@cinatra-ai/blog-idea-generator",
+    packageName: "@fixture-vendor/blog-idea-generator",
     packageVersion: "1.0.0",
   })),
   readAgentRunById: vi.fn(async () => null),

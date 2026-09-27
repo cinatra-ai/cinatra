@@ -25,7 +25,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 const ORG_ID = "88c63f08-4d2e-4c7a-9f1b-2a0d6e5c4b31";
 const ORG_BASE = `/organizations/${ORG_ID}`;
-const AGENT_ID = "cinatra-ai/blog-draft-writer-agent";
+const AGENT_ID = "fixture-vendor/blog-draft-writer-agent";
 const RUN_ID = "run-3693";
 const SCOPED_LAUNCHER = `${ORG_BASE}/agents/${AGENT_ID}/new`;
 const BARE_LAUNCHER = `/agents/${AGENT_ID}/new`;
@@ -155,7 +155,7 @@ function stepperProps(overrides: Partial<OrchestratorStepperPanelProps>): Orches
     initialStatus: "failed",
     initialError: "WayFlow task failed",
     agUiEnabled: false,
-    agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
+    agentPackageName: "@fixture-vendor/blog-draft-writer-agent",
     inputParams: {},
     stepperSteps: [{ index: 1, stepNumber: 0, label: "Setup", xRenderer: "grouped-setup-form" }],
     agentId: AGENT_ID,

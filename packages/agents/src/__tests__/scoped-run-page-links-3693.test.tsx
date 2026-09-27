@@ -28,7 +28,7 @@ import { scopeSurfaceBase, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 const ORG_ID = "88c63f08-4d2e-4c7a-9f1b-2a0d6e5c4b31";
 const ORG_SCOPE: ScopeSurfaceRef = { kind: "organization", id: ORG_ID };
 const ORG_BASE = scopeSurfaceBase(ORG_SCOPE);
-const AGENT_ID = "cinatra-ai/blog-draft-writer-agent";
+const AGENT_ID = "fixture-vendor/blog-draft-writer-agent";
 const RUN_ID = "run-3693";
 const RUN_NAME = "Blog Draft Writer Agent (1)";
 const ORG_ANCHOR = { v: 1, kind: "organization", id: ORG_ID };
@@ -92,7 +92,7 @@ const TEMPLATE = {
   outputSchema: null,
   taskSpec: null,
   status: "published",
-  packageName: "@cinatra-ai/blog-draft-writer-agent",
+  packageName: "@fixture-vendor/blog-draft-writer-agent",
   packageVersion: "1.0.0",
   gatedSteps: [],
   triggerMode: "none",
