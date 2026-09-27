@@ -79,7 +79,7 @@ describe("isolated generated job cut", () => {
     expect(yaml).not.toContain("vars.CI_RUNNER");
     expect(yaml).not.toContain("publish-nonrelease-image:");
     expect(yaml).not.toMatch(/\$\{\{[^}]*needs\./);
-    expect(yaml.match(/timeout-minutes: (70|45)\n/g)).toHaveLength(3);
+    expect(yaml.match(/timeout-minutes: (90|45)\n/g)).toHaveLength(3);
   });
   it("removes cache consumers and their preparer while preserving the live cache guard", () => {
     const yaml = renderWorkflow(sourceFiles(ROOT));
