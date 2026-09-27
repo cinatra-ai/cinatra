@@ -44,7 +44,7 @@
         "**"
       ],
       "skippable": true,
-      "timeoutMinutes": 70
+      "timeoutMinutes": 90
     },
     {
       "context": "A2A protocol unit tests",
