@@ -214,7 +214,7 @@
     "source_node": {
      "$component_ref": "ctx-ideaContext-resolve_context"
     },
-    "source_output": "candidates",
+    "source_output": "plannedRefs",
     "destination_node": {
      "$component_ref": "ctx-ideaContext-emit_context_payload"
     },
@@ -238,7 +238,7 @@
     "source_node": {
      "$component_ref": "ctx-ideaContext-resolve_context"
     },
-    "source_output": "selectedRefs",
+    "source_output": "plannedRefs",
     "destination_node": {
      "$component_ref": "ctx-ideaContext-emit_context_payload"
     },
@@ -394,11 +394,11 @@
     "source_node": {
      "$component_ref": "ctx-ideaContext-resolve_context"
     },
-    "source_output": "selectedRefs",
+    "source_output": "plannedRefs",
     "destination_node": {
      "$component_ref": "ctx-ideaContext-finalize_autonomous"
     },
-    "destination_input": "selectedRefs"
+    "destination_input": "plannedRefs"
    },
    {
     "component_type": "DataFlowEdge",
@@ -426,6 +426,7 @@
    },
    {
     "component_type": "DataFlowEdge",
+    "name": "ctx-ideaContext-resolve_allocationToken_to_finalize_interactive",
     "source_node": {
      "$component_ref": "ctx-ideaContext-resolve_context"
     },
@@ -433,11 +434,11 @@
     "destination_node": {
      "$component_ref": "ctx-ideaContext-finalize_interactive"
     },
-    "destination_input": "allocationToken",
-    "name": "ctx-ideaContext-resolve_context_allocationToken_to_ctx-ideaContext-finalize_interactive"
+    "destination_input": "allocationToken"
    },
    {
     "component_type": "DataFlowEdge",
+    "name": "ctx-ideaContext-resolve_allocationToken_to_finalize_autonomous",
     "source_node": {
      "$component_ref": "ctx-ideaContext-resolve_context"
     },
@@ -445,8 +446,7 @@
     "destination_node": {
      "$component_ref": "ctx-ideaContext-finalize_autonomous"
     },
-    "destination_input": "allocationToken",
-    "name": "ctx-ideaContext-resolve_context_allocationToken_to_ctx-ideaContext-finalize_autonomous"
+    "destination_input": "allocationToken"
    }
   ],
   "$referenced_components": {
@@ -554,6 +554,15 @@
      {
       "title": "allocationToken",
       "type": "string"
+     },
+     {
+      "title": "plannedRefs",
+      "type": "array",
+      "json_schema": {
+       "items": {
+        "type": "object"
+       }
+      }
      }
     ]
    },
@@ -700,7 +709,7 @@
      "slotId": "{{ slotId }}",
      "projectId": "{{ projectId }}",
      "selectionMode": "{{ selectionMode }}",
-     "userResponse": "{# pyagentspec-input-hint (do not remove): {{ slotId }} {{ resolutionMode }} {{ selectedRefs }} #}{\"slotId\":{{ slotId | tojson }},\"resolutionMode\":{{ resolutionMode | tojson }},\"selectedRefs\":{{ selectedRefs | tojson }}}",
+     "userResponse": "{# pyagentspec-input-hint (do not remove): {{ slotId }} {{ resolutionMode }} {{ plannedRefs }} #}{\"slotId\":{{ slotId | tojson }},\"resolutionMode\":{{ resolutionMode | tojson }},\"selectedRefs\":{{ plannedRefs | tojson }}}",
      "allocationToken": "{{ allocationToken }}"
     },
     "inputs": [
@@ -730,17 +739,17 @@
       "type": "string"
      },
      {
-      "title": "selectedRefs",
+      "title": "allocationToken",
+      "type": "string"
+     },
+     {
+      "title": "plannedRefs",
       "type": "array",
       "json_schema": {
        "items": {
         "type": "object"
        }
       }
-     },
-     {
-      "title": "allocationToken",
-      "type": "string"
      }
     ],
     "outputs": [

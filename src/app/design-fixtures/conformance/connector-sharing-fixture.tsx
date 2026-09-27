@@ -239,8 +239,16 @@ export function ConnectorSharingFixture({
       data-variant={variant}
       className="flex w-full max-w-3xl flex-col gap-4"
     >
+      {/* The MANY-connections shape: this mount stands for the page the
+          drawing itself draws the roll-up on: the connector that holds many
+          connections, whose strip adds Connections after Sharing. That is
+          the only page shape the roll-up belongs to (cinatra#3454), so the
+          `connector-sharing-rollup` surface is graded where the drawing puts
+          it. The card still needs more than one connection to roll up, so the
+          single-panel variants below draw none. */}
       <ConnectorSharingPanels
         panels={panels}
+        pageShape="many"
         state={variant === "loading" ? "loading" : "ready"}
       />
     </div>
