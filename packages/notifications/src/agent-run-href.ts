@@ -51,6 +51,31 @@ const LAUNCH_SCOPE_ANCHOR_VERSION = 1;
 /** The reserved id no scope may use. Copy of `WORKSPACE_SCOPE_SENTINEL`. */
 const WORKSPACE_SCOPE_SENTINEL = "__workspace__";
 
+/** The query name that carries the run detail's open step. Copy of
+ *  `RUN_STEP_QUERY_KEY`. */
+const RUN_STEP_QUERY_KEY = "step";
+
+/**
+ * THE RUN'S ADDRESS WITH ONE STEP OPEN, which is what a review's address IS
+ * (cinatra#3693). Verbatim copy of `src/lib/agent-url.ts`'s `buildRunStepPath`.
+ *
+ * The ratified drawing gives a review no page: "a pending review renders the
+ * review gate in the run detail, under the same rail, never as a standalone
+ * document", and "there is no review page view outside the run's route". So a
+ * reader sent to one review is sent to the RUN, with the gate's own rail
+ * selection named on the address, and the run detail opens there on first
+ * render.
+ */
+function buildRunStepPathCopy(runPath: string, step: string): string {
+  return `${runPath}?${RUN_STEP_QUERY_KEY}=${encodeURIComponent(step)}`;
+}
+
+/** The rail's selection key for one of a run's review gates. Copy of
+ *  `runReviewGateStepKey` (`packages/agents/src/run-surface-rail-step.ts`). */
+function runReviewGateStepKeyCopy(reviewTaskId: string): string {
+  return `review:${reviewTaskId}`;
+}
+
 /** The scope base each anchor kind addresses. Copy of
  *  `launchScopeAnchorBase`'s four-kind map. The `user` kind is FLAT BY DESIGN:
  *  `/personal` means "mine" to whoever reads it, so it is not an address. */
@@ -124,6 +149,13 @@ export function buildAgentInstancePath(
  * the BullMQ job's `data`. Returns the route path on success, or `undefined`
  * for any unresolvable / non-agent / absent input (link-less notification).
  *
+ * A `reviewTaskId` beside the run id names ONE of the run's review gates
+ * (cinatra#3693), and the href then carries that gate's own rail selection: the
+ * drawing makes Notifications the road to a review, and "a review is reached
+ * from the Notifications page of every scope … and opens in place on its run
+ * page". Absent, the href is the run page with no step named, which is exactly
+ * what it has always been.
+ *
  * `readAgentRunById` is called with the runId ONLY (no actor argument) so the
  * auth gate inside the store function is skipped — correct for the worker
  * writer path which has no session. It only reads templateId / packageName to
@@ -160,9 +192,20 @@ export async function resolveAgentRunHref(
     if (packageName.length === 0) return undefined;
 
     // Under the run's own scope base, when its anchor names one.
-    return buildAgentInstancePath(packageName, runId, {
+    const runPath = buildAgentInstancePath(packageName, runId, {
       launchScopeAnchor: (run as { launchScopeAnchor?: unknown }).launchScopeAnchor,
     });
+    // AND ON THE GATE THE NOTIFICATION IS ABOUT, WHERE IT NAMES ONE
+    // (cinatra#3693). Read from the job data the caller passes, never from the
+    // job id: a BullMQ id spells a review task as `resume-${reviewTaskId}` on one
+    // path and not at all on another, and a guessed gate would open the wrong
+    // one. A blank or non-string value is no gate and keeps the run's own
+    // address.
+    const reviewTaskId = (jobData as Record<string, unknown>).reviewTaskId;
+    if (typeof reviewTaskId !== "string" || reviewTaskId.trim().length === 0) {
+      return runPath;
+    }
+    return buildRunStepPathCopy(runPath, runReviewGateStepKeyCopy(reviewTaskId.trim()));
   } catch {
     // Writer path must never throw into the worker.
     return undefined;

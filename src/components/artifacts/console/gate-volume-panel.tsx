@@ -21,14 +21,23 @@ import type {
   OrgReviewGateVolume,
 } from "@cinatra-ai/agents/lifecycle-policy-store";
 import { Empty, EmptyDescription, EmptyHeader } from "@/components/ui/empty";
+import { buildRunStepPath } from "@/lib/agent-url";
+import { runReviewGateStepKey } from "@cinatra-ai/agents/run-surface-rail-step";
 
 /**
- * Deep-link a gate to the run-embedded review surface that decides it:
- * `/agents/{vendor}/{package}/{runId}/review/{reviewTaskId}`.
+ * Deep-link a gate to the reading that decides it: the RUN's own address, with
+ * the gate's rail selection named on it (cinatra#3693).
  *
- * The SAME five-segment shape (and the same `unknown/unknown` degrade) the
- * execution path already emits for a marked reviewer gate — the review page keys
- * ONLY on the run id, so an unresolved package still resolves rather than 404ing.
+ * The review has no page of its own — "a pending review renders the review gate
+ * in the run detail, under the same rail, never as a standalone document" — so
+ * this console addresses the run and names the gate, exactly as the run engine's
+ * own interrupt does.
+ *
+ * The SAME vendor/package/instance shape (and the same `unknown/unknown`
+ * degrade) the execution path emits for a marked reviewer gate — the run page
+ * keys ONLY on the instance slot, so an unresolved package still resolves rather
+ * than 404ing. The console reads no run anchor, so the address is the bare one
+ * and the run page sends the reader to the run's home from there.
  */
 export function gateReviewHref(
   runId: string,
@@ -41,7 +50,7 @@ export function gateReviewHref(
     : runPackageName
       ? `/agents/${runPackageName}/${encodeURIComponent(runId)}`
       : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
-  return `${base}/review/${encodeURIComponent(reviewTaskId)}`;
+  return buildRunStepPath(base, runReviewGateStepKey(reviewTaskId));
 }
 
 function formatAge(ms: number): string {

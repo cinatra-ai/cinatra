@@ -78,7 +78,7 @@ import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ReviewRunSurface } from "./review-run-surface";
 import { VerificationView } from "./verification-view";
 import {
-  reviewPageHomeRedirect,
+  reviewAddressRedirect,
   reviewPageScopeCrumbs,
   type ReviewPageScopeProps,
 } from "./review-page-body";
@@ -150,34 +150,46 @@ export default async function AgentRunReviewPage({
   const reviewTaskId = decodeURIComponent(rawTaskId);
   const sp = (await searchParams) ?? {};
   const isVerificationView = sp.view === "verification";
+  // THE SCOPE THIS ROUTE WAS MOUNTED UNDER IS NO LONGER PART OF THE ANSWER
+  // (cinatra#3693). It used to decide whether the reader was already at the
+  // review's canonical address; now every reading is sent to the RUN's own home,
+  // whatever base it was read under, so the base decides nothing. The prop stays
+  // because the scoped shell passes the same three values to every screen it
+  // mounts, and dropping one from this one alone would be a second shape for the
+  // shell to remember.
+  void scopeBase;
 
   const session = await getAuthSession();
   if (!session) redirect(await signInRedirectTarget());
   const actorCtx = await resolveReviewActorContext();
   if (!actorCtx) redirect(await signInRedirectTarget());
 
-  // THE RUN'S HOME, AFTER THE ACCESS DOOR (cinatra#3693). The review is a
-  // sub-route of its run, so it lives where the run lives: an anchored run's
-  // review read at the bare address or under another scope is sent to the run's
-  // canonical home plus this same sub-path — and only once the reader has
-  // cleared the door below, so a refused reader learns nothing about where the
-  // run lives. The scope's own crumbs travel with the page for the same reason
-  // the run page publishes them: the trail's head is the run's HOME scope.
+  // THE REVIEW READS IN THE RUN, AFTER THE ACCESS DOOR (cinatra#3693).
   //
-  // A PENDING gate's reader is sent to the run page itself (cinatra#3693): "a
-  // pending review still opens in place on the run page, as the run-page
-  // drawing says" — and the run page opens on the gate it is parked at.
-  const sendReaderHome = async (pendingGate = false) => {
-    const home = await reviewPageHomeRedirect({
+  // The owner retired the standalone review page and the drawings give the review
+  // no page of its own: "a pending review renders the review gate in the run
+  // detail, under the same rail, never as a standalone document", and "there is
+  // no review page view outside the run's route". So EVERY reading of this route
+  // — a pending gate, a settled one, and the audit view — is sent to the run's
+  // own address with the gate's rail selection named on it, and the run detail
+  // opens on that step at first render.
+  //
+  // THE ROUTE STILL ANSWERS so that a notification already sent, and a bookmark
+  // already taken, keep working: they land where the reading now lives.
+  //
+  // AND ONLY ONCE THE READER HAS CLEARED THE DOOR BELOW, because the address
+  // names the run's home scope and a refused reader may not be told it. The
+  // scope's own crumbs stay for the readings that still draw chrome (a refusal,
+  // a gate the loader cannot show).
+  const sendReaderToTheRun = async () => {
+    const runAddress = await reviewAddressRedirect({
       agentId: `${vendor}/${packageName}`,
       rawInstanceId,
       rawTaskId,
       runId,
-      scopeBase,
       verificationView: isVerificationView,
-      pendingGate,
     });
-    if (home) redirect(home);
+    if (runAddress) redirect(runAddress);
   };
   const scopeCrumbs = reviewPageScopeCrumbs({ launchScope, scopeTitle });
 
@@ -189,7 +201,7 @@ export default async function AgentRunReviewPage({
   if (isVerificationView) {
     const access = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
     if (!access.ok) return <ReviewNotAuthorizedPanel />;
-    await sendReaderHome();
+    await sendReaderToTheRun();
     const gate = await readReviewGate(runId, reviewTaskId);
     if (!gate) {
       return (
@@ -252,7 +264,7 @@ export default async function AgentRunReviewPage({
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;
   }
-  await sendReaderHome(surface.kind === "ready");
+  await sendReaderToTheRun();
 
   // The generic blocked panel is still the page's answer for a gate it cannot
   // show: `targets-mismatch` (a stale or tampered view) and the `unavailable`

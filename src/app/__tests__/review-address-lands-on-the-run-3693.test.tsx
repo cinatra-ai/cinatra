@@ -10,16 +10,17 @@
  * of every scope (Application Design — Notifications) and opens in place on its
  * run page".
  *
- * B2 — the review address of a PENDING gate lands on the run page at the run's
- *      canonical home (an unanchored run: the bare run page), and only after
- *      the page's access door has cleared; a refused reader is told so and is
- *      never redirected.
- * B3 — a settled gate and its audit reading stay on the review address the
- *      first commit scoped (`<home>/review/<task>`), until the run detail can
- *      draw a chosen settled gate itself (the recorded B-SETTLED narrowing).
+ * B2 — EVERY reading of the review address lands on the run page at the run's
+ *      canonical home (an unanchored run: the bare run page), with the gate's
+ *      own rail selection named on it, and only after the page's access door
+ *      has cleared; a refused reader is told so and is never redirected.
+ * B3 — that holds for a settled gate and for the audit reading too (the second
+ *      fix leg closes the B-SETTLED narrowing the first one recorded): the run
+ *      detail draws both in place now, so neither has an address of its own.
  *
- * The run page opens a parked review gate in place by its own selection; that
- * is pinned by run-page-parked-review-opens-in-place.test.tsx.
+ * The run page draws those readings in place, and opens on the step its address
+ * names; both are pinned by
+ * packages/agents/src/__tests__/run-page-parked-review-opens-in-place.test.tsx.
  */
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -231,14 +232,16 @@ const SETTLED = {
 
 const ORG_RUN_PAGE = `${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}`;
 const BARE_RUN_PAGE = `/agents/${AGENT_ID}/${RUN_ID}`;
+const GATE_STEP = `?step=review%3A${TASK_ID}`;
+const AUDIT_STEP = `?step=audit%3A${TASK_ID}`;
 
-describe("B2: a pending review's address lands on the run page, after the access door (cinatra#3693)", () => {
+describe("B2: the review address lands on the run page, after the access door (cinatra#3693)", () => {
   it("the bare address of an organization-anchored run lands on the run page at its home", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}`);
+    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}${GATE_STEP}`);
     // AFTER the access door, never before it.
     expect(mocks.loadReviewGateSurface).toHaveBeenCalledTimes(1);
   });
@@ -252,7 +255,7 @@ describe("B2: a pending review's address lands on the run page, after the access
         searchParams: Promise.resolve({}),
       }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}`);
+    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}${GATE_STEP}`);
   });
 
   it("another scope's review address lands on the run page at the run's own home", async () => {
@@ -264,15 +267,15 @@ describe("B2: a pending review's address lands on the run page, after the access
         searchParams: Promise.resolve({}),
       }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}`);
+    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}${GATE_STEP}`);
   });
 
-  it("an unanchored run's pending review lands on the bare run page", async () => {
+  it("an unanchored run's review lands on the bare run page", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(null));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
     );
-    expect(message).toBe(`REDIRECT:${BARE_RUN_PAGE}`);
+    expect(message).toBe(`REDIRECT:${BARE_RUN_PAGE}${GATE_STEP}`);
   });
 
   it("a reader the access door refuses is told so, and is never redirected", async () => {
@@ -284,32 +287,47 @@ describe("B2: a pending review's address lands on the run page, after the access
   });
 });
 
-describe("B3: a settled gate and its audit reading keep the review address (B-SETTLED, cinatra#3693)", () => {
-  it("a settled gate at the bare address goes to its home's review address", async () => {
+describe("B3: a settled gate and its audit reading land there too (cinatra#3693, leg 2)", () => {
+  it("a settled gate goes to the run page with the gate selected, not to a review address", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     mocks.loadReviewGateSurface.mockResolvedValue(SETTLED);
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}/review/${TASK_ID}`);
+    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}${GATE_STEP}`);
+    expect(message).not.toContain("/review/");
   });
 
-  it("a settled gate renders read-only at its home's review address", async () => {
+  it("a settled gate read at its own home scope goes to the run page all the same", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     mocks.loadReviewGateSurface.mockResolvedValue(SETTLED);
-    const tree = await ScopedAgentsRoute({
-      scope: ORG_SCOPE,
-      segments: [VENDOR, PACKAGE, RUN_ID, "review", TASK_ID],
-      searchParams: Promise.resolve({}),
-    });
-    expect(renderToStaticMarkup(tree as React.ReactElement)).toContain('data-testid="review-gate-card"');
+    const message = await thrownBy(() =>
+      ScopedAgentsRoute({
+        scope: ORG_SCOPE,
+        segments: [VENDOR, PACKAGE, RUN_ID, "review", TASK_ID],
+        searchParams: Promise.resolve({}),
+      }),
+    );
+    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}${GATE_STEP}`);
   });
 
-  it("the audit reading keeps its own address, verification view and all", async () => {
+  it("the audit reading goes to the run page with the audit step selected", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({ view: "verification" }) }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}/review/${TASK_ID}?view=verification`);
+    expect(message).toBe(`REDIRECT:${ORG_RUN_PAGE}${AUDIT_STEP}`);
+    expect(message).not.toContain("view=verification");
+  });
+
+  it("the audit reading redirects after its OWN access check, never before it", async () => {
+    mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
+    mocks.enforceReviewRunAccess.mockResolvedValue({ ok: false });
+    const tree = await AgentRunReviewPage({
+      params: reviewParams(),
+      searchParams: Promise.resolve({ view: "verification" }),
+    });
+    expect(renderToStaticMarkup(tree as React.ReactElement)).toContain("Not authorized");
+    expect(mocks.readAgentRunById).not.toHaveBeenCalled();
   });
 });

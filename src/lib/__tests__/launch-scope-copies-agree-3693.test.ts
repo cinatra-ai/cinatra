@@ -9,7 +9,9 @@
  *   - the agent-runs cube, for the `launch_scope` dimension a scope's
  *     Executions tab filters on;
  *   - the notification and run-engine deep-link builders, for the base a
- *     run's address is prefixed with.
+ *     run's address is prefixed with, AND for the one address form that names a
+ *     step of the run detail (cinatra#3693, the second fix leg): a review has no
+ *     address of its own, so both of them mint `<run>?step=review:<task>`.
  *
  * A copy that drifts is worse than no copy. A run would list in a scope it was
  * never launched from, or a reader would be sent to the wrong scope's road. So
@@ -26,6 +28,8 @@ import {
   launchScopeAnchorBase,
   parseLaunchScopeAnchor,
 } from "@/lib/launch-scope-anchor";
+import { RUN_STEP_QUERY_KEY, buildRunStepPath } from "@/lib/agent-url";
+import { runReviewGateStepKey } from "@cinatra-ai/agents/run-surface-rail-step";
 import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
 import {
   AGENT_RUNS_LAUNCH_SCOPE_ANCHOR_VERSION,
@@ -144,5 +148,60 @@ describe("the run engine's copy is the same text as the notifications copy (cina
     expect(source).toContain(
       "buildReviewRunBasePath(reviewPackageName, runId, run.launchScopeAnchor)",
     );
+  });
+});
+
+/**
+ * THE ONE ADDRESS FORM FOR "THIS RUN, THIS STEP SELECTED" (cinatra#3693).
+ *
+ * The drawings give a review no page: "a pending review renders the review gate
+ * in the run detail, under the same rail, never as a standalone document", and
+ * "there is no review page view outside the run's route". So the address that
+ * sends a reader to one review is the RUN's address with the gate's own rail
+ * selection named on it. `src/lib/agent-url.ts` is the authority; both packages
+ * hold a verbatim copy of the query name and the composer, inside the same
+ * copied block the base map is in, so a drift in either one fails above.
+ */
+describe("the run-step address form (cinatra#3693)", () => {
+  const ROOT = path.resolve(__dirname, "..", "..", "..");
+  const readSource = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
+
+  it("is one query name and one composer in the host", () => {
+    expect(RUN_STEP_QUERY_KEY).toBe("step");
+    expect(buildRunStepPath("/teams/t1/agents/acme/writer/R1", "review:task 1")).toBe(
+      "/teams/t1/agents/acme/writer/R1?step=review%3Atask%201",
+    );
+    // The key the rail answers to, and the one the address carries, are one
+    // spelling: the address names a selection, it does not invent a second name
+    // for it.
+    expect(runReviewGateStepKey("task-1")).toBe("review:task-1");
+  });
+
+  it("both packages hold the same copy of the name and the composer", () => {
+    for (const rel of [
+      "packages/agents/src/execution.ts",
+      "packages/notifications/src/agent-run-href.ts",
+    ]) {
+      const source = readSource(rel);
+      expect(source, rel).toContain(`const RUN_STEP_QUERY_KEY = "${RUN_STEP_QUERY_KEY}";`);
+      expect(source, rel).toContain(
+        "return `${runPath}?${RUN_STEP_QUERY_KEY}=${encodeURIComponent(step)}`;",
+      );
+      expect(source, rel).toContain("return `review:${reviewTaskId}`;");
+    }
+  });
+
+  it("and no road mints the retired `/review/<taskId>` sub-path any more", () => {
+    // What the copies compose at RUN TIME is pinned beside the resolver that
+    // composes it, where the store is already stubbed:
+    // `src/lib/__tests__/review-links-reach-the-run-3693.test.ts`.
+    for (const rel of [
+      "packages/agents/src/execution.ts",
+      "packages/notifications/src/agent-run-href.ts",
+      "src/components/artifacts/console/gate-volume-panel.tsx",
+      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-page-body.tsx",
+    ]) {
+      expect(readSource(rel), rel).not.toMatch(/\/review\/\$\{/);
+    }
   });
 });
