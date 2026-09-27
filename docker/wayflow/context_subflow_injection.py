@@ -15,9 +15,14 @@ surfaced only as an undiagnosable runtime 403, and a server-route change
 required re-releasing every agent in lockstep.
 
 Legacy compatibility: a definition that already carries a marker (author-
-placed OR loader-injected) for a declared slot is left untouched — the four
-first-party leaf agents and every compiled orchestrator keep mounting
-byte-identically until their owner-gated re-release to the slim format.
+placed OR loader-injected) for a declared slot gets no second subflow — the
+four first-party leaf agents and every compiled orchestrator keep their own
+subflows until their owner-gated re-release to the slim format. One
+exception (cinatra#3685): the loader injects the token plumbing into a
+subflow that carries a marker but no token — the allocationToken output of
+its resolve step and the allocationToken field wired from that output into
+every finalize body the subflow sends, read from the template. A definition
+that already carries the token is untouched.
 
 Fail posture (converged with Codex, 2026-07-10):
   - absent / null / empty ``contextSlots`` → no-op;
@@ -1115,6 +1120,236 @@ def _inject_into_definition(
 
 
 # ---------------------------------------------------------------------------
+# cinatra#3685 — the allocation token filled into author-placed subflows.
+# ---------------------------------------------------------------------------
+
+_ALLOCATION_TOKEN = "allocationToken"
+_RESOLVE_ROUTE = "/api/context-resolve"
+_FINALIZE_ROUTE = "/api/context-finalize"
+
+
+def _template_token_plumbing() -> Dict[str, Any]:
+    """The template's own allocationToken pieces (read, never re-typed)."""
+    subflow = _load_template()["subflow"]
+    nodes = [
+        n for n in subflow["$referenced_components"].values() if isinstance(n, dict)
+    ]
+    resolve = next(n for n in nodes if str(n.get("url", "")).endswith(_RESOLVE_ROUTE))
+    finalize = next(
+        n for n in nodes if str(n.get("url", "")).endswith(_FINALIZE_ROUTE)
+    )
+    return {
+        "output": next(
+            o for o in resolve["outputs"] if o.get("title") == _ALLOCATION_TOKEN
+        ),
+        "input": next(
+            i for i in finalize["inputs"] if i.get("title") == _ALLOCATION_TOKEN
+        ),
+        "value": finalize["data"][_ALLOCATION_TOKEN],
+        "edge": next(
+            e
+            for e in subflow["data_flow_connections"]
+            if e.get("source_output") == _ALLOCATION_TOKEN
+        ),
+    }
+
+
+def _marker_slot(node: Dict[str, Any]) -> Optional[str]:
+    cin = _metadata_cinatra(node)
+    purpose = cin.get("purpose") if cin else None
+    if node.get("component_type") != "FlowNode" or not isinstance(purpose, str):
+        return None
+    for prefix in (AUTHOR_PLACED_PURPOSE_PREFIX, LOADER_INJECTED_PURPOSE_PREFIX):
+        if purpose.startswith(prefix) and purpose[len(prefix):]:
+            return purpose[len(prefix):]
+    return None
+
+
+def _markers_with_definitions(
+    doc: Dict[str, Any],
+) -> List[Tuple[Dict[str, Any], str, str]]:
+    """(marker FlowNode, slot id, enclosing definition label), document order."""
+    found: List[Tuple[Dict[str, Any], str, str]] = []
+
+    def walk(node: Any, owner: str) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item, owner)
+            return
+        if not isinstance(node, dict):
+            return
+        if node is not doc and _is_flow_definition(node):
+            owner = node["id"]
+        slot = _marker_slot(node)
+        if slot is not None:
+            found.append((node, slot, owner))
+        for value in node.values():
+            walk(value, owner)
+
+    root_id = doc.get("id")
+    walk(doc, root_id if isinstance(root_id, str) else "<root>")
+    return found
+
+
+def _referenced_flow_definitions(doc: Dict[str, Any], key: str) -> List[Any]:
+    """Every Flow definition keyed ``key`` in any $referenced_components."""
+    hits: List[Any] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        refs = node.get("$referenced_components")
+        if isinstance(refs, dict) and key in refs:
+            target = refs[key]
+            if isinstance(target, dict) and target.get("component_type") == "Flow":
+                hits.append(target)
+        for value in node.values():
+            walk(value)
+
+    walk(doc)
+    return hits
+
+
+def _plan_token_fill(
+    doc: Dict[str, Any],
+) -> List[Tuple[str, str, Dict[str, Any], List[Tuple[str, str]]]]:
+    """What each marked subflow lacks: (slot, definition, subflow, gaps).
+
+    A gap is (kind, node id) with kind output | input | data | edge. A subflow
+    that cannot be read without guessing (its reference names no Flow or
+    several, not exactly one resolve ApiNode, no finalize ApiNode, a
+    non-list/non-dict field the fill would write into) is left untouched.
+    """
+    plans: List[Tuple[str, str, Dict[str, Any], List[Tuple[str, str]]]] = []
+    seen: set = set()
+    for marker, slot, owner in _markers_with_definitions(doc):
+        subflow = marker.get("subflow")
+        ref = _component_ref(subflow)
+        if ref is not None:
+            candidates = _referenced_flow_definitions(doc, ref)
+            if len(candidates) != 1:
+                continue
+            subflow = candidates[0]
+        if not isinstance(subflow, dict) or subflow.get("component_type") != "Flow":
+            continue
+        if id(subflow) in seen:
+            continue
+        seen.add(id(subflow))
+        # Definition-local: the subflow's own components and inline nodes.
+        local = list((subflow.get("$referenced_components") or {}).values())
+        local += [n for n in subflow.get("nodes") or [] if isinstance(n, dict)]
+        api = [
+            n
+            for n in local
+            if isinstance(n, dict)
+            and n.get("component_type") == "ApiNode"
+            and isinstance(n.get("url"), str)
+            and isinstance(n.get("id"), str)
+        ]
+        resolves = [n for n in api if n["url"].endswith(_RESOLVE_ROUTE)]
+        finalizes = [n for n in api if n["url"].endswith(_FINALIZE_ROUTE)]
+        dfc = subflow.get("data_flow_connections")
+        if len(resolves) != 1 or not finalizes or not isinstance(dfc, list):
+            continue
+        resolve = resolves[0]
+        if not isinstance(resolve.get("outputs"), list) or not all(
+            isinstance(f.get("inputs"), list) and isinstance(f.get("data"), dict)
+            for f in finalizes
+        ):
+            continue
+        gaps: List[Tuple[str, str]] = []
+        if not any(
+            isinstance(o, dict) and o.get("title") == _ALLOCATION_TOKEN
+            for o in resolve["outputs"]
+        ):
+            gaps.append(("output", resolve["id"]))
+        for finalize in finalizes:
+            if not any(
+                isinstance(i, dict) and i.get("title") == _ALLOCATION_TOKEN
+                for i in finalize["inputs"]
+            ):
+                gaps.append(("input", finalize["id"]))
+            if _ALLOCATION_TOKEN not in finalize["data"]:
+                gaps.append(("data", finalize["id"]))
+            if not any(
+                isinstance(e, dict)
+                and _component_ref(e.get("destination_node")) == finalize["id"]
+                and e.get("destination_input") == _ALLOCATION_TOKEN
+                for e in dfc
+            ):
+                gaps.append(("edge", finalize["id"]))
+        if gaps:
+            plans.append((slot, owner, subflow, gaps))
+    return plans
+
+
+def _fill_allocation_token_plumbing(
+    doc: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Fill the token plumbing a marked context subflow lacks.
+
+    /api/context-finalize requires the allocationToken /api/context-resolve
+    returned for the gate. An author-placed subflow written before the token
+    existed neither declares it on its resolve step nor sends it, so the
+    loader injects the token plumbing into a subflow that carries a marker but
+    no token: the output declaration on the resolve step, and the
+    allocationToken field wired from that output into every finalize body the
+    subflow sends — each piece read from the template and added only where
+    missing. Nothing else of the subflow moves. When nothing is missing the
+    ORIGINAL ``doc`` is returned with an empty report; otherwise a deep copy.
+    """
+    if not _plan_token_fill(doc):
+        return doc, []
+    filled = copy.deepcopy(doc)
+    parts = _template_token_plumbing()
+    report: List[Dict[str, Any]] = []
+    for slot, owner, subflow, gaps in _plan_token_fill(filled):
+        components = subflow.get("$referenced_components") or {}
+        by_id = {
+            n["id"]: n
+            for n in [*components.values(), *(subflow.get("nodes") or [])]
+            if isinstance(n, dict) and isinstance(n.get("id"), str)
+        }
+        resolve_id = next(
+            n["id"]
+            for n in by_id.values()
+            if n.get("component_type") == "ApiNode"
+            and str(n.get("url", "")).endswith(_RESOLVE_ROUTE)
+        )
+        for kind, node_id in gaps:
+            node = by_id[node_id]
+            if kind == "output":
+                node["outputs"].append(copy.deepcopy(parts["output"]))
+            elif kind == "input":
+                node["inputs"].append(copy.deepcopy(parts["input"]))
+            elif kind == "data":
+                node["data"][_ALLOCATION_TOKEN] = parts["value"]
+            else:
+                edge = copy.deepcopy(parts["edge"])
+                edge["source_node"] = {"$component_ref": resolve_id}
+                edge["destination_node"] = {"$component_ref": node_id}
+                # The real pyagentspec loader refuses a DataFlowEdge without a
+                # name, so the added edge carries one.
+                edge.setdefault(
+                    "name", f"{resolve_id}_{_ALLOCATION_TOKEN}_to_{node_id}"
+                )
+                subflow["data_flow_connections"].append(edge)
+        report.append(
+            {
+                "slot": slot,
+                "definition": owner,
+                "templateVersion": CONTEXT_SUBFLOW_TEMPLATE_VERSION,
+                "filled": [_ALLOCATION_TOKEN],
+            }
+        )
+    return filled, report
+
+
+# ---------------------------------------------------------------------------
 # Entry point.
 # ---------------------------------------------------------------------------
 
@@ -1125,16 +1360,23 @@ def inject_context_subflows(
     """Inject the canonical context subflow for every declared-but-not-carried
     slot in ``doc`` (the parsed, PRE-placeholder-substitution OAS).
 
-    Returns ``(document, report)``. When no slot needed injection the ORIGINAL
-    ``doc`` object is returned untouched with an empty report — the caller
-    keeps the raw-text mount path byte-identical. When injection applies, the
-    returned document is a deep copy; ``doc`` itself is never mutated.
+    Returns ``(document, report)``. When no slot needed injection and no
+    marked subflow lacked the allocation token, the ORIGINAL ``doc`` object is
+    returned untouched with an empty report — the caller keeps the raw-text
+    mount path byte-identical. When injection or the token fill applies, the
+    returned document is a deep copy; ``doc`` itself is never mutated. A fill
+    reports one entry per filled subflow with ``"filled": ["allocationToken"]``.
 
     Raises ContextInjectionError on any malformed declaration or impossible
     injection (the caller records a per-agent mount failure).
     """
     if not isinstance(doc, dict):
         return doc, []
+
+    # cinatra#3685 — fill the allocation token into marked subflows first;
+    # the same object comes back when nothing was missing.
+    source = doc
+    doc, fill_report = _fill_allocation_token_plumbing(source)
 
     carriers = _find_declaration_carriers(doc)
     validated: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
@@ -1149,7 +1391,7 @@ def inject_context_subflows(
         if slots:
             validated.append((definition, slots))
     if not validated:
-        return doc, []
+        return doc, fill_report
 
     # THE SATISFACTION MAP (item 0.29), resolved on the ORIGINAL document and
     # validated there, so a malformed or unkeepable declaration fails the mount
@@ -1169,9 +1411,9 @@ def inject_context_subflows(
         for definition, slots in validated
     )
     if not needs_injection and not declares_hand_down:
-        return doc, []
+        return doc, fill_report
 
-    composed = copy.deepcopy(doc)
+    composed = copy.deepcopy(doc) if doc is source else doc
     # Re-find carriers on the copy (same traversal order — deterministic).
     copy_carriers = _find_declaration_carriers(composed)
     # The satisfaction map is keyed by identity, so it is re-resolved on the
@@ -1230,4 +1472,4 @@ def inject_context_subflows(
                 hand_down,
             )
         )
-    return composed, report
+    return composed, fill_report + report
