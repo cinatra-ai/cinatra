@@ -309,27 +309,22 @@ jobs:
           # would be a vacuous green of the one thing this job adds, so the
           # import is asserted first and the job goes red when the pin is gone.
           #
-          # Three tests of that file are DESELECTED by name because they are
-          # red on main for a reason this job must not claim to cover. Each
-          # compares the rendered template against the hand-authored fixture,
-          # and cinatra#3418 renamed the resolve step's output (`selectedRefs`
-          # to `plannedRefs`) and added the allocation token inputs in the
-          # template without catching the fixture up. The fixture is the
-          # derived artifact, so regenerating it against the current template
-          # is what closes the drift; measured on 2026-09-26, the fix in flight
-          # for cinatra#3685 advances that fixture but does not yet close it.
-          # Drop each deselection when a fixture makes it pass, never by
-          # editing the assertion. Until then these three cover nothing here.
+          # The whole file runs, with nothing deselected. Three of its tests
+          # compare the rendered template against the hand-authored fixture,
+          # and they were red for a while because cinatra#3418 renamed the
+          # resolve step's output (`selectedRefs` to `plannedRefs`) and added
+          # the allocation token plumbing in the template without catching the
+          # fixture up. The fixture is the derived artifact and carries the
+          # template's own rendering again, so the three now compare the
+          # template this job builds. A future drift of that kind belongs in
+          # the fixture as well, never in an assertion or a deselection.
           docker exec -w /app wayflow-mount-guard python -c 'import wayflowcore'
           docker exec -e CINATRA_AGENTS_DIR=/agents wayflow-mount-guard \
             python -m pytest -q \
             tests/test_input_message_gate_reconcile.py \
             tests/test_repo_agents_load.py \
             tests/test_gate_mount_both_paths.py \
-            tests/test_context_subflow_injection.py \
-            --deselect tests/test_context_subflow_injection.py::test_template_byte_parity_with_hand_authored_subflow \
-            --deselect tests/test_context_subflow_injection.py::test_slim_leaf_injection_structure \
-            --deselect tests/test_context_subflow_injection.py::test_slim_injection_reproduces_hand_authored_topology
+            tests/test_context_subflow_injection.py
 
       - name: Runtime logs
         if: always()
