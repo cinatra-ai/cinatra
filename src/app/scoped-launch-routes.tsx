@@ -123,8 +123,8 @@ type AgentInstanceScreen = (props: {
 /**
  * The registry screen an instance SUB-ROUTE names (cinatra#3693), or null for
  * a shape with no page under a scope. Results and optimization have no screen
- * in the registry, and the skills page is a page of its own with no scope, so
- * they stay not-found here.
+ * in the registry, so they stay not-found here; the skills pane is a page of its
+ * own rather than a registry screen and is mounted directly below.
  */
 function instanceSubScreenKey(rest: readonly string[]): string | null {
   if (rest.length !== 1) return null;
@@ -213,6 +213,25 @@ export async function ScopedAgentsRoute({
         reviewTaskId: route.rest[1],
       }),
       searchParams,
+      scopeBase,
+      launchScope: scope,
+      scopeTitle,
+    });
+  }
+  // THE SKILLS PANE (cinatra#3693). A page of its own on the bare tree rather
+  // than a registry screen, so it is mounted the way the chat mount and the
+  // review route are: behind `await import(...)`, which is what keeps it out of
+  // the eager build graph every one of the ten scoped entries pays for.
+  if (route.kind === "instance" && route.rest.length === 1 && route.rest[0] === "skills") {
+    const { default: AgentPackageInstanceSkillsPage } = await import(
+      "@/app/agents/[vendor]/[packageName]/[instanceId]/skills/page"
+    );
+    return AgentPackageInstanceSkillsPage({
+      params: Promise.resolve({
+        vendor: route.vendor,
+        packageName: route.packageName,
+        instanceId: route.instanceId,
+      }),
       scopeBase,
       launchScope: scope,
       scopeTitle,

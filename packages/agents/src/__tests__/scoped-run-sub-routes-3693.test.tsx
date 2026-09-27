@@ -302,7 +302,7 @@ async function thrownBy(run: () => Promise<unknown>): Promise<string | null> {
   }
 }
 
-import { PermissionsScreen, TriggerScreen } from "../instance-screens";
+import { PermissionsScreen, SetupScreen, TriggerScreen } from "../instance-screens";
 
 type SubScreen = typeof TriggerScreen;
 const SUB_SCREENS: ReadonlyArray<[string, SubScreen]> = [
@@ -393,5 +393,58 @@ describe.each(SUB_SCREENS)("A2: the /%s sub-screen of a flat run stays on the ba
       }),
     );
     expect(message).toBe(`redirect:/agents/${AGENT_ID}/${RUN_ID}/${sub}`);
+  });
+});
+
+/**
+ * AND THE STEP AN ADDRESS NAMED SURVIVES THAT REDIRECT (cinatra#3693,
+ * convergence round 1, finding 3).
+ *
+ * The home check compares PATHS and answers a path. A caller that reads no run
+ * anchor mints a BARE address with the gate named on it — the admin console's
+ * gate-volume rows are exactly that — so the reader was sent to the run's scoped
+ * home with the gate forgotten, and had to find the review again by hand.
+ */
+describe("A3: the run page's home redirect carries the step it was given", () => {
+  const home = `${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}`;
+
+  it("keeps a review gate's selection on the hop to the run's home", async () => {
+    const message = await thrownBy(() =>
+      SetupScreen({
+        agentId: AGENT_ID,
+        instanceId: RUN_ID,
+        searchParams: { step: "review:task-1" },
+      }),
+    );
+    expect(message).toBe(`redirect:${home}?step=review%3Atask-1`);
+  });
+
+  it("keeps an audit reading's selection too", async () => {
+    const message = await thrownBy(() =>
+      SetupScreen({
+        agentId: AGENT_ID,
+        instanceId: RUN_ID,
+        searchParams: { step: "audit:task-1" },
+      }),
+    );
+    expect(message).toBe(`redirect:${home}?step=audit%3Atask-1`);
+  });
+
+  it("carries nothing else, and drops a value the rail's vocabulary refuses", async () => {
+    const message = await thrownBy(() =>
+      SetupScreen({
+        agentId: AGENT_ID,
+        instanceId: RUN_ID,
+        searchParams: { step: "../../etc/passwd", tab: "data", view: "verification" },
+      }),
+    );
+    expect(message).toBe(`redirect:${home}`);
+  });
+
+  it("redirects plainly when no step is named", async () => {
+    const message = await thrownBy(() =>
+      SetupScreen({ agentId: AGENT_ID, instanceId: RUN_ID }),
+    );
+    expect(message).toBe(`redirect:${home}`);
   });
 });

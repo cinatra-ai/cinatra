@@ -19,6 +19,9 @@
  *   cd packages/agents && pnpm exec vitest run \
  *     src/__tests__/scoped-run-page-links-3693.test.tsx
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -581,5 +584,34 @@ describe("the schedule page's links (TriggerScreen)", () => {
     row.anchor = null;
     const elements = elementsOf(await TriggerScreen({ agentId: AGENT_ID, instanceId: RUN_ID }));
     expect(finishedRunLink(elements)).toBe(BARE_RUN);
+  });
+});
+
+/**
+ * AND NO LINK MAY FALL BACK TO AN ADDRESS WITH NO SCOPE IN IT (cinatra#3693,
+ * the second fix leg).
+ *
+ * The Run button's destination used to be optional over a bare
+ * `/agents/<slug>/<run>/data` fallback. Its one caller has always passed a
+ * scoped address, so the fallback was unreachable — and a second caller added
+ * without one would have escaped the scope silently. The prop is required now,
+ * which the type checker enforces at every call site; this pins that the
+ * fallback text is actually gone rather than merely unreached.
+ */
+describe("the Run button names its own destination (cinatra#3693)", () => {
+  it("keeps no bare fallback address in the dialog at all", () => {
+    const source = readFileSync(
+      path.join(__dirname, "..", "run-dialog.tsx"),
+      "utf8",
+    );
+    // No fallback expression, and no address composed here from the slug: the
+    // helper that built one is gone with it.
+    expect(source).not.toMatch(/redirectTo\s*\?\?/);
+    expect(source).not.toMatch(/encodeSlug/);
+    // The destination is the caller's, it is not optional, and it is the only
+    // thing this dialog navigates to.
+    expect(source).toContain("redirectTo: string;");
+    expect(source).toContain("router.push(redirectTo);");
+    expect(source.match(/router\.push\(/g)).toHaveLength(1);
   });
 });

@@ -98,6 +98,12 @@ vi.mock(
   },
 );
 
+// The SKILLS pane, replaced outright: A3 asks what the shell hands it, and the
+// pane's own body reads a skill ledger this suite is not about.
+vi.mock("@/app/agents/[vendor]/[packageName]/[instanceId]/skills/page", () => ({
+  default: vi.fn(async () => "skills-page"),
+}));
+
 // ── The review page's collaborators (the same edges its own suites stub) ────
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: mocks.getAuthSession,
@@ -185,7 +191,10 @@ vi.mock("@/components/page-header", () => ({
 import { ScopedAgentsRoute } from "@/app/scoped-launch-routes";
 import AgentRunReviewPage from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page";
 
+import AgentPackageInstanceSkillsPage from "@/app/agents/[vendor]/[packageName]/[instanceId]/skills/page";
+
 const reviewPageSpy = vi.mocked(AgentRunReviewPage);
+const skillsPageSpy = vi.mocked(AgentPackageInstanceSkillsPage);
 
 const ACTOR = {
   actor: { actorType: "human", userId: "u1", source: "route" },
@@ -205,32 +214,6 @@ const READY = {
 
 function runRow(launchScopeAnchor: unknown) {
   return { id: RUN_ID, templateId: null, stepResults: null, launchScopeAnchor };
-}
-
-/**
- * Every element of a server-rendered tree, props included, without rendering
- * it — through arrays and the plain objects a rail's step list is made of.
- */
-function elementsOf(
-  node: unknown,
-  out: React.ReactElement[] = [],
-  seen: Set<object> = new Set(),
-): React.ReactElement[] {
-  if (node == null || typeof node !== "object" || seen.has(node)) return out;
-  seen.add(node);
-  if (Array.isArray(node)) {
-    for (const child of node) elementsOf(child, out, seen);
-    return out;
-  }
-  if (React.isValidElement(node)) {
-    out.push(node);
-    for (const value of Object.values(node.props as Record<string, unknown>)) elementsOf(value, out, seen);
-    return out;
-  }
-  if (Object.getPrototypeOf(node) === Object.prototype) {
-    for (const value of Object.values(node as Record<string, unknown>)) elementsOf(value, out, seen);
-  }
-  return out;
 }
 
 function reviewParams(instanceId = RUN_ID, reviewTaskId = TASK_ID) {
@@ -346,7 +329,6 @@ describe("A1: a scoped instance sub-route resolves through the same delegation (
   it.each([
     [["results"]],
     [["optimization"]],
-    [["skills"]],
     [["nope"]],
     [["trigger", "extra"]],
     [["review"]],
@@ -364,25 +346,26 @@ describe("A1: a scoped instance sub-route resolves through the same delegation (
 // A2 — the review page's home check, after its access door.
 // ---------------------------------------------------------------------------
 
-describe("A2: the review page sends an anchored run's reader home after the access door (cinatra#3693)", () => {
-  it("the bare address of an organization-anchored run's pending review lands on the scoped run page", async () => {
+describe("A2: the review route sends every reader to the run, after the access door (cinatra#3693)", () => {
+  const GATE_STEP = `?step=review%3A${TASK_ID}`;
+  const AUDIT_STEP = `?step=audit%3A${TASK_ID}`;
+
+  it("the bare address of an organization-anchored run's review lands on the scoped run page", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}`);
+    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}${GATE_STEP}`);
     // AFTER the access door, never before it.
     expect(mocks.loadReviewGateSurface).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the verification reading on the redirect", async () => {
+  it("the verification reading becomes the run's audit step", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({ view: "verification" }) }),
     );
-    expect(message).toBe(
-      `REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}/review/${TASK_ID}?view=verification`,
-    );
+    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}${AUDIT_STEP}`);
     expect(mocks.enforceReviewRunAccess).toHaveBeenCalledTimes(1);
   });
 
@@ -395,26 +378,21 @@ describe("A2: the review page sends an anchored run's reader home after the acce
         searchParams: Promise.resolve({}),
       }),
     );
-    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}`);
+    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}${GATE_STEP}`);
   });
 
-  it("renders a settled gate at the home address, and names the scope in the trail", async () => {
+  it("a settled gate goes to the run page too — no standalone review document", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(ORG_ANCHOR));
     mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled", targets: [], pinnedCapturePairs: {}, agentSummary: null });
-    const tree = await ScopedAgentsRoute({
-      scope: ORG_SCOPE,
-      segments: [VENDOR, PACKAGE, RUN_ID, "review", TASK_ID],
-      searchParams: Promise.resolve({}),
-    });
-    expect(renderToStaticMarkup(tree as React.ReactElement)).toContain('data-testid="review-gate-card"');
-    const crumbs = elementsOf(tree).filter(
-      (el) => Array.isArray((el.props as { entries?: unknown }).entries),
+    const message = await thrownBy(() =>
+      ScopedAgentsRoute({
+        scope: ORG_SCOPE,
+        segments: [VENDOR, PACKAGE, RUN_ID, "review", TASK_ID],
+        searchParams: Promise.resolve({}),
+      }),
     );
-    expect(crumbs).toHaveLength(1);
-    expect((crumbs[0].props as { entries: unknown }).entries).toEqual([
-      { prefix: ORG_BASE, label: "Acme" },
-      { prefix: `${ORG_BASE}/agents`, label: "Agents" },
-    ]);
+    expect(message).toBe(`REDIRECT:${ORG_BASE}/agents/${AGENT_ID}/${RUN_ID}${GATE_STEP}`);
+    expect(message).not.toContain("/review/");
   });
 
   it("a reader the access door refuses is told so, and is never redirected", async () => {
@@ -424,20 +402,57 @@ describe("A2: the review page sends an anchored run's reader home after the acce
     expect(renderToStaticMarkup(tree as React.ReactElement)).toContain("Not authorized");
   });
 
-  it("an unanchored run's pending review lands on the bare run page", async () => {
+  it("an unanchored run's review lands on the bare run page, gate named", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(null));
     const message = await thrownBy(() =>
       AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
     );
-    expect(message).toBe(`REDIRECT:/agents/${AGENT_ID}/${RUN_ID}`);
+    expect(message).toBe(`REDIRECT:/agents/${AGENT_ID}/${RUN_ID}${GATE_STEP}`);
   });
 
-  it("an unanchored run's settled review stays on the bare address, as it always has", async () => {
+  it("an unanchored run's settled review lands there as well", async () => {
     mocks.readAgentRunById.mockResolvedValue(runRow(null));
     mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled", targets: [], pinnedCapturePairs: {}, agentSummary: null });
-    const tree = await AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) });
-    const html = renderToStaticMarkup(tree as React.ReactElement);
-    expect(html).toContain('data-testid="review-gate-card"');
-    expect(elementsOf(tree).some((el) => Array.isArray((el.props as { entries?: unknown }).entries))).toBe(false);
+    const message = await thrownBy(() =>
+      AgentRunReviewPage({ params: reviewParams(), searchParams: Promise.resolve({}) }),
+    );
+    expect(message).toBe(`REDIRECT:/agents/${AGENT_ID}/${RUN_ID}${GATE_STEP}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A3 — the skills pane under a scope.
+// ---------------------------------------------------------------------------
+
+describe("A3: the scoped skills sub-route resolves (cinatra#3693)", () => {
+  it("mounts the skills page with the run, the base, the vantage and the name", async () => {
+    const tree = await ScopedAgentsRoute({
+      scope: ORG_SCOPE,
+      segments: [VENDOR, PACKAGE, RUN_ID, "skills"],
+    });
+    expect(skillsPageSpy).toHaveBeenCalledTimes(1);
+    const props = skillsPageSpy.mock.calls[0]![0] as {
+      params: Promise<Record<string, string>>;
+      scopeBase?: string | null;
+      launchScope?: unknown;
+      scopeTitle?: string | null;
+    };
+    expect(await props.params).toEqual({
+      vendor: VENDOR,
+      packageName: PACKAGE,
+      instanceId: RUN_ID,
+    });
+    expect(props.scopeBase).toBe(ORG_BASE);
+    expect(props.launchScope).toEqual(ORG_SCOPE);
+    expect(props.scopeTitle).toBe("Acme");
+    expect(tree).toBe("skills-page");
+  });
+
+  it("keeps a deeper skills shape not-found", async () => {
+    const message = await thrownBy(() =>
+      ScopedAgentsRoute({ scope: ORG_SCOPE, segments: [VENDOR, PACKAGE, RUN_ID, "skills", "extra"] }),
+    );
+    expect(message).toBe("NEXT_NOT_FOUND");
+    expect(skillsPageSpy).not.toHaveBeenCalled();
   });
 });
