@@ -2,12 +2,12 @@
 //
 // The Sharing tab's body (cinatra#3374), against the ratified drawing
 // (design/specs/app-connectors.html §II, "Sharing tab"):
-//  - "the roll-up card heads the list, and only when there is more than one
-//    connection to roll up" — so a single connection heads NO roll-up and the
-//    list starts with that connection's panel; and where it does head the list,
-//    "The roll-up card is the Connections status card of the Setup tab, with no
-//    Check and no All connections link: the list it counts is directly beneath
-//    it";
+//  - "The roll-up card is the Connections status card of the Setup tab, with
+//    no Check and no All connections link: the list it counts is directly
+//    beneath it", which the maintainer read on 2026-09-26 (cinatra#3454) as
+//    the page's SHAPE and not the count: only a many-connections page has that
+//    Setup card, so only its Sharing tab heads the list with the roll-up, and
+//    it still needs "more than one connection to roll up";
 //  - each panel is "a connection row — … carrying its name and mono line and
 //    nothing else: no status badge and no per-row action";
 //  - "Beneath each row sits the shared permissions card", drawn by the shared
@@ -129,7 +129,7 @@ describe("ConnectorSharingPanels", () => {
     // to roll up, so the list starts with that connection's own panel. ONE rule
     // for every mount — the Sharing tab and the pages that draw no tab strip
     // (the bundled-react setup pages and the §II error treatments) alike.
-    await render(<ConnectorSharingPanels panels={[panel(0)]} />);
+    await render(<ConnectorSharingPanels panels={[panel(0)]} pageShape="many" />);
     expect(
       container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
     ).toBeNull();
@@ -140,8 +140,36 @@ describe("ConnectorSharingPanels", () => {
     expect(accessTrigger(first!)).toBeTruthy();
   });
 
-  it("heads the list with the roll-up card once a SECOND connection is listed", async () => {
+  it("draws NO roll-up on a SINGLE-shape page that lists TWO connections", async () => {
+    // The maintainer's ruling of 2026-09-26 (cinatra#3454): the roll-up
+    // follows the page's SHAPE, not the count. The roll-up card is the
+    // Connections status card of the Setup tab, and the generated connector
+    // page draws no Connections tab, so its Sharing tab heads its list with
+    // nothing however many connections the owner saved.
+    await render(
+      <ConnectorSharingPanels panels={[panel(0), panel(1)]} pageShape="single" />,
+    );
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+    expect(
+      container.querySelectorAll('[data-conformance-id="connector-sharing"]').length,
+    ).toBe(2);
+  });
+
+  it("takes the SINGLE shape when the caller states none", async () => {
+    // No production page carries the many-connections shape today, so a
+    // caller that says nothing gets the shape its page actually has.
     await render(<ConnectorSharingPanels panels={[panel(0), panel(1)]} />);
+    expect(
+      container.querySelector('[data-conformance-id="connector-sharing-rollup"]'),
+    ).toBeNull();
+  });
+
+  it("heads the list with the roll-up card once a SECOND connection is listed", async () => {
+    await render(
+      <ConnectorSharingPanels panels={[panel(0), panel(1)]} pageShape="many" />,
+    );
     const rollup = container.querySelector('[data-conformance-id="connector-sharing-rollup"]');
     expect(rollup).toBeTruthy();
     // The count it carries is the list beneath it.
