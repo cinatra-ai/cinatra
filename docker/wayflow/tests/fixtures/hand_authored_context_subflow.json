@@ -423,6 +423,30 @@
      "$component_ref": "ctx-ideaContext-end"
     },
     "destination_input": "contextSlotBindings"
+   },
+   {
+    "component_type": "DataFlowEdge",
+    "source_node": {
+     "$component_ref": "ctx-ideaContext-resolve_context"
+    },
+    "source_output": "allocationToken",
+    "destination_node": {
+     "$component_ref": "ctx-ideaContext-finalize_interactive"
+    },
+    "destination_input": "allocationToken",
+    "name": "ctx-ideaContext-resolve_context_allocationToken_to_ctx-ideaContext-finalize_interactive"
+   },
+   {
+    "component_type": "DataFlowEdge",
+    "source_node": {
+     "$component_ref": "ctx-ideaContext-resolve_context"
+    },
+    "source_output": "allocationToken",
+    "destination_node": {
+     "$component_ref": "ctx-ideaContext-finalize_autonomous"
+    },
+    "destination_input": "allocationToken",
+    "name": "ctx-ideaContext-resolve_context_allocationToken_to_ctx-ideaContext-finalize_autonomous"
    }
   ],
   "$referenced_components": {
@@ -526,6 +550,10 @@
      {
       "title": "resolutionMode",
       "type": "string"
+     },
+     {
+      "title": "allocationToken",
+      "type": "string"
      }
     ]
    },
@@ -614,7 +642,8 @@
      "slotId": "{{ slotId }}",
      "projectId": "{{ projectId }}",
      "selectionMode": "{{ selectionMode }}",
-     "userResponse": "{{ userResponse }}"
+     "userResponse": "{{ userResponse }}",
+     "allocationToken": "{{ allocationToken }}"
     },
     "inputs": [
      {
@@ -640,6 +669,10 @@
      },
      {
       "title": "userResponse",
+      "type": "string"
+     },
+     {
+      "title": "allocationToken",
       "type": "string"
      }
     ],
@@ -667,7 +700,8 @@
      "slotId": "{{ slotId }}",
      "projectId": "{{ projectId }}",
      "selectionMode": "{{ selectionMode }}",
-     "userResponse": "{# pyagentspec-input-hint (do not remove): {{ slotId }} {{ resolutionMode }} {{ selectedRefs }} #}{\"slotId\":{{ slotId | tojson }},\"resolutionMode\":{{ resolutionMode | tojson }},\"selectedRefs\":{{ selectedRefs | tojson }}}"
+     "userResponse": "{# pyagentspec-input-hint (do not remove): {{ slotId }} {{ resolutionMode }} {{ selectedRefs }} #}{\"slotId\":{{ slotId | tojson }},\"resolutionMode\":{{ resolutionMode | tojson }},\"selectedRefs\":{{ selectedRefs | tojson }}}",
+     "allocationToken": "{{ allocationToken }}"
     },
     "inputs": [
      {
@@ -703,6 +737,10 @@
         "type": "object"
        }
       }
+     },
+     {
+      "title": "allocationToken",
+      "type": "string"
      }
     ],
     "outputs": [

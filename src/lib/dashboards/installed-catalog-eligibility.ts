@@ -7,7 +7,10 @@
  * the store or the extension access evaluator already decided.
  */
 import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity";
-import { normalizeCreatableDashboardName } from "@cinatra-ai/dashboards/entity-identity";
+import {
+  normalizeCreatableDashboardName,
+  workspaceDashboardRef,
+} from "@cinatra-ai/dashboards/entity-identity";
 import type { AccessScopeVantage } from "@cinatra-ai/extensions/access-scope-vantage";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
@@ -86,6 +89,17 @@ export function actorMayReachSurface(
       return !!surface.scopeId && (actor.teamIds ?? []).includes(surface.scopeId);
     case "project":
       return !!surface.scopeId && actorHoldsProjectGrant(actor, surface.scopeId);
+    case "workspace":
+      // MEMBERSHIP IS THE REACH. Every member of an organization is positioned
+      // at the workspace, so the workspace surface adds no scope of its own to
+      // prove: the two checks above (the actor's organization IS this leg's
+      // organization, and they hold a resolved membership role in it) are the
+      // whole question. They are the load-bearing ones too, because this leg's
+      // organization is one member organization of the viewer's vantage, and
+      // the actor handed in is the actor AS RESOLVED FOR THAT ORGANIZATION. An
+      // actor resolved for a different tenant is refused by the first check, so
+      // a federated read can never cross a fence the viewer does not hold.
+      return true;
     default: {
       const _exhaustive: never = surface;
       void _exhaustive;
@@ -99,9 +113,16 @@ export function actorMayReachSurface(
  * access policy is evaluated against (`policyFieldAdmitsScopeVantage`).
  */
 export function vantageForSurface(surface: CatalogSurface): AccessScopeVantage {
-  return surface.kind === "personal"
-    ? { kind: "personal", orgId: surface.orgId }
-    : { kind: surface.kind, orgId: surface.orgId, scopeId: surface.scopeId };
+  switch (surface.kind) {
+    case "personal":
+      return { kind: "personal", orgId: surface.orgId };
+    // The workspace projects a GENERIC MEMBER of this leg's organization, so it
+    // carries the organization and no scope id (see `visibilityAdmitsScopeVantage`).
+    case "workspace":
+      return { kind: "workspace", orgId: surface.orgId };
+    default:
+      return { kind: surface.kind, orgId: surface.orgId, scopeId: surface.scopeId };
+  }
 }
 
 /**
@@ -172,6 +193,12 @@ export function destinationRefForSurface(
         ownerLevel: "user",
         ownerId: actorUserId,
       };
+    case "workspace":
+      // The viewer's own organization-free workspace collection, through the
+      // platform's ONE spelling of that ref. It does not depend on this leg's
+      // organization, which is why every leg of the federation resolves the
+      // SAME destination and the collision check is taken once.
+      return workspaceDashboardRef(actorUserId);
     default: {
       const _exhaustive: never = surface;
       void _exhaustive;
