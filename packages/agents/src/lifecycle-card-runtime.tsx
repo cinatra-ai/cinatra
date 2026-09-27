@@ -1256,6 +1256,29 @@ function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
 }
 
 /**
+ * Is this run DISPATCHED AND ABOUT TO START? (cinatra#3062, fix leg 5.)
+ *
+ * `queued` is the dispatch waiting for its worker, and the `queued->running`
+ * CAS that ends it is the run's start — the one change the skills card beside
+ * this watch turns read-only on (§V: "Once the run is running, the selection is
+ * fixed and the row is read-only"). A watch that has backed off to its long
+ * interval by then left that card editable, with a live Continue, for up to a
+ * whole interval after the start. So a queued run is read at the brisk cadence
+ * too: the status is transient, and the run panel polls the same route every
+ * two seconds for a queued run anyway.
+ *
+ * AND SO IS A RUN STILL AT ITS SKILLS STEP (`pending_input`, convergence
+ * finding). One Continue there can release the run and start it between two
+ * looks of a backed-off watch, so `queued` is never read and the card kept its
+ * boxes and its Continue for up to a whole long interval after the start. The
+ * Skills step is a control a person is about to press — the same reason an open
+ * moment is read briskly above.
+ */
+function runIsAboutToStart(card: RunMomentCard): boolean {
+  return card.status === "queued" || card.status === "pending_input";
+}
+
+/**
  * HOW FAR APART THE LOOKS ARE, AND WHAT ENDS THEM.
  *
  * THE CADENCE BACKS OFF but does NOT expire, and that is the whole point of
@@ -1396,7 +1419,9 @@ export function useRunMomentCard({
     };
     const timer = window.setTimeout(
       look,
-      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
+      probe.reads === 0
+        ? 0
+        : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card) || runIsAboutToStart(card)),
     );
     // THE PERSON COMING BACK TO THE TAB is the cheap stand-in for "something
     // may have happened while nobody was looking" — the same signal the card

@@ -393,10 +393,13 @@ describe("the boundary, asked of the ROW", () => {
     expect(
       statusMod.recommendationRunHasStartedForRow({ status: "pending_input", startedAt: new Date() }),
     ).toBe(true);
-    // …and every unambiguous status keeps the answer it already had.
+    // …a QUEUED row with no stamp has not started either: the stamp is written
+    // only in the queued->running dispatch CAS, so until that CAS no work step
+    // has run (cinatra#3062, fix leg 5)…
     expect(statusMod.recommendationRunHasStartedForRow({ status: "queued", startedAt: null })).toBe(
-      true,
+      false,
     );
+    // …and every other unambiguous status keeps the answer it already had.
     expect(
       statusMod.recommendationRunHasStartedForRow({ status: "pending_input", startedAt: null }),
     ).toBe(false);

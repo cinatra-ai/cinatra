@@ -138,6 +138,12 @@ export const START_AMBIGUOUS_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRu
  *
  *   - a status in `START_AMBIGUOUS_RUN_STATUSES` with NO stamp has NOT started
  *     — the case the card was getting wrong;
+ *   - `queued` with NO stamp has NOT started either (cinatra#3062, fix leg 5).
+ *     `queued` is the dispatch waiting for its worker, and the stamp is written
+ *     in the `queued->running` CAS that ends it — so until that CAS no work step
+ *     has run, which is what §V calls "before the run starts". The status-only
+ *     answer calls it started, and the card drew the read-only reading with no
+ *     Continue for as long as the row sat there right after the one Continue;
  *   - anything else with no stamp keeps the status-only answer
  *     `recommendationRunHasStarted` gives, so a row whose stamp is missing for
  *     any other reason never becomes editable on that account.
@@ -154,6 +160,7 @@ export function recommendationRunHasStartedForRow(
   if (run.startedAt !== null && run.startedAt !== undefined) return true;
   const status = run.status;
   if (typeof status === "string" && START_AMBIGUOUS_RUN_STATUSES.has(status)) return false;
+  if (status === "queued") return false;
   return recommendationRunHasStarted(status);
 }
 
@@ -171,6 +178,14 @@ export function recommendationRunHasStartedForRow(
  * BEFORE execution — see `START_AMBIGUOUS_RUN_STATUSES` — and leaving it out is
  * what refused a returning reader's change on a run that had not started, while
  * the screen was offering them the box to make it with.
+ *
+ * `queued` IS DELIBERATELY NOT IN IT, although an unstamped queued row reads as
+ * not started above (cinatra#3062, fix leg 5). The dispatch reads the run's
+ * selected skill revisions for its ledger snapshot while the row is still
+ * `queued`, BEFORE the `queued->running` CAS, so a selection written in that
+ * window could miss the snapshot the run is materialized from. The store stays
+ * the conservative authority there, and a change pressed in that window is
+ * answered by the row's existing refusal.
  */
 export const PRE_START_RUN_STATUSES_WITHOUT_A_START_STAMP: ReadonlySet<string> = new Set<string>([
   ...PRE_EXECUTION_RUN_STATUSES,
