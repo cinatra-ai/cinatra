@@ -30,6 +30,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  orderRunRailSteps,
   railDrawsUpcomingRunSteps,
   upcomingRunRailStepKeys,
 } from "../instance-screens";
@@ -110,7 +111,7 @@ function runPageRail(params: {
   if (numbered.length > 0) {
     railSteps.push(...buildSetupRailSteps(numbered.map(asStep), railSteps.length - head.length));
   }
-  return railSteps;
+  return orderRunRailSteps(railSteps);
 }
 
 /** The rail as a reader sees it: every row title, in order. */
@@ -143,21 +144,24 @@ describe("the rail is the run whole lifecycle once the first step is settled", (
     //     authorize" — including when it is drawn as a step the run has not
     //     reached yet, because an upcoming row is drawn where its step will
     //     stand.
+    // The drawing's order, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
     expect(railRowTitles(view.container)).toEqual([
       "Skills",
-      "Setup",
       "Schedule",
+      "Setup",
       "Review",
     ]);
     // Steps already passed sit above; steps still to come below. The settled
     // form is row 1 rather than row 0 now: the Skills row stands above it,
     // drawn as a step the run has not reached (cinatra#3047 fix leg 8).
+    // And row 2 since the Schedule entry stands above it too, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
     const rows = view.container.querySelectorAll("[data-run-surface-rail-step]");
     expect(rows[0].getAttribute("data-run-surface-rail-reached")).toBe("false");
-    expect(rows[1].getAttribute("data-run-surface-rail-settled")).toBe("true");
-    expect(rows[1].getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(rows[1].getAttribute("aria-current")).toBe("step");
-    for (const row of Array.from(rows).slice(2)) {
+    expect(rows[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(rows[2].getAttribute("data-run-surface-rail-settled")).toBe("true");
+    expect(rows[2].getAttribute("data-run-surface-rail-selected")).toBe("true");
+    expect(rows[2].getAttribute("aria-current")).toBe("step");
+    for (const row of Array.from(rows).slice(3)) {
       expect(row.getAttribute("data-run-surface-rail-reached")).toBe("false");
     }
   });
@@ -184,10 +188,11 @@ describe("the rail is the run whole lifecycle once the first step is settled", (
     //     authorize" — including when it is drawn as a step the run has not
     //     reached yet, because an upcoming row is drawn where its step will
     //     stand.
+    // The drawing's order, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
     expect(railRowTitles(view.container)).toEqual([
       "Skills",
-      "Setup",
       "Schedule",
+      "Setup",
       "Review",
     ]);
   });

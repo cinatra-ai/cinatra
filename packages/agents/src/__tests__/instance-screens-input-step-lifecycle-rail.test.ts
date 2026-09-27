@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import { buildRunInputSteps } from "../run-input-steps";
 import { buildRunInputRailSteps } from "../run-input-rail-steps";
 import { buildSetupRailSteps } from "../setup-run-surface-steps";
+import { orderRunRailSteps } from "../instance-screens";
 
 const SCREEN_SRC = fs.readFileSync(
   path.join(__dirname, "..", "instance-screens.tsx"),
@@ -105,8 +106,9 @@ describe("the answered first step keeps its place, and the rail renumbers", () =
       // OFFSET rule this case pins is unchanged.
       "buildSetupRailSteps(setupStepsOnTheRail, inputRailSteps.length)",
     );
+    // The composed rail passes through the one order, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
     expect(TRIGGER_SCREEN).toContain(
-      "const railSteps: RunSurfaceRailStep[] = [...inputRailSteps, ...setupRailSteps];",
+      "const railSteps: RunSurfaceRailStep[] = orderRunRailSteps([...inputRailSteps, ...setupRailSteps]);",
     );
   });
 
@@ -114,7 +116,7 @@ describe("the answered first step keeps its place, and the rail renumbers", () =
     expect(TRIGGER_SCREEN).toContain("resolveTemplateInputSchema(template)");
   });
 
-  it("puts the settled entry first and the schedule second", () => {
+  it("puts Skills and Schedule above the settled entry, and Review below it", () => {
     const inputRows = buildRunInputRailSteps(
       buildRunInputSteps({
         required: ["idea"],
@@ -132,10 +134,11 @@ describe("the answered first step keeps its place, and the rail renumbers", () =
       ],
       inputRows.length,
     );
-    expect([...inputRows, ...setupRows].map((r) => r.key)).toEqual([
-      "input:0",
-      "schedule",
+    // The drawing's order, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
+    expect(orderRunRailSteps([...inputRows, ...setupRows]).map((r) => r.key)).toEqual([
       "recommendation",
+      "schedule",
+      "input:0",
       "review",
     ]);
     expect(inputRows[0].settled).toBe(true);

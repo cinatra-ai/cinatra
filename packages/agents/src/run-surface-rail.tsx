@@ -42,13 +42,17 @@
 import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
+  useEffect,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ReviewGatePlaceholder } from "./review-gate-states";
 // THE FRAME STATES THAT IT DRAWS THE RAIL (cinatra#3478) -- see the
 // declaration beside the rail vocabulary in ./run-step-rail-extra-entry.
 import {
@@ -324,7 +328,8 @@ export function RunSurfaceRailRow({
   // The emphasised treatment is for the row the surface is actually on. A row
   // that cannot be opened never gets it — and neither does a row its page has
   // said the run has not reached.
-  const emphasised = Boolean(selected) && selectable && reached !== false;
+  const emphasised =
+    Boolean(selected) && (selectable || selection?.skillsReleased === true) && reached !== false;
   return (
     <Button
       type="button"
@@ -408,11 +413,88 @@ export function RunSurfaceRailSeparator(): ReactElement {
   );
 }
 
+/**
+ * DOES THE RUN'S OWN ROW NAME A STOP THE RAIL DOES NOT CARRY? (cinatra#3246.)
+ * A rail composed while the run worked carries no entry for the gate it stops
+ * at: the run's row reads `pending_approval` with its recorded moment.
+ */
+export function runRowReadsAnUncarriedStop(read: {
+  status?: string | null;
+  lifecycleMoment?: string | null;
+}): boolean {
+  return (
+    read.status === "pending_approval" &&
+    typeof read.lifecycleMoment === "string" &&
+    read.lifecycleMoment.length > 0
+  );
+}
+
+/**
+ * THE PAGE FOLLOWS THE RUN TO THE GATE IT STOPS AT (cinatra#3246), on the model
+ * of `TriggerStepWatcher`: one `GET /api/agents/runs/<id>` at a time, every two
+ * seconds, and `router.refresh()` ONCE when the row names a stop -- then it
+ * stands down, as it does on any status the run no longer works in.
+ */
+export function RunStopFollower({ runId }: { runId: string }): null {
+  const router = useRouter();
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const controller = new AbortController();
+    const intervalId = window.setInterval(() => {
+      if (doneRef.current) {
+        window.clearInterval(intervalId);
+        return;
+      }
+      if (inFlight) return;
+      inFlight = true;
+      fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error("not ok"))))
+        .then((data: { status?: string | null; lifecycleMoment?: string | null }) => {
+          if (cancelled || doneRef.current) return;
+          if (runRowReadsAnUncarriedStop(data)) {
+            doneRef.current = true;
+            window.clearInterval(intervalId);
+            router.refresh();
+            return;
+          }
+          const stillWorking =
+            data.status === "queued" ||
+            data.status === "running" ||
+            data.status === "pending_approval";
+          if (typeof data.status === "string" && !stillWorking) {
+            doneRef.current = true;
+            window.clearInterval(intervalId);
+          }
+        })
+        // A read that fails is retried on the next tick; the page never fails on it.
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
+    }, 2_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      controller.abort();
+    };
+  }, [runId, router]);
+
+  return null;
+}
+
 export function RunSurfaceRail({
   steps,
   rail = null,
   detail = null,
   initialSelection,
+  releasedSelection,
 }: {
   /** The steps heading the rail, in the order the plan puts them. */
   steps: readonly RunSurfaceRailStep[];
@@ -425,6 +507,8 @@ export function RunSurfaceRail({
    * knows whether the agent has run and whether it is paused on a gate.
    */
   initialSelection: RunStepSelection;
+  /** The step the page's own election names once the Skills question is answered (cinatra#3285). */
+  releasedSelection?: RunStepSelection;
 }): ReactElement {
   const [selected, setSelected] = useState<RunStepSelection>(() =>
     resolveRunSurfaceSelection(steps, detail, initialSelection),
@@ -467,9 +551,15 @@ export function RunSurfaceRail({
     if (resolveRunSurfaceSelection(steps, detail, next) !== next) return;
     setSelected(next);
   };
+  // The instant the Skills decision lands, the entry reads settled and the selection moves to the step the page elects for the released run, before the refresh does (cinatra#3285).
+  const [skillsReleased, setSkillsReleased] = useState(false);
+  const releaseSkills = () => {
+    setSkillsReleased(true);
+    if (releasedSelection !== undefined) setSelected(releasedSelection);
+  };
 
   return (
-    <RunStepSelectionProvider value={{ selected, select }}>
+    <RunStepSelectionProvider value={{ selected, select, skillsReleased, releaseSkills }}>
       {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
 
           A run panel drawn inside this detail raises a live rail column of
@@ -554,7 +644,19 @@ export function RunSurfaceRail({
             as the step's own surface and suppresses the fallback — an openable
             row over an empty column, which is the one thing this rail must not
             produce. */}
-        {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
+        {/* Released, with nothing of its own to draw yet, the selected entry's page is the run-progress placeholder -- never the answered Skills card (cinatra#3246). */}
+        {open && runSurfaceNodeExists(open.surface) ? (
+          open.surface
+        ) : runSurfaceNodeExists(detail) || !skillsReleased ? (
+          detail
+        ) : (
+          <section
+            className="rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+            data-run-review-slot="working"
+          >
+            <ReviewGatePlaceholder />
+          </section>
+        )}
       </div>
       </RunSurfaceRailFrameProvider>
     </RunStepSelectionProvider>
