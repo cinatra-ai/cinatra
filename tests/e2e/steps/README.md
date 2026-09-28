@@ -8,11 +8,15 @@ defect of a step, with a test, fixed once for every run.
 
 | Step | What it guarantees |
 | --- | --- |
-| `signInThroughPage` | One sign-in, through the product's own sign-in page, after the form has hydrated. |
+| `signInThroughPage` | One sign-in, through the product's own sign-in page, after the form has hydrated, and back only once the page has landed past it. |
 | `waitForIsland` | A frame of the review island, taken when it has loaded or when the bound runs out. |
 | `watchRun` | A run's watch kept to its bound, with a frame taken when the run settles or at the bound. |
 | `readCount` | A count on one line, taken once it has held still. |
 | `navigateTo` | A page reached through the product's own navigation, never by typing its address. |
+| `readRows` | Rows of one table by named columns, every name checked against the database's catalog first. |
+| `press` | One control pressed by its role and accessible name, never a guess, and the page's next settled state. |
+| `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
+| `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -58,6 +62,10 @@ which renders `noValidate` only once hydration has committed, so the form's
 5. Fills the two fields and presses once.
 6. Reads the app's own sign-in request (the email route, or the username route the
    same form takes) and its answer.
+7. Waits for the landing: the page leaves the sign-in page, and the page it lands
+   on draws its ready signal, the app shell (`SIGN_IN_READY_SELECTORS`: its link
+   to the chat, its navigation or its sidebar; `ready` names others). A step
+   taken next never runs on the sign-in page.
 
 **The once-only budget.** A run creates one budget with `createSignInBudget()` and
 hands the same object to every sign-in it makes. A press that sent no sign-in
@@ -69,14 +77,16 @@ without loading anything.
 | --- | --- | --- |
 | `SIGN_IN_NAVIGATION_BOUND_MS` | 300_000 | the page load, and the one reload |
 | `SIGN_IN_HYDRATION_BOUND_MS` | 60_000 | from the load to the hydration mark |
-| `SIGN_IN_HYDRATION_POLL_MS` | 100 | how often the mark is read |
+| `SIGN_IN_HYDRATION_POLL_MS` | 100 | how often the mark, and then the landing, is read |
 | `SIGN_IN_ACTION_BOUND_MS` | 30_000 | one fill, or the press |
 | `SIGN_IN_REQUEST_BOUND_MS` | 10_000 | from the press to the app's own request |
 | `SIGN_IN_ANSWER_BOUND_MS` | 120_000 | from that request to the app's answer |
+| `SIGN_IN_LANDING_BOUND_MS` | 120_000 | from the app's answer to the landing and its ready signal |
 
 Refusal kinds: `input` and `spent` (nothing was sent), `blocker` (the page never
 became pressable), `driver-failure` (the press sent no sign-in request),
-`rejected` and `no-answer` (the request left the page, and the budget is spent).
+`rejected`, `no-answer` and `no-landing` (the request left the page, and the budget
+is spent).
 
 ## `waitForIsland(page, { record, shutter, frameSrcPath?, bound?, pollMs? })`
 
@@ -163,6 +173,154 @@ context's first page loads.
 | `NAVIGATE_ACTION_BOUND_MS` | 30_000 | the press |
 | `NAVIGATE_START_BOUND_MS` | 5_000 | from the press to the start of its navigation |
 | `NAVIGATE_LANDING_BOUND_MS` | 120_000 | from the press to the landing |
+
+<!-- readRows, the landing of signInThroughPage, dispatchRun, press and selectFrom -->
+
+## `readRows(database, { table, columns, record, where?, schema?, limit?, bounds? })`
+
+Reads rows of one table by named columns. The caller hands the step the database
+client it already holds: a connected `pg` client or pool, or anything with a
+`query(text, values)` call that answers `{ rows }`. The step imports no driver of
+its own.
+
+1. Reads the columns of every table of that name from the database's own catalog
+   (`information_schema.columns`), before anything else.
+2. Refuses at once a table no schema holds and a column the table does not have,
+   and names the closest there is: `user_id` finds `userId`, and `org_id` finds
+   `organizationId`. The columns of `where` are checked the same way.
+3. Builds the one query from names the catalog listed, each quoted as an
+   identifier, and hands every value of `where` to the database as a bound
+   parameter (`null` matches an empty column). It never takes a query string.
+4. Answers `{ schema, table, columns, rows }` and writes one line that names the
+   table, the columns and the matched columns, never a value.
+
+The product keeps its sign-in tables (camel-case columns such as `userId`) in
+`public`, and its own tables in its configured schema. Without `schema` the step
+reads the one schema that holds the table, and refuses a table that two schemas
+hold until the schema is named.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `READ_ROWS_BOUND_MS` | 10_000 | one reading of the database: the catalog, or the rows |
+| `READ_ROWS_LIMIT` | 100 | the rows one reading answers; more matching rows are refused, never cut |
+
+Refusal kinds: `input`, `unknown-table`, `ambiguous` and `unknown-column`
+(nothing was read), `too-many-rows`, `unreadable` (the database refused the
+reading; only the error's class and code are kept) and `no-answer`. Its unit
+tests read a database double. With `E2E_STEPS_UNIT_DATABASE_URL` naming a
+PostgreSQL database the tests may create schemas in, the same cases also read
+that database, in schemas they create and drop.
+
+## The control steps: `press`, `selectFrom` and `dispatchRun`
+
+These steps find a control as a person with a screen reader finds it: by its
+role and its accessible name. The name is the text the elements of
+`aria-labelledby` hold, `aria-label`, the control's own labels or a fieldset's
+legend, or, for a button, a link, a tab, a menu item, an option or a radio, its
+text without hidden parts. Only a shown control counts: drawn, and not hidden
+from assistive technology (`aria-hidden`). Names are compared whole, after each
+run of white space becomes one space.
+
+When a name matches several controls, the step acts on none of them: it refuses
+(`ambiguous`) and names where each one sits. The one control a step acts on
+carries the mark `data-step-control` for that act only. A refusal lists at most
+`CONTROL_NAMES_LISTED` (ten) names and counts the others.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | one press or one selection |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while a step waits |
+
+## `press(page, { name, record, role?, bounds? })`
+
+Presses the one shown control of `role` named `name`: a button by default, or a
+link, a menu item or a tab (`role: "link"`, `"menuitem"` or `"tab"`). Then it
+waits for the page's next settled state, read with the start signal of
+`navigateTo` (a navigation request, the page's own request for a link's path, or
+another path in the address):
+
+- no start signal within `PRESS_START_BOUND_MS`: no navigation started, and the
+  page stayed where it was;
+- a start signal: the navigation must land within `PRESS_SETTLE_BOUND_MS`, on a
+  new document that has loaded, or in place on another path.
+
+A press whose navigation starts only after the start bound (a handler that waits
+for a slow answer first) reads as one that stayed; give such a control a longer
+`startMs`. The step answers `{ name, role, from, path, navigated, elapsedMs }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation |
+
+Refusal kinds: `input`, `unreadable` (the page could not be read), `no-control`
+(naming the controls of the role that the page shows), `ambiguous` and
+`disabled` (nothing was pressed), `driver-failure` and `unsettled`.
+
+## `selectFrom(page, { picker, entry, record, bounds? })`
+
+Selects `entry`, by its visible text, in the one shown picker named `picker`:
+
+- a select: the option is selected as a person selects it;
+- a radio group (`role="radiogroup"`, or a fieldset or group that holds radios):
+  the radio with that label is checked;
+- a listbox: the option is pressed;
+- a combobox that is not a text field: it is pressed first, to open the list it
+  controls (`aria-controls`), and the option is pressed in that list.
+
+Then it waits until the page reflects the selection: the entry reads as selected
+(the selected option of a select, a checked radio, `aria-selected` or
+`aria-checked`, a combobox that shows the entry), or a live region (a status, an
+alert, a toast) names the entry that did not name it before. The step answers
+`{ picker, entry, kind, via, path, elapsedMs }`, where `via` is `state` or
+`confirmation`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, and from opening a combobox to its list |
+
+Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
+shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
+(nothing was selected), `driver-failure` and `not-reflected`.
+
+## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
+
+Starts a run from its card, or sends it through the conversation's composer, or
+both, the card first.
+
+- **The card.** A card is an `article`, or an element the design system marks as
+  a card (`data-slot="card"`, or a `data-slot` that ends in `-card`). Its name is
+  its `aria-label`, the text of `aria-labelledby`, or its title: the element
+  marked as the card's name or title, or its first heading. The step presses the
+  card's one shown button or link named `control` (`Run` by default).
+- **The composer.** With `prompt`, the step waits for the one shown text box
+  named `composer` (`Send message` by default), types the prompt into it, and
+  presses the send control, the button of the same name. The product gives its
+  composer that name in an empty conversation and in one with messages alike;
+  only the placeholder differs ("Ask anything..." or "Type a message..."), and a
+  placeholder is never read as a name. No line carries the prompt.
+
+Then the step waits for what the press that sent the run brings that the page
+did not show before:
+
+- the run: the run page's surface, or the run panel the conversation draws, with
+  the newest run's state read as `watchRun` reads it; or
+- a notification: a toast that is neither an error nor still loading, or a row
+  of the notifications list.
+
+The step answers `{ card, via, state, path, elapsedMs }`, where `via` is `run`
+or `notification`. To watch the run itself, hand the page to `watchRun` next.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call, or the card's press, to the composer |
+| `DISPATCH_RUN_BOUND_MS` | 120_000 | from the press that sent the run to the run or its notification |
+
+Refusal kinds: `input`, `unreadable`, `no-card` (naming the cards the page
+shows), `ambiguous`, `no-control` (naming the card's controls) and `disabled`
+(nothing was pressed), `no-composer` (naming the text boxes the page shows; no
+prompt was sent), `driver-failure` and `no-run` (the refusal names the page, and
+an error the page shows).
 
 ## Shared bounds
 

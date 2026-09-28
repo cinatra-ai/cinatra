@@ -41,6 +41,22 @@ const BOUND_NAMES = [
   "SIGN_IN_REQUEST_BOUND_MS",
 ];
 
+// readRows, the landing of signInThroughPage, dispatchRun, press and selectFrom:
+// their steps and their bounds join the lists above.
+STEP_NAMES.push("dispatchRun", "press", "readRows", "selectFrom");
+BOUND_NAMES.push(
+  "CONTROL_ACTION_BOUND_MS",
+  "CONTROL_POLL_MS",
+  "DISPATCH_RUN_BOUND_MS",
+  "DISPATCH_RUN_COMPOSER_BOUND_MS",
+  "PRESS_SETTLE_BOUND_MS",
+  "PRESS_START_BOUND_MS",
+  "READ_ROWS_BOUND_MS",
+  "SELECT_REFLECT_BOUND_MS",
+  "SIGN_IN_LANDING_BOUND_MS",
+);
+BOUND_NAMES.sort();
+
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {
     const steps = theSteps(...STEP_NAMES, "createSignInBudget");

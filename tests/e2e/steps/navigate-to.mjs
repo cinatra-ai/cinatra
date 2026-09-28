@@ -100,7 +100,7 @@ async function visibleLinks(page, path, from, record) {
  * @param {string | null} origin
  * @param {string} path
  */
-function startsNavigation(page, request, origin, path) {
+export function startsNavigation(page, request, origin, path) {
   try {
     if (request.frame() !== page.mainFrame()) return false;
     if (request.isNavigationRequest()) return true;

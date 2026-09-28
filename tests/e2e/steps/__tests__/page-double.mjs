@@ -440,7 +440,15 @@ export class PageDouble {
           scenario.handler === "posts"
             ? [EMAIL_ROUTE, { email: id, password: secret }]
             : [USERNAME_ROUTE, { username: id, password: secret }];
-        this.#send("POST", new URL(route, this.#origin).href, JSON.stringify(payload), false).catch(() => {});
+        this.#send("POST", new URL(route, this.#origin).href, JSON.stringify(payload), false)
+          .then((sent) => {
+            // The landing of signInThroughPage: once the app has answered 200, the
+            // page goes where its scenario says, as the product's form does.
+            if (sent.status === 200 && typeof scenario.landing === "string" && this.#dom === dom) {
+              this.#navigate("GET", new URL(scenario.landing, this.#origin).href, null).catch(() => {});
+            }
+          })
+          .catch(() => {});
       });
     } else if (scenario.handler === "silent") {
       form.addEventListener("submit", (event) => event.preventDefault());
@@ -734,5 +742,29 @@ class LocatorDouble {
       if (Date.now() >= until) throw new TimeoutError(timeoutMessage);
       await pause(20);
     }
+  }
+
+  // readRows, the landing of signInThroughPage, dispatchRun, press and
+  // selectFrom: the two calls selectFrom makes on the page's own controls, with a
+  // browser's rules. A select takes an option by its place and announces the
+  // change; a radio is checked by its own press, which unchecks the others of its
+  // group and announces the change.
+  async selectOption(value, { timeout = 30_000 } = {}) {
+    const element = await this.#one(timeout, `locator.selectOption: Timeout ${timeout}ms exceeded.`);
+    if (element.localName !== "select") throw new Error("locator.selectOption: Element is not a <select> element");
+    const index = value && typeof value === "object" ? value.index : undefined;
+    if (!Number.isInteger(index) || !element.options[index]) throw new Error("locator.selectOption: did not find some options");
+    const window = element.ownerDocument.defaultView;
+    element.selectedIndex = index;
+    element.dispatchEvent(new window.Event("input", { bubbles: true }));
+    element.dispatchEvent(new window.Event("change", { bubbles: true }));
+    return [element.options[index].value];
+  }
+
+  async check({ timeout = 30_000 } = {}) {
+    const element = await this.#one(timeout, `locator.check: Timeout ${timeout}ms exceeded.`);
+    if (element.localName !== "input" || !["radio", "checkbox"].includes(element.type)) throw new Error("locator.check: Not a checkbox or radio button");
+    if (!element.checked) element.click();
+    if (!element.checked) throw new Error("locator.check: Clicking the checkbox did not change its state");
   }
 }
