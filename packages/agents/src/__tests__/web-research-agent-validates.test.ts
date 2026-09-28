@@ -118,7 +118,7 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(union).toEqual(inputTitles);
   });
 
-  it("EndNode declares 4 outputs (enrichedRows/extractionNotes/failures/webChecks) AND data_flow_connections.length === 9 AND control_flow_connections.length === 2", () => {
+  it("EndNode declares 4 outputs (enrichedRows/extractionNotes/failures/webChecks) AND data_flow_connections.length === 11 AND control_flow_connections.length === 3", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -129,8 +129,8 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(byTitle.get("failures")).toBe("array");
     expect(byTitle.get("webChecks")).toBe("array");
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(9);
+    expect(dfc.length).toBe(11);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(2);
+    expect(cfc.length).toBe(3);
   });
 });
