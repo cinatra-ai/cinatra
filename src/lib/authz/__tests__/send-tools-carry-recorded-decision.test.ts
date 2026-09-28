@@ -52,6 +52,10 @@ const INVENTORY_MEMBERS = [
   "agent_source_publish",
   "artifact_source_publish",
   "skill_source_publish",
+  // Publishing: an agent package through a creation request.
+  "agent_creation_request_propose",
+  "agent_creation_request_decide",
+  "agent_creation_request_retry_publish",
   // An answer to a person's pending gate in a run.
   "agent_run_resume",
 ] as const;
