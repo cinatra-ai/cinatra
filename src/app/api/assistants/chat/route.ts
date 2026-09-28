@@ -370,10 +370,13 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   // instanceId. Zero/multiple origin-matched rows, or a divergent id → deny.
   // This re-pins the write target to the verified origin's single canonical row
   // (the server-verified-origin authority the AUTH INVARIANT preserves EXACTLY).
+  // cinatra#3715: a sign-in pinned to the handshake's identity re-pins through
+  // the same opt-in the sign-in used — the frame gate's one handshake rule.
   const reResolvedInstance = resolveCanonicalInstanceForOrigin({
     instancesConfigKey: entry.auth.instancesConfigKey,
     origin: verifiedOrigin ?? "",
     claimedInstanceId: claims.instanceId,
+    connectSiteFallbackClient: entry.auth.instancesConfigKey,
   });
   if (!reResolvedInstance || reResolvedInstance !== claims.instanceId) {
     return denyUserAuth("instance_binding_failed");

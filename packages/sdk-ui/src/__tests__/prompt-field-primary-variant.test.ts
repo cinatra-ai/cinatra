@@ -43,9 +43,21 @@ describe("PromptField §I primary variant (#2865)", () => {
   it("keeps the box, the raised ground and the send affordance the promoted input needs", () => {
     // §I: the chat box keeps all three and takes the line-strong edge.
     expect(SOURCE).toMatch(
-      /relative flex items-end gap-1 rounded-control border \$\{primary [^}]*\} bg-surface-strong shadow-sm/,
+      /relative flex items-end gap-1 \$\{primary \? "rounded-chip" : "rounded-control"\} border \$\{primary [^}]*\} bg-surface-strong shadow-sm/,
     );
     expect(SOURCE).toContain("aria-label={pending ? stopAriaLabel : submitAriaLabel}");
+  });
+
+  it("gives only the promoted field the composer's 8px radius, and every other field keeps its own", () => {
+    // §I: "the composer takes the 8px radius the prompt window already gives a
+    // conversational input, and every colour is a shared token" — the shared
+    // `--r-chip` token (8px) goes to the promoted field alone. A field that says
+    // nothing (the run's prompt window, drawn at 10px) keeps `rounded-control`.
+    expect(SOURCE).toContain('${primary ? "rounded-chip" : "rounded-control"}');
+    // One place decides it — no second, unconditional `rounded-chip` that would
+    // move every consumer — and no arbitrary radius value.
+    expect(SOURCE.match(/rounded-chip/g)).toHaveLength(1);
+    expect(SOURCE).not.toMatch(/rounded-\[8px\]/);
   });
 
   it("emits a conformance id only when the host asks for one", () => {
