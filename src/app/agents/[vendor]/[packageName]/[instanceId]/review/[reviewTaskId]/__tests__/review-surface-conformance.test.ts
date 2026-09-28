@@ -525,10 +525,14 @@ describe("§IV — the decision: three affordances, one bar, atomic, re-validate
     expect(DECISION_BAR).toMatch(/Textarea/);
   });
 
-  it("carries the picture's prompt as its OWN field beside the note (item 5)", () => {
-    expect(DECISION_BAR).toMatch(/data-conformance-id="review-regenerate-prompt-field"/);
-    expect(DECISION_BAR).toMatch(/Picture prompt/);
-    // Its own value on the submit, never folded into the note.
+  it("carries ONE note field for every review — a picture's prompt opens in it (item 5, as §VI draws it)", () => {
+    // §VI "One note field, and it reads for both roads": no second input that
+    // appears for one kind of artifact only. The prompt is pre-filled INTO the
+    // note, and the member the change road reads the picture's prompt from stays.
+    const code = stripComments(DECISION_BAR);
+    expect(code).not.toMatch(/data-conformance-id="review-regenerate-prompt-field"/);
+    expect(code).not.toMatch(/Picture prompt/);
+    expect((code.match(/<Textarea\b/g) ?? []).length).toBe(1);
     expect(DECISION_BAR).toMatch(/regeneratePrompt/);
   });
 

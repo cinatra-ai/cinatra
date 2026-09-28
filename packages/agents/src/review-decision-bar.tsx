@@ -30,8 +30,8 @@ export type SubmitReviewDecisionAction = (input: {
   disposition: ReviewFloorSubmission;
   comment: string | null;
   /**
-   * FOR A PICTURE, THE EDITED PROMPT (item 5) — its own value beside the note,
-   * carried only by Regenerate and never folded into the comment.
+   * ON A PICTURE'S REGENERATE, THE NOTE'S WORDS AGAIN (item 5, as §VI draws it)
+   * — the same trimmed words as `comment`, filed by the change road as the prompt.
    */
   regeneratePrompt?: string | null;
   /**
@@ -55,8 +55,8 @@ export type SubmitReviewDecisionAction = (input: {
  * affordances, and no fourth — Comment (ghost, the note that decides nothing),
  * Regenerate (the words go back to the step that produced the work, which then
  * opens the review again on the next revision), Continue (primary, the run goes
- * on with the frozen revision) — plus the note field they all write into, and,
- * for a picture, the prompt as its own pre-filled field beside it.
+ * on with the frozen revision) — plus the ONE note field they all write into,
+ * which on a picture's review opens carrying the picture's prompt.
  *
  * THERE IS NO REJECT. A person who wants neither outcome leaves the run as it
  * is, so the affordance is gone rather than disabled — and gone at the decision
@@ -95,15 +95,15 @@ export function ReviewDecisionBar({
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
   /**
-   * THE PICTURE'S PROMPT, PRE-FILLED (cinatra#3080 item 5) — the prompt recorded
-   * on the reviewed revision's ledger row, resolved by the SURFACE and handed
-   * down. Absent for everything that is not a picture, and the bar is then
-   * byte-identical to one that never had the field.
+   * THE PICTURE'S PROMPT (cinatra#3080 item 5, as §VI draws it) — the prompt
+   * recorded on the reviewed revision's ledger row, resolved by the SURFACE and
+   * handed down. Absent for everything that is not a picture, and the note field
+   * then opens empty.
    *
-   * IT IS EDITABLE AND IT IS NOT THE NOTE. The note says what to change; the
-   * prompt says what to make. Regenerate carries both, separately, so the
-   * producing step never has to take one sentence apart again. The DISPLAY is
-   * never handed either.
+   * IT OPENS IN THE ONE NOTE FIELD, to be edited rather than re-typed; there is
+   * no second input. Words left untouched are not the reader's: a Continue or a
+   * Comment over them files no note. Regenerate sends the field's words as the
+   * note and, here, as the picture's prompt. The DISPLAY is never handed either.
    */
   picturePrompt?: string | null;
   /**
@@ -150,11 +150,12 @@ export function ReviewDecisionBar({
   regenerateRefusal?: string | null;
 }) {
   const router = useRouter();
-  const [comment, setComment] = useState("");
-  // The prompt is SEEDED from the ledger row and then owned by the reviewer. A
-  // `useState` initializer (not a controlled prop) is what makes it editable
-  // without the surface having to hold the draft.
-  const [prompt, setPrompt] = useState(picturePrompt ?? "");
+  // THE ONE NOTE FIELD (§VI) opens carrying the picture's prompt, else empty. A
+  // `useState` initializer (not a controlled prop) makes it editable without the
+  // surface having to hold the draft.
+  const prefilled = picturePrompt ?? "";
+  const onPicture = prefilled !== "";
+  const [comment, setComment] = useState(prefilled);
   const [pending, startTransition] = useTransition();
   const [outcome, setOutcome] = useState<ReviewSubmitOutcome | null>(null);
 
@@ -168,17 +169,20 @@ export function ReviewDecisionBar({
   const settled = decided || outcome?.kind === "changes-requested";
 
   function submit(action: ReviewFloorAction) {
+    const words = comment.trim();
+    // Words the reader never touched are not the reader's to sign (§VI).
+    const untouched = onPicture && words === prefilled.trim();
     setOutcome(null);
     startTransition(async () => {
       const result = await submitAction({
         disposition: action,
-        comment: comment.trim() === "" ? null : comment.trim(),
-        // THE PROMPT RIDES REGENERATE AND NOTHING ELSE. A Comment decides
-        // nothing and a Continue goes on with the frozen revision, so neither
-        // has anywhere to put a re-ask; sending it anyway would put an edited
-        // prompt into a decision that never reaches a producing step.
-        ...(action === "regenerate" && prompt.trim() !== ""
-          ? { regeneratePrompt: prompt.trim() }
+        comment: words === "" || (action !== "regenerate" && untouched) ? null : words,
+        // ON A PICTURE'S REVIEW, REGENERATE ALSO SENDS THE WORDS AS THE PROMPT
+        // (§VI): the change road files `comment` as the person's words and
+        // `regeneratePrompt` as what the picture is made from. Nothing else
+        // carries it — a Comment or a Continue never reaches a producing step.
+        ...(action === "regenerate" && onPicture && words !== ""
+          ? { regeneratePrompt: words }
           : {}),
         // CONTINUE ONLY, and OMITTED rather than nulled otherwise.
         //
@@ -229,9 +233,9 @@ export function ReviewDecisionBar({
           } accepted — they ride this decision.`}
         </p>
       ) : null}
-      {/* The note (§IV) — optional on Continue, the words a Regenerate works
-          from, the
-          substance of a comment. Travels into the audit trail + the resume note.
+      {/* The ONE note (§IV, §VI) — optional on Continue, the words a Regenerate
+          works from, the substance of a comment; on a picture's review it opens
+          carrying the picture's prompt. Travels into the audit trail + the resume note.
 
           §I INPUT HIERARCHY — SUBORDINATE (design specs/app-lifecycle-cards.html
           §I, the `.notefield` / `.nf-input` rules). A conversation carrying this
@@ -266,41 +270,6 @@ export function ReviewDecisionBar({
           className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
         />
       </div>
-
-      {/* THE PICTURE'S PROMPT (cinatra#3080 item 5) — its OWN field, beside the
-          note, pre-filled with the prompt on the reviewed revision's ledger row.
-          Two fields because they answer two questions: the note says what to
-          change about this go, the prompt says what to make. Regenerate carries
-          them as separate values so the producing step is never handed one
-          sentence to take apart.
-
-          It takes the SAME subordinate treatment as the note (§I): one quiet
-          dashed baseline under a mono label, no box, no raised ground, no send
-          affordance — a second primary-looking input beside the first would put
-          back exactly the choice the hierarchy removes.
-
-          DRAWN ONLY WHERE THERE IS A PROMPT. A revision that is not a picture,
-          or one whose ledger row records none, draws the note alone. */}
-      {picturePrompt ? (
-        <div data-conformance-id="review-regenerate-prompt-field" className="px-4 pt-3">
-          <label
-            htmlFor="review-regenerate-prompt"
-            className="mb-1.5 block font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground"
-          >
-            Picture prompt{" "}
-            <span className="normal-case tracking-normal">(sent with Regenerate)</span>
-          </label>
-          <Textarea
-            id="review-regenerate-prompt"
-            data-testid="review-regenerate-prompt"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            disabled={pending || settled || !permissions.canDecide}
-            placeholder="What the picture should show…"
-            className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
-          />
-        </div>
-      ) : null}
 
       {settled ? (
         outcome.kind === "decided" ? (

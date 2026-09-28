@@ -24,7 +24,7 @@ vi.mock("next/navigation", () => ({
 
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import type { ReviewFloorSubmission } from "@/lib/artifacts/review-surface-model";
-import { REVIEW_FLOOR_LABELS } from "@/lib/artifacts/review-surface-model";
+import { REGENERATE_NEEDS_A_NOTE, REVIEW_FLOOR_LABELS } from "@/lib/artifacts/review-surface-model";
 import { ReviewDecisionBar } from "../review-decision-bar";
 
 afterEach(() => {
@@ -142,42 +142,140 @@ describe("acceptance item 4 — Regenerate is a terminal act", () => {
   });
 });
 
-describe("acceptance item 5 — a picture's prompt is its own field", () => {
-  it("draws no prompt field when the reviewed revision is not a picture", () => {
-    renderBar();
+describe("§VI — one note field; a picture's prompt opens in it (item 5, as drawn)", () => {
+  // The drawing's paragraph "One note field, and it reads for both roads": the
+  // floor carries ONE Note field whatever the decision. Where the producer holds
+  // the words that made the reviewed revision — a picture's prompt — the field
+  // opens carrying them; words the reader never touched are not filed as the
+  // reader's on a Continue or a Comment; Regenerate sends the field's words both
+  // as the note and, on a picture's review, as the picture's prompt.
+  const CAN = { canDecide: true, canComment: true };
+  const PICTURE = { picturePrompt: "a red bicycle" };
+  const noteField = () => screen.getByTestId("review-rationale") as HTMLTextAreaElement;
+
+  it("draws exactly ONE text field on a picture's review, opening with the picture's prompt", () => {
+    renderBar({ kind: "annotated" }, CAN, PICTURE);
+    const fields = screen.getAllByRole("textbox");
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toBe(noteField());
+    expect(noteField().value).toBe("a red bicycle");
     expect(screen.queryByTestId("review-regenerate-prompt")).toBeNull();
+    expect(
+      document.querySelector('[data-conformance-id="review-regenerate-prompt-field"]'),
+    ).toBeNull();
   });
 
-  it("draws the prompt PRE-FILLED beside the note, and carries the two separately", async () => {
+  it("draws the one field EMPTY on a review that is not a picture", () => {
+    renderBar();
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(noteField().value).toBe("");
+  });
+
+  it("Regenerate after the words are edited sends them as the note AND as the picture's prompt", async () => {
     const { submitAction } = renderBar(
       { kind: "changes-requested", status: "requested", idempotent: false },
-      { canDecide: true, canComment: true },
-      { picturePrompt: "a red bicycle" },
+      CAN,
+      PICTURE,
     );
-    const promptField = screen.getByTestId("review-regenerate-prompt") as HTMLTextAreaElement;
-    expect(promptField.value).toBe("a red bicycle");
-
-    fireEvent.change(screen.getByTestId("review-rationale"), { target: { value: "warmer light" } });
-    fireEvent.change(promptField, { target: { value: "a red bicycle at golden hour" } });
+    fireEvent.change(noteField(), { target: { value: "a red bicycle at golden hour" } });
     fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
     await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
-    expect(firstInput(submitAction)).toMatchObject({
+    expect(firstInput(submitAction)).toEqual({
       disposition: "regenerate",
-      comment: "warmer light",
+      comment: "a red bicycle at golden hour",
       regeneratePrompt: "a red bicycle at golden hour",
     });
   });
 
-  it("sends no prompt with a Comment or a Continue — only Regenerate carries it", async () => {
+  it("Regenerate over the untouched pre-filled field sends the prompt itself in both", async () => {
     const { submitAction } = renderBar(
-      { kind: "annotated" },
-      { canDecide: true, canComment: true },
-      { picturePrompt: "a red bicycle" },
+      { kind: "changes-requested", status: "requested", idempotent: false },
+      CAN,
+      PICTURE,
     );
-    fireEvent.change(screen.getByTestId("review-rationale"), { target: { value: "a thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
+    expect(firstInput(submitAction)).toEqual({
+      disposition: "regenerate",
+      comment: "a red bicycle",
+      regeneratePrompt: "a red bicycle",
+    });
+  });
+
+  it("Continue over the untouched pre-filled field records no note at all", async () => {
+    const { submitAction } = renderBar(
+      { kind: "decided", disposition: "approve", idempotent: false },
+      CAN,
+      PICTURE,
+    );
+    expect(noteField().value).toBe("a red bicycle");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
+    const input = firstInput(submitAction);
+    expect(input.disposition).toBe("continue");
+    expect(input.comment).toBeNull();
+    expect(Object.keys(input)).not.toContain("regeneratePrompt");
+  });
+
+  it("Comment over the untouched pre-filled field records no note at all", async () => {
+    const { submitAction } = renderBar({ kind: "annotated" }, CAN, PICTURE);
+    expect(noteField().value).toBe("a red bicycle");
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
-    expect(firstInput(submitAction).regeneratePrompt ?? null).toBeNull();
+    const input = firstInput(submitAction);
+    expect(input.disposition).toBe("comment");
+    expect(input.comment).toBeNull();
+    expect(Object.keys(input)).not.toContain("regeneratePrompt");
+  });
+
+  it("Continue after the pre-filled field is edited carries the reader's words, and no prompt", async () => {
+    const { submitAction } = renderBar(
+      { kind: "decided", disposition: "approve", idempotent: false },
+      CAN,
+      PICTURE,
+    );
+    expect(noteField().value).toBe("a red bicycle");
+    fireEvent.change(noteField(), { target: { value: "warmer light" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
+    const input = firstInput(submitAction);
+    expect(input.disposition).toBe("continue");
+    expect(input.comment).toBe("warmer light");
+    expect(Object.keys(input)).not.toContain("regeneratePrompt");
+  });
+
+  it("Regenerate after the pre-filled field is emptied sends no words, and the refusal is shown", async () => {
+    const { submitAction } = renderBar(
+      { kind: "error", message: REGENERATE_NEEDS_A_NOTE },
+      CAN,
+      PICTURE,
+    );
+    expect(noteField().value).toBe("a red bicycle");
+    fireEvent.change(noteField(), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
+    const input = firstInput(submitAction);
+    expect(input.disposition).toBe("regenerate");
+    expect(input.comment).toBeNull();
+    expect(Object.keys(input)).not.toContain("regeneratePrompt");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(REGENERATE_NEEDS_A_NOTE),
+    );
+  });
+
+  it("Regenerate on a review that is not a picture sends the note alone, and no prompt", async () => {
+    const { submitAction } = renderBar({
+      kind: "changes-requested",
+      status: "requested",
+      idempotent: false,
+    });
+    fireEvent.change(noteField(), { target: { value: "warmer light" } });
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
+    const input = firstInput(submitAction);
+    expect(input.disposition).toBe("regenerate");
+    expect(input.comment).toBe("warmer light");
+    expect(Object.keys(input)).not.toContain("regeneratePrompt");
   });
 });
 
