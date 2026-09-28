@@ -29,6 +29,7 @@ const BOUND_NAMES = [
   "ISLAND_WAIT_BOUND_MS",
   "NAVIGATE_ACTION_BOUND_MS",
   "NAVIGATE_LANDING_BOUND_MS",
+  "NAVIGATE_START_BOUND_MS",
   "READING_BOUND_MS",
   "RUN_WATCH_BOUND_MS",
   "RUN_WATCH_POLL_MS",
@@ -74,6 +75,16 @@ describe("the steps module", () => {
     expect(steps.MULTIPLEXED_PROTOCOLS).toEqual(["h2", "h3"]);
     expect(steps.STANDING_BOUNDS).toEqual({ readingMs: steps.READING_BOUND_MS });
     expect(steps.FURTHER_PAGE_MODIFIER).toBe("ControlOrMeta");
+  });
+
+  it("names the start bound of a press: a few seconds, beside the press and the landing", () => {
+    const steps = theSteps("navigateTo");
+    expect(steps.NAVIGATE_START_BOUND_MS).toBe(5_000);
+    expect(steps.NAVIGATE_BOUNDS).toEqual({
+      actionMs: steps.NAVIGATE_ACTION_BOUND_MS,
+      startMs: steps.NAVIGATE_START_BOUND_MS,
+      landingMs: steps.NAVIGATE_LANDING_BOUND_MS,
+    });
   });
 
   it("loads in a plain Node process, with no TypeScript and no aliases", () => {

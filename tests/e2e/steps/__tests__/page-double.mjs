@@ -17,6 +17,11 @@
 //     from that part, and its own request stays open with it, without a
 //     response end in its timing;
 //   - a press that holds the new-tab modifier opens the link in a further page;
+//   - a press on a link the page's own handler takes over plays that handler: it
+//     cancels the press, or opens a dialog or a panel in place, or requests the
+//     page from the app and, once the app has answered, moves the address
+//     without a new document, as a client-side router does;
+//   - a page has one frame, its main frame, and every request is made in it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
 //     and its argument and its answer cross as JSON;
@@ -253,6 +258,11 @@ export class PageDouble {
     return this.#href;
   }
 
+  /** The frame every request of this page is made in: the page has no other. */
+  mainFrame() {
+    return this.#frame;
+  }
+
   context() {
     return this.#context;
   }
@@ -450,9 +460,30 @@ export class PageDouble {
     if (element.localName === "a" && element.hasAttribute("href")) {
       // The page's handler cancels every press of this link.
       if (element.hasAttribute("data-fixture-inert")) return;
+      // The page's handler cancels the press and opens the dialog or the panel it names, in place.
+      const opens = element.getAttribute("data-fixture-opens");
+      if (opens !== null) {
+        element.ownerDocument.getElementById(opens)?.removeAttribute("hidden");
+        if (element.hasAttribute("aria-expanded")) element.setAttribute("aria-expanded", "true");
+        return;
+      }
       // A link that opens another tab leaves this page where it is.
       if (element.getAttribute("target") === "_blank") return;
       const href = new URL(element.getAttribute("href"), this.#href).href;
+      if (element.hasAttribute("data-fixture-in-place")) {
+        // The page's handler cancels the press, requests the page from the app,
+        // and moves the address once the app has answered: the document stays.
+        const dom = this.#dom;
+        this.#send("GET", href, null, false).then(
+          () => {
+            if (this.#closed || this.#dom !== dom) return;
+            this.#href = href;
+            dom.reconfigure({ url: href });
+          },
+          () => {},
+        );
+        return;
+      }
       if (modifiers.some((modifier) => NEW_TAB_MODIFIERS.includes(modifier))) {
         // The new-tab modifier: the link opens in a further page, and this one stays.
         this.#context[INNER].open().goto(href).catch(() => {});

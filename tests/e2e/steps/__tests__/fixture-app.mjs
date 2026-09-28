@@ -122,7 +122,16 @@ export const NAV_START = [
   '<a href="/nav/slow">Slow</a>',
   // A link whose handler cancels every press, a press that asks for a further page included.
   '<a href="/nav/inert" data-fixture-inert>Inert</a>',
+  // Links whose href is a fallback only: the handler cancels the press and opens,
+  // in place, a dialog or the panel the link controls.
+  '<a href="/nav/details" aria-label="View details for the target" aria-haspopup="dialog" data-fixture-opens="nav-details">Details</a>',
+  '<a href="/nav/filters" aria-controls="nav-filters" aria-expanded="false" data-fixture-opens="nav-filters">Filters</a>',
+  // A link whose handler navigates in place, as a client-side router does: it
+  // requests the page, and moves the address once the slow answer has come.
+  '<a href="/nav/slow-in-place" data-fixture-in-place>Slow in place</a>',
   "</nav>",
+  '<div role="dialog" id="nav-details" aria-labelledby="nav-details-title" hidden><h2 id="nav-details-title">Target details</h2></div>',
+  '<section id="nav-filters" aria-label="Filter the list" hidden><p>Filters.</p></section>',
 ].join("");
 
 /** The request a stream page holds open: an event stream the server never ends. */
@@ -154,6 +163,21 @@ const TIMELINE_RUNNER = `<script>
   var ops = JSON.parse(document.getElementById("fixture-timeline").textContent);
   document.querySelectorAll("[data-fixture-inert]").forEach(function (link) {
     link.addEventListener("click", function (event) { event.preventDefault(); });
+  });
+  document.querySelectorAll("[data-fixture-opens]").forEach(function (link) {
+    link.addEventListener("click", function (event) {
+      event.preventDefault();
+      var opened = document.getElementById(link.getAttribute("data-fixture-opens"));
+      if (opened) opened.removeAttribute("hidden");
+      if (link.hasAttribute("aria-expanded")) link.setAttribute("aria-expanded", "true");
+    });
+  });
+  document.querySelectorAll("[data-fixture-in-place]").forEach(function (link) {
+    link.addEventListener("click", function (event) {
+      event.preventDefault();
+      var href = link.getAttribute("href");
+      fetch(href).then(function () { history.pushState(null, "", href); });
+    });
   });
   ops.forEach(function (op) {
     if (op.freeze) {
@@ -346,7 +370,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         response.end();
         return;
       }
-      if (url.pathname === "/nav/slow") {
+      if (url.pathname === "/nav/slow" || url.pathname === "/nav/slow-in-place") {
         setTimeout(() => html(200, page("Slow", "<p>Slow.</p>")), 3000);
         return;
       }

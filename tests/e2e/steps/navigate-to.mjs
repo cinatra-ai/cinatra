@@ -10,6 +10,15 @@
 // string or a fragment, and it opens in this tab. Lines name pages by their path
 // alone, never by an address or a query string.
 //
+// A PRESS THAT GOES NOWHERE. A link can be a fallback only: its own handler
+// cancels the press and opens a dialog in place. A press that navigates shows it
+// within moments, however long its landing takes: a navigation request of the
+// page, the app's own request for the path when it navigates in place (a
+// client-side router requests the page before it moves the address), or another
+// path in the address. When none of these comes within the start bound, the step
+// refuses at once, naming the link it pressed and the dialog or panel the page
+// shows instead, and does not wait out the landing bound.
+//
 // A FURTHER PAGE. With `furtherPage: true` the step presses the same link with
 // the modifier that opens it in a further page of the same browser context, as a
 // person does, and leaves the current page where it is. Before it presses, it
@@ -24,20 +33,33 @@ import {
   standingRequests,
   takeStandingReading,
 } from "./read-standing-requests.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "navigateTo";
 
 /** The press: how long the link may take to be ready. */
 export const NAVIGATE_ACTION_BOUND_MS = 30_000;
+/**
+ * From the press to the start of its navigation. Short on purpose: a press that
+ * navigates starts its navigation at once, even when the landing takes minutes,
+ * so a press that started none within a few seconds (a link whose own handler
+ * opens a dialog instead) is refused then, not at the end of the landing bound.
+ */
+export const NAVIGATE_START_BOUND_MS = 5_000;
 /** From the press to the landing. A development boot compiles a route on its first request. */
 export const NAVIGATE_LANDING_BOUND_MS = 120_000;
 
 /** Every bound of the step, by the name `bounds` overrides it with. */
 export const NAVIGATE_BOUNDS = Object.freeze({
   actionMs: NAVIGATE_ACTION_BOUND_MS,
+  startMs: NAVIGATE_START_BOUND_MS,
   landingMs: NAVIGATE_LANDING_BOUND_MS,
 });
+
+/** How often the address is read while the step waits for the press's navigation to start. */
+const START_POLL_MS = 50;
+/** The most characters of a name read from the page that a line carries. */
+const NAME_LENGTH = 60;
 
 /** The modifier held while pressing a link to open it in a further page: Meta on macOS, Control elsewhere. */
 export const FURTHER_PAGE_MODIFIER = "ControlOrMeta";
@@ -69,11 +91,111 @@ async function visibleLinks(page, path, from, record) {
 }
 
 /**
+ * Whether `request` shows that a press started a navigation of `page`: a
+ * navigation request of its main frame, or its main frame's own request for
+ * `path` on `origin`, which a client-side router sends before it moves the
+ * address in place.
+ * @param {import("@playwright/test").Page} page
+ * @param {import("@playwright/test").Request} request
+ * @param {string | null} origin
+ * @param {string} path
+ */
+function startsNavigation(page, request, origin, path) {
+  try {
+    if (request.frame() !== page.mainFrame()) return false;
+    if (request.isNavigationRequest()) return true;
+    const url = new URL(request.url());
+    return url.origin === origin && url.pathname === path;
+  } catch {
+    // A request of no frame, such as a service worker's, navigates no page.
+    return false;
+  }
+}
+
+/**
+ * Whether the press's navigation started within `bound`: `hasStarted()` says
+ * so, or the page is on another path than `from`. A new query string or
+ * fragment on the same path, as a dialog may write, takes the page nowhere.
+ * @param {import("@playwright/test").Page} page
+ * @param {string} from
+ * @param {() => boolean} hasStarted
+ * @param {number} bound
+ */
+async function startedWithin(page, from, hasStarted, bound) {
+  const until = performance.now() + bound;
+  for (;;) {
+    if (hasStarted() || pathOf(page.url()) !== from) return true;
+    const remaining = until - performance.now();
+    if (remaining <= 0) return false;
+    await pause(Math.min(START_POLL_MS, remaining));
+  }
+}
+
+// Runs IN THE PAGE: nothing of this module may be used inside it. It answers
+// the name of the first shown link that `selector` matches, the names of the
+// open dialogs, and the names of the shown panels that link controls; a name is
+// "" when the page gives none.
+function readInstead({ selector }) {
+  const text = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  // Shown: attached and drawn. A modal dialog hides the rest of the page from
+  // assistive technology only, so `aria-hidden` is not read.
+  const shown = (element) => {
+    if (!element || !element.isConnected || getComputedStyle(element).visibility === "hidden") return false;
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || getComputedStyle(node).display === "none") return false;
+    }
+    return true;
+  };
+  const byIds = (element, attribute) =>
+    text(element.getAttribute(attribute))
+      .split(" ")
+      .filter(Boolean)
+      .map((id) => document.getElementById(id));
+  const labelledBy = (element) => text(byIds(element, "aria-labelledby").map((node) => (node ? node.textContent : "")).join(" "));
+  const nameOf = (element) => {
+    const heading = element.querySelector("h1, h2, h3, h4, h5, h6, [role='heading']");
+    return text(element.getAttribute("aria-label")) || labelledBy(element) || (heading ? text(heading.textContent) : "");
+  };
+  const link = Array.from(document.querySelectorAll(selector)).find(shown);
+  const dialogs = Array.from(document.querySelectorAll("[role='dialog'], [role='alertdialog'], dialog[open]")).filter(shown);
+  const panels = link ? byIds(link, "aria-controls").filter((panel) => shown(panel) && !dialogs.includes(panel)) : [];
+  return {
+    link: link ? text(link.getAttribute("aria-label")) || labelledBy(link) || text(link.textContent) : "",
+    dialogs: dialogs.map(nameOf),
+    panels: panels.map(nameOf),
+  };
+}
+
+/**
+ * A name read from the page, for a line: without an address, without double
+ * quotes, and at most NAME_LENGTH characters.
+ * @param {string} name
+ */
+function lineName(name) {
+  const plain = name.replace(/\b[a-z][a-z\d+.-]*:\/\/\S*/gi, "an address").replace(/"/g, "'");
+  return plain.length > NAME_LENGTH ? `${plain.slice(0, NAME_LENGTH - 1).trimEnd()}…` : plain;
+}
+
+/**
+ * What the page shows in place of a landing, for the refusal.
+ * @param {{ dialogs: string[], panels: string[] } | null} reading
+ */
+function describeInstead(reading) {
+  if (!reading) return "what it shows instead could not be read";
+  const shown = [
+    ...reading.dialogs.map((name) => (name ? `a dialog "${lineName(name)}"` : "a dialog without a name")),
+    ...reading.panels.map((name) => (name ? `a panel "${lineName(name)}" that the link controls` : "a panel without a name that the link controls")),
+  ];
+  return shown.length > 0 ? `it shows instead: ${shown.join(" and ")}` : "it shows no dialog and no panel that the link controls";
+}
+
+/**
  * Reach `path` from the caller's current page by pressing the first visible link
  * that leads there, and resolve `{ path, from, pressed, elapsedMs }` once the
  * page has landed. Already on `path`, it presses nothing. Refuses, as a
- * StepRefusal, a path it cannot use, a page with no visible link to it, and a
- * press that does not land on it within the bound.
+ * StepRefusal, a path it cannot use, a page with no visible link to it, a press
+ * that starts no navigation within the start bound, and a press that does not
+ * land on it within the landing bound.
  *
  * With `furtherPage: true` it opens `path` in a further page instead, once the
  * standing requests on the current page's origin are below `standingBound`
@@ -111,17 +233,46 @@ export async function navigateTo(page, { path, record, bounds, furtherPage, stan
 
   const links = await visibleLinks(page, path, from, record);
 
+  // The start of the press's navigation, listened for from before the press, so
+  // a request the press sends at once is not missed.
+  const origin = originOf(page.url());
+  let started = false;
+  const onRequest = (/** @type {import("@playwright/test").Request} */ request) => {
+    if (!started) started = startsNavigation(page, request, origin, path);
+  };
+  // The landing bound is the step's whole wait after the press: the start bound never outlasts it.
+  const startBound = Math.min(bound.startMs, bound.landingMs);
   const start = performance.now();
+  let pressed = start;
+  let moved = false;
+  page.on("request", onRequest);
   try {
-    // `noWaitAfter`: without it the click itself waits, within the press's bound,
-    // for the navigation it started, and a slow landing reads as a failed press.
-    // The landing is waited for below, within its own bound.
-    await links.first().click({ timeout: bound.actionMs, noWaitAfter: true });
-  } catch (error) {
-    throw refuse(STEP, record, "driver-failure", `the link to ${path} could not be pressed (${errorClass(error)})`);
+    try {
+      // `noWaitAfter`: without it the click itself waits, within the press's bound,
+      // for the navigation it started, and a slow landing reads as a failed press.
+      // The landing is waited for below, within its own bound.
+      await links.first().click({ timeout: bound.actionMs, noWaitAfter: true });
+    } catch (error) {
+      throw refuse(STEP, record, "driver-failure", `the link to ${path} could not be pressed (${errorClass(error)})`);
+    }
+    pressed = performance.now();
+    moved = await startedWithin(page, from, () => started, startBound);
+  } finally {
+    page.off("request", onRequest);
+  }
+  if (!moved) {
+    const reading = await within(page.evaluate(readInstead, { selector: linksTo(path) }), READING_BOUND_MS);
+    const link = reading?.link ? `the link "${lineName(reading.link)}" to ${path}` : `the link to ${path}`;
+    throw refuse(
+      STEP,
+      record,
+      "no-navigation",
+      `the press on ${link} started no navigation within ${startBound} ms, and the page stayed on ${from}; ${describeInstead(reading)}`,
+    );
   }
   try {
-    await page.waitForURL((url) => url.pathname === path, { timeout: bound.landingMs, waitUntil: "load" });
+    const left = Math.max(1, bound.landingMs - (performance.now() - pressed));
+    await page.waitForURL((url) => url.pathname === path, { timeout: left, waitUntil: "load" });
   } catch {
     throw refuse(STEP, record, "landed-elsewhere", `the press did not land on ${path} within ${bound.landingMs} ms (the page is on ${pathOf(page.url())})`);
   }

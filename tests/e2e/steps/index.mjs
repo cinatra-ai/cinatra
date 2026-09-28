@@ -46,6 +46,7 @@ export {
   NAVIGATE_ACTION_BOUND_MS,
   NAVIGATE_BOUNDS,
   NAVIGATE_LANDING_BOUND_MS,
+  NAVIGATE_START_BOUND_MS,
   navigateTo,
 } from "./navigate-to.mjs";
 export {

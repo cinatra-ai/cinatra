@@ -140,7 +140,12 @@ Presses the first visible link on the current page that leads to `path` (its
 this tab), waits for the landing, and writes where it landed from. Already on
 `path`, it presses nothing. With no such link it refuses: it never types an
 address. A press that lands elsewhere, for example through a redirect, is refused
-with the page it landed on.
+with the page it landed on. A press that starts no navigation within
+`NAVIGATE_START_BOUND_MS` (no navigation request, no request for `path` such as a
+client-side router sends, and no other path in the address), for example because
+the link's own handler opens a dialog in place, is refused at once
+(`no-navigation`), naming the link it pressed and the dialog or panel the page
+shows instead.
 
 With `furtherPage: true` it opens the page in a further page instead, and first
 reads the requests that stand open on the origin (`readStandingRequests`): a
@@ -156,6 +161,7 @@ context's first page loads.
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `NAVIGATE_ACTION_BOUND_MS` | 30_000 | the press |
+| `NAVIGATE_START_BOUND_MS` | 5_000 | from the press to the start of its navigation |
 | `NAVIGATE_LANDING_BOUND_MS` | 120_000 | from the press to the landing |
 
 ## Shared bounds
