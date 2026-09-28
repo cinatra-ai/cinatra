@@ -88,15 +88,15 @@ describe("web-scrape-agent OAS validates against L1, LLM-metadata, and StartNode
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode declares required=[seedUrls,outputSchema,instructions] + hidden=[maxUrls,followLinks,maxDepth]", () => {
+  it("StartNode declares required=[seedUrls,outputSchemaSource,instructions] + hidden=[maxUrls,followLinks,maxDepth,outputSchema]", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
     const meta = (start!.metadata as Record<string, unknown> | undefined)?.cinatra as
       | Record<string, unknown>
       | undefined;
-    expect(meta?.required).toEqual(["seedUrls", "outputSchema", "instructions"]);
-    expect(meta?.hidden).toEqual(["maxUrls", "followLinks", "maxDepth"]);
+    expect(meta?.required).toEqual(["seedUrls", "outputSchemaSource", "instructions"]);
+    expect(meta?.hidden).toEqual(["maxUrls", "followLinks", "maxDepth", "outputSchema"]);
   });
 
   it("every array-typed field in the OAS carries an item schema (json_schema.items with a type)", () => {

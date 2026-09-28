@@ -102,7 +102,7 @@ describe("company-discovery-agent OAS validates against L1, LLM metadata, and St
     expect(union).toEqual(inputTitles);
   });
 
-  it("EndNode declares 3 outputs (accountId/wasMerged/apolloOrganizationId) AND data_flow_connections.length === 7 (incl. cinatra_run_id DFE) AND control_flow_connections.length === 2", () => {
+  it("EndNode declares 3 outputs (accountId/wasMerged/apolloOrganizationId) AND data_flow_connections.length === 9 (incl. cinatra_run_id DFE) AND control_flow_connections.length === 3", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -112,8 +112,8 @@ describe("company-discovery-agent OAS validates against L1, LLM metadata, and St
     expect(byTitle.get("wasMerged")).toBe("boolean");
     expect(byTitle.get("apolloOrganizationId")).toBe("string");
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(7);
+    expect(dfc.length).toBe(9);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(2);
+    expect(cfc.length).toBe(3);
   });
 });
