@@ -297,6 +297,8 @@ async function mountGate(gate: Record<string, unknown>) {
   };
   const view = render(<OrchestratorStepperPanel {...props} />);
   await waitFor(() => expect(gateRegion()).not.toBeNull());
+  // The pack's own idea renderer loads lazily through the registry; the schema floor drawn meanwhile is a transient, never a reading (cinatra#3035).
+  if (gate.xRenderer === IDEA_RENDERER_ID) await view.findByRole("radiogroup");
   return view;
 }
 

@@ -173,8 +173,8 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
     );
     expect(entry).toBeTruthy();
     expect(entry!.priority).toBe(80);
-    // The pipeline binding declares its question and empty-state message, so the registry hands the renderer those params through the wrapper.
-    expect(entry!.renderer.displayName).toBe("WithBindingParams(BlogIdeaSelectionRenderer)");
+    // The pipeline ships its own idea-step renderer, so the registry mounts it map-first through the extension wrapper, carrying the binding's params.
+    expect(entry!.renderer.displayName).toBe("WithBindingParams(ExtensionFieldRenderer(@cinatra-ai/blog-pipeline-agent:idea-selection))");
   });
 
   it("classifies as a mid-run HITL gate (parity with the retired :output-suffix classification)", () => {
@@ -188,8 +188,8 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
       { "x-renderer": BINDING_ID },
       CTX as never,
     );
-    // The pipeline binding declares its question and empty-state message, so the registry hands the renderer those params through the wrapper.
-    expect(dedicated!.renderer.displayName).toBe("WithBindingParams(BlogIdeaSelectionRenderer)");
+    // The pipeline ships its own idea-step renderer, so the registry mounts it map-first through the extension wrapper, carrying the binding's params.
+    expect(dedicated!.renderer.displayName).toBe("WithBindingParams(ExtensionFieldRenderer(@cinatra-ai/blog-pipeline-agent:idea-selection))");
     // cinatra#1796 teardown: the shared reviewer binding the chooser relocated
     // OFF is gone — its package is retired, its kind is out of the vocabulary
     // and its dispatcher is deleted. Reconstructed here from parts so this file
@@ -203,6 +203,18 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
       CTX as never,
     );
     expect(orphaned).toBeFalsy();
+  });
+
+  it("the pipeline's own renderer keeps the step's Continue held until a pick (cinatra#3035)", () => {
+    const entry = fieldRendererRegistry.resolve(
+      "selectedIdeaJson",
+      { "x-renderer": BINDING_ID },
+      CTX as never,
+    );
+    expect(entry).toBeTruthy();
+    expect(entry!.renderer.displayName).toBe("WithBindingParams(ExtensionFieldRenderer(@cinatra-ai/blog-pipeline-agent:idea-selection))");
+    expect(entry!.holdsContinueUntilPicked).toBe(true);
+    expect(entry!.midRunHitl).toBe(true);
   });
 });
 

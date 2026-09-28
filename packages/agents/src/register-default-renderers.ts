@@ -324,6 +324,8 @@ export function registerFieldRendererBindings(
         // here, and a control-less extension-shipped setup renderer is the next
         // slice's work, not a guess made on this one.
         drawsOwnSubmit: true,
+        // The kind's hold travels with the binding whoever draws the step (cinatra#3035).
+        holdsContinueUntilPicked: RENDERER_KIND_TABLE[b.kind]?.holdsContinueUntilPicked === true,
         midRunHitl: b.midRunHitl === true,
       });
       continue;
