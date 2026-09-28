@@ -119,6 +119,65 @@ export function oboCeilingNonOrgTiers(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Outward-effect tools and the person's recorded decision (cinatra#3745).
+//
+// A tool of this set acts outward on a person's behalf: it sends a message (a
+// mail through a connected mailbox, a campaign send, a test send, a member
+// invitation), publishes (a social post, a LinkedIn post, an agent, artifact
+// or skill package to a registry), or answers a person's pending gate in a
+// run. Called on an agent run's frame (a frame that carries a run id), such a
+// tool is served only together with the person's recorded decision for the
+// run's action; `enforceMcpBoundary` answers the call with
+// `outward_effect_requires_recorded_decision` otherwise. A call on a frame
+// without a run id, and every tool outside this set, take the boundary's other
+// rules. The set names tools, never packages; its census test is
+// __tests__/send-tools-carry-recorded-decision.test.ts. Kept inline in this
+// module, beside the boundary that reads it.
+// ---------------------------------------------------------------------------
+
+/** The reason `enforceMcpBoundary` answers a call of the outward-effect set with. */
+export const RECORDED_DECISION_REQUIRED_REASON = "outward_effect_requires_recorded_decision";
+
+export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  // Messages: campaign sends and follow-ups (every trigger-email-send tool
+  // whose metadata marks a state change).
+  "email_outreach_send_test_start",
+  "email_outreach_send_initial_start",
+  "email_outreach_send_initial_cancel",
+  "email_outreach_system_jobs_initial_send_run",
+  "email_outreach_system_process_due_follow_ups",
+  // Messages: a mail through a connected mailbox, a test send, an invitation.
+  "email_send",
+  "gmail_email_send",
+  "email_test_delivery_run_send",
+  "permissions_members_invite",
+  // Publishing: posts and packages.
+  "social_media_publish",
+  "linkedin_post_publish",
+  "blog_post_publish_linkedin_publish",
+  "agent_registry_publish",
+  "agent_source_publish",
+  "artifact_source_publish",
+  "skill_source_publish",
+  // An answer to a person's pending gate in a run.
+  "agent_run_resume",
+]);
+
+/**
+ * True when the call is a tool of the outward-effect set on an agent run's
+ * frame, so it is served only together with the person's recorded decision
+ * for the run's action. False for every other call, which this rule leaves to
+ * the boundary's other rules.
+ */
+export function needsRecordedDecision(
+  primitiveName: string,
+  ctx: McpBoundaryRequest["ctx"] | null,
+): boolean {
+  if (!OUTWARD_EFFECT_TOOL_NAMES.has(primitiveName)) return false;
+  return ctx?.runId !== undefined && ctx?.runId !== null;
+}
+
 export type McpBoundaryDecision =
   | { allowed: true; reason?: never; shouldBlock?: never }
   | { allowed: false; reason: string; shouldBlock: boolean };
@@ -240,6 +299,22 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
       metadata: { reason: "unclassified_primitive" },
     });
     return { allowed: false, reason: "unclassified_primitive", shouldBlock: true };
+  }
+
+  // Outward-effect tools (cinatra#3745): a tool that sends or publishes on a
+  // person's behalf, or answers a person's pending gate, called on an agent
+  // run's frame, is served only together with the person's recorded decision
+  // for the run's action. This rule runs before the cannot-express gate, the
+  // carve-outs, the unenforced shadow step and every role short-circuit, so it
+  // holds whatever the caller's role, the tool's classification status, a
+  // carve-out or the enforcement mode.
+  if (needsRecordedDecision(req.primitiveName, req.ctx)) {
+    await audit(req, classification.resourceType, "denied", {
+      mode: "enforced",
+      boundary: req.delegatedRestricted ? "delegated_chat_token" : "mcp_handler_dispatch",
+      reason: RECORDED_DECISION_REQUIRED_REASON,
+    });
+    return { allowed: false, reason: RECORDED_DECISION_REQUIRED_REASON, shouldBlock: true };
   }
 
   // ── W4 (#1053): cannot-express surfaces under agent-run OBO ───────────────
