@@ -757,10 +757,12 @@ describe("the conversation card is truthful when the authority answers underneat
       expect(row(container)!.getAttribute("data-lifecycle-card-state")).toBe("decided"),
     );
 
-    // STILL SUBMITTED: this reader's press is on the wire, so nothing here is
-    // pressable and a press is not a second decision.
+    // STILL SUBMITTED: this reader's press is on the wire, so a press is not a
+    // second decision — and the question stays open on the screen (cinatra#3062,
+    // fix leg 6). §V: "While the question is open the boxes take a change and
+    // Continue stands beneath them. Continue does not close the row."
     expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("true");
-    expect((continueButton(container) as HTMLButtonElement).disabled).toBe(true);
+    expect((continueButton(container) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(continueButton(container)!);
     expect(confirmMock).toHaveBeenCalledTimes(1);
 

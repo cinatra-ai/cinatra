@@ -199,12 +199,14 @@ describe("Continue on the held Skills step", () => {
     fireEvent.click(continueButton(container)!);
     await waitFor(() => expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1));
 
-    // IN FLIGHT: the whole reading states that it is, and a second press is not
-    // a second decision.
+    // IN FLIGHT: the row states that it is, and a second press is not a second
+    // decision — but the question stays open on the screen (cinatra#3062, fix
+    // leg 6). §V: "While the question is open the boxes take a change and
+    // Continue stands beneath them. Continue does not close the row."
     expect(row(container)!.getAttribute("data-skills-step-submitted")).toBe("true");
-    expect(continueButton(container)!.hasAttribute("disabled")).toBe(true);
+    expect(continueButton(container)!.hasAttribute("disabled")).toBe(false);
     for (const box of container.querySelectorAll('[role="checkbox"]')) {
-      expect(box.hasAttribute("disabled")).toBe(true);
+      expect(box.hasAttribute("disabled")).toBe(false);
     }
     fireEvent.click(continueButton(container)!);
     expect(confirmRunRecommendationAction).toHaveBeenCalledTimes(1);

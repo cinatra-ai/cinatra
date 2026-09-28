@@ -166,6 +166,38 @@ export function hydrateDrawnRecommendationReadingFromStorage(
 }
 
 /**
+ * THE RUN ROW'S START FACT, AS THE TURN LAST READ IT (cinatra#3062, fix leg 6).
+ *
+ * The ratified drawing's section V: "For as long as the run has not started, a
+ * reader who comes back to the Skills step is shown the same pills with the
+ * boxes still able to take a change and Continue still beneath them".
+ *
+ * A remembered reading cannot say whether the run has started SINCE it was
+ * drawn, so the replay withholds that fact — and a re-created turn then drew
+ * the settled row read-only with no Continue, on a run whose row carried no
+ * start stamp, for as long as its fresh resolve took. The conversation already
+ * reads the run's own row for the turn; the card files that row's answer here,
+ * beside the drawn reading, so a re-created turn has it at its first commit.
+ *
+ * Page-session memory only, and never an authority: it is written from the
+ * row's own reading, replaced by the next one, and read only by a REPLAYED
+ * reading — the resolver's own answer always wins over both.
+ */
+const startFacts = new Map<string, boolean>();
+
+/** File the start fact the turn's run-row reading gave for `runId`. */
+export function rememberRunStartFact(runId: string, started: boolean): void {
+  if (!runId) return;
+  startFacts.set(runId, started);
+}
+
+/** The start fact last filed for `runId`, or `undefined` when none was. */
+export function recallRunStartFact(runId: string): boolean | undefined {
+  if (!runId) return undefined;
+  return startFacts.get(runId);
+}
+
+/**
  * FORGET the reading remembered for `runId` — both halves.
  *
  * THE AUTHORITY'S OWN `none` IS WHAT CALLS THIS (convergence, fix leg 3). The
@@ -180,6 +212,7 @@ export function hydrateDrawnRecommendationReadingFromStorage(
 export function forgetDrawnRecommendationReading(runId: string): void {
   if (!runId) return;
   drawn.delete(runId);
+  startFacts.delete(runId);
   const store = storage();
   if (store === null) return;
   try {
@@ -193,6 +226,7 @@ export function forgetDrawnRecommendationReading(runId: string): void {
  *  purpose, because forgetting is the defect this module exists to prevent. */
 export function resetDrawnRecommendationReadings(): void {
   drawn.clear();
+  startFacts.clear();
   const store = storage();
   if (store === null) return;
   try {

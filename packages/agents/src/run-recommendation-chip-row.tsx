@@ -45,8 +45,11 @@ import {
   forgetDrawnRecommendationReading,
   hydrateDrawnRecommendationReadingFromStorage,
   recallDrawnRecommendationReading,
+  recallRunStartFact,
   rememberDrawnRecommendationReading,
+  rememberRunStartFact,
 } from "./run-recommendation-reading-register";
+import { recommendationRunHasStartedForRow } from "./run-status";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
 import { VENDOR_BY_CONNECTIVE, resolveVendorPresentation } from "@/lib/vendor-presentation";
 
@@ -967,6 +970,18 @@ export function RunRecommendationChipRow({
    * requirement, so the screen states it: once the step has been submitted the
    * whole reading is inert until the settled reading replaces it. Cleared again
    * only by a REFUSAL, which leaves the hold live and the step decidable.
+   *
+   * A DECLARATION, NO LONGER A DRAWN READING (cinatra#3062, fix leg 6). §V:
+   * "While the question is open the boxes take a change and Continue stands
+   * beneath them. Continue does not close the row." A picture round pressed
+   * the one Continue in a conversation and read the row inert — every box
+   * disabled, the Continue greyed — for the whole release and dispatch, which
+   * is none of the three readings §V draws. So the row still DECLARES the
+   * window (`data-skills-step-submitted`) and `inFlightRef` still keeps a press
+   * inside it from becoming a second decision, but neither the boxes nor the
+   * Continue read this state: the question stays open on the screen until the
+   * run starts, and a press the run has moved past is refused by the server
+   * and said through the refusal line.
    */
   const [submitted, setSubmitted] = useState(false);
   /**
@@ -1288,11 +1303,12 @@ export function RunRecommendationChipRow({
    * starts from the RUN's own record, so a reader who opens the completed step
    * and presses Continue again records exactly what the run already had.
    */
-  const skillIsChecked = (skill: SkillsStepCandidate): boolean =>
-    checkedOverrides[skill.skillId] ??
-    (decision.kind === "pending"
+  const recordedIsChecked = (skill: SkillsStepCandidate): boolean =>
+    decision.kind === "pending"
       ? skill.recommended === true
-      : (settledInputs?.appliedSkillIds.has(skill.skillId) ?? false));
+      : (settledInputs?.appliedSkillIds.has(skill.skillId) ?? false);
+  const skillIsChecked = (skill: SkillsStepCandidate): boolean =>
+    checkedOverrides[skill.skillId] ?? recordedIsChecked(skill);
 
   /**
    * CONTINUE — submit the selection and release the hold, through the SAME
@@ -1434,7 +1450,15 @@ export function RunRecommendationChipRow({
           <span className="text-xs text-muted-foreground">No candidate skills.</span>
         ) : (
           opts.pills.map((skill) => {
-            const checked = skillIsChecked(skill);
+            // A READ-ONLY PILL STATES THE RECORD, NEVER AN UNSENT EDIT
+            // (cinatra#3062, fix leg 6 convergence). §V: "Once the run is
+            // running, the selection is fixed and the row is read-only: each
+            // pill states in its own box whether that skill was applied to the
+            // run". The boxes now take a change while a press is in flight, and
+            // the reset of those edits waits for the flight to land — so a row
+            // that turned read-only in that window would otherwise draw an edit
+            // the run never received as applied.
+            const checked = opts.editable ? skillIsChecked(skill) : recordedIsChecked(skill);
             return (
               <SkillsStepPill
                 key={skill.skillId}
@@ -1510,11 +1534,14 @@ export function RunRecommendationChipRow({
             // and it does NOT move with it — React clears the transition flag in
             // a later commit of its own — so a refusal painted a frame that said
             // the hold was live and the step decidable while the one control it
-            // offers was greyed out. The control now follows the single answer
-            // the row publishes as `data-skills-step-submitted`, which covers
-            // the in-flight window as well: it is true from the press until the
-            // decision comes back, and only a refusal clears it.
-            disabled={!canDecide || submitted}
+            // offers was greyed out. `pending` stays out of it.
+            //
+            // AND NOT WHILE A PRESS IS IN FLIGHT (cinatra#3062, fix leg 6).
+            // §V: "Continue does not close the row." The window stays
+            // declared on the row as `data-skills-step-submitted`, and
+            // `inFlightRef` is what keeps a press inside it to one decision;
+            // the control itself reads only who may answer.
+            disabled={!canDecide}
             // WRAPPED, not passed by reference: `onContinue` takes no argument
             // and a bare `onClick={onContinue}` would hand it the click event.
             onClick={() => onContinue()}
@@ -1571,7 +1598,9 @@ export function RunRecommendationChipRow({
         return skillsStep({
           cardState: "decided",
           pills: stepCandidates,
-          editable: canDecide && !submitted,
+          // Not closed by a press in flight either (cinatra#3062, fix leg 6):
+          // "Continue does not close the row."
+          editable: canDecide,
           ready: true,
           // Drawn for every reader; the button itself is `disabled` without run
           // access, which is what the drawing's restricted reading asks for.
@@ -1687,7 +1716,11 @@ export function RunRecommendationChipRow({
       // memory can only reach this branch through a conversation host, which is
       // the only host that remembers; the reading it replays is the question as
       // it stood, so the answering waits for the resolver.
-      editable: canDecide && !submitted && !replayedQuestion,
+      //
+      // AND NOT CLOSED BY A PRESS IN FLIGHT (cinatra#3062, fix leg 6): "While
+      // the question is open the boxes take a change and Continue stands
+      // beneath them." `inFlightRef` keeps the press to one decision.
+      editable: canDecide && !replayedQuestion,
       ready: loaded,
       // Nothing to press on a REPLAYED question, for the reason the `editable`
       // line above gives. A LIVE hold is a run that has not started, so its
@@ -2335,6 +2368,7 @@ export function RecommendationHoldCard({
   onStateChange,
   initialState = null,
   runStatus,
+  runStartedAt,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
@@ -2374,6 +2408,13 @@ export function RecommendationHoldCard({
    * unchanged.
    */
   runStatus?: string | null;
+  /**
+   * THE RUN ROW'S OWN START STAMP, as the same watch last read it beside
+   * `runStatus` (cinatra#3062, fix leg 6) — `null` when the row carries none.
+   * Read for ONE thing only: the start fact a REPLAYED reading may not guess.
+   * A host that passes nothing (`undefined`) is unchanged.
+   */
+  runStartedAt?: string | null;
   /**
    * THE HOST'S OWN READING, RESOLVED BEFORE THE FIRST PAINT (cinatra#3047,
    * review point C — the re-shoot round).
@@ -2552,6 +2593,49 @@ export function RecommendationHoldCard({
    * reading as it was DRAWN.
    */
   const replayed = !authoritySaysNone && authoritative === null && remembered !== null;
+  /**
+   * …AND THE RUN ROW THE TURN ALREADY READS CAN SAY IT (cinatra#3062, fix leg 6).
+   *
+   * §V: "For as long as the run has not started, a reader who comes back to
+   * the Skills step is shown the same pills with the boxes still able to take
+   * a change and Continue still beneath them". A picture round measured a
+   * re-created turn replaying the settled row read-only with no Continue for
+   * as long as the fresh mount's resolve took, on a run whose row carried no
+   * start stamp — the once-started reading on a run that had not started.
+   *
+   * The replay withholds the start fact because a REMEMBERED reading cannot
+   * know it. The run's own row can, and the conversation already reads that
+   * row for this turn (`runStatus` above, and its stamp beside it): the same
+   * boundary the resolver applies (`recommendationRunHasStartedForRow`), asked
+   * of the same row, and as current as the live card is. Remembered beside the
+   * drawn reading so a re-created turn has it at its FIRST commit, before its
+   * own watch has read again — and replaced by that watch the moment it does.
+   * A run whose row carries the stamp reads started here too, so a replay
+   * never re-opens the boxes on a run that is under way; with no row reading
+   * at all the fact stays withheld, exactly as before.
+   */
+  const rowStartFact =
+    runStatus != null && runStartedAt !== undefined
+      ? recommendationRunHasStartedForRow({ status: runStatus, startedAt: runStartedAt })
+      : undefined;
+  useEffect(() => {
+    // Never filed behind the authority's `none`: that answer ERASES the memory
+    // of the row, and a later row reading may not write a fact back into it.
+    if (!keepsItsPlace || authoritySaysNone || rowStartFact === undefined) return;
+    rememberRunStartFact(runId, rowStartFact);
+  }, [keepsItsPlace, authoritySaysNone, runId, rowStartFact]);
+  // A STARTED RUN NEVER UN-STARTS: any source that has seen the start wins —
+  // the remembered answer's own `runStarted: true`, this turn's row reading or
+  // the filed one — so a filed `false` older than a resolver's `true` cannot
+  // re-open the boxes on a replay.
+  const recalledStartFact = keepsItsPlace ? recallRunStartFact(runId) : undefined;
+  const replayedRunStarted = replayed
+    ? (state !== null && "runStarted" in state && state.runStarted === true) ||
+      rowStartFact === true ||
+      recalledStartFact === true
+      ? true
+      : (rowStartFact ?? recalledStartFact)
+    : undefined;
   // Written from what is DRAWN, never from what merely arrived: the register
   // ignores `none` and anything it cannot classify, so the memory can only hold
   // a row that was on screen.
@@ -2650,13 +2734,13 @@ export function RecommendationHoldCard({
                 // The resolver's own answer, never the screen's, and re-asked of
                 // the run ROW on every mount — see
                 // `recommendationRunHasStartedForRow`.
-                runStarted: replayed ? undefined : state.runStarted,
+                runStarted: replayed ? replayedRunStarted : state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
             : {
                 kind: "skipped",
                 decided: state.decided,
-                runStarted: replayed ? undefined : state.runStarted,
+                runStarted: replayed ? replayedRunStarted : state.runStarted,
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
       }
