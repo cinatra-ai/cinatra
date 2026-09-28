@@ -2636,6 +2636,24 @@ export function RecommendationHoldCard({
       ? true
       : (rowStartFact ?? recalledStartFact)
     : undefined;
+  /**
+   * …AND THE LIVE ANSWER READS THE SAME ROW AT ONCE (cinatra#3062, fix leg 7).
+   *
+   * §V: "Once the run has started the same pills are drawn with the state their
+   * boxes were left in, read-only, and with no Continue". A picture round
+   * measured a LIVE settled card keeping its boxes and its Continue for eight
+   * to eleven seconds after the run started: the turn's own watch had already
+   * read the stamped row, but the card waited for its authority to be asked
+   * again and to answer. The start fact was in the client one row reading
+   * after the start, so the live answer takes it exactly as the replay does.
+   *
+   * The same rule as above, and only in its one direction: a started run never
+   * un-starts, so a source that has seen the start wins, and a row reading of
+   * NOT started never re-opens a card the resolver has read as started — the
+   * resolver's own answer is kept whenever no source has seen the start.
+   */
+  const liveRunStarted = (answer: boolean | undefined): boolean | undefined =>
+    answer === true || rowStartFact === true || recalledStartFact === true ? true : answer;
   // Written from what is DRAWN, never from what merely arrived: the register
   // ignores `none` and anything it cannot classify, so the memory can only hold
   // a row that was on screen.
@@ -2734,13 +2752,13 @@ export function RecommendationHoldCard({
                 // The resolver's own answer, never the screen's, and re-asked of
                 // the run ROW on every mount — see
                 // `recommendationRunHasStartedForRow`.
-                runStarted: replayed ? replayedRunStarted : state.runStarted,
+                runStarted: replayed ? replayedRunStarted : liveRunStarted(state.runStarted),
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
             : {
                 kind: "skipped",
                 decided: state.decided,
-                runStarted: replayed ? replayedRunStarted : state.runStarted,
+                runStarted: replayed ? replayedRunStarted : liveRunStarted(state.runStarted),
                 ...(state.candidates ? { candidates: state.candidates } : {}),
               }
       }
