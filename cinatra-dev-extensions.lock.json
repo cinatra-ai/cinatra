@@ -210,12 +210,12 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "9d9644731ec4e693095b6b5aa1227628922f6016"
+      "resolvedSha": "f572ea31031719166a482f4063a20cbcb74134a4"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "ee2490b42ad1c454bf37428826a6ec26022842b3"
+      "resolvedSha": "590ae268d4365af88820f3e52d23d605f2e1b77c"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
@@ -230,7 +230,7 @@
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
       "repo": "cinatra-ai/email-test-delivery-agent",
-      "resolvedSha": "bc30768e42fe4f961eba7e1156a3322b82806393"
+      "resolvedSha": "1afddbaa75b5f1e77081c5713fe49933039894a3"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",
