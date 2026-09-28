@@ -69,6 +69,12 @@ export type PreparedRepositorySnapshot = SuppliedInstallCandidate & {
   entryCount: number;
   totalBytes: number;
   contentDigest: string;
+  /**
+   * The package's own manifest text, as the archive intake read it — carried
+   * so the upload road reads the package's declared pack dependencies on this
+   * road exactly as on the file road (cinatra#3204 criterion 24).
+   */
+  packageJson?: string;
 };
 
 /**
@@ -873,6 +879,7 @@ export async function prepareSuppliedRepositoryArchiveSnapshot(
     entryCount: prepared.package.deliveredEntries.size,
     totalBytes: prepared.tarball.byteLength,
     contentDigest: prepared.package.contentDigest,
+    packageJson: prepared.package.packageJson,
   };
 }
 

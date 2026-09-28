@@ -1207,18 +1207,114 @@ export type HandleWayflowTaskStateArgs = {
   };
 };
 
+/** The anchor version this build vouches for. Copy of
+ *  `LAUNCH_SCOPE_ANCHOR_VERSION`. */
+const LAUNCH_SCOPE_ANCHOR_VERSION = 1;
+
+/** The reserved id no scope may use. Copy of `WORKSPACE_SCOPE_SENTINEL`. */
+const WORKSPACE_SCOPE_SENTINEL = "__workspace__";
+
+/** The query name that carries the run detail's open step. Copy of
+ *  `RUN_STEP_QUERY_KEY`. */
+const RUN_STEP_QUERY_KEY = "step";
+
+/**
+ * THE RUN'S ADDRESS WITH ONE STEP OPEN, which is what a review's address IS
+ * (cinatra#3693). Verbatim copy of `src/lib/agent-url.ts`'s `buildRunStepPath`.
+ *
+ * The ratified drawing gives a review no page: "a pending review renders the
+ * review gate in the run detail, under the same rail, never as a standalone
+ * document", and "there is no review page view outside the run's route". So a
+ * reader sent to one review is sent to the RUN, with the gate's own rail
+ * selection named on the address, and the run detail opens there on first
+ * render.
+ */
+function buildRunStepPathCopy(runPath: string, step: string): string {
+  return `${runPath}?${RUN_STEP_QUERY_KEY}=${encodeURIComponent(step)}`;
+}
+
+/** The rail's selection key for one of a run's review gates. Copy of
+ *  `runReviewGateStepKey` (`packages/agents/src/run-surface-rail-step.ts`). */
+function runReviewGateStepKeyCopy(reviewTaskId: string): string {
+  return `review:${reviewTaskId}`;
+}
+
+/** The scope base each anchor kind addresses. Copy of
+ *  `launchScopeAnchorBase`'s four-kind map. The `user` kind is FLAT BY DESIGN:
+ *  `/personal` means "mine" to whoever reads it, so it is not an address. */
+const LAUNCH_SCOPE_ANCHOR_BASE: Readonly<Record<string, ((id: string) => string) | null>> = {
+  workspace: () => "/workspace",
+  organization: (id) => `/organizations/${encodeURIComponent(id)}`,
+  team: (id) => `/teams/${encodeURIComponent(id)}`,
+  project: (id) => `/projects/${encodeURIComponent(id)}`,
+  user: null,
+};
+
+/**
+ * The scope base a stored anchor addresses, or `null` for a flat run. That is
+ * both the personal anchor's answer and the answer for every payload this
+ * build cannot vouch for. Verbatim copy of the host's
+ * `launchScopeAnchorBase(parseLaunchScopeAnchor(raw))`, decoder included.
+ *
+ * Exported for the agreement test only; every caller here goes through
+ * `buildAgentInstancePath`.
+ */
+export function launchScopeAnchorBaseCopy(raw: unknown): string | null {
+  if (raw == null) return null;
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.v !== LAUNCH_SCOPE_ANCHOR_VERSION) return null;
+  if (typeof obj.kind !== "string") return null;
+  if (!Object.prototype.hasOwnProperty.call(LAUNCH_SCOPE_ANCHOR_BASE, obj.kind)) return null;
+  const base = LAUNCH_SCOPE_ANCHOR_BASE[obj.kind];
+  if (obj.kind === "workspace") {
+    // The union's workspace arm has NO `id` field, so a payload that carries
+    // the key at all, `null` included, is one no mint can have produced.
+    return Object.prototype.hasOwnProperty.call(obj, "id") ? null : base!("");
+  }
+  if (typeof obj.id !== "string") return null;
+  const id = obj.id.trim();
+  if (id.length === 0 || id === WORKSPACE_SCOPE_SENTINEL) return null;
+  return base ? base(id) : null;
+}
+
 /**
  * Build the run's canonical `/agents/{vendor}/{pkg}/{runId}` base path from a
- * scoped package name. A VERBATIM copy of `src/lib/agent-url.ts`'s
- * `buildAgentInstancePath` (4 lines, zero deps) — inlined so the universally-
- * reachable execution path grows no new first-party module edge (the route-graph
- * ratchet guards this hot path), mirroring the same duplication precedent in
+ * scoped package name, UNDER THE SCOPE BASE ITS ANCHOR NAMES (cinatra#3693).
+ * A VERBATIM copy of `src/lib/agent-url.ts`'s `buildAgentInstancePath` (zero
+ * deps), inlined so the universally-reachable execution path grows no new
+ * first-party module edge (the route-graph ratchet guards this hot path),
+ * mirroring the same duplication precedent in
  * packages/notifications/src/agent-run-href.ts.
+ *
+ * THE INTERRUPT'S ADDRESS IS THE RUN'S OWN HOME. Before this, a gate on a run
+ * launched from a scope emitted the BARE address, so the reader it notified was
+ * carried out of the scope with nothing said. The anchor is the run's immutable
+ * record of where it was launched from, so it decides the base. A run with no
+ * anchor keeps the bare address, unchanged.
+ *
+ * The copied rule above is the host decoder's, FAIL-CLOSED arms included, and
+ * its agreement with the host's originals, and with the identical copy in
+ * packages/notifications, is pinned by
+ * `src/lib/__tests__/launch-scope-copies-agree-3693.test.ts`.
  */
-function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+function buildReviewRunBasePath(
+  agentPackageName: string,
+  instanceId: string,
+  launchScopeAnchor?: unknown,
+): string {
+  const base = launchScopeAnchorBaseCopy(launchScopeAnchor) ?? "";
   const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `/agents/${agentPackageName}/${instanceId}`;
+  if (match) return `${base}/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `${base}/agents/${agentPackageName}/${instanceId}`;
 }
 
 /**
@@ -1699,27 +1795,41 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }
       }
       if (routeToReviewSurface) {
-        // The review surface lives UNDER the agent run (owner ruling 2026-07-25
-        // (3), cinatra#2063): `/agents/[vendor]/[packageName]/[instanceId]/review/
-        // [reviewTaskId]`, where instanceId == this run. Build the run's canonical
-        // `/agents/{vendor}/{pkg}/{runId}` base from the template packageName (the
-        // same resolution the notification deep-link + run-detail redirect use),
-        // then append the review sub-path. packageName is present for a marked
-        // reviewer gate (a published orchestrator/flow template); the fallback must
-        // still emit the route's FIVE-segment shape (…/[vendor]/[packageName]/
-        // [instanceId]/review/[reviewTaskId]) with the runId in the instanceId slot,
-        // because the review page keys ONLY on instanceId (== runId) — a shorter
-        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades to
-        // placeholder vendor+package segments, never a dead/misrouted link.
+        // THE REVIEW IS READ IN THE RUN (owner ruling 2026-07-25 (3),
+        // cinatra#2063, and the in-place reading of cinatra#3693). The address is
+        // the run's own — `/agents/{vendor}/{pkg}/{runId}` under the scope base
+        // its anchor names — with the gate's rail selection carried as a query,
+        // and no sub-path of its own. Build the base from the template
+        // packageName (the same resolution the notification deep-link and the
+        // run-detail redirect use). packageName is present for a marked reviewer
+        // gate (a published orchestrator/flow template); the fallback must still
+        // emit the route's vendor/package/instance shape with the runId in the
+        // instance slot, because the run page keys ONLY on that slot — a shorter
+        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades
+        // to placeholder vendor+package segments, never a dead/misrouted link.
         const reviewTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
         const reviewPackageName =
           typeof reviewTemplate?.packageName === "string" && reviewTemplate.packageName.trim().length > 0
             ? reviewTemplate.packageName.trim()
             : null;
+        // The run's own home decides the base (cinatra#3693). The degraded
+        // arm keeps the bare shape: with no package name there is no canonical
+        // address to scope, and a run page still has to be addressable by the
+        // vendor/package/instance grammar the route is built on.
         const reviewRunBase = reviewPackageName
-          ? buildReviewRunBasePath(reviewPackageName, runId)
+          ? buildReviewRunBasePath(reviewPackageName, runId, run.launchScopeAnchor)
           : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
-        const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
+        // AND THE ADDRESS IS THE RUN'S, WITH THE GATE SELECTED (cinatra#3693).
+        // It used to be a `/review/<taskId>` sub-path -- a standalone review
+        // document, which the drawing gives the review nowhere: "a pending
+        // review renders the review gate in the run detail, under the same rail,
+        // never as a standalone document". Whoever this interrupt reaches is
+        // sent to the run itself now, with the gate's own rail selection on the
+        // address, so the run detail opens on that gate at first render.
+        const reviewSurfaceUrl = buildRunStepPathCopy(
+          reviewRunBase,
+          runReviewGateStepKeyCopy(reviewTaskId),
+        );
         // cinatra#2566 (epic #2564 S2) — the gate's LIFECYCLE CARD REF. The run
         // card draws the review with the same `ReviewGateCard` the chat thread
         // and the review page mount, and a card is only ever addressed by a

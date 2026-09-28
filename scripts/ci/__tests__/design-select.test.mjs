@@ -376,7 +376,10 @@ describe("4. FAIL OPEN — every uncertainty runs the whole suite", () => {
     expect(diff.mode).toBe("all");
   });
 
-  it("diffs against the merge base with the target branch on a pull request", () => {
+  it("diffs the pull request's own head against its merge base with the target branch", () => {
+    // HEAD is the merge ref; the range is the head the event payload names
+    // (cinatra#3667 — the fixture-repository proof is design-select-range).
+    const head = "c".repeat(40);
     const calls = [];
     const diff = resolveChangedFiles({
       env: {
@@ -384,9 +387,12 @@ describe("4. FAIL OPEN — every uncertainty runs the whole suite", () => {
         GITHUB_REF_NAME: "feature",
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_BASE_REF: "main",
+        GITHUB_EVENT_PATH: "event.json",
       },
+      readFile: () => JSON.stringify({ pull_request: { head: { sha: head } } }),
       git: (args) => {
         calls.push(args.join(" "));
+        if (args[0] === "rev-list") return `${"d".repeat(40)} ${"a".repeat(40)} ${head}\n`;
         if (args[0] === "merge-base") return "abc123\n";
         if (args[0] === "diff") return "src/app/design-fixtures/alpha/page.tsx\nREADME.md\n";
         return "";
@@ -394,8 +400,8 @@ describe("4. FAIL OPEN — every uncertainty runs the whole suite", () => {
     });
     expect(diff.mode).toBe("diff");
     expect(diff.files).toEqual(["src/app/design-fixtures/alpha/page.tsx", "README.md"]);
-    expect(calls).toContain("merge-base origin/main HEAD");
-    expect(calls).toContain("diff --name-only abc123 HEAD");
+    expect(calls).toContain(`merge-base origin/main ${head}`);
+    expect(calls).toContain(`diff --name-only abc123 ${head}`);
   });
 });
 
