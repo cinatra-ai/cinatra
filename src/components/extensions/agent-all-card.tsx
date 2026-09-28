@@ -105,7 +105,7 @@ export function AgentAllCard({
   return (
     <InstalledExtensionCard
       name={row.name}
-      accentColor={deriveExtensionAccent(row.key)}
+      accentColor={deriveExtensionAccent(row.packageName ?? row.key)}
       emblem={extensionKindEmblem("agent")}
       kindIcon={extensionKindEmblem("agent", "size-3.5")}
       kindLabel="Agent"
