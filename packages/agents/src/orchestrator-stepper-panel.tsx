@@ -35,6 +35,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
+import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
 
 import {
@@ -201,6 +202,12 @@ export type StepperStep = { index: number; stepNumber: number; label: string; de
 
 export type OrchestratorStepperPanelProps = {
   runId: string;
+  /**
+   * The scope base the run lives under (cinatra#3693): "Start fresh" and
+   * "Start new run" open that scope's own launcher, so the next run stays in
+   * the scope. Absent on the bare route, where both keep today's road.
+   */
+  scopeBase?: string | null;
   initialStatus: string;
   initialError: string | null;
   agUiEnabled?: boolean | null;
@@ -1495,12 +1502,19 @@ function HitlApprovalCard({
 // FailedCard — Failed state
 // ---------------------------------------------------------------------------
 
+/** The launcher "Start fresh" opens: the run's own scope's when it has one. */
+function startFreshPath(agentId: string, scopeBase?: string | null): string {
+  return scopeBase ? buildAgentWorkspacePath(agentId, { scopeBase }) : `/agents/${agentId}/new`;
+}
+
 function FailedCard({
   agentId,
   errorMessage,
+  scopeBase,
 }: {
   agentId: string;
   errorMessage: string | null;
+  scopeBase?: string | null;
 }) {
   const router = useRouter();
   return (
@@ -1516,7 +1530,7 @@ function FailedCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push(`/agents/${agentId}/new`)}
+            onClick={() => router.push(startFreshPath(agentId, scopeBase))}
           >
             Start fresh
           </Button>
@@ -1534,10 +1548,12 @@ function CancelledCard({
   runId,
   agentId,
   lgThreadId,
+  scopeBase,
 }: {
   runId: string;
   agentId: string;
   lgThreadId: string | null;
+  scopeBase?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -1566,7 +1582,7 @@ function CancelledCard({
     });
 
   const handleStartFresh = () => {
-    router.push(`/agents/${agentId}/new`);
+    router.push(startFreshPath(agentId, scopeBase));
   };
 
   return (
@@ -2000,6 +2016,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
+    scopeBase,
   } = props;
 
   // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
@@ -2831,7 +2848,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       </Card>
     );
   } else if (status === "failed") {
-    stageCard = <FailedCard agentId={agentId} errorMessage={runError} />;
+    stageCard = <FailedCard agentId={agentId} errorMessage={runError} scopeBase={scopeBase} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.
     stageCard = (
@@ -2849,7 +2866,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else if (status === "stopped") {
     stageCard = (
-      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} />
+      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} scopeBase={scopeBase} />
     );
   } else if (
     status === "pending_approval" &&
@@ -3020,6 +3037,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <RunCompletionCard
             runId={runId}
             agentId={agentId}
+            scopeBase={scopeBase}
             outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
           />
         )

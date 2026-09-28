@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
@@ -945,7 +945,10 @@ def _strip_token_plumbing(subflow: Dict[str, Any]) -> None:
     ]
 
 
-def _assert_token_plumbing(subflow: Dict[str, Any]) -> None:
+def _assert_token_plumbing(
+    subflow: Dict[str, Any],
+    filled: Tuple[str, ...] = (_FINALIZE_INTERACTIVE, _FINALIZE_AUTONOMOUS),
+) -> None:
     parts = _template_token_parts()
     rc = subflow["$referenced_components"]
     outputs = rc[_RESOLVE]["outputs"]
@@ -961,11 +964,24 @@ def _assert_token_plumbing(subflow: Dict[str, Any]) -> None:
     token_edges = [
         e for e in subflow["data_flow_connections"] if e["source_output"] == _TOKEN
     ]
-    # Shaped as the template's edges, plus the name the real loader requires.
+    # Shaped as the template's edges; the name is checked on its own, because a
+    # filled edge carries its own name rather than the template's.
     assert len(token_edges) == 2
+    # The template names its token edges so the runtime loader accepts them, and
+    # the fill names every edge it adds after that edge's own endpoints. So the
+    # two token edges never share a name, no name keeps the template's unrendered
+    # slot placeholder, and a filled name ends in its own destination. The shape
+    # check drops the name on both sides and compares the plumbing alone.
+    assert len({e["name"] for e in token_edges}) == len(token_edges)
     for edge in token_edges:
         assert isinstance(edge.get("name"), str) and edge["name"]
-        assert {k: v for k, v in edge.items() if k != "name"} in parts["edges"]
+        assert "__SLOT__" not in edge["name"]
+        destination = _cref(edge["destination_node"])
+        if destination in filled:
+            assert edge["name"].endswith(f"_to_{destination}")
+        assert {k: v for k, v in edge.items() if k != "name"} in [
+            {k: v for k, v in e.items() if k != "name"} for e in parts["edges"]
+        ]
 
 
 def test_3685_pinned_fixture_is_the_token_less_legacy_shape() -> None:
@@ -1096,7 +1112,7 @@ def test_3685_partial_plumbing_only_the_missing_pieces_are_added() -> None:
 
     assert out is not doc and doc == before
     out_subflow = out["$referenced_components"][_PINNED_SUBFLOW]
-    _assert_token_plumbing(out_subflow)
+    _assert_token_plumbing(out_subflow, filled=(_FINALIZE_AUTONOMOUS,))
     out_rc = out_subflow["$referenced_components"]
     before_rc = before["$referenced_components"][_PINNED_SUBFLOW][
         "$referenced_components"
@@ -1109,8 +1125,15 @@ def test_3685_partial_plumbing_only_the_missing_pieces_are_added() -> None:
     out_edges = out_subflow["data_flow_connections"]
     assert out_edges[: len(before_edges)] == before_edges
     assert len(out_edges) == len(before_edges) + 1
+    # The fill named the one edge it added after that edge's own endpoints, so
+    # the name differs from the author's, holds no slot placeholder, and ends in
+    # the finalize step the edge actually reaches.
+    added_name = out_edges[-1]["name"]
+    assert added_name != before_edges[-1]["name"]
+    assert "__SLOT__" not in added_name
+    assert added_name.endswith(f"_to_{_FINALIZE_AUTONOMOUS}")
     added = {k: v for k, v in out_edges[-1].items() if k != "name"}
-    assert added == parts["edges"][1]
+    assert added == {k: v for k, v in parts["edges"][1].items() if k != "name"}
     assert [r["slot"] for r in report] == [_PINNED_SLOT]
 
 
