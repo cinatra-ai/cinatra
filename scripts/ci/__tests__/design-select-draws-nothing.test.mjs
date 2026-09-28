@@ -254,7 +254,7 @@ const REQUIRED_PACK = {
 };
 const OTHER_PACK = { packageName: "@cinatra-ai/blog-connector", repo: "cinatra-ai/blog-connector" };
 // An unmoved pin whose repo is not a plain owner/name: the gate refuses the lock.
-const NOT_PLAIN_PACK = { ...OTHER_PACK, repo: "cinatra-ai/packs/blog-connector" };
+const NOT_PLAIN_PACK = { ...OTHER_PACK, repo: "cinatra-ai/blog-connector/packs" };
 
 // The fixture's git sees nothing of the machine it runs on (as in
 // design-select-range.test.mjs).
