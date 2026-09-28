@@ -50,6 +50,12 @@ import {
   unmanagedComposeServices,
   shouldSkipDevPreflight,
 } from "./lib/dev-preflight.mjs";
+import {
+  DEV_SOURCE_MAPS_ENV_VAR,
+  DISABLE_SOURCE_MAPS_FLAG,
+  resolveDevSourceMaps,
+  resolveNextDevArgs,
+} from "./lib/dev-source-maps.mjs";
 
 // Repo root (the dir holding docker-compose*.yml), resolved from THIS script's
 // location so the best-effort Nango heal targets the right compose files no
@@ -91,6 +97,27 @@ function lookupEnvFiles(key) {
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+// cinatra#3758: source maps in the server process, switched by
+// CINATRA_DEV_SOURCE_MAPS from the shell or `.env.local` (see
+// scripts/lib/dev-source-maps.mjs). Read before anything below can touch Docker,
+// so a value the launcher does not accept stops it at once. Unset changes
+// nothing: `next dev` gets the same arguments and the same NODE_OPTIONS as before.
+let devSourceMaps;
+try {
+  devSourceMaps = resolveDevSourceMaps({
+    processEnv: process.env,
+    envFileValues: ENV_FILES.map((file) => readEnvFileValue(file, DEV_SOURCE_MAPS_ENV_VAR)),
+  });
+} catch (error) {
+  console.error(`\n[dev-server] ✖ ${error.message}\n`);
+  process.exit(1);
+}
+if (!devSourceMaps.sourceMaps) {
+  console.log(
+    `[dev-server] ${DEV_SOURCE_MAPS_ENV_VAR}=0 — starting the server process without source maps (${DISABLE_SOURCE_MAPS_FLAG}).`,
+  );
 }
 
 // cinatra#2839: the bypass switch is resolved ONCE, from the real shell
@@ -594,7 +621,9 @@ await runNangoHealthPreflight();
 const forwardedArgs = process.argv.slice(2);
 const nextBin = path.join(process.cwd(), "node_modules", ".bin", "next");
 
-const child = spawn(nextBin, ["dev", ...forwardedArgs], {
+const nextArgs = resolveNextDevArgs({ forwardedArgs, sourceMaps: devSourceMaps.sourceMaps });
+
+const child = spawn(nextBin, nextArgs, {
   stdio: "inherit",
   env: process.env,
 });
