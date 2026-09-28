@@ -216,7 +216,7 @@ describe("outward-effect tools on an agent run's frame", () => {
   });
 
   describe("a tool outside the set, and a call on a frame that carries no run, keep today's decision", () => {
-    it.each(["accounts_get", "dashboards_list"])("keeps the decision for %s on an agent run's frame", async (primitiveName) => {
+    it.each(["crm_account_get", "dashboards_list"])("keeps the decision for %s on an agent run's frame", async (primitiveName) => {
       const d = await enforceMcpBoundary({ primitiveName, ctx: runMemberCtx(), delegatedRestricted: false });
       expect(d).toEqual({ allowed: true });
     });
