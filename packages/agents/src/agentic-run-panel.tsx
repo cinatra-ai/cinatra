@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { flushSync } from "react-dom";
 import Link from "next/link";
 import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
 import {
@@ -678,6 +687,33 @@ export function AgenticRunPanel({
   // server processes the resume. Prevents "Loading recipients" loop caused by the poll
   // returning pending_approval with the old context before the server advances the graph.
   const justSubmittedXRendererRef = useRef<string | null>(null);
+  // AND THE GATE THE PERSON ANSWERED, BY ITS OWN REVIEW TASK (cinatra#3739).
+  // Armed and released exactly where the suppression above is, but keyed on
+  // the review task rather than the renderer, because a later setup field may
+  // reuse the renderer. While the run works after the Continue, no RESUME frame
+  // reaches the stream, so the stream keeps the answered interrupt; read as
+  // "on file" it held the run at pending_approval while the row read running,
+  // and the column drew the paused plate. Only that one interrupt stops
+  // counting: a stream interrupt with any other review task, and the row's own
+  // question, count exactly as before.
+  const [answeredReviewTaskId, setAnsweredReviewTaskId] = useState<string | null>(null);
+  // AND THE ROW'S OWN QUESTION JOINS IT (cinatra#3739, fix leg 19): "the
+  // question the person answered is spent wherever it is read". Until the
+  // server resumes, the run's ROW still reads pending_approval and carries the
+  // answered question as its own, and counted as a live one it drew the paused
+  // plate for the first reading after the Continue. So from the accepted
+  // Continue on, the answered question stops counting on the stream AND on the
+  // row. A run's gates can share one review task (`setup-<runId>`,
+  // `wayflow-<taskId>`), so a question is the answered one only while its review
+  // task, its renderer and its field are all the answered question's; any other
+  // question, on the stream or the row, counts exactly as before. Armed beside
+  // the key above; released with it, since nothing matches a released key.
+  const [answeredQuestionShape, setAnsweredQuestionShape] = useState<string | null>(null);
+  const isAnsweredQuestion = (question: HitlContext | null): boolean =>
+    question !== null &&
+    answeredReviewTaskId !== null &&
+    question.reviewTaskId === answeredReviewTaskId &&
+    `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape;
 
   // Load connectedApps + gmailAliases once on mount so the HITL field renderer
   // registry can evaluate conditions like `context.connectedApps.includes("gmail")`.
@@ -779,6 +815,12 @@ export function AgenticRunPanel({
   // was, except where the stream cannot speak again and the row can say so — a
   // run parked on its own produced output's review, and the terminal statuses a
   // park is released into. See `resolveRunSurfaceStatus` for the full rule.
+  // The stream's interrupt as a question, so the answered one is matched on its
+  // review task, renderer and field on the stream as on the row (fix leg 19).
+  const streamQuestionOnFile: HitlContext | null =
+    streamEnabled && streamResult.interruptContext
+      ? mapInterruptToHitlContext(streamResult.interruptContext)
+      : null;
   const status = resolveRunSurfaceStatus({
     streamEnabled,
     streamedStatus: streamResult.status,
@@ -788,7 +830,13 @@ export function AgenticRunPanel({
     // `rawEffectiveHitlContext` composes below (cinatra#3739): with none, a
     // stream's spent `pending_approval` gives way to the row's `running`.
     interruptOnFile:
-      Boolean(streamEnabled && streamResult.interruptContext) || hitlContext !== null,
+      Boolean(
+        streamEnabled &&
+          streamResult.interruptContext &&
+          (streamResult.interruptContext.reviewTaskId !== answeredReviewTaskId ||
+            !isAnsweredQuestion(streamQuestionOnFile)),
+      ) ||
+      (hitlContext !== null && !isAnsweredQuestion(hitlContext)),
   });
   const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
@@ -1090,7 +1138,13 @@ export function AgenticRunPanel({
       errorMode: "rethrow" | "toast";
     }) => {
       if (args.trackApproving) setIsApproving(true);
-      if (args.suppressGate) justSubmittedXRendererRef.current = args.xRenderer;
+      if (args.suppressGate) {
+        justSubmittedXRendererRef.current = args.xRenderer;
+        setAnsweredReviewTaskId(args.reviewTaskId);
+        setAnsweredQuestionShape(
+          `${args.xRenderer}::${latestHitlContextRef.current?.fieldName ?? ""}`,
+        );
+      }
       try {
         const outcome = await approveReviewTask(
           args.reviewTaskId,
@@ -1104,7 +1158,10 @@ export function AgenticRunPanel({
           // what put the masked framework string into SchemaFieldRenderer's
           // submitError line. Nothing is submitted, so the suppression is
           // released and the surface draws the blocked state instead.
-          if (args.suppressGate) justSubmittedXRendererRef.current = null;
+          if (args.suppressGate) {
+            justSubmittedXRendererRef.current = null;
+            setAnsweredReviewTaskId(null);
+          }
           setGateBlocked(outcome.blocked);
           return;
         }
@@ -1112,7 +1169,10 @@ export function AgenticRunPanel({
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
         if (!isAlreadyResolvedError(msg)) {
-          if (args.suppressGate) justSubmittedXRendererRef.current = null;
+          if (args.suppressGate) {
+            justSubmittedXRendererRef.current = null;
+            setAnsweredReviewTaskId(null);
+          }
           if (args.errorMode === "rethrow") throw err;
           toast.error("Could not continue this run.");
         }
@@ -2201,12 +2261,28 @@ export function AgenticRunPanel({
   const conversationHostedPanel = ambientLifecycleHost === "chat_thread";
   const pausePlaceholder =
     conversationHostedPanel && pauseWithNothingToDraw && reviewStillReading;
+  //
+  // AND A PAUSE WHOSE ONLY QUESTION IS THE ANSWERED ONE IS THE RUN WORKING
+  // (cinatra#3739, fix leg 19). "While the run works, the detail carries a
+  // placeholder": from the accepted Continue until the server resumes, the
+  // stream and the row both still read pending_approval with the question the
+  // person just answered. When every question on file - the stream's interrupt
+  // and the row's own - is none or that answered one, the run is not waiting on
+  // anyone and the placeholder stands from the first reading. A question with
+  // any other review task, renderer or field, a refused or thrown submit (which
+  // releases the key), a marked gate and a park all read exactly as before.
+  const onlyTheAnsweredQuestionOnFile =
+    isPendingApproval &&
+    answeredReviewTaskId !== null &&
+    (streamQuestionOnFile === null || isAnsweredQuestion(streamQuestionOnFile)) &&
+    (hitlContext === null || isAnsweredQuestion(hitlContext));
   const blockedOnInputGate =
     isPendingApproval &&
     !markedReviewGate &&
     !parkedOnProducedReview &&
     !parkKindUnheard &&
-    !pausePlaceholder;
+    !pausePlaceholder &&
+    !onlyTheAnsweredQuestionOnFile;
   //
   // AND IT IS THE RUN'S CURRENT READING OR IT IS NOTHING. The slot's ref is
   // deliberately NOT enough on its own: a run carries its gate for ever, so a
@@ -2268,6 +2344,7 @@ export function AgenticRunPanel({
     !blockedOnInputGate &&
     (status === "queued" ||
       status === "running" ||
+      onlyTheAnsweredQuestionOnFile ||
       ((reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview) &&
         !widgetHostedPanel));
 
@@ -2419,6 +2496,36 @@ export function AgenticRunPanel({
       </LifecycleCardSurfaceProvider>
     )
   ) : null;
+  // THE PLACEHOLDER STANDS UNTIL THE CARD HAS DRAWN (cinatra#3739). The card is
+  // mounted as soon as the slot's reference is read, so its resolve can answer;
+  // but it draws nothing until an authorized resolve has (its own rule, left as
+  // it is), and the column held nothing for as long as that took. So the box
+  // reads what the card has DRAWN into it: until the card's own root stands in
+  // the box, the placeholder stands beside the still-empty mount; the moment it
+  // stands, the placeholder goes in the same frame (the observer's reading is
+  // flushed before the browser paints), and if the card ever draws nothing
+  // again the placeholder comes back. Never both, never neither. Keyed on the
+  // reference, so a new ticket waits for its own card.
+  const reviewSlotBoxRef = useRef<HTMLElement | null>(null);
+  const [reviewCardDrawnFor, setReviewCardDrawnFor] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    const box = reviewSlotBoxRef.current;
+    if (inPlaceReviewRef === null || box === null) return;
+    const drawnFor = inPlaceReviewRef;
+    const boxHoldsTheCard = () =>
+      Array.from(box.children).some(
+        (child) => child.getAttribute("data-conformance-id") !== "review-gate-placeholder",
+      );
+    setReviewCardDrawnFor(boxHoldsTheCard() ? drawnFor : null);
+    const observer = new MutationObserver(() => {
+      const next = boxHoldsTheCard() ? drawnFor : null;
+      flushSync(() => setReviewCardDrawnFor(next));
+    });
+    observer.observe(box, { childList: true });
+    return () => observer.disconnect();
+  }, [inPlaceReviewRef]);
+  const reviewCardDrawn =
+    reviewScreenNode !== null && reviewCardDrawnFor === inPlaceReviewRef;
 
   if (reviewScreenNode !== null || runIsWorking) {
     return (
@@ -2446,7 +2553,7 @@ export function AgenticRunPanel({
           className={
             railDrawsTheFrame
               ? "flex flex-col gap-4"
-              : reviewScreenNode !== null
+              : reviewCardDrawn
                 ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
                 : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           }
@@ -2454,9 +2561,11 @@ export function AgenticRunPanel({
           // nothing and drives nothing — and it exists because the SWAP is the
           // ruled property: a proof has to be able to see the placeholder go and
           // the review screen arrive in the same slot.
-          data-run-review-slot={reviewScreenNode !== null ? "review" : "working"}
+          data-run-review-slot={reviewCardDrawn ? "review" : "working"}
+          ref={reviewSlotBoxRef}
         >
-          {reviewScreenNode ?? (
+          {reviewScreenNode}
+          {reviewCardDrawn ? null : (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
               // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
