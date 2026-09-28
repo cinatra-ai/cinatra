@@ -32,6 +32,9 @@ import {
   buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  findFinalizedFanoutMessageMaterialization,
+  findFinalizedMidRunMaterialization,
+  recordFanoutReuseMaterialization,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -568,7 +571,12 @@ export async function writeClaimedArtifact(input: {
   /** The calling node id, or null on the `derived_output` / `default_road`
    *  paths (no node). */
   nodeId: string | null;
-  path: "end_node_binding" | "materialize_tool" | "derived_output" | "default_road";
+  path:
+    | "end_node_binding"
+    | "materialize_tool"
+    | "derived_output"
+    | "default_road"
+    | "email_fanout";
   /** The detection ladder's recorded verdict (cinatra#3029, the `default_road`
    *  path only) — journalled on the ledger row this write claims, so the
    *  DECIDING RUNG of every default-road artifact is auditable. */
@@ -586,6 +594,14 @@ export async function writeClaimedArtifact(input: {
   resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   /** Per-path wording for the accepts-mismatch error message. */
   mimeDescription: string;
+  /** OPTIONAL physical origin of the revision (cinatra#3089). Absent ⇒
+   *  `agent_generated`, every pre-existing caller's origin; the email fan-out
+   *  passes `live_generator`, the origin the same-artifact revision already
+   *  carries. The creation path's produced event is emitted under it. */
+  originKind?: "agent_generated" | "live_generator";
+  /** OPTIONAL typed data for the object's own declared fields (cinatra#3089),
+   *  passed to the creation path's `typedData`; absent for every other caller. */
+  typedData?: Record<string, unknown>;
   /** OPTIONAL extra Tx2 queries composed into the SAME transaction as the
    *  artifact write + the ledger finalize (cinatra#1893). The derived_output
    *  path passes its token-guarded outbox `done`-settle here so the settle and
@@ -680,7 +696,8 @@ export async function writeClaimedArtifact(input: {
       visibility: input.ownership.visibility,
       title: input.title,
       declaredMime: input.mime,
-      originKind: "agent_generated",
+      originKind: input.originKind ?? "agent_generated",
+      ...(input.typedData ? { typedData: input.typedData } : {}),
       stream: asUtf8Stream(input.content),
       // Server-side provenance: the actually-executing run id. The
       // existing cross-org validation inside the creation path yields
@@ -1342,6 +1359,131 @@ export async function materializeToolArtifact(input: {
     return {
       ok: false,
       error: `materialization failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The send fan-out's per-message body revision (cinatra#3089, lifecycle-d W1).
+// ---------------------------------------------------------------------------
+
+/**
+ * Write ONE message body of a send as a markdown revision on the ledger: path
+ * `email_fanout`, the ledger output identity = the message identity, the
+ * content hash = the markdown's, origin `live_generator` (so the creation
+ * path's produced event carries it). A retry hits the finalized claim and
+ * returns its refs; a body the drafting step already filed mid-run in the same
+ * run with the same bytes, not yet bound to another message, is bound to this
+ * message and returned instead of writing a second one.
+ *
+ * The CALLER names the declared object type; the extension is the pack whose
+ * claim wins that type for the organisation (a declaration, never a pack name
+ * in this tree), and the type is then resolved exactly as the binding road
+ * resolves one. The row ownership is derived from the run exactly as the
+ * materializer derives it — from the run's template anchor, read off the run
+ * itself (the fan-out carries no template id). Never throws: a refusal is a
+ * returned error the send boundary makes a visible failure of the send.
+ */
+export async function materializeFanoutMessageRevision(input: {
+  runId: string;
+  orgId: string;
+  createdBy: string | null;
+  /** The declared object type the caller files the body under. */
+  objectTypeId: string;
+  /** The message identity — the ledger output id. */
+  outputId: string;
+  title: string;
+  markdown: string;
+  /** The type's own declared fields (`bodyMarkdown`, `subject`, …). */
+  typedData: Record<string, unknown>;
+}): Promise<ToolArtifactMaterialization> {
+  try {
+    ensurePostgresSchema();
+    const s = postgresSchema.replaceAll('"', '""');
+    const runRes = await pool().query(
+      `SELECT template_id FROM "${s}"."agent_runs" WHERE id = $1 AND org_id = $2 LIMIT 1`,
+      [input.runId, input.orgId],
+    );
+    const templateId = (runRes.rows[0] as { template_id?: string | null } | undefined)
+      ?.template_id;
+    if (typeof templateId !== "string" || templateId.length === 0) {
+      return {
+        ok: false,
+        error: `run ${input.runId} is not an agent run of organization ${input.orgId} — the message body has no run to be filed under`,
+      };
+    }
+    const ownership = await resolveRunScopeOwnership({
+      templateId,
+      runId: input.runId,
+      orgId: input.orgId,
+    });
+
+    // The pack that declares the type: the organisation's winning claim over it.
+    const [{ readArtifactTypeClaimsForOrg }, { resolveClaimWinner }] = await Promise.all([
+      import("@/lib/objects/artifact-claim-store"),
+      import("@cinatra-ai/objects/claims"),
+    ]);
+    const winner = resolveClaimWinner(readArtifactTypeClaimsForOrg(input.orgId), {
+      orgId: input.orgId,
+      objectTypeId: input.objectTypeId,
+    });
+    if (!winner) {
+      return {
+        ok: false,
+        error: `no installed pack claims the object type "${input.objectTypeId}" for organization ${input.orgId}`,
+      };
+    }
+    const extension = winner.extensionPackage;
+
+    // Warm the registry so declared-type resolution sees every installed type.
+    registerAllObjectTypes();
+    const resolved = await resolveBoundArtifactTarget({
+      orgId: input.orgId,
+      extension,
+      bindingObjectTypeId: input.objectTypeId,
+    });
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+
+    const contentHash = createHash("sha256").update(input.markdown, "utf8").digest("hex");
+    const messageKey = { orgId: input.orgId, runId: input.runId, extension, contentHash };
+    // A retried message keeps its own mapping before any mid-run lookup.
+    const own = await findFinalizedFanoutMessageMaterialization({
+      ...messageKey,
+      outputId: input.outputId,
+    });
+    if (own) return { ok: true, ...own, deduped: true };
+    // A mid-run body not yet bound to another message is bound to this one.
+    const prefiled = await findFinalizedMidRunMaterialization(messageKey);
+    if (prefiled) {
+      await recordFanoutReuseMaterialization({
+        ...messageKey,
+        outputId: input.outputId,
+        ...prefiled,
+      });
+      return { ok: true, ...prefiled, deduped: true };
+    }
+
+    return await writeClaimedArtifact({
+      runId: input.runId,
+      orgId: input.orgId,
+      createdBy: input.createdBy,
+      outputId: input.outputId,
+      nodeId: null,
+      path: "email_fanout",
+      extension,
+      title: input.title,
+      mime: "text/markdown",
+      content: input.markdown,
+      ownership,
+      resolvedTarget: resolved.target,
+      mimeDescription: "the fan-out message body MIME",
+      originKind: "live_generator",
+      typedData: input.typedData,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `message body materialization failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
