@@ -289,15 +289,27 @@ export function shortRunReference(runId: string | null | undefined): string | nu
  *
  * Both are OPTIONAL and default to the drawing as it shipped, so the callers
  * that have no run to name (the instance screen's generic wait) are unchanged.
+ *
+ * AND THE CARD FRAME, WHERE NOTHING AROUND THE BOX DRAWS IT (cinatra#3007, fix
+ * leg 20). The drawing puts this card's heading and arc inside the run card
+ * (`.runcard`: a 1px line border, a 12px radius, the surface-strong ground and
+ * 18px/20px padding). On the run page the rail draws the frame and the slot's
+ * box gives up its chrome, so the frame goes on this root — never on a wrapper,
+ * which the box's observer would read as the review card having drawn. OFF by
+ * default: every other caller draws exactly what it drew.
  */
 export function ReviewGatePlaceholder({
   runRef = null,
   settled = false,
+  framed = false,
 }: {
   /** A short, stable reference to the run this box is waiting on. */
   runRef?: string | null;
   /** The wait is over — the run left the park, or its gate was decided. */
   settled?: boolean;
+  /** Draw the run card's frame on this root (the drawing's 12px, not the
+   *  application's 16px `rounded-card`). */
+  framed?: boolean;
 } = {}) {
   return (
     <div
@@ -322,7 +334,11 @@ export function ReviewGatePlaceholder({
             ? "Waiting finished"
             : "Working"
       }
-      className="flex w-full flex-col gap-3"
+      className={
+        framed
+          ? "flex w-full flex-col gap-3 rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px]"
+          : "flex w-full flex-col gap-3"
+      }
     >
       {/* THE CARD'S OWN NAME, and it STAYS (re-read at design main for fix leg
           12, against the reading that this title is off-contract). The drawing's

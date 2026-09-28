@@ -928,6 +928,7 @@ export function AgenticRunPanel({
   );
   const {
     slot: reviewSlot,
+    answered: reviewSlotAnswered,
     mayStillOpen: reviewMayStillOpen,
     stillReading: reviewStillReading,
   } = useRunReviewSlot({
@@ -2347,6 +2348,73 @@ export function AgenticRunPanel({
       onlyTheAnsweredQuestionOnFile ||
       ((reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview) &&
         !widgetHostedPanel));
+  //
+  // ONE HAND-OVER, KEYED ON THE GATE'S REFERENCE (cinatra#3007, fix leg 20).
+  // "One run detail, twice, in the same column under the same rail: first the
+  // placeholder, then the gate itself." The status and the slot's reference
+  // are read by two readers at two moments, and for one reading they can
+  // disagree: an older answer puts the status back to `running` for a beat, and
+  // the run a decision releases reads `running` before it reads `completed`. The
+  // slot reader drops its answer on every status edge, so for that reading the
+  // reference above was null, the card UNMOUNTED, the placeholder came back, and
+  // the card was mounted again to draw nothing until its own resolve answered
+  // (measured: the card mounted twice and the placeholder came back twice).
+  //
+  // So once the card has DRAWN for a run parked on the review of what it
+  // produced, that reference is held, and a reading that would otherwise be the
+  // placeholder keeps the card mounted for it instead. It is held only where the
+  // placeholder would stand and only while the slot names no OTHER gate: a new
+  // reference (a successor gate) keeps its own hand-over exactly as before, a
+  // real open question on file ends the hold and is drawn, and the hold ends
+  // when the run leaves the park and its release (any status but
+  // pending_approval, running and completed) or reads completed with the slot's
+  // answer in hand — so a retried or failed run draws what it always drew.
+  //
+  // AND IT IS A BEAT, NOT A STATE. Short of `completed` — where the slot's own
+  // immediate look ends the hold — a hold that stands in for the reading is
+  // bounded by this panel's own tick: once the run has been heard from
+  // `REVIEW_HOLD_BEAT_READINGS` times while the hold stood in (about eight
+  // seconds at the live cadence), the readings are no longer a beat between two
+  // sources and the panel draws what they say.
+  const REVIEW_HOLD_BEAT_READINGS = 4;
+  const [heldReview, setHeldReview] = useState<{
+    runId: string;
+    ref: string;
+    /** `heardFromRun` when the hold first stood in for a reading. */
+    heardAt: number | null;
+  } | null>(null);
+  const heldReviewRef = heldReview !== null && heldReview.runId === runId ? heldReview.ref : null;
+  const reviewHoldStandsIn =
+    heldReviewRef !== null &&
+    inPlaceReviewRef === null &&
+    runIsWorking &&
+    (reviewSlot.ref === null || reviewSlot.ref === heldReviewRef);
+  // THE HOLD MOVES ONLY ON A SETTLED READING. On the render a status edge
+  // lands, the slot reader drops its answer by a render-phase update, so this
+  // pass still sees the answer it is about to drop; nothing here acts on it.
+  const [reviewHoldStatus, setReviewHoldStatus] = useState(status);
+  const reviewHoldStatusEdge = reviewHoldStatus !== status;
+  if (reviewHoldStatusEdge) setReviewHoldStatus(status);
+  const reviewHoldIsOver =
+    heldReviewRef !== null &&
+    !reviewHoldStatusEdge &&
+    (blockedOnInputGate ||
+      (status !== "pending_approval" && status !== "running" && status !== "completed") ||
+      (status === "completed" && reviewSlotAnswered) ||
+      (status !== "completed" &&
+        heldReview?.heardAt != null &&
+        heardFromRun - heldReview.heardAt >= REVIEW_HOLD_BEAT_READINGS));
+  if (reviewHoldIsOver) {
+    setHeldReview(null);
+  } else if (!reviewHoldStatusEdge && heldReview !== null && heldReviewRef !== null) {
+    if (reviewHoldStandsIn && heldReview.heardAt === null) {
+      setHeldReview({ ...heldReview, heardAt: heardFromRun });
+    } else if (!reviewHoldStandsIn && heldReview.heardAt !== null) {
+      setHeldReview({ ...heldReview, heardAt: null });
+    }
+  }
+  const reviewRefInTheBox =
+    inPlaceReviewRef ?? (reviewHoldStandsIn && !reviewHoldIsOver ? heldReviewRef : null);
 
   // THE READING IS REPORTED TO WHOEVER HOSTS THIS PANEL (cinatra#3484).
   //
@@ -2380,7 +2448,7 @@ export function AgenticRunPanel({
   // card resolved to would have to come from the card, which is a wire this
   // change does not open; so the value is read for what it is, and a host that
   // needs the stronger question asks it of the card.
-  const panelDrawsReview = Boolean(inPlaceReviewRef);
+  const panelDrawsReview = Boolean(reviewRefInTheBox);
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);
   onReviewReadingChangeRef.current = onReviewReadingChange;
   useEffect(() => {
@@ -2469,13 +2537,13 @@ export function AgenticRunPanel({
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
   const conversationHostedReview = ambientLifecycleHost === "chat_thread";
-  const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
+  const reviewScreenNode: ReactNode = reviewRefInTheBox ? (
     conversationHostedReview ? (
       <ReviewGateCard
         view={{
           viewType: "artifact_review_gate",
           schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-          ref: inPlaceReviewRef,
+          ref: reviewRefInTheBox,
         }}
         // §VI — the gate's conversational prompt window keeps its exchange with
         // the RUN (cinatra#3141 item 1).
@@ -2487,7 +2555,7 @@ export function AgenticRunPanel({
           view={{
             viewType: "artifact_review_gate",
             schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-            ref: inPlaceReviewRef,
+            ref: reviewRefInTheBox,
           }}
           // §VI — the gate's conversational prompt window keeps its exchange
           // with the RUN (cinatra#3141 item 1).
@@ -2510,8 +2578,8 @@ export function AgenticRunPanel({
   const [reviewCardDrawnFor, setReviewCardDrawnFor] = useState<string | null>(null);
   useLayoutEffect(() => {
     const box = reviewSlotBoxRef.current;
-    if (inPlaceReviewRef === null || box === null) return;
-    const drawnFor = inPlaceReviewRef;
+    if (reviewRefInTheBox === null || box === null) return;
+    const drawnFor = reviewRefInTheBox;
     const boxHoldsTheCard = () =>
       Array.from(box.children).some(
         (child) => child.getAttribute("data-conformance-id") !== "review-gate-placeholder",
@@ -2523,9 +2591,19 @@ export function AgenticRunPanel({
     });
     observer.observe(box, { childList: true });
     return () => observer.disconnect();
-  }, [inPlaceReviewRef]);
+  }, [reviewRefInTheBox]);
   const reviewCardDrawn =
-    reviewScreenNode !== null && reviewCardDrawnFor === inPlaceReviewRef;
+    reviewScreenNode !== null && reviewCardDrawnFor === reviewRefInTheBox;
+  // The hand-over's one latch (fix leg 20, above): the reference the card has
+  // drawn for, over a run parked on the review of what it produced.
+  if (
+    reviewCardDrawn &&
+    parkedOnProducedReview &&
+    reviewRefInTheBox !== null &&
+    reviewRefInTheBox !== heldReviewRef
+  ) {
+    setHeldReview({ runId, ref: reviewRefInTheBox, heardAt: null });
+  }
 
   if (reviewScreenNode !== null || runIsWorking) {
     return (
@@ -2568,6 +2646,11 @@ export function AgenticRunPanel({
           {reviewCardDrawn ? null : (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
+              // THE CARD FRAME IS THE PLACEHOLDER'S OWN where the rail draws the
+              // frame and this box gives its chrome up (fix leg 20): "the card
+              // frame, and a spinning icon". Off the frame the box above draws
+              // it, and a second one would be a card inside a card.
+              framed={railDrawsTheFrame}
               // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
               // WAITS IN (fix leg 7). Measured on the sixth graded reading: the pair
               // shot for this card was taken with the run already completed and
