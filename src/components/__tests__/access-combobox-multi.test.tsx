@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import * as Mod from "@/components/access-combobox";
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
 
 describe("AccessCombobox checkbox multi-select — selectionMode=\"multiple\" (cinatra#1607 / #1072)", () => {
   it("exposes ONE picker component and no residual hierarchical export", () => {
@@ -49,7 +49,7 @@ describe("AccessCombobox checkbox multi-select — selectionMode=\"multiple\" (c
   });
 
   it("renders a leading Checkbox in multi rows and no trailing Check there", () => {
-    expect(SOURCE).toMatch(/import \{ Checkbox \} from "@\/components\/ui\/checkbox"/);
+    expect(SOURCE).toMatch(/import \{ Checkbox \} from "\.\/ui\/checkbox"/);
     expect(SOURCE).toMatch(/renderMultiRow/);
     const multiRow = SOURCE.slice(
       SOURCE.indexOf("const renderMultiRow"),
@@ -61,10 +61,11 @@ describe("AccessCombobox checkbox multi-select — selectionMode=\"multiple\" (c
 
   it("toggles through the pure toggleAccessSelection BY DEFAULT (grant mode) and keeps the popover OPEN", () => {
     // The toggle + implication logic lives in the pure access-scope module
+    // (moved beside the picker with it, cinatra#3385)
     // (co-located with the label helpers so it adds no new reachable module to
     // the routes that transitively reach the picker — the route-graph ratchet).
     expect(SOURCE).toMatch(
-      /import \{[\s\S]*toggleAccessSelection[\s\S]*\} from "@\/components\/access-scope"/,
+      /import \{[\s\S]*toggleAccessSelection[\s\S]*\} from "\.\/access\/scope"/,
     );
     // Grant-mode fallback: an omitted override MUST delegate to the pure grant
     // helper (cinatra#1074 W5 made the semantics injectable; grant surfaces pass
@@ -93,13 +94,13 @@ describe("AccessCombobox checkbox multi-select — selectionMode=\"multiple\" (c
 
   it("renders the trigger via resolveAccessSummary and a Tooltip for N>1", () => {
     expect(SOURCE).toMatch(/resolveAccessSummary\(/);
-    expect(SOURCE).toMatch(/import \{[\s\S]*Tooltip[\s\S]*\} from "@\/components\/ui\/tooltip"/);
+    expect(SOURCE).toMatch(/import \{[\s\S]*Tooltip[\s\S]*\} from "\.\/ui\/tooltip"/);
     expect(SOURCE).toMatch(/multiSelection\.length > 1/);
   });
 
   it("re-exports the pure label helpers for existing callers", () => {
     expect(SOURCE).toMatch(
-      /export \{ resolveAccessParts, resolveAccessSummary \} from "@\/components\/access-scope"/,
+      /export \{ resolveAccessParts, resolveAccessSummary \} from "\.\/access\/scope"/,
     );
   });
 });

@@ -46,6 +46,11 @@ import "server-only";
 
 import { readAssignedSkillsForAgentPackage } from "@/lib/agent-assigned-skills-store";
 import {
+  EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
+  resolveEffectiveAssignedSkills,
+  type AssignedSkillScopeRow,
+} from "@cinatra-ai/agents/effective-assigned-skills";
+import {
   readCatalogSnapshotSource,
   resolveSkillAssignability,
   type AssignabilityRefusal,
@@ -78,6 +83,24 @@ export type WithheldAssignedSkill = {
 export type AssignedSkillTierOutcome = {
   /** Ordered (by stored `position`), deduped, REVALIDATED ids. */
   skillIds: string[];
+  /**
+   * The ids the OLDER custom-assignment store won in the SAME chain, under the
+   * SAME per-run cap (cinatra#2815 S3). Reported apart from `skillIds` because
+   * the two stores are gated differently: the per-scope store's rows are
+   * revalidated against the catalog snapshot here, and a custom row keeps the
+   * single runtime-delivery gate its caller has always applied. What they now
+   * share is the pair that was leaking: WHICH scopes may be read, and how many
+   * distinct assigned skills one run receives.
+   */
+  customSkillIds: string[];
+  /** True when the run's snapshot was absent, malformed or an unknown version
+   *  and the SOLE legacy fallback (workspace plus the durable organization) was
+   *  the chain that ran. The callers that audit scope decisions record it. */
+  scopeUsedFallback: boolean;
+  /** Distinct assigned ids the scope chain reached but the per-run cap of 5
+   *  refused, in chain order. Never silent: an operator reads here why an
+   *  assignment that exists in settings did not reach the run. */
+  droppedOverEffectiveCap: string[];
   /** The canonical agent package the rows were read for; null when unresolved. */
   agentPackageName: string | null;
   /** Rows read but refused by revalidation. Empty on a degraded arm (nothing
@@ -91,7 +114,7 @@ export type AssignedSkillTierDeps = {
   /** Ordered assignment rows for ONE canonical package. Default = the S1 store. */
   readAssignments?: (
     agentPackageName: string,
-  ) => Promise<ReadonlyArray<{ skillId: string }>>;
+  ) => Promise<ReadonlyArray<AssignedSkillScopeRow>>;
   /**
    * The shared S1 predicate. NEVER re-implemented. Default = the real one,
    * reading the catalog through the PURE snapshot source (see
@@ -107,6 +130,49 @@ export type AssignedSkillTierDeps = {
    * reads the installed-agent population through its own seam.
    */
   resolveAgentPackage?: (rawId: string) => Promise<AgentPackageResolution>;
+  /**
+   * THE RUN'S FROZEN SCOPES (cinatra#2815 S3, epic #2812) — not a seam but the
+   * tier's scope INPUT, carried here so the two positional arguments stay what
+   * they are.
+   *
+   * `snapshot` is the raw `assignment_scope_snapshot` payload of the run (or of
+   * the assistant thread) this resolution is for. `durableOrgId` is the
+   * instance's durable organization, which is the ONLY layer the sole legacy
+   * fallback adds to the workspace when the payload is absent, malformed or an
+   * unknown version.
+   *
+   * A caller that supplies NEITHER gets the narrowest possible answer — the
+   * workspace layer alone — never the un-scoped package-wide set. A run's
+   * delivered assignments must come from scopes somebody actually granted it.
+   */
+  runScope?: AssignedSkillDeliveryScope;
+  /**
+   * Rows from the OLDER custom-assignment store, already carrying their scope
+   * as (`scopeKind`, `scopeId`), per cinatra#2815 S3.
+   *
+   * They are handed in rather than read here because their reader keys on the
+   * caller's own agent reference, not on the canonical package this tier
+   * resolves. What this tier owns is the DECISION: both stores are admitted by
+   * one snapshot chain and share one per-run cap, so five per-scope picks plus
+   * a custom row deliver five assigned skills, not six.
+   */
+  customScopeRows?: readonly AssignedSkillScopeRow[];
+};
+
+/**
+ * The two stores that enter the one chain, as the marker the winning pick
+ * carries back. They are compared HERE and nowhere else: the chain treats the
+ * field as opaque, so the two names cannot drift apart inside it.
+ */
+const PER_SCOPE_STORE = "per-scope";
+const CUSTOM_STORE = "custom";
+
+/** The scope input {@link AssignedSkillTierDeps.runScope} carries. */
+export type AssignedSkillDeliveryScope = {
+  /** The raw immutable snapshot payload of the run / assistant thread. */
+  snapshot?: unknown;
+  /** The instance's durable organization — the legacy fallback's org floor. */
+  durableOrgId?: string | null;
 };
 
 /**
@@ -122,11 +188,36 @@ function forLog(value: unknown): string {
     .slice(0, 200);
 }
 
+/**
+ * The custom store's picks when the per-scope side produced nothing.
+ *
+ * A degraded arm is about THIS tier's read or THIS tier's agent resolution; the
+ * older store is a different table behind a different reader, and it kept
+ * delivering through both before. It still does, through the snapshot chain,
+ * with the whole per-run cap to itself because nothing else is claiming it.
+ */
+function customOnlySelection(deps: AssignedSkillTierDeps): string[] {
+  return resolveEffectiveAssignedSkills(deps.customScopeRows ?? [], {
+    snapshot: deps.runScope?.snapshot,
+    durableOrgId: deps.runScope?.durableOrgId ?? null,
+    cap: EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
+  }).skillIds;
+}
+
 function degraded(
   reason: AssignedSkillTierDegradation,
   agentPackageName: string | null,
+  deps: AssignedSkillTierDeps = {},
 ): AssignedSkillTierOutcome {
-  return { skillIds: [], agentPackageName, withheld: [], degraded: reason };
+  return {
+    skillIds: [],
+    customSkillIds: customOnlySelection(deps),
+    agentPackageName,
+    withheld: [],
+    degraded: reason,
+    scopeUsedFallback: false,
+    droppedOverEffectiveCap: [],
+  };
 }
 
 /**
@@ -180,7 +271,7 @@ export async function resolveAssignedSkillTier(
   deps: AssignedSkillTierDeps = {},
 ): Promise<AssignedSkillTierOutcome> {
   const rawId = typeof agentId === "string" ? agentId.trim() : "";
-  if (rawId === "") return degraded("agent-unresolved", null);
+  if (rawId === "") return degraded("agent-unresolved", null, deps);
 
   // ---- (1) canonical agent package -------------------------------------
   //
@@ -200,7 +291,7 @@ export async function resolveAssignedSkillTier(
       forLog(rawId),
       err instanceof Error ? err.message : err,
     );
-    return degraded("agent-unresolved", null);
+    return degraded("agent-unresolved", null, deps);
   }
   if (!resolution.ok) {
     // An UNKNOWN reference is the overwhelmingly common case (an agent with no
@@ -213,12 +304,12 @@ export async function resolveAssignedSkillTier(
         (resolution.matches ?? []).map(forLog),
       );
     }
-    return degraded("agent-unresolved", null);
+    return degraded("agent-unresolved", null, deps);
   }
   const agentPackageName = resolution.packageName;
 
   // ---- (2) the stored assignment rows ----------------------------------
-  let rows: ReadonlyArray<{ skillId: string }>;
+  let rows: ReadonlyArray<AssignedSkillScopeRow>;
   try {
     rows = await (deps.readAssignments ?? readAssignedSkillsForAgentPackage)(agentPackageName);
   } catch (err) {
@@ -228,22 +319,95 @@ export async function resolveAssignedSkillTier(
       forLog(agentPackageName),
       err instanceof Error ? err.message : err,
     );
-    return degraded("assignment-read-failed", agentPackageName);
+    return degraded("assignment-read-failed", agentPackageName, deps);
   }
 
-  // First-seen dedup over the stored order (`position` ASC). The store's PK
-  // already makes a duplicate pair impossible; this keeps the tier a pure
-  // function of its input even against a hand-edited row set.
-  const seen = new Set<string>();
-  const orderedIds: string[] = [];
-  for (const row of rows ?? []) {
-    const id = typeof row?.skillId === "string" ? row.skillId.trim() : "";
-    if (id === "" || seen.has(id)) continue;
-    seen.add(id);
-    orderedIds.push(id);
+  // ---- (2b) THE EFFECTIVE-5 CHAIN (cinatra#2815 S3, epic #2812) --------
+  //
+  // The store's cap is per EXACT SCOPE, so the rows just read can legally carry
+  // five project assignments, five organization ones and five workspace ones at
+  // once. A run receives at most FIVE DISTINCT ids, taken along
+  // project -> user -> team(s) -> organization -> workspace from the scopes its
+  // creation FROZE — never a live column, never the actor's current teams.
+  //
+  // The chain, its first-seen dedupe (which replaces the flat dedupe this tier
+  // used to do over the stored order) and the SOLE legacy fallback all live in
+  // ONE pure module, consumed here and by the assistant delivery seam, because
+  // two copies of one authority rule decide differently the first time one of
+  // them is fixed.
+  // BOTH assignment stores enter ONE selection. The older custom-assignment
+  // table answers the same question this one does, "which skills did somebody
+  // assign to this agent, at which scope", so its rows are placed by the same
+  // chain, deduped by the same first-seen rule, and counted against the same
+  // per-run cap. Appending them afterwards is how five per-scope picks plus one
+  // custom row became six assigned skills in one run.
+  //
+  // The per-scope rows go in FIRST, so within one exact scope they hold the
+  // positions the settings page wrote, and a custom row for a skill already won
+  // there is the duplicate the dedupe drops rather than a second slot.
+  const customScopeRows = deps.customScopeRows ?? [];
+  const effective = resolveEffectiveAssignedSkills(
+    [
+      ...(rows ?? []).map((row) => ({ ...row, source: PER_SCOPE_STORE })),
+      ...customScopeRows.map((row) => ({ ...row, source: CUSTOM_STORE })),
+    ],
+    {
+      snapshot: deps.runScope?.snapshot,
+      durableOrgId: deps.runScope?.durableOrgId ?? null,
+      cap: EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP,
+    },
+  );
+  // Which store won a pick decides which gate it still owes, not whether it was
+  // counted. The WINNING ROW answers that and nothing else can: the same skill
+  // is routinely assigned in both stores, and asking whether the id appears
+  // anywhere among the per-scope rows sent a custom winner into the catalog
+  // gate whenever an unrelated scope, one this run's snapshot never names,
+  // happened to name the same skill.
+  const orderedIds = effective.picks
+    .filter((pick) => pick.source !== CUSTOM_STORE)
+    .map((pick) => pick.skillId);
+  const customSkillIds = effective.picks
+    .filter((pick) => pick.source === CUSTOM_STORE)
+    .map((pick) => pick.skillId);
+  if (effective.droppedOverCap.length > 0) {
+    console.warn(
+      "[agent-assigned-skills] the per-run effective cap of " +
+        `${EFFECTIVE_ASSIGNED_SKILLS_PER_RUN_CAP} refused assignment(s) — they ` +
+        "survive in settings but are NOT delivered to this run. agent / refused:",
+      forLog(agentPackageName),
+      effective.droppedOverCap.map(forLog),
+    );
   }
+  if (effective.fallbackDegraded) {
+    console.warn(
+      "[agent-assigned-skills] no usable assignment-scope snapshot AND no " +
+        "durable organization — the chain narrowed to the WORKSPACE layer alone " +
+        "(fail-closed, never wider). agent / reason:",
+      forLog(agentPackageName),
+      effective.fallbackDegraded,
+    );
+  }
+  if (effective.unplaceableScopeKinds.length > 0) {
+    console.warn(
+      "[agent-assigned-skills] assignment row(s) carry a scope kind this build " +
+        "cannot place — dropped, never widened. agent / kinds:",
+      forLog(agentPackageName),
+      effective.unplaceableScopeKinds.map(forLog),
+    );
+  }
+  const scopeReport = {
+    scopeUsedFallback: effective.usedFallback,
+    droppedOverEffectiveCap: effective.droppedOverCap,
+  };
   if (orderedIds.length === 0) {
-    return { skillIds: [], agentPackageName, withheld: [], degraded: null };
+    return {
+      skillIds: [],
+      customSkillIds,
+      agentPackageName,
+      withheld: [],
+      degraded: null,
+      ...scopeReport,
+    };
   }
 
   // ---- (3) resolution-time REVALIDATION --------------------------------
@@ -258,7 +422,11 @@ export async function resolveAssignedSkillTier(
       forLog(agentPackageName),
       err instanceof Error ? err.message : err,
     );
-    return degraded("revalidation-failed", agentPackageName);
+    return {
+      ...degraded("revalidation-failed", agentPackageName),
+      customSkillIds,
+      ...scopeReport,
+    };
   }
 
   const skillIds: string[] = [];
@@ -278,7 +446,14 @@ export async function resolveAssignedSkillTier(
       withheld.map((w) => `${forLog(w.skillId)}:${w.reason}`),
     );
   }
-  return { skillIds, agentPackageName, withheld, degraded: null };
+  return {
+    skillIds,
+    customSkillIds,
+    agentPackageName,
+    withheld,
+    degraded: null,
+    ...scopeReport,
+  };
 }
 
 /** Ids-only convenience over {@link resolveAssignedSkillTier}. Never rejects. */

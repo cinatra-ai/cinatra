@@ -267,12 +267,15 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
     expect(invocationId).toBe("wayflow-task-rev-1");
     const v = values as Record<string, unknown>;
-    // Owner ruling 2026-07-25 (3): the review surface lives UNDER the agent run.
-    // The template packageName (@cinatra-ai/web-research-agent) → the run base
-    // /agents/cinatra-ai/web-research-agent/run-rev-1, then the review sub-path.
+    // Owner ruling 2026-07-25 (3): the review reads UNDER the agent run — and
+    // since cinatra#3693 it reads IN it, with no page of its own. The template
+    // packageName (@cinatra-ai/web-research-agent) gives the run base
+    // /agents/cinatra-ai/web-research-agent/run-rev-1, and the gate travels as
+    // the run detail's own rail selection rather than as a sub-path.
     expect(v.reviewSurfaceUrl).toBe(
-      "/agents/cinatra-ai/web-research-agent/run-rev-1/review/wayflow-task-rev-1",
+      "/agents/cinatra-ai/web-research-agent/run-rev-1?step=review%3Awayflow-task-rev-1",
     );
+    expect(v.reviewSurfaceUrl).not.toContain("/review/");
     expect(v.reviewTaskId).toBe("wayflow-task-rev-1");
     // cinatra#3035 (epic #3023 W11): the surface a person lands on shows ONE
     // artifact — the first of the two the set named.
