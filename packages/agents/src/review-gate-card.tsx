@@ -134,7 +134,7 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -2118,12 +2118,29 @@ export function ReviewGateSettledExchange({
       ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
       : {}),
   });
+  // THE SETTLED EXCHANGE HOLDS ITS NEWEST TURN IN VIEW (cinatra#2934, §IX:
+  // "The panel scrolls at its own cap and holds itself at the bottom, so the
+  // newest turn is the one in view"). This is that panel's exchange drawn
+  // read-only, so it holds the same way: the capped area is brought to its end
+  // when it mounts with the stored exchange and whenever the newest turn
+  // changes, before paint. The reader's own scroll is no dependency: a
+  // re-render that adds nothing leaves the area where the reader put it.
+  // Declared before the empty-exchange return, so the hooks run in one order.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastEntry = runWindow.entries[runWindow.entries.length - 1];
+  const lastEntryId = lastEntry?.id;
+  const lastEntryContent = lastEntry?.content;
+  useLayoutEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [runWindow.entries.length, lastEntryId, lastEntryContent]);
   if (runWindow.entries.length === 0) return null;
   return (
     <div data-review-settled-exchange="" className="px-5 pb-4 pt-6">
       <div className="mx-auto max-w-3xl">
         <div className="rounded-panel border border-line bg-surface p-3 shadow-sm">
-          <div className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+          <div ref={scrollRef} className="flex max-h-52 flex-col gap-2 overflow-y-auto">
             {runWindow.entries.map((entry) => (
               <div
                 key={entry.id}

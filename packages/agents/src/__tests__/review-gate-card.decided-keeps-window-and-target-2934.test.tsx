@@ -269,6 +269,86 @@ describe("R1b — what the read-only exchange must not change", () => {
   });
 });
 
+describe("R1c — the settled exchange stands at its newest turn", () => {
+  // The drawing, §IX: "The panel scrolls at its own cap and holds itself at the
+  // bottom, so the newest turn is the one in view." The settled exchange is that
+  // panel drawn read-only, so its capped area holds the same way.
+  //
+  // The scroll-area stub of hitl-conversation-panel-holds-newest-turn-2934:
+  // jsdom lays nothing out, so the settled exchange's capped area (the element
+  // with overflow-y-auto inside [data-review-settled-exchange], read with
+  // `closest`) gets a scroll height of 1000 and a writable position; every
+  // other element reads jsdom's own.
+  const SCROLL_HEIGHT = 1000;
+  const positions = new WeakMap<Element, number>();
+  const savedTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop");
+  const savedHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  const baseTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+  const baseHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+  const isSettledArea = (el: HTMLElement) =>
+    el.classList.contains("overflow-y-auto") && el.closest("[data-review-settled-exchange]") !== null;
+
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (isSettledArea(this)) return positions.get(this) ?? 0;
+        return baseTop?.get ? baseTop.get.call(this) : 0;
+      },
+      set(this: HTMLElement, value: number) {
+        if (isSettledArea(this)) {
+          positions.set(this, value);
+          return;
+        }
+        baseTop?.set?.call(this, value);
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (isSettledArea(this)) return SCROLL_HEIGHT;
+        return baseHeight?.get ? baseHeight.get.call(this) : 0;
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (savedTop) Object.defineProperty(HTMLElement.prototype, "scrollTop", savedTop);
+    else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
+    if (savedHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", savedHeight);
+    else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  });
+
+  it("after the typed request settles the gate the area stands at its end, and a re-render that adds nothing keeps the reader's position", async () => {
+    armTypedRequest(null);
+    const view = renderRunPageCard();
+    const { container } = view;
+    await waitForPending(container);
+
+    await typeTheRequestAndSettle(container);
+
+    const card = container.querySelector('[data-conformance-id="review-gate-card"]')!;
+    await waitFor(() => expect(card.querySelectorAll("[data-run-window-entry]").length).toBe(2));
+    const area = card.querySelector<HTMLElement>("[data-review-settled-exchange] .overflow-y-auto")!;
+    expect(area).not.toBeNull();
+    // The newest turn — the reply that decided the gate — is the one in view.
+    expect(area.scrollTop).toBe(SCROLL_HEIGHT);
+
+    // The hold is keyed on the exchange, never on every render: a re-render
+    // that adds nothing leaves the area where the reader put it.
+    area.scrollTop = 0;
+    fireEvent.scroll(area);
+    view.rerender(
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard view={VIEW} runId={RUN} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await act(async () => {});
+    expect(card.querySelector("[data-review-settled-exchange] .overflow-y-auto")).toBe(area);
+    expect(area.scrollTop).toBe(0);
+  });
+});
+
 describe("R2c — the card frames the decided target at an address the island admits", () => {
   it("the cookie road: the SAME island address before and after the settle", async () => {
     armTypedRequest(null);
