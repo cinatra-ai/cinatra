@@ -115,3 +115,76 @@ describe("the steps module", () => {
     }
   });
 });
+
+// uploadFile, fillForm, switchTheme and decideGate: their names and bounds join
+// the lists above in this one place, and the bounds stay in order.
+STEP_NAMES.push("decideGate", "fillForm", "switchTheme", "uploadFile");
+BOUND_NAMES.push(
+  "FORM_ACTION_BOUND_MS",
+  "FORM_ERROR_BOUND_MS",
+  "FORM_FIELDS_BOUND_MS",
+  "FORM_POLL_MS",
+  "GATE_ACTION_BOUND_MS",
+  "GATE_FIND_BOUND_MS",
+  "GATE_LEAVE_BOUND_MS",
+  "GATE_POLL_MS",
+  "THEME_ACTION_BOUND_MS",
+  "THEME_APPLIED_BOUND_MS",
+  "THEME_CONTROL_BOUND_MS",
+  "THEME_POLL_MS",
+  "UPLOAD_ACTION_BOUND_MS",
+  "UPLOAD_CHOOSER_BOUND_MS",
+  "UPLOAD_CONTROL_BOUND_MS",
+  "UPLOAD_POLL_MS",
+  "UPLOAD_ROW_BOUND_MS",
+);
+BOUND_NAMES.sort();
+
+describe("the steps that drive a page's own controls", () => {
+  it("name each bound by the key the step's bounds take it by", () => {
+    const steps = theSteps("uploadFile", "fillForm", "switchTheme", "decideGate");
+    expect(steps.UPLOAD_BOUNDS).toEqual({
+      controlMs: steps.UPLOAD_CONTROL_BOUND_MS,
+      actionMs: steps.UPLOAD_ACTION_BOUND_MS,
+      chooserMs: steps.UPLOAD_CHOOSER_BOUND_MS,
+      rowMs: steps.UPLOAD_ROW_BOUND_MS,
+      pollMs: steps.UPLOAD_POLL_MS,
+    });
+    expect(steps.FORM_BOUNDS).toEqual({
+      fieldsMs: steps.FORM_FIELDS_BOUND_MS,
+      actionMs: steps.FORM_ACTION_BOUND_MS,
+      errorMs: steps.FORM_ERROR_BOUND_MS,
+      pollMs: steps.FORM_POLL_MS,
+    });
+    expect(steps.THEME_BOUNDS).toEqual({
+      controlMs: steps.THEME_CONTROL_BOUND_MS,
+      actionMs: steps.THEME_ACTION_BOUND_MS,
+      appliedMs: steps.THEME_APPLIED_BOUND_MS,
+      pollMs: steps.THEME_POLL_MS,
+    });
+    expect(steps.GATE_BOUNDS).toEqual({
+      findMs: steps.GATE_FIND_BOUND_MS,
+      actionMs: steps.GATE_ACTION_BOUND_MS,
+      leaveMs: steps.GATE_LEAVE_BOUND_MS,
+      pollMs: steps.GATE_POLL_MS,
+    });
+  });
+
+  it("keep the waits for a chooser, a field's error and the applied theme short", () => {
+    const steps = theSteps("uploadFile", "fillForm", "switchTheme");
+    expect(steps.UPLOAD_CHOOSER_BOUND_MS).toBe(5_000);
+    expect(steps.FORM_ERROR_BOUND_MS).toBe(5_000);
+    expect(steps.THEME_APPLIED_BOUND_MS).toBe(10_000);
+  });
+
+  it("name the product's own controls and markers", () => {
+    const steps = theSteps("uploadFile", "switchTheme", "decideGate");
+    expect(steps.UPLOAD_ROW_SELECTOR).toBe('[data-conformance-id="artifacts-library-list"] > li');
+    expect(steps.THEME_CONTROL_NAME).toBe("Toggle theme");
+    expect(steps.THEME_ROOT_CLASSES).toEqual({ light: "cinatra", dark: "dark" });
+    expect(steps.ISLAND_THEME_ATTRIBUTE).toBe("data-island-color-scheme");
+    expect(steps.GATE_SELECTOR).toBe("[data-lifecycle-card]");
+    expect(steps.GATE_WAITING_STATUS).toBe("needs-review");
+    expect(steps.GATE_LEFT_STATES).toEqual(["settled", "decided"]);
+  });
+});
