@@ -210,12 +210,12 @@
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "a313ea243d306779e613f650736956b6951e3630"
+      "resolvedSha": "9d9644731ec4e693095b6b5aa1227628922f6016"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "411aec0b0c87df21789512bf0042ea3e52cbf2af"
+      "resolvedSha": "ee2490b42ad1c454bf37428826a6ec26022842b3"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
@@ -230,7 +230,7 @@
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
       "repo": "cinatra-ai/email-test-delivery-agent",
-      "resolvedSha": "9bcefbfababf71ba4af00aeafd1910793925629d"
+      "resolvedSha": "bc30768e42fe4f961eba7e1156a3322b82806393"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",
@@ -425,7 +425,7 @@
     {
       "packageName": "@cinatra-ai/web-scrape-agent",
       "repo": "cinatra-ai/web-scrape-agent",
-      "resolvedSha": "7fa1d84d5f47ea81490aa70bb94d1bdb6f4a63b1"
+      "resolvedSha": "e97b3e94225b6921cc5c004c3a818518a60b261e"
     },
     {
       "packageName": "@cinatra-ai/wordpress-agent",
