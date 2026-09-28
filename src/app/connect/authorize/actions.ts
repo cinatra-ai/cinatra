@@ -131,8 +131,9 @@ export async function approveConnectAction(formData: FormData): Promise<void> {
   // single-use consent CSRF token (so an attacker cannot drive this 302 without
   // an org-admin actively approving on their own session). The code is short-
   // lived + single-use + PKCE-bound. URL.searchParams.set percent-encodes both
-  // values. Referrer-Policy: no-referrer is set on the consent page response so
-  // the code is not leaked via the Referer header on this hop.
+  // values. The consent page response carries Referrer-Policy: same-origin, so
+  // when this 302 goes to a CMS callback on another origin no Referer is sent
+  // on the hop and the code is not leaked through it (cinatra#3712).
   redirect(
     appendQuery(params.params.redirectUri, {
       code,

@@ -48,7 +48,10 @@ const RequestSchema = z.object({
   // returned for THIS gate, carried by the renderer. Optional ON THE WIRE only
   // so a caller that omits it is refused with a reason it can act on rather
   // than a shapeless body error; it is REQUIRED (see the refusal below).
-  allocationToken: z.string().min(1).optional(),
+  // An EMPTY string — what a subflow renders when resolve could not plan and
+  // returned no token — reads as absent too, so it reaches that same actionable
+  // refusal instead of failing here as `invalid_body` (cinatra#3692).
+  allocationToken: z.string().optional(),
 });
 
 export async function POST(req: Request): Promise<Response> {
