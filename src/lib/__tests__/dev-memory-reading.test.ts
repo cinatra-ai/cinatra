@@ -4,8 +4,9 @@
  * Pins the line (a fixed prefix and exactly five whole numbers of megabytes,
  * nothing a reader could mistake for a path or an address), the mode (the
  * development server only), the timer (one per process, once a minute, never
- * holding the process open) and the wiring (the server's instrumentation hook
- * starts it after the build guard). No server is started.
+ * holding the process open) and the wiring (the framework's instrumentation
+ * entry starts it in the Node.js runtime; the file-size-tracked
+ * src/instrumentation.node.ts does not grow). No server is started.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -89,6 +90,21 @@ describe("isDevelopmentServer", () => {
     for (const NODE_ENV of ["production", "test", "", "Development", undefined]) {
       expect(isDevelopmentServer({ NODE_ENV })).toBe(false);
     }
+  });
+
+  it("answers no inside `next build`, even when it runs as development", () => {
+    expect(
+      isDevelopmentServer({ NODE_ENV: "development", NEXT_PHASE: "phase-production-build" }),
+    ).toBe(false);
+    expect(
+      startDevMemoryReading({
+        env: { NODE_ENV: "development", NEXT_PHASE: "phase-production-build" },
+        setIntervalFn: () => {
+          throw new Error("a build must not start the reading");
+        },
+        holder: newHolder(),
+      }),
+    ).toBe(false);
   });
 });
 
@@ -189,14 +205,27 @@ describe("startDevMemoryReading", () => {
 });
 
 describe("the wiring", () => {
-  it("is started by the server's instrumentation hook, after the build guard and before startBoot", () => {
-    const entry = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
-    expect(entry).toContain('import { startDevMemoryReading } from "@/lib/dev-memory-reading";');
-    const guard = entry.indexOf('process.env.NEXT_PHASE === "phase-production-build"');
-    const start = entry.indexOf("  startDevMemoryReading();");
-    const next = entry.indexOf("await startBoot(");
-    expect(guard).toBeGreaterThan(-1);
-    expect(start).toBeGreaterThan(guard);
-    expect(next).toBeGreaterThan(start);
+  it("is started by the framework's instrumentation entry, in the Node.js runtime, before the rest of the startup", () => {
+    const entry = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.ts"), "utf8");
+    const runtime = entry.indexOf('if (process.env.NEXT_RUNTIME === "nodejs") {');
+    // A dynamic import inside that branch, like the entry's other Node.js-only
+    // steps, so the Edge runtime's module graph never sees process.memoryUsage().
+    const load = entry.indexOf(
+      'const { startDevMemoryReading } = await import("@/lib/dev-memory-reading");',
+    );
+    const start = entry.indexOf("    startDevMemoryReading();");
+    const rest = entry.indexOf(
+      'const { register: registerNode } = await import("./instrumentation.node");',
+    );
+    expect(runtime).toBeGreaterThan(-1);
+    expect(load).toBeGreaterThan(runtime);
+    expect(start).toBeGreaterThan(load);
+    expect(rest).toBeGreaterThan(start);
+    expect(entry).not.toMatch(/^import[^\n]*dev-memory-reading/m);
+  });
+
+  it("leaves the size-tracked src/instrumentation.node.ts alone", () => {
+    const node = readFileSync(path.join(REPO_ROOT, "src", "instrumentation.node.ts"), "utf8");
+    expect(node).not.toContain("dev-memory-reading");
   });
 });

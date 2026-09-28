@@ -111,7 +111,6 @@ import "@/lib/register-run-wait-notifier";
 import "@/lib/boot/arm-local-caller-gate"; // socket-peer stamp + boot credential
 import { installFatalErrorHandlers } from "@/lib/boot/fatal-error-policy";
 import { startBoot } from "@/lib/boot/start-boot";
-import { startDevMemoryReading } from "@/lib/dev-memory-reading";
 import { auth } from "@/lib/auth"; // handed to the boot below, which waits for it
 
 export async function register() {
@@ -138,11 +137,6 @@ export async function register() {
   if (process.env.NEXT_PHASE === "phase-production-build") {
     return;
   }
-
-  // The development server's memory by kind, one line a minute (cinatra#3758).
-  // Starts nothing outside `next dev`, and only one timer per process however
-  // often this hook runs. See src/lib/dev-memory-reading.ts.
-  startDevMemoryReading();
 
   // Delegate the ordered boot sequence to the orchestrator, through the module
   // that decides who waits for it (@/lib/boot/start-boot) and waits for the auth

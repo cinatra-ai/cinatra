@@ -23,11 +23,14 @@
  *
  * DEVELOPMENT ONLY, ONE TIMER PER PROCESS, NEVER HOLDS THE PROCESS OPEN. It
  * starts only when NODE_ENV is `development`, which `next dev` sets for its
- * server, so a production server, a build and a test run never write it. The
- * framework runs the instrumentation hook again after a hot reload, and each
- * bundler compilation has its own module cache, so the timer is kept on a
- * process-wide `Symbol.for` key and a later call starts nothing. The timer is
- * `unref()`ed: it never keeps the process alive and never delays its exit.
+ * server, and never while `next build` collects page data (NEXT_PHASE
+ * `phase-production-build`), so a production server, a build and a test run
+ * never write it, wherever the call sits. The framework's instrumentation entry
+ * (src/instrumentation.ts) starts it in the Node.js runtime. The framework runs
+ * that hook again after a hot reload, and each bundler compilation has its own
+ * module cache, so the timer is kept on a process-wide `Symbol.for` key and a
+ * later call starts nothing. The timer is `unref()`ed: it never keeps the
+ * process alive and never delays its exit.
  *
  * Deliberately NOT importing "server-only": the unit test imports this module
  * directly.
@@ -68,11 +71,14 @@ export function formatDevMemoryLine(usage: DevMemoryUsage): string {
   ].join(" ");
 }
 
-/** Is this process the development server? Only an explicit `development` says so. */
+/**
+ * Is this process the development server? Only an explicit `development` says
+ * so, and never inside `next build`, which can run with `development` too.
+ */
 export function isDevelopmentServer(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return env.NODE_ENV === "development";
+  return env.NODE_ENV === "development" && env.NEXT_PHASE !== "phase-production-build";
 }
 
 export type DevMemoryReadingDeps = {
