@@ -6,14 +6,14 @@
  * `@dynamic/types:*` on the passthrough save path so the refusal class cannot
  * silently return."
  *
- * The sibling tests pin the shaper, its declaration and the ownership rule.
- * They cannot see the mechanism that actually makes the save survive a
- * development runtime with NO LLM provider configured: `classifyObject` short-
- * circuits on a typeHint that resolves in the static registry and never
- * reaches `resolveConfiguredLlmRuntime`. A change that moved provider
- * resolution ahead of that short-circuit would put cinatra#2960's refusal back
- * with every other test still green — so it is pinned here, from both sides,
- * with the runtime resolver mocked to the credential-free answer (`null`).
+ * The host no longer registers the blog pipeline's selected-idea type: the
+ * save that named it is retired (cinatra#3035), and a pack's type id does not
+ * live in the host. Pinned here at the classifier boundary, with the runtime
+ * resolver mocked to the credential-free answer (`null`): after
+ * `registerAllObjectTypes` the registry resolves no
+ * `@cinatra-ai/blog-pipeline:selected-idea` and lists no type under
+ * `@cinatra-ai/blog-pipeline`, and the tombstoned id still falls through to
+ * provider resolution and fails closed — the refusal cinatra#2960 recorded.
  */
 import { describe, expect, it, beforeEach, vi } from "vitest";
 
@@ -48,28 +48,14 @@ describe("cinatra#2960 — the selected-idea typeHint classifies with no LLM con
     registerAllObjectTypes();
   });
 
-  it("takes the static fast path: confidence 1.0, not a new type, no provider resolution", async () => {
-    const out = await classifyObject(RAW, OWNED_SELECTED_IDEA_TYPE);
-    expect(out.type).toBe(OWNED_SELECTED_IDEA_TYPE);
-    expect(out.confidence).toBe(1);
-    expect(out.isNewType).toBe(false);
-    expect(out.normalizedData).toEqual(RAW);
-    // The whole point: no provider was consulted, so a runtime with no
-    // credentials configured classifies this save all the same.
-    expect(resolveRuntime).not.toHaveBeenCalled();
-  });
-
-  it("the classification the fast path returns passes every arm of the save guard", async () => {
-    const out = await classifyObject(RAW, OWNED_SELECTED_IDEA_TYPE);
-    // The arms of the fail-closed guard in packages/objects/src/mcp/handlers.ts,
-    // read back one by one against this classification.
-    expect(out).not.toBeNull();
-    expect(out.isNewType).toBe(false);
-    expect(out.type.startsWith("@dynamic/types:")).toBe(false);
-    expect(out.type.startsWith("@cinatra-ai/dynamic:")).toBe(false);
-    expect(out.type).not.toBe("@cinatra-ai/objects:object");
-    expect(out.confidence).toBeGreaterThanOrEqual(0.4);
-    expect(objectTypeRegistry.resolve(out.type)).toBeTruthy();
+  it("registers no type for the blog pipeline's package: the retired selected-idea type resolves nowhere", () => {
+    expect(objectTypeRegistry.resolve(OWNED_SELECTED_IDEA_TYPE)).toBeNull();
+    expect(
+      objectTypeRegistry
+        .list()
+        .map((d) => d.type)
+        .filter((t) => t.startsWith("@cinatra-ai/blog-pipeline:")),
+    ).toEqual([]);
   });
 
   it("the tombstoned id still falls through to provider resolution and fails closed", async () => {
