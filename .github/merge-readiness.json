@@ -229,7 +229,7 @@
     {
       "context": "design-record-grammar",
       "app": "github-actions",
-      "workflow": ".github/workflows/gates.yml",
+      "workflow": ".github/workflows/design-record-grammar.yml",
       "paths": [
         "**"
       ],
@@ -685,6 +685,12 @@
       }
     },
     ".github/workflows/dashboard-live-verify.yml": {
+      "pull_request": {
+        "branches": null,
+        "branches-ignore": null
+      }
+    },
+    ".github/workflows/design-record-grammar.yml": {
       "pull_request": {
         "branches": null,
         "branches-ignore": null

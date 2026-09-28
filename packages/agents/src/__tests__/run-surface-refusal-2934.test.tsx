@@ -102,14 +102,16 @@ describe("the person classes, measured against the authorization layer itself", 
 });
 
 describe("the screen answers with the reason it was given, not with one answer for all three", () => {
-  it("a refusal that KEPT the run's existence opens the standard not-authorized panel", async () => {
+  // SUPERSEDED BY cinatra#3697: every authorization refusal answers the flat
+  // not-found, a 403 included — a refused reader learns nothing of the run.
+  it("a refusal that KEPT the run's existence answers the flat not-found too", async () => {
     const verdict = await readAs("user-colleague", ORG_MEMBER);
     expect(verdict.ok).toBe(false);
     expect(
       runScreenAccessAnswer(
         new AuthzError({ statusCode: 403, reason: "forbidden", message: "Run access denied." }),
       ),
-    ).toBe("not-authorized");
+    ).toBe("not-found");
   });
 
   it("a refusal that HID the run's existence still opens the flat not-found", async () => {
@@ -135,10 +137,11 @@ describe("the screen answers with the reason it was given, not with one answer f
     [401, "no_session"],
     [400, "owner_implicit"],
   ] as const) {
-    it(`a ${statusCode} refusal is handed back rather than drawn as "you may not act on it"`, () => {
+    // SUPERSEDED BY cinatra#3697: the flat not-found, never "you may not act on it".
+    it(`a ${statusCode} refusal answers the flat not-found rather than "you may not act on it"`, () => {
       expect(
         runScreenAccessAnswer(new AuthzError({ statusCode, reason, message: "no." })),
-      ).toBe("rethrow");
+      ).toBe("not-found");
     });
   }
 });
@@ -223,11 +226,12 @@ describe("the trail above the refusal carries no run identifier either", () => {
   it("ORGANIZATION MEMBER: the run page's not-authorized reading draws a trail with no substring of the run id", async () => {
     const verdict = await readAs("user-colleague", ORG_MEMBER);
     expect(verdict).toEqual({ ok: false, statusCode: 403, reason: "forbidden" });
+    // SUPERSEDED BY cinatra#3697: the screen answers this reader the flat not-found.
     expect(
       runScreenAccessAnswer(
         new AuthzError({ statusCode: 403, reason: "forbidden", message: "Run access denied." }),
       ),
-    ).toBe("not-authorized");
+    ).toBe("not-found");
     // The panel this person is given clears the crumb contributions itself.
     const { container } = render(
       <RunNotAuthorizedPanel surface="Setup" conformanceId="run-not-authorized" />,

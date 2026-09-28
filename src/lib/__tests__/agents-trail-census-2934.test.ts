@@ -58,7 +58,9 @@ function pageFiles(dir: string, rel = ""): string[] {
 
 // THE CENSUS. Each kind names the route it stands for; the page files they
 // stand for are held equal to the route tree below.
-const AREA_PAGES = ["executions", "reviews"] as const;
+// The workspace-wide Reviews page is retired (cinatra#3697): a review opens in
+// place on its run, so the area keeps one page of its own.
+const AREA_PAGES = ["executions"] as const;
 const INSTANCE_SUBROUTES = [
   "data",
   "optimization",
