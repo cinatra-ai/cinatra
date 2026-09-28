@@ -162,7 +162,7 @@ with the page it landed on.
   server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
   over the same fixture pages, which keeps the double honest.
 - **The live smoke**, one per step, against a running development server:
-  `pnpm test:e2e:steps` (config `tests/e2e/config/steps.config.ts`). Without a
+  `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
   browser or a server every test is skipped, and its reason names what is missing.
   `E2E_STEPS_ISLAND_PATH` and `E2E_STEPS_RUN_PATH` name a page with a review island
   and a run page for the two watching smokes.

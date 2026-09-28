@@ -13,7 +13,7 @@
  *
  * Run locally:
  *   pnpm dev                     # in another shell (port 3000)
- *   pnpm test:e2e:steps
+ *   pnpm exec playwright test -c tests/e2e/config/steps.config.ts
  *
  * E2E_STEPS_BASE_URL (or E2E_STEPS_PORT) points it at another server.
  * E2E_STEPS_ISLAND_PATH and E2E_STEPS_RUN_PATH name a page with a review island
