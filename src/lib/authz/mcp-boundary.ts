@@ -166,6 +166,8 @@ export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "agent_creation_request_retry_publish",
   // An answer to a person's pending gate in a run.
   "agent_run_resume",
+  // A person's decision on an approval at its source.
+  "approvals_decide",
 ]);
 
 /**

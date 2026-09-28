@@ -58,6 +58,8 @@ const INVENTORY_MEMBERS = [
   "agent_creation_request_retry_publish",
   // An answer to a person's pending gate in a run.
   "agent_run_resume",
+  // A person's decision on an approval at its source.
+  "approvals_decide",
 ] as const;
 
 const EXPECTED_MEMBERS: readonly string[] = [...TRIGGER_EMAIL_SEND_MEMBERS, ...INVENTORY_MEMBERS];
