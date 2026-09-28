@@ -1,4 +1,18 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { readAgentRunById } from "@cinatra-ai/agents/store";
+import type { ActorRoleHints } from "@cinatra-ai/agents/auth-policy";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import { AuthzError } from "@/lib/authz";
+import {
+  getAuthSession,
+  isPlatformAdmin,
+  resolveOrgRoleForSession,
+  signInRedirectTarget,
+} from "@/lib/auth-session";
+import { redirect } from "next/navigation";
+import { CrumbContributions } from "@/components/crumb-contributions";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import { listSkillsUsedForRun } from "@/lib/agent-run-skills-used";
 import { readRunSelectedSkillRevisions } from "@/lib/run-selected-skill-revisions";
 import { Main } from "@/components/layout/main";
@@ -28,6 +42,29 @@ type Props = {
 };
 
 /**
+ * WHAT THE SCOPED SHELL HANDS THIS PAGE (cinatra#3693).
+ *
+ * Every other screen below an instance takes these three, so the scoped shell
+ * can mount them all the same way: the base the page is read under, the scope
+ * itself for the trail's head, and the scope's resolved name. This page was the
+ * one sub-route that took none of them, so `<base>/…/<run>/skills` answered 404
+ * while the same run's Schedule, Permissions and Data panes all resolved.
+ *
+ * IT RUNS NO HOME CHECK, and that is a decision rather than an omission: this
+ * pane is not addressed by anything the product draws, so no reader arrives here
+ * at the wrong base for a run. The scope it was read under is what its trail
+ * says.
+ */
+type ScopeProps = {
+  /** The scope base the page is mounted under, e.g. `/teams/<id>`. */
+  scopeBase?: string | null;
+  /** The scope itself, for the trail's head. */
+  launchScope?: ScopeSurfaceRef | null;
+  /** The scope's resolved name, read behind the scope's own gate. */
+  scopeTitle?: string | null;
+};
+
+/**
  * Skills tab.
  *
  * Surfaces the per-run skill ledger (agent_run_skills_used) for the agent
@@ -37,8 +74,49 @@ type Props = {
  * Records the installed catalog skills resolved for the run — the same set the
  * run's LLM steps receive via the sessionless llm-bridge resolution.
  */
-export default async function AgentPackageInstanceSkillsPage({ params }: Props) {
+export default async function AgentPackageInstanceSkillsPage({
+  params,
+  scopeBase,
+  launchScope,
+  scopeTitle,
+}: Props & ScopeProps) {
   const { instanceId } = await params;
+  // The base decides nothing here (see `ScopeProps`); the vantage decides the
+  // trail's head, exactly as it does on the run page.
+  void scopeBase;
+
+  // ── THE RUN'S OWN ACCESS DOOR, BEFORE ANY LEDGER IS READ (cinatra#3693) ───
+  //
+  // The two reads below are plain SQL over `run_id` and take no actor: they
+  // enforce nothing themselves, so whatever stands in front of them IS the
+  // door. Nothing did. `readAgentRunById` with the actor is that door — the same
+  // call, with the same actor and the same role hints, the run page and the
+  // Permissions pane make — and it enforces the run's effective auth policy
+  // (`runDataVisibility`) on top of ownership. A refusal arrives as `AuthzError`
+  // and is answered as not-found, so a reader who may not see the run is not
+  // told it exists.
+  const session = await getAuthSession();
+  if (!session) redirect(await signInRedirectTarget());
+  const actor: PrimitiveActorContext = {
+    actorType: "human",
+    source: "ui",
+    userId: session.user?.id ?? undefined,
+  };
+  const roles: ActorRoleHints = {
+    platformRole: isPlatformAdmin(session) ? "platform_admin" : "member",
+    orgRole: await resolveOrgRoleForSession({
+      user: { id: session.user.id },
+      session: session.session,
+    }),
+    actorOrganizationId: session.session?.activeOrganizationId ?? undefined,
+  };
+  try {
+    if (!(await readAgentRunById(instanceId, actor, roles))) notFound();
+  } catch (err) {
+    if (err instanceof AuthzError) notFound();
+    throw err;
+  }
+
   const skills = listSkillsUsedForRun({ runId: instanceId });
   // Join the telemetry ledger against the authoritative per-run selection set so
   // each ledger row can be labeled by its selection source (cinatra#2067 item 6).
@@ -48,6 +126,11 @@ export default async function AgentPackageInstanceSkillsPage({ params }: Props) 
 
   return (
     <Main className="min-h-screen">
+      {launchScope ? (
+        <CrumbContributions
+          entries={scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)}
+        />
+      ) : null}
       <PageHeader
         title="Skills"
         description="Skills resolved + invoked during this run."
