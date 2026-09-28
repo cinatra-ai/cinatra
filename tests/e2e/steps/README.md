@@ -1,0 +1,168 @@
+# End-to-end steps
+
+The maintained steps the end-to-end suites and the picture rounds drive the
+product through. A picture round, the run that proves a pull request on a booted
+app and takes its pictures, calls these steps instead of following written rules
+in its instructions. A defect in how a run drives the product then becomes a
+defect of a step, with a test, fixed once for every run.
+
+| Step | What it guarantees |
+| --- | --- |
+| `signInThroughPage` | One sign-in, through the product's own sign-in page, after the form has hydrated. |
+| `waitForIsland` | A frame of the review island, taken when it has loaded or when the bound runs out. |
+| `watchRun` | A run's watch kept to its bound, with a frame taken when the run settles or at the bound. |
+| `readCount` | A count on one line, taken once it has held still. |
+| `navigateTo` | A page reached through the product's own navigation, never by typing its address. |
+
+`index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
+refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
+imports only Node's builtins and its own files, so both of these work:
+
+- a Playwright suite imports it: `import { navigateTo } from "../steps/index.mjs";`
+- a plain Node process imports it from the checkout under test, next to that
+  checkout's own `@playwright/test`, with no TypeScript and no import aliases.
+
+## What every step shares
+
+- **A record.** Every step takes a `record` callback and writes one line per event
+  through it. A line names a page by its path, never by its address or its query
+  string, and never carries a credential. A step without a `record` does nothing.
+- **Refusals by name.** A step that cannot keep its guarantee throws a
+  `StepRefusal` whose message names the step, the kind of refusal and the reason,
+  for example `navigateTo refused (no-link): no visible link on /agents leads to
+  /chat — no address was typed`. The same line is written through the record first.
+  An error from Playwright is reduced to its class (`TimeoutError`), because its
+  message can repeat a value it was given to type.
+- **Named bounds.** Every bound is an exported constant; a caller may shorten or
+  lengthen one through the step's options, and an unknown or non-positive bound is
+  refused before anything happens.
+- **Frames through a shutter.** The two watching steps take their frame through a
+  `shutter` the caller passes: `({ step, state, settled, elapsedMs }) => path`.
+  The shutter takes the picture (usually `page.screenshot`) and answers its path.
+
+## `signInThroughPage(page, { credentials, budget, record, url?, bounds? })`
+
+Signs a run in once. The sign-in form comes from the product's auth form library,
+which renders `noValidate` only once hydration has committed, so the form's
+`novalidate` attribute is the hydration mark.
+
+1. Refuses, before anything is sent, a call without the run's budget, without
+   credentials, or with an unknown bound.
+2. Loads the sign-in page with a full load and checks it landed there.
+3. Arms two guards before anything is pressed. The page guard cancels a submission
+   the app's own handler did not cancel: the native submission a press before
+   hydration makes. The network guard aborts a navigation to the sign-in page that
+   would carry the form's fields, including one a script starts with `form.submit()`.
+4. Waits for the hydration mark, never a fixed sleep. A page still without it after
+   the bound is reloaded once; a second stall is refused with a reading of the page.
+5. Fills the two fields and presses once.
+6. Reads the app's own sign-in request (the email route, or the username route the
+   same form takes) and its answer.
+
+**The once-only budget.** A run creates one budget with `createSignInBudget()` and
+hands the same object to every sign-in it makes. A press that sent no sign-in
+request is a driver failure and never spends it; a request that left the page
+spends it, whatever the answer. A second sign-in on a spent budget is refused
+without loading anything.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `SIGN_IN_NAVIGATION_BOUND_MS` | 300_000 | the page load, and the one reload |
+| `SIGN_IN_HYDRATION_BOUND_MS` | 60_000 | from the load to the hydration mark |
+| `SIGN_IN_HYDRATION_POLL_MS` | 100 | how often the mark is read |
+| `SIGN_IN_ACTION_BOUND_MS` | 30_000 | one fill, or the press |
+| `SIGN_IN_REQUEST_BOUND_MS` | 10_000 | from the press to the app's own request |
+| `SIGN_IN_ANSWER_BOUND_MS` | 120_000 | from that request to the app's answer |
+
+Refusal kinds: `input` and `spent` (nothing was sent), `blocker` (the page never
+became pressable), `driver-failure` (the press sent no sign-in request),
+`rejected` and `no-answer` (the request left the page, and the budget is spent).
+
+## `waitForIsland(page, { record, shutter, frameSrcPath?, bound?, pollMs? })`
+
+Waits for a review card's island: the framed document that shows the work under
+review. It reads the island's own load state (`data-island-load-state` on
+`[data-conformance-id="review-target-island"]`) on a fixed cadence and takes the
+frame when the state is `loaded`, or when the bound runs out. The card's own
+`timed-out` does not end the wait: the frame stays mounted and a late load heals
+it. Either way it writes exactly one line (settled or ran out, the elapsed time and
+the state) and answers `{ state, settled, elapsedMs, path }`.
+
+The island is the first on the page whose frame shows `frameSrcPath`
+(`/lifecycle/review-island` by default). Other readings: `absent`, `unmarked`,
+`unreadable`. A frame the browser loads lazily does not start loading off screen,
+so bring the card into view before waiting.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `ISLAND_WAIT_BOUND_MS` | 120_000 | the whole wait |
+| `ISLAND_POLL_MS` | 250 | how often the state is read |
+
+## `watchRun(page, { record, shutter, bound?, pollMs? })`
+
+Watches a run on the run page until it settles or the bound runs out, and takes the
+frame either way. A reading it could not take, for example while the page reloads,
+is a reading and never the end of the watch. The state it reads:
+
+- `completion:<evidence>`: the completion card, with the reading its output rests
+  on. Settled, unless that reading is `pending`.
+- `status:<status>`: the run's own status pill, the one drawn with the dot in the
+  run surface. Settled at `approved`, `failed` and `needs-review` (the run waits
+  for a person); still moving at `running` and `queued`.
+- `absent`, `unmarked` (a run surface that draws no status, as when the run's first
+  step is an input step on the rail) and `unreadable`: never settled.
+
+It writes one line and answers `{ state, settled, elapsedMs, path }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `RUN_WATCH_BOUND_MS` | 300_000 | the whole watch |
+| `RUN_WATCH_POLL_MS` | 1_000 | how often the state is read |
+
+## `readCount(page, { selector, record, settleMs?, pollMs?, bound? })`
+
+A reading with a value, for a state whose precondition is absent on the boot: no
+notifications, no failed run. It counts what the selector matches (attached
+elements, visible or not) and records the count on one line only once it has held
+still for `settleMs`, so a list that mounts a moment after the page loads is never
+read as empty. A count that never holds still within the bound is refused.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `COUNT_SETTLE_MS` | 1_000 | how long the count must hold still |
+| `COUNT_POLL_MS` | 100 | how often it is read |
+| `COUNT_BOUND_MS` | 15_000 | how long it has to hold still at all |
+
+## `navigateTo(page, { path, record, bounds? })`
+
+Presses the first visible link on the current page that leads to `path` (its
+`href` is the path, or the path with a query string or a fragment, and it opens in
+this tab), waits for the landing, and writes where it landed from. Already on
+`path`, it presses nothing. With no such link it refuses: it never types an
+address. A press that lands elsewhere, for example through a redirect, is refused
+with the page it landed on.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `NAVIGATE_ACTION_BOUND_MS` | 30_000 | the press |
+| `NAVIGATE_LANDING_BOUND_MS` | 120_000 | from the press to the landing |
+
+## Shared bounds
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `FRAME_BOUND_MS` | 60_000 | the shutter answering with a frame |
+| `READING_BOUND_MS` | 5_000 | one reading of the page; a watch can overrun its bound by at most this |
+
+## Tests
+
+- **Unit tests**, in the root unit tier (`pnpm test:root`, or
+  `pnpm exec vitest run --config vitest.config.ts tests/e2e/steps`). Each step's
+  branches run against a page double over a local fixture app: no browser, no
+  server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
+  over the same fixture pages, which keeps the double honest.
+- **The live smoke**, one per step, against a running development server:
+  `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
+  browser or a server every test is skipped, and its reason names what is missing.
+  `E2E_STEPS_ISLAND_PATH` and `E2E_STEPS_RUN_PATH` name a page with a review island
+  and a run page for the two watching smokes.
