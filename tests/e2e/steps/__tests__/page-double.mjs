@@ -1,10 +1,22 @@
-// A page double for the step tests: the parts of Playwright's `Page` the steps
-// use, speaking real HTTP to the fixture app, with each document built by jsdom.
+// A page double for the step tests: the parts of Playwright's `Page` and
+// `BrowserContext` the steps use, speaking real HTTP to the fixture app, with
+// each document built by jsdom.
 //
 // It keeps a browser's rules for exactly what the steps do with a page:
 //   - a navigation is a real request to the fixture app; every request is
 //     announced to the page's request listeners before it is routed, and routes
 //     run last-registered first and may abort a request before it leaves;
+//   - the context announces every request of its pages, and its end: finished,
+//     or failed (aborted, or cancelled because its document was left); a page
+//     that closes takes its requests with it and reports nothing;
+//   - plain HTTP goes over HTTP/1.1 and an https origin over HTTP/2, one
+//     session per origin; each document's resource timing lists its own
+//     navigation and every request it sent once that request's response has
+//     ended, with the protocol it went over;
+//   - a page whose first part declares that its response streams on is shown
+//     from that part, and its own request stays open with it, without a
+//     response end in its timing;
+//   - a press that holds the new-tab modifier opens the link in a further page;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
 //     and its argument and its answer cross as JSON;
@@ -17,8 +29,11 @@
 //     Playwright's own call log does, so a step that forwards that message fails
 //     these cases.
 // The page's declared behaviour (the JSON each fixture page carries) is played on
-// its document with timers, as the page's inline script does in a browser.
-// Inline scripts never run here.
+// its document with timers, as the page's inline script does in a browser: a
+// stream it opens stays open, and while its main thread is declared busy, a
+// reading waits. Inline scripts never run here.
+import { connect, constants } from "node:http2";
+
 import { JSDOM } from "jsdom";
 
 import { EMAIL_ROUTE, USERNAME_ROUTE } from "./fixture-app.mjs";
@@ -34,6 +49,173 @@ const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 const viaJson = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const DESTROYED = "Execution context was destroyed, most likely because of a navigation";
 const ERROR_PAGE = "chrome-error://chromewebdata/";
+/** The modifiers a press holds to open a link in a further page. */
+const NEW_TAB_MODIFIERS = ["ControlOrMeta", "Control", "Meta"];
+/** How a page double reaches its context: the context's own side, which Playwright's has not. */
+const INNER = Symbol("context double");
+/** A page's first part that says the rest of its response is still to come. */
+const STREAMING_MARK = /<meta name="fixture-streaming"/;
+
+/**
+ * A response body as it arrives: `head` resolves with what has come once its
+ * first part is there (or it ended), `whole` with all of it once it has ended,
+ * and rejects when it was cancelled or failed. `subscribe` feeds it:
+ * (onPart, onEnd, onFail).
+ */
+function collect(subscribe) {
+  let text = "";
+  let firstPart;
+  const head = new Promise((done) => {
+    firstPart = done;
+  });
+  const whole = new Promise((done, fail) => {
+    subscribe(
+      (part) => {
+        text += part;
+        firstPart(text);
+      },
+      () => {
+        firstPart(text);
+        done(text);
+      },
+      (error) => {
+        firstPart(text);
+        fail(error);
+      },
+    );
+  });
+  whole.catch(() => {});
+  return { head, whole };
+}
+
+/**
+ * One request over the wire, answered once the response's head has arrived:
+ * its status, its final address, the protocol it went over, its body as it
+ * arrives (`head` and `whole`, see collect) and `cancel`. Plain HTTP goes over
+ * HTTP/1.1; an https origin over HTTP/2.
+ */
+async function transfer(sessionOf, href, { method, body, headers, follow }) {
+  if (new URL(href).protocol === "http:") {
+    const controller = new AbortController();
+    const response = await fetch(href, {
+      method,
+      body: body ?? undefined,
+      headers,
+      redirect: follow ? "follow" : "manual",
+      signal: controller.signal,
+    });
+    const { head, whole } = collect((onPart, onEnd, onFail) => {
+      if (!response.body) return onEnd();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const pump = () =>
+        reader.read().then(({ done, value }) => {
+          if (done) {
+            const rest = decoder.decode();
+            if (rest) onPart(rest);
+            return onEnd();
+          }
+          onPart(decoder.decode(value, { stream: true }));
+          return pump();
+        }, onFail);
+      pump();
+    });
+    return { status: response.status, url: response.url, protocol: "http/1.1", head, whole, cancel: () => controller.abort() };
+  }
+  const session = await sessionOf(new URL(href).origin);
+  for (let hops = 0; ; hops += 1) {
+    const url = new URL(href);
+    const stream = session.request({ ":method": method, ":path": `${url.pathname}${url.search}`, ...headers });
+    stream.on("error", () => {});
+    stream.end(body ?? undefined);
+    const answer = await new Promise((done, fail) => {
+      stream.once("response", done);
+      stream.once("close", () => fail(new Error("the stream closed before its response")));
+    });
+    const status = Number(answer[":status"]);
+    if (follow && status >= 300 && status < 400 && answer.location && hops < 20) {
+      stream.close(constants.NGHTTP2_CANCEL);
+      href = new URL(answer.location, href).href;
+      method = "GET";
+      body = null;
+      continue;
+    }
+    const { head, whole } = collect((onPart, onEnd, onFail) => {
+      stream.setEncoding("utf8");
+      stream.on("data", onPart);
+      stream.once("end", onEnd);
+      stream.once("close", () => onFail(new Error("the stream was cancelled")));
+    });
+    return { status, url: href, protocol: session.alpnProtocol, head, whole, cancel: () => stream.close(constants.NGHTTP2_CANCEL) };
+  }
+}
+
+/** A browser context: its open pages, and the request events of all of them. */
+export class ContextDouble {
+  #origin;
+  #pages = [];
+  #listeners = new Map();
+  #sessions = new Map();
+
+  constructor(origin) {
+    this.#origin = origin;
+    this[INNER] = {
+      emit: (event, value) => {
+        for (const listener of [...(this.#listeners.get(event) ?? [])]) listener(value);
+      },
+      open: () => {
+        const page = new PageDouble(this.#origin, this);
+        this.#pages.push(page);
+        this[INNER].emit("page", page);
+        return page;
+      },
+      forget: (page) => {
+        this.#pages = this.#pages.filter((open) => open !== page);
+      },
+      // One HTTP/2 session per origin, as a browser keeps one connection. The
+      // origin's certificate is made at run time, so it is not verified.
+      session: (origin) => {
+        let session = this.#sessions.get(origin);
+        if (!session) {
+          session = new Promise((done, fail) => {
+            const opened = connect(origin, { rejectUnauthorized: false });
+            opened.on("error", fail);
+            opened.once("connect", () => done(opened));
+          });
+          session.catch(() => {});
+          this.#sessions.set(origin, session);
+        }
+        return session;
+      },
+      transfer: (href, options) => transfer(this[INNER].session, href, options),
+    };
+  }
+
+  pages() {
+    return [...this.#pages];
+  }
+
+  async newPage() {
+    return this[INNER].open();
+  }
+
+  on(event, listener) {
+    this.#listeners.set(event, [...(this.#listeners.get(event) ?? []), listener]);
+  }
+
+  off(event, listener) {
+    this.#listeners.set(
+      event,
+      (this.#listeners.get(event) ?? []).filter((l) => l !== listener),
+    );
+  }
+
+  async close() {
+    for (const page of this.pages()) await page.close();
+    for (const session of this.#sessions.values()) (await session.catch(() => null))?.destroy();
+    this.#sessions.clear();
+  }
+}
 
 /** Visible, as far as a document without layout can tell: attached, and no `hidden` or inline `display: none` on the way up. */
 function isVisible(element) {
@@ -47,6 +229,8 @@ function isVisible(element) {
 
 export class PageDouble {
   #origin;
+  #context;
+  #frame = { page: () => this };
   #href = "about:blank";
   #dom;
   #navigating = 0;
@@ -54,14 +238,27 @@ export class PageDouble {
   #requestListeners = [];
   #timers = new Set();
   #closed = false;
+  #streams = new Set();
+  #entries = new WeakMap();
+  #busyUntil = new WeakMap();
 
-  constructor(origin) {
+  /** Opened by its context: `context.newPage()`. */
+  constructor(origin, context) {
     this.#origin = origin;
-    this.#dom = this.#build("about:blank", "<!doctype html><html><body></body></html>");
+    this.#context = context;
+    this.#dom = this.#build("about:blank", "<!doctype html><html><body></body></html>", null, 0);
   }
 
   url() {
     return this.#href;
+  }
+
+  context() {
+    return this.#context;
+  }
+
+  isClosed() {
+    return this.#closed;
   }
 
   async goto(url, { timeout } = {}) {
@@ -90,6 +287,9 @@ export class PageDouble {
   }
 
   async evaluate(fn, arg) {
+    // A page whose main thread is busy answers once it is free again.
+    const busy = (this.#busyUntil.get(this.#dom) ?? 0) - Date.now();
+    if (busy > 0) await pause(busy);
     if (this.#navigating > 0 || this.#closed) throw new Error(DESTROYED);
     const inPage = this.#dom.window.eval(`(${fn.toString()})`);
     return viaJson(await inPage(viaJson(arg)));
@@ -118,7 +318,7 @@ export class PageDouble {
     return new LocatorDouble(
       {
         document: () => this.#dom.window.document,
-        press: (element) => this.#press(element),
+        press: (element, modifiers) => this.#press(element, modifiers),
       },
       selector,
       {},
@@ -126,9 +326,12 @@ export class PageDouble {
   }
 
   async close() {
+    if (this.#closed) return;
     this.#closed = true;
     for (const timer of this.#timers) clearTimeout(timer);
     this.#timers.clear();
+    this.#endStreams(null, "closed");
+    this.#context[INNER].forget(this);
     this.#dom.window.close();
   }
 
@@ -150,9 +353,16 @@ export class PageDouble {
     return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
   }
 
-  /** A document for `html`, with the behaviour the page declares scheduled on it. */
-  #build(href, html) {
+  /** A document for `html`, with its resource timing and the behaviour the page declares scheduled on it. */
+  #build(href, html, protocol, responseEnd) {
     const dom = new JSDOM(html, { url: /^https?:/.test(href) ? href : "about:blank", runScripts: "outside-only" });
+    const entries = /^https?:/.test(href)
+      ? [{ name: href, entryType: "navigation", nextHopProtocol: protocol ?? "", startTime: 0, responseEnd }]
+      : [];
+    this.#entries.set(dom, entries);
+    Object.defineProperty(dom.window.performance, "getEntriesByType", {
+      value: (type) => entries.filter((entry) => entry.entryType === type).map((entry) => ({ ...entry })),
+    });
     const declared = (id) => {
       const node = dom.window.document.getElementById(id);
       return node ? JSON.parse(node.textContent) : null;
@@ -165,10 +375,24 @@ export class PageDouble {
     return dom;
   }
 
-  #commit(href, html) {
+  #commit(href, html, protocol = null, elapsedMs = 0, streaming = null) {
     const previous = this.#dom;
     this.#href = href;
-    this.#dom = this.#build(href, html);
+    this.#dom = this.#build(href, html, protocol, streaming ? 0 : Math.max(1, elapsedMs));
+    // The document left behind cancels its requests, and the context hears of each.
+    this.#endStreams(previous, "failed");
+    if (streaming) {
+      // Its own request stays open with it; its response end is written once the rest has come.
+      const dom = this.#dom;
+      const held = this.#hold(dom, streaming.request, () => {
+        this.#entries.get(dom)[0].responseEnd = dom.window.performance.now();
+      });
+      held.stop = streaming.reply.cancel;
+      streaming.reply.whole.then(
+        () => held.settle("finished"),
+        () => held.settle("failed"),
+      );
+    }
     previous.window.close();
   }
 
@@ -176,6 +400,14 @@ export class PageDouble {
     if (this.#dom !== dom) return;
     if (op.reload) {
       this.#navigate("GET", this.#href, null).catch(() => {});
+      return;
+    }
+    if (op.stream) {
+      this.#openStream(dom, op.stream);
+      return;
+    }
+    if (op.freeze) {
+      this.#busyUntil.set(dom, Date.now() + op.freeze);
       return;
     }
     const element = dom.window.document.querySelector(op.target);
@@ -214,11 +446,19 @@ export class PageDouble {
     form.setAttribute("novalidate", "");
   }
 
-  #press(element) {
+  #press(element, modifiers) {
     if (element.localName === "a" && element.hasAttribute("href")) {
+      // The page's handler cancels every press of this link.
+      if (element.hasAttribute("data-fixture-inert")) return;
       // A link that opens another tab leaves this page where it is.
       if (element.getAttribute("target") === "_blank") return;
-      this.#navigate("GET", new URL(element.getAttribute("href"), this.#href).href, null).catch(() => {});
+      const href = new URL(element.getAttribute("href"), this.#href).href;
+      if (modifiers.some((modifier) => NEW_TAB_MODIFIERS.includes(modifier))) {
+        // The new-tab modifier: the link opens in a further page, and this one stays.
+        this.#context[INNER].open().goto(href).catch(() => {});
+        return;
+      }
+      this.#navigate("GET", href, null).catch(() => {});
       return;
     }
     const form = element.form;
@@ -252,25 +492,119 @@ export class PageDouble {
         this.#commit(ERROR_PAGE, "<!doctype html><title>Blocked</title>");
         return null;
       }
-      this.#commit(sent.url, sent.text);
+      this.#commit(sent.url, sent.text, sent.protocol, sent.elapsedMs, sent.streaming);
       return { status: () => sent.status, url: () => sent.url };
     } finally {
       this.#navigating -= 1;
     }
   }
 
-  async #send(method, href, body, navigation) {
-    let answered;
-    const answer = new Promise((done) => {
-      answered = done;
-    });
-    const request = {
+  #request(method, href, navigation, answer) {
+    return {
       url: () => href,
       method: () => method,
       isNavigationRequest: () => navigation,
       response: () => answer,
+      frame: () => this.#frame,
     };
+  }
+
+  /** The request's entry in the resource timing of the document that sent it, once its response has ended. */
+  #timed(dom, href, protocol, startedAt) {
+    const entries = this.#entries.get(dom);
+    if (!entries || this.#dom !== dom) return;
+    const now = dom.window.performance.now();
+    entries.push({
+      name: href,
+      entryType: "resource",
+      nextHopProtocol: protocol,
+      startTime: Math.max(0, now - (performance.now() - startedAt)),
+      responseEnd: now,
+    });
+  }
+
+  /**
+   * Keep `request` open with `dom`. It settles once: finished (its body ended),
+   * failed (`dom` was left), and the context hears of both; or closed with its
+   * page, and the context hears nothing, as in a browser.
+   */
+  #hold(dom, request, onFinished) {
+    const inner = this.#context[INNER];
+    const held = { dom, settled: false, stop: () => {} };
+    held.settle = (how) => {
+      if (held.settled) return;
+      held.settled = true;
+      this.#streams.delete(held);
+      if (how === "finished") {
+        inner.emit("requestfinished", request);
+        onFinished();
+      } else if (how === "failed") {
+        inner.emit("requestfailed", request);
+      }
+    };
+    this.#streams.add(held);
+    return held;
+  }
+
+  /** A request the document holds open, as an event stream is: it ends only when the server ends it or the page leaves it. */
+  #openStream(dom, path) {
+    if (this.#dom !== dom || this.#closed) return;
+    const href = new URL(path, this.#href).href;
+    const inner = this.#context[INNER];
+    let answered;
+    const request = this.#request(
+      "GET",
+      href,
+      false,
+      new Promise((done) => {
+        answered = done;
+      }),
+    );
+    const startedAt = performance.now();
+    let protocol = "";
+    const held = this.#hold(dom, request, () => this.#timed(dom, href, protocol, startedAt));
     for (const listener of [...this.#requestListeners]) listener(request);
+    inner.emit("request", request);
+    inner.transfer(href, { method: "GET", body: null, headers: { accept: "text/event-stream" }, follow: false }).then(
+      (reply) => {
+        answered({ status: () => reply.status });
+        protocol = reply.protocol;
+        if (held.settled) {
+          reply.cancel();
+          return;
+        }
+        held.stop = reply.cancel;
+        reply.whole.then(
+          () => held.settle("finished"),
+          () => held.settle("failed"),
+        );
+      },
+      () => {
+        answered(null);
+        held.settle("failed");
+      },
+    );
+  }
+
+  /** End the streams of `dom` (of every document when null): `failed` when the document is left, `closed` with the page. */
+  #endStreams(dom, how) {
+    for (const stream of [...this.#streams]) {
+      if (dom !== null && stream.dom !== dom) continue;
+      stream.settle(how);
+      stream.stop();
+    }
+  }
+
+  async #send(method, href, body, navigation) {
+    const from = this.#dom;
+    const inner = this.#context[INNER];
+    let answered;
+    const answer = new Promise((done) => {
+      answered = done;
+    });
+    const request = this.#request(method, href, navigation, answer);
+    for (const listener of [...this.#requestListeners]) listener(request);
+    inner.emit("request", request);
     for (const { matcher, handler } of [...this.#routes].reverse()) {
       if (!matcher(new URL(href))) continue;
       let verdict = "fallback";
@@ -288,25 +622,39 @@ export class PageDouble {
       );
       if (verdict === "abort") {
         answered(null);
+        inner.emit("requestfailed", request);
         return { aborted: true };
       }
       if (verdict === "continue") break;
     }
     const headers = body === null ? {} : { "content-type": navigation ? "application/x-www-form-urlencoded" : "application/json" };
-    let response;
+    const startedAt = performance.now();
+    let reply;
+    let text;
     try {
-      response = await fetch(href, { method, body: body ?? undefined, headers, redirect: navigation ? "follow" : "manual" });
+      reply = await inner.transfer(href, { method, body, headers, follow: navigation });
+      // A page whose first part says its response streams on is shown from that part; its request stays open.
+      const first = navigation ? await reply.head : "";
+      if (STREAMING_MARK.test(first)) {
+        answered({ status: () => reply.status });
+        const elapsedMs = performance.now() - startedAt;
+        return { aborted: false, status: reply.status, url: reply.url, text: first, protocol: reply.protocol, elapsedMs, streaming: { reply, request } };
+      }
+      text = await reply.whole;
     } catch (error) {
       answered(null);
+      inner.emit("requestfailed", request);
       throw error;
     }
-    const text = await response.text();
-    answered({ status: () => response.status });
-    return { aborted: false, status: response.status, url: response.url, text };
+    answered({ status: () => reply.status });
+    inner.emit("requestfinished", request);
+    if (!navigation) this.#timed(from, href, reply.protocol, startedAt);
+    const elapsedMs = performance.now() - startedAt;
+    return { aborted: false, status: reply.status, url: reply.url, text, protocol: reply.protocol, elapsedMs };
   }
 }
 
-/** The locator calls the steps make: count, the visible filter, first, fill and click. */
+/** The locator calls the steps make: count, the visible filter, first, fill and click (with its modifiers). */
 class LocatorDouble {
   #page;
   #selector;
@@ -335,9 +683,9 @@ class LocatorDouble {
     element.value = value;
   }
 
-  async click({ timeout = 30_000 } = {}) {
+  async click({ timeout = 30_000, modifiers = [] } = {}) {
     const element = await this.#one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`);
-    this.#page.press(element);
+    this.#page.press(element, modifiers);
   }
 
   #matches() {
