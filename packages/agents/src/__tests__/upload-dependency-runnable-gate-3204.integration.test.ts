@@ -444,7 +444,18 @@ afterEach(async () => {
       ),
     () => admin.query(`DELETE FROM ${s}."agent_templates" WHERE package_name = ANY($1)`, [names]),
     () => admin.query(`DELETE FROM ${s}."extension_install_batches" WHERE root_package = ANY($1)`, [names]),
-    () => admin.query(`DELETE FROM ${s}."installed_extension" WHERE package_name = ANY($1)`, [names]),
+    // The canonical rows leave through the lifecycle primitive, never raw SQL:
+    // the canonical-gate-reach guard confines these writes to the store.
+    async () => {
+      for (const rows of (await canonical.readInstalledExtensionsByPackageNames(names)).values()) {
+        for (const row of rows) {
+          await primitive.transitionExtensionLifecycle(row.id, "force_delete", {
+            actor: { source: "worker" },
+            reason: "integration fixture reset",
+          });
+        }
+      }
+    },
   ]);
 });
 
