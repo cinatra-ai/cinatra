@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "4bcd9c98a5e43b4f229001b34af64f8042614238"
+      "resolvedSha": "b0ff1a7096164fab811a5b783a28209830a53176"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",

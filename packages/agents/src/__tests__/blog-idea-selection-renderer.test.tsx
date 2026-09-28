@@ -173,7 +173,8 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
     );
     expect(entry).toBeTruthy();
     expect(entry!.priority).toBe(80);
-    expect(entry!.renderer).toBe(BlogIdeaSelectionRenderer);
+    // The pipeline binding declares its question and empty-state message, so the registry hands the renderer those params through the wrapper.
+    expect(entry!.renderer.displayName).toBe("WithBindingParams(BlogIdeaSelectionRenderer)");
   });
 
   it("classifies as a mid-run HITL gate (parity with the retired :output-suffix classification)", () => {
@@ -187,7 +188,8 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
       { "x-renderer": BINDING_ID },
       CTX as never,
     );
-    expect(dedicated!.renderer).toBe(BlogIdeaSelectionRenderer);
+    // The pipeline binding declares its question and empty-state message, so the registry hands the renderer those params through the wrapper.
+    expect(dedicated!.renderer.displayName).toBe("WithBindingParams(BlogIdeaSelectionRenderer)");
     // cinatra#1796 teardown: the shared reviewer binding the chooser relocated
     // OFF is gone — its package is retired, its kind is out of the vocabulary
     // and its dispatcher is deleted. Reconstructed here from parts so this file
