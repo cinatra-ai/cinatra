@@ -9,11 +9,11 @@
  *
  * Additionally enforces: agentspec_version, component_type, packageName,
  * the OpenAI/gpt-5 LLM pair, the web_search-only toolbox declaration, the
- * empty hitlScreens (stateless — no operator gates), the single ApiNode
+ * empty hitlScreens (stateless — no operator gates), the bridge ApiNode
  * targeting templated /api/llm-bridge with SKILL.md auto-discovery
  * (no skill_source_path field — bridge auto-discovers from agent_id),
- * correct StartNode required+hidden coverage (required=['rows','prompt'] +
- * hidden=['sources','outputSchema']), and EndNode shape with 4 outputs
+ * correct StartNode required+hidden coverage (required=['rowsSource','prompt'] +
+ * hidden=['rows','sources','outputSchema','cinatra_run_id']), and EndNode shape with 4 outputs
  * (enrichedRows/extractionNotes/failures/webChecks).
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/web-research-agent-validates.test.ts
@@ -82,11 +82,11 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(cinatra.hitlScreens).toEqual([]);
   });
 
-  it("has exactly one ApiNode targeting templated /api/llm-bridge with SKILL.md auto-discovery (no skill_source_path)", () => {
+  it("has exactly two ApiNodes, the bridge node targeting templated /api/llm-bridge with SKILL.md auto-discovery (no skill_source_path)", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const apiNodes = Object.values(refs).filter((c) => c.component_type === "ApiNode");
-    expect(apiNodes).toHaveLength(1);
-    const apiNode = apiNodes[0]!;
+    expect(apiNodes).toHaveLength(2);
+    const apiNode = apiNodes.find((c) => c.id === "research")!;
     expect(apiNode.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
     expect(apiNode.http_method).toBe("POST");
     const data = apiNode.data as Record<string, unknown>;
@@ -101,7 +101,7 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=['rowsSource','prompt'] AND hidden=['rows','sources','outputSchema'] — covers all 5 inputs", () => {
+  it("StartNode required=['rowsSource','prompt'] AND hidden=['rows','sources','outputSchema','cinatra_run_id'] — covers all 6 inputs", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
@@ -109,7 +109,7 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
       | Record<string, unknown>
       | undefined;
     expect(meta?.required).toEqual(["rowsSource", "prompt"]);
-    expect(meta?.hidden).toEqual(["rows", "sources", "outputSchema"]);
+    expect(meta?.hidden).toEqual(["rows", "sources", "outputSchema", "cinatra_run_id"]);
     const startInputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(startInputs.map((i) => i.title as string));
     const requiredSet = new Set(meta?.required as string[]);
@@ -118,7 +118,7 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(union).toEqual(inputTitles);
   });
 
-  it("EndNode declares 4 outputs (enrichedRows/extractionNotes/failures/webChecks) AND data_flow_connections.length === 11 AND control_flow_connections.length === 3", () => {
+  it("EndNode declares 4 outputs (enrichedRows/extractionNotes/failures/webChecks) AND data_flow_connections.length === 18 AND control_flow_connections.length === 9", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -129,8 +129,8 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(byTitle.get("failures")).toBe("array");
     expect(byTitle.get("webChecks")).toBe("array");
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(11);
+    expect(dfc.length).toBe(18);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(3);
+    expect(cfc.length).toBe(9);
   });
 });
