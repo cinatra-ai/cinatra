@@ -56,6 +56,21 @@ export function resolveStreamFirst<T>(
  *     `queued` versus `running` changes nothing — the stream is ahead there and
  *     stays ahead.
  *
+ * ONE EXCEPTION, AND IT IS ALSO ABOUT SILENCE (cinatra#3739). The stream writes
+ * `pending_approval` only on an INTERRUPT, and the RESUME that answers it
+ * retires the interrupt without moving the status ("the next RUN_STARTED or
+ * terminal event drives the status"). So after a person answers the run's
+ * context gate, the stream's last word is that gate's spent `pending_approval`
+ * while the run is back at work - and the run detail kept the wait with nothing
+ * on file and drew the empty plate where the drawing puts the run progress
+ * placeholder: "While the run works, the detail carries a placeholder." When
+ * the caller says NO interrupt is on file for the run, and the row reads
+ * `running`, the row's `running` wins. Only `running` does: a row reading
+ * `queued` changes nothing, and a stream that finished keeps its word. With an
+ * interrupt on file - a real question or gate - the stream's `pending_approval`
+ * keeps its say, and an ABSENT input is read as on file, so a caller that does
+ * not pass it resolves exactly as before.
+ *
  * Everything else is byte-for-byte `resolveStreamFirst`, which is what the
  * unchanged callers keep getting.
  */
@@ -164,6 +179,7 @@ export function resolveRunSurfaceStatus({
   streamedStatus,
   polledStatus,
   rowStatus,
+  interruptOnFile,
 }: {
   streamEnabled: boolean;
   /** The stream's last word, or `null` when it has not delivered one. */
@@ -173,9 +189,23 @@ export function resolveRunSurfaceStatus({
   /** The run ROW's own status, as the run's seed route last answered it.
    *  `null` when this surface has never read one. */
   rowStatus: string | null;
+  /** Whether an interrupt is on file for the run (cinatra#3739): the stream's
+   *  review-task interrupt, or the row's own. ABSENT is read as on file, so a
+   *  caller that does not pass it resolves exactly as it did. */
+  interruptOnFile?: boolean;
 }): string {
   const streamFirst = resolveStreamFirst(streamEnabled, streamedStatus, polledStatus);
   if (!streamEnabled || streamedStatus === null || rowStatus === null) return streamFirst;
+  // THE SPENT GATE STATUS (cinatra#3739): the INTERRUPT's `pending_approval`
+  // whose interrupt the RESUME retired gives way to the row's `running`, and to
+  // nothing else. See the doc comment above the two sets.
+  if (
+    streamedStatus === "pending_approval" &&
+    rowStatus === "running" &&
+    interruptOnFile === false
+  ) {
+    return rowStatus;
+  }
   if (!RUN_STATUS_STREAM_CANNOT_LEAVE.has(streamedStatus)) return streamFirst;
   if (!RUN_STATUS_ROW_MAY_OVERRULE.has(rowStatus)) return streamFirst;
   return rowStatus;

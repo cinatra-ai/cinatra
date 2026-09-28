@@ -784,6 +784,11 @@ export function AgenticRunPanel({
     streamedStatus: streamResult.status,
     polledStatus: pollStatus,
     rowStatus,
+    // The interrupt on file, read off the same two readings
+    // `rawEffectiveHitlContext` composes below (cinatra#3739): with none, a
+    // stream's spent `pending_approval` gives way to the row's `running`.
+    interruptOnFile:
+      Boolean(streamEnabled && streamResult.interruptContext) || hitlContext !== null,
   });
   const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
