@@ -1673,6 +1673,36 @@ export function defaultRunReviewSlotReader(runId: string): RunReviewSlotReader {
 }
 
 /**
+ * IS THE GATE THIS TICKET NAMES STILL THE PENDING ONE (cinatra#3007, F2)? Asked
+ * of the same resolve route the card asks, with the same credential the card
+ * would send, so the reader learns nothing the card could not. Any answer but a
+ * pending state — a decided gate, a refusal, a failure — is "no".
+ */
+async function reviewTicketStillPending(
+  ref: string,
+  auth: LifecycleCardAuth | null,
+  signal: AbortSignal,
+): Promise<boolean> {
+  try {
+    const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(auth?.headers() ?? {}) },
+      body: JSON.stringify({ viewType: "artifact_review_gate", ref }),
+      credentials: auth?.credentials ?? "same-origin",
+      signal,
+    });
+    if (!response.ok) return false;
+    const envelope = parseLifecycleResolveEnvelope(
+      "artifact_review_gate",
+      await response.json(),
+    );
+    return envelope?.state?.state === "pending";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Keep a run's review slot current, for the surface that draws it.
  *
  * `initial` is the answer the MOUNT was handed (the run screen reads it
@@ -1822,6 +1852,9 @@ export function useRunReviewSlot({
   // has already moved past — and the ceiling's re-arm must turn on whether the
   // ROW said something new, never on which render the comparison happened in.
   const lastAnswerRef = useRef<RunReviewSlot>(initial ?? EMPTY_RUN_REVIEW_SLOT);
+  // The credential the card itself resolves with, for the one question the
+  // reader asks of the resolve route (`reviewTicketStillPending`).
+  const auth = useContext(LifecycleCardAuthContext);
   // WHEN THIS READER LAST LOOKED, and which liveness signal it looked against.
   // Held in refs because they are the schedule's own book-keeping and must never
   // themselves re-key the schedule — see the effect's note on the elapsed-time
@@ -2280,12 +2313,35 @@ export function useRunReviewSlot({
                   nextPark === next.producedReviewPark
                     ? next
                     : { ...next, producedReviewPark: nextPark };
-                changed =
-                  merged.ref !== last.ref ||
-                  merged.awaiting !== last.awaiting ||
-                  merged.producedReviewPark !== last.producedReviewPark;
-                lastAnswerRef.current = merged;
-                setSlot(merged);
+                // A NEW TICKET IS NOT A NEW GATE (cinatra#3007, F2). The route
+                // seals every ticket under a fresh nonce, so each look of a
+                // parked run answers a DIFFERENT string for the SAME gate — and
+                // a card handed a new ticket draws nothing until its own resolve
+                // answers again. Measured: ninety-three mounts in six minutes,
+                // an empty detail between them. So while the run stays parked and
+                // the answer differs from the one on file in its ticket ALONE,
+                // the ticket on file is kept for as long as its gate is still
+                // the pending one; a gate that was decided, superseded or cannot
+                // be read any more gives way to the new ticket at once.
+                const onlyTheTicketMoved =
+                  parkedStatus &&
+                  last.ref !== null &&
+                  merged.ref !== null &&
+                  merged.ref !== last.ref &&
+                  merged.awaiting === last.awaiting &&
+                  merged.producedReviewPark === last.producedReviewPark;
+                const keepTheTicketOnFile =
+                  onlyTheTicketMoved &&
+                  (await reviewTicketStillPending(last.ref as string, auth, abort.signal));
+                if (lookEpochRef.current !== epoch) return;
+                if (!keepTheTicketOnFile) {
+                  changed =
+                    merged.ref !== last.ref ||
+                    merged.awaiting !== last.awaiting ||
+                    merged.producedReviewPark !== last.producedReviewPark;
+                  lastAnswerRef.current = merged;
+                  setSlot(merged);
+                }
                 landed = true;
               }
             }
@@ -2329,6 +2385,7 @@ export function useRunReviewSlot({
     probe.reads,
     probe.failures,
     read,
+    auth,
     isProducedReviewPark,
     // SAFE ONLY BECAUSE THE DELAY IS AN ELAPSED-TIME BUDGET (fix leg 8). The
     // caller bumps this every two to five seconds, so on the previous schedule
