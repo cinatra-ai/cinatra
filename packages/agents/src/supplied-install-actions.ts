@@ -337,6 +337,12 @@ type Candidate = {
     granted?: unknown;
     confirmedClosureDigest?: unknown;
   };
+  /**
+   * The package's own manifest text, as the archive intake read it — where its
+   * declared pack dependencies are read from (cinatra#3204 criterion 24). A
+   * candidate without it takes the road exactly as before.
+   */
+  packageJson?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -373,11 +379,13 @@ async function suppliedSkillPackageId(
 /**
  * The PRE-INSTALL confirmation for a supplied skill package.
  *
- * The previewed closure is the root package ALONE, stated rather than assumed: a
- * supplied package carries no resolved registry dependency edges on this road
- * (bundled-closure handling is criterion 24, and is not built here), so a wider
- * claim would be a claim this road cannot keep. The post-install recorder reads
- * the real closure from the catalog and applies the digest check.
+ * The previewed closure is the root package ALONE, stated rather than assumed.
+ * The uploaded package's declared pack dependencies are not part of this
+ * upload: the road installs the missing ones from the connected registry
+ * through the store's own road before the uploaded package (cinatra#3204
+ * criterion 24, `installMissingPackDependencies`), so they are registry
+ * installs and not this prompt's closure. The post-install recorder reads the
+ * real closure from the catalog and applies the digest check.
  */
 async function buildSuppliedConsentPrompt(input: {
   kind: SuppliedPackageKind;
@@ -437,6 +445,148 @@ const CONSENT_FAIL_CLOSED: SuppliedUploadConsentOutcome = {
     "The upload consent could not be recorded, so the installed skill stays excluded from upload.",
 };
 
+type SuppliedInstallActor = {
+  actorType: "human";
+  source: "ui";
+  userId?: string;
+  orgId: string;
+};
+
+/**
+ * THE UPLOADED PACKAGE'S PACK DEPENDENCIES COME FROM THE CONNECTED REGISTRY
+ * (cinatra#3204 criterion 24). The maintainer's decision, in its own words:
+ * "The upload road reads the package's declared pack dependencies and installs
+ * the missing ones from the connected registry through the store's own road
+ * before the uploaded package; when the registry has none, the upload is
+ * refused with the missing names." The archive's own npm dependencies stay
+ * bundled; this reads the PACK dependencies alone.
+ *
+ * Nothing here is a second parser, a second registry client or a second
+ * installer: the edges are read by the store's own parser and filtered by the
+ * store's own auto-install predicate (peer and optional edges never install),
+ * the installed-row reading and the scope ladder are the planner's, the
+ * registry read is the saga's own, and each missing dependency is installed by
+ * the store's dependency saga as the operator, at the anchor the planner's own
+ * member rule gives it — which resolves its exact version and integrity,
+ * authorizes it, plans its own closure dependencies-first and compensates its
+ * own batch.
+ *
+ * EVERY missing dependency is resolved against the registry BEFORE anything is
+ * written, so one refusal names every dependency the registry does not carry.
+ * A dependency installed here is an ordinary registry install: it stays
+ * installed if the uploaded package's own install is refused afterwards.
+ *
+ * Answers a refusal to return, or null to go on with the install.
+ */
+async function installMissingPackDependencies(
+  scope: ResolvedScope,
+  candidate: Candidate,
+  actor: SuppliedInstallActor,
+): Promise<{ ok: false; error: string } | null> {
+  if (typeof candidate.packageJson !== "string") return null;
+  const { parseManifestDependencyEdges, versionConstraintToRange } = await import(
+    "@cinatra-ai/extensions/manifest-dependencies"
+  );
+  const { isAutoInstallableEdge } = await import("@cinatra-ai/extensions/dependency-closure");
+  // A malformed declaration refuses here in the parser's own words, before
+  // anything is written.
+  const declared = parseManifestDependencyEdges(JSON.parse(candidate.packageJson) as unknown, {
+    packageName: candidate.packageName,
+  }).edges.filter((edge) => isAutoInstallableEdge(edge));
+  if (declared.length === 0) return null;
+
+  const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+  const { defaultOrgPlatformChain, resolveMemberRowOwnership } = await import(
+    "@/lib/extension-dependency-plan"
+  );
+  const rows = await listInstalledExtensions({});
+  const liveAt = (packageName: string, organizationId: string | null): boolean => {
+    const chain = defaultOrgPlatformChain(organizationId);
+    return rows.some(
+      (row) =>
+        row.packageName === packageName &&
+        (row.status === "active" || row.status === "locked") &&
+        chain.some((level) => level.matches(row)),
+    );
+  };
+  // Each dependency's anchor is the planner's own member rule: the operator's
+  // chosen anchor, except that an AGENT dependency of a workspace-anchored
+  // upload stays org-anchored at the operator's active organization (a legacy
+  // edge with no declared kind counts as an agent, as the planner counts it).
+  const anchorFor = (kind: string | null) =>
+    resolveMemberRowOwnership({
+      root: scope.rowOwnership,
+      isRoot: false,
+      memberKind: kind,
+      installerOrgId: scope.orgId,
+    });
+  const missing = declared
+    .filter(
+      (edge) =>
+        !liveAt(edge.packageName, scope.rowOwnership.organizationId ?? null) &&
+        !liveAt(edge.packageName, anchorFor(edge.kind ?? null).organizationId ?? null),
+    )
+    .sort((a, b) => (a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0));
+  if (missing.length === 0) return null;
+
+  const { fetchRegistryExtensionSummary, installExtensionWithDependencies } = await import(
+    "@/lib/extension-install-batch"
+  );
+  const resolved: {
+    packageName: string;
+    version: string;
+    rowOwnership: ReturnType<typeof anchorFor>;
+  }[] = [];
+  const unresolvable: string[] = [];
+  for (const edge of missing) {
+    const constraint = versionConstraintToRange(edge.versionConstraint);
+    try {
+      // A git reference is never a registry coordinate.
+      if (edge.versionConstraint.kind === "git-ref") {
+        throw new Error(`${edge.packageName}: a git reference is not a registry version`);
+      }
+      const summary = await fetchRegistryExtensionSummary(edge.packageName, constraint);
+      // The registry's own kind decides the anchor, as it does in the planner.
+      const rowOwnership = anchorFor(summary.kind);
+      if (liveAt(edge.packageName, rowOwnership.organizationId ?? null)) continue;
+      resolved.push({ packageName: edge.packageName, version: summary.resolvedVersion, rowOwnership });
+    } catch (err) {
+      console.warn(
+        "[supplied-install-actions] a declared pack dependency did not resolve from the connected registry:",
+        err instanceof Error ? err.message : err,
+      );
+      unresolvable.push(`${edge.packageName} (${constraint})`);
+    }
+  }
+  if (unresolvable.length > 0) {
+    return {
+      ok: false,
+      error:
+        `${candidate.packageName} needs ${unresolvable.length === 1 ? "an extension" : "extensions"} ` +
+        `that ${unresolvable.length === 1 ? "is" : "are"} not installed and that the connected registry ` +
+        `does not carry: ${unresolvable.join(", ")}. Nothing was installed.`,
+    };
+  }
+  if (resolved.length === 0) return null;
+
+  // The saga dispatches through the extension registry, so the handler set is
+  // registered in THIS worker first — the same precondition the uploaded
+  // package's own dispatch meets (`installSuppliedCandidate`).
+  await import("@cinatra-ai/extensions/handler-bootstrap");
+
+  // Each saga throws in its own words; the road's refusal path answers with
+  // them, and the uploaded package is not installed.
+  for (const dependency of resolved) {
+    await installExtensionWithDependencies({
+      packageName: dependency.packageName,
+      version: dependency.version,
+      actor,
+      rowOwnership: dependency.rowOwnership,
+    });
+  }
+  return null;
+}
+
 async function installAtScope(
   session: Awaited<ReturnType<typeof requireAdminSession>>,
   scope: ResolvedScope,
@@ -444,6 +594,20 @@ async function installAtScope(
 ): Promise<SuppliedInstallResult> {
   // The fail-closed precondition, for EVERY kind (criterion 13).
   assertSuppliedInstallAccessTarget(candidate.kind, scope.target);
+
+  const actor: SuppliedInstallActor = {
+    actorType: "human",
+    source: "ui",
+    ...(session.user?.id ? { userId: session.user.id } : {}),
+    orgId: scope.orgId,
+  };
+
+  // The package's declared pack dependencies, BEFORE anything of the package
+  // itself is written (cinatra#3204 criterion 24): a dependency the registry
+  // does not carry refuses the upload here, and the missing ones the registry
+  // does carry are installed through the store's own road first.
+  const dependencyRefusal = await installMissingPackDependencies(scope, candidate, actor);
+  if (dependencyRefusal) return dependencyRefusal;
 
   const { installSuppliedCandidate } = await import("@/lib/supplied-package-install");
   const { readInstalledExtensionByIdentity } = await import(
@@ -482,12 +646,7 @@ async function installAtScope(
     try {
       await installSuppliedCandidate({
         candidate: candidate as never,
-        actor: {
-          actorType: "human",
-          source: "ui",
-          ...(session.user?.id ? { userId: session.user.id } : {}),
-          orgId: scope.orgId,
-        },
+        actor,
         rowOwnership: scope.rowOwnership,
       });
     } catch (installErr) {
@@ -512,6 +671,109 @@ async function installAtScope(
       // gate, the validator, the containment policy. A summary here would
       // replace the one sentence the operator has to act on.
       throw installErr;
+    }
+
+    // THE AGENT KIND'S TEMPLATE, WHICH NOTHING ON THIS ROAD REGISTERED
+    // (cinatra#3534). The dispatcher installs the PACKAGE; for an agent pack it
+    // does not register the agent TEMPLATE, so a pack supplied here landed as a
+    // live row with no runnable agent behind it — its Run wizard answered 404
+    // and the run screen's search found no agent — while the very same pack
+    // loaded by the development fleet sync was runnable. The access read below
+    // was this road's only response to the missing row, and it can only throw.
+    //
+    // The registration is the fleet sync's OWN entry point called over the pack
+    // the dispatcher has just FINALIZED in the extension package store, never a
+    // copy of its body: the template import and the package-identity write both
+    // happen inside that function, with its own options. The store dir holds the
+    // pack itself (`package.json` at its top), so `cinatra/oas.json` under it is
+    // the canonical layout that loader reads and the sibling manifest it resolves
+    // one directory up is the pack's own.
+    //
+    // Entered ONLY when there is no template row, so nothing is anchored twice:
+    // the loader's canonical-record seam refuses to write while a live platform
+    // row is present, and this install's canonical row IS live by the time it
+    // runs.
+    if (candidate.kind === "agent") {
+      // The whole registration step sits inside ONE compensated boundary: the
+      // template read is part of it, because a read that rejects after the
+      // dispatcher has already installed would otherwise escape this function
+      // and leave a fresh install standing with neither an agent behind it nor
+      // a rollback (convergence finding, cinatra#3534).
+      let refusal: string | null = null;
+      let refusalDetail: string | null = null;
+      try {
+        const { readAgentTemplateByPackageName } = await import("./store");
+        const registered = await readAgentTemplateByPackageName(candidate.packageName);
+        if (!registered) {
+          const { resolveFinalizedStorePayload } = await import(
+            "@/lib/extension-store-payload"
+          );
+          const finalized = await resolveFinalizedStorePayload({
+            packageName: candidate.packageName,
+            expectedKind: "agent",
+            orgId: identity.organizationId,
+          });
+          if (!finalized) {
+            throw new Error(
+              `${candidate.packageName} installed, but the finalized package bytes for it could not be found, so its agent could not be registered.`,
+            );
+          }
+          const { join } = await import("node:path");
+          const { ensureAgentPackageFromGitFile } = await import("./ensure-agent-package");
+          const outcome = await ensureAgentPackageFromGitFile({
+            oasSourcePath: join(finalized.storeDir, "cinatra", "oas.json"),
+          });
+          // THE LOADER REFUSES WITHOUT THROWING. Its skip contract answers
+          // `{ templateId: "", skipped: true }` for a pack it will not register
+          // — an unreadable sibling manifest, no package name, a reserved slug.
+          // Reading only the exception would let that refusal fall through to
+          // the access read below, which can only report a missing row as an
+          // ACCESS failure: the operator would be told the scope could not be
+          // saved when the truth is that the pack declares no agent this
+          // application can register (convergence finding, cinatra#3534).
+          if (!outcome.templateId) {
+            throw new Error(
+              `${candidate.packageName} installed, but it declares no agent this application can register, so there is nothing to run. The server log carries the reason.`,
+            );
+          }
+        }
+      } catch (registerErr) {
+        // The refusal travels in the words of whatever refused it — the same
+        // rule the install failure above follows — but the operator's answer
+        // never carries a server filesystem path: the loader reads the pack by
+        // absolute path, so its own failures quote one.
+        refusalDetail = registerErr instanceof Error ? registerErr.message : String(registerErr);
+        refusal = withoutServerPaths(refusalDetail);
+      }
+      if (refusal) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[supplied-install-actions] agent template registration failed:",
+          refusalDetail,
+        );
+        // A row that was already live before this install is never rolled
+        // back — this road's existing rule, unchanged. What is NOT said is
+        // that the previous version survived: the dispatcher has already run,
+        // so the bytes on disk are this upload's (convergence finding).
+        if (hadLiveRowBefore) {
+          return {
+            ok: false,
+            error: `${refusal} A version of it was already installed, so nothing was uninstalled — check it on the installed-extensions list before retrying.`,
+          };
+        }
+        const rolledBack = await rollbackFreshSuppliedInstall({
+          identity,
+          packageName: candidate.packageName,
+          version: candidate.version,
+          workspaceAnchored: isWorkspaceRowAnchor(scope.rowOwnership),
+        });
+        return {
+          ok: false,
+          error: rolledBack
+            ? `${refusal} The install was rolled back, so nothing was left installed.`
+            : `${refusal} The install could not be rolled back — this needs recovery. Check the installed-extensions list before retrying.`,
+        };
+      }
     }
 
     try {
@@ -618,6 +880,16 @@ async function installAtScope(
  * the package-scoped uninstall, a workspace-anchored (org-NULL) row through the
  * row-scoped inverse the org-pinned resolver cannot address.
  */
+/**
+ * An operator's answer never carries a server filesystem path (convergence
+ * finding, cinatra#3534). The agent loader reads a pack by absolute path, so
+ * its own refusals — a missing document, an unreadable one — quote that path in
+ * the message this road passes on. The full text still goes to the server log.
+ */
+function withoutServerPaths(message: string): string {
+  return message.replace(/(?:\/[\w.@+-]+){2,}\/?/g, "a path on the server");
+}
+
 async function rollbackFreshSuppliedInstall(input: {
   identity: {
     organizationId: string | null;
@@ -749,6 +1021,9 @@ export async function installSuppliedArchiveAction(input: {
     });
     return await installAtScope(session, scope, {
       ...(candidateFromPreparedArchive(prepared) as never as Candidate),
+      // The manifest text the intake read, so the declared pack dependencies
+      // are read on this road too (cinatra#3204 criterion 24).
+      packageJson: prepared.package.packageJson,
       ...(input.anthropicUploadConsent
         ? { anthropicUploadConsent: input.anthropicUploadConsent }
         : {}),

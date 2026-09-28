@@ -120,6 +120,8 @@ describe("the conformance harness mounts for the schedule card", () => {
         .querySelector('[data-harness-id="schedule-decision-log"] [data-harness-road]')
         ?.getAttribute("data-harness-carried-rows"),
     ).toBe("none");
+    // The answer is outstanding until "Confirming…" goes; let it land before the test ends.
+    await waitFor(() => expect(screen.queryByText("Confirming…")).toBeNull(), { timeout: 3_000 });
   });
 
   it("presses the shipped Save changes and the PRODUCT draws what a landed save means", async () => {

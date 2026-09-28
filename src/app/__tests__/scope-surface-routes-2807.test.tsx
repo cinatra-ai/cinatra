@@ -6,9 +6,11 @@
 // four new tabs (assistants, agents, artifacts, skills). Route existence alone
 // is not the acceptance: every route is RENDERED and must show the shared
 // five-tab strip, the correct active tab, the scope-based hrefs, and its own
-// named empty-state surface. S1 loads no scope data — the contents of the
-// Assistants/Agents tabs (#2808) and of the Artifacts/Skills tabs (#2810) are
-// their own slices, so what these shells render is an honest placeholder.
+// named empty-state surface. All four tabs take a read now: Artifacts and
+// Skills with #2810, Assistants and Agents with #2808 and #3707. So every
+// empty surface this suite pins is the tab's OWN empty reading, never the
+// placeholder S1 drew for a tab with no route. The Artifacts and Skills bodies
+// are stood in for below; the Assistants and Agents reads answer with no rows.
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -51,15 +53,29 @@ const names = vi.hoisted(() => {
 });
 vi.mock("@/lib/scope-surface-entity-name", () => names);
 
+// The Artifacts and Skills tab BODIES (cinatra#2810) are stood in for here: the
+// subject of this suite is the shell those tabs are tabs OF, and each body's
+// own read is proven in its own suite. They render nothing, so the shell falls
+// to its empty state — which is exactly where the two tabs' honest EMPTY
+// reading is asserted below.
+vi.mock("@/components/scope-surfaces/scope-surface-artifacts-tab", () => ({
+  ScopeSurfaceArtifactsTab: () =>
+    createElement("div", { "data-testid": "scope-artifacts-body" }),
+}));
+vi.mock("@/components/scope-surfaces/scope-surface-skills-tab", () => ({
+  ScopeSurfaceSkillsTab: () =>
+    createElement("div", { "data-testid": "scope-skills-body" }),
+}));
+
 // The per-scope eligibility read the Agents/Assistants tabs perform for their
 // contents (cinatra#2808). This suite is about the SHELL: the strip, the active
 // tab, the scope hrefs and the honest empty state a scope with nothing to list
-// shows, so the read answers with no rows and every shell renders exactly the
-// placeholder S1 specified. What the read itself decides is proven in its own
-// suite, against fixtures, never against a live store.
+// shows, so the read ANSWERS with no rows, and every shell renders that tab's
+// own empty reading (cinatra#3707). What the read itself decides is proven in
+// its own suite, against fixtures, never against a live store.
 const eligibility = vi.hoisted(() => ({
-  readScopeSurfaceAgentRows: vi.fn(async () => []),
-  readScopeSurfaceAssistantRows: vi.fn(async () => []),
+  readScopeSurfaceAgentTab: vi.fn(async () => ({ rows: [], read: true })),
+  readScopeSurfaceAssistantTab: vi.fn(async () => ({ rows: [], read: true })),
 }));
 vi.mock("@/lib/scope-surface-eligibility.server", () => eligibility);
 
@@ -210,6 +226,16 @@ describe("the 5x4 scoped tab routes render the shared strip and their empty stat
       const label = tab[0]!.toUpperCase() + tab.slice(1);
 
       describe(`${base}/${tab}`, () => {
+        // The two truths the shell must keep apart. A tab whose rows were
+        // never read may state its OWN condition and name what it will list —
+        // never that the scope has nothing. A tab whose rows WERE read says
+        // what the read found. All four tabs read now: Artifacts and Skills as
+        // of cinatra#2810, Assistants and Agents as of cinatra#3707. The
+        // Artifacts and Skills bodies are stood in for above, so those two
+        // mount their stand-in; the Assistants and Agents reads answer with no
+        // rows, so those two draw their own empty reading.
+        const MOUNTS_BODY = tab === "artifacts" || tab === "skills";
+
         beforeEach(async () => {
           await renderRoute(loaders[tab]!, props);
         });
@@ -234,17 +260,30 @@ describe("the 5x4 scoped tab routes render the shared strip and their empty stat
           }
         });
 
-        it(`shows the scope-${tab}-empty surface`, () => {
-          expect(screen.getByTestId(`scope-${tab}-empty`)).toBeTruthy();
-        });
+        it(
+          MOUNTS_BODY
+            ? `mounts the scope-${tab}-body its slice wired onto this route`
+            : `shows the scope-${tab}-empty surface`,
+          () => {
+            expect(
+              screen.getByTestId(MOUNTS_BODY ? `scope-${tab}-body` : `scope-${tab}-empty`),
+            ).toBeTruthy();
+          },
+        );
 
-        it("promises what the tab will hold and never claims the scope is empty", () => {
-          // S1 reads nothing, so the surface may state its own condition and
-          // name what the tab will list — never that the scope has nothing.
-          const copy = screen.getByTestId(`scope-${tab}-empty`).textContent ?? "";
-          expect(copy).toMatch(/appear here/);
-          expect(copy).not.toMatch(/nothing|\bnone\b|\bempty\b|\bno \w+ (?:yet|here)/i);
-        });
+        if (!MOUNTS_BODY) {
+          // RESTATED by cinatra#3707. This case asserted the S1 placeholder,
+          // which was right while these two tabs took no read. They read now,
+          // and the read here ANSWERED with no rows, so the honest reading is
+          // the scope's own emptiness, never "This tab is not ready yet",
+          // which a reader takes to mean the tab is unbuilt.
+          it("reads the scope's own emptiness on a read that answered", () => {
+            const copy = screen.getByTestId(`scope-${tab}-empty`).textContent ?? "";
+            expect(copy).toContain(`No ${tab} here yet`);
+            expect(copy).not.toContain("This tab is not ready yet");
+            expect(copy).not.toMatch(/appear here/);
+          });
+        }
 
         it("requires an authenticated viewer", () => {
           expect(auth.requireAuthSession).toHaveBeenCalled();

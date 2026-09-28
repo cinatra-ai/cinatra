@@ -367,28 +367,45 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // cinatra#221: the Connect consent screen issues an authorization code
-        // appended to a cross-origin 302 to the CMS callback. Set
-        // Referrer-Policy: no-referrer so the short-lived code is never leaked
-        // via the Referer header on that hop (belt-and-suspenders on top of the
-        // browser's default cross-origin stripping; covers the dev loopback
-        // same-origin case too). The page carries no other sensitive content.
+        // cinatra#221, cinatra#3712: the Connect consent screen issues an
+        // authorization code appended to a 302 to the CMS callback, and its
+        // Approve / Deny are server actions — a same-origin POST made by this
+        // document. `same-origin` serves both:
+        // - it sends NO Referer on a cross-origin hop, so when the CMS callback
+        //   is another origin (the CMS's own; a different port on the same
+        //   loopback host is another origin too) the short-lived code is not
+        //   leaked via the Referer header on that hop (it still reaches the
+        //   callback in its query string, by design);
+        // - the page's own server-action POST carries its real `Origin` when
+        //   the browser submits the form itself (a navigation POST, as before
+        //   the page hydrates). The earlier `no-referrer` made the browser send
+        //   `Origin: null` on such a POST (the Fetch standard's "append a
+        //   request Origin header" rule nulls it for a non-`cors` request),
+        //   which the framework's server-action protection aborts as an
+        //   invalid request — the refusal cinatra#3712 measured.
+        // The page carries no other sensitive content.
         source: "/connect/authorize",
-        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+        headers: [{ key: "Referrer-Policy", value: "same-origin" }],
       },
       {
-        // cinatra#2631 (codex rework round 7): the hosted widget login carries a
-        // single-use SCREEN NONCE in its own query string — the only carrier a
-        // server-component GET has, since it may not set a cookie. Same class of
-        // short-lived URL-borne secret as the Connect authorization code above,
-        // so it gets the same treatment: `no-referrer` so no navigation off this
-        // page can put it in a Referer header (the browser default already
-        // strips the query cross-origin; this covers the same-origin and
-        // dev-loopback hops too), and `no-store` so no shared cache holds a
-        // response minted for one arrival at an authenticated surface.
+        // cinatra#2631 (codex rework round 7), cinatra#3712: the hosted widget
+        // login carries a single-use SCREEN NONCE in its own query string — the
+        // only carrier a server-component GET has, since it may not set a
+        // cookie. Same class of short-lived URL-borne secret as the Connect
+        // authorization code above, so it gets the same treatment:
+        // `same-origin` so no navigation or request off this page to ANOTHER
+        // origin puts it in a Referer header — a Referer carrying it goes only
+        // to the product itself, which minted it. The grant's server action is
+        // called once from script when the page mounts (a `cors`-mode fetch,
+        // whose `Origin` the Fetch rule keeps under either policy), so this
+        // screen takes `same-origin` like the consent so that no same-origin
+        // POST of this document, however the browser sends it, carries
+        // `Origin: null` into the framework's server-action protection. And
+        // `no-store` so no shared cache holds a response minted for one arrival
+        // at an authenticated surface.
         source: "/widget-auth",
         headers: [
-          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Referrer-Policy", value: "same-origin" },
           { key: "Cache-Control", value: "no-store" },
         ],
       },
