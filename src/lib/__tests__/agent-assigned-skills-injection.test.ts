@@ -153,9 +153,17 @@ describe("stored order, dedup and the empty cases", () => {
     });
     expect(out).toEqual({
       skillIds: [],
+      // cinatra#2815 S3: the other assignment store's picks, from the SAME
+      // chain and the SAME per-run cap. This caller hands it no rows.
+      customSkillIds: [],
       agentPackageName: AGENT_PKG,
       withheld: [],
       degraded: null,
+      // cinatra#2815 S3 — the outcome also REPORTS the scope decision the
+      // effective-5 chain made. With no rows there is nothing to place, and
+      // this caller names no run scope, so the chain's narrowest answer ran.
+      scopeUsedFallback: true,
+      droppedOverEffectiveCap: [],
     });
     expect(revalidate).not.toHaveBeenCalled();
   });
@@ -427,9 +435,16 @@ describe("fail-closed arms — the run always proceeds (issue AC 5)", () => {
     });
     expect(out).toEqual({
       skillIds: [],
+      // A degraded arm is THIS tier's read, not the other store's; with no
+      // custom rows handed in there is nothing for it to deliver either.
+      customSkillIds: [],
       agentPackageName: AGENT_PKG,
       withheld: [],
       degraded: "assignment-read-failed",
+      // cinatra#2815 S3 — a degraded arm reports NO scope decision: nothing was
+      // read, so nothing was placed and nothing was refused by the per-run cap.
+      scopeUsedFallback: false,
+      droppedOverEffectiveCap: [],
     });
   });
 

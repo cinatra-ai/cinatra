@@ -12,4 +12,5 @@
  * that owns it states the chain, and this file is the path that keeps every
  * existing caller and its tests reading exactly as before.
  */
-export { resolveInstalledVendorName } from "@cinatra-ai/registries";
+export { resolveInstalledVendorName, declaredVendorNameForScope } from "@cinatra-ai/registries";
+export type { DeclaredVendorEntry } from "@cinatra-ai/registries";

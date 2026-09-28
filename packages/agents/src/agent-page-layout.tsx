@@ -46,6 +46,14 @@ type AgentPageLayoutProps = {
    * WITH the instance crumb, in one call.
    */
   scopeCrumbEntries?: readonly CrumbContribution[];
+  /**
+   * The run's owner label, drawn beside its name in the crumb that names the
+   * run (cinatra#3693). cinatra#2809: a PERSONAL-anchored run stays on the
+   * bare route "labeled ... Personal (owner)", because `/personal` means
+   * "mine" to whoever reads it. Absent for every other run, whose crumb is
+   * exactly its name.
+   */
+  ownerLabel?: string | null;
   children: ReactNode;
 };
 
@@ -148,6 +156,7 @@ export function AgentPageLayout({
   extensionHref,
   scopeBase,
   scopeCrumbEntries,
+  ownerLabel,
   children,
 }: AgentPageLayoutProps) {
   const [runName, setRunName] = useState(initialRunName);
@@ -162,7 +171,8 @@ export function AgentPageLayout({
   // the former divergent pair (the name-changed event + the AppShell
   // instance-name fetch). Rename + name-set flows update `runName`, which
   // re-publishes.
-  const crumbLabel = runName || templateName || `${instanceId.slice(0, 8)}…`;
+  const runCrumbName = runName || templateName || `${instanceId.slice(0, 8)}…`;
+  const crumbLabel = ownerLabel ? `${runCrumbName} · ${ownerLabel}` : runCrumbName;
   // Epoch-capture guard (mirrors CrumbContributions): the identity this
   // layout publishes was authorized by the server render that mounted it. A
   // later epoch-context change with the SAME instance still mounted (router
@@ -322,6 +332,7 @@ export function AgentPageLayout({
             instanceId={instanceId}
             activeTab={activeTab}
             showTriggerTab={showTriggerTab}
+            scopeBase={scopeBase}
           />
         </div>
 

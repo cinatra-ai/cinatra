@@ -7,11 +7,24 @@ import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import type { HitlGateContext } from "./run-surface-status";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import { buildAgentPackageBasePath } from "@/lib/agent-url";
+
+/** The run's schedule step, under the scope base the run is read under
+ *  (cinatra#3693); the bare address when there is none. */
+function scheduleStepPath(agentId: string, instanceId: string, scopeBase?: string | null): string {
+  return `${buildAgentPackageBasePath(agentId, { scopeBase: scopeBase ?? null })}/${encodeURIComponent(instanceId)}/trigger`;
+}
 
 type SetupCompletionWatcherProps = {
   runId: string;
   agentId: string;
   instanceId: string;
+  /**
+   * The scope base the run is read under (cinatra#3693), so the hand-off to
+   * the schedule step — and the panel's own restart — stay in the run's scope.
+   * Absent on the bare route.
+   */
+  scopeBase?: string | null;
   agUiEnabled?: boolean | null;
   initialStatus: string;
   initialError: string | null;
@@ -120,6 +133,7 @@ export function SetupCompletionWatcher({
   runId,
   agentId,
   instanceId,
+  scopeBase,
   agUiEnabled,
   initialStatus,
   initialError,
@@ -171,7 +185,7 @@ export function SetupCompletionWatcher({
     );
     if (allFilled && !noRedirect) {
       hasFiredRef.current = true;
-      router.push(`/agents/${agentId}/${encodeURIComponent(instanceId)}/trigger`);
+      router.push(scheduleStepPath(agentId, instanceId, scopeBase));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally runs once on mount only
@@ -218,11 +232,11 @@ export function SetupCompletionWatcher({
         );
         if (allFilled && !hasFiredRef.current && !noRedirect) {
           hasFiredRef.current = true;
-          router.push(`/agents/${agentId}/${encodeURIComponent(instanceId)}/trigger`);
+          router.push(scheduleStepPath(agentId, instanceId, scopeBase));
         }
       })
       .catch(() => {});
-  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, router, noRedirect, runHasExecuted, triggerConfigured]);
+  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, scopeBase, router, noRedirect, runHasExecuted, triggerConfigured]);
 
   // Polling-based navigation (fallback — covers agUiEnabled=false and any missed SSE events).
   useEffect(() => {
@@ -255,7 +269,7 @@ export function SetupCompletionWatcher({
           if (allFilled && !hasFiredRef.current && !noRedirect) {
             hasFiredRef.current = true;
             window.clearInterval(interval);
-            router.push(`/agents/${agentId}/${encodeURIComponent(instanceId)}/trigger`);
+            router.push(scheduleStepPath(agentId, instanceId, scopeBase));
           }
         })
         .catch(() => {});
@@ -284,6 +298,7 @@ export function SetupCompletionWatcher({
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}
+      scopeBase={scopeBase}
     />
   );
 }

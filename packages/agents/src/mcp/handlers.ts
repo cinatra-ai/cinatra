@@ -2665,11 +2665,11 @@ async function handleAgentBuilderImport(
   if (!zipBase64 || typeof zipBase64 !== "string") return { error: "zipBase64 is required." };
 
   try {
-    // Delegate to importAgentTemplate with redirect: false — MCP handlers must not
-    // trigger Next.js redirects. The upsert-by-packageName path is handled inside
-    // importAgentTemplate when the ZIP's agent.json carries a packageName.
+    // Delegate to importAgentTemplate with redirect: false (MCP handlers must not trigger Next.js redirects) and requireRuntimeMount: false
+    // (cinatra#3493: this primitive RESTORES a draft and neither registers nor publishes anything, so it keeps its previous contract on an
+    // instance with no agent runtime configured, while the screen’s supplied-install road requires the mount). The upsert-by-packageName path is handled inside importAgentTemplate.
     const { importAgentTemplate } = await import("../import-export-actions");
-    const result = await importAgentTemplate(zipBase64, name ?? undefined, { redirect: false });
+    const result = await importAgentTemplate(zipBase64, name ?? undefined, { redirect: false, requireRuntimeMount: false });
 
     return {
       templateId: result.templateId,

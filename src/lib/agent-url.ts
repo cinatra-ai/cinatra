@@ -103,3 +103,43 @@ export function buildAgentPackageBasePath(
 ): string {
   return `${normalizeScopeBase(scope)}/agents/${packageSegments(agentPackageName)}`;
 }
+
+// ---------------------------------------------------------------------------
+// THE RUN'S ADDRESS WITH ONE STEP OPEN (cinatra#3693).
+//
+// The ratified drawing gives a review no page of its own: "a pending review
+// renders the review gate in the run detail, under the same rail, never as a
+// standalone document", and "there is no review page view outside the run's
+// route". A reader still has to be SENT to a particular review — from a
+// notification, from the run engine's own interrupt, from the admin console —
+// so the address that does the sending is the RUN's address with the step named
+// on it, and never a sub-path of its own.
+//
+// ONE KEY, DECLARED HERE. The run detail's steps already have names: the rail's
+// selection vocabulary (`packages/agents/src/run-surface-rail-step.ts`) spells
+// each step as a short key, and the review gate and its audit are two of them.
+// So the address carries that key verbatim under one query name rather than
+// inventing a second spelling of the same thing.
+//
+// THE KEY LIVES IN THIS LEAF because the leaf has no imports and every road
+// that mints an agent address already reads it. Two packages may not import
+// `@/` and hold a verbatim copy of the name instead
+// (`packages/agents/src/execution.ts`,
+// `packages/notifications/src/agent-run-href.ts`); the agreement is pinned by
+// `src/lib/__tests__/launch-scope-copies-agree-3693.test.ts`.
+// ---------------------------------------------------------------------------
+
+/** The query name that carries the run detail's open step (cinatra#3693). */
+export const RUN_STEP_QUERY_KEY = "step";
+
+/**
+ * The run's own address with one step open — the ONE form for "this run, this
+ * step selected".
+ *
+ * `runPath` is a run address as the builders above mint it (scoped or bare);
+ * `step` is a rail selection key. The key is percent-encoded, so a key holding
+ * a `:` or an id needing encoding survives the round trip.
+ */
+export function buildRunStepPath(runPath: string, step: string): string {
+  return `${runPath}?${RUN_STEP_QUERY_KEY}=${encodeURIComponent(step)}`;
+}

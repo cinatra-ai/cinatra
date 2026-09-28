@@ -574,6 +574,18 @@ export type AssistantInjectionPortsInput = {
   sessionId: string;
   /** The assistant's own required injectable set (its runtime config bundle). */
   requiredSkillIds: readonly string[];
+  /**
+   * The assistant's SCOPED ASSIGNED skill ids for THIS session (cinatra#2815
+   * S3) — injected as a seam so the ports factory stays a pure closure over the
+   * identity this turn already vetted, and so the thread read is provable
+   * without a database.
+   *
+   * Absent ⇒ the surface declares no assignment channel and the resolver
+   * delivers none.
+   */
+  resolveAssignedSkillIdsForSession?: (
+    sessionId: string,
+  ) => Promise<readonly string[]>;
 };
 
 export function buildAssistantInjectionPorts(
@@ -600,6 +612,16 @@ export function buildAssistantInjectionPorts(
     },
     async resolveAssistantRequiredSkills() {
       return input.requiredSkillIds.map((skillId) => ({ skillId }));
+    },
+    async resolveAssistantAssignedSkills(intent) {
+      // The session is re-compared here as well as in the authorization port:
+      // this port is the one that READS a thread's frozen scopes, and a port
+      // that would read them for a session the surface did not vet is exactly
+      // the confused-deputy shape the authorization arm exists to refuse.
+      if (!intent.sessionId || intent.sessionId !== input.sessionId) return [];
+      if (!input.resolveAssignedSkillIdsForSession) return [];
+      const ids = await input.resolveAssignedSkillIdsForSession(intent.sessionId);
+      return (ids ?? []).map((skillId) => ({ skillId }));
     },
   };
 }
@@ -1063,6 +1085,19 @@ export async function runAssistantTurn(
       userId,
       sessionId: assistantSessionId,
       requiredSkillIds: runtimeConfig.skillIds,
+      // cinatra#2815 S3 — the assistant's per-scope assignments, resolved
+      // through the thread's IMMUTABLE snapshot. Imported dynamically so this
+      // runtime's static module graph (and the locked route graphs that reach
+      // it) is unchanged by a channel that only runs when a turn dispatches.
+      resolveAssignedSkillIdsForSession: async (sessionId) => {
+        const { resolveAssistantAssignedSkillIds } = await import(
+          "@/lib/assistant-assigned-skills-delivery"
+        );
+        return resolveAssistantAssignedSkillIds({
+          agentId: assistantAgentId,
+          sessionId,
+        });
+      },
     }),
   );
   // The CINATRA assistant never truncates BY DESIGN: its bundle's SIZE
