@@ -17,6 +17,11 @@ defect of a step, with a test, fixed once for every run.
 | `press` | One control pressed by its role and accessible name, never a guess, and the page's next settled state. |
 | `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
 | `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
+| `uploadFile` | A file uploaded through the page's own upload control, with its row in the list before it returns. |
+| `fillForm` | Fields filled by their labels; a required field left empty on submit is refused with the page's own error. |
+| `switchTheme` | The theme switched through the app's own control, and read back from the page and its review island. |
+| `decideGate` | A decision taken through the named gate's own control, and the run seen to leave the gate. |
+<!-- The four rows above: uploadFile, fillForm, switchTheme and decideGate. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -321,6 +326,102 @@ shows), `ambiguous`, `no-control` (naming the card's controls) and `disabled`
 (nothing was pressed), `no-composer` (naming the text boxes the page shows; no
 prompt was sent), `driver-failure` and `no-run` (the refusal names the page, and
 an error the page shows).
+
+<!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
+
+## `uploadFile(page, { control, path, record, bounds? })`
+
+Uploads the file at `path` through the page's own upload control. It presses the
+first shown button named `control` (the library's Upload button, which opens a
+hidden file input, or a shown file input with a label of its own), answers the
+file chooser the press opens with the file, and waits until a row that names the
+file appears in the library's list (`UPLOAD_ROW_SELECTOR`), beyond the rows that
+named it before the press. A line names the file by its name alone, never by the
+place it was read from. A press the page's handler has not taken over yet (before
+the page has hydrated) opens no chooser, and is refused as such at once. It
+answers `{ control, file, path, elapsedMs }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `UPLOAD_CONTROL_BOUND_MS` | 15_000 | the control shown with its name |
+| `UPLOAD_ACTION_BOUND_MS` | 30_000 | the press, and handing the file to the chooser |
+| `UPLOAD_CHOOSER_BOUND_MS` | 5_000 | from the press to the file chooser |
+| `UPLOAD_ROW_BOUND_MS` | 120_000 | from the file handed over to its row |
+| `UPLOAD_POLL_MS` | 250 | how often the control and the list are read |
+
+Refusal kinds: `input` (nothing was pressed), `no-control` (naming the page's file
+inputs), `driver-failure`, `no-chooser` (the press opened no file chooser) and
+`no-row` (naming the rows the list shows).
+
+## `fillForm(page, { fields, record, form?, submit?, bounds? })`
+
+Fills `fields` (`{ label: value }`) by the labels a person reads: a field's label
+is the text its `aria-labelledby` names, else its `aria-label`, else the text of
+its `<label>`. `form` selects what holds the fields, the whole page by default. A
+label the form does not show within the bound is refused before anything is
+filled, naming the labels it has. With `submit`, it then presses the form's
+control of that name. A field still empty after the press is a required field
+left empty when the page marks it (`aria-invalid="true"`) or shows an error for
+it, or when it declares itself required; the refusal quotes the page's own error
+text: what its `aria-errormessage` names, else an error its `aria-describedby`
+names, else an error in the field's own box (`FIELD_ERROR_SELECTOR`). No value is
+ever written to a line. It answers `{ filled, submitted, path }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `FORM_FIELDS_BOUND_MS` | 15_000 | every named field shown |
+| `FORM_ACTION_BOUND_MS` | 30_000 | one fill, or the press |
+| `FORM_ERROR_BOUND_MS` | 5_000 | from the press to the page's error for a field left empty |
+| `FORM_POLL_MS` | 100 | how often the form is read |
+
+Refusal kinds: `input` and `unknown-label` (nothing was filled), `driver-failure`,
+`no-submit` (naming the form's controls) and `required-empty`.
+
+## `switchTheme(page, { to, record, island?, frameSrcPath?, bounds? })`
+
+Switches the page to `to` (`light` or `dark`) through the app's own theme
+control, the button named "Toggle theme": it presses it at most once, and not at
+all when the page shows `to` already. It then reads, on a fixed cadence, the
+page's palette (the class the app writes on the document root: `cinatra` or
+`dark`) and the theme each review island applied (`data-island-color-scheme` on
+the wrapper of the island's document, in every frame on `frameSrcPath`, which is
+`/lifecycle/review-island` by default), until both report `to`. With
+`island: false` only the page's palette is read, for a page that frames no
+island. It answers `{ to, pressed, islands, elapsedMs }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `THEME_CONTROL_BOUND_MS` | 15_000 | the control shown with its name, which it has only once the app has mounted it |
+| `THEME_ACTION_BOUND_MS` | 30_000 | the press |
+| `THEME_APPLIED_BOUND_MS` | 10_000 | from the press to the page and its islands reporting the theme |
+| `THEME_POLL_MS` | 100 | how often they are read |
+
+Refusal kinds: `input` (nothing was pressed), `no-control`, `driver-failure`,
+`not-applied` (the page's palette did not become `to`) and `island-unreported`
+(the page shows `to`, but an island reported something else last: the other
+theme, `unmarked`, `absent` or `unreadable`).
+
+## `decideGate(page, { gate, decision, record, bounds? })`
+
+Takes a decision at a gate a run stops at. A gate is a lifecycle card
+(`GATE_SELECTOR`), named by its accessible name, else its heading, else its
+title: the first text it shows, as the review gate's "Review requested". The
+decision is that gate's own shown button of the name, never another gate's. After
+the press it waits until the run has left the gate: on a run page the run's
+status pill reads another status than `needs-review`; on a page without it the
+gate reads `settled` or `decided`, or is no longer drawn. It answers
+`{ gate, decision, state, elapsedMs, path }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `GATE_FIND_BOUND_MS` | 30_000 | the gate and its control drawn |
+| `GATE_ACTION_BOUND_MS` | 30_000 | the press |
+| `GATE_LEAVE_BOUND_MS` | 60_000 | from the press to the run leaving the gate |
+| `GATE_POLL_MS` | 250 | how often the page is read |
+
+Refusal kinds: `input` (nothing was pressed), `no-gate` (naming the gates the
+page shows), `no-control` (naming the gate's controls), `driver-failure` and
+`still-at-gate` (with the last reading).
 
 ## Shared bounds
 

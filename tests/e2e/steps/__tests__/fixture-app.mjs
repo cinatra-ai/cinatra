@@ -524,6 +524,15 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/conversation/boxes": CONVERSATION_PAGES.boxes,
       };
       if (Object.hasOwn(pages, url.pathname)) return html(200, page(url.pathname, pages[url.pathname]));
+      // uploadFile, fillForm, switchTheme and decideGate: their pages and routes
+      // live in fixture-app-controls.mjs, so this file changes in this one place.
+      if (/^\/(upload|form|theme|gate)\//.test(url.pathname)) {
+        import("./fixture-app-controls.mjs").then(
+          ({ serveControlPage }) => serveControlPage({ method: request.method, url, response }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
       html(404, "<!doctype html><title>Not found</title>");
     });
   };

@@ -74,3 +74,49 @@ export {
   DISPATCH_RUN_SELECTOR,
   dispatchRun,
 } from "./dispatch-run.mjs";
+// uploadFile, fillForm, switchTheme and decideGate: the steps that drive a
+// page's own controls.
+export {
+  UPLOAD_ACTION_BOUND_MS,
+  UPLOAD_BOUNDS,
+  UPLOAD_CHOOSER_BOUND_MS,
+  UPLOAD_CONTROL_BOUND_MS,
+  UPLOAD_POLL_MS,
+  UPLOAD_ROW_BOUND_MS,
+  UPLOAD_ROW_SELECTOR,
+  uploadFile,
+} from "./upload-file.mjs";
+export {
+  FIELD_ERROR_SELECTOR,
+  FORM_ACTION_BOUND_MS,
+  FORM_BOUNDS,
+  FORM_ERROR_BOUND_MS,
+  FORM_FIELDS_BOUND_MS,
+  FORM_POLL_MS,
+  FORM_SCOPE_SELECTOR,
+  fillForm,
+} from "./fill-form.mjs";
+export {
+  ISLAND_THEME_ATTRIBUTE,
+  ISLAND_THEME_SELECTOR,
+  THEME_ACTION_BOUND_MS,
+  THEME_APPLIED_BOUND_MS,
+  THEME_BOUNDS,
+  THEME_CONTROL_BOUND_MS,
+  THEME_CONTROL_NAME,
+  THEME_POLL_MS,
+  THEME_ROOT_CLASSES,
+  switchTheme,
+} from "./switch-theme.mjs";
+export {
+  GATE_ACTION_BOUND_MS,
+  GATE_BOUNDS,
+  GATE_FIND_BOUND_MS,
+  GATE_LEAVE_BOUND_MS,
+  GATE_LEFT_STATES,
+  GATE_POLL_MS,
+  GATE_SELECTOR,
+  GATE_STATE_ATTRIBUTE,
+  GATE_WAITING_STATUS,
+  decideGate,
+} from "./decide-gate.mjs";
