@@ -9,7 +9,7 @@
  *
  * Additionally enforces: agentspec_version, component_type, packageName,
  * the OpenAI/gpt-5 LLM pair, the web_search-only toolbox declaration, the
- * single ApiNode targeting templated /api/llm-bridge with SKILL.md auto-discovery
+ * bridge ApiNode targeting templated /api/llm-bridge with SKILL.md auto-discovery
  * (no skill_source_path field — bridge auto-discovers from agent_id), correct
  * StartNode required+hidden coverage, and EndNode shape.
  *
@@ -73,11 +73,11 @@ describe("web-scrape-agent OAS validates against L1, LLM-metadata, and StartNode
     expect(cinatra.toolboxes).toEqual(["web_search"]);
   });
 
-  it("has exactly one ApiNode targeting templated /api/llm-bridge with SKILL.md auto-discovery (no skill_source_path)", () => {
+  it("has exactly two ApiNodes, the bridge node targeting templated /api/llm-bridge with SKILL.md auto-discovery (no skill_source_path)", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const apiNodes = Object.values(refs).filter((c) => c.component_type === "ApiNode");
-    expect(apiNodes).toHaveLength(1);
-    const apiNode = apiNodes[0]!;
+    expect(apiNodes).toHaveLength(2);
+    const apiNode = apiNodes.find((c) => c.id === "extract")!;
     expect(apiNode.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
     expect(apiNode.http_method).toBe("POST");
     const data = apiNode.data as Record<string, unknown>;
@@ -88,15 +88,15 @@ describe("web-scrape-agent OAS validates against L1, LLM-metadata, and StartNode
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode declares required=[seedUrls,outputSchema,instructions] + hidden=[maxUrls,followLinks,maxDepth]", () => {
+  it("StartNode declares required=[seedUrls,outputSchemaSource,instructions] + hidden=[maxUrls,followLinks,maxDepth,outputSchema,cinatra_run_id]", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
     const meta = (start!.metadata as Record<string, unknown> | undefined)?.cinatra as
       | Record<string, unknown>
       | undefined;
-    expect(meta?.required).toEqual(["seedUrls", "outputSchema", "instructions"]);
-    expect(meta?.hidden).toEqual(["maxUrls", "followLinks", "maxDepth"]);
+    expect(meta?.required).toEqual(["seedUrls", "outputSchemaSource", "instructions"]);
+    expect(meta?.hidden).toEqual(["maxUrls", "followLinks", "maxDepth", "outputSchema", "cinatra_run_id"]);
   });
 
   it("every array-typed field in the OAS carries an item schema (json_schema.items with a type)", () => {
