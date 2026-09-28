@@ -279,6 +279,13 @@ function twinCtx(
     // Mint the meaning assertion ONLY on an `upsert` AND when the caller is a
     // materialize writer. Never on `delete`.
     mintMeaningAssertion: operation === "upsert" && opts?.mintMeaningAssertion === true,
+    // THE PINNED CONFIGURATION (cinatra#3092): on an `upsert`, the just-written
+    // row's `config_json` VERBATIM, which the host twin records on the revision
+    // it appends (same transaction). Every pairing path builds its context HERE,
+    // so every upsert kind — create, save, publish, archive and restore, rename,
+    // materialize, adopt, upgrade and backfill — carries it. Never on `delete`
+    // (a delete appends no revision).
+    ...(operation === "upsert" ? { configuration: row.configJson } : {}),
   };
 }
 
