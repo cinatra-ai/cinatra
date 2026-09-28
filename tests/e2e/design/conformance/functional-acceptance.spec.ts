@@ -257,9 +257,19 @@ function describeSurface(surface: ManifestSurface, requireEveryAspect: boolean):
   }
 
   test.describe(surface.id, () => {
+    // ONE surface's battery is the unit the functional-acceptance project
+    // spreads over its workers (tests/e2e/config/design.config.ts): these tests
+    // run in order on one worker and are retried one by one. No surface shares
+    // a state with another that a second worker could race: every write a
+    // driver makes is answered at the network boundary of its own page, and the
+    // seeded namespace below is converged before any worker starts.
+    test.describe.configure({ mode: "default" });
+
     if (driver.seeded) {
       // Idempotent, converging provisioning of the run-namespaced seed
-      // kit (cinatra#986) — memoized per worker; retries converge again.
+      // kit (cinatra#986) — memoized per worker; retries converge again. Once
+      // the global setup (tests/e2e/design/seed-setup.ts) has converged it,
+      // this finds every row in place and writes nothing.
       test.beforeAll(async () => {
         await ensureSeeded();
       });
