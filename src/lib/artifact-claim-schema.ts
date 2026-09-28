@@ -525,14 +525,15 @@ export function artifactMaterializationLedgerSchemaQueries(
     // `output_id` identity per path: the EndNode output name for
     // `end_node_binding`; the calling node id for `materialize_tool` (#925);
     // the authoring step id for `llm_emit` provenance rows (unique per emit,
-    // so legitimately distinct same-byte emits never collide on the key).
+    // so legitimately distinct same-byte emits never collide on the key);
+    // the message identity for `email_fanout` (cinatra#3089, core__0109).
     { text: `CREATE TABLE IF NOT EXISTS "${q}"."artifact_materializations" (
   id                          text PRIMARY KEY,
   org_id                      text NOT NULL,
   run_id                      text NOT NULL,
   output_id                   text NOT NULL,
   node_id                     text,
-  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output','default_road')),
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit','derived_output','default_road','email_fanout')),
   extension                   text NOT NULL,
   content_hash                text NOT NULL,
   artifact_id                 text,
