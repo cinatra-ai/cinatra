@@ -210,7 +210,7 @@
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "590ae268d4365af88820f3e52d23d605f2e1b77c"
+      "resolvedSha": "9fe3ba698ab8cf754076f1742a352b36ad381dcf"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
