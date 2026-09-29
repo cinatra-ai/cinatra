@@ -40,6 +40,8 @@ import { stepRecordWorkName } from "./step-work-name";
 //   completion) but never override the label or fork a duplicate entry.
 //   GATES are never deduped into a step — a gate is always its own entry so a
 //   pending gate and a resolved gate (history) are each individually visible.
+//   The one exception (cinatra#3035): when exactly one template step marks its
+//   review, each `wayflow-` gate stands IN that step's place as its entry.
 //
 // ── DEDUP ──────────────────────────────────────────────────────────────────
 //   Entries share an identity KEY; same key ⇒ one entry, sources unioned
@@ -58,6 +60,13 @@ import { stepRecordWorkName } from "./step-work-name";
 //   order; gates ALWAYS trail the derived-step spine, ordered among themselves by
 //   `createdAt` (they are run-keyed, not bound to a policy step number — trailing
 //   placement matches the review surface's synthetic trailing "Review" step).
+//   The one exception (cinatra#3035): a `wayflow-` gate of the ONE marked step
+//   takes that step's place and label, keeping createdAt order among the gates
+//   there (the first on the step's ordinal, each later one a fraction past it),
+//   each followed by its verification.
+//   A template marking two or more steps folds nothing: the gate row stores no
+//   step, so tying each gate to its step needs a `step_number` column on
+//   `artifact_review_gates` written at emission.
 //   Lifecycle-decision entries trail the gates, ordered among themselves by
 //   decision time (then event id).
 // ---------------------------------------------------------------------------
@@ -101,6 +110,11 @@ export interface RunStepRailEntry {
    * unchanged.
    */
   openable?: boolean;
+  /**
+   * Present only on a gate entry that stands in a declared step's place, and on
+   * that gate's verification: that step's policy step number (cinatra#3035).
+   */
+  onStep?: number;
   /** Present iff kind==="gate": the linkage the rail entry deep-links into the
    * relocated review surface with, plus the read-only-history discriminator. */
   gate?: {
@@ -147,6 +161,9 @@ export interface RailTemplateStep {
   /** The policy step number the live resolver keys on. */
   stepNumber: number;
   label: string;
+  /** True when the approval policy marks this step as the one that opens its
+   *  review (`artifactReviewTargetsInput`, cinatra#3035). */
+  marksReview?: boolean;
 }
 
 /** A captured-submission marker for a display step index. */
@@ -400,16 +417,45 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   // a count — a deduped or non-contiguous spine can't push a gate up into it.
   let maxOrdinal = 0;
   for (const { entry } of byKey.values()) maxOrdinal = Math.max(maxOrdinal, entry.ordinal);
-  sortedGates.forEach((g, i) => {
+  // A DECLARED STEP AND ITS REVIEW ARE ONE ENTRY (cinatra#3035). When exactly
+  // one template step marks its review, every gate named `wayflow-…` was raised
+  // there (only the marked branch writes that prefix), so it takes that step's
+  // ordinal and label and the step's own entry is not drawn beside it. With two
+  // or more marked steps the gate row cannot say which step raised it, and
+  // every gate trails as before.
+  const markedSteps = templateSteps.filter((step) => step.marksReview === true);
+  const foldStep = markedSteps.length === 1 ? markedSteps[0] : null;
+  // The gates standing there, in createdAt order. Each takes its own ordinal
+  // inside the step's place — the first the step's own, each later one a
+  // fraction past it — so every entry keeps an ordinal of its own and the one
+  // the run is parked on is the one `activeOrdinal` names.
+  const foldedKeys =
+    foldStep === null
+      ? []
+      : [
+          ...new Set(
+            sortedGates
+              .filter((g) => g.reviewTaskId.startsWith("wayflow-"))
+              .map((g) => `gate:${g.reviewTaskId}`),
+          ),
+        ];
+  let trailingRank = 0;
+  sortedGates.forEach((g) => {
     const key = `gate:${g.reviewTaskId}`;
+    const standsIn = g.reviewTaskId.startsWith("wayflow-") ? foldStep : null;
+    const ordinal =
+      standsIn !== null
+        ? standsIn.index + foldedKeys.indexOf(key) / foldedKeys.length
+        : maxOrdinal + 1 + trailingRank++;
     upsert(
       key,
       () => ({
         key,
-        ordinal: maxOrdinal + 1 + i,
+        ordinal,
         kind: "gate",
-        label: "Review",
+        label: standsIn !== null ? standsIn.label : "Review",
         status: g.status === "resolved" ? "resolved" : "pending",
+        ...(standsIn !== null ? { onStep: standsIn.stepNumber } : {}),
         gate: {
           gateId: g.gateId,
           reviewTaskId: g.reviewTaskId,
@@ -430,6 +476,8 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
       },
     );
   });
+  // The gate IS the marked step's entry once one stands there.
+  if (foldStep !== null && foldedKeys.length > 0) byKey.delete(`step:${foldStep.stepNumber}`);
 
   // (+) VERIFICATIONS (S4, cinatra#2042) — a post-change verification record is
   //     woven in RIGHT AFTER the gate it annotates: it shares the gate's ordinal
@@ -444,6 +492,8 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
     for (const { entry } of byKey.values()) maxOrd = Math.max(maxOrd, entry.ordinal);
     const ordinal = gateEntry ? gateEntry.entry.ordinal : maxOrd + 1;
     const key = `verification:${v.reviewTaskId}`;
+    // A folded gate's verification stays with it, in its step's place.
+    const onStep = gateEntry?.entry.onStep;
     upsert(
       key,
       () => ({
@@ -452,6 +502,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         kind: "verification",
         label: "Audit",
         status: "completed",
+        ...(onStep !== undefined ? { onStep } : {}),
         verification: { gateId: v.gateId, reviewTaskId: v.reviewTaskId, outcome: v.outcome },
       }),
       "verification",

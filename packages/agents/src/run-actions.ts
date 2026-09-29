@@ -623,6 +623,8 @@ export async function buildSubmissionMapByStepIndex(
     hitlOwnedBy?: string;
     xRenderer?: string;
     firesRendererGate?: boolean;
+    artifactReviewTargetsInput?: string;
+    inputMessageSchema?: Record<string, unknown>;
   }>,
   hitlSteps: ReadonlyArray<{ index: number; stepNumber: number }>,
 ): Promise<SubmissionMapEntries> {
@@ -663,6 +665,15 @@ export async function buildSubmissionMapByStepIndex(
   // envelope; some paths spread the raw context values instead). Shape-only.
   const isContextSubmission = (v: Record<string, unknown> | null): boolean => {
     if (!v) return false;
+    // cinatra#3035: the context answer stored as its own top-level values,
+    // whatever else it carries.
+    if (
+      typeof v["slotId"] === "string" &&
+      typeof v["resolutionMode"] === "string" &&
+      Array.isArray(v["selectedRefs"])
+    ) {
+      return true;
+    }
     const ur = v["userResponse"];
     if (typeof ur === "string") {
       try {
@@ -701,6 +712,22 @@ export async function buildSubmissionMapByStepIndex(
         : 1;
     for (let g = 0; g < gateCount; g++) {
       if (promptCursor >= prompts.length) return entries; // run still in progress — stop walking
+      // cinatra#3035: a review step the template marks is decided through its
+      // gate, which stores no answer here. It takes the answer at the cursor only
+      // when that answer is its own declared field (the ordinary gate it falls
+      // back to); otherwise the answer belongs to the next pause.
+      if (
+        typeof step.artifactReviewTargetsInput === "string" &&
+        step.artifactReviewTargetsInput.length > 0
+      ) {
+        const values = prompts[promptCursor].submittedValues;
+        const properties = step.inputMessageSchema?.["properties"];
+        const declared =
+          properties && typeof properties === "object" ? Object.keys(properties) : [];
+        if (values !== null && !Object.keys(values).every((name) => declared.includes(name))) {
+          continue;
+        }
+      }
       const stepperEntry = hitlSteps.find(
         (h) => h.stepNumber === step.stepNumber,
       );
