@@ -233,11 +233,30 @@ const PROFILE_FORM = [
   "</form>",
 ].join("");
 
+// "Idea (optional)" is drawn as the product draws an optional field: the label's
+// two inline parts meet with no white space between them, so its text reads
+// "Idea(optional)" while the form reading names it "Idea (optional)".
+const IDEA_FORM = [
+  '<form id="idea-form" novalidate aria-label="Idea">',
+  '<div class="field"><label for="idea">Idea<span class="ml-1">(optional)</span></label><textarea id="idea" name="idea"></textarea></div>',
+  "</form>",
+].join("");
+
+// Two fields whose labels differ in white space only: "Brief (optional)" and "Brief(optional)".
+const BRIEF_FORM = [
+  '<form id="brief-form" novalidate aria-label="Brief">',
+  '<div class="field"><label for="brief">Brief (optional)</label><textarea id="brief" name="brief"></textarea></div>',
+  '<div class="field"><label for="brief-more">Brief(optional)</label><textarea id="brief-more" name="brief-more"></textarea></div>',
+  "</form>",
+].join("");
+
 /** The form pages, by the second segment of their path. */
 export const FORM_SCENARIOS = Object.freeze({
   profile: { body: PROFILE_FORM, timeline: [] },
   // The app draws the form a moment after the page.
   late: { body: '<div id="form-slot"></div>', timeline: [{ at: 300, target: "#form-slot", html: PROFILE_FORM }] },
+  idea: { body: IDEA_FORM, timeline: [] },
+  brief: { body: BRIEF_FORM, timeline: [] },
 });
 
 function formPage(scenario) {

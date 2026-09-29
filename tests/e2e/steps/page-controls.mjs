@@ -14,8 +14,10 @@
 //
 // A STEP NEVER ACTS ON A GUESS. When a name matches several controls, the step
 // refuses and names each one by the named part of the page it sits in (a card,
-// a row, a list item, a dialog, a group). The one control it acts on carries the
-// mark (CONTROL_MARK) for the press only, and loses it right after.
+// a row, a list item, a dialog, a group). A press may look within one such part
+// only, named as that refusal names it; a part that several carry is refused
+// too. The one control it acts on carries the mark (CONTROL_MARK) for the press
+// only, and loses it right after.
 import { randomUUID } from "node:crypto";
 
 /** One press or one selection: how long the control may take to take it. */
@@ -85,13 +87,21 @@ export const describeMatches = (matches) => matches.map((match, index) => `${ind
 /**
  * Reads the page's controls for one query and marks the one control the step
  * will act on, when exactly one matches. `query.mode` is:
- *   - `press`: the shown controls of `role` and those named `name`;
+ *   - `press`: the shown controls of `role` and those named `name`, within the
+ *     one shown part of the page named `within` when the query names one (the
+ *     parts of that name come back as `scope`); a checkbox's, a radio's or a
+ *     switch's checked state comes back with it;
+ *   - `checked`: the checked state of the marked control (null once the page
+ *     no longer holds it);
  *   - `card`: the shown cards and those named `card`, and in the one card, its
  *     buttons and links and those named `control`;
  *   - `picker`: the shown pickers (a select, a combobox, a listbox, a radio
  *     group) and those named `picker`, and in the one picker, its entries and
  *     those whose text is `entry`; a combobox's entries are those of the list it
- *     controls, once that list is shown;
+ *     controls, once that list is shown. When no picker is named `picker`, a
+ *     combobox with no accessible name is found by the text that stands in for
+ *     its name, road by road (`by`): the placeholder it shows, the value it
+ *     shows, or the label element before it in its form group;
  *   - `reflected`: whether the marked entry reads as selected, and the text of
  *     a live region that names `entry` and was not there before (`before`);
  *   - `composer`: the shown text boxes and those named `composer`, and the shown
@@ -176,6 +186,13 @@ export function readControls(query) {
   };
   const disabled = (element) =>
     (typeof element.matches === "function" && element.matches(":disabled")) || element.getAttribute("aria-disabled") === "true";
+  // A checkbox, a radio or a switch reads as checked (true), not (false) or `mixed`.
+  const TOGGLES = ["checkbox", "radio", "switch"];
+  const checkedOf = (element) => {
+    if (element.localName === "input" && ["checkbox", "radio"].includes(typeOf(element))) return element.indeterminate ? "mixed" : element.checked;
+    const state = text(element.getAttribute("aria-checked")).toLowerCase();
+    return state === "mixed" ? "mixed" : state === "true";
+  };
   const listOf = (names) => {
     const unique = Array.from(new Set(names));
     return { names: unique.slice(0, query.listed), more: Math.max(0, unique.length - query.listed) };
@@ -225,7 +242,32 @@ export function readControls(query) {
         href = null;
       }
     }
-    return { role: roleOf(element), part: partOf(element), disabled: disabled(element), href };
+    const role = roleOf(element);
+    return { role, part: partOf(element), disabled: disabled(element), href, checked: TOGGLES.includes(role) ? checkedOf(element) : null };
+  };
+  // The controls of the press query's role and those of its name: within the one
+  // shown part of the page named `within` when it names one, and none when no
+  // part or several parts carry that name.
+  const pressable = () => {
+    let root = document;
+    let scope = null;
+    if (query.within) {
+      const parts = Array.from(document.querySelectorAll(PARTS.map(([, selector]) => selector).join(", ")))
+        .filter(exposed)
+        .map((element) => ({ element, kind: PARTS.find(([, selector]) => element.matches(selector))[0], name: titleOf(element) }))
+        .filter((part) => part.name);
+      const found = innermost(parts.filter((part) => part.name === query.within));
+      scope = {
+        found: found.length,
+        kind: found.length === 1 ? found[0].kind : "",
+        parts: listOf(parts.map((part) => part.name)),
+        matches: found.map((part) => ({ kind: part.kind, part: partOf(part.element) })),
+      };
+      if (found.length !== 1) return { scope, controls: [], matches: [] };
+      root = found[0].element;
+    }
+    const controls = controlsIn(root, [query.role]);
+    return { scope, controls, matches: controls.filter((element) => nameOf(element) === query.name) };
   };
   const LIVE = "[role='status'], [role='alert'], [aria-live], [data-sonner-toast]";
   const liveTexts = () =>
@@ -235,10 +277,14 @@ export function readControls(query) {
       .filter(Boolean);
 
   if (query.mode === "press") {
-    const controls = controlsIn(document, [query.role]);
-    const matches = controls.filter((element) => nameOf(element) === query.name);
+    const { scope, controls, matches } = pressable();
     if (matches.length === 1 && !disabled(matches[0])) mark(matches[0], query.mark);
-    return { path: location.pathname, present: listOf(controls.map(nameOf)), matches: matches.map(describe) };
+    return { path: location.pathname, scope, present: listOf(controls.map(nameOf)), matches: matches.map(describe) };
+  }
+
+  if (query.mode === "checked") {
+    const control = document.querySelector(`[${query.attribute}="${query.mark}"]`);
+    return { path: location.pathname, checked: control ? checkedOf(control) : null };
   }
 
   if (query.mode === "card") {
@@ -270,8 +316,47 @@ export function readControls(query) {
       .map((element) => ({ element, kind: kindOf(element) }))
       .filter((picker) => picker.kind)
       .map((picker) => ({ ...picker, name: nameOf(picker.element) }));
-    const found = innermost(pickers.filter((picker) => picker.name === query.picker));
-    const read = { path: location.pathname, pickers: listOf(pickers.map((picker) => picker.name)), found: found.length };
+    // A combobox with no accessible name shows its placeholder (the shared select
+    // marks it `data-placeholder`) until it holds a value, and then that value.
+    const placeholderOf = (element) => (element.hasAttribute("data-placeholder") ? text(contentOf(element, null)) : "");
+    const valueOf = (element) => (element.hasAttribute("data-placeholder") ? "" : text(contentOf(element, null)));
+    // The label element before a combobox in its form group, the nearest element
+    // that holds one before it: a label of no other control, with no other shown
+    // field between the two.
+    const FIELD_ROLES = ["textbox", "searchbox", "combobox", "listbox", "checkbox", "radio", "switch", "slider", "spinbutton"];
+    const isField = (node) => (["input", "select", "textarea"].includes(node.localName) ? typeOf(node) !== "hidden" : FIELD_ROLES.includes(roleOf(node)));
+    const before = (node, other) => Boolean(node.compareDocumentPosition(other) & 4);
+    const labelBefore = (element) => {
+      for (let group = element.parentElement; group; group = group.parentElement) {
+        const labels = Array.from(group.querySelectorAll("label")).filter((label) => before(label, element));
+        if (labels.length === 0) continue;
+        const label = labels[labels.length - 1];
+        if (label.control || !shown(label)) return "";
+        const fields = Array.from(group.querySelectorAll("input, select, textarea, [role]"));
+        const between = fields.some((node) => node !== element && before(label, node) && before(node, element) && isField(node) && exposed(node));
+        return between ? "" : text(contentOf(label, null));
+      }
+      return "";
+    };
+    const ROADS = [
+      ["placeholder", placeholderOf],
+      ["value", valueOf],
+      ["label", labelBefore],
+    ];
+    let by = "name";
+    let found = innermost(pickers.filter((picker) => picker.name === query.picker));
+    if (found.length === 0) {
+      const unnamed = pickers.filter((picker) => picker.kind === "combobox" && picker.name === "");
+      for (const [road, standIn] of ROADS) {
+        const matched = unnamed.filter((picker) => standIn(picker.element) === query.picker);
+        if (matched.length > 0) {
+          by = road;
+          found = matched;
+          break;
+        }
+      }
+    }
+    const read = { path: location.pathname, pickers: listOf(pickers.map((picker) => picker.name)), found: found.length, by };
     if (found.length !== 1) return read;
     const { element: picker, kind } = found[0];
     mark(picker, `${query.mark}p`);

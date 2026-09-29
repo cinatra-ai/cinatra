@@ -247,7 +247,7 @@ carries the mark `data-step-control` for that act only. A refusal lists at most
 | `CONTROL_ACTION_BOUND_MS` | 10_000 | one press or one selection |
 | `CONTROL_POLL_MS` | 100 | how often the page is read while a step waits |
 
-## `press(page, { name, record, role?, bounds? })`
+## `press(page, { name, record, role?, within?, bounds? })`
 
 Presses the one shown control of `role` named `name`: a button by default, or a
 link, a menu item or a tab (`role: "link"`, `"menuitem"` or `"tab"`). Then it
@@ -264,14 +264,25 @@ A press whose navigation starts only after the start bound (a handler that waits
 for a slow answer first) reads as one that stayed; give such a control a longer
 `startMs`. The step answers `{ name, role, from, path, navigated, elapsedMs }`.
 
+A checkbox, a radio or a switch (`role: "checkbox"`, `"radio"` or `"switch"`) is
+pressed the same way, and its checked state is read before the press and once the
+page has settled (a state the page changes only after a slow answer needs a
+longer `startMs`); a press that did not change it is refused (`unchanged`). With
+`within`, the name is looked for only inside the one shown part of the page of
+that name, a landmark or a section named by its label or its heading, as a
+refusal names the part a control sits in; a scope that no part carries is
+refused (`no-scope`), and one that several parts carry (`ambiguous`).
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation |
 | `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation |
 
-Refusal kinds: `input`, `unreadable` (the page could not be read), `no-control`
-(naming the controls of the role that the page shows), `ambiguous` and
-`disabled` (nothing was pressed), `driver-failure` and `unsettled`.
+Refusal kinds: `input`, `unreadable` (the page could not be read), `no-scope`
+(naming the named parts the page shows), `no-control` (naming the controls of
+the role that the page, or its scope, shows), `ambiguous` and `disabled`
+(nothing was pressed), `driver-failure`, `unsettled` and `unchanged` (the
+checked state did not change, or could not be read after the press).
 
 ## `selectFrom(page, { picker, entry, record, bounds? })`
 
@@ -283,6 +294,14 @@ Selects `entry`, by its visible text, in the one shown picker named `picker`:
 - a listbox: the option is pressed;
 - a combobox that is not a text field: it is pressed first, to open the list it
   controls (`aria-controls`), and the option is pressed in that list.
+
+When no picker carries the name, a combobox with no accessible name, as the
+shared select draws one, is found by the text a person reads for it, tried in
+this order: the placeholder it shows (marked `data-placeholder`), the value it
+shows, or the text of a label element before it in its form group (the nearest
+element that holds one, a label that names no other control, with no other
+field between the two); when more than one combobox matches on the first of
+these that finds one, it refuses (`ambiguous`).
 
 Then it waits until the page reflects the selection: the entry reads as selected
 (the selected option of a select, a checked radio, `aria-selected` or
@@ -370,7 +389,11 @@ Fills `fields` (`{ label: value }`) by the labels a person reads: a field's labe
 is the text its `aria-labelledby` names, else its `aria-label`, else the text of
 its `<label>`. `form` selects what holds the fields, the whole page by default. A
 label the form does not show within the bound is refused before anything is
-filled, naming the labels it has. With `submit`, it then presses the form's
+filled, naming the labels it has. One reading of the form both lists its labels
+and resolves the field a label names, and a label names a field when both read
+the same without their white space ("Idea (optional)" and "Idea(optional)"
+alike); a label that names two fields is refused as `ambiguous`, naming both,
+before anything is filled. With `submit`, it then presses the form's
 control of that name. A field still empty after the press is a required field
 left empty when the page marks it (`aria-invalid="true"`) or shows an error for
 it, or when it declares itself required; the refusal quotes the page's own error
@@ -385,8 +408,8 @@ ever written to a line. It answers `{ filled, submitted, path }`.
 | `FORM_ERROR_BOUND_MS` | 5_000 | from the press to the page's error for a field left empty |
 | `FORM_POLL_MS` | 100 | how often the form is read |
 
-Refusal kinds: `input` and `unknown-label` (nothing was filled), `driver-failure`,
-`no-submit` (naming the form's controls) and `required-empty`.
+Refusal kinds: `input`, `unknown-label` and `ambiguous` (nothing was filled),
+`driver-failure`, `no-submit` (naming the form's controls) and `required-empty`.
 
 ## `switchTheme(page, { to, record, island?, frameSrcPath?, bounds? })`
 
