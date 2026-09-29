@@ -28,23 +28,27 @@
  * the skill name, the `data-chip-mark` and the element structure are kept for
  * the same reason.
  *
- * THE HOST THIS IS TAKEN ON MOVED TWICE (cinatra#3047), and the baseline did
- * NOT — which is the whole point of the file. The faces below are §V's per-chip
- * settled faces. Review point C made the RUN PAGE draw the Skills step instead
- * of them, so they were re-aimed at `page_gate_region`; the re-shoot then found
- * the REVIEW PAGE still drawing them above its review card, and the review page
- * is the run's own second page rather than a transcript, so it draws the Skills
- * step too now. The faces are therefore rendered where they still live — the
- * CONVERSATION — and they must still match the recorded bytes exactly: the
- * reading that changed is the run's two pages', and these faces are the two
- * transcript hosts', which review point E leaves untouched.
+ * THE HOST THIS IS TAKEN ON MOVED THREE TIMES, and then ran out; the baseline
+ * did NOT — which is the whole point of the file. The faces below are §V's
+ * per-chip settled faces. Review point C made the RUN PAGE draw the Skills step
+ * instead of them, so they were re-aimed at `page_gate_region`; the re-shoot
+ * then found the REVIEW PAGE still drawing them above its review card, and the
+ * review page is the run's own second page, so they were re-aimed again at the
+ * CONVERSATION; cinatra#3062 moves the conversation and the widget too. Every
+ * declared host draws the Skills step now, so these faces are no host's drawing
+ * any more: they are the shape `chipRowDrawsSkillChecklist` produces for its
+ * FALSE answer, which is what a mount that declared no host falls to.
  *
- * TWO NORMALIZATIONS, both on the ROOT and both about the MOUNT rather than the
- * face, each named at its own line below. The root declares the host that
- * mounted it and the baseline was recorded on `run_card`; and the conversation's
- * mount adds its own evidence anchor to that same root, host-conditionally
- * (`data-chat-thread-recommendation-hold`, cinatra#2794), which no other host
- * carries. Both are properties of WHERE the card is mounted. The FACES — the
+ * SO THE FACES ARE RENDERED WITH NO SURFACE PROVIDER AT ALL, which is that
+ * answer's own mount, and they must still match the recorded bytes exactly.
+ * That is the record this file exists to keep: the cells cinatra#2893 promised
+ * not to disturb are byte-for-byte what they were, and a change to them would
+ * be a change nobody asked for rather than a consequence of moving a host.
+ *
+ * ONE NORMALIZATION, on the ROOT and about the MOUNT rather than the face: the
+ * root declares the host that mounted it and the baseline was recorded on
+ * `run_card`, while a mount with no provider declares none and omits the
+ * attribute. That is a property of WHERE the card is mounted. The FACES — the
  * three cells this file exists for — are compared with no normalization at all
  * and match the recorded bytes exactly, and the root's other seven attributes
  * are compared as recorded.
@@ -107,18 +111,20 @@ export function normalizeFace(el: Element): string {
 export async function renderSettledFaces(): Promise<Record<string, string>> {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+  // NO SURFACE PROVIDER — see the note at the head of this file. This is the
+  // mount `chipRowDrawsSkillChecklist`'s false answer belongs to now, and it is
+  // the only one that still draws these faces.
+  void LifecycleCardSurfaceProvider;
   render(
-    <LifecycleCardSurfaceProvider host="chat_thread">
-      <RunRecommendationChipRow
-        runId="run-2893"
-        agentPackageName="@cinatra-test/hold-fixture-agent"
-        decision={{
-          kind: "confirmed",
-          skillNames: ["Enrich contacts", "Draft email"],
-          decided: SETTLED_FIXTURE,
-        }}
-      />
-    </LifecycleCardSurfaceProvider>,
+    <RunRecommendationChipRow
+      runId="run-2893"
+      agentPackageName="@cinatra-test/hold-fixture-agent"
+      decision={{
+        kind: "confirmed",
+        skillNames: ["Enrich contacts", "Draft email"],
+        decided: SETTLED_FIXTURE,
+      }}
+    />,
   );
   await waitFor(() =>
     expect(document.querySelectorAll("[data-recommendation-chip]")).toHaveLength(3),
@@ -136,17 +142,16 @@ export async function renderSettledFaces(): Promise<Record<string, string>> {
   // carries, so a root that moved would break every settled capture on file.
   const root = document.querySelector("[data-run-recommendation-chip-row]");
   if (!root) throw new Error("no card root");
-  out["settled-card-root"] = normalizeFace(root)
-    .replace(/>[\s\S]*<\//, "></")
-    // THE ONE NORMALIZATION (cinatra#3047). The root declares the host that
-    // mounted it, and the baseline was recorded on `run_card` — one of the two
-    // hosts whose reading this change moved. Nothing else about the root may
-    // move, and the comparison below is what proves it did not.
-    .replace('data-lifecycle-card-host="chat_thread"', 'data-lifecycle-card-host="run_card"')
-    // AND THE CONVERSATION'S OWN EVIDENCE ANCHOR (cinatra#2794), added to this
-    // same root by the chat mount alone. It is what the transcript's suites
-    // measure the turn by; it is not part of any face.
-    .replace(' data-chat-thread-recommendation-hold=""', "");
+  // THE ONE NORMALIZATION. The root declares the host that mounted it, and the
+  // baseline was recorded on `run_card`; a mount with no provider declares none
+  // and omits the attribute altogether, so it is put back — on the ELEMENT,
+  // before the face is normalized, so the attribute order the comparison reads
+  // is the sorted one either way. Nothing else about the root may move, and the
+  // comparison below is what proves it did not.
+  if (!root.hasAttribute("data-lifecycle-card-host")) {
+    root.setAttribute("data-lifecycle-card-host", "run_card");
+  }
+  out["settled-card-root"] = normalizeFace(root).replace(/>[\s\S]*<\//, "></");
   return out;
 }
 

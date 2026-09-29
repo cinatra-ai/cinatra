@@ -22,9 +22,11 @@
 //   4. checked maps to CONFIRMED and unchecked to SKIPPED when the step is
 //      submitted, and no `adjusted` mark can be produced from this screen;
 //   5. the SETTLED reading is the same pills with the box read-only;
-//   6. and the conversation host is untouched — it still draws the three
-//      affordances and no checkbox (review point E gives the chat and the
-//      widget their own issue).
+//   6. and NO host is left drawing the retired reading: cinatra#3047 moved the
+//      run page and, in its re-shoot round, the review page's gate region;
+//      cinatra#3062 moved the chat and the widget. Every declared host draws
+//      the checkbox reading, and the arm at the foot of this file drives the
+//      three cookie hosts by name to say so.
 //
 // Run:
 //   cd packages/agents && npx vitest run \
@@ -69,6 +71,7 @@ vi.mock("../server-actions", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { RecommendationHoldCard } from "../run-recommendation-chip-row";
+import { resetDrawnRecommendationReadings } from "../run-recommendation-reading-register";
 
 const RUN_ID = "run-3047";
 const PKG = "@cinatra-ai/blog-draft-writer-agent";
@@ -133,6 +136,12 @@ const continueButton = (c: HTMLElement) =>
   c.querySelector<HTMLElement>("[data-skills-step-continue]");
 
 beforeEach(() => {
+  // A FRESH READER PER ARM (cinatra#3062, fix leg 3). The card now remembers the
+  // row it DREW, keyed by run, so that a remount redraws it instead of emptying
+  // the turn — §V's "a row the reader did see keeps its place in the turn". The
+  // arms below reuse one run id, so each one declares a reader who has been
+  // shown nothing yet.
+  resetDrawnRecommendationReadings();
   holdStateMock.mockReset();
   confirmRunRecommendationAction.mockClear();
   skipRunRecommendationAction.mockClear();
@@ -303,17 +312,16 @@ describe("the settled Skills step on the run page", () => {
   });
 });
 
-describe("the conversation is untouched (review point E)", () => {
-  // WHICH HOSTS ARE STILL "EVERY OTHER" NARROWED BY ONE (cinatra#3047, the
-  // re-shoot's first defect). This arm drove `chat_thread` AND
-  // `page_gate_region`, because point C named the run page alone. The re-shoot
-  // then photographed the review page still drawing the retired chip reading
-  // above its review card, and the review page is not "another host" in the
-  // sense point E means: it is the run's OWN second page — the same run, the
-  // same rail, the same Skills step — and the change request names it beside
-  // the run page. So `page_gate_region` draws the Skills step now, which
-  // `skills-step-on-the-review-page.test.tsx` reads in full, and what is left
-  // here is the CONVERSATION, which point E still leaves alone.
+describe("no host is left drawing the retired reading", () => {
+  // THE DEVIATION IS CLOSED, and this arm is what says so by driving it.
+  // cinatra#3047 moved the run page and then, in its re-shoot round, the review
+  // page's gate region; cinatra#3062 moves `/chat` and the site widget. §IX
+  // rules the same card onto every host, and with both legs in there is no host
+  // left keeping the three affordances. So the two arms that used to stand here
+  // — one naming `page_gate_region` as cinatra#3062's deviation, one naming the
+  // conversation as the change request's point E — are replaced by the single
+  // positive pin their premises now add up to: every declared host draws the
+  // checkbox reading, and each is driven by name rather than assumed.
   //
   // THE WIDGET IS NOT DRIVEN HERE, and the reason is a property of the product
   // rather than a gap: `site_widget` is not a cookie host, so the surface
@@ -321,22 +329,21 @@ describe("the conversation is untouched (review point E)", () => {
   // reads and decides through the broker instead. Driving it needs that
   // declaration and a stub for both broker routes, which
   // `recommendation-hold-card.test.tsx` already carries — and its per-host arm
-  // asserts the same reading, for all four hosts, through each host's own
+  // asserts this same reading, for all four hosts, through each host's own
   // transport.
-  it.each(["chat_thread"] as const)(
-    "keeps the three affordances on %s, and draws no checkbox and no Continue",
+  it.each(["run_card", "chat_thread", "page_gate_region"] as const)(
+    "draws a checkbox per pill and one Continue on %s, and no per-chip affordance",
     async (host) => {
       holdStateMock.mockResolvedValue(HELD);
       const { container } = mount(host);
       await waitFor(() => expect(pills(container)).toHaveLength(2));
 
       expect(row(container)!.getAttribute("data-lifecycle-card-host")).toBe(host);
-      expect(row(container)!.getAttribute("data-run-recommendation-reading")).toBeNull();
-      expect(container.querySelectorAll('[data-skill-action="confirm"]')).toHaveLength(2);
-      expect(container.querySelectorAll('[data-skill-action="adjust"]')).toHaveLength(2);
-      expect(container.querySelectorAll('[data-skill-action="skip"]')).toHaveLength(2);
-      expect(boxes(container)).toHaveLength(0);
-      expect(continueButton(container)).toBeNull();
+      // The queries below are proved falsifiable by the settled arm above, which
+      // finds a row with no checkbox and no Continue through the same helpers.
+      expect(container.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+      expect(boxes(container)).toHaveLength(2);
+      expect(continueButton(container)).not.toBeNull();
     },
   );
 });

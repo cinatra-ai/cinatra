@@ -82,6 +82,9 @@ import {
   CHIP_ROW,
   CHIP_SKIP,
   CONVERSATION_LIST,
+  SKILLS_BOX,
+  SKILLS_CONTINUE,
+  SKILL_APPLIED_ATTR,
   DECISION_ATTR,
   HELD_TURN_AGENT_PACKAGE,
   HELD_TURN_MESSAGE,
@@ -208,9 +211,12 @@ interface CardAnchors {
    */
   decision: string | null;
   settled: boolean;
-  /** Which skills the settled row names, and the mark each one carries. */
+  /** §V's checklist controls on this host (cinatra#3062). */
+  boxControls: number;
+  continueControls: number;
+  /** Which skills the row names, and what each pill's box says about it. */
   chipSkillIds: Array<string | null>;
-  chipMarks: Array<string | null>;
+  chipApplied: Array<string | null>;
 }
 
 async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
@@ -225,6 +231,9 @@ async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
       confirm,
       adjust,
       skip,
+      box,
+      cont,
+      appliedAttr,
       retiredA,
       retiredB,
       marker,
@@ -266,12 +275,14 @@ async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
         confirmControls: q(confirm),
         adjustControls: q(adjust),
         skipControls: q(skip),
+        boxControls: q(box),
+        continueControls: q(cont),
         retiredRowControls: q(retiredA) + q(retiredB),
         // OFF THE ROOT, both of them — see the field docs.
         decision: card ? card.getAttribute(decisionAttr) : null,
         settled: card ? card.getAttribute("data-run-recommendation-settled") === "true" : false,
         chipSkillIds: chipEls.map((c) => c.getAttribute("data-skill-id")),
-        chipMarks: chipEls.map((c) => c.getAttribute("data-chip-mark")),
+        chipApplied: chipEls.map((c) => c.getAttribute(appliedAttr)),
       };
     },
     {
@@ -283,6 +294,9 @@ async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
       confirm: CHIP_CONFIRM,
       adjust: CHIP_ADJUST,
       skip: CHIP_SKIP,
+      box: SKILLS_BOX,
+      cont: SKILLS_CONTINUE,
+      appliedAttr: SKILL_APPLIED_ATTR,
       retiredA: RETIRED_ROW_CONFIRM,
       retiredB: RETIRED_ROW_SKIP,
       marker: CHAT_HOLD_MARKER,
@@ -632,6 +646,32 @@ async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAncho
   return last!;
 }
 
+/**
+ * SET ONE PILL'S BOX, AND READ IT BACK (cinatra#3062, fix leg 4).
+ *
+ * Section V's decision act on this host is the checklist: "The reader sets the
+ * boxes and presses Continue beneath the list ... and the whole row is answered
+ * at once, every box together." A box OPENS on the scorer's verdict for this
+ * prompt -- ticked for a skill it recommends, clear for one it does not, which
+ * is why the drawing's own example draws two ticked pills beside a clear one. So
+ * a flow that toggles blindly answers whatever the environment opened with, and
+ * the decision it takes is not the decision it asserts.
+ *
+ * This states the box it means and reads it back, so the press's MEANING is a
+ * measured fact before the press happens.
+ */
+async function setSkillBox(page: Page, skillId: string, want: boolean): Promise<void> {
+  const box = page.locator(`${CARD_ROOT} ${SKILLS_BOX}[data-skill-id="${skillId}"]`).first();
+  await expect(box, "the pill's own box is on screen to be set").toHaveCount(1);
+  if ((await box.getAttribute("aria-checked")) !== String(want)) {
+    await box.click();
+  }
+  await expect(
+    box,
+    `the box states the reader's answer (${want ? "ticked" : "clear"}) before Continue`,
+  ).toHaveAttribute("aria-checked", String(want));
+}
+
 async function waitForDecidedCard(
   page: Page,
   want: string,
@@ -856,10 +896,14 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   ).toBe(true);
   expect(held.chipRow, "the row IS the card").toBe(true);
   expect(held.chips, "one chip per assigned skill").toBe(1);
-  // §V's three per-chip controls, and nothing above them.
-  expect(held.confirmControls).toBe(1);
-  expect(held.adjustControls).toBe(1);
-  expect(held.skipControls).toBe(1);
+  // §V's checklist, and nothing above it: a box in front of the one pill, one
+  // Continue beneath the list, and NOTHING to press on the pill itself
+  // (cinatra#3062).
+  expect(held.boxControls, "a checkbox in front of the skill's name").toBe(1);
+  expect(held.continueControls, "one Continue beneath the list").toBe(1);
+  expect(held.confirmControls).toBe(0);
+  expect(held.adjustControls).toBe(0);
+  expect(held.skipControls).toBe(0);
   expect(
     held.retiredRowControls,
     "the redraw deleted the row-level Confirm/Skip — a revival must not pass unnoticed",
@@ -898,7 +942,21 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
     "the decision is taken on a thread route, which the first message created",
   ).not.toBe(threadUrl);
   await stripDevOverlay(page);
-  await page.locator(`${CARD_ROOT} ${CHIP_CONFIRM}`).first().click();
+  // THE READER SETS THE BOX, THEN PRESSES CONTINUE (cinatra#3062, fix leg 4).
+  //
+  // This line used to press Continue on whatever the row opened with, on the
+  // assumption that the offered skill's box is ticked by default. It is not a
+  // default: it is the scorer's verdict on THIS prompt, and on this flow's own
+  // prompt the offered skill opens CLEAR. An all-clear Continue is the shipped
+  // skip, so the press this arm takes for a confirm went out as
+  // `skipRunRecommendationAction`, the run settled `skipped`, and the wait below
+  // spent its whole 120 s on a "confirmed" the run was never going to reach.
+  //
+  // Section V's act is "the reader sets the boxes and presses Continue", so the
+  // box is SET here and read back, and the decision this arm asserts is the
+  // decision it actually takes.
+  await setSkillBox(page, HELD_TURN_SKILL_ID, true);
+  await page.locator(`${CARD_ROOT} ${SKILLS_CONTINUE}`).first().click();
 
   // ── (4) The same card settles IN PLACE, URL unchanged ───────────────────
   const confirmed = await waitForDecidedCard(page, "confirmed", runId);
@@ -911,7 +969,12 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
     "and still the `agent_run` part's own container — settling did not re-parent the card",
   ).toBe(true);
   expect(confirmed.confirmControls + confirmed.adjustControls + confirmed.skipControls,
-    "a settled card offers nothing to press").toBe(0);
+    "a settled card carries no per-pill affordance").toBe(0);
+  // THE CONTINUE IS NOT ASSERTED ABSENT HERE, and that is the drawing rather
+  // than a gap: §V keeps the boxes editable, with Continue beneath them, "for as
+  // long as the run has not started" — and the run this decision just released
+  // is queued for a moment before it starts. The reading that IS fixed at this
+  // instant is what each pill's box states, which is asserted below.
   expect(confirmed.settled, "and says so on its own root").toBe(true);
   // Asserted by SKILL ID rather than by the chip's rendered label: the label is a
   // display name that a copy change may move, while the id is the thing the
@@ -919,7 +982,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(confirmed.chipSkillIds, "the settled row names the skill it kept").toEqual([
     HELD_TURN_SKILL_ID,
   ]);
-  expect(confirmed.chipMarks, "and marks it confirmed").toEqual(["confirmed"]);
+  expect(confirmed.chipApplied, "and its box states it was applied").toEqual(["true"]);
   await expect(page.locator(`${CARD_ROOT}${CARD_HOST_CHAT}${CARD_DECIDED}`)).toHaveCount(1);
   await expect(page.locator(`${CARD_ROOT}${CARD_HELD}`)).toHaveCount(0);
   expect(page.url(), "settling the card NAVIGATED NOWHERE").toBe(urlAtConfirm);
@@ -956,7 +1019,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(reloaded.insideConversationList).toBe(true);
   expect(reloaded.decision, "with its recorded decision intact").toBe("confirmed");
   expect(reloaded.chipSkillIds).toEqual([HELD_TURN_SKILL_ID]);
-  expect(reloaded.chipMarks).toEqual(["confirmed"]);
+  expect(reloaded.chipApplied).toEqual(["true"]);
   expect(
     reloaded.confirmControls + reloaded.adjustControls + reloaded.skipControls,
     "and it is still settled after the reload",
@@ -992,14 +1055,23 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
     held2.slotIsProducingAgentRun,
     "the second card is at ITS OWN run's `agent_run` producing slot",
   ).toBe(true);
-  expect(held2.skipControls, "the chip carries its own Skip").toBe(1);
+  expect(held2.boxControls, "the second card draws its own box").toBe(1);
+  expect(held2.continueControls, "and its own Continue").toBe(1);
+  expect(held2.skipControls, "and nothing to press on the pill").toBe(0);
 
   // Same baseline rule as the confirm half: the thread route, read immediately
   // before the press.
   const urlAtSkip = page.url();
   expect(urlAtSkip).not.toBe(skipThreadUrl);
   await stripDevOverlay(page);
-  await page.locator(`${CARD_ROOT} ${CHIP_SKIP}`).first().click();
+  // §V: "clearing every box and pressing Continue is an ordinary answer to the
+  // same question, and the run goes ahead with no recommended skill applied" —
+  // which is the shipped skip, and the only way to reach it on this host.
+  // The box is STATED clear rather than toggled, for the reason the confirm arm
+  // gives: a blind toggle answers whatever the scorer opened the row with, so it
+  // is the all-clear arm only when the row happened to open ticked.
+  await setSkillBox(page, HELD_TURN_SKILL_ID, false);
+  await page.locator(`${CARD_ROOT} ${SKILLS_CONTINUE}`).first().click();
 
   const skipped = await waitForDecidedCard(page, "skipped", runId2);
   expect(skipped.roots).toBe(1);
@@ -1011,7 +1083,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   ).toBe(true);
   expect(
     skipped.confirmControls + skipped.adjustControls + skipped.skipControls,
-    "a skipped card offers nothing to press either",
+    "an all-clear card carries no per-pill affordance either",
   ).toBe(0);
   expect(skipped.settled).toBe(true);
   // The settled SKIP row draws its chips off the durable per-skill rejection
@@ -1020,7 +1092,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(skipped.chipSkillIds, "the skipped row names the skill it dropped").toEqual([
     HELD_TURN_SKILL_ID,
   ]);
-  expect(skipped.chipMarks, "and marks it skipped").toEqual(["skipped"]);
+  expect(skipped.chipApplied, "and its box states it was not applied").toEqual(["false"]);
   expect(page.url(), "SKIP settled the card without navigating").toBe(urlAtSkip);
 
   const skippedStatus = await expectReleasedInvariant(runId2);

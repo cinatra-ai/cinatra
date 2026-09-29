@@ -2,9 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 164,
-    "/api/mcp": 1295,
-    "/chat": 1394,
-    "/api/a2a": 1303,
-    "/api/llm-bridge": 1313
+    "/api/mcp": 1296,
+    "/chat": 1395,
+    "/api/a2a": 1304,
+    "/api/llm-bridge": 1314
+  },
+  "absorbs": {
+    "/api/a2a": {
+      "from": 1303,
+      "to": 1304,
+      "reason": "Pull request 3079 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at b3a72b71d016fe9c39e1c5705a2ed849db2ef8a6 reads 1303 and the merged tree reads 1304, the one added module being that file; the growth is additive and no module leaves the route.",
+      "pr": 3079
+    },
+    "/api/llm-bridge": {
+      "from": 1313,
+      "to": 1314,
+      "reason": "Pull request 3079 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at b3a72b71d016fe9c39e1c5705a2ed849db2ef8a6 reads 1313 and the merged tree reads 1314, the one added module being that file; the growth is additive and no module leaves the route.",
+      "pr": 3079
+    },
+    "/api/mcp": {
+      "from": 1295,
+      "to": 1296,
+      "reason": "Pull request 3079 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at b3a72b71d016fe9c39e1c5705a2ed849db2ef8a6 reads 1295 and the merged tree reads 1296, the one added module being that file; the growth is additive and no module leaves the route.",
+      "pr": 3079
+    },
+    "/chat": {
+      "from": 1394,
+      "to": 1395,
+      "reason": "Pull request 3079 (issue 3062) adds exactly one core module to this route, packages/agents/src/run-recommendation-reading-register.ts: the reading the skills card drew is remembered in its own module so the settled card can be drawn read-only without the decision core. Measured, not argued: with the companion extension fleet cloned pinned and the merged scripts/route-graph.mjs, main at b3a72b71d016fe9c39e1c5705a2ed849db2ef8a6 reads 1394 and the merged tree reads 1395, the one added module being that file; the growth is additive and no module leaves the route.",
+      "pr": 3079
+    }
   }
 }

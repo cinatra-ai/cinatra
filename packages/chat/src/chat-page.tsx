@@ -78,7 +78,7 @@ import {
   collectNewlyTaggedIds,
   resolveDispatchPlan,
 } from "./chat-routing";
-import { useChatUrlSync } from "./chat-client-url"; // cinatra#1878 W3 /chat URL sync (push/restore/adopt/seed)
+import { useChatUrlSync, useHeldChatTranscript } from "./chat-client-url"; // cinatra#1878 W3 /chat URL sync (push/restore/adopt/seed)
 // The unified AG-UI wire (cinatra#1218, epic #1216 S2): the headless client
 // drives the full turn lifecycle over the S3 reducer behind a small UI port
 // (driveAssistantChatTurn); persistence fetch helpers are co-located there
@@ -357,6 +357,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     messagesRef.current = messages;
     streams.noteCommittedTranscript(messages);
   }, [messages, streams]);
+  // cinatra#3062: a fresh mount of this page draws the transcript the page it replaces still holds until its own load answers.
+  const { shownMessages, releaseHeldTranscript } = useHeldChatTranscript(userId, activeThreadId, initialThreadId, messages, loadedThreadIdRef);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
   // (The auto-scroll lock release that used to sit here moved into
@@ -401,6 +403,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       return;
     }
     void fetchThreadById(activeThreadId).then((thread) => {
+      releaseHeldTranscript(); // cinatra#3062: the page's own read has answered — its own list is drawn from here on.
       if (thread) {
         // Backfill missing ids — threads stored before the id field was added won't have them,
         // causing key={undefined} in the messages list and React's missing-key warning.
@@ -437,7 +440,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         loadedThreadIdRef.current = activeThreadId;
       }
     });
-  }, [activeThreadId]);
+  }, [activeThreadId, releaseHeldTranscript]);
 
   // Poll the active thread for externally-written messages (e.g. from the
   // chat_thread_send MCP tool). Uses window.setInterval per codebase convention.
@@ -1123,7 +1126,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       <ConversationColumn
         // `/chat` states its host EXPLICITLY: the first-party cookie surface.
         host={chatHostAdapter}
-        messages={messages}
+        messages={shownMessages}
         isSlackMode={isSlackMode}
         animating={animating}
         theme={theme}

@@ -140,6 +140,21 @@ export async function updateAgentRunStatusConditional(
             // DB clock: the row's own timeout (COALESCE default 24h) from now().
             executionDeadlineAt: sql`now() + make_interval(secs => COALESCE(${agentRuns.timeoutSeconds}, 86400))`,
             humanWaitAttemptId: null, // #1938: a fresh dispatch drops any wait marker
+            // cinatra#3062: THE START STAMP IS PART OF THE DISPATCH BOOKKEEPING.
+            // `started_at` is the fact "this run has executed" — the one fact that
+            // tells the two producers of `pending_approval` apart (the pre-execution
+            // setup interrupt, versus an interrupt raised mid-flight), which the
+            // status string cannot. It is stamped HERE, in the same CAS as the
+            // status flip and the attempt id, for exactly the reason the attempt id
+            // is: this is the deepest layer, so no dispatching caller can bypass it
+            // and no `running` row can carry a missing stamp. Every dispatch used to
+            // leave the column NULL unless a caller happened to pass one, so the
+            // only rows that ever carried a stamp were the synthetic content-editor
+            // carrier's — and a run interrupted mid-flight was indistinguishable
+            // from one parked before it ever ran. COALESCE, never a bare `now()`:
+            // a re-dispatch keeps the run's FIRST start, and a reset that cleared
+            // the column (`clearAgentRunFailureMetadata`) legitimately re-stamps.
+            startedAt: sql`COALESCE(${agentRuns.startedAt}, now())`,
           }
         : {}),
       // cinatra#1938: durable in-attempt wait marker (rationale on the agent_runs

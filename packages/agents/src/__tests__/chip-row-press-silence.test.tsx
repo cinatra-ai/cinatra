@@ -33,13 +33,17 @@
  * Run:
  *   cd packages/agents && npx vitest run src/__tests__/chip-row-press-silence.test.tsx
  */
-// THE §V CHIP-ROW IS THE CONVERSATION'S READING (cinatra#3047, review points C
-// and E). The run page's own Skills step draws a checkbox per pill and one
-// Continue beneath the list — pinned in `skills-step-checkbox-pills.test.tsx`
-// and `skills-step-continue.test.tsx` — and the chat, the widget and the review
-// page keep the three per-chip affordances this file is about until point E's
-// own issue lands. So this suite is driven on `chat_thread`, which is where the
-// drawing it asserts actually lives; nothing else about it changed.
+// DRIVEN ON §V's OWN CONTROLS (cinatra#3047 review point C, then cinatra#3062).
+// Every declared host draws a checkbox per pill and one Continue beneath the
+// list now — the run page and the review page moved with cinatra#3047, the chat
+// and the widget with cinatra#3062 — so the per-chip Confirm / Adjust / Skip
+// this file used to press exists on no host at all. NEITHER CRITERION IS ABOUT
+// THAT AFFORDANCE: AC1 is about what a REJECTED decision draws, and AC2 is about
+// presses that land with no intervening render each reading the same base map
+// from their own render closure. Both live in the row's decision path, which
+// both readings share, and both are taken here on the boxes and the Continue.
+// AC2's hazard is reproduced the same way it always was — several changes inside
+// ONE `act` scope, so React cannot re-render between them.
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -102,7 +106,11 @@ async function mountRow() {
   const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
   const out = render(
-    <LifecycleCardSurfaceProvider host="chat_thread">
+    // ANY DECLARED HOST DRAWS THE SAME READING NOW — see the note at the head of
+    // this file. The run page is taken because it is the host §V's checklist
+    // reached first; the other three draw the identical card, which
+    // `recommendation-hold-card.test.tsx` compares byte for byte.
+    <LifecycleCardSurfaceProvider host="run_card">
       <RunRecommendationChipRow
         runId="run-2905"
         agentPackageName="@cinatra-test/hold-fixture-agent"
@@ -119,18 +127,39 @@ async function mountRow() {
   return out;
 }
 
-const controls = (action: "confirm" | "adjust" | "skip") =>
-  [...document.querySelectorAll(`[data-skill-action="${action}"]`)] as HTMLButtonElement[];
+/** Every box §V draws, one per pill. */
+const boxes = () =>
+  [...document.querySelectorAll("[data-skills-step-checkbox]")] as HTMLButtonElement[];
+
+/** One named box. */
+const box = (skillId: string) => {
+  const el = document.querySelector(
+    `[data-skills-step-checkbox][data-skill-id="${skillId}"]`,
+  ) as HTMLButtonElement | null;
+  if (!el) throw new Error(`no checkbox on ${skillId}`);
+  return el;
+};
+
+/** §V's one control, beneath the list. */
+const continueControl = () =>
+  document.querySelector("[data-skills-step-continue]") as HTMLButtonElement | null;
 
 /** The row's ONE refusal line — §6.4 step 7's red line, nothing else. */
 const refusalLine = () => document.querySelector('[role="alert"]');
 
-/** One press, each landing with its own render in between (ordinary clicking). */
-const press = async (skillId: string, action: "confirm" | "skip") => {
-  const btn = document.querySelector(
-    `[data-skill-action="${action}"][data-skill-id="${skillId}"]`,
-  ) as HTMLButtonElement | null;
-  if (!btn) throw new Error(`no ${action} affordance on ${skillId}`);
+/** One box change, landing with its own render in between (ordinary clicking). */
+const toggle = async (skillId: string) => {
+  const el = box(skillId);
+  await act(async () => {
+    el.click();
+    await Promise.resolve();
+  });
+};
+
+/** The decision itself. */
+const submit = async () => {
+  const btn = continueControl();
+  if (!btn) throw new Error("the row drew no Continue");
   await act(async () => {
     btn.click();
     await Promise.resolve();
@@ -138,11 +167,14 @@ const press = async (skillId: string, action: "confirm" | "skip") => {
 };
 
 describe("AC1 — a REJECTED decision draws a refusal and leaves the row operable", () => {
-  it("a confirm that REJECTS draws the row's red line instead of nothing", async () => {
+  it("a decision that REJECTS draws the row's red line instead of nothing", async () => {
     confirmMock.mockRejectedValueOnce(new Error("transport failed"));
     await mountRow();
 
-    for (const s of THREE_SKILLS) await press(s.skillId, "confirm");
+    // Every skill here is recommended, so the boxes come up checked and one
+    // Continue carries the whole set — the same decision the three Confirms used
+    // to make between them.
+    await submit();
 
     // The action was reached — this is a REJECTION path, not a no-release path.
     expect(confirmMock).toHaveBeenCalledTimes(1);
@@ -153,13 +185,13 @@ describe("AC1 — a REJECTED decision draws a refusal and leaves the row operabl
     // …drawn in the row's EXISTING error line, not new chrome.
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(line!.className).toContain("text-destructive");
-    // "…and nothing has changed. Press again." — the row is still operable.
-    expect(controls("confirm")).toHaveLength(3);
-    expect(controls("adjust")).toHaveLength(3);
-    expect(controls("skip")).toHaveLength(3);
-    for (const b of [...controls("confirm"), ...controls("adjust"), ...controls("skip")]) {
-      expect(b.disabled).toBe(false);
-    }
+    // "…and nothing has changed. Press again." — the row is still operable, and
+    // on this reading that means every box and the one Continue.
+    expect(boxes()).toHaveLength(3);
+    for (const b of boxes()) expect(b.disabled).toBe(false);
+    expect(continueControl()).not.toBeNull();
+    expect(continueControl()!.disabled).toBe(false);
+    expect(document.querySelectorAll("[data-skill-action]")).toHaveLength(0);
     // Nothing was reported as decided: no settle, no refresh.
     expect(routerRefresh).not.toHaveBeenCalled();
     expect(
@@ -168,15 +200,17 @@ describe("AC1 — a REJECTED decision draws a refusal and leaves the row operabl
     ).toBe("held");
   });
 
-  it("a rejected confirm can be PRESSED AGAIN, and a second press that lands settles the row", async () => {
+  it("a rejected decision can be PRESSED AGAIN, and a second press that lands settles the row", async () => {
     confirmMock.mockRejectedValueOnce(new Error("transport failed"));
     await mountRow();
 
-    for (const s of THREE_SKILLS) await press(s.skillId, "confirm");
+    await submit();
     expect(refusalLine()).not.toBeNull();
 
-    // Press again — §6.4 step 7's own instruction to the reader.
-    await press("skill-enrich", "confirm");
+    // Press again — §6.4 step 7's own instruction to the reader. This is the
+    // half of the criterion the row's `submitted` guard has to get right: it is
+    // written on the press and cleared, with the refusal message, in ONE commit.
+    await submit();
     expect(confirmMock).toHaveBeenCalledTimes(2);
     const second = confirmMock.mock.calls[1]![0] as { confirmedSkillIds: string[] };
     expect([...second.confirmedSkillIds].sort()).toEqual(
@@ -186,12 +220,13 @@ describe("AC1 — a REJECTED decision draws a refusal and leaves the row operabl
     expect(routerRefresh).toHaveBeenCalled();
   });
 
-  it("a skip that REJECTS draws the row's red line instead of nothing", async () => {
+  it("an all-clear decision that REJECTS draws the row's red line instead of nothing", async () => {
     skipMock.mockRejectedValueOnce(new Error("transport failed"));
     await mountRow();
 
-    // Nothing kept — the release takes the skip branch.
-    for (const s of THREE_SKILLS) await press(s.skillId, "skip");
+    // Nothing kept — every box cleared, so the release takes the skip branch.
+    for (const s of THREE_SKILLS) await toggle(s.skillId);
+    await submit();
 
     expect(skipMock).toHaveBeenCalledTimes(1);
     expect(confirmMock).not.toHaveBeenCalled();
@@ -199,8 +234,8 @@ describe("AC1 — a REJECTED decision draws a refusal and leaves the row operabl
     expect(line).not.toBeNull();
     expect(line!.textContent?.trim()).toBeTruthy();
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1);
-    expect(controls("skip")).toHaveLength(3);
-    for (const b of controls("skip")) expect(b.disabled).toBe(false);
+    expect(boxes()).toHaveLength(3);
+    for (const b of boxes()) expect(b.disabled).toBe(false);
     expect(routerRefresh).not.toHaveBeenCalled();
   });
 
@@ -208,7 +243,7 @@ describe("AC1 — a REJECTED decision draws a refusal and leaves the row operabl
     confirmMock.mockResolvedValueOnce({ ok: false, error: "Refused: that hold is not this run's." });
     await mountRow();
 
-    for (const s of THREE_SKILLS) await press(s.skillId, "confirm");
+    await submit();
 
     const alerts = [...document.querySelectorAll('[role="alert"]')];
     expect(alerts).toHaveLength(1);
@@ -216,45 +251,54 @@ describe("AC1 — a REJECTED decision draws a refusal and leaves the row operabl
   });
 });
 
-describe("AC2 — every chip's Confirm with NO intervening render still releases ONCE, with the full kept set", () => {
-  it("three Confirms in one batch release once and carry every skill", async () => {
+describe("AC2 — box changes with NO intervening render still release ONCE, with the full kept set", () => {
+  it("two boxes cleared in one batch are BOTH cleared — the last change does not win", async () => {
     await mountRow();
 
-    const buttons = controls("confirm");
-    expect(buttons).toHaveLength(3);
-    // ONE act scope, three presses: React has no chance to re-render between
-    // them, so every handler that reads state from its own render closure reads
-    // the SAME base map. That is candidate (b), reproduced deterministically.
+    expect(boxes()).toHaveLength(3);
+    // ONE act scope, two changes to DIFFERENT boxes: React has no chance to
+    // re-render between them, so both handlers read the selection from the SAME
+    // render closure. That is candidate (b) exactly, on the control that ships —
+    // a base map spread from a stale closure keeps only the last change, and the
+    // decision then carries a skill the reader had cleared.
     await act(async () => {
-      for (const b of buttons) b.click();
+      box("skill-enrich").click();
+      box("skill-draft").click();
       await Promise.resolve();
     });
+    await submit();
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    const payload = confirmMock.mock.calls[0]![0] as { confirmedSkillIds: string[] };
+    expect([...payload.confirmedSkillIds].sort()).toEqual(["skill-send"]);
+    // The hold was released, and nothing was drawn as a refusal.
+    expect(refusalLine()).toBeNull();
+    expect(routerRefresh).toHaveBeenCalled();
+  });
+
+  it("the untouched batch releases once and carries every skill", async () => {
+    await mountRow();
+
+    await submit();
 
     expect(confirmMock).toHaveBeenCalledTimes(1);
     const payload = confirmMock.mock.calls[0]![0] as { confirmedSkillIds: string[] };
     expect([...payload.confirmedSkillIds].sort()).toEqual(
       THREE_SKILLS.map((s) => s.skillId).sort(),
     );
-    // The hold was released, and nothing was drawn as a refusal.
     expect(refusalLine()).toBeNull();
     expect(routerRefresh).toHaveBeenCalled();
   });
 
-  it("a batch of MIXED marks releases once and keeps only what was confirmed", async () => {
+  it("a MIXED batch releases once and keeps only what stayed checked", async () => {
     await mountRow();
 
+    // One box cleared inside the same act scope as two that are left alone.
     await act(async () => {
-      (document.querySelector(
-        '[data-skill-action="confirm"][data-skill-id="skill-enrich"]',
-      ) as HTMLButtonElement).click();
-      (document.querySelector(
-        '[data-skill-action="skip"][data-skill-id="skill-draft"]',
-      ) as HTMLButtonElement).click();
-      (document.querySelector(
-        '[data-skill-action="confirm"][data-skill-id="skill-send"]',
-      ) as HTMLButtonElement).click();
+      box("skill-draft").click();
       await Promise.resolve();
     });
+    await submit();
 
     expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(skipMock).not.toHaveBeenCalled();
@@ -262,24 +306,26 @@ describe("AC2 — every chip's Confirm with NO intervening render still releases
     expect([...payload.confirmedSkillIds].sort()).toEqual(["skill-enrich", "skill-send"]);
   });
 
-  it("a batch where every chip is SKIPPED releases once through the skip branch", async () => {
+  it("a batch that clears every box releases once through the skip branch", async () => {
     await mountRow();
 
-    const buttons = controls("skip");
     await act(async () => {
-      for (const b of buttons) b.click();
+      for (const s of THREE_SKILLS) box(s.skillId).click();
       await Promise.resolve();
     });
+    await submit();
 
     expect(skipMock).toHaveBeenCalledTimes(1);
     expect(confirmMock).not.toHaveBeenCalled();
     expect(refusalLine()).toBeNull();
   });
 
-  it("presses that DO render in between are unchanged — one release, full kept set", async () => {
+  it("changes that DO render in between are unchanged — one release, full kept set", async () => {
     await mountRow();
 
-    for (const s of THREE_SKILLS) await press(s.skillId, "confirm");
+    for (const s of THREE_SKILLS) await toggle(s.skillId);
+    for (const s of THREE_SKILLS) await toggle(s.skillId);
+    await submit();
 
     expect(confirmMock).toHaveBeenCalledTimes(1);
     const payload = confirmMock.mock.calls[0]![0] as { confirmedSkillIds: string[] };
