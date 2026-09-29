@@ -230,12 +230,10 @@ describe("the expensive job is gated on the decision and consumes the same plan"
 });
 
 describe("the workflow runs when the selection logic changes", () => {
-  it("triggers on the selector and on the selector's own suites", () => {
-    const paths = triggerPaths();
-    expect(paths).toContain("scripts/ci/design-select.mjs");
-    expect(paths).toContain("scripts/ci/__tests__/design-select.test.mjs");
-    expect(paths).toContain("scripts/ci/__tests__/design-select-workflow.test.mjs");
-    expect(paths).toContain(WORKFLOW);
+  it("lets every PR reach the selector, including global widening inputs", () => {
+    expect(TEXT).toContain("  pull_request:");
+    expect(triggerPaths()).toEqual([]);
+    expect(TEXT).not.toMatch(/^    paths-ignore:/m);
   });
 });
 

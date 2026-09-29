@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { selectCiImpact } from "../ci-impact.mjs";
 import { parseTriggers } from "../merge-group-coverage-guard.mjs";
 // The workflow file the skills-drift check is called from is named through the
 // derivation's own exported path constant ("exported so callers/tests need no
@@ -40,6 +41,7 @@ const WORKFLOWS_DIR = path.join(REPO_ROOT, ".github", "workflows");
 const PATHS_FILTER_PIN = "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d";
 
 /** Job ids that carry a workflow's changed-path detection. */
+const IMPACT_DETECTOR = "run: node scripts/ci/ci-impact.mjs";
 const DETECTOR_IDS = ["changes", "detect", "changed-paths"];
 
 /**
@@ -74,7 +76,6 @@ const TREE_WIDE_JOBS = {
     "design-pin-drift": "reads the pull request's own touched-path set against the design pin maps — every path is its input",
     "design-pin-freshness": "sibling of design-pin-drift on the same touched-path set",
     "design-anchor-resolution": "sibling of design-pin-drift on the same touched-path set",
-    "design-record-grammar": "sibling of design-pin-drift on the same touched-path set",
   },
 };
 
@@ -94,6 +95,8 @@ const UNCONDITIONAL = {
     "a live-config drift probe: it reads the repository's configured secrets against the pinned manifest, never a file in the diff, so no path list could predict when it must run",
   "truthful-attribution-gate.yml": "reads the candidate's commit records, not the tree",
   "merge-readiness.yml": "reads the candidate's own check runs, not the tree",
+  "design-record-grammar.yml":
+    "reads the pull request body against the branch's pin, and must run again when the body is edited, which changes no file",
 };
 
 /** The gates the `main` ruleset requires: unconditional, whole-tree readers. */
@@ -180,7 +183,7 @@ function coversWorkflowFiles(globs, file) {
 /** The detector jobs of a workflow: a job id we know, running the pinned action. */
 function detectorsOf(jobs) {
   return [...jobs]
-    .filter(([id, body]) => DETECTOR_IDS.includes(id) && body.includes("dorny/paths-filter@"))
+    .filter(([id, body]) => DETECTOR_IDS.includes(id) && (body.includes("dorny/paths-filter@") || body.includes(IMPACT_DETECTOR)))
     .map(([id]) => id);
 }
 
@@ -225,14 +228,26 @@ describe("every conditional pull-request workflow carries its changed-path detec
         `${file}: no \`changes\` job running ${PATHS_FILTER_PIN} — its heavy jobs would run on every push`,
       ).not.toHaveLength(0);
       for (const id of detectors) {
-        expect(jobs.get(id), `${file}: job \`${id}\` must use the repository's own pin`).toContain(
-          PATHS_FILTER_PIN,
-        );
+        const body = jobs.get(id);
+        if (body.includes(IMPACT_DETECTOR)) {
+          expect(["build-image.yml", "e2e-app-suites.yml"]).toContain(file);
+          expect(body).toContain("GITHUB_TOKEN: ${{ github.token }}");
+          expect(body).toContain("pull-requests: read");
+        } else {
+          expect(body, `${file}: detector must use the repository's own pin`).toContain(PATHS_FILTER_PIN);
+        }
       }
     });
 
     it(`${file} keeps every filter list covering a change to the workflow files`, () => {
       for (const id of detectors) {
+        if (jobs.get(id).includes(IMPACT_DETECTOR)) {
+          const selected = selectCiImpact({ event: "pull_request", files: [`.github/workflows/${file}`] });
+          expect(selected.skip_runtime).toBe(false);
+          expect(selected.skip_feedback).toBe(false);
+          expect(selected.skip_notifications).toBe(false);
+          continue;
+        }
         const lists = filterLists(jobs.get(id));
         expect(lists, `${file}: job \`${id}\` has no \`filters: |\` block`).not.toBeNull();
         expect([...lists.keys()], `${file}: job \`${id}\` declares no filter key`).not.toHaveLength(0);

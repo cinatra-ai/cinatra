@@ -35,6 +35,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
+import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
 
 import {
@@ -197,6 +198,17 @@ export type StepperStep = { index: number; stepNumber: number; label: string; de
 
 export type OrchestratorStepperPanelProps = {
   runId: string;
+  /**
+   * THE LAUNCHER THE SUCCESSOR OPENS (cinatra#3693, cinatra#3786): the run's
+   * canonical base where it has one, and `/personal` for a user-anchored run,
+   * whose own address stays bare. "Start fresh" and "Start new run" open that
+   * launcher, so the next run is stamped with the same vantage. Absent for an
+   * unanchored run, where both keep today's road.
+   *
+   * NOT this panel's address base: the run page keeps that to itself and
+   * hands this one down separately (`successorLaunchBase`).
+   */
+  launchBase?: string | null;
   initialStatus: string;
   initialError: string | null;
   agUiEnabled?: boolean | null;
@@ -1491,12 +1503,22 @@ function HitlApprovalCard({
 // FailedCard — Failed state
 // ---------------------------------------------------------------------------
 
+/** The launcher "Start fresh" opens: the run's own launch base when it has
+ *  one, which is `/personal` for a user-anchored run (cinatra#3786). */
+function startFreshPath(agentId: string, launchBase?: string | null): string {
+  return launchBase
+    ? buildAgentWorkspacePath(agentId, { scopeBase: launchBase })
+    : `/agents/${agentId}/new`;
+}
+
 function FailedCard({
   agentId,
   errorMessage,
+  launchBase,
 }: {
   agentId: string;
   errorMessage: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   return (
@@ -1512,7 +1534,7 @@ function FailedCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push(`/agents/${agentId}/new`)}
+            onClick={() => router.push(startFreshPath(agentId, launchBase))}
           >
             Start fresh
           </Button>
@@ -1530,10 +1552,12 @@ function CancelledCard({
   runId,
   agentId,
   lgThreadId,
+  launchBase,
 }: {
   runId: string;
   agentId: string;
   lgThreadId: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -1562,7 +1586,7 @@ function CancelledCard({
     });
 
   const handleStartFresh = () => {
-    router.push(`/agents/${agentId}/new`);
+    router.push(startFreshPath(agentId, launchBase));
   };
 
   return (
@@ -1996,6 +2020,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
+    launchBase,
   } = props;
 
   // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
@@ -2711,7 +2736,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
-    stageCard = <FailedCard agentId={agentId} errorMessage={runError} />;
+    stageCard = <FailedCard agentId={agentId} errorMessage={runError} launchBase={launchBase} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.
     stageCard = (
@@ -2729,7 +2754,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else if (status === "stopped") {
     stageCard = (
-      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} />
+      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} launchBase={launchBase} />
     );
   } else if (
     status === "pending_approval" &&
@@ -2900,6 +2925,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <RunCompletionCard
             runId={runId}
             agentId={agentId}
+            launchBase={launchBase}
             outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
           />
         )

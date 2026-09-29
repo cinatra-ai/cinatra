@@ -45,70 +45,8 @@ name: design-visual-verify
 
 on:
   pull_request:
-    paths:
-      - "src/components/ui/**"
-      - "src/components/extension-card.tsx"
-      - "src/components/brand-mark.tsx"
-      - "src/components/status-pill.tsx"
-      - "src/components/page-header.tsx"
-      - "src/components/page-content.tsx"
-      - "src/components/layout/**"
-      - "src/lib/cinatra-toast.ts"
-      - "src/lib/extension-accent.ts"
-      - "src/lib/status-adapter.ts"
-      - "src/app/globals.css"
-      - "src/app/design-fixtures/**"
-      # Conformance-covered real surfaces + manifest consumption (cinatra#985):
-      # the listing-card/CTA screens family, the compat verdict feeding the
-      # six-state CTA, the banner icon fallback, and the deep-export map the
-      # harness imports through. The manifest pins, allowlist, contract and
-      # suite all live under tests/e2e/design/** (already matched below).
-      - "packages/extensions/src/screens/**"
-      - "packages/extensions/package.json"
-      # Pure semver helper feeding resolveMarketplaceCardCta's update
-      # detection (the update -> installed-latest conformance behavior).
-      - "packages/registries/src/version-compare.ts"
-      - "src/lib/extension-compat-badge.ts"
-      # Route-guard allowlist carrying the fixture routes' CI reachability.
-      - "src/lib/auth-route-guard.ts"
-      # The seed endpoint's AUTHORIZATION contract (the presented capability)
-      # and the primitives it is built on. Reachability and authorization are
-      # different gates, and this job is the only place the second one is
-      # exercised end to end — a change to either must run it.
-      - "src/lib/test-support/conformance-seed-fence.ts"
-      - "src/lib/test-support/seed-capability.ts"
-      - "src/components/extension-card-icon-image.tsx"
-      - "src/components/extension-kind-emblem.tsx"
-      # Seeded data-contract surfaces (cinatra#986): the §VI installed card +
-      # URL-driven status filter, and the /connectors client/badge family.
-      - "src/components/extensions/installed-extension-card.tsx"
-      - "src/components/extensions/extensions-tab-select.tsx"
-      - "packages/connectors/src/**"
-      - "packages/connectors/package.json"
-      # §II connector-setup surfaces (cinatra#2354): the schema-config host
-      # renderer + the right-column status card, and the sdk-ui components that
-      # OWN the connector-setup / connector-multi-setup / connector-connections
-      # conformance ids and their state variants. A rename here breaks the
-      # functional-acceptance contract by design, so the gate must see it.
-      - "src/components/extensions/schema-config-connector-form.tsx"
-      - "src/components/extensions/connector-status-probe-card.tsx"
-      - "packages/sdk-ui/src/connector-setup-columns.tsx"
-      - "packages/sdk-ui/src/connections-list.tsx"
-      - "packages/sdk-ui/src/connection-status-card.tsx"
-      - "packages/sdk-ui/src/connection-status-badge.tsx"
-      - "scripts/design/**"
-      - "tests/e2e/config/design.config.ts"
-      - "tests/e2e/config/base.ts"
-      - "tests/e2e/design/**"
-      # The selector that decides WHETHER this workflow's expensive job runs
-      # and WHICH families it runs (cinatra#3268), and the suites that prove
-      # it. A change to any of them must be judged by the whole suite, so the
-      # workflow has to be triggered by it in the first place.
-      - "scripts/ci/design-select.mjs"
-      - "scripts/ci/__tests__/design-select.test.mjs"
-      - "scripts/ci/__tests__/design-select-workflow.test.mjs"
-      - "scripts/ci/__tests__/design-visual-verify-port-isolation.test.mjs"
-      - ".github/workflows/design-visual-verify.yml"
+    # Always reach the cheap selector: its dependency graph and widening rules
+    # are authoritative. An outer allowlist previously hid shared/global inputs.
   # THE QUEUE EVENT CARRIES NO `paths:` FILTER (engineering#658 item 1).
   # GitHub fires every merge_group-triggered workflow on every candidate,
   # so the path question is answered INSIDE the workflow, over the
@@ -143,6 +81,8 @@ jobs:
   # run's event froze — rather than a second selection below that could
   # disagree with the first.
   select:
+    permissions:
+      contents: read
     name: design suite selection
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
@@ -300,6 +240,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   pixel-diff:
+    permissions:
+      contents: read
     name: /design-fixtures pixel-diff + axe
     needs: select
     # The whole point of the job above: a change that renders nothing does not
@@ -318,8 +260,12 @@ jobs:
     # class (design-baselines-refresh, which takes PIXEL too).
     runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '"ubuntu-latest"') }}
     # Post-cutover the build compiles the app + 79 cloned extensions, so the
-    # prod build + standalone boot + suite needs more than the old 15 min.
-    timeout-minutes: 70
+    # prod build + standalone boot + suite needs more than the old 15 min. The
+    # all-families run (every family, one worker) measured 35 minutes alone on
+    # the pool and needs longer under load; with a build of up to 17 minutes and
+    # a 60-minute suite budget below, 90 minutes leaves the failure dump its
+    # room.
+    timeout-minutes: 90
 
     # The standalone PRODUCTION server runs instrumentation.node.ts register()
     # at boot, which (in any runtime mode) enqueues a few system BullMQ jobs
@@ -577,6 +523,48 @@ jobs:
             echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
           fi
 
+      - name: Restore the design build cache (self-hosted only)
+        # THE RUNNER-LOCAL BUILD CACHE (cinatra#3771).
+        #
+        # Measured on 2026-09-28 over thirty design jobs: the build below took
+        # 6.0 to 18.9 minutes (median 8.9), from nothing every time, on
+        # self-hosted runners that had built the same tree an hour earlier. This
+        # step puts the framework's build cache back into .next/cache before the
+        # build, from a store under this runner's own work root (outside the
+        # checkout, and never an artifact); the step after the build keeps what
+        # the build wrote for the next job. The key (the lockfile and the other
+        # build inputs, and the branch), the checks and the pruning live in
+        # scripts/ci/design-build-cache.sh. A cache that does not match its
+        # manifest is discarded with a "design build cache: DISCARDED" line, and
+        # the job runs a full build.
+        #
+        # Self-hosted runners only: a hosted runner is thrown away after the
+        # job, so a cache kept there could never be read, and the hosted build
+        # stays exactly as it was. The step never fails the job; any trouble
+        # turns the cache off for this job with a named line. The branch names
+        # reach the script through `env`, never interpolated into it: a pull
+        # request author chooses them.
+        #
+        # Off unless labelled (cinatra#3810): the step runs only for a pull
+        # request that carries the label in the condition below, and every other
+        # job skips it (a merge-queue run has no pull request, so it reads as no
+        # label) and builds exactly as it did without the cache. Measured on
+        # 2026-09-29 on a quiet machine, a cold build with the cache on took
+        # 9.4 to 10.8 minutes and 30.5 to 31.4 GB of memory, against
+        # 7.1 to 7.5 minutes and 24.5 to 24.8 GB with it off; on a saturated
+        # machine both took 12.8 to 20 minutes. No warm build has been measured:
+        # no base branch cache is written while the merge queue is not in use, a
+        # later push of a pull request is warm only when it builds on the same
+        # runner, and a runner's store holds only two caches at its size limit.
+        id: build-cache
+        if: ${{ runner.environment == 'self-hosted' && contains(github.event.pull_request.labels.*.name, 'design-build-cache') }}
+        env:
+          DESIGN_BUILD_CACHE_EVENT: ${{ github.event_name }}
+          DESIGN_BUILD_CACHE_PR: ${{ github.event.pull_request.number }}
+          DESIGN_BUILD_CACHE_HEAD_BRANCH: ${{ github.head_ref }}
+          DESIGN_BUILD_CACHE_BASE_BRANCH: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_ref || github.base_ref }}
+        run: bash scripts/ci/design-build-cache.sh restore
+
       - name: Build (standalone production server)
         # Prod build (next.config output:"standalone"). Compiles the app + the
         # 79 cloned extensions ONCE here (under the job timeout), so the server
@@ -588,7 +576,23 @@ jobs:
           # reclaims it ("runner received a shutdown signal"); the knob maps to
           # experimental.cpus in next.config.ts. Same cap as the smoke build.
           CINATRA_BUILD_CPUS: "1"
-        run: pnpm build
+          # The Turbopack build cache (cinatra#3771): "1" only when the restore
+          # step above answered that this job may keep one, and empty on every
+          # other job, whose build is then exactly what it was. A build that
+          # fails with it on runs once more from nothing with it off
+          # (design-build-cache.sh rebuild), and that build's result is this
+          # step's result; with it off, the build's own exit code stands.
+          CINATRA_TURBOPACK_BUILD_FS_CACHE: ${{ steps.build-cache.outputs.fs-cache }}
+        run: pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"
+
+      - name: Keep the design build cache for the next job (self-hosted only)
+        # Keeps what the build just wrote for the next job on this runner
+        # (cinatra#3771): only after a build that succeeded with the cache on.
+        # It moves .next/cache out of the checkout into the store; nothing after
+        # the build reads it (the server runs from .next/standalone), and none
+        # of the upload steps below can reach the store. Never fails the job.
+        if: ${{ steps.build-cache.outputs.fs-cache == '1' }}
+        run: bash scripts/ci/design-build-cache.sh save
 
       - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
         # The presented capability the seed endpoint requires
@@ -727,8 +731,11 @@ jobs:
         # supporting evidence, never the sole gate). E2E_REUSE_SERVER=1 →
         # the config disables its own webServer and reuses the standalone
         # server above. Wrapped in `timeout` (above the Playwright budget) so
-        # a hung run is killed, not left to the job cap; 1200s covers the
-        # added conformance project on the shared boot.
+        # a hung run is killed, not left to the job cap. 3600s covers the
+        # all-families run on the loaded pool: its 762 tests on one worker took
+        # 2084s when alone and were cut short at 2400s (exit 124, nothing
+        # failed) on every loaded run since 2026-09-25, so the budget follows
+        # the measured duration and stays inside the job cap above.
         #
         # `--plan` is `pnpm test:e2e:design` (which is this same selector with
         # `--run`) reading the PUBLISHED decision instead of taking its own:
@@ -738,7 +745,7 @@ jobs:
         env:
           E2E_REUSE_SERVER: "1"
         run: >-
-          timeout --kill-after=60 2400
+          timeout --kill-after=60 3600
           node scripts/ci/design-select.mjs --run --plan design-select.json
 
       - name: Dump standalone server log on failure
@@ -819,6 +826,7 @@ jobs:
   # including a selection that could not be taken at all.
   # -------------------------------------------------------------------------
   verdict:
+    permissions: {}
     name: design suite verdict
     needs: [select, pixel-diff]
     if: ${{ always() }}

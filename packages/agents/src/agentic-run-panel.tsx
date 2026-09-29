@@ -128,6 +128,12 @@ export type AgenticRunPanelProps = {
   // have the slug handy (e.g. chat surfaces) still get the Retry action,
   // which only needs runId; they just don't get Start new run.
   agentId?: string;
+  // THE LAUNCHER THE SUCCESSOR OPENS (cinatra#3693, cinatra#3786): the run's
+  // canonical base where it has one, and `/personal` for a user-anchored run,
+  // whose own address stays bare. "Start new run" opens that launcher, so the
+  // next run is stamped with the same vantage. Absent for an unanchored run
+  // and on the chat surfaces, which keep today's road.
+  launchBase?: string | null;
   // Agent package name (template slug) used to resolve selective overrides from
   // agentUIOverrideRegistry. Optional: when absent, override resolution is skipped
   // and DispatchRenderer is used.
@@ -470,6 +476,7 @@ export function AgenticRunPanel({
   initialMessages,
   agUiEnabled,
   agentId,
+  launchBase,
   agentPackageName,
   traceId,
   inputParams,
@@ -2650,7 +2657,7 @@ export function AgenticRunPanel({
             >
               {isRetrying ? "Retrying…" : "Retry"}
             </Button>
-            {agentId ? <StartNewRunButton agentId={agentId} /> : null}
+            {agentId ? <StartNewRunButton agentId={agentId} launchBase={launchBase} /> : null}
           </div>
         </div>
       )}
@@ -2715,6 +2722,7 @@ export function AgenticRunPanel({
         <RunCompletionCard
           runId={runId}
           agentId={completionAgentId}
+          launchBase={launchBase}
           outputHint="transcript"
           // The panel already decided this synchronously, from its own
           // `messages`, to stand the raw stream panels down. Handing the card

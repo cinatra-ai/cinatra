@@ -336,3 +336,121 @@ export function scoreSkillRecommendations(
 
   return scored.map((row, i) => ({ ...row, rank: i + 1 }));
 }
+
+// ---------------------------------------------------------------------------
+// RecommendationOrderingV1 (cinatra#2815 S3 part 4).
+//
+// In-run recommendation persistence turns an advisory ranking into a STORED
+// row, and a stored row outlives the process that ranked it. The moment a rank
+// is persisted it stops being an implementation detail of the scorer and
+// becomes a contract, so this module states that contract ONCE — the four
+// decisions the issue requires to be bound before the code, in one place a
+// reader can check against a persisted row:
+//
+//   AUTHORITATIVE ORDERED INPUT
+//     The ranked output of `scoreSkillRecommendations` over the ELIGIBLE,
+//     restricted candidate pool, read by `rank` ASCENDING (rank 1 = best).
+//     Not the candidate-generation order (which is skill-id ascending, an
+//     artefact of how candidates are drawn from the catalog) and not the raw
+//     score (which is a float and would make the boundary depend on how two
+//     equal scores happened to be produced).
+//
+//   DETERMINISTIC TIE-BREAK
+//     Score DESCENDING, then skillId ASCENDING in UTF-16 CODE-UNIT order.
+//     Byte-identical to the scorer's own final sort, and deliberately NOT
+//     `localeCompare`: a locale-aware compare lets the host's locale reorder
+//     ties on non-ASCII ids, so two hosts would persist two different
+//     boundaries for one ranking.
+//
+//   THE LITERAL orderingVersion VALUE
+//     "RecommendationOrderingV1", the name the issue and the pull request
+//     bound before implementation, spelled the same way here so the code and
+//     the binding cannot drift. It rides on every truncation record, so a row
+//     persisted under a future V2 is distinguishable on sight rather than by
+//     inference from its shape. The sibling contract in this slice states its
+//     own name the same way ("ContextAllocationTokenV1"), so a reader meets
+//     one convention across both.
+//
+//   TRUNCATION BEFORE OR AFTER ELIGIBILITY
+//     AFTER, and after the ORDERING as well. The pool is made eligible first
+//     (installed-catalog membership INTERSECTED with the caller's restriction),
+//     then EVERY eligible candidate is scored and ranked, and only then is the
+//     ranking cut to the cap. Truncating before eligibility would let an
+//     ineligible id consume a slot a deliverable skill should have had, and
+//     `candidatePoolCount` would count rows that could never have been
+//     recommended. Truncating before the RANKING is worse still: the cut would
+//     fall in skill-id order, so the best match in the pool could be removed
+//     before anything scored it. The cut therefore removes the TAIL of the
+//     ranking, which is the only removal a reader can reason about.
+//
+// TELEMETRY NEVER MARKS REMOVED CANDIDATES REJECTED. The metadata says how big
+// the eligible pool was and how many rows the cut removed — nothing about the
+// removed rows' merit. They were scored, and they ranked below the cut; that is
+// a different statement from a rejection, and the record does not make it.
+//
+// PURE: no IO, no `server-only`. The recommender and the persistence path both
+// decide with this code.
+// ---------------------------------------------------------------------------
+
+/** The bound literal. */
+export const RECOMMENDATION_ORDERING_VERSION = "RecommendationOrderingV1";
+
+/** The default cut applied to the eligible pool. Mirrors the recommender's
+ *  landed `DEFAULT_MAX_CANDIDATES`; stated here so the truncation record and
+ *  the cut cannot drift apart silently. */
+export const RECOMMENDATION_POOL_CAP = 50;
+
+/** The minimum a row needs to take part in the authoritative ordering. */
+export type RankAuthoritativeRow = {
+  skillId: string;
+  score: number;
+  rank: number;
+};
+
+/** The record persisted beside a recommendation decision. Exactly the three
+ *  fields the issue binds — a fourth would be a second source of truth. */
+export type RecommendationTruncationV1 = {
+  /** How many candidates were ELIGIBLE, before the cut. */
+  candidatePoolCount: number;
+  /** How many eligible candidates the cut removed. Never negative. */
+  truncatedCount: number;
+  /** Always `RECOMMENDATION_ORDERING_VERSION`. */
+  orderingVersion: typeof RECOMMENDATION_ORDERING_VERSION;
+};
+
+/**
+ * The authoritative order, applied to rows that already carry the scorer's
+ * rank. Rank ascending; where two rows claim the same rank the scorer's own
+ * tie-break decides, so the order is TOTAL whatever the caller hands over.
+ */
+export function orderRankAuthoritative<T extends RankAuthoritativeRow>(
+  rows: ReadonlyArray<T>,
+): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      b.score - a.score ||
+      (a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0),
+  );
+}
+
+/**
+ * The truncation record for one recommendation pass.
+ *
+ * `eligibleCount` is the pool AFTER eligibility and BEFORE the cut;
+ * `keptCount` is what survived it. A `keptCount` that exceeds the pool cannot
+ * happen through the recommender, and is clamped rather than trusted: a
+ * negative truncation would read as "rows appeared", which is never true.
+ */
+export function buildRecommendationTruncation(input: {
+  eligibleCount: number;
+  keptCount: number;
+}): RecommendationTruncationV1 {
+  const candidatePoolCount = Math.max(0, input.eligibleCount);
+  const kept = Math.max(0, input.keptCount);
+  return {
+    candidatePoolCount,
+    truncatedCount: Math.max(0, candidatePoolCount - kept),
+    orderingVersion: RECOMMENDATION_ORDERING_VERSION,
+  };
+}

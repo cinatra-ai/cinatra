@@ -34,6 +34,8 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `required-extensions-cover-host-imports.mjs` | the prod bootable DECLARATION vs the live code surface | packages | live-derived (no baseline) + the **declaration equality guard** |
 | `identity-coupling-gate.mjs` | IDENTITY surface — auth-route-guard public-route exemptions naming a concrete extension; host `src/` re-declaring an SDK-owned capability id literal | dangerous-class findings | **stateless** (no baseline; every finding is a hard fail) |
 | `vendor-token-core-gate.mjs` | VENDOR tokens in core (`src/` + `packages/`) — vendor-named file/route path segments and import specifiers, independent of any extension package lexeme | `file :: path :: token` / `file :: import :: specifier` occurrences | `vendor-token-core-gate.baseline.json` — **shrink-only residual floor** (cinatra#973, epic cinatra-ai/cinatra#978; see the dedicated section below) |
+| `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
+| `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -314,6 +316,193 @@ google-oauth glue, the twenty external-MCP proxy). The floor only shrinks:
 As the epic waves (#974–#977, #979) evict each cluster into its owning
 extension, the floor ratchets toward the sanctioned-surface set; the baseline
 file is the authoritative current count.
+
+## Application border gates — the shrink-only floors (cinatra#3821)
+
+**The rule.** The application offers the same roads to every extension. What
+an artifact holds is the work of the agent extension whose flow creates it. A
+connector gives an agent its connection and its tools, and it never creates an
+artifact. An artifact extension declares the type and draws it from its
+content. The application gains no function for one artifact type, one agent or
+one connector. The lexeme, identity and vendor gates above do not see that
+line; these two gates hold it.
+
+### What they refuse
+
+`application-border-gate.mjs` scans application code (`src/` and every
+`packages/*/src`; `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`)
+with the TypeScript compiler API and refuses a new occurrence of:
+
+1. **Class 1 (`types`)** — a string literal (or a template literal without
+   substitutions) whose text equals an object type id an extension claims, or
+   has the id shape `<namespace>:<local>` under a namespace a claim declares, in
+   any position — for example as the type of an artifact the application
+   itself creates. Key `file :: type :: id`, with its count.
+2. **Class 2 (`names`)** — a module whose path carries a word of the frozen
+   domain set (`appointment`, `blog`, `campaign`, `campaigns`, `cms`, `crm`,
+   `email`, `icp`, `mail`, `newsletter`, `outreach`, `playbook`, `podcast`,
+   `portfolio`, `prospecting`, `social`) as a whole sub-token of a directory or
+   file segment (split on non-alphanumerics and camelCase, as the vendor gate
+   splits). The segments read are those after `src/`; for a package, its
+   directory name plus those after `packages/<name>/src/`. Key
+   `file :: name :: token`, with the number of segments. The set is frozen and
+   reviewed, not derived from the package names of the locks: derived words
+   (`client`, `mcp`, `server`, `list`, ...) read mostly generic modules, and a
+   derived set would move with every lock change, so a pin advance could turn
+   `main` red with no code change. Vendor words stay the vendor gate's, so one
+   path segment is counted by one gate.
+3. **Class 3 (`ceilings`)** — growth of a module already on the class 1 or
+   class 2 floor. Each such module carries a ceiling: its count of top-level
+   value declarations (the names of top-level functions, classes and
+   variables, exported or not). A count above the ceiling is refused; a count
+   below it is a stale entry. A new top-level function that stores the
+   published words of a CMS page in `src/lib/artifacts/cms-content-snapshot-capture.ts`
+   is refused; a fix inside an existing declaration adds no name, so a listed
+   module stays maintainable while its surface cannot widen.
+
+`connector-artifact-road-gate.mjs` refuses a new **class 6 road**: from a
+module that faces connectors to a module that creates an artifact.
+
+- The connector-facing modules are `packages/extensions/src/connector-handler.ts`
+  and every capability the application publishes: a
+  `registerCapabilityProvider` call (or a call of a local wrapper that forwards
+  its first parameter to it) in a module under `src/` whose provider identity
+  is the application's own (`HOST_PROVIDER_PACKAGE`). Its capability id is
+  resolved from an inline literal, a same-module constant, a member of
+  `HOST_CONNECTOR_SERVICE_CAPABILITIES` or an imported SDK constant; an id the
+  gate cannot resolve, and a direct call whose options are neither an object
+  literal nor a constant bound to one, is a scanner error (exit 2), never a
+  pass. A
+  capability's roots are the modules that define its impl members, plus the
+  modules its declaration names as `entries`.
+- A creating module calls a builder of `src/lib/artifacts/artifact-writer-witness.ts`
+  (the witness every host writer that mints an artifact emits), also through a
+  module that re-exports it, or passes a claimed type id as the value of a
+  `typeHint` property.
+- The reach follows value-import edges only (static imports and re-exports,
+  side-effect imports, literal dynamic `import()`, `require()`; `import type`
+  and `export type` are skipped), resolved through `@/`, relative paths and
+  workspace packages by their `exports` or `src/<subpath>`. A package root
+  barrel (`packages/<name>/src/index.*`) is not traversed, and a road is at
+  most six edges long: through the barrels every root reaches the whole run
+  machinery, which is no truthful floor.
+- **The declaration** (the `capabilities` section of the baseline) is the one
+  place the gate reads whether a capability can create an artifact: every
+  published id with `createsArtifact` (true or false) and, where the impl
+  reaches its work through a `globalThis` slot, `entries` (the modules that
+  bind the slot). A published id missing from it, a declared id no longer
+  published, a `createsArtifact` that disagrees with the reach, and an impl
+  that reads a `globalThis` property with no `entries` each fail. The review
+  seam for staged CMS writes (`@cinatra-ai/host:cms-review`) reaches its
+  capture only through such a slot, which
+  `src/lib/register-cms-review-host-seam-runtime.ts` binds; no import edge
+  leads there from the registration, so the declaration names it.
+- When `packages/sdk-extensions/src/artifact-contract.ts` exports
+  `ARTIFACT_CREATING_ROADS`, its members under the application's provider
+  identity must equal the ids declared `createsArtifact: true`; while it is
+  absent the OK line says `SDK roads list absent` and the declaration governs.
+
+### The vocabulary is derived, never typed
+
+`scripts/audit/lib/claimed-type-vocabulary.mjs` reads the well-formed
+`cinatra.artifact.objectTypes[].type` claims of the extension packages the two
+locks name from the materialized tree (`extensions/<scope>/<name>`, with the
+produces gate's own `discoverExtensionDirs` and `readArtifactClaimIds`). It
+names no extension package. An absent tree, fewer packages than
+`cinatra.devExtensions` declares, a package whose manifest is unreadable or
+names no package, or a tree that claims no id throws a named
+error, which each gate maps to exit 2 (scanner error, never a vacuous pass).
+The namespaces of the claims matter as much as the ids: five claimed
+namespaces (the email artifacts pack's `@cinatra-ai/email` among them) are no
+package name, so the instance-coupling ban cannot see them.
+
+### Count once beside the display boundary gate
+
+`artifact-ui-boundary-gate.mjs` (G1) reads a type id only in a `.tsx` module
+and only in a keying position; class 1 reads every other position of every
+module. Class 1 imports G1's own `classifyIdentity` and `keyingKindOf` and
+skips exactly a literal G1 classifies as an object type in a keying position,
+so the partition is G1's definition and cannot drift from it. Nothing on G1's
+floor enters this floor, and a literal G1 counts is still refused by G1.
+
+### Exemptions, each with its reason
+
+| Exemption | Classes | Why |
+| --- | --- | --- |
+| the generator-emitted files (`PERMANENT_EXEMPT_FILES`, an explicit list) | all | generator output from the manifests, byte-pinned by `generate-extension-manifest.mjs --check`; a hand-added file under `src/lib/generated/` is still counted |
+| tests and specs, `__tests__/`, `__fixtures__/`, `__mocks__/` (the test doubles), `test/` and `tests/`, stories, `.d.ts` declarations | all | the surfaces that police the boundary or declare types only |
+| documents (`*.md`) | all | they document the boundary |
+| the owner-ruled `DATA_CONTRACT_ID_ALLOWLIST` ids | class 1 | the one place owner rulings on such ids live; reported apart exactly as the instance-coupling ban reports them, never a second exception list |
+| `SANCTIONED_MODULES`: `src/lib/org-invitation-email.ts` | class 2 | the platform's own member-invitation mail, written for no type, agent or connector; the set grows only by a reviewed change to the gate |
+
+### How the floors move
+
+Both floors only shrink, with the mechanics of the vendor gate:
+
+- a new key or a grown count fails; a key whose count fell is **stale** and
+  fails until `--write-baseline` ratchets the floor down;
+- `--write-baseline` refuses to write a grown floor;
+- the base guards (`APPLICATION_BORDER_BASE`, `CONNECTOR_ARTIFACT_ROAD_BASE`)
+  fail closed on a flag-like or unresolvable reference and refuse a committed
+  floor that grew against the base (no constraint when the base holds no
+  floor);
+- one growth of the class 1 floor is admitted, by `--write-baseline` run with
+  `APPLICATION_BORDER_BASE` set and by the base guard: a new class 1 key (and
+  the new ceiling its module then needs) whose file is byte-identical at the
+  base reference — the code did not change, only the vocabulary did (an
+  extension newly claiming an id the application already spells); a key
+  already on the floor never grows this way, and a count that is not a
+  non-negative integer fails;
+- every entry of the application border floor names its `owner`, the
+  extension that will own the code, and every road names `removedBy`, the item
+  that removes it; `--write-baseline` writes a new entry as `UNASSIGNED`, and
+  the check fails on an `UNASSIGNED` or empty value.
+
+At introduction the application border floor holds 28 class 1 entries in 8
+files, 85 class 2 entries in 84 files and 89 ceilings; the road floor holds
+four roads (`@cinatra-ai/host:cms-review` to the CMS snapshot capture and to
+the preview capture store, `@cinatra-ai/host:blog-routing` to the artifact
+creation module, `@cinatra-ai/host:email-routing` to its own registering
+module), and the connector handler reaches no creating module. The items that
+empty the floors are filed apart. The baseline files are the authoritative
+current count.
+
+**Enforcement.** The tests of record in
+`scripts/audit/__tests__/application-border-gate.test.mjs` and
+`scripts/audit/__tests__/connector-artifact-road-gate.test.mjs` run each gate's
+own scan and diff over the whole tree in the root suite (`pnpm test:root`), so
+every pull request of the application runs them beside the sibling gates; they
+fail, never skip, when the extension tree is not cloned back. A change that
+adds a violation and adds its entry to the committed floor in the same pull
+request stays green until the base-branch guard of the floors runs in CI,
+which is a later change; the floor file's diff shows such an entry to the
+reviewer.
+
+### What they cannot see
+
+- a type id assembled at run time or passed in a variable;
+- an id outside the vocabulary, such as one the application registers under
+  its own namespace (`@cinatra-ai/objects:cms-content-snapshot`);
+- a module whose path holds no word of the frozen set;
+- growth inside an existing declaration, a nested function, a new branch, an
+  interface or a type alias;
+- a road through a package root barrel, a registry or a slot that is not
+  declared (a slot is looked for in the registering module only: in the impl
+  it registers and the same-module functions that impl names), or a road
+  longer than six edges;
+- an artifact-typed row written through the generic objects write with a type
+  chosen at run time (the `@cinatra-ai/host:objects-integration` capability
+  hands a connector the objects provider; a run-time refusal is outside these
+  gates);
+- an application MCP tool a connector calls.
+
+The connector's own side, classes 4 and 5, belongs to the conformance checker
+(`scripts/extensions/lib/conformance-rules.mjs`), not to these gates: its rules
+for a package of kind connector refuse a declared produced type or a claimed
+object type (class 4), and connector code that calls a road that creates an
+artifact (class 5). Those rules are the sibling change of cinatra#3821 and run
+in each connector's repository and over the materialized tree on the
+application's pull requests.
 
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 

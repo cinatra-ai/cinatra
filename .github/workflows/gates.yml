@@ -287,7 +287,12 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.pnpm_suites == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    # Budget as for every job on the self-hosted classes (the contract in
+    # scripts/ci/__tests__/self-hosted-job-timeout-budgets.test.mjs): 28 = the
+    # measured worst setup phase of a loaded pool (20) + this job's own phase
+    # (3, an upper bound: its longest whole run on the hosted runners, 2.3
+    # minutes, rounded up) + the 5-minute margin.
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -531,48 +536,3 @@ jobs:
           fi
           export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
           node scripts/ci/design-anchor-resolution.mjs --github-annotations
-
-  # Design RECORD GRAMMAR (cinatra#3144 G3): every Fix-leg / graded-record
-  # section of this pull request's body must name the pin it was graded
-  # against. NO EXTRA CREDENTIAL — the body is already in the workflow event
-  # payload at GITHUB_EVENT_PATH, the same door the skills-drift
-  # acknowledgement line is read through, so this job mints nothing. Landed
-  # WARN-FIRST beside its two siblings: its context is not required until a
-  # separate pull request adds it. See scripts/ci/design-record-grammar.mjs.
-  design-record-grammar:
-    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Full history: the trigger rule diffs the touched paths against
-          # the PR base, same as design-pin-drift.
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-
-      - name: Design Record Grammar
-        run: |
-          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
-            base="origin/${{ github.event.pull_request.base.ref }}"
-          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
-            # A merge group's baseline is the event's own base_sha, not the
-            # branch ref: origin/main can move under a queued group, which
-            # would make the touched-path set over- or under-report.
-            base="${{ github.event.merge_group.base_sha }}"
-          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            base="${{ github.event.before }}"
-          else
-            base="origin/main"
-          fi
-          # An unresolvable base means the touched-path set is meaningless, so
-          # it is cleared and every pin is treated as touched — the fail-closed
-          # direction its two siblings above already take.
-          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
-            echo "::notice::diff base '${base}' did not resolve — treating every pin as touched (fail-closed)"
-            base=""
-          fi
-          export DESIGN_PIN_DRIFT_DIFF_BASE="$base"
-          node scripts/ci/design-record-grammar.mjs --github-annotations

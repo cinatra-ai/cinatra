@@ -4788,9 +4788,11 @@ const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
 // connector-sharing-locked (a declared ceiling, or a recommended scope).
 //
 // Each driver asserts against the conformance id the PRODUCT component emits
-// (`ConnectorSharingPanels`, and the `PermissionsForm` it mounts beneath each
-// row) — the harness `data-surface-id` wrapper only selects WHICH mount, so a
-// driver can never pass against harness-only chrome. Field values are the
+// (`ConnectorSharingPanels`, and the shared `PermissionsPanel` it draws beneath
+// each row). The harness `data-surface-id` wrapper only selects WHICH mount,
+// so a driver can never pass against harness-only chrome. Since cinatra#3385
+// the fixture states the panel's DATA and its bindings, exactly as a connector
+// pack does, so these drivers grade the parts the SDK draws. Field values are the
 // anti-lookalike seeds of connector-sharing-seed.ts, so a wrong-source read
 // reds.
 // ---------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { designPartition } from "@/lib/test-support/design-partition";
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
@@ -247,6 +248,13 @@ async function installTargetRow(store: Store, target: TargetRow, runId: string):
   }
 }
 
+/** Capability-protected identity probe for an externally booted partition. */
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  const refusal = refuseUncapableCaller(req);
+  if (refusal) return refusal;
+  return NextResponse.json({ partition: designPartition() ?? null });
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const refusal = refuseUncapableCaller(req);
   if (refusal) return refusal;
@@ -255,6 +263,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "body must be { runId } matching " + String(CONFORMANCE_RUN_ID_RE) }, { status: 400 });
   }
 
+  const partition = designPartition();
+  if (partition && partition.runId !== runId) {
+    return NextResponse.json({ error: "run namespace does not match this isolated partition" }, { status: 400 });
+  }
   const store = await loadStore();
   const targets = targetRows(runId);
   const targetById = new Map(targets.map((t) => [t.id, t]));
@@ -331,6 +343,10 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
   const runId = await parseRunId(req);
   if (!runId) {
     return NextResponse.json({ error: "body must be { runId } matching " + String(CONFORMANCE_RUN_ID_RE) }, { status: 400 });
+  }
+  const partition = designPartition();
+  if (partition && partition.runId !== runId) {
+    return NextResponse.json({ error: "run namespace does not match this isolated partition" }, { status: 400 });
   }
   const store = await loadStore();
   const existing = await namespaceRows(store, runId);
