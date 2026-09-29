@@ -258,7 +258,10 @@ another path in the address):
 - no start signal within `PRESS_START_BOUND_MS`: no navigation started, and the
   page stayed where it was;
 - a start signal: the navigation must land within `PRESS_SETTLE_BOUND_MS`, on a
-  new document that has loaded, or in place on another path.
+  new document that has loaded, or in place on another path. A browser holds a
+  reading of the page while a navigation is in flight; the step waits for one
+  no longer than the bound leaves, so a navigation that lands late is refused
+  at the bound, with the page still on the document it started from.
 
 A press whose navigation starts only after the start bound (a handler that waits
 for a slow answer first) reads as one that stayed; give such a control a longer
@@ -293,7 +296,10 @@ Selects `entry`, by its visible text, in the one shown picker named `picker`:
   the radio with that label is checked;
 - a listbox: the option is pressed;
 - a combobox that is not a text field: it is pressed first, to open the list it
-  controls (`aria-controls`), and the option is pressed in that list.
+  controls (`aria-controls`), and the option is pressed in that list;
+- a search field, a combobox that is a text input (as the entity search draws
+  one): the entry's text is typed into it, and the option is pressed in the
+  list that opens.
 
 When no picker carries the name, a combobox with no accessible name, as the
 shared select draws one, is found by the text a person reads for it, tried in
@@ -301,11 +307,26 @@ this order: the placeholder it shows (marked `data-placeholder`), the value it
 shows, or the text of a label element before it in its form group (the nearest
 element that holds one, a label that names no other control, with no other
 field between the two); when more than one combobox matches on the first of
-these that finds one, it refuses (`ambiguous`).
+these that finds one, it refuses (`ambiguous`). A search field with no
+accessible name is found the same way, by its placeholder while it is empty or
+by the text it holds.
 
 Once it has opened a combobox, it reads the combobox again by its mark, never by
 its name: while the list is open, the shared select hides everything outside the
 list from assistive technology, the combobox included.
+
+A search field lists its entries once text is typed into it. The step types the
+entry's text, reads the field again by its mark (the text hides its placeholder
+and changes its value), and waits within the reflect bound for an option of the
+entry's name. A search list draws each entry as a row, the entry's name first
+and then what tells it apart (a detail line, a status), so an option is named
+by its first text. The step presses the one option of the name, refuses several
+(`ambiguous`), and refuses none once the bound has run out (`no-entry`), naming
+the entries the list showed. It reads the choice back from the page, never from
+the list, whose selected row is only the one a key press would choose: the
+field shows the entry once its list has closed, or the page draws the entry (a
+row, a chip) more often than before the press. The field or the page showing
+another entry of the list instead is refused (`other-entry`).
 
 Then it waits until the page reflects the selection: the entry reads as selected
 (the selected option of a select, a checked radio, `aria-selected` or
@@ -316,11 +337,12 @@ alert, a toast) names the entry that did not name it before. The step answers
 
 | Bound | Default | Covers |
 | --- | --- | --- |
-| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, and from opening a combobox to its list |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, and from typing into a search field to its entry in the list |
 
 Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
 shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
-(nothing was selected), `driver-failure` and `not-reflected`.
+(nothing was selected), `driver-failure`, `other-entry` (a search field's page
+took another entry than the one pressed) and `not-reflected`.
 
 ## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
 
@@ -397,10 +419,14 @@ filled, naming the labels it has. One reading of the form both lists its labels
 and resolves the field a label names, and a label names a field when both read
 the same without their white space ("Idea (optional)" and "Idea(optional)"
 alike); a label that names two fields is refused as `ambiguous`, naming both,
-before anything is filled. With `submit`, it then presses the form's
-control of that name. A field still empty after the press is a required field
-left empty when the page marks it (`aria-invalid="true"`) or shows an error for
-it, or when it declares itself required; the refusal quotes the page's own error
+before anything is filled. With `submit`, it then presses the form's control of
+that name, which the same reading resolves by the same match, so a name a
+refusal lists is one the step takes; a name that two controls carry is refused
+as `ambiguous`, naming both, before anything is pressed, and a control hidden
+from assistive technology is neither listed nor pressed. A field still empty
+after the press is a required field left empty when the page marks it
+(`aria-invalid="true"`) or shows an error for it, or when it declares itself
+required; the refusal quotes the page's own error
 text: what its `aria-errormessage` names, else an error its `aria-describedby`
 names, else an error in the field's own box (`FIELD_ERROR_SELECTOR`). No value is
 ever written to a line. It answers `{ filled, submitted, path }`.
@@ -412,8 +438,9 @@ ever written to a line. It answers `{ filled, submitted, path }`.
 | `FORM_ERROR_BOUND_MS` | 5_000 | from the press to the page's error for a field left empty |
 | `FORM_POLL_MS` | 100 | how often the form is read |
 
-Refusal kinds: `input`, `unknown-label` and `ambiguous` (nothing was filled),
-`driver-failure`, `no-submit` (naming the form's controls) and `required-empty`.
+Refusal kinds: `input`, `unknown-label` and `ambiguous` (nothing was filled; for
+a name two controls carry, nothing was pressed), `driver-failure`, `no-submit`
+(naming the form's controls) and `required-empty`.
 
 ## `switchTheme(page, { to, record, island?, frameSrcPath?, bounds? })`
 

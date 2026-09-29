@@ -213,6 +213,18 @@ const TIMELINE_RUNNER = `<script>
       picker.setAttribute("aria-expanded", "false");
     });
   });
+  // A search field's own handlers (see PICK_SEARCH_PAGE): the page double runs the same two functions.
+  var typeInSearchField = ${typeInSearchField};
+  var pressSearchEntry = ${pressSearchEntry};
+  document.addEventListener("input", function (event) {
+    var field = event.target;
+    if (!field || !field.hasAttribute || !field.hasAttribute("data-fixture-searches")) return;
+    typeInSearchField(field, function (run, ms) { setTimeout(run, ms); });
+  });
+  document.addEventListener("click", function (event) {
+    var option = event.target && event.target.closest ? event.target.closest("[data-fixture-picks]") : null;
+    if (option) pressSearchEntry(option);
+  });
   document.querySelectorAll("[data-fixture-in-place]").forEach(function (link) {
     link.addEventListener("click", function (event) {
       event.preventDefault();
@@ -515,6 +527,213 @@ export const PICK_HIDING_PAGE = [
 ].join("");
 
 /**
+ * The search fields of PICK_SEARCH_PAGE, as the entity search draws one: a text
+ * input with the role combobox, whose list opens once text is typed into it.
+ * `searchingMs` and `answerMs` are when the list shows its "Searching…" row and
+ * its answer after the typing. Each field names its list, the entries a search
+ * finds (the entry's name first, then what tells it apart), and what the page
+ * does with a pressed entry (`takes`):
+ *   - `row`: the field is emptied and a row naming the entry joins `rows`, as
+ *     the agent's Skills tab draws a chosen skill;
+ *   - `chip`: a chip naming the entry takes the field's place, as a user picker
+ *     draws the chosen user;
+ *   - `field`: the field shows the entry;
+ *   - `another-row` and `another-field`: the page takes the entry listed after
+ *     the pressed one instead, into a row or into the field;
+ *   - `nothing`: the field is emptied and nothing is drawn, as a page at its
+ *     limit takes no further entry.
+ * A field with `opens: false` opens no list.
+ */
+export const SEARCH_FIELDS = Object.freeze({
+  searchingMs: 100,
+  answerMs: 250,
+  fields: {
+    "search-skills": {
+      list: "search-skills-list",
+      takes: "row",
+      rows: "search-skills-rows",
+      entries: [
+        ["Web search pro", "Searches more sources · by Acme", "Active"],
+        ["Web search", "Searches the web · by Acme", "Active"],
+        ["Web scraper", "Reads one page · by Acme", "Active"],
+        ["Summary", "Sums up a text · by Acme", "Active"],
+        ["Summary", "Sums up a text · by Initech", "Locked"],
+      ],
+    },
+    "search-people": {
+      list: "search-people-list",
+      takes: "chip",
+      entries: [
+        ["Ada Lovelace", "Engineering"],
+        ["Alan Turing", "Research"],
+      ],
+    },
+    "search-reviewers": {
+      list: "search-reviewers-list",
+      takes: "field",
+      entries: [
+        ["Grace Hopper", "Platform"],
+        ["Grace Kelly", "Design"],
+      ],
+    },
+    "search-author": {
+      list: "search-author-list",
+      takes: "another-row",
+      rows: "search-author-rows",
+      entries: [
+        ["Dana", "Design"],
+        ["Dana Scully", "Research"],
+      ],
+    },
+    "search-assignee": {
+      list: "search-assignee-list",
+      takes: "another-field",
+      entries: [
+        ["Dana", "Design"],
+        ["Dana Scully", "Research"],
+      ],
+    },
+    "search-editor": { list: "search-editor-list", takes: "nothing", entries: [["Eve", "Support"]] },
+    "search-viewer": { list: "search-viewer-list", opens: false, entries: [] },
+  },
+});
+
+// The two handlers of a search field. They run IN THE PAGE: the page's inline
+// script runs them in a browser, and the page double runs the same two on its
+// own document, so nothing of this module may be used inside them.
+
+/**
+ * Text typed into a search field: the list it controls opens at once, with its
+ * empty state or, when it was open, with the rows it showed; then its
+ * "Searching…" row, a disabled option; then its answer, the entries whose name
+ * holds the typed text, each a row with the entry's name first. The first row
+ * is the active one (`aria-selected`), the one a key press would choose, not a
+ * chosen one. A later typing replaces what an earlier one had still to show.
+ * `later(run, ms)` runs `run` after `ms`.
+ */
+export function typeInSearchField(field, later) {
+  const document = field.ownerDocument;
+  const declared = JSON.parse(document.getElementById("fixture-searches").textContent);
+  const own = declared.fields[field.id];
+  if (!own || own.opens === false) return;
+  const list = document.getElementById(own.list);
+  const turn = String(Number(field.getAttribute("data-fixture-turn") || "0") + 1);
+  field.setAttribute("data-fixture-turn", turn);
+  const current = () => field.getAttribute("data-fixture-turn") === turn;
+  const empty = () => {
+    const node = document.createElement("div");
+    node.setAttribute("role", "presentation");
+    node.textContent = "No matches.";
+    return node;
+  };
+  const row = (parts, active) => {
+    const option = document.createElement("div");
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", active ? "true" : "false");
+    option.setAttribute("data-fixture-picks", "");
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      option.appendChild(span);
+    }
+    return option;
+  };
+  if (list.hasAttribute("hidden")) {
+    list.replaceChildren(empty());
+    list.removeAttribute("hidden");
+  }
+  field.setAttribute("aria-expanded", "true");
+  field.setAttribute("aria-controls", own.list);
+  const typed = field.value.trim().toLowerCase();
+  later(() => {
+    if (!current()) return;
+    const searching = document.createElement("div");
+    searching.setAttribute("role", "option");
+    searching.setAttribute("aria-disabled", "true");
+    searching.setAttribute("aria-selected", "false");
+    searching.textContent = "Searching…";
+    list.replaceChildren(searching);
+  }, declared.searchingMs);
+  later(() => {
+    if (!current()) return;
+    const found = own.entries.filter((entry) => entry[0].toLowerCase().includes(typed));
+    list.replaceChildren(...(found.length > 0 ? found.map((entry, at) => row(entry, at === 0)) : [empty()]));
+  }, declared.answerMs);
+}
+
+/**
+ * An entry pressed in a search field's list: it becomes the active row, as the
+ * pointer over it makes it, and it is taken: the list closes (keeping its rows
+ * until it opens again), the field no longer controls it, and the page does with
+ * the entry what the field declares (see SEARCH_FIELDS).
+ */
+export function pressSearchEntry(option) {
+  const document = option.ownerDocument;
+  const list = option.closest("[role='listbox']");
+  if (!list) return;
+  const declared = JSON.parse(document.getElementById("fixture-searches").textContent);
+  const id = Object.keys(declared.fields).find((key) => declared.fields[key].list === list.id);
+  const own = id ? declared.fields[id] : null;
+  const field = id ? document.getElementById(id) : null;
+  if (!own || !field) return;
+  const rows = Array.from(list.querySelectorAll("[data-fixture-picks]"));
+  for (const one of rows) one.setAttribute("aria-selected", one === option ? "true" : "false");
+  list.setAttribute("hidden", "");
+  field.setAttribute("data-fixture-turn", String(Number(field.getAttribute("data-fixture-turn") || "0") + 1));
+  field.setAttribute("aria-expanded", "false");
+  field.removeAttribute("aria-controls");
+  const at = rows.indexOf(option);
+  const partsOf = (one) => Array.from(one.children, (span) => span.textContent);
+  const another = own.takes === "another-row" || own.takes === "another-field";
+  const taken = partsOf(another ? rows[at + 1] || rows[at - 1] || option : option);
+  const drawn = (tag, parts) => {
+    const node = document.createElement(tag);
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      node.appendChild(span);
+    }
+    return node;
+  };
+  if (own.takes === "row" || own.takes === "another-row") {
+    field.value = "";
+    document.getElementById(own.rows).appendChild(drawn("li", taken));
+  } else if (own.takes === "chip") {
+    const chip = drawn("span", taken.slice(0, 2));
+    chip.setAttribute("data-fixture-chip", "");
+    field.replaceWith(chip);
+  } else if (own.takes === "field" || own.takes === "another-field") {
+    field.value = taken[0];
+  } else {
+    field.value = "";
+  }
+}
+
+const searchField = (id, placeholder, named = "") =>
+  `<input id="${id}" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-autocomplete="list" placeholder="${placeholder}"${named} data-fixture-searches>` +
+  `<div role="listbox" id="${id}-list" hidden></div>`;
+
+/**
+ * Search fields, as the entity search draws them (see SEARCH_FIELDS): one named
+ * by its label, whose chosen entries join a list of rows below it; one with no
+ * accessible name that shows its placeholder, and one with no accessible name
+ * after a label element in its form group; and four named by `aria-label` whose
+ * page takes another entry, into a row or into the field, takes nothing, or
+ * opens no list.
+ */
+export const PICK_SEARCH_PAGE = [
+  `<label for="search-skills">Skills</label> ${searchField("search-skills", "Search installed skills…")}`,
+  '<ul id="search-skills-rows" aria-label="Chosen skills"></ul>',
+  `<div id="search-people-slot">${searchField("search-people", "Search people…")}</div>`,
+  `<div role="group"><label>Reviewer</label> ${searchField("search-reviewers", "Search reviewers…")}</div>`,
+  `${searchField("search-author", "Search authors…", ' aria-label="Author"')}<ul id="search-author-rows" aria-label="Authors"></ul>`,
+  searchField("search-assignee", "Search assignees…", ' aria-label="Assignee"'),
+  searchField("search-editor", "Search editors…", ' aria-label="Editor"'),
+  searchField("search-viewer", "Search viewers…", ' aria-label="Viewer"'),
+  `<script type="application/json" id="fixture-searches">${JSON.stringify(SEARCH_FIELDS)}</script>`,
+].join("");
+
+/**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
  * `secure`, every page is also served over HTTP/2 at `secureOrigin`.
@@ -628,6 +847,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/pick/start": PICK_PAGE,
         "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/pick/hiding": PICK_HIDING_PAGE,
+        "/pick/search": PICK_SEARCH_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,
         "/conversation/boxes": CONVERSATION_PAGES.boxes,

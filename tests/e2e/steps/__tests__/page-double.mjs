@@ -27,12 +27,16 @@
 //     shows the page again (see hideOthers);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - text filled into a search field, and a press on an entry of its list, run
+//     the page's own handlers for them: the same two functions the page's inline
+//     script runs in a browser (see typeInSearchField in fixture-app.mjs);
 //   - a page has one frame, its main frame, and every request is made in it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
 //     and its argument and its answer cross as JSON;
-//   - a reading taken while a navigation is in flight throws, as a destroyed
-//     execution context does in a browser;
+//   - a reading sent while a navigation is in flight is held until the
+//     navigation has committed, and then throws, as a browser holds it and then
+//     reports its execution context destroyed;
 //   - a submit event runs the app's handler on the form first and the window's
 //     listeners after it, and, when nobody cancelled it, the form submits
 //     natively: its fields leave in a query string or a form body;
@@ -47,7 +51,7 @@ import { connect, constants } from "node:http2";
 
 import { JSDOM } from "jsdom";
 
-import { EMAIL_ROUTE, USERNAME_ROUTE } from "./fixture-app.mjs";
+import { EMAIL_ROUTE, USERNAME_ROUTE, pressSearchEntry, typeInSearchField } from "./fixture-app.mjs";
 
 export class TimeoutError extends Error {
   constructor(message) {
@@ -356,7 +360,12 @@ export class PageDouble {
     // A page whose main thread is busy answers once it is free again.
     const busy = (this.#busyUntil.get(this.#dom) ?? 0) - Date.now();
     if (busy > 0) await pause(busy);
-    if (this.#navigating > 0 || this.#closed) throw new Error(DESTROYED);
+    // A reading sent while a navigation is in flight is held until the new document has committed, and the document it was sent to is gone then.
+    if (this.#navigating > 0) {
+      while (this.#navigating > 0 && !this.#closed) await pause(10);
+      throw new Error(DESTROYED);
+    }
+    if (this.#closed) throw new Error(DESTROYED);
     const inPage = this.#dom.window.eval(`(${fn.toString()})`);
     return viaJson(await inPage(viaJson(arg)));
   }
@@ -385,6 +394,7 @@ export class PageDouble {
       {
         document: () => this.#dom.window.document,
         press: (element, modifiers) => this.#press(element, modifiers),
+        typed: (element) => this.#typed(element),
       },
       selector,
       {},
@@ -520,7 +530,24 @@ export class PageDouble {
     form.setAttribute("novalidate", "");
   }
 
+  /** Text filled into a field: the page's handler for a search field opens its list and answers the search. */
+  #typed(element) {
+    if (!element.hasAttribute("data-fixture-searches")) return;
+    const document = element.ownerDocument;
+    typeInSearchField(element, (run, ms) =>
+      this.#later(() => {
+        if (this.#dom.window.document === document) run();
+      }, ms),
+    );
+  }
+
   #press(element, modifiers) {
+    // The page's handler takes an entry of a search field's list.
+    const entry = element.closest("[data-fixture-picks]");
+    if (entry) {
+      pressSearchEntry(entry);
+      return;
+    }
     // The page's handler flips the checked state of a control it draws itself.
     if (element.hasAttribute("data-fixture-toggles")) {
       const on = element.getAttribute("aria-checked") !== "true";
@@ -575,7 +602,10 @@ export class PageDouble {
       const window = element.ownerDocument.defaultView;
       const event = new window.Event("submit", { bubbles: true, cancelable: true });
       form.dispatchEvent(event);
-      if (!event.defaultPrevented) this.#nativeSubmit(form);
+      // A form the page declares a handler for is taken by that handler, as the page's script takes it in a browser.
+      const handlers = this.#declared(element.ownerDocument).filter((op) => op.submit && form.matches(op.submit));
+      for (const op of handlers) this.#playSubmit(form, op);
+      if (handlers.length === 0 && !event.defaultPrevented) this.#nativeSubmit(form);
     }
   }
 
@@ -776,11 +806,14 @@ export class PageDouble {
   //     declared `press` behaviour), then the browser's default: a file input
   //     opens a file chooser, a submit button sends its form (to the form's
   //     declared `submit` behaviour, or natively by the rules above), and a
-  //     link follows the rules above;
+  //     link follows the rules above; a submit button pressed by a selector
+  //     (`locator`) sends its form the same way;
   //   - a file chooser reaches every `waitForEvent("filechooser")` pending when
   //     it opens, and one nobody waits for is dropped, as a headless browser
   //     drops it; the files handed to it land on its input, which reports
-  //     `input` and `change`;
+  //     `input` and `change` only when they differ from the files it holds
+  //     already (a browser compares them by their source, so the same file
+  //     handed over twice reports nothing the second time);
   //   - a fill sets the value and reports `input` and `change`;
   //   - a frame's document is loaded from the app the first time it is read and
   //     again once its address has changed, and that load is not announced: no
@@ -791,6 +824,8 @@ export class PageDouble {
 
   #chooserWaiters = [];
   #frameDocuments = new WeakMap();
+  /** What each file input holds: the source of each of its files. */
+  #heldFiles = new WeakMap();
 
   getByRole(role, { name, exact = false } = {}) {
     return this.#named(`getByRole('${role}')`, (document) =>
@@ -943,13 +978,7 @@ export class PageDouble {
     }
     const form = element.form;
     if (form && element.localName === "button" && (type || "submit") === "submit") {
-      const handlers = declared.filter((op) => op.submit && form.matches(op.submit));
-      if (handlers.length === 0) {
-        this.#press(element, []);
-        return;
-      }
-      form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
-      for (const op of handlers) this.#playSubmit(form, op);
+      this.#press(element, []);
       return;
     }
     const link = element.closest("a[href]");
@@ -1008,12 +1037,19 @@ export class PageDouble {
     }
   }
 
-  /** Files handed to a chooser: read, set on its input, reported, and handed to the page's handler. */
+  /**
+   * Files handed to a chooser: read, set on its input, and, when they differ from
+   * the files the input held, reported and handed to the page's handler. A file
+   * read from a path has that path as its source; one handed over as a payload
+   * has a source of its own.
+   */
   async #setFiles(input, files) {
-    const [{ readFile }, { basename }] = await Promise.all([import("node:fs/promises"), import("node:path")]);
+    const [{ readFile }, { basename, resolve }] = await Promise.all([import("node:fs/promises"), import("node:path")]);
     const chosen = await Promise.all(
       (Array.isArray(files) ? files : [files]).map(async (file) =>
-        typeof file === "string" ? { name: basename(file), mimeType: "application/octet-stream", buffer: await readFile(file) } : file,
+        typeof file === "string"
+          ? { name: basename(file), mimeType: "application/octet-stream", buffer: await readFile(file), source: resolve(file) }
+          : { ...file, source: Symbol("payload") },
       ),
     );
     if (!input.isConnected || this.#closed) throw new Error("Element is not attached to the DOM");
@@ -1022,15 +1058,22 @@ export class PageDouble {
     const list = chosen.map((file) => new window.File([file.buffer], file.name, { type: file.mimeType }));
     const fileList = Object.assign(Object.fromEntries(list.map((file, at) => [at, file])), { length: list.length, item: (at) => list[at] ?? null });
     Object.defineProperty(input, "files", { configurable: true, get: () => fileList });
+    const held = this.#heldFiles.get(input) ?? [];
+    this.#heldFiles.set(input, chosen.map((file) => file.source));
+    if (held.length === chosen.length && chosen.every((file, at) => file.source === held[at])) return;
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     input.dispatchEvent(new window.Event("change", { bubbles: true }));
     for (const op of this.#declared(document)) {
-      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen);
+      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen, input);
     }
   }
 
-  #playChosen(document, op, chosen) {
+  #playChosen(document, op, chosen, input) {
     const dom = this.#dom;
+    // The page's handler takes the files and empties its input at once, as the library's own handler does.
+    const none = { length: 0, item: () => null };
+    Object.defineProperty(input, "files", { configurable: true, get: () => none });
+    this.#heldFiles.delete(input);
     for (const file of chosen) {
       this.#send("POST", new URL(op.upload, this.#href).href, file.buffer, false).then(
         (sent) =>
@@ -1155,6 +1198,7 @@ class LocatorDouble {
     const window = element.ownerDocument.defaultView;
     element.dispatchEvent(new window.Event("input", { bubbles: true }));
     element.dispatchEvent(new window.Event("change", { bubbles: true }));
+    this.#page.typed(element);
   }
 
   async click({ timeout = 30_000, modifiers = [] } = {}) {

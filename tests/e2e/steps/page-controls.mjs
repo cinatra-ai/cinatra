@@ -95,16 +95,22 @@ export const describeMatches = (matches) => matches.map((match, index) => `${ind
  *     no longer holds it);
  *   - `card`: the shown cards and those named `card`, and in the one card, its
  *     buttons and links and those named `control`;
- *   - `picker`: the shown pickers (a select, a combobox, a listbox, a radio
- *     group) and those named `picker`, and in the one picker, its entries and
- *     those whose text is `entry`; a combobox's entries are those of the list it
- *     controls, once that list is shown. When no picker is named `picker`, a
- *     combobox with no accessible name is found by the text that stands in for
- *     its name, road by road (`by`): the placeholder it shows, the value it
- *     shows, or the label element before it in its form group. With `marked`,
- *     the picker is the one that carries the mark, by no name (`by` is `mark`);
+ *   - `picker`: the shown pickers (a select, a combobox, a search field, a
+ *     listbox, a radio group) and those named `picker`, and in the one picker,
+ *     its entries and those whose text is `entry`; a combobox's entries, and a
+ *     search field's, are those of the list it controls, once that list is
+ *     shown, and a search list names each by its row's first text. When no
+ *     picker is named `picker`, a combobox or a search field with no accessible
+ *     name is found by the text that stands in for its name, road by road
+ *     (`by`): the placeholder it shows, the value it shows, or the label element
+ *     before it in its form group. With `marked`, the picker is the one that
+ *     carries the mark, by no name (`by` is `mark`). For a search field whose
+ *     list is shown, `drawn` counts the texts the page draws for each entry of
+ *     the list, for the reading after the choice;
  *   - `reflected`: whether the marked entry reads as selected, and the text of
- *     a live region that names `entry` and was not there before (`before`);
+ *     a live region that names `entry` and was not there before (`before`); for
+ *     a search field, whether the field (its list closed) or a text the page
+ *     draws beyond `drawn` shows `entry`, or another entry of the list instead;
  *   - `composer`: the shown text boxes and those named `composer`, and the shown
  *     buttons of that same name, the composer's send control. A text box's
  *     placeholder is never its name.
@@ -270,6 +276,43 @@ export function readControls(query) {
     const controls = controlsIn(root, [query.role]);
     return { scope, controls, matches: controls.filter((element) => nameOf(element) === query.name) };
   };
+  // The list a combobox or a search field controls (`aria-controls`, `aria-owns`), while it is shown.
+  const controlledList = (element) =>
+    [...byIds(element, "aria-controls"), ...byIds(element, "aria-owns")]
+      .map((node) => (roleOf(node) === "listbox" ? node : node.querySelector("[role='listbox']")))
+      .find((node) => node && exposed(node)) || null;
+  // A search list draws each entry as a row: the entry's name first, then what
+  // tells it apart (a detail line, a status). The row is named by that first
+  // text, unless it is named on its own (`aria-labelledby`, `aria-label`).
+  const firstTextOf = (element) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      let hidden = false;
+      for (let at = node.parentElement; at && at !== element; at = at.parentElement) {
+        if (at.hasAttribute("hidden") || at.getAttribute("aria-hidden") === "true" || ["script", "style", "template"].includes(at.localName)) hidden = true;
+      }
+      if (!hidden && text(node.nodeValue)) return text(node.nodeValue);
+    }
+    return "";
+  };
+  const rowNameOf = (element) =>
+    text(byIds(element, "aria-labelledby").map((node) => contentOf(node, element)).join(" ")) || text(element.getAttribute("aria-label")) || firstTextOf(element);
+  // How many shown texts of the page read as each of `names`, outside `field`,
+  // the list it controls and every option: what a page draws for a choice (a
+  // row, a chip), counted before the choice and after it.
+  const drawnCounts = (names, field) => {
+    const list = field ? controlledList(field) : null;
+    const counts = names.map(() => 0);
+    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = names.indexOf(text(node.nodeValue));
+      const parent = node.parentElement;
+      if (at < 0 || !parent || parent.closest("script, style, template, [role='option']")) continue;
+      if ((field && field.contains(parent)) || (list && list.contains(parent)) || !shown(parent)) continue;
+      counts[at] += 1;
+    }
+    return counts;
+  };
   const LIVE = "[role='status'], [role='alert'], [aria-live], [data-sonner-toast]";
   const liveTexts = () =>
     Array.from(document.querySelectorAll(LIVE))
@@ -303,11 +346,15 @@ export function readControls(query) {
 
   if (query.mode === "picker") {
     const radiosOf = (group) => Array.from(group.querySelectorAll("input, [role='radio']")).filter((element) => roleOf(element) === "radio" && exposed(element));
-    const optionsOf = (list) => Array.from(list.querySelectorAll("[role='option']")).filter(exposed).map((element) => ({ element, name: nameOf(element) }));
+    const optionsOf = (list, named = nameOf) =>
+      Array.from(list.querySelectorAll("[role='option']"))
+        .filter(exposed)
+        .map((element) => ({ element, name: named(element) }));
     const kindOf = (element) => {
       if (element.localName === "select") return "select";
       const role = roleOf(element);
-      if (role === "combobox") return element.localName === "input" ? "" : "combobox";
+      // A combobox that is a text input is a search field: its list opens once text is typed into it.
+      if (role === "combobox") return element.localName === "input" ? "search" : "combobox";
       if (role === "listbox") return "listbox";
       if (role === "radiogroup" || role === "group") return radiosOf(element).length > 0 ? "radiogroup" : "";
       return "";
@@ -318,9 +365,16 @@ export function readControls(query) {
       .filter((picker) => picker.kind)
       .map((picker) => ({ ...picker, name: nameOf(picker.element) }));
     // A combobox with no accessible name shows its placeholder (the shared select
-    // marks it `data-placeholder`) until it holds a value, and then that value.
-    const placeholderOf = (element) => (element.hasAttribute("data-placeholder") ? text(contentOf(element, null)) : "");
-    const valueOf = (element) => (element.hasAttribute("data-placeholder") ? "" : text(contentOf(element, null)));
+    // marks it `data-placeholder`) until it holds a value, and then that value. A
+    // search field shows its own placeholder while it is empty, and then its text.
+    const placeholderOf = (element) => {
+      if (element.localName === "input") return text(element.value) ? "" : text(element.getAttribute("placeholder"));
+      return element.hasAttribute("data-placeholder") ? text(contentOf(element, null)) : "";
+    };
+    const valueOf = (element) => {
+      if (element.localName === "input") return text(element.value);
+      return element.hasAttribute("data-placeholder") ? "" : text(contentOf(element, null));
+    };
     // The label element before a combobox in its form group, the nearest element
     // that holds one before it: a label of no other control, with no other shown
     // field between the two.
@@ -355,7 +409,7 @@ export function readControls(query) {
     let by = query.marked ? "mark" : "name";
     let found = query.marked ? markedPicker() : innermost(pickers.filter((picker) => picker.name === query.picker));
     if (found.length === 0 && !query.marked) {
-      const unnamed = pickers.filter((picker) => picker.kind === "combobox" && picker.name === "");
+      const unnamed = pickers.filter((picker) => (picker.kind === "combobox" || picker.kind === "search") && picker.name === "");
       for (const [road, standIn] of ROADS) {
         const matched = unnamed.filter((picker) => standIn(picker.element) === query.picker);
         if (matched.length > 0) {
@@ -378,16 +432,21 @@ export function readControls(query) {
     } else if (kind === "radiogroup") {
       entries = radiosOf(picker).map((element) => ({ element, name: nameOf(element) }));
     } else {
-      // A combobox's entries are those of the list it controls, once that list is shown.
-      const list = [...byIds(picker, "aria-controls"), ...byIds(picker, "aria-owns")]
-        .map((node) => (roleOf(node) === "listbox" ? node : node.querySelector("[role='listbox']")))
-        .find((node) => node && exposed(node));
+      // A combobox's entries, and a search field's, are those of the list it
+      // controls, once that list is shown; a search list names each by its row.
+      const list = controlledList(picker);
       open = Boolean(list);
-      entries = list ? optionsOf(list) : [];
+      entries = list ? optionsOf(list, kind === "search" ? rowNameOf : nameOf) : [];
     }
     const matches = entries.filter((entry) => entry.name === query.entry);
     const chosen = matches.length === 1 ? matches[0] : null;
-    if (chosen && kind !== "select") mark(chosen.element, `${query.mark}e`);
+    if (chosen && kind !== "select") {
+      // One entry carries the mark: a list read again may have drawn its rows anew.
+      for (const other of Array.from(document.querySelectorAll(`[${query.attribute}="${query.mark}e"]`))) other.removeAttribute(query.attribute);
+      mark(chosen.element, `${query.mark}e`);
+    }
+    // What the page draws for each entry of a search field's list, before the choice.
+    const names = Array.from(new Set(entries.map((entry) => entry.name)));
     return {
       ...read,
       kind,
@@ -399,11 +458,32 @@ export function readControls(query) {
       index: chosen && kind === "select" ? chosen.index : -1,
       native: Boolean(chosen && chosen.element.localName === "input"),
       live: liveTexts(),
+      drawn: kind === "search" && open ? { names, counts: drawnCounts(names, picker) } : null,
     };
   }
 
   if (query.mode === "reflected") {
     const picker = document.querySelector(`[${query.attribute}="${query.mark}p"]`);
+    if (query.kind === "search") {
+      // A search field's choice is read back from the page, never from its list:
+      // the row a list marks selected is its active one, which a key press would
+      // choose. The field shows the entry once its list has closed, or the page
+      // draws it (a row, a chip) more often than before; the field or the page
+      // showing another entry of the list is a choice taken otherwise (`instead`).
+      const { names, counts } = query.drawn || { names: [], counts: [] };
+      const now = drawnCounts(names, picker);
+      const grew = names.map((name, at) => now[at] > counts[at]);
+      const closed = !picker || !controlledList(picker);
+      const value = picker && picker.localName === "input" ? text(picker.value) : "";
+      const other = names.find((name, at) => name !== query.entry && grew[at]);
+      let instead = null;
+      let shows = "";
+      if (other !== undefined) instead = { where: "page", text: other };
+      else if (closed && value !== "" && value !== query.entry) instead = { where: "field", text: value };
+      else if (grew[names.indexOf(query.entry)]) shows = "page";
+      else if (closed && value === query.entry) shows = "field";
+      return { path: location.pathname, state: shows !== "", shows, instead, confirmation: "" };
+    }
     const entry = document.querySelector(`[${query.attribute}="${query.mark}e"]`);
     let state = false;
     if (query.kind === "select") {
