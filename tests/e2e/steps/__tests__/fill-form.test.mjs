@@ -6,6 +6,12 @@
 // from the page, and a required field left empty that surfaced only as a run
 // that went on with a gap. Every value below is built at run time; each case
 // checks that no value reaches a line the step wrote.
+//
+// One more: the control that sends the form was found by the browser's
+// accessible name, while a refusal listed the names the form reading gives. A
+// button whose name has inline parts that meet with no white space was named
+// one way in a refusal and found another way, so a name the refusal offered
+// could not be used.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { BACKENDS, closeBrowser, labelOf, refusal, scene, theSteps } from "./backends.mjs";
@@ -155,6 +161,47 @@ for (const backend of BACKENDS) {
         );
         expect(lines).toEqual([error.message]);
         expect(saved(app)).toEqual([]);
+      });
+    });
+
+    // A control whose inline parts meet with no white space: the page's text reads
+    // "Save(draft)", the form reading names it "Save (draft)". Either names the control.
+    it("presses a control whose name has inline parts by the text the page reads, without a space between the parts", async () => {
+      await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
+        const fillForm = await open(page, app, "/form/draft");
+        const result = await fillForm(page, { fields: { Title: TITLE }, submit: "Save(draft)", record, bounds: BOUNDS });
+        expect(result).toEqual({ filled: ["Title"], submitted: true, path: "/form/draft" });
+        for (let i = 0; i < 40 && saved(app).length === 0; i += 1) await new Promise((done) => setTimeout(done, 25));
+        expect(saved(app), "the form was sent exactly once").toHaveLength(1);
+        expect(JSON.parse(saved(app)[0].body)).toEqual({ title: TITLE });
+        expect(lines).toEqual(['fillForm: filled "Title" in the form on /form/draft and pressed "Save(draft)"']);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
+      });
+    });
+
+    it("presses the same control by the name the form reading gives it, with a space between the parts", async () => {
+      await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
+        const fillForm = await open(page, app, "/form/draft");
+        const result = await fillForm(page, { fields: { Title: TITLE }, submit: "Save (draft)", record, bounds: BOUNDS });
+        expect(result).toEqual({ filled: ["Title"], submitted: true, path: "/form/draft" });
+        for (let i = 0; i < 40 && saved(app).length === 0; i += 1) await new Promise((done) => setTimeout(done, 25));
+        expect(saved(app), "the form was sent exactly once").toHaveLength(1);
+        expect(lines).toEqual(['fillForm: filled "Title" in the form on /form/draft and pressed "Save (draft)"']);
+      });
+    });
+
+    it("refuses, naming both, a control name that matches two controls once white space is left out, and presses neither", async () => {
+      await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
+        const fillForm = await open(page, app, "/form/twin");
+        const error = await refusal(fillForm(page, { fields: { Title: TITLE }, submit: "Save (draft)", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("ambiguous");
+        expect(error.message).toBe(
+          'fillForm refused (ambiguous): the control "Save (draft)" matches 2 shown controls in the form on /form/twin: "Save (draft)", "Save(draft)" — ' +
+            'the fields were filled ("Title"), and nothing was pressed, since a press never guesses',
+        );
+        expect(lines).toEqual([error.message]);
+        expect(saved(app), "a control was pressed before the refusal").toEqual([]);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
       });
     });
 

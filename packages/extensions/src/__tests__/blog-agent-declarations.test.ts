@@ -70,14 +70,10 @@ const TABLE: Array<{
   },
   {
     agent: "blog-image-generator-agent",
-    // The picture it settles has no write road an agent can take: the three
-    // roads the fleet's blocking adoption gate recognises — an EndNode output
-    // binding, an `artifact_materialize` node, an `artifact_authoring_emit`
-    // claim — are each scoped to text-authorable MIMEs, and the gate refuses a
-    // produces entry no recognised road reaches. (The host does file picture
-    // bytes on its own campaigns road; that road is neither recognised by the
-    // gate nor reachable from an agent.) Its entry waits with the pipeline's
-    // two. BOTH EDGES stay: they say what the run touches, which is true today.
+    // The picture it settles is filed by the pipeline's own step through the
+    // host's image tool, mid-run, so the produces entry for that picture is the
+    // pipeline's and this agent declares none. BOTH EDGES stay: they say what
+    // the run touches, which is true today.
     produces: [],
     edges: [IMAGE, POST].sort(),
   },
@@ -105,13 +101,14 @@ const TABLE: Array<{
   {
     agent: "blog-pipeline-agent",
     // A produces entry is a promise the run keeps: the pipeline files its draft
-    // and its LinkedIn post through terminal bindings today. Its ideas and its
-    // pictures go through mid-run write roads that are not built yet, so those
-    // two entries wait for them — the fleet's adoption gate refuses a declared
-    // production nothing materializes. All four EDGES stay: they say what the
-    // run touches, which is true either way.
+    // and its LinkedIn post through terminal bindings, and its picture is now
+    // filed mid-run by the pipeline's own image step through the host's image
+    // tool. Only the ideas entry still waits for its write road — the fleet's
+    // adoption gate refuses a declared production nothing materializes. All
+    // four EDGES stay: they say what the run touches, which is true either way.
     produces: [
       { extension: POST, objectTypeId: POST_TYPE },
+      { extension: IMAGE, objectTypeId: IMAGE_TYPE },
       { extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE },
     ],
     edges: [IDEA, POST, IMAGE, LINKEDIN].sort(),
@@ -138,15 +135,16 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     expect(total).toBe(14);
   });
 
-  it("declares five of the nine typed produces entries", () => {
-    // Nine after the prototype. Three wait for their write roads, not for their
-    // packages: the image agent's own entry and the pipeline's idea and picture
-    // entries. No road an agent can take reaches a picture today. The fourth
-    // absence is different in kind: the LinkedIn PUBLISHER's entry is RETIRED,
-    // not waiting — at its pin it writes an address onto the writer's artifact
-    // instead of producing one, so it declares no produces entry at all.
+  it("declares six of the nine typed produces entries", () => {
+    // Nine after the prototype. Two still wait, not for their packages: the
+    // image agent's own entry (the picture is the pipeline's, filed by its own
+    // image step) and the pipeline's ideas entry, which waits for its write
+    // road. The third absence is different in kind: the LinkedIn PUBLISHER's
+    // entry is RETIRED, not waiting — at its pin it writes an address onto the
+    // writer's artifact instead of producing one, so it declares no produces
+    // entry at all.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
-    expect(total).toBe(5);
+    expect(total).toBe(6);
     for (const row of TABLE) {
       for (const entry of row.produces) {
         expect(entry.objectTypeId).toMatch(/^@[\w-]+\/[\w-]+:[\w-]+$/);

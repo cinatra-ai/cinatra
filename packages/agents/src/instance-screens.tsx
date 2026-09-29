@@ -7,6 +7,7 @@ import {
   launchScopeInstanceLabel,
   parseLaunchScopeAnchor,
   readLaunchScopeAnchor,
+  successorLaunchBase,
 } from "@/lib/launch-scope-anchor";
 import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
@@ -1326,6 +1327,25 @@ function personalOwnerLabel(launchScopeAnchor: unknown): string | null {
   return label === "Personal (owner)" ? label : null;
 }
 
+/**
+ * THE LAUNCHER A SUCCESSOR OPENS, read from the RUN rather than from the route
+ * (cinatra#3786). "Start fresh" on a failed or stopped run and "Start new run"
+ * on a finished one used to be handed this page's own `scopeBase`, which is
+ * null for a user-anchored run because that run is addressed bare by design. So
+ * they opened the bare launcher, which mints no anchor, and a personal run's
+ * successor was written with none: it lost the owner words on its trail and the
+ * personal Executions list did not hold it.
+ *
+ * Answered from the run's own anchor, so it cannot disagree with the record the
+ * successor inherits. For a team, project, organization or workspace run it is
+ * the same base the addresses take; for an unanchored run it is null and
+ * nothing moves; for a user-anchored run it is `/personal`, the one launcher
+ * that mints a `user` anchor.
+ */
+function successorLaunchBaseForRun(launchScopeAnchor: unknown): string | null {
+  return successorLaunchBase(parseLaunchScopeAnchor(launchScopeAnchor));
+}
+
 async function resolveTemplateForActor(agentId: string) {
   const session = await getAuthSession();
   // admin-parity P4 (cinatra#1129): resolve the actor's admin-standing bag so a
@@ -2562,7 +2582,11 @@ export async function SetupScreen({
                     // this panel's own column down — or the page draws two
                     // rails again.
                     railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
-                    scopeBase={scopeBase ?? null}
+                    // NOT `scopeBase`: this panel's successor controls open a
+                    // LAUNCHER, and the launcher of a user-anchored run is
+                    // `/personal` while its every address stays bare
+                    // (cinatra#3786).
+                    launchBase={successorLaunchBaseForRun(run.launchScopeAnchor)}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -2570,6 +2594,10 @@ export async function SetupScreen({
                     agentId={agentId}
                     instanceId={instanceId}
                     scopeBase={scopeBase ?? null}
+                    // …and the LAUNCHER its panel's successor controls open,
+                    // which is not the address base above for a user-anchored
+                    // run (cinatra#3786).
+                    launchBase={successorLaunchBaseForRun(run.launchScopeAnchor)}
                     // cinatra#2933 (lifecycle-b W5b) -- the run page is one of
                     // the five windows, and this watcher is the panel it is
                     // drawn by. Both halves travel together: the template the

@@ -14,6 +14,10 @@
 //     the page stayed where it was, and the step returns then.
 //   - When one comes, the navigation must land within the settle bound: a new
 //     document that has loaded, or, in place, the same document on another path.
+//     A browser holds a reading sent while a navigation is in flight until the
+//     navigation ends; the step waits for such a reading no longer than the
+//     settle bound leaves, so a navigation that lands late is refused at the
+//     bound, with the page still on the document it started from.
 // A press whose navigation starts later than the start bound (a handler that
 // waits for a slow answer first) reads as one that stayed; lengthen `startMs`
 // for such a control.
@@ -43,6 +47,7 @@ import {
   readControls,
   readDocument,
   unmarkControls,
+  unspacedNote,
 } from "./page-controls.mjs";
 import { startsNavigation } from "./navigate-to.mjs";
 import { originOf } from "./read-standing-requests.mjs";
@@ -144,7 +149,7 @@ export async function press(page, { name, role = "button", within: scope, record
       STEP,
       record,
       "ambiguous",
-      `${part.found} shown parts of the page on ${from} are named ${quotedName(scopeName)}: ${where} — ${nothing}, since a press never guesses`,
+      `${part.found} shown parts of the page on ${from} are named ${quotedName(scopeName)}${unspacedNote(part.unspaced, part.named)}: ${where} — ${nothing}, since a press never guesses`,
     );
   }
   // Where the control is looked for, for a line: the part of the page, when named, and the page.
@@ -158,7 +163,7 @@ export async function press(page, { name, role = "button", within: scope, record
       STEP,
       record,
       "ambiguous",
-      `${matches.length} shown ${words}${at} are named ${named}: ${describeMatches(matches)} — ${nothing}, since a press never guesses`,
+      `${matches.length} shown ${words}${at} are named ${named}${unspacedNote(reading.unspaced, reading.named)}: ${describeMatches(matches)} — ${nothing}, since a press never guesses`,
     );
   }
   const [control] = matches;
@@ -203,8 +208,13 @@ export async function press(page, { name, role = "button", within: scope, record
   } finally {
     page.off("request", onRequest);
     // The page is the app's again. A page that has navigated since carries neither.
-    await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
-    await within(page.evaluate(forgetDocument, { key }), READING_BOUND_MS);
+    // While the press's navigation is still in flight, the browser holds these two
+    // readings until it ends: they take effect then on the document the press
+    // started from, or that document is gone and its mark with it. They are not
+    // waited for past a poll, so the step keeps its settle bound.
+    const cleanupMs = settled || !started ? READING_BOUND_MS : bound.pollMs;
+    await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), cleanupMs);
+    await within(page.evaluate(forgetDocument, { key }), cleanupMs);
   }
   const elapsedMs = elapsedSince(pressedAt);
   if (!settled) {
@@ -243,8 +253,11 @@ export async function press(page, { name, role = "button", within: scope, record
 async function settle(page, { key, from, hasStarted, bound, pressedAt }) {
   const startBound = Math.min(bound.startMs, bound.settleMs);
   for (;;) {
-    // A reading taken while a navigation is in flight fails: the page is moving.
-    const reading = await within(page.evaluate(readDocument, { key, set: false }), READING_BOUND_MS);
+    // A reading sent while a navigation is in flight is held until the navigation
+    // ends, and fails once a new document has committed: it is waited for no
+    // longer than the bound leaves.
+    const left = bound.settleMs - (performance.now() - pressedAt);
+    const reading = await within(page.evaluate(readDocument, { key, set: false }), Math.max(1, Math.min(READING_BOUND_MS, left)));
     const elapsed = performance.now() - pressedAt;
     if (reading) {
       if (!reading.same && reading.state === "complete") return { navigated: true, path: reading.path };

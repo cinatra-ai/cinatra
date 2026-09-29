@@ -74,6 +74,27 @@ BOUND_NAMES.push(
   "UPLOAD_ROW_BOUND_MS",
 );
 BOUND_NAMES.sort();
+// readControlNames joins the steps; its one bound of time is the shared reading
+// bound, listed above already.
+STEP_NAMES.push("readControlNames");
+// armPageTape and readPageTape join the steps; their one bound is the shared
+// reading bound too.
+STEP_NAMES.push("armPageTape", "readPageTape");
+// typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress: their
+// steps and their bounds join the lists in this one place, and the bounds stay
+// in order.
+STEP_NAMES.push("openAddress", "reloadPage", "sendInComposer", "typeInWindow", "waitForTurn");
+BOUND_NAMES.push(
+  "COMPOSER_CARD_BOUND_MS",
+  "OPEN_ADDRESS_BOUND_MS",
+  "RELOAD_BOUND_MS",
+  "TURN_BOUND_MS",
+  "TURN_CEILING_MS",
+  "TURN_POLL_MS",
+  "WINDOW_FIELD_BOUND_MS",
+  "WINDOW_SENT_BOUND_MS",
+);
+BOUND_NAMES.sort();
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {

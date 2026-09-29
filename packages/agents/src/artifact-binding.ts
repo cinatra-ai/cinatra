@@ -626,6 +626,10 @@ export function resolveArtifactBindingObjectType(
 
 export const ARTIFACT_MATERIALIZE_TOOL = "artifact_materialize";
 
+/** The host's image tool on the passthrough route (cinatra#3032): a prompt in, a
+ *  picture filed under the extension the call names. */
+export const ARTIFACT_IMAGE_TOOL = "artifact_image_generate";
+
 /** URL marker identifying the deterministic passthrough route. */
 export const AGENTS_PASSTHROUGH_URL_MARKER = "/api/agents/passthrough";
 
@@ -908,6 +912,91 @@ export function collectArtifactMaterializeNodesFromOasDocument(
   });
 
   return { nodes, errors };
+}
+
+export type CollectedArtifactImageNode = {
+  /** The calling ApiNode's component id — the ledger `output_id` identity. */
+  nodeId: string;
+  extension: string;
+  objectTypeId?: string;
+};
+
+/**
+ * cinatra#3035: collect every passthrough ApiNode that files a picture through
+ * the host's image tool (`artifact_image_generate`) — the fourth
+ * materialization road. The tool refuses an extension the running package does
+ * not declare in `cinatra.produces`, so a step that calls it with a literal,
+ * declared extension and names itself as the ledger's node reaches that entry.
+ *
+ * Statics only, walked like the materialize collector (top-level components and
+ * FlowNode subflows). A node counts ONLY when `data.tool` is the literal image
+ * tool, `data.input` is an object, `input.extension` is a literal the known
+ * produces list names (a null list skips the parity), `input.node_id` is a
+ * literal equal to the node's own id, and `input.title` and `input.prompt` are
+ * strings that are not blank once trimmed. A node that does not meet them
+ * resolves nothing — there is no error list, so no package gains a finding; a
+ * produces entry kept only by such a node stays refused by the existing
+ * unmaterialized finding.
+ */
+export function collectArtifactImageNodesFromOasDocument(
+  doc: Record<string, unknown>,
+  opts?: { produces?: readonly string[] | null },
+): { nodes: CollectedArtifactImageNode[] } {
+  const nodes: CollectedArtifactImageNode[] = [];
+  const producesNames: readonly string[] | null = opts?.produces ?? null;
+
+  walkPassthroughApiNodes(doc, (node, refKey) => {
+    const nodeId =
+      typeof node.id === "string" && node.id.length > 0 ? node.id : refKey;
+
+    let data: unknown = node.data;
+    if (typeof data === "string") {
+      try {
+        const parsed: unknown = JSON.parse(data);
+        if (isPlainObject(parsed)) data = parsed;
+      } catch {
+        return;
+      }
+    }
+    if (!isPlainObject(data) || data.tool !== ARTIFACT_IMAGE_TOOL) return;
+
+    const input = data.input;
+    if (!isPlainObject(input)) return;
+
+    const extension = input.extension;
+    if (typeof extension !== "string" || extension.length === 0 || isTemplated(extension)) {
+      return;
+    }
+    if (producesNames != null && !producesNames.includes(extension)) return;
+
+    const declaredNodeId = input.node_id;
+    if (
+      typeof declaredNodeId !== "string" ||
+      isTemplated(declaredNodeId) ||
+      declaredNodeId !== nodeId
+    ) {
+      return;
+    }
+
+    for (const field of ["title", "prompt"] as const) {
+      const value = input[field];
+      // The image tool trims both and refuses a blank one.
+      if (typeof value !== "string" || value.trim().length === 0) return;
+    }
+
+    const objectTypeId = input.objectTypeId;
+    nodes.push({
+      nodeId,
+      extension,
+      ...(typeof objectTypeId === "string" &&
+      objectTypeId.length > 0 &&
+      !isTemplated(objectTypeId)
+        ? { objectTypeId }
+        : {}),
+    });
+  });
+
+  return { nodes };
 }
 
 // ---------------------------------------------------------------------------

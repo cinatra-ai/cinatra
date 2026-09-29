@@ -445,6 +445,24 @@ export async function loadRunDerivationContext(input: {
   };
 }
 
+/**
+ * cinatra#3035: does the run's own flow document declare a marked review step?
+ * The SAME cached answer `authorizeToolMaterializeWrite` hands the text road,
+ * read from the run package's own flow, so a picture written mid-run takes the
+ * origin a mid-run text write of that run takes. A template with no package
+ * marks nothing.
+ */
+export async function loadRunMarksReviewStep(input: {
+  templateId: string;
+  packageVersion: string | null;
+}): Promise<boolean> {
+  const packageName = await resolveTemplatePackageName(input.templateId);
+  if (packageName === null) return false;
+  return (
+    await loadRunPackageBindings({ packageName, packageVersion: input.packageVersion })
+  ).marksReviewStep;
+}
+
 async function resolveTemplatePackageName(
   templateId: string,
 ): Promise<string | null> {

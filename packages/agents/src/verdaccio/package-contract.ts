@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ReviewFinding } from "../validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
+  collectArtifactImageNodesFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
 } from "../artifact-binding";
 
@@ -487,13 +488,16 @@ export function parseAgentPackageManifestForInstall(
 // runnable materialization edge"; the runtime OAS-lint view is
 // `scanOasForArtifactParityFindings` (validate-oas-runtime-invariants.ts).
 //
-// THE THREE MATERIALIZATION ROADS. A declared extension is reached by an
-// EndNode `outputs[].cinatra.artifact` binding, by an `artifact_materialize`
-// passthrough ApiNode, or by the AUTHORING EMIT — the road a publisher mints
-// an edited revision on, through the required `artifact_authoring_emit`
-// consumed primitive and with no terminal binding of its own. All three are
-// named side by side as the roads that resolve a produces entry; the third is
-// read from `cinatra.consumes` because it is a capability edge, not a node
+// THE MATERIALIZATION ROADS. A declared extension is reached by an EndNode
+// `outputs[].cinatra.artifact` binding, by an `artifact_materialize`
+// passthrough ApiNode, by the AUTHORING EMIT — the road a publisher mints an
+// edited revision on, through the required `artifact_authoring_emit` consumed
+// primitive and with no terminal binding of its own — or by an IMAGE-TOOL STEP
+// (cinatra#3035): a passthrough ApiNode that calls the host's image tool
+// (`artifact_image_generate`) with a literal extension the produces list
+// declares and names itself as the ledger's node. All four are named side by
+// side as the roads that resolve a produces entry; the authoring emit is read
+// from `cinatra.consumes` because it is a capability edge, not a node
 // annotation. A publisher on that road has a resolving declaration, so a gate
 // that cannot see it refuses a package that is correct.
 //
@@ -583,6 +587,7 @@ export function evaluateProducesMaterializationContract(args: {
   const materializeResult = collectArtifactMaterializeNodesFromOasDocument(oasDoc, {
     produces,
   });
+  const imageResult = collectArtifactImageNodesFromOasDocument(oasDoc, { produces });
 
   for (const err of [...bindingResult.errors, ...materializeResult.errors]) {
     findings.push({
@@ -596,6 +601,7 @@ export function evaluateProducesMaterializationContract(args: {
   const covered = new Set<string>();
   for (const b of bindingResult.bindings) covered.add(b.binding.extension);
   for (const n of materializeResult.nodes) covered.add(n.extension);
+  for (const n of imageResult.nodes) covered.add(n.extension);
   for (const ext of produces) {
     if (covered.has(ext) || authoringEmitResolves) continue;
     findings.push({
@@ -604,9 +610,10 @@ export function evaluateProducesMaterializationContract(args: {
       message:
         `cinatra.produces declares "${ext}" but no materialization road reaches it — ` +
         `no EndNode output binding (outputs[].cinatra.artifact), no ` +
-        `artifact_materialize passthrough node, and no required ` +
-        `${ARTIFACT_AUTHORING_EMIT_PRIMITIVE} claim in cinatra.consumes — so the ` +
-        `declared artifact is never persisted. Add one of the three roads for ` +
+        `artifact_materialize passthrough node, no required ` +
+        `${ARTIFACT_AUTHORING_EMIT_PRIMITIVE} claim in cinatra.consumes, and no ` +
+        `artifact_image_generate passthrough step filing it — so the ` +
+        `declared artifact is never persisted. Add one of the four roads for ` +
         `"${ext}", or declare nothing (cinatra#924).`,
       source: "deterministic",
     });

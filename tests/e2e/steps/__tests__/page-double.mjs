@@ -21,20 +21,37 @@
 //     cancels the press, or opens a dialog or a panel in place, or requests the
 //     page from the app and, once the app has answered, moves the address
 //     without a new document, as a client-side router does;
+//   - a list drawn as the shared select draws it hides everything outside it
+//     from assistive technology while it is open, as the select's library does,
+//     and a press on one of its entries takes the entry, closes the list and
+//     shows the page again (see hideOthers);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - text filled into a search field, and a press on an entry of its list, run
+//     the page's own handlers for them: the same two functions the page's inline
+//     script runs in a browser (see typeInSearchField in fixture-app.mjs);
 //   - a page has one frame, its main frame, and every request is made in it;
+//     the page announces each navigation of that frame (`framenavigated`): a new
+//     document once it has committed, and a change of the address in place, a
+//     state pushed or replaced in the document's history (at the same address
+//     too) or a new fragment; it announces a failed request (`requestfailed`)
+//     as the context does, and its own `close`;
+//   - every document has its own time origin (`performance.timeOrigin`), as
+//     every jsdom window has one, and a change of the address in place keeps it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
 //     and its argument and its answer cross as JSON;
-//   - a reading taken while a navigation is in flight throws, as a destroyed
-//     execution context does in a browser;
+//   - a reading sent while a navigation is in flight is held until the
+//     navigation has committed, and then throws, as a browser holds it and then
+//     reports its execution context destroyed;
 //   - a submit event runs the app's handler on the form first and the window's
 //     listeners after it, and, when nobody cancelled it, the form submits
 //     natively: its fields leave in a query string or a form body;
 //   - a failed fill repeats the value it was given to fill in its message, as
 //     Playwright's own call log does, so a step that forwards that message fails
-//     these cases.
+//     these cases;
+//   - a press moves the focus, and the keyboard types into the element that has
+//     it (see the keyboard, further down).
 // The page's declared behaviour (the JSON each fixture page carries) is played on
 // its document with timers, as the page's inline script does in a browser: a
 // stream it opens stays open, and while its main thread is declared busy, a
@@ -43,7 +60,8 @@ import { connect, constants } from "node:http2";
 
 import { JSDOM } from "jsdom";
 
-import { EMAIL_ROUTE, USERNAME_ROUTE } from "./fixture-app.mjs";
+import { EMAIL_ROUTE, USERNAME_ROUTE, pressSearchEntry, typeInSearchField } from "./fixture-app.mjs";
+import { inputInFixtureWindow, sendInFixtureWindow } from "./fixture-app-windows.mjs";
 
 export class TimeoutError extends Error {
   constructor(message) {
@@ -234,15 +252,67 @@ function isVisible(element) {
   return true;
 }
 
+/** The marker the shared select's library puts on each element it hides. */
+const HIDDEN_MARKER = "data-aria-hidden";
+
+/**
+ * What the shared select's library does once its list is open: every element
+ * outside the list is hidden from assistive technology, the combobox that opened
+ * it included. It walks down from the body along the elements that hold the
+ * list, a live region or a script, and gives every other element it meets there
+ * `aria-hidden="true"` and its marker; an element hidden already keeps its own
+ * value. The inline script of fixture-app.mjs does the same in a browser.
+ */
+function hideOthers(list) {
+  const document = list.ownerDocument;
+  const kept = [list, ...document.querySelectorAll("[aria-live], script")];
+  const walk = (parent) => {
+    for (const child of Array.from(parent.children)) {
+      if (kept.includes(child)) continue;
+      if (kept.some((node) => child.contains(node))) {
+        walk(child);
+        continue;
+      }
+      const own = child.getAttribute("aria-hidden");
+      if (own !== null && own !== "false") continue;
+      child.setAttribute("aria-hidden", "true");
+      child.setAttribute(HIDDEN_MARKER, "true");
+    }
+  };
+  walk(document.body);
+}
+
+/**
+ * An entry pressed in such a list is taken: the list closes, the combobox that
+ * controls it shows the entry, and every element the list hid is shown again.
+ */
+function chooseEntry(entry) {
+  const document = entry.ownerDocument;
+  const list = entry.closest("[role='listbox']");
+  if (!list) return;
+  list.setAttribute("hidden", "");
+  for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
+    node.removeAttribute("aria-hidden");
+    node.removeAttribute(HIDDEN_MARKER);
+  }
+  const picker = document.querySelector(`[aria-controls="${list.id}"]`);
+  if (!picker) return;
+  picker.textContent = entry.textContent;
+  picker.removeAttribute("data-placeholder");
+  picker.setAttribute("aria-expanded", "false");
+}
+
 export class PageDouble {
   #origin;
   #context;
-  #frame = { page: () => this };
+  #frame = { page: () => this, url: () => this.#href };
   #href = "about:blank";
   #dom;
   #navigating = 0;
   #routes = [];
   #requestListeners = [];
+  /** The page's other listeners, by event: `framenavigated`, `requestfailed` and `close`. */
+  #listeners = new Map();
   #timers = new Set();
   #closed = false;
   #streams = new Set();
@@ -292,17 +362,29 @@ export class PageDouble {
 
   on(event, listener) {
     if (event === "request") this.#requestListeners.push(listener);
+    else this.#listeners.set(event, [...(this.#listeners.get(event) ?? []), listener]);
   }
 
   off(event, listener) {
     this.#requestListeners = this.#requestListeners.filter((l) => l !== listener);
+    for (const [name, listeners] of this.#listeners) this.#listeners.set(name, listeners.filter((l) => l !== listener));
+  }
+
+  /** Tells the page's listeners of `event`. */
+  #emit(event, value) {
+    for (const listener of [...(this.#listeners.get(event) ?? [])]) listener(value);
   }
 
   async evaluate(fn, arg) {
     // A page whose main thread is busy answers once it is free again.
     const busy = (this.#busyUntil.get(this.#dom) ?? 0) - Date.now();
     if (busy > 0) await pause(busy);
-    if (this.#navigating > 0 || this.#closed) throw new Error(DESTROYED);
+    // A reading sent while a navigation is in flight is held until the new document has committed, and the document it was sent to is gone then.
+    if (this.#navigating > 0) {
+      while (this.#navigating > 0 && !this.#closed) await pause(10);
+      throw new Error(DESTROYED);
+    }
+    if (this.#closed) throw new Error(DESTROYED);
     const inPage = this.#dom.window.eval(`(${fn.toString()})`);
     return viaJson(await inPage(viaJson(arg)));
   }
@@ -331,6 +413,8 @@ export class PageDouble {
       {
         document: () => this.#dom.window.document,
         press: (element, modifiers) => this.#press(element, modifiers),
+        typed: (element) => this.#typed(element),
+        focus: (element) => this.#focus(element),
       },
       selector,
       {},
@@ -345,6 +429,7 @@ export class PageDouble {
     this.#endStreams(null, "closed");
     this.#context[INNER].forget(this);
     this.#dom.window.close();
+    this.#emit("close", this);
   }
 
   #later(fn, ms) {
@@ -375,6 +460,20 @@ export class PageDouble {
     Object.defineProperty(dom.window.performance, "getEntriesByType", {
       value: (type) => entries.filter((entry) => entry.entryType === type).map((entry) => ({ ...entry })),
     });
+    // A change of the address in place: a state pushed or replaced in the
+    // history (at the same address too), or a new fragment.
+    const { history } = dom.window;
+    for (const name of ["pushState", "replaceState"]) {
+      const own = history[name].bind(history);
+      Object.defineProperty(history, name, {
+        configurable: true,
+        value: (...args) => {
+          own(...args);
+          this.#movedInPlace(dom);
+        },
+      });
+    }
+    dom.window.addEventListener("hashchange", () => this.#movedInPlace(dom));
     const declared = (id) => {
       const node = dom.window.document.getElementById(id);
       return node ? JSON.parse(node.textContent) : null;
@@ -391,6 +490,8 @@ export class PageDouble {
     const previous = this.#dom;
     this.#href = href;
     this.#dom = this.#build(href, html, protocol, streaming ? 0 : Math.max(1, elapsedMs));
+    // A new document has the focus on nothing of its own yet.
+    this.#focused = null;
     // The document left behind cancels its requests, and the context hears of each.
     this.#endStreams(previous, "failed");
     if (streaming) {
@@ -406,6 +507,14 @@ export class PageDouble {
       );
     }
     previous.window.close();
+    this.#emit("framenavigated", this.#frame);
+  }
+
+  /** The address of `dom` changed in place: the page follows it, and announces the navigation of its main frame. */
+  #movedInPlace(dom) {
+    if (this.#closed || this.#dom !== dom) return;
+    this.#href = dom.window.location.href;
+    this.#emit("framenavigated", this.#frame);
   }
 
   #play(dom, op) {
@@ -466,7 +575,40 @@ export class PageDouble {
     form.setAttribute("novalidate", "");
   }
 
+  /**
+   * Text filled or typed into a field: the page's handler for a window's box
+   * keeps its send control in step with it, and the page's handler for a search
+   * field opens its list and answers the search.
+   */
+  #typed(element) {
+    if (element.hasAttribute("data-fixture-window-box")) inputInFixtureWindow(element);
+    if (!element.hasAttribute("data-fixture-searches")) return;
+    const document = element.ownerDocument;
+    typeInSearchField(element, (run, ms) =>
+      this.#later(() => {
+        if (this.#dom.window.document === document) run();
+      }, ms),
+    );
+  }
+
   #press(element, modifiers) {
+    // The page's handler takes a press on a window's send control.
+    const send = element.closest("[data-fixture-window-send]");
+    if (send) {
+      const document = send.ownerDocument;
+      sendInFixtureWindow(send, (run, ms) =>
+        this.#later(() => {
+          if (this.#dom.window.document === document) run();
+        }, ms),
+      );
+      return;
+    }
+    // The page's handler takes an entry of a search field's list.
+    const entry = element.closest("[data-fixture-picks]");
+    if (entry) {
+      pressSearchEntry(entry);
+      return;
+    }
     // The page's handler flips the checked state of a control it draws itself.
     if (element.hasAttribute("data-fixture-toggles")) {
       const on = element.getAttribute("aria-checked") !== "true";
@@ -477,10 +619,17 @@ export class PageDouble {
     if (element.localName === "a" && element.hasAttribute("href")) {
       // The page's handler cancels every press of this link.
       if (element.hasAttribute("data-fixture-inert")) return;
+      // The page's handler takes an entry of a list drawn as the shared select draws it.
+      if (element.hasAttribute("data-fixture-chooses")) {
+        chooseEntry(element);
+        return;
+      }
       // The page's handler cancels the press and opens the dialog or the panel it names, in place.
       const opens = element.getAttribute("data-fixture-opens");
       if (opens !== null) {
-        element.ownerDocument.getElementById(opens)?.removeAttribute("hidden");
+        const opened = element.ownerDocument.getElementById(opens);
+        opened?.removeAttribute("hidden");
+        if (opened?.hasAttribute("data-fixture-hides-others")) hideOthers(opened);
         if (element.hasAttribute("aria-expanded")) element.setAttribute("aria-expanded", "true");
         return;
       }
@@ -489,13 +638,12 @@ export class PageDouble {
       const href = new URL(element.getAttribute("href"), this.#href).href;
       if (element.hasAttribute("data-fixture-in-place")) {
         // The page's handler cancels the press, requests the page from the app,
-        // and moves the address once the app has answered: the document stays.
+        // and pushes the address once the app has answered: the document stays.
         const dom = this.#dom;
         this.#send("GET", href, null, false).then(
           () => {
             if (this.#closed || this.#dom !== dom) return;
-            this.#href = href;
-            dom.reconfigure({ url: href });
+            dom.window.history.pushState(null, "", href);
           },
           () => {},
         );
@@ -514,7 +662,10 @@ export class PageDouble {
       const window = element.ownerDocument.defaultView;
       const event = new window.Event("submit", { bubbles: true, cancelable: true });
       form.dispatchEvent(event);
-      if (!event.defaultPrevented) this.#nativeSubmit(form);
+      // A form the page declares a handler for is taken by that handler, as the page's script takes it in a browser.
+      const handlers = this.#declared(element.ownerDocument).filter((op) => op.submit && form.matches(op.submit));
+      for (const op of handlers) this.#playSubmit(form, op);
+      if (handlers.length === 0 && !event.defaultPrevented) this.#nativeSubmit(form);
     }
   }
 
@@ -588,6 +739,7 @@ export class PageDouble {
         onFinished();
       } else if (how === "failed") {
         inner.emit("requestfailed", request);
+        this.#emit("requestfailed", request);
       }
     };
     this.#streams.add(held);
@@ -671,6 +823,7 @@ export class PageDouble {
       if (verdict === "abort") {
         answered(null);
         inner.emit("requestfailed", request);
+        this.#emit("requestfailed", request);
         return { aborted: true };
       }
       if (verdict === "continue") break;
@@ -692,6 +845,7 @@ export class PageDouble {
     } catch (error) {
       answered(null);
       inner.emit("requestfailed", request);
+      this.#emit("requestfailed", request);
       throw error;
     }
     answered({ status: () => reply.status });
@@ -715,11 +869,14 @@ export class PageDouble {
   //     declared `press` behaviour), then the browser's default: a file input
   //     opens a file chooser, a submit button sends its form (to the form's
   //     declared `submit` behaviour, or natively by the rules above), and a
-  //     link follows the rules above;
+  //     link follows the rules above; a submit button pressed by a selector
+  //     (`locator`) sends its form the same way;
   //   - a file chooser reaches every `waitForEvent("filechooser")` pending when
   //     it opens, and one nobody waits for is dropped, as a headless browser
   //     drops it; the files handed to it land on its input, which reports
-  //     `input` and `change`;
+  //     `input` and `change` only when they differ from the files it holds
+  //     already (a browser compares them by their source, so the same file
+  //     handed over twice reports nothing the second time);
   //   - a fill sets the value and reports `input` and `change`;
   //   - a frame's document is loaded from the app the first time it is read and
   //     again once its address has changed, and that load is not announced: no
@@ -730,6 +887,8 @@ export class PageDouble {
 
   #chooserWaiters = [];
   #frameDocuments = new WeakMap();
+  /** What each file input holds: the source of each of its files. */
+  #heldFiles = new WeakMap();
 
   getByRole(role, { name, exact = false } = {}) {
     return this.#named(`getByRole('${role}')`, (document) =>
@@ -882,13 +1041,7 @@ export class PageDouble {
     }
     const form = element.form;
     if (form && element.localName === "button" && (type || "submit") === "submit") {
-      const handlers = declared.filter((op) => op.submit && form.matches(op.submit));
-      if (handlers.length === 0) {
-        this.#press(element, []);
-        return;
-      }
-      form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
-      for (const op of handlers) this.#playSubmit(form, op);
+      this.#press(element, []);
       return;
     }
     const link = element.closest("a[href]");
@@ -947,12 +1100,19 @@ export class PageDouble {
     }
   }
 
-  /** Files handed to a chooser: read, set on its input, reported, and handed to the page's handler. */
+  /**
+   * Files handed to a chooser: read, set on its input, and, when they differ from
+   * the files the input held, reported and handed to the page's handler. A file
+   * read from a path has that path as its source; one handed over as a payload
+   * has a source of its own.
+   */
   async #setFiles(input, files) {
-    const [{ readFile }, { basename }] = await Promise.all([import("node:fs/promises"), import("node:path")]);
+    const [{ readFile }, { basename, resolve }] = await Promise.all([import("node:fs/promises"), import("node:path")]);
     const chosen = await Promise.all(
       (Array.isArray(files) ? files : [files]).map(async (file) =>
-        typeof file === "string" ? { name: basename(file), mimeType: "application/octet-stream", buffer: await readFile(file) } : file,
+        typeof file === "string"
+          ? { name: basename(file), mimeType: "application/octet-stream", buffer: await readFile(file), source: resolve(file) }
+          : { ...file, source: Symbol("payload") },
       ),
     );
     if (!input.isConnected || this.#closed) throw new Error("Element is not attached to the DOM");
@@ -961,15 +1121,22 @@ export class PageDouble {
     const list = chosen.map((file) => new window.File([file.buffer], file.name, { type: file.mimeType }));
     const fileList = Object.assign(Object.fromEntries(list.map((file, at) => [at, file])), { length: list.length, item: (at) => list[at] ?? null });
     Object.defineProperty(input, "files", { configurable: true, get: () => fileList });
+    const held = this.#heldFiles.get(input) ?? [];
+    this.#heldFiles.set(input, chosen.map((file) => file.source));
+    if (held.length === chosen.length && chosen.every((file, at) => file.source === held[at])) return;
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     input.dispatchEvent(new window.Event("change", { bubbles: true }));
     for (const op of this.#declared(document)) {
-      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen);
+      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen, input);
     }
   }
 
-  #playChosen(document, op, chosen) {
+  #playChosen(document, op, chosen, input) {
     const dom = this.#dom;
+    // The page's handler takes the files and empties its input at once, as the library's own handler does.
+    const none = { length: 0, item: () => null };
+    Object.defineProperty(input, "files", { configurable: true, get: () => none });
+    this.#heldFiles.delete(input);
     for (const file of chosen) {
       this.#send("POST", new URL(op.upload, this.#href).href, file.buffer, false).then(
         (sent) =>
@@ -1062,6 +1229,118 @@ export class PageDouble {
     this.#frameDocuments.set(frame, { href, dom });
     return dom;
   }
+
+  // ---------------------------------------------------------------------------
+  // typeInWindow, waitForTurn and sendInComposer: the focus and the keyboard.
+  // The browser's rules kept for them:
+  //   - a press moves the focus to the pressed element when it takes the focus
+  //     (a field, a control, a link, or an element whose content is editable),
+  //     and away from any other otherwise; a new document has it on nothing;
+  //   - the keyboard types into the element that has the focus when it takes
+  //     text: a text field that is neither disabled nor read-only, or an element
+  //     whose content is editable (`contenteditable` other than "false"). The
+  //     text goes in at the selection, in place of what the selection holds, or
+  //     at the end of the element's text when the selection is elsewhere, and
+  //     the element reports `input`. A browser types key by key and reports each
+  //     key; the double types the whole text at once and reports it once;
+  //   - Backspace deletes what the selection holds, or the last character of
+  //     the text when the caret is at its end; no other key is pressed here;
+  //   - text typed into a window's box, and a press on a window's send control,
+  //     run the page's own handlers for them: the same two functions the page's
+  //     inline script runs in a browser (see fixture-app-windows.mjs).
+  // ---------------------------------------------------------------------------
+
+  #focused = null;
+
+  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus. */
+  keyboard = {
+    type: async (text) => this.#typeText(String(text)),
+    press: async (key) => this.#pressKey(String(key)),
+  };
+
+  #focus(element) {
+    const focusable = element.matches("a[href], button, input, select, textarea, [tabindex]") || PageDouble.#takesText(element);
+    this.#focused = focusable ? element : null;
+  }
+
+  /** Whether `element` takes text typed into it. */
+  static #takesText(element) {
+    if (!element || !element.isConnected) return false;
+    if (element.localName === "input" || element.localName === "textarea") return !element.disabled && !element.readOnly;
+    for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+      const editable = node.getAttribute("contenteditable");
+      if (editable !== null) return editable.toLowerCase() !== "false";
+    }
+    return false;
+  }
+
+  /** The element the keyboard types into: the one that has the focus, in the current document, when it takes text. */
+  #typingTarget() {
+    const element = this.#focused;
+    return element && element.ownerDocument === this.#dom.window.document && PageDouble.#takesText(element) ? element : null;
+  }
+
+  /** The selection's range when it lies inside `element`, else a caret at the end of its text. */
+  static #rangeIn(element) {
+    const document = element.ownerDocument;
+    const selection = document.defaultView.getSelection();
+    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    if (range && element.contains(range.startContainer) && element.contains(range.endContainer)) return range;
+    const end = document.createRange();
+    end.selectNodeContents(element);
+    end.collapse(false);
+    return end;
+  }
+
+  #typeText(text) {
+    const element = this.#typingTarget();
+    if (!element || text === "") return;
+    const window = element.ownerDocument.defaultView;
+    if (element.localName === "input" || element.localName === "textarea") {
+      const start = element.selectionStart ?? element.value.length;
+      const end = element.selectionEnd ?? start;
+      element.value = `${element.value.slice(0, start)}${text}${element.value.slice(end)}`;
+      element.setSelectionRange(start + text.length, start + text.length);
+    } else {
+      const range = PageDouble.#rangeIn(element);
+      range.deleteContents();
+      const node = element.ownerDocument.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    element.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    this.#typed(element);
+  }
+
+  #pressKey(key) {
+    if (key !== "Backspace") throw new Error(`the page double presses Backspace only, not ${key}`);
+    const element = this.#typingTarget();
+    if (!element) return;
+    const window = element.ownerDocument.defaultView;
+    if (element.localName === "input" || element.localName === "textarea") {
+      const start = element.selectionStart ?? element.value.length;
+      const end = element.selectionEnd ?? start;
+      const from = start === end ? Math.max(0, start - 1) : start;
+      element.value = `${element.value.slice(0, from)}${element.value.slice(end)}`;
+      element.setSelectionRange(from, from);
+    } else {
+      const range = PageDouble.#rangeIn(element);
+      if (!range.collapsed) {
+        range.deleteContents();
+      } else {
+        const walker = element.ownerDocument.createTreeWalker(element, 4 /* text nodes */);
+        let last = null;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.nodeValue !== "") last = node;
+        if (last) last.deleteData(last.nodeValue.length - 1, 1);
+      }
+    }
+    element.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+    this.#typed(element);
+  }
 }
 
 /** The locator calls the steps make: count, the visible filter, first, fill and click (with its modifiers). */
@@ -1094,10 +1373,12 @@ class LocatorDouble {
     const window = element.ownerDocument.defaultView;
     element.dispatchEvent(new window.Event("input", { bubbles: true }));
     element.dispatchEvent(new window.Event("change", { bubbles: true }));
+    this.#page.typed(element);
   }
 
   async click({ timeout = 30_000, modifiers = [] } = {}) {
     const element = await this.#one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`);
+    this.#page.focus(element);
     this.#page.press(element, modifiers);
   }
 
