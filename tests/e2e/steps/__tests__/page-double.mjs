@@ -703,14 +703,14 @@ export class PageDouble {
 
   // ---------------------------------------------------------------------------
   // uploadFile, fillForm, switchTheme and decideGate: what these four steps do
-  // with a page, in this one place. They name controls and fields as a person
-  // reads them (`getByRole`, `getByLabel`), answer a file chooser
+  // with a page, in this one place. They name controls as a person reads them
+  // (`getByRole`), answer a file chooser
   // (`waitForEvent("filechooser")`) and read the documents of the page's frames
   // (`frames()`). The browser's rules kept for them:
   //   - a named locator matches what the accessibility tree shows: nothing
   //     `hidden`, under an inline `display: none` or under `aria-hidden="true"`,
   //     named by `aria-labelledby`, then `aria-label`, then its labels, its value
-  //     or its text; `getByLabel` matches a field by any of its labels;
+  //     or its text;
   //   - a press dispatches a click, then the page's own handler for it runs (its
   //     declared `press` behaviour), then the browser's default: a file input
   //     opens a file chooser, a submit button sends its form (to the form's
@@ -739,18 +739,6 @@ export class PageDouble {
           PageDouble.#exposed(element) &&
           PageDouble.#matches([PageDouble.#accessibleName(element)], name, exact),
       ),
-    );
-  }
-
-  getByLabel(text, { exact = false } = {}) {
-    return this.#named(`getByLabel('${text}')`, (document) =>
-      Array.from(document.querySelectorAll("input, textarea, select")).filter((element) => {
-        if ((element.getAttribute("type") ?? "").toLowerCase() === "hidden") return false;
-        const labelledBy = PageDouble.#byIds(element, "aria-labelledby").map((node) => PageDouble.#textOf(node));
-        const labels = Array.from(element.labels ?? [], (label) => PageDouble.#textOf(label));
-        const names = [PageDouble.#normal(labelledBy.join(" ")), PageDouble.#normal(element.getAttribute("aria-label")), ...labels];
-        return PageDouble.#matches(names.filter(Boolean), text, exact);
-      }),
     );
   }
 
@@ -1103,6 +1091,9 @@ class LocatorDouble {
   async fill(value, { timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.fill: Timeout ${timeout}ms exceeded.\nCall log:\n  - fill("${value}")`);
     element.value = value;
+    const window = element.ownerDocument.defaultView;
+    element.dispatchEvent(new window.Event("input", { bubbles: true }));
+    element.dispatchEvent(new window.Event("change", { bubbles: true }));
   }
 
   async click({ timeout = 30_000, modifiers = [] } = {}) {

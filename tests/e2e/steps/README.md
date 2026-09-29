@@ -389,7 +389,11 @@ Fills `fields` (`{ label: value }`) by the labels a person reads: a field's labe
 is the text its `aria-labelledby` names, else its `aria-label`, else the text of
 its `<label>`. `form` selects what holds the fields, the whole page by default. A
 label the form does not show within the bound is refused before anything is
-filled, naming the labels it has. With `submit`, it then presses the form's
+filled, naming the labels it has. One reading of the form both lists its labels
+and resolves the field a label names, and a label names a field when both read
+the same without their white space ("Idea (optional)" and "Idea(optional)"
+alike); a label that names two fields is refused as `ambiguous`, naming both,
+before anything is filled. With `submit`, it then presses the form's
 control of that name. A field still empty after the press is a required field
 left empty when the page marks it (`aria-invalid="true"`) or shows an error for
 it, or when it declares itself required; the refusal quotes the page's own error
@@ -404,8 +408,8 @@ ever written to a line. It answers `{ filled, submitted, path }`.
 | `FORM_ERROR_BOUND_MS` | 5_000 | from the press to the page's error for a field left empty |
 | `FORM_POLL_MS` | 100 | how often the form is read |
 
-Refusal kinds: `input` and `unknown-label` (nothing was filled), `driver-failure`,
-`no-submit` (naming the form's controls) and `required-empty`.
+Refusal kinds: `input`, `unknown-label` and `ambiguous` (nothing was filled),
+`driver-failure`, `no-submit` (naming the form's controls) and `required-empty`.
 
 ## `switchTheme(page, { to, record, island?, frameSrcPath?, bounds? })`
 
