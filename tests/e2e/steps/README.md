@@ -17,6 +17,7 @@ defect of a step, with a test, fixed once for every run.
 | `press` | One control pressed by its role and accessible name, never a guess, and the page's next settled state. |
 | `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
 | `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
+| `readControlNames` | Every shown control of a page, by its role and its accessible name, a control without a name included. |
 | `uploadFile` | A file uploaded through the page's own upload control, with its row in the list before it returns. |
 | `fillForm` | Fields filled by their labels; a required field left empty on submit is refused with the page's own error. |
 | `switchTheme` | The theme switched through the app's own control, and read back from the page and its review island. |
@@ -382,6 +383,57 @@ shows), `ambiguous`, `no-control` (naming the card's controls) and `disabled`
 (nothing was pressed), `no-composer` (naming the text boxes the page shows; no
 prompt was sent), `driver-failure` and `no-run` (the refusal names the page, and
 an error the page shows).
+
+<!-- readControlNames: every shown control of a page, by its role and its name. -->
+
+## `readControlNames(page, { record, within?, bounds? })`
+
+Reads every shown control of the page by its role and its accessible name, with
+the reader of the control steps: the same order of name sources and the same
+rule for what counts as shown, so a name it reads is the name `press` looks for.
+Beside the roles of controls (a button, a link, a menu item, a tab, a tree item,
+a text box, a search field, a combobox, a listbox and its options, a checkbox, a
+radio and a radio group, a switch, a slider and a spin button), it reads the
+parts of a page a person moves between: a region, a group, a dialog or an alert
+dialog, a form, a navigation and a search landmark. An element without a `role`
+takes the one its tag gives it: a button is a button, a `nav` is a navigation,
+and a section or a form is a region or a form only once it has a name. An
+element with neither is not listed. With `within`, it reads only inside the one
+shown part of the page of that name, found as `press` finds it.
+
+It answers `{ controls, more }`. `controls` lists each control as
+`{ role, name, from, description }`, in the page's order, at most
+`READ_CONTROL_NAMES_LIMIT` of them, and `more` counts the controls beyond.
+`from` says where the name comes from:
+`aria-labelledby`, `aria-label`, `label` (the control's own labels, or a
+fieldset's legend), `text` (its text, or a button input's value) or `title`.
+`description` is the text `aria-describedby` names. A control without a name is
+listed, with an empty name and an empty `from`: a reading that left it out could
+not show that its name is missing. A section that its heading names for a
+person with a screen reader points to that heading (`aria-labelledby`), and
+reads as a region with the heading's text. A heading alone names its section
+for no one, so such a section is no region; its controls are listed all the
+same.
+
+It writes one line per control: `readControlNames: ` and the JSON of its role,
+its name and `from`, such as
+`readControlNames: {"role":"button","name":"Save","from":"text"}`. A name is
+written whole up to `READ_CONTROL_NAME_LENGTH` characters; a longer one is cut
+there and ends with an ellipsis, and an address in a name is written as "an
+address". When the limit cut controls off, one more line counts them, such as
+`readControlNames: {"more":12}`. The answer keeps every name whole.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `READING_BOUND_MS` | 5_000 | the one reading of the page (`readingMs` changes it) |
+| `READ_CONTROL_NAMES_LIMIT` | 400 | the controls one reading lists; `more` counts the others |
+| `READ_CONTROL_NAME_LENGTH` | 300 | the characters of a name one line carries |
+
+Refusal kinds: `input` (nothing was read), `no-scope` (naming the named parts
+the page shows), `ambiguous` (naming where each part of that name sits),
+`no-control` (the page, or its part, shows no control) and `driver-failure`
+(the reading failed, or gave no answer within its bound; only the error's class
+is kept).
 
 <!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
 

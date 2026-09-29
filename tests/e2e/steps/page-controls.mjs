@@ -1,7 +1,7 @@
-// What the control steps share (press, selectFrom and dispatchRun): the page's
-// controls, read in the page by their role and their accessible name; the mark
-// a step puts on the one control it acts on; and the reading of the document a
-// press starts from.
+// What the control steps share (press, selectFrom, dispatchRun and
+// readControlNames): the page's controls, read in the page by their role and
+// their accessible name; the mark a step puts on the one control it acts on;
+// and the reading of the document a press starts from.
 //
 // A CONTROL IS FOUND AS A PERSON WITH A SCREEN READER FINDS IT: by its role (a
 // button, a link, a tab, a radio, an option) and its accessible name, read in
@@ -48,6 +48,13 @@ export const markedBy = (value) => `[${CONTROL_MARK}="${value}"]`;
 export const plainName = (name) => String(name ?? "").replace(/\s+/g, " ").trim();
 
 /**
+ * A name read from the page, for a line: an address in it is written as "an
+ * address", since a line never carries one.
+ * @param {string} name
+ */
+export const withoutAddress = (name) => String(name).replace(/\b[a-z][a-z\d+.-]*:\/\/\S*/gi, "an address");
+
+/**
  * A name read from the page, for a line: without an address, without double
  * quotes, at most NAME_LENGTH characters, and quoted; a control without a name
  * is said to be one.
@@ -55,7 +62,7 @@ export const plainName = (name) => String(name ?? "").replace(/\s+/g, " ").trim(
  */
 export function quotedName(name) {
   if (!name) return "one without a name";
-  const plain = name.replace(/\b[a-z][a-z\d+.-]*:\/\/\S*/gi, "an address").replace(/"/g, "'");
+  const plain = withoutAddress(name).replace(/"/g, "'");
   return `"${plain.length > NAME_LENGTH ? `${plain.slice(0, NAME_LENGTH - 1).trimEnd()}…` : plain}"`;
 }
 
@@ -113,7 +120,16 @@ export const describeMatches = (matches) => matches.map((match, index) => `${ind
  *     draws beyond `drawn` shows `entry`, or another entry of the list instead;
  *   - `composer`: the shown text boxes and those named `composer`, and the shown
  *     buttons of that same name, the composer's send control. A text box's
- *     placeholder is never its name.
+ *     placeholder is never its name;
+ *   - `names`: every shown control of the page, or of the one shown part of
+ *     the page named `within` (found as `press` finds it, and `scope` as it
+ *     comes back there), in the page's order: its role, its name, where the
+ *     name comes from (`from`) and the text `aria-describedby` names; at most
+ *     `limit` of them, and `more` counts the rest. Beside the roles of controls
+ *     it reads the parts a person moves between: a region (a section with a
+ *     name), a group, a dialog or an alert dialog, a form with a name, a
+ *     navigation and a search landmark. A control without a name is read with
+ *     an empty name.
  * Lists of names come back bounded: `{ names, more }`.
  */
 export function readControls(query) {
@@ -141,15 +157,25 @@ export function readControls(query) {
       if (BUTTON_TYPES.includes(type)) return "button";
       if (type === "radio" || type === "checkbox") return type;
       if (type === "search") return "searchbox";
+      if (type === "number") return "spinbutton";
+      if (type === "range") return "slider";
       return ["", "text", "email", "tel", "url"].includes(type) ? "textbox" : "";
     }
     if (tag === "textarea") return "textbox";
     if (tag === "select") return element.multiple || element.size > 1 ? "listbox" : "combobox";
     if (tag === "option") return "option";
     if (tag === "fieldset") return "group";
+    if (tag === "nav") return "navigation";
+    if (tag === "dialog") return "dialog";
+    if (tag === "search") return "search";
+    // A section is a region, and a form a form, only once it has a name.
+    if (tag === "section") return namedBy(element, "region").name ? "region" : "";
+    if (tag === "form") return namedBy(element, "form").name ? "form" : "";
     return "";
   };
   const FROM_CONTENT = ["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "radio", "checkbox", "switch", "treeitem"];
+  // The roles of a field: what a person fills in, picks from or sets.
+  const FIELD_ROLES = ["textbox", "searchbox", "combobox", "listbox", "checkbox", "radio", "switch", "slider", "spinbutton"];
   // The text a node gives a name: its text without hidden parts, an image's
   // alternative text, and a field's value; `skip` is the control being named.
   const contentOf = (node, skip) => {
@@ -174,23 +200,32 @@ export function readControls(query) {
       .map((id) => document.getElementById(id))
       .filter(Boolean);
   const legendOf = (element) => Array.from(element.children).find((child) => child.localName === "legend") || null;
-  const nameOf = (element) => {
+  // An element's name and where it comes from (`from`), read in this order: the
+  // text of the elements `aria-labelledby` names; `aria-label`; its own labels,
+  // or a fieldset's legend (`label`); a button input's value or alternative
+  // text, or, for a role that takes its name from its content, its text without
+  // hidden parts (`text`); and last its title (`title`). `from` is empty when
+  // there is no name. `role` is the element's role, when it has been read.
+  const namedBy = (element, role) => {
+    const named = (name, from) => ({ name, from: name ? from : "" });
     const labelledBy = text(byIds(element, "aria-labelledby").map((node) => contentOf(node, element)).join(" "));
-    if (labelledBy) return labelledBy;
+    if (labelledBy) return named(labelledBy, "aria-labelledby");
     const label = text(element.getAttribute("aria-label"));
-    if (label) return label;
+    if (label) return named(label, "aria-label");
     const labels = element.labels ? text(Array.from(element.labels).map((node) => contentOf(node, element)).join(" ")) : "";
-    if (labels) return labels;
-    if (element.localName === "fieldset" && legendOf(element)) return text(contentOf(legendOf(element), null));
+    if (labels) return named(labels, "label");
+    if (element.localName === "fieldset" && legendOf(element)) return named(text(contentOf(legendOf(element), null)), "label");
     if (element.localName === "input" && BUTTON_TYPES.includes(typeOf(element))) {
-      return text(typeOf(element) === "image" ? element.getAttribute("alt") : element.value) || text(element.getAttribute("title"));
+      const shows = text(typeOf(element) === "image" ? element.getAttribute("alt") : element.value);
+      return shows ? named(shows, "text") : named(text(element.getAttribute("title")), "title");
     }
-    if (FROM_CONTENT.includes(roleOf(element))) {
+    if (FROM_CONTENT.includes(role === undefined ? roleOf(element) : role)) {
       const content = text(contentOf(element, null));
-      if (content) return content;
+      if (content) return named(content, "text");
     }
-    return text(element.getAttribute("title"));
+    return named(text(element.getAttribute("title")), "title");
   };
+  const nameOf = (element) => namedBy(element).name;
   const disabled = (element) =>
     (typeof element.matches === "function" && element.matches(":disabled")) || element.getAttribute("aria-disabled") === "true";
   // A checkbox, a radio or a switch reads as checked (true), not (false) or `mixed`.
@@ -252,6 +287,26 @@ export function readControls(query) {
     const role = roleOf(element);
     return { role, part: partOf(element), disabled: disabled(element), href, checked: TOGGLES.includes(role) ? checkedOf(element) : null };
   };
+  // The one shown part of the page named `within` (a landmark, or a section
+  // named by its label or its heading): `root` is that part, or null when no
+  // part or several parts carry the name, and `scope` says how many carry it,
+  // where each sits, and the named parts the page shows.
+  const scopeOf = (within) => {
+    const parts = Array.from(document.querySelectorAll(PARTS.map(([, selector]) => selector).join(", ")))
+      .filter(exposed)
+      .map((element) => ({ element, kind: PARTS.find(([, selector]) => element.matches(selector))[0], name: titleOf(element) }))
+      .filter((part) => part.name);
+    const found = innermost(parts.filter((part) => part.name === within));
+    return {
+      root: found.length === 1 ? found[0].element : null,
+      scope: {
+        found: found.length,
+        kind: found.length === 1 ? found[0].kind : "",
+        parts: listOf(parts.map((part) => part.name)),
+        matches: found.map((part) => ({ kind: part.kind, part: partOf(part.element) })),
+      },
+    };
+  };
   // The controls of the press query's role and those of its name: within the one
   // shown part of the page named `within` when it names one, and none when no
   // part or several parts carry that name.
@@ -259,19 +314,8 @@ export function readControls(query) {
     let root = document;
     let scope = null;
     if (query.within) {
-      const parts = Array.from(document.querySelectorAll(PARTS.map(([, selector]) => selector).join(", ")))
-        .filter(exposed)
-        .map((element) => ({ element, kind: PARTS.find(([, selector]) => element.matches(selector))[0], name: titleOf(element) }))
-        .filter((part) => part.name);
-      const found = innermost(parts.filter((part) => part.name === query.within));
-      scope = {
-        found: found.length,
-        kind: found.length === 1 ? found[0].kind : "",
-        parts: listOf(parts.map((part) => part.name)),
-        matches: found.map((part) => ({ kind: part.kind, part: partOf(part.element) })),
-      };
-      if (found.length !== 1) return { scope, controls: [], matches: [] };
-      root = found[0].element;
+      ({ root, scope } = scopeOf(query.within));
+      if (!root) return { scope, controls: [], matches: [] };
     }
     const controls = controlsIn(root, [query.role]);
     return { scope, controls, matches: controls.filter((element) => nameOf(element) === query.name) };
@@ -378,7 +422,6 @@ export function readControls(query) {
     // The label element before a combobox in its form group, the nearest element
     // that holds one before it: a label of no other control, with no other shown
     // field between the two.
-    const FIELD_ROLES = ["textbox", "searchbox", "combobox", "listbox", "checkbox", "radio", "switch", "slider", "spinbutton"];
     const isField = (node) => (["input", "select", "textarea"].includes(node.localName) ? typeOf(node) !== "hidden" : FIELD_ROLES.includes(roleOf(node)));
     const before = (node, other) => Boolean(node.compareDocumentPosition(other) & 4);
     const labelBefore = (element) => {
@@ -507,6 +550,30 @@ export function readControls(query) {
     if (matches.length === 1) mark(matches[0], `${query.mark}t`);
     if (sends.length === 1) mark(sends[0], `${query.mark}s`);
     return { path: location.pathname, boxes: listOf(boxes.map(nameOf)), found: matches.length, sends: sends.length };
+  }
+
+  if (query.mode === "names") {
+    // The roles a reading lists: those of the controls this reader knows, and
+    // the parts of a page a person moves between.
+    const LISTED = [...new Set([...FROM_CONTENT, ...FIELD_ROLES, "radiogroup", "group", "region", "dialog", "alertdialog", "form", "navigation", "search"])];
+    let root = document;
+    let scope = null;
+    if (query.within) {
+      ({ root, scope } = scopeOf(query.within));
+      if (!root) return { path: location.pathname, scope, controls: [], more: 0 };
+    }
+    const found = [];
+    for (const element of Array.from(root.querySelectorAll("*"))) {
+      const role = roleOf(element);
+      if (LISTED.includes(role) && exposed(element)) found.push({ element, role });
+    }
+    // A control without a name is read all the same, with an empty name.
+    const controls = found.slice(0, query.limit).map(({ element, role }) => ({
+      role,
+      ...namedBy(element, role),
+      description: text(byIds(element, "aria-describedby").map((node) => contentOf(node, element)).join(" ")),
+    }));
+    return { path: location.pathname, scope, controls, more: found.length - controls.length };
   }
 
   throw new Error("readControls: no such mode");

@@ -733,6 +733,68 @@ export const PICK_SEARCH_PAGE = [
   `<script type="application/json" id="fixture-searches">${JSON.stringify(SEARCH_FIELDS)}</script>`,
 ].join("");
 
+// readControlNames: the pages its cases read.
+
+/** An address in a control's name, built from parts so no address literal sits in source. */
+export const NAMES_ADDRESS = ["https:", "", ["docs", "example", "test"].join("."), "guide"].join("/");
+/** A name of 400 characters: longer than a line carries. */
+export const NAMES_LONG_NAME = "0123456789".repeat(40);
+/** A name of 300 characters: as long as a line carries. */
+export const NAMES_FULL_NAME = "9876543210".repeat(30);
+
+/**
+ * The pages readControlNames reads, by the second segment of their path:
+ *   - `start`: controls with a name and without one, in the order a reading
+ *     lists them. A navigation named by its label, with a link named by its
+ *     text and one that shows only an image hidden from assistive technology;
+ *     a section its heading names (`aria-labelledby`), with buttons named by
+ *     their text, by `aria-label` and by their title, a button with no name,
+ *     fields named by a label and by `aria-labelledby` (one described by a
+ *     hint), a field whose only text is its placeholder, which is never a name,
+ *     and a select with its options; a section whose heading names it for no
+ *     one, so it is no region; two sections that carry one heading; a labelled
+ *     section with no control in it; a form named by its label, with a group
+ *     named by its legend; a form with no name, which is no form; a dialog
+ *     named by its heading, an alert dialog and a search landmark; and three
+ *     controls that are not shown: one hidden from assistive technology, one
+ *     `hidden`, and one inside `display: none`.
+ *   - `long`: a name longer than a line carries, one as long as it carries, and
+ *     one that holds an address.
+ *   - `many`: more controls than one reading lists.
+ *   - `empty`: no shown control, only ones that are not shown.
+ */
+export const NAMES_PAGES = Object.freeze({
+  start: [
+    '<header><nav aria-label="Main"><a href="/nav/target">Target</a> <a href="/nav/start"><svg aria-hidden="true"></svg></a></nav></header>',
+    "<main><h1>Plans and drafts</h1>",
+    '<section aria-labelledby="names-plans-title"><h2 id="names-plans-title">Plans</h2>',
+    '<button type="button">Save plan</button> <button type="button" aria-label="Delete plan"><svg aria-hidden="true"></svg></button>',
+    ' <button type="button"><svg aria-hidden="true"></svg></button> <button type="button" title="Refresh"><svg aria-hidden="true"></svg></button>',
+    '<label for="names-title">Title</label> <input id="names-title" aria-describedby="names-title-hint"><p id="names-title-hint">Shown on the card.</p>',
+    '<span id="names-owner">Owner</span> <input aria-labelledby="names-owner"> <input placeholder="Search plans">',
+    '<select aria-label="Size"><option>Small</option><option>Large</option></select></section>',
+    '<section><h2>Drafts</h2><button type="button">Open draft</button></section>',
+    '<section><h2>Twin</h2><button type="button">First twin</button></section>',
+    '<section><h2>Twin</h2><button type="button">Second twin</button></section>',
+    '<section aria-label="Notes"><p>Nothing to press here.</p></section>',
+    '<form aria-label="Filters"><fieldset><legend>Colour</legend><label><input type="radio" name="colour"> Red</label></fieldset></form>',
+    '<form><button type="submit">Send</button></form>',
+    '<div role="dialog" aria-labelledby="names-confirm-title"><h2 id="names-confirm-title">Confirm</h2><button type="button">Close</button></div>',
+    '<div role="alertdialog" aria-label="Discard the draft?"><button type="button">Discard</button></div>',
+    '<search aria-label="Site"><input type="search" aria-label="Search the site"></search>',
+    '<div aria-hidden="true"><button type="button">Hidden twin</button></div> <button type="button" hidden>Not drawn</button>',
+    '<div style="display:none"><button type="button">Not displayed</button></div>',
+    "</main>",
+  ].join(""),
+  long: [
+    `<button type="button" aria-label="${NAMES_LONG_NAME}"></button>`,
+    `<button type="button" aria-label="${NAMES_FULL_NAME}"></button>`,
+    `<a href="/nav/target">Read ${NAMES_ADDRESS} first</a>`,
+  ].join(""),
+  many: Array.from({ length: 405 }, (_, i) => `<button type="button">Item ${i + 1}</button>`).join(" "),
+  empty: '<p>No control is shown here.</p><div aria-hidden="true"><button type="button">Hidden</button></div><button type="button" hidden>Not drawn</button>',
+});
+
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
@@ -862,6 +924,9 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         );
         return;
       }
+      // readControlNames: its pages.
+      const namesPage = /^\/names\/([a-z]+)$/.exec(url.pathname);
+      if (namesPage && Object.hasOwn(NAMES_PAGES, namesPage[1])) return html(200, page(url.pathname, NAMES_PAGES[namesPage[1]]));
       html(404, "<!doctype html><title>Not found</title>");
     });
   };
