@@ -11,9 +11,10 @@
 //   - `{ press, choose }`: pressing `press` presses the hidden file input
 //     `choose`, which opens the file chooser;
 //   - `{ chosen, upload, rows, refused, delayMs }`: each file chosen on `chosen`
-//     is posted to `upload`; once the app has answered and `delayMs` has passed,
-//     a row naming it joins the list `rows`, or, when the app refused it,
-//     `refused` shows the refusal;
+//     is posted to `upload`, and the input is emptied at once, as the library's
+//     own handler empties it so that the same file can be chosen again; once
+//     the app has answered and `delayMs` has passed, a row naming it joins the
+//     list `rows`, or, when the app refused it, `refused` shows the refusal;
 //   - `{ submit, sends, done }`: sending the form `submit` marks each empty
 //     `data-fixture-required` field invalid and shows its error text (in the
 //     element `data-fixture-error-in` names, or in a destructive line after the
@@ -109,6 +110,8 @@ const CONTROL_RUNNER = `<script>
         });
       });
     });
+    // Emptied at once, as the library's own handler empties it: a browser reports the same file chosen again only then.
+    input.value = "";
   }
   function send(op, form) {
     form.querySelectorAll("[data-fixture-shown-error]").forEach(function (node) { node.remove(); });

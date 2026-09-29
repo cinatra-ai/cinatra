@@ -258,7 +258,10 @@ another path in the address):
 - no start signal within `PRESS_START_BOUND_MS`: no navigation started, and the
   page stayed where it was;
 - a start signal: the navigation must land within `PRESS_SETTLE_BOUND_MS`, on a
-  new document that has loaded, or in place on another path.
+  new document that has loaded, or in place on another path. A browser holds a
+  reading of the page while a navigation is in flight; the step waits for one
+  no longer than the bound leaves, so a navigation that lands late is refused
+  at the bound, with the page still on the document it started from.
 
 A press whose navigation starts only after the start bound (a handler that waits
 for a slow answer first) reads as one that stayed; give such a control a longer
