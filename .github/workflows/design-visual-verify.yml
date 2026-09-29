@@ -544,8 +544,17 @@ jobs:
         # turns the cache off for this job with a named line. The branch names
         # reach the script through `env`, never interpolated into it: a pull
         # request author chooses them.
+        #
+        # Off unless labelled (cinatra#3810): the step runs only for a pull
+        # request that carries the label in the condition below, and every other
+        # job skips it (a merge-queue run has no pull request, so it reads as no
+        # label) and builds exactly as it did without the cache. A cold build
+        # with the cache on measured 19 to 20 minutes and 30 to 31 GB of memory
+        # against 7 to 9 minutes and 24.5 to 26 GB with it off (2026-09-29), and
+        # no base branch cache is written while the merge queue is not in use,
+        # so without the label the first build of every pull request is cold.
         id: build-cache
-        if: ${{ runner.environment == 'self-hosted' }}
+        if: ${{ runner.environment == 'self-hosted' && contains(github.event.pull_request.labels.*.name, 'design-build-cache') }}
         env:
           DESIGN_BUILD_CACHE_EVENT: ${{ github.event_name }}
           DESIGN_BUILD_CACHE_PR: ${{ github.event.pull_request.number }}
