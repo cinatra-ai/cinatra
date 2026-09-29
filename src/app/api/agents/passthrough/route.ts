@@ -37,6 +37,7 @@ import {
 } from "./answered-gate-provenance";
 import { shapeObjectsUpdateInput } from "./objects-update-seam";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
+import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 
 /**
@@ -357,14 +358,15 @@ export async function POST(req: Request): Promise<Response> {
   if (!tool) {
     return NextResponse.json({ error: "`tool` is required" }, { status: 400 });
   }
-  // A NAME THIS LIST DOES NOT CARRY IS NOT REFUSED HERE (cinatra#3035, epic
-  // #3023 W11). Beside the host's own names the passthrough also admits a tool
-  // the CALLING extension's own declaration names — and which extension is
-  // calling is only known once the run below is PROVEN, so the decision cannot
-  // be made from the body. Such a tool takes the extension-scoped road below,
-  // which refuses it when the caller's own pinned declaration names no node
-  // that calls it: fail-closed either way, and no pack's tool name in the host.
-  const staticallyAllowed = ALLOWED_TOOLS.has(tool);
+  if (!ALLOWED_TOOLS.has(tool)) {
+    return NextResponse.json(
+      {
+        error: `Tool "${tool}" is not on the deterministic-passthrough allowlist. ` +
+          `Allowed: ${[...ALLOWED_TOOLS].join(", ")}.`,
+      },
+      { status: 403 },
+    );
+  }
 
   const rawInput =
     body.input && typeof body.input === "object" && !Array.isArray(body.input)
@@ -614,7 +616,7 @@ export async function POST(req: Request): Promise<Response> {
         );
       }
       result = outcome.result;
-    } else if (EXTENSION_SCOPED_TOOLS.has(tool) || !staticallyAllowed) {
+    } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
       // cinatra#3031 (epic #3023 W7). The scope comes from the run PROVEN by
       // bindBridgeRunId above — its template package and the version the run is
       // pinned to — never from the request body, which is what makes the
@@ -756,10 +758,18 @@ export async function POST(req: Request): Promise<Response> {
               ? (input.rawData as Record<string, unknown>)
               : {})
           : input;
-      const shaped = {
+      const shaped: Record<string, unknown> = {
         ...echoFields,
         [idField]: resultObj.id ?? resultObj[idField] ?? null,
       };
+      // THE FILED REVIEW SET RIDES OUT ON THE ECHO (cinatra#3035), for every
+      // extension alike: a declared module that filed review targets gets them
+      // back at the top level under the dispatch's reserved key, as JSON TEXT,
+      // because a marked review gate's input is one string.
+      const filedTargets = resultObj[EXTENSION_TOOL_REVIEW_TARGETS_KEY];
+      if (tool === "extension_tool" && Array.isArray(filedTargets)) {
+        shaped[EXTENSION_TOOL_REVIEW_TARGETS_KEY] = JSON.stringify(filedTargets);
+      }
       return NextResponse.json(shaped);
     }
 

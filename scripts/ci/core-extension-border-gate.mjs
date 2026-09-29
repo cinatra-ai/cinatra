@@ -588,6 +588,9 @@ export function baselineDefects(doc) {
       if (!Number.isInteger(n) || n < 0) bad.push(`line count is not a whole number (${f}): ${id}`);
       if (!f.startsWith(`${e.key}/`) && f !== e.key) bad.push(`recorded file is outside the module (${f}): ${id}`);
     }
+    if (Object.keys(files).length === 0) {
+      bad.push(`stale entry, every recorded file is gone (an empty line map), run --write-baseline to drop it: ${id}`);
+    }
   }
   return bad;
 }
@@ -714,6 +717,33 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
   return { findings, violations: violationsOf(findings, baseline.keys), stale, baseline };
 }
 
+// The writer may only SHRINK a pack-shaped module. A recorded file that grew
+// keeps its recorded allowance (so the growth stays a violation the author
+// must answer for), a file that shrank records the smaller count, a file that
+// is gone leaves the ledger, and a NEW file is never written in — otherwise
+// `--write-baseline` would launder exactly the growth this gate exists to
+// refuse. An entry whose module is gone leaves the ledger whole.
+export function shrinkPackShapedEntries(repoRoot, previousEntries) {
+  const entries = [];
+  const refused = [];
+  for (const e of previousEntries) {
+    if (e.rule !== "pack-shaped-core-domain") continue;
+    const current = measurePackShapedDomain(repoRoot, e.key);
+    const files = {};
+    for (const [f, recorded] of Object.entries(e.files ?? {})) {
+      if (!(f in current)) continue;
+      if (current[f] > recorded) refused.push(`${e.key} :: ${f} grew ${recorded} -> ${current[f]}`);
+      files[f] = Math.min(recorded, current[f]);
+    }
+    for (const f of Object.keys(current)) {
+      if (!(f in (e.files ?? {}))) refused.push(`${e.key} :: ${f} is a NEW file`);
+    }
+    if (Object.keys(current).length === 0) continue;
+    entries.push({ ...e, files });
+  }
+  return { entries, refused };
+}
+
 function writeBaseline(repoRoot, baselinePath) {
   const previous = readBaseline(baselinePath);
   const { findings } = scanRepository({ repoRoot, baselinePath });
@@ -727,27 +757,8 @@ function writeBaseline(repoRoot, baselinePath) {
       reason: previous.reasons.get(k) ?? "",
     });
   }
-  // The writer may only SHRINK a pack-shaped module. A recorded file that grew
-  // keeps its recorded allowance (so the growth stays a violation the author
-  // must answer for), a file that shrank records the smaller count, a file that
-  // is gone leaves the ledger, and a NEW file is never written in — otherwise
-  // `--write-baseline` would launder exactly the growth this gate exists to
-  // refuse.
-  const refused = [];
-  for (const e of previous.entries) {
-    if (e.rule !== "pack-shaped-core-domain") continue;
-    const current = measurePackShapedDomain(repoRoot, e.key);
-    const files = {};
-    for (const [f, recorded] of Object.entries(e.files ?? {})) {
-      if (!(f in current)) continue;
-      if (current[f] > recorded) refused.push(`${e.key} :: ${f} grew ${recorded} -> ${current[f]}`);
-      files[f] = Math.min(recorded, current[f]);
-    }
-    for (const f of Object.keys(current)) {
-      if (!(f in (e.files ?? {}))) refused.push(`${e.key} :: ${f} is a NEW file`);
-    }
-    entries.push({ ...e, files });
-  }
+  const { entries: domainEntries, refused } = shrinkPackShapedEntries(repoRoot, previous.entries);
+  entries.push(...domainEntries);
   entries.sort((a, b) => a.rule.localeCompare(b.rule) || a.key.localeCompare(b.key));
   const doc = JSON.parse(readFileSync(baselinePath, "utf8"));
   doc.entries = entries;

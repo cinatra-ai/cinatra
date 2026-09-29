@@ -35,7 +35,6 @@ import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
-import { BlogIdeaSelectionRenderer } from "./blog-idea-selection-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
   PersonalSkillRenderer,
@@ -113,19 +112,11 @@ const RENDERER_KIND_TABLE: Record<
     makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
-  // cinatra#1796: the DEDICATED idea-selection chooser for blog-pipeline's
-  // `idea_selection_gate`, activated by the binding id
-  // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition). The
-  // host ships this component (unlike the migrated *-review kinds below): the
-  // gate relocated OFF the shared reviewer-output binding onto this one
-  // (blog-pipeline-agent#40). Both the former inline chooser and the
-  // reviewer-output dispatcher it lived in are now gone (#1796 teardown); this
-  // dedicated binding is the only path to the chooser.
-  "blog-idea-selection": {
-    renderer: BlogIdeaSelectionRenderer,
-    credentialSafe: true,
-    holdsContinueUntilPicked: true,
-  },
+  // MIGRATED (cinatra#3380): the extension that declares the binding ships the
+  // component. The KIND stays for the vocabulary (set-equality) and its hold;
+  // a binding not in the build's component map degrades to the
+  // SchemaFieldRenderer floor here (never blank).
+  "blog-idea-selection": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, holdsContinueUntilPicked: true },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],

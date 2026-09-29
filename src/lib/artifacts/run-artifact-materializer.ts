@@ -257,6 +257,65 @@ function readFanOutMemberTitle(
   return { ok: true, title };
 }
 
+/**
+ * A plain JSON object member — not an array, not null, not a class instance.
+ * The member-field fan-out (cinatra#3732) files exactly such a member.
+ */
+function isPlainObjectMember(member: unknown): member is Record<string, unknown> {
+  if (typeof member !== "object" || member === null || Array.isArray(member)) return false;
+  const proto = Object.getPrototypeOf(member);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Read a member-field fan-out member (cinatra#3732): the member ITSELF is the
+ * body, serialized as JSON unchanged, and its title is the value of the member's
+ * OWN field the binding names — trimmed, non-empty, never invented and never
+ * read from outside the member. Fail-closed on each count, for this member only.
+ */
+function readFanOutObjectMember(
+  member: unknown,
+  titleField: string,
+): { ok: true; title: string; body: string } | { ok: false; error: string } {
+  if (!isPlainObjectMember(member)) {
+    return {
+      ok: false,
+      error:
+        `it is not a plain object (got ${
+          member === null ? "null" : Array.isArray(member) ? "array" : typeof member
+        }) — a member-field fan-out files each object member as itself`,
+    };
+  }
+  const raw = Object.prototype.hasOwnProperty.call(member, titleField)
+    ? member[titleField]
+    : undefined;
+  if (typeof raw !== "string") {
+    return {
+      ok: false,
+      error:
+        raw === undefined
+          ? `its title field "${titleField}" is missing`
+          : `its title field "${titleField}" is not a string (got ${
+              raw === null ? "null" : Array.isArray(raw) ? "array" : typeof raw
+            })`,
+    };
+  }
+  const title = raw.trim();
+  if (title.length === 0) {
+    return { ok: false, error: `its title field "${titleField}" carries no non-empty title` };
+  }
+  let body: string;
+  try {
+    body = JSON.stringify(member);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `it could not be serialized as JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { ok: true, title, body };
+}
+
 function pool(): Pool {
   return getPooledDb({
     name: "run-artifact-materializer",
@@ -1027,10 +1086,13 @@ export async function materializeRunArtifacts(input: {
         continue;
       }
       // ------------------------------------------------------------------
-      // FAN-OUT (cinatra#3034, plan item 0.27): the bound output is a list of
-      // plain-text members and each member becomes ITS OWN artifact, titled
-      // from its own first line behind the declared prefix. One ledger
-      // identity, one outcome and one row per member — never a batch.
+      // FAN-OUT (cinatra#3034, plan item 0.27): the bound output is a list and
+      // each member becomes ITS OWN artifact. On the first-line road a member
+      // is plain text, titled from its own first line behind the declared
+      // prefix; on the member-field road (cinatra#3732) a member is an object,
+      // filed unchanged as its own JSON body and titled from the field the
+      // binding names. One ledger identity, one outcome and one row per member
+      // — never a batch.
       // ------------------------------------------------------------------
       if (binding.fanOut !== undefined) {
         const fanMime = resolveBindingMime(binding, outputs);
@@ -1046,6 +1108,11 @@ export async function materializeRunArtifacts(input: {
                 ? " (output missing from the run's declared outputs)"
                 : ` (got ${typeof members})`),
           );
+          continue;
+        }
+        if (members.length === 0 && binding.fanOut.titleFrom === "member-field") {
+          // An empty list is a normal result for a feed (cinatra#3732): the run
+          // listed nothing new, so nothing is written and nothing fails.
           continue;
         }
         if (members.length === 0) {
@@ -1066,6 +1133,18 @@ export async function materializeRunArtifacts(input: {
         for (const candidate of members) {
           if (typeof candidate === "string") {
             fanOutTotalBytes += new TextEncoder().encode(candidate).byteLength;
+          } else if (
+            binding.fanOut.titleFrom === "member-field" &&
+            isPlainObjectMember(candidate)
+          ) {
+            // The member-field road writes each object member serialized, so
+            // the list cap counts those serialized bytes. A member that cannot
+            // be serialized is never written: it fails alone in the member loop.
+            try {
+              fanOutTotalBytes += new TextEncoder().encode(JSON.stringify(candidate)).byteLength;
+            } catch {
+              // counted as nothing; readFanOutObjectMember fails this member alone
+            }
           }
         }
         if (fanOutTotalBytes > MAX_FAN_OUT_TOTAL_BYTES) {
@@ -1098,19 +1177,33 @@ export async function materializeRunArtifacts(input: {
             });
           };
           const member = members[index];
-          if (typeof member !== "string") {
-            failMember(
-              `member ${index} of "${contentFrom}" is not a plain string ` +
-                `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
-            );
-            continue;
+          let memberBody: string;
+          let memberTitleText: string;
+          if (binding.fanOut.titleFrom === "member-field") {
+            const objectMember = readFanOutObjectMember(member, binding.fanOut.titleField);
+            if (!objectMember.ok) {
+              failMember(`member ${index} of "${contentFrom}": ${objectMember.error}`);
+              continue;
+            }
+            memberBody = objectMember.body;
+            memberTitleText = objectMember.title;
+          } else {
+            if (typeof member !== "string") {
+              failMember(
+                `member ${index} of "${contentFrom}" is not a plain string ` +
+                  `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
+              );
+              continue;
+            }
+            const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
+            if (!memberTitle.ok) {
+              failMember(`member ${index} of "${contentFrom}": ${memberTitle.error}`);
+              continue;
+            }
+            memberBody = member;
+            memberTitleText = memberTitle.title;
           }
-          const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
-          if (!memberTitle.ok) {
-            failMember(`member ${index} of "${contentFrom}": ${memberTitle.error}`);
-            continue;
-          }
-          const memberBytes = new TextEncoder().encode(member).byteLength;
+          const memberBytes = new TextEncoder().encode(memberBody).byteLength;
           if (memberBytes > MAX_AUTHORED_CONTENT_BYTES) {
             failMember(
               `member ${index} of "${contentFrom}" (${memberBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
@@ -1125,9 +1218,9 @@ export async function materializeRunArtifacts(input: {
             nodeId,
             path: "end_node_binding",
             extension: binding.extension,
-            title: memberTitle.title,
+            title: memberTitleText,
             mime: fanMime.mime,
-            content: member,
+            content: memberBody,
             ownership,
             resolvedTarget: resolvedFan.target,
             mimeDescription: "the binding resolved MIME",
