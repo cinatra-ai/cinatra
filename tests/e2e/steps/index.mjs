@@ -124,3 +124,25 @@ export {
   GATE_WAITING_STATUS,
   decideGate,
 } from "./decide-gate.mjs";
+// typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress: a
+// window's text box, a turn of its conversation, a reload, a composer's message
+// answered with a card, and an address no link leads to.
+export {
+  RUN_WINDOW_ENTRY_ATTRIBUTE,
+  RUN_WINDOW_FIELD,
+  TYPE_IN_WINDOW_BOUNDS,
+  WINDOW_FIELD_BOUND_MS,
+  WINDOW_SENT_BOUND_MS,
+  typeInWindow,
+} from "./type-in-window.mjs";
+export { TURN_BOUND_MS, TURN_CEILING_MS, TURN_POLL_MS, WAIT_FOR_TURN_BOUNDS, waitForTurn } from "./wait-for-turn.mjs";
+export { RELOAD_BOUND_MS, RELOAD_PAGE_BOUNDS, reloadPage } from "./reload-page.mjs";
+export {
+  COMPOSER_CARD_BOUND_MS,
+  COMPOSER_CARD_KIND_ATTRIBUTES,
+  COMPOSER_CARD_SELECTOR,
+  COMPOSER_ERROR_SELECTOR,
+  SEND_IN_COMPOSER_BOUNDS,
+  sendInComposer,
+} from "./send-in-composer.mjs";
+export { OPEN_ADDRESS_BOUNDS, OPEN_ADDRESS_BOUND_MS, openAddress } from "./open-address.mjs";

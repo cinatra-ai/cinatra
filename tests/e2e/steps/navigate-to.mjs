@@ -64,8 +64,13 @@ const NAME_LENGTH = 60;
 /** The modifier held while pressing a link to open it in a further page: Meta on macOS, Control elsewhere. */
 export const FURTHER_PAGE_MODIFIER = "ControlOrMeta";
 
-/** @param {string} path */
-function linksTo(path) {
+/**
+ * The selector of the links that lead to `path` in this tab: its `href` is the
+ * path, or the path with a query string or a fragment. openAddress reads the
+ * page's links with it too.
+ * @param {string} path
+ */
+export function linksTo(path) {
   return [`a[href="${path}"]`, `a[href^="${path}?"]`, `a[href^="${path}#"]`]
     .map((selector) => `${selector}:not([target="_blank"])`)
     .join(", ");
