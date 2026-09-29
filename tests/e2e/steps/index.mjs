@@ -74,6 +74,8 @@ export {
   DISPATCH_RUN_SELECTOR,
   dispatchRun,
 } from "./dispatch-run.mjs";
+// readControlNames: every shown control of a page, by its role and its name.
+export { READ_CONTROL_NAMES_BOUNDS, READ_CONTROL_NAMES_LIMIT, READ_CONTROL_NAME_LENGTH, readControlNames } from "./read-control-names.mjs";
 // uploadFile, fillForm, switchTheme and decideGate: the steps that drive a
 // page's own controls.
 export {

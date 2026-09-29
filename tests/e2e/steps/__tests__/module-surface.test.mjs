@@ -74,6 +74,9 @@ BOUND_NAMES.push(
   "UPLOAD_ROW_BOUND_MS",
 );
 BOUND_NAMES.sort();
+// readControlNames joins the steps; its one bound of time is the shared reading
+// bound, listed above already.
+STEP_NAMES.push("readControlNames");
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {
