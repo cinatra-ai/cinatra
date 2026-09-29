@@ -18,7 +18,9 @@ const BOUNDS = Object.freeze({ fieldsMs: 1500, actionMs: 2000, errorMs: 1000, po
 const TITLE = ["fixture", "title", "one"].join("-");
 const SUMMARY = ["fixture", "summary", "two"].join("-");
 const NOTES = ["fixture", "notes", "three"].join("-");
-const SECRETS = [TITLE, SUMMARY, NOTES];
+const IDEA = ["fixture", "idea", "four"].join("-");
+const BRIEF = ["fixture", "brief", "five"].join("-");
+const SECRETS = [TITLE, SUMMARY, NOTES, IDEA, BRIEF];
 const LABELS = '"Title", "Summary *", "Notes (optional)", "Reference"';
 
 for (const backend of BACKENDS) {
@@ -63,6 +65,28 @@ for (const backend of BACKENDS) {
       });
     });
 
+    // A label whose inline parts meet with no white space: the page's text reads
+    // "Idea(optional)", the form reading names it "Idea (optional)". Either names the field.
+    it("fills a field whose label has inline parts by the text the page reads, without a space between the parts", async () => {
+      await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
+        const fillForm = await open(page, app, "/form/idea");
+        const result = await fillForm(page, { fields: { "Idea(optional)": IDEA }, record, bounds: BOUNDS });
+        expect(result).toEqual({ filled: ["Idea(optional)"], submitted: false, path: "/form/idea" });
+        expect(await valueOf(page, "#idea")).toBe(IDEA);
+        expect(lines).toEqual(['fillForm: filled "Idea(optional)" in the form on /form/idea']);
+      });
+    });
+
+    it("fills the same field by the name the form reading gives it, with a space between the parts", async () => {
+      await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
+        const fillForm = await open(page, app, "/form/idea");
+        const result = await fillForm(page, { fields: { "Idea (optional)": IDEA }, record, bounds: BOUNDS });
+        expect(result).toEqual({ filled: ["Idea (optional)"], submitted: false, path: "/form/idea" });
+        expect(await valueOf(page, "#idea")).toBe(IDEA);
+        expect(lines).toEqual(['fillForm: filled "Idea (optional)" in the form on /form/idea']);
+      });
+    });
+
     it("refuses by name a label the form does not have, naming the labels it has", async () => {
       await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
         const fillForm = await open(page, app, "/form/profile");
@@ -76,6 +100,21 @@ for (const backend of BACKENDS) {
         expect(lines).toEqual([error.message]);
         expect(await valueOf(page, "#title"), "a field was filled before the refusal").toBe("");
         expect(saved(app)).toEqual([]);
+      });
+    });
+
+    it("refuses, naming both, a label that matches two fields once white space is left out, and fills neither", async () => {
+      await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
+        const fillForm = await open(page, app, "/form/brief");
+        const error = await refusal(fillForm(page, { fields: { "Brief (optional)": BRIEF }, record, bounds: BOUNDS }));
+        expect(error.kind).toBe("ambiguous");
+        expect(error.message).toBe(
+          'fillForm refused (ambiguous): the label "Brief (optional)" matches 2 shown fields in the form on /form/brief: ' +
+            '"Brief (optional)", "Brief(optional)" — nothing was filled, since a fill never guesses',
+        );
+        expect(lines).toEqual([error.message]);
+        expect(await valueOf(page, "#brief"), "a field was filled before the refusal").toBe("");
+        expect(await valueOf(page, "#brief-more"), "a field was filled before the refusal").toBe("");
       });
     });
 

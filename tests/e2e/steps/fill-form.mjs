@@ -12,6 +12,12 @@
 // `aria-labelledby` elements, else its `aria-label`, else the text of its
 // `<label>` elements. The form is the element `form` selects, the whole page by
 // default. Values are never written to a line: a field may hold a credential.
+// One reading of the form (readForm) names the fields, for the labels a refusal
+// lists and for the field a fill resolves alike, so the two cannot differ. A
+// label names a field when both read the same without their white space: the
+// reading puts a space where a label's inline parts meet ("Idea (optional)"),
+// which the page's text may lack ("Idea(optional)"), and either names the field.
+// A label that names two fields is refused, naming both.
 //
 // A REQUIRED FIELD LEFT EMPTY. After the press, a field that is still empty is
 // a required field left empty when the page marks it (`aria-invalid="true"`) or
@@ -24,6 +30,7 @@
 // read until the page marks a field, the form is gone, or the error bound runs
 // out.
 import { listed, pickCandidate, quoted } from "./control-kit.mjs";
+import { CONTROL_MARK, markedBy, newMark, unmarkControls } from "./page-controls.mjs";
 import { READING_BOUND_MS, errorClass, pathOf, pollUntilSettled, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "fillForm";
@@ -58,11 +65,16 @@ export const FORM_BOUNDS = Object.freeze({
 /**
  * The form's shown, labelled fields (label, empty, required, marked invalid,
  * the page's error text) and the names of its shown controls. The state says
- * whether every `need`ed label is there (`ready`, `missing`), or, after the
- * press, whether a `watch`ed field the page marks is still empty (`refused`),
- * none of them is there any more (`gone`), or neither (`open`).
+ * whether every `need`ed label names one field (`ready`), one of them names
+ * none (`missing`, those in `missing`) or several (`ambiguous`, each in
+ * `ambiguous` with the labels of the fields it names), or, after the press,
+ * whether a `watch`ed field the page marks is still empty (`refused`), none of
+ * them is there any more (`gone`), or neither (`open`). With `pick`, the one
+ * field its label names takes the mark; `picked` lists the labels of every
+ * field that label names. A label names a field when both read the same
+ * without their white space.
  */
-function readForm({ scope, errors, need, watch }) {
+function readForm({ scope, errors, need, watch, pick }) {
   const text = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const shown = (element) => {
     if (!element.isConnected || getComputedStyle(element).visibility === "hidden") return false;
@@ -115,30 +127,45 @@ function readForm({ scope, errors, need, watch }) {
   if (!root) return { state: watch ? "gone" : "absent", fields: [], controls: [] };
   const fillable =
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="file"]), textarea, select';
-  const fields = Array.from(root.querySelectorAll(fillable))
+  const labelled = Array.from(root.querySelectorAll(fillable))
     .filter(shown)
-    .map((control) => ({
-      label: labelOf(control),
-      empty: String(control.value || "").trim() === "",
-      disabled: control.disabled === true,
-      required: control.required === true || control.getAttribute("aria-required") === "true",
-      invalid: control.getAttribute("aria-invalid") === "true",
-      error: errorOf(control),
-    }))
+    .map((control) => ({ control, label: labelOf(control) }))
     .filter((field) => field.label !== "");
+  const keyOf = (label) => String(label).replace(/\s+/g, "");
+  const named = (label) => labelled.filter((field) => keyOf(field.label) === keyOf(label));
+  const fields = labelled.map(({ control, label }) => ({
+    label,
+    empty: String(control.value || "").trim() === "",
+    disabled: control.disabled === true,
+    required: control.required === true || control.getAttribute("aria-required") === "true",
+    invalid: control.getAttribute("aria-invalid") === "true",
+    error: errorOf(control),
+  }));
   const controls = Array.from(root.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'))
     .filter(shown)
     .map(nameOf);
   let state = "present";
-  if (need) state = need.every((label) => fields.some((field) => field.label === label)) ? "ready" : "missing";
+  let missing = [];
+  let ambiguous = [];
+  if (need) {
+    missing = need.filter((label) => named(label).length === 0);
+    ambiguous = need.map((label) => ({ label, labels: named(label).map((field) => field.label) })).filter((one) => one.labels.length > 1);
+    state = ambiguous.length > 0 ? "ambiguous" : missing.length > 0 ? "missing" : "ready";
+  }
   if (watch) {
     const watched = fields.filter((field) => watch.includes(field.label));
     state = watched.length === 0 ? "gone" : watched.some((field) => field.empty && (field.invalid || field.error)) ? "refused" : "open";
   }
-  return { state, fields, controls };
+  let picked = [];
+  if (pick) {
+    const found = named(pick.label);
+    if (found.length === 1) found[0].control.setAttribute(pick.attribute, pick.mark);
+    picked = found.map((field) => field.label);
+  }
+  return { state, fields, controls, missing, ambiguous, picked };
 }
 
-/** Whether a candidate field or control is shown and inside the form. */
+/** Whether a candidate control is shown and inside the form. */
 function shownInForm(element, { scope }) {
   if (!element.closest(scope) || getComputedStyle(element).visibility === "hidden") return false;
   for (let node = element; node; node = node.parentElement) {
@@ -159,10 +186,11 @@ const soFar = (filled) => (filled.length > 0 ? ` — filled before it: ${listed(
  * named so. Resolves `{ filled, submitted, path }`: the labels it filled, in
  * order, whether it pressed, and the page's path. Refuses, as a StepRefusal:
  * `input` (nothing was filled), `unknown-label` (no field has the label within
- * the bound, naming the labels the form has), `driver-failure` (a fill or the
- * press failed), `no-submit` (no shown control with the `submit` name in the
- * form, naming its controls) and `required-empty` (the press left a required
- * field empty, with the page's own error text).
+ * the bound, naming the labels the form has), `ambiguous` (the label names
+ * several fields, naming them), `driver-failure` (a fill or the press failed),
+ * `no-submit` (no shown control with the `submit` name in the form, naming its
+ * controls) and `required-empty` (the press left a required field empty, with
+ * the page's own error text).
  *
  * @param {import("@playwright/test").Page} page
  * @param {{
@@ -191,19 +219,22 @@ export async function fillForm(page, { fields, record, form = FORM_SCOPE_SELECTO
   const wanted = entries.map(([label, value]) => /** @type {[string, string]} */ ([normal(label), value]));
   const need = wanted.map(([label]) => label);
   const at = pathOf(page.url());
+  /** A label that names several fields, for a line, with the label of each. */
+  const several = (/** @type {string} */ label, /** @type {string[]} */ labels) =>
+    `the label ${quoted(label)} matches ${labels.length} shown fields in the form on ${at}: ${listed(labels, "")}`;
 
   // Every named field, shown: a form the app draws after the page may take a moment.
   const { reading, settled } = await pollUntilSettled(page, {
     read: readForm,
     arg: { scope: form, errors: FIELD_ERROR_SELECTOR, need },
-    isSettled: (state) => state === "ready",
+    isSettled: (state) => state === "ready" || state === "ambiguous",
     bound: bound.fieldsMs,
     pollMs: bound.pollMs,
   });
+  const found = /** @type {{ state: string, fields?: { label: string }[], missing?: string[], ambiguous?: { label: string, labels: string[] }[] }} */ (reading);
   if (!settled) {
-    const found = /** @type {{ fields?: { label: string }[] }} */ (reading).fields;
-    const labels = found ? found.map((field) => field.label) : null;
-    const unknown = labels ? need.filter((label) => !labels.includes(label)) : need;
+    const labels = found.fields ? found.fields.map((field) => field.label) : null;
+    const unknown = found.missing ?? need;
     const has = labels ? `its labels: ${listed(labels, "none")}` : "its labels could not be read";
     throw refuse(
       STEP,
@@ -212,19 +243,31 @@ export async function fillForm(page, { fields, record, form = FORM_SCOPE_SELECTO
       `no field in the form on ${at} is labelled ${unknown.map(quoted).join(" or ")} within ${bound.fieldsMs} ms; ${has} — ${nothing}`,
     );
   }
+  if (found.state === "ambiguous") {
+    const each = (found.ambiguous ?? []).map((one) => several(one.label, one.labels));
+    throw refuse(STEP, record, "ambiguous", `${each.join("; ")} — ${nothing}, since a fill never guesses`);
+  }
 
   /** @type {string[]} */
   const filled = [];
   for (const [label, value] of wanted) {
-    const field = await pickCandidate(page.getByLabel(label, { exact: true }), shownInForm, { scope: form });
-    if (!field) {
-      throw refuse(STEP, record, "unknown-label", `no shown field labelled ${quoted(label)} in the form on ${at} can be filled by its label${soFar(filled)}`);
-    }
+    // The field is resolved by the reading that listed the labels, and carries the mark for its fill only.
+    const mark = newMark();
     try {
-      await field.fill(value, { timeout: bound.actionMs });
-    } catch (error) {
-      // Playwright's own message can repeat the value it was given to fill: only the class is kept.
-      throw refuse(STEP, record, "driver-failure", `the field ${quoted(label)} could not be filled (${errorClass(error)})${soFar(filled)}`);
+      const picking = await within(page.evaluate(readForm, { scope: form, errors: FIELD_ERROR_SELECTOR, pick: { label, attribute: CONTROL_MARK, mark } }), READING_BOUND_MS);
+      const picked = /** @type {string[]} */ (picking?.picked ?? []);
+      if (picked.length > 1) throw refuse(STEP, record, "ambiguous", `${several(label, picked)}${soFar(filled)}, since a fill never guesses`);
+      if (picked.length === 0) {
+        throw refuse(STEP, record, "unknown-label", `no shown field labelled ${quoted(label)} in the form on ${at} can be filled by its label${soFar(filled)}`);
+      }
+      try {
+        await page.locator(markedBy(mark)).fill(value, { timeout: bound.actionMs });
+      } catch (error) {
+        // Playwright's own message can repeat the value it was given to fill: only the class is kept.
+        throw refuse(STEP, record, "driver-failure", `the field ${quoted(label)} could not be filled (${errorClass(error)})${soFar(filled)}`);
+      }
+    } finally {
+      await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
     }
     filled.push(label);
   }
