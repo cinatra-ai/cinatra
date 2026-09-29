@@ -75,6 +75,60 @@ const KIND_DEFAULT_ACCESS_POLICY: Record<
   connection: OWNER_DEFAULT,
 };
 
+/**
+ * The kinds the table above actually states a default for, read from the table
+ * ITSELF rather than restated. `connector` is appended because it is the one
+ * kind the table deliberately excludes (cinatra#955) and it still has an
+ * install default, derived from its own declaration.
+ *
+ * This exists so a conformance test can enumerate the CONTRACT's own keys. A
+ * kind added to `ExtensionKind` and to the table but not to
+ * `ALL_EXTENSION_KINDS` would otherwise be invisible to a loop over the kind
+ * roster, and its owner-only default could then disagree with the pure
+ * `OWNER_DEFAULT_INSTALL_KINDS` roster with nothing to report it
+ * (cinatra#3785).
+ */
+export const KIND_INSTALL_DEFAULT_KINDS: readonly string[] = Object.freeze([
+  ...Object.keys(KIND_DEFAULT_ACCESS_POLICY),
+  "connector",
+]);
+
+/**
+ * Does this kind's INSTALL DEFAULT reach only the owner?
+ *
+ * Derived from {@link KIND_DEFAULT_ACCESS_POLICY} itself rather than from a
+ * second list, so re-tiering a kind's default answers this question differently
+ * on the same edit. All three visibility fields must be exactly `owner`: a
+ * default that is owner on one tier and wider on another is NOT owner-only, and
+ * answering true for it would let a caller replace a tier it meant to keep.
+ *
+ * The connector kind answers FALSE rather than throwing the way
+ * {@link defaultAccessPolicyForKind} does. It has no static default at all
+ * (cinatra#955); the one it derives from its cached cinatra/config.json
+ * declaration is admin or workspace, never owner, so the question has an honest
+ * answer without the table.
+ *
+ * Read by the PURE target mapping, which states the same roster independently
+ * as `OWNER_DEFAULT_INSTALL_KINDS` (./install-access-target.ts) because it must
+ * not import this server-only module; a conformance test pins the two equal
+ * (cinatra#3785).
+ */
+export function kindInstallDefaultIsOwnerOnly(kind: string): boolean {
+  if (kind === "connector") return false;
+  const policy = (
+    KIND_DEFAULT_ACCESS_POLICY as Record<string, AgentAuthPolicy | undefined>
+  )[kind];
+  if (!policy) return false;
+  return [
+    policy.runListVisibility,
+    policy.runDataVisibility,
+    policy.runExecuteVisibility,
+  ].every((field) => {
+    const tokens = field as unknown as readonly string[];
+    return tokens.length === 1 && tokens[0] === "owner";
+  });
+}
+
 export function defaultAccessPolicyForKind(kind: ExtensionKind): AgentAuthPolicy {
   if (kind === "connector") {
     // Fail-closed: there is no static connector default (cinatra#955). The
