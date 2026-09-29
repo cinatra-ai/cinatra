@@ -173,6 +173,17 @@ the reading sees only what the pages sent after it was first taken on the contex
 so a run calls `readStandingRequests(context, { record })` once, before the
 context's first page loads.
 
+With `furtherPage: true` it opens the page in a further page instead, and first
+reads the requests that stand open on the origin (`readStandingRequests`): a
+browser keeps at most six connections per origin over plain HTTP, so at or above
+`STANDING_REQUEST_BOUND` (four, which keeps two free for a load and a press;
+`standingBound` changes it), or while a page's count is unknown, it opens nothing
+and refuses with the count, the bound and the pages that hold them, so the caller
+closes a page it no longer needs. An origin served over HTTP/2 is not counted, and
+the reading sees only what the pages sent after it was first taken on the context,
+so a run calls `readStandingRequests(context, { record })` once, before the
+context's first page loads.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `NAVIGATE_ACTION_BOUND_MS` | 30_000 | the press |
