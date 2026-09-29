@@ -14,6 +14,12 @@
  * D1 — for a scoped run, Start new run and Start fresh go to the scoped
  *      launcher, and no unanchored run is created on the way.
  * D2 — for an unscoped run both keep today's road exactly.
+ * D3: for a PERSONAL run the same controls open the PERSONAL launcher
+ *      (cinatra#3786). A user-anchored run lives at its bare address by
+ *      design, so the bare base used to be all these controls were handed and
+ *      the successor was written with no anchor at all. The launcher a
+ *      successor opens is now its own value, and for this kind it is
+ *      `/personal` while every address of the run itself stays bare.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -29,6 +35,8 @@ const AGENT_ID = "fixture-vendor/blog-draft-writer-agent";
 const RUN_ID = "run-3693";
 const SCOPED_LAUNCHER = `${ORG_BASE}/agents/${AGENT_ID}/new`;
 const BARE_LAUNCHER = `/agents/${AGENT_ID}/new`;
+const PERSONAL_BASE = "/personal";
+const PERSONAL_LAUNCHER = `${PERSONAL_BASE}/agents/${AGENT_ID}/new`;
 
 const routerPush = vi.hoisted(() => vi.fn());
 const createAndTriggerRun = vi.hoisted(() => vi.fn());
@@ -166,7 +174,7 @@ function stepperProps(overrides: Partial<OrchestratorStepperPanelProps>): Orches
   };
 }
 
-function agenticProps(status: string, scopeBase?: string) {
+function agenticProps(status: string, launchBase?: string) {
   return {
     runId: RUN_ID,
     initialStatus: status,
@@ -176,7 +184,7 @@ function agenticProps(status: string, scopeBase?: string) {
     agentId: AGENT_ID,
     inputParams: {},
     initialStreamedText: "",
-    ...(scopeBase ? { scopeBase } : {}),
+    ...(launchBase ? { launchBase } : {}),
   };
 }
 
@@ -187,27 +195,27 @@ async function press(name: RegExp) {
 
 describe("D1: a scoped run's next run starts in the same scope", () => {
   it("the completion card's Start new run opens the scoped launcher, creating nothing itself", async () => {
-    render(<RunCompletionCard runId={RUN_ID} agentId={AGENT_ID} outputHint="transcript" scopeBase={ORG_BASE} />);
+    render(<RunCompletionCard runId={RUN_ID} agentId={AGENT_ID} outputHint="transcript" launchBase={ORG_BASE} />);
     await press(/start new run/i);
     await waitFor(() => expect(routerPush).toHaveBeenCalledWith(SCOPED_LAUNCHER));
     expect(createAndTriggerRun).not.toHaveBeenCalled();
   });
 
   it("the stepper's completed card hands the base to Start new run", async () => {
-    render(<OrchestratorStepperPanel {...stepperProps({ initialStatus: "completed", initialError: null, scopeBase: ORG_BASE })} />);
+    render(<OrchestratorStepperPanel {...stepperProps({ initialStatus: "completed", initialError: null, launchBase: ORG_BASE })} />);
     await press(/start new run/i);
     await waitFor(() => expect(routerPush).toHaveBeenCalledWith(SCOPED_LAUNCHER));
     expect(createAndTriggerRun).not.toHaveBeenCalled();
   });
 
   it("the stepper's failed card: Start fresh opens the scoped launcher", async () => {
-    render(<OrchestratorStepperPanel {...stepperProps({ scopeBase: ORG_BASE })} />);
+    render(<OrchestratorStepperPanel {...stepperProps({ launchBase: ORG_BASE })} />);
     await press(/start fresh/i);
     expect(routerPush).toHaveBeenCalledWith(SCOPED_LAUNCHER);
   });
 
   it("the stepper's stopped card: Start fresh opens the scoped launcher", async () => {
-    render(<OrchestratorStepperPanel {...stepperProps({ initialStatus: "stopped", initialError: null, scopeBase: ORG_BASE })} />);
+    render(<OrchestratorStepperPanel {...stepperProps({ initialStatus: "stopped", initialError: null, launchBase: ORG_BASE })} />);
     await press(/start fresh/i);
     expect(routerPush).toHaveBeenCalledWith(SCOPED_LAUNCHER);
   });
@@ -252,5 +260,59 @@ describe("D2: an unscoped run keeps today's road", () => {
     render(<OrchestratorStepperPanel {...stepperProps({ initialStatus: "stopped", initialError: null })} />);
     await press(/start fresh/i);
     expect(routerPush).toHaveBeenCalledWith(BARE_LAUNCHER);
+  });
+});
+
+describe("D3: a personal run's next run starts at the personal launcher (cinatra#3786)", () => {
+  it("the completion card's Start new run opens the personal launcher, creating nothing itself", async () => {
+    render(
+      <RunCompletionCard runId={RUN_ID} agentId={AGENT_ID} outputHint="transcript" launchBase={PERSONAL_BASE} />,
+    );
+    await press(/start new run/i);
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith(PERSONAL_LAUNCHER));
+    // The bare road is the one that wrote an unanchored successor. Nothing is
+    // created here at all: the launcher mints the anchor and creates the run.
+    expect(createAndTriggerRun).not.toHaveBeenCalled();
+  });
+
+  it("the stepper's completed card hands the personal base to Start new run", async () => {
+    render(
+      <OrchestratorStepperPanel
+        {...stepperProps({ initialStatus: "completed", initialError: null, launchBase: PERSONAL_BASE })}
+      />,
+    );
+    await press(/start new run/i);
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith(PERSONAL_LAUNCHER));
+    expect(createAndTriggerRun).not.toHaveBeenCalled();
+  });
+
+  it("the stepper's failed card: Start fresh opens the personal launcher", async () => {
+    render(<OrchestratorStepperPanel {...stepperProps({ launchBase: PERSONAL_BASE })} />);
+    await press(/start fresh/i);
+    expect(routerPush).toHaveBeenCalledWith(PERSONAL_LAUNCHER);
+  });
+
+  it("the stepper's stopped card: Start fresh opens the personal launcher", async () => {
+    render(
+      <OrchestratorStepperPanel
+        {...stepperProps({ initialStatus: "stopped", initialError: null, launchBase: PERSONAL_BASE })}
+      />,
+    );
+    await press(/start fresh/i);
+    expect(routerPush).toHaveBeenCalledWith(PERSONAL_LAUNCHER);
+  });
+
+  it("the run panel's failed block: Start new run opens the personal launcher", async () => {
+    render(<AgenticRunPanel {...agenticProps("failed", PERSONAL_BASE)} />);
+    await press(/start new run/i);
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith(PERSONAL_LAUNCHER));
+    expect(createAndTriggerRun).not.toHaveBeenCalled();
+  });
+
+  it("the run panel's completion card: Start new run opens the personal launcher", async () => {
+    render(<AgenticRunPanel {...agenticProps("completed", PERSONAL_BASE)} />);
+    await press(/start new run/i);
+    await waitFor(() => expect(routerPush).toHaveBeenCalledWith(PERSONAL_LAUNCHER));
+    expect(createAndTriggerRun).not.toHaveBeenCalled();
   });
 });
