@@ -1,5 +1,6 @@
-// What the control steps share (press, selectFrom, dispatchRun and
-// readControlNames): the page's controls, read in the page by their role and
+// What the control steps share (press, selectFrom, dispatchRun,
+// readControlNames, and the window steps typeInWindow, waitForTurn and
+// sendInComposer): the page's controls, read in the page by their role and
 // their accessible name; the mark a step puts on the one control it acts on;
 // and the reading of the document a press starts from.
 //
@@ -141,7 +142,25 @@ export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space 
  *     it reads the parts a person moves between: a region (a section with a
  *     name), a group, a dialog or an alert dialog, a form with a name, a
  *     navigation and a search landmark. A control without a name is read with
- *     an empty name.
+ *     an empty name;
+ *   - `window`: the shown text boxes (role textbox) and those named `field`,
+ *     within the one shown part of the page named `within` when the query
+ *     names one (found as `press` finds it). For the one box: whether it takes
+ *     text (`editable`: a text field neither disabled nor read-only, or an
+ *     element whose content is editable, and not marked disabled or read-only
+ *     for assistive technology), the text it holds (`text`, a non-breaking
+ *     space read as a space), and its send control: the shown buttons of the
+ *     box's own name, looked for from the box outwards and taken from the
+ *     nearest part of the page that holds one (`sends` counts them there), and
+ *     the names of the shown buttons nearest to the box (`beside`). With a
+ *     `mark`, the box takes it (`<mark>t`), and so does the send control when
+ *     there is one (`<mark>s`); the marks of an earlier reading of the same
+ *     act come off first. `entries` counts the shown elements that carry the
+ *     `entry` attribute, `person` and `assistant` apart, in the same part of
+ *     the page. `note` keeps a count in the page's document for the wait that
+ *     follows a send, under `noteKey`, by the field and the part: `set` notes
+ *     the counts of this reading, `forget` removes the note; `noted` is the
+ *     note there is, or null.
  * Lists of names come back bounded: `{ names, more }`.
  */
 export function readControls(query) {
@@ -643,6 +662,94 @@ export function readControls(query) {
       description: text(byIds(element, "aria-describedby").map((node) => contentOf(node, element)).join(" ")),
     }));
     return { path: location.pathname, scope, controls, more: found.length - controls.length };
+  }
+
+  if (query.mode === "window") {
+    // The marks of an earlier reading of the same act come off first: the page may have drawn the window anew.
+    if (query.mark) {
+      for (const node of Array.from(document.querySelectorAll(`[${query.attribute}]`))) {
+        if (String(node.getAttribute(query.attribute)).startsWith(query.mark)) node.removeAttribute(query.attribute);
+      }
+    }
+    let root = document;
+    let scope = null;
+    if (query.within) ({ root, scope } = scopeOf(query.within));
+    // The window's entries, by the product's own marker: the person's and the assistant's apart.
+    const entries = { person: 0, assistant: 0 };
+    if (root) {
+      for (const node of Array.from(root.querySelectorAll(`[${query.entry}]`))) {
+        const who = node.getAttribute(query.entry);
+        if ((who === "person" || who === "assistant") && shown(node)) entries[who] += 1;
+      }
+    }
+    // The note a send leaves in the document for the wait that follows it, by the window it was sent in.
+    const key = `${query.field}\n${query.within}`;
+    const held = window[query.noteKey];
+    const notes = held && typeof held === "object" ? held : {};
+    const read = {
+      path: location.pathname,
+      scope,
+      entries,
+      noted: Object.hasOwn(notes, key) ? notes[key] : null,
+      boxes: listOf([]),
+      found: 0,
+      unspaced: false,
+      named: listOf([]),
+      matches: [],
+    };
+    if (query.note === "forget") {
+      delete notes[key];
+      read.noted = null;
+    }
+    if (!root) return read;
+    const boxes = controlsIn(root, ["textbox"]);
+    const { found, unspaced } = matching(boxes, nameOf, query.field);
+    Object.assign(read, { boxes: listOf(boxes.map(nameOf)), found: found.length, unspaced, named: listOf(found.map(nameOf)), matches: found.map(describe) });
+    if (found.length !== 1) return read;
+    const box = found[0];
+    // It takes text: a text field neither disabled nor read-only, or an element whose content is editable.
+    const editableOf = (element) => {
+      if (disabled(element) || element.getAttribute("aria-readonly") === "true") return false;
+      if (element.localName === "input" || element.localName === "textarea") return !element.readOnly;
+      for (let node = element; node; node = node.parentElement) {
+        const editable = node.getAttribute("contenteditable");
+        if (editable !== null) return editable.toLowerCase() !== "false";
+      }
+      return false;
+    };
+    // The text it holds, as a person reads it: a non-breaking space is a space.
+    const boxText = box.localName === "input" || box.localName === "textarea" ? box.value : box.textContent;
+    // Its send control: the shown buttons of the box's own name, from the box outwards, at the nearest part that holds one.
+    const boxName = nameOf(box);
+    const top = root === document ? document.documentElement : root;
+    let sends = [];
+    let beside = null;
+    for (let node = box.parentElement; node; node = node.parentElement) {
+      const buttons = controlsIn(node, ["button"]);
+      if (beside === null && buttons.length > 0) beside = buttons;
+      const match = matching(buttons, nameOf, boxName).found;
+      if (match.length > 0) {
+        sends = match;
+        break;
+      }
+      if (node === top) break;
+    }
+    if (query.mark) {
+      mark(box, `${query.mark}t`);
+      if (sends.length === 1) mark(sends[0], `${query.mark}s`);
+    }
+    if (query.note === "set") {
+      notes[key] = entries;
+      window[query.noteKey] = notes;
+      read.noted = entries;
+    }
+    return {
+      ...read,
+      editable: editableOf(box),
+      text: String(boxText || "").replace(/\u00a0/g, " "),
+      sends: sends.length,
+      beside: listOf((beside || []).map(nameOf)),
+    };
   }
 
   throw new Error("readControls: no such mode");

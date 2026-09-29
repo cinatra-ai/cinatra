@@ -24,7 +24,12 @@ defect of a step, with a test, fixed once for every run.
 | `fillForm` | Fields filled by their labels; a required field left empty on submit is refused with the page's own error. |
 | `switchTheme` | The theme switched through the app's own control, and read back from the page and its review island. |
 | `decideGate` | A decision taken through the named gate's own control, and the run seen to leave the gate. |
-<!-- The four rows above: uploadFile, fillForm, switchTheme and decideGate. -->
+| `typeInWindow` | Text typed into a window's text box through the keyboard, read back from the box, and sent through the window's own send control when asked. |
+| `waitForTurn` | A turn of a window's conversation waited for without a reload: a new entry of the assistant, and the send control idle again. |
+| `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
+| `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
+| `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
+<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -590,6 +595,143 @@ gate reads `settled` or `decided`, or is no longer drawn. It answers
 Refusal kinds: `input` (nothing was pressed), `no-gate` (naming the gates the
 page shows), `no-control` (naming the gate's controls), `driver-failure` and
 `still-at-gate` (with the last reading).
+
+<!-- typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress: a window's text box, a turn of its conversation, a reload, a composer's message and an address no link leads to. -->
+
+## `typeInWindow(page, { field, text, record, send?, replace?, within?, bounds? })`
+
+Types `text` into the one shown text box of role textbox named `field`, as a
+person types it. A run window's text box is no form field: the product draws it
+as a box whose content is editable, named by its `aria-label` (the run window's
+"Apply AI suggestion", `RUN_WINDOW_FIELD`), so `fillForm` finds no field in it.
+The step finds the box with the reader of the control steps, never by a test
+id; with `within`, only inside the one shown part of the page of that name, for
+a page that shows more than one window. It presses into the box, puts the caret
+at the end of its text (with `replace`, selects the text and deletes it with
+Backspace first) and types the text key by key. A text with a line break or
+another control character is refused, since a line break would press Enter,
+which sends. The text is read back from the box, and a box that does not read
+back what was typed is refused. A box the product has locked, as it locks a
+window's box while an answer is pending, is refused before anything is typed.
+
+With `send`, it presses the box's own send control, the shown button of the
+box's name nearest to it (the product names a window's box and its send control
+alike), once the text is in, and waits until the window has taken the message:
+the product empties the box as it takes it. Right before the press it notes, in
+the page's document, the entries the window shows, for `waitForTurn`. The step
+answers `{ field, text, sent, path }`, where `text` is what the box read back.
+No line carries the text.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `WINDOW_FIELD_BOUND_MS` | 30_000 | from the call to the text box shown with its name (`fieldMs`) |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press into the box, and the press on the send control (`actionMs`) |
+| `WINDOW_SENT_BOUND_MS` | 5_000 | from the press on the send control to the window taking the message (`sentMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input`, `unreadable`, `no-scope`, `no-field` (naming the text
+boxes the page shows), `ambiguous`, `disabled` and, with `send`, `no-control`
+(naming the buttons nearest to the box; nothing was typed), `driver-failure`,
+`not-typed` and `not-sent`.
+
+## `waitForTurn(page, { record, field?, within?, bounds? })`
+
+Waits, never reloading, until a new entry of the assistant stands in a window
+and its send control is idle again. The product marks each entry of a window's
+conversation with `data-run-window-entry` (`RUN_WINDOW_ENTRY_ATTRIBUTE`), as
+`person` or `assistant`, and the step counts the shown ones in the page, or in
+the one shown part of it named `within`. The window is named by its text box
+(`field`, "Apply AI suggestion" unless named otherwise), found as
+`typeInWindow` finds it. While an answer is pending, the product locks the box
+and gives the send control its stop name; the send control is idle once the
+box takes text again and a shown button of the box's name stands beside it
+again.
+
+A send made by `typeInWindow` notes, in the page's document, the entries its
+window showed right before the press. The wait counts from that note when there
+is one for the same `field` and `within`, so an answer that stood before the
+wait began is still the new turn; without one it counts from its own first
+reading. A wait that sees the turn takes the note away, and a new document has
+none. The step answers `{ field, before, after, since, elapsedMs, path }`, where
+`before` and `after` count the entries as `{ person, assistant }` and `since` is
+`send` or `wait`. At its bound it refuses (`no-turn`) and names what was
+missing: the new entry, the idle send control, or both.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `TURN_BOUND_MS` | 120_000 | from the start of the wait to the turn (`turnMs`) |
+| `TURN_CEILING_MS` | 600_000 | the most `turnMs` may be raised to |
+| `TURN_POLL_MS` | 250 | how often the window is read (`pollMs`) |
+
+Refusal kinds: `input` (nothing was waited for, a `turnMs` above the ceiling
+included), `unreadable`, `no-scope`, `no-window` (naming the text boxes the
+page shows) and `ambiguous`, all at once, and `no-turn` at the bound.
+
+## `reloadPage(page, { record, bounds? })`
+
+The browser's own reload of the page, until the new document's content has
+loaded (`DOMContentLoaded`). The step then reads the new document's time
+origin (`performance.timeOrigin`, which every new document has anew, as
+`armPageTape` reads it) and answers `{ path, timeOrigin, elapsedMs }`. A reload
+that lands on another path than the one the page was on, such as a redirect to
+the sign-in page, is refused, naming where it landed.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `RELOAD_BOUND_MS` | 120_000 | from the reload to the new document's content loaded (`reloadMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the new document (`readingMs`) |
+
+Refusal kinds: `input` and `closed` (nothing was reloaded), `no-load`,
+`landed-elsewhere` and `driver-failure` (the new document could not be read).
+
+## `sendInComposer(page, { prompt, composer, record, bounds? })`
+
+Sends one message through the conversation's composer, the one shown text box
+named `composer` ("Send message" in the product), and waits for the card that
+answers it. It types on `typeInWindow`'s road, in place of the text the
+composer held (a stored draft), so that the message is the prompt alone, and
+presses the composer's own send control. A card is what the conversation draws
+for an answer that is not text: a lifecycle card (`data-lifecycle-card`) or a
+renderable view (`data-view-type`), whose value is the card's kind. The step
+reads the shown cards of each kind right before the press, and answers
+`{ composer, kind, path, elapsedMs }` once a card stands that the conversation
+did not show then. It reads the page as `dispatchRun` reads it for a run (the
+run page's surface, the run panel the conversation draws, or a notification of
+a run) and refuses a send after which one shows: starting a run is
+`dispatchRun`'s act. No line carries the prompt.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call to the composer shown with its name (`composerMs`) |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | one press (`actionMs`) |
+| `WINDOW_SENT_BOUND_MS` | 5_000 | from the press on the send control to the composer taking the message (`sentMs`) |
+| `COMPOSER_CARD_BOUND_MS` | 120_000 | from the send to the answer's card (`cardMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read (`pollMs`) |
+
+Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
+`no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
+error the page shows, the conversation's error card among them).
+
+## `openAddress(page, { path, record, bounds? })`
+
+Loads `path`, once, on the current page's own origin and in the caller's page,
+so the session the page is signed in with goes with it, and answers
+`{ path, status, from, elapsedMs }`: where the load landed, the status of the
+response, and the path the page was on. It is the one step that types an
+address, because a page that exists only for a wrong address, such as the
+not-found page, has no link that leads to it, so no press can reach it. It
+refuses, before it loads anything, a path that a visible link on the current
+page leads to, read as `navigateTo` reads its links (`has-link`: pressing that
+link is `navigateTo`'s act), an address of another origin (`other-origin`), and
+anything that is no page path. Its line says that an address was typed.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OPEN_ADDRESS_BOUND_MS` | 120_000 | from the typed address to the landing (`loadMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the page's links (`readingMs`) |
+
+Refusal kinds: `input`, `other-origin`, `unreadable` and `has-link` (no address
+was typed), and `no-load`.
 
 ## Shared bounds
 

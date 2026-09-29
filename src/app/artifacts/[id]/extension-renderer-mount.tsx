@@ -3,10 +3,7 @@ import "server-only";
 import type { ReactNode } from "react";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
-import {
-  artifactEditCapabilityForPropsVersion,
-  type ArtifactRendererProps,
-} from "@/lib/artifacts/artifact-renderer-props";
+import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 
 import { classifyLoadablePath } from "./renderer-resolution";
 import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
@@ -67,16 +64,10 @@ export async function ExtensionRendererMount({
     // Bind the descriptor's exact tuple into the freshness-preflight server action
     // so the client loader can re-confirm "still admitted" just before importing.
     const preflight = runRuntimeRendererFreshnessPreflight.bind(null, descriptor.tuple);
-    // THE EDIT CHANNEL THE DISPLAY DECLARED (cinatra#3814): "a display that
-    // declared the older version keeps the contract it has". A runtime display
-    // is handed this snapshot directly, so its edit capability is narrowed here
-    // to the props version its admitted tuple declares — and nothing else is.
-    const edit = artifactEditCapabilityForPropsVersion(props.edit, descriptor.tuple.propsApiVersion);
-    const displayProps = edit === props.edit ? props : { ...props, edit };
     return (
       <DynamicRendererLoader
         descriptor={descriptor}
-        props={displayProps}
+        props={props}
         fallback={fallback}
         preflight={preflight}
       />

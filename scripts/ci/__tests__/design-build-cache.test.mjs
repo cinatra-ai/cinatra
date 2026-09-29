@@ -2,7 +2,8 @@
 //
 // The shape cases read the pixel-diff job of design-visual-verify.yml: the
 // cache is restored before the build and kept after it, on self-hosted runners
-// only, and the build falls back to a full build.
+// only and only for a pull request that carries the label design-build-cache
+// (cinatra#3810), and the build falls back to a full build.
 //
 // The run cases lay out one self-hosted runner the way the job sees it (a work
 // root, the workspace and the checkout beneath it, the job's temporary
@@ -65,6 +66,7 @@ const KEEP = /^Keep the design build cache/;
 const indexOfStep = (matcher) => STEPS.findIndex((s) => matcher.test(s.name));
 const stepText = (matcher) => STEPS.find((s) => matcher.test(s.name))?.text ?? "";
 const runLine = (matcher) => stepText(matcher).match(/^ {8}run: (.+)$/m)?.[1];
+const ifLine = (matcher) => stepText(matcher).match(/^ {8}if: (.+)$/m)?.[1];
 
 describe("design-visual-verify.yml pixel-diff: the runner-local build cache", () => {
   it("restores the cache right before the build and keeps it right after", () => {
@@ -76,9 +78,25 @@ describe("design-visual-verify.yml pixel-diff: the runner-local build cache", ()
   it("runs on self-hosted runners only, guarded by the runner's own environment", () => {
     const restore = stepText(RESTORE);
     expect(restore).toMatch(/^ {8}id: build-cache$/m);
-    expect(restore).toMatch(/^ {8}if: \$\{\{ runner\.environment == 'self-hosted' \}\}$/m);
+    expect(ifLine(RESTORE)).toContain("runner.environment == 'self-hosted'");
     expect(restore).not.toContain("vars.");
     expect(runLine(RESTORE)).toBe("bash scripts/ci/design-build-cache.sh restore");
+  });
+
+  it("restores the cache only for a pull request that carries the label design-build-cache", () => {
+    // Off unless labelled (cinatra#3810). A merge-queue run has no pull
+    // request, so it reads as a run without the label and skips the step.
+    expect(ifLine(RESTORE)).toBe(
+      "${{ runner.environment == 'self-hosted' && contains(github.event.pull_request.labels.*.name, 'design-build-cache') }}",
+    );
+    // The label's name is written once in the workflow, in that condition.
+    expect(WORKFLOW.split("'design-build-cache'")).toHaveLength(2);
+    // A skipped restore step answers nothing: the build then gets an empty
+    // switch, and the keep step does not run.
+    expect(stepText(BUILD)).toMatch(
+      /^ {10}CINATRA_TURBOPACK_BUILD_FS_CACHE: \$\{\{ steps\.build-cache\.outputs\.fs-cache \}\}$/m,
+    );
+    expect(ifLine(KEEP)).toBe("${{ steps.build-cache.outputs.fs-cache == '1' }}");
   });
 
   it("hands the event and the branch names to the script through env", () => {

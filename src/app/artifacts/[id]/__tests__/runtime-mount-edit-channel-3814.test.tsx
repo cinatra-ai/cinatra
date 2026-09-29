@@ -1,47 +1,31 @@
 /**
- * cinatra#3814 — THE RUNTIME SEAM HANDS A DISPLAY THE EDIT CHANNEL IT DECLARED.
+ * cinatra#3814 — A RUNTIME DISPLAY IS HANDED THE EDIT CHANNEL IT DECLARED.
  *
  * "The channel version moves, and a display that declared the older version
- * keeps the contract it has." A build-map display is handed its snapshot through
- * `artifactRendererPropsAtVersion`; a RUNTIME-installed display is handed the
- * snapshot by `ExtensionRendererMount` directly, so this seam has to narrow the
- * edit capability to the props version the display's admitted tuple declares —
- * or a display on the older channel version would be handed a title road it
- * never agreed to (and a strict reader of the older version would lose its text
- * road with it).
+ * keeps the contract it has." Every runtime-installed display is handed its
+ * snapshot by the one component that loads it; the hand-over narrows the edit
+ * capability to the props version the display's admitted tuple declares, so a
+ * display on the older channel version is handed no title road and keeps its
+ * text road, and a display on the new channel version is offered both.
+ *
+ * The hand-over is read two ways, in the node environment: the pure function
+ * directly, and the loader's hook-free mounted display called as a plain
+ * function with its returned element read by type and props.
  */
 import type { ReactElement } from "react";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { AdmittedClientBundleTuple } from "@cinatra-ai/sdk-extensions/artifact-client-bundle";
 
-// The same module doubles `runtime-renderer-mount.test.tsx` carries: the fixture
-// package is treated as installed, and the build map holds no runtime key.
-vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
-  isArtifactExtensionWriteAllowed: async () => true,
-}));
-vi.mock("@/lib/generated/artifact-renderers", () => ({
-  GENERATED_ARTIFACT_RENDERERS: {
-    "@fixture/built-ext::detail": {
-      resolution: "guardedOptional",
-      packageName: "@fixture/built-ext",
-      slot: "detail",
-      representations: [],
-      propsApiVersion: 1,
-      edit: { kind: "read-only" as const, channelVersion: 1, reason: "read-only-surface" as const },
-      load: async () => ({ default: () => null }),
-    },
-  },
-}));
-
-import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 import {
   ARTIFACT_RENDERER_PROPS_API_VERSION,
   ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
+  readOnlyArtifactEdit,
   type ArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
-import { ExtensionRendererMount } from "../extension-renderer-mount";
-import { DynamicRendererLoader } from "../dynamic-renderer-loader";
+import type { SerializedRuntimeRendererDescriptor } from "@/lib/artifacts/runtime-renderer-descriptor";
+import { runtimeDisplayProps } from "../runtime-display-props";
+import { MountedRuntimeDisplay } from "../dynamic-renderer-loader";
 
 const PKG = "@fixture/text-display";
 const DIGEST = "b".repeat(128);
@@ -60,13 +44,29 @@ function tuple(propsApiVersion: number): AdmittedClientBundleTuple {
   };
 }
 
-const okActivate = { materialize: async () => {}, verify: async () => true };
+function descriptor(propsApiVersion: number): SerializedRuntimeRendererDescriptor {
+  return {
+    digestPinnedUrl: `/api/artifact-renderer-assets/${PKG}/detail/${DIGEST}`,
+    tuple: tuple(propsApiVersion),
+  };
+}
 
 /** The capability the artifact page mints for a writer: the text road and the title road. */
 const TITLE_ROAD = {
   kind: "editable" as const,
   channelVersion: 2,
   fields: ["text", "title"] as Array<"text" | "title">,
+  artifactId: "artifact-1",
+  baseRevisionId: "rev-1",
+  saveUrl: "/api/artifacts/artifact-1/edit",
+  idlePauseMs: 900,
+  capBytes: 256 * 1024,
+} as ArtifactRendererProps["edit"];
+
+/** The same capability on the older channel version: the text road only, no `fields` key. */
+const OLDER_ROAD = {
+  kind: "editable" as const,
+  channelVersion: 1,
   artifactId: "artifact-1",
   baseRevisionId: "rev-1",
   saveUrl: "/api/artifacts/artifact-1/edit",
@@ -105,41 +105,70 @@ function ceilingProps(): ArtifactRendererProps {
   };
 }
 
-async function handedTo(propsApiVersion: number): Promise<ArtifactRendererProps> {
-  await runtimeAssetRegistry.admitAndActivate({ tuple: tuple(propsApiVersion), generation: 1, ...okActivate });
-  const el = (await ExtensionRendererMount({
-    generatedKey: runtimeAssetRegistry.keyFor(PKG, "detail"),
-    packageName: PKG,
-    slot: "detail",
-    props: ceilingProps(),
-    fallback: null,
-  })) as ReactElement;
-  expect(el.type).toBe(DynamicRendererLoader);
-  return (el.props as { props: ArtifactRendererProps }).props;
+function withoutEdit(props: ArtifactRendererProps): Partial<ArtifactRendererProps> {
+  const rest: Partial<ArtifactRendererProps> = { ...props };
+  delete rest.edit;
+  return rest;
 }
 
-afterEach(() => {
-  runtimeAssetRegistry._clearForTests();
-  vi.restoreAllMocks();
-});
+function Probe(): null {
+  return null;
+}
 
-afterAll(() => {
-  vi.doUnmock("@/lib/artifacts/artifact-extension-access");
-  vi.doUnmock("@/lib/generated/artifact-renderers");
-  vi.resetModules();
-});
+/** The element the loader's mounted display hands the display, read by type and props. */
+function handedChild(propsApiVersion: number): ReactElement {
+  const el = MountedRuntimeDisplay({
+    Renderer: Probe,
+    descriptor: descriptor(propsApiVersion),
+    props: ceilingProps(),
+    fallback: "FLOOR",
+    onError: () => {},
+  }) as ReactElement;
+  return (el.props as { children: ReactElement }).children;
+}
 
-describe("cinatra#3814 — a display on the older channel version is handed no title road", () => {
-  it("R-a a runtime display that declared props version 1 is handed the channel at version 1, and its bytes as carried", async () => {
-    const handed = await handedTo(1);
-    expect(handed.edit.channelVersion).toBe(1);
+describe("cinatra#3814 — the hand-over rule of a runtime display", () => {
+  it("P-a a display that declared props version 1 is handed the text road only, and the rest of the snapshot as carried", () => {
+    const handed = runtimeDisplayProps(ceilingProps(), 1);
+    expect(handed.edit).toEqual(OLDER_ROAD);
     expect(Object.prototype.hasOwnProperty.call(handed.edit, "fields")).toBe(false);
     expect(handed.edit.kind).toBe("editable");
-    expect(handed.bytes).toEqual(BYTES);
+    expect(withoutEdit(handed)).toEqual(withoutEdit(ceilingProps()));
   });
 
-  it("R-b a runtime display that declared the title-edit version is handed the capability whole", async () => {
-    const handed = await handedTo(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION);
+  it.each([3, 2])("P-c a display that declared props version %i is handed the text road only", (version) => {
+    const handed = runtimeDisplayProps(ceilingProps(), version);
+    expect(handed.edit).toEqual(OLDER_ROAD);
+    expect(Object.prototype.hasOwnProperty.call(handed.edit, "fields")).toBe(false);
+    expect(handed.edit.kind).toBe("editable");
+    expect(withoutEdit(handed)).toEqual(withoutEdit(ceilingProps()));
+  });
+
+  it("P-d a refusal is handed on the older channel version with its reason", () => {
+    const handed = runtimeDisplayProps({ ...ceilingProps(), edit: readOnlyArtifactEdit("read-only-surface") }, 3);
+    expect(handed.edit).toEqual({ kind: "read-only", channelVersion: 1, reason: "read-only-surface" });
+  });
+
+  it("P-b a display that declared the title-edit version is handed the snapshot whole", () => {
+    const snapshot = ceilingProps();
+    const handed = runtimeDisplayProps(snapshot, ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION);
+    expect(handed).toBe(snapshot);
     expect(handed.edit).toEqual(TITLE_ROAD);
+  });
+});
+
+describe("cinatra#3814 — the loader hands a mounted runtime display the channel it declared", () => {
+  it.each([3, 2, 1])("L-a a display that declared props version %i is handed no title road", (version) => {
+    const child = handedChild(version);
+    expect(child.type).toBe(Probe);
+    expect(child.props).toEqual({ ...ceilingProps(), edit: OLDER_ROAD });
+    expect(child.props).toEqual(runtimeDisplayProps(ceilingProps(), version));
+  });
+
+  it("L-b a display that declared the title-edit version is handed the text road and the title road", () => {
+    const child = handedChild(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION);
+    expect(child.type).toBe(Probe);
+    expect(child.props).toEqual(ceilingProps());
+    expect((child.props as ArtifactRendererProps).edit).toEqual(TITLE_ROAD);
   });
 });

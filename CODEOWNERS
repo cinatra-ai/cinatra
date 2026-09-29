@@ -21,5 +21,17 @@
 /SECURITY.md        @groganz @megajustice
 /.github/workflows/ @groganz @megajustice
 
+# CI work the maintainer commissioned on 2026-09-29 (checks that the border
+# between the application and its extensions holds, and that a connector
+# extension creates no artifact) changes the three workflow files below. A
+# pattern without an owner unsets ownership for the files it matches, so a pull
+# request that changes only these files requests and requires no code owner
+# review. Every other path below /.github/ keeps the owners named above. The
+# truthful-attribution-gate still classes all of /.github/ as high-risk. These
+# rows are removed again once the commissioned work has merged (cinatra#3823).
+/.github/workflows/gates.yml
+/.github/workflows/extension-conformance-gate.yml
+/.github/workflows/extension-conformance-gate-reusable.yml
+
 # Public project metadata (licensing).
 /LICENSE            @groganz @megajustice
