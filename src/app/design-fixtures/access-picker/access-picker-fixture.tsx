@@ -15,7 +15,7 @@
 // Plus the §VI CONTAINMENT cases (cinatra#1607 AC2/AC8): a parentScope=org
 // render (org's teams/projects + Personal), a leaf/unknown parent (Personal
 // only), and a multi-mode parentScope render.
-// Kept OFF the pixel-diffed /design-fixtures index — driven directly by
+// Kept OFF the now-retired /design-fixtures catalog — driven directly by
 // verification runs / the owner.
 // ---------------------------------------------------------------------------
 

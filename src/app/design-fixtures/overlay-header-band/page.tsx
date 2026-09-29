@@ -35,8 +35,8 @@ export const metadata: Metadata = {
  * below the real header's bottom edge, in the light theme and the dark theme,
  * and that every option is still reachable inside the bounded panel.
  *
- * Kept OFF the pixel-diffed /design-fixtures index (same convention as the
- * header-rule fixture) so the committed pixel baselines stay untouched;
+ * Kept OFF the now-retired /design-fixtures catalog (same convention as the
+ * header-rule fixture) which cinatra#3189 removed;
  * coverage here is geometry assertion, not snapshot.
  */
 const CALENDARS = Array.from({ length: 40 }, (_, i) => ({

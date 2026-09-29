@@ -18,8 +18,8 @@ export const metadata: Metadata = {
  * Internal route. Not linked from navigation. Renders the real AgentAllCard so
  * the accent-panel-as-detail-hotspot (cinatra#1121) is assertion-verifiable
  * (tests/e2e/design/agents-card-accent.spec.ts) without a session or storefront
- * round-trip. Kept OFF the pixel-diffed /design-fixtures index page so the
- * committed baselines there stay untouched; the Playwright coverage for this
+ * round-trip. Kept OFF the now-retired /design-fixtures catalog page which
+ * cinatra#3189 removed; the Playwright coverage for this
  * route is assertion-based.
  */
 export default function AgentsCardAccentFixturesPage() {
