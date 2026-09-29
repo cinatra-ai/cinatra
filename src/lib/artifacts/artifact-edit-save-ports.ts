@@ -20,7 +20,7 @@ import { ARTIFACT_CONTENT_CHANNEL_CAPS } from "@cinatra-ai/sdk-extensions/artifa
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { buildObjectsWithOutboxQuery, getObjectById } from "@/lib/objects-store";
+import { buildObjectRowLiveAtVersionGuardQuery, buildObjectsWithOutboxQuery, getObjectById } from "@/lib/objects-store";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { requireAccess } from "@/lib/authz/require-access";
 import { AuthzError } from "@/lib/authz/errors";
@@ -151,11 +151,12 @@ async function readTitle(input: { orgId: string; artifactId: string }): Promise<
  * before any transaction starts, rather than rewritten under another tag.
  *
  * THE ROW IS READ BEFORE THE TRANSACTION, and the builder writes the whole row
- * back (and lifts a tombstone). So a GUARD op runs first, in the transaction: it
- * locks the row and requires it still live and still at the version that was
- * read. A row deleted or changed in between makes it a division by zero, which
- * aborts the append whole — no revision, no title — and the append reads as
- * `unknown-base`, exactly as its own base guard does.
+ * back (and lifts a tombstone). So a GUARD op runs first, in the transaction,
+ * built by the objects store's row guard builder: it locks the row and requires
+ * it still live and still at the version that was read. A row deleted or changed
+ * in between makes it a division by zero, which aborts the append whole — no
+ * revision, no title — and the append reads as `unknown-base`, exactly as its
+ * own base guard does.
  */
 export function buildArtifactTitleWriteOps(input: {
   orgId: string;
@@ -170,15 +171,11 @@ export function buildArtifactTitleWriteOps(input: {
   if (typeof row.source !== "string") {
     throw new Error("artifact title edit: the artifact row carries no provenance tag to keep");
   }
-  const guard = {
-    text: `SELECT 1 / COUNT(*)::int AS title_row_unchanged
-FROM (
-  SELECT 1 FROM "${schemaId()}"."objects"
-  WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL AND COALESCE(version, 1) = $3
-  FOR UPDATE
-) AS live`,
-    values: [row.id, input.orgId, row.version],
-  };
+  const guard = buildObjectRowLiveAtVersionGuardQuery(postgresSchema, {
+    id: row.id,
+    orgId: input.orgId,
+    expectedVersion: row.version,
+  });
   const write = buildObjectsWithOutboxQuery(postgresSchema, "upsert", {
     id: row.id,
     type: row.type,
