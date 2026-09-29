@@ -20,7 +20,7 @@ import { ARTIFACT_CONTENT_CHANNEL_CAPS } from "@cinatra-ai/sdk-extensions/artifa
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { getObjectById } from "@/lib/objects-store";
+import { buildObjectsWithOutboxQuery, getObjectById } from "@/lib/objects-store";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { requireAccess } from "@/lib/authz/require-access";
 import { AuthzError } from "@/lib/authz/errors";
@@ -30,7 +30,11 @@ import { deriveSubstanceKey } from "./resource-store";
 import { truncateToUtf8Bytes } from "./artifact-content-channel";
 import { appendRepresentationWithExpectedBase } from "./representation-store";
 import { buildArtifactEditAuditOp, buildArtifactEditWitnessOp } from "./artifact-edit-audit";
-import type { ArtifactEditLatest, ArtifactEditSavePorts } from "./artifact-edit-save";
+import type {
+  ArtifactEditLatest,
+  ArtifactEditSavePorts,
+  ArtifactTitleEditSavePorts,
+} from "./artifact-edit-save";
 
 const schemaId = (): string => postgresSchema.replaceAll('"', '""');
 
@@ -113,6 +117,83 @@ LIMIT 1`,
     mime: String(row.mime),
     form: row.form as ArtifactEditLatest["form"],
   };
+}
+
+/** The title a row's data carries, or null. */
+function titleOf(data: unknown): string | null {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+  const title = (data as Record<string, unknown>).title;
+  return typeof title === "string" ? title : null;
+}
+
+/**
+ * THE ARTIFACT'S CURRENT TITLE (cinatra#3814) — row metadata, read through the
+ * objects substrate exactly as `readLatest` reads the row: the organization
+ * scope and `deleted_at IS NULL`, no ownership filter (the write-rights question
+ * is `mayWrite`'s).
+ */
+async function readTitle(input: { orgId: string; artifactId: string }): Promise<string | null> {
+  ensurePostgresSchema();
+  const row = getObjectById(input.artifactId, { orgId: input.orgId });
+  return row ? titleOf(row.data) : null;
+}
+
+/**
+ * THE TITLE WRITE, as one op to splice into the append's transaction
+ * (cinatra#3814). Built by the objects substrate's own row-plus-outbox builder
+ * in its `upsert` mode, from the row `getObjectById` returns with ONLY `title`
+ * replaced in its data — so the title moves in the same transaction as the
+ * revision, a stale refusal takes it with it, and the outbox fires as for every
+ * other row write. Never a hand-written objects statement.
+ *
+ * THE BUILDER INLINES THE ROW'S PROVENANCE TAG as a validated literal and
+ * rewrites it, so a row whose tag it cannot carry faithfully is refused here,
+ * before any transaction starts, rather than rewritten under another tag.
+ *
+ * THE ROW IS READ BEFORE THE TRANSACTION, and the builder writes the whole row
+ * back (and lifts a tombstone). So a GUARD op runs first, in the transaction: it
+ * locks the row and requires it still live and still at the version that was
+ * read. A row deleted or changed in between makes it a division by zero, which
+ * aborts the append whole — no revision, no title — and the append reads as
+ * `unknown-base`, exactly as its own base guard does.
+ */
+export function buildArtifactTitleWriteOps(input: {
+  orgId: string;
+  artifactId: string;
+  title: string;
+}): Array<{ text: string; values: unknown[] }> {
+  const row = getObjectById(input.artifactId, { orgId: input.orgId });
+  if (!row) throw new Error("artifact title edit: the artifact row is not readable");
+  if (row.data === null || typeof row.data !== "object" || Array.isArray(row.data)) {
+    throw new Error("artifact title edit: the artifact row carries no data object");
+  }
+  if (typeof row.source !== "string") {
+    throw new Error("artifact title edit: the artifact row carries no provenance tag to keep");
+  }
+  const guard = {
+    text: `SELECT 1 / COUNT(*)::int AS title_row_unchanged
+FROM (
+  SELECT 1 FROM "${schemaId()}"."objects"
+  WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL AND COALESCE(version, 1) = $3
+  FOR UPDATE
+) AS live`,
+    values: [row.id, input.orgId, row.version],
+  };
+  const write = buildObjectsWithOutboxQuery(postgresSchema, "upsert", {
+    id: row.id,
+    type: row.type,
+    parentId: row.parentId,
+    parentType: row.parentType,
+    dataJson: JSON.stringify({ ...(row.data as Record<string, unknown>), title: input.title }),
+    createdBy: row.createdBy,
+    orgId: row.orgId,
+    source: row.source,
+    ownerLevel: row.ownerLevel,
+    ownerId: row.ownerId,
+    visibility: row.visibility,
+    projectId: row.projectId,
+  });
+  return [guard, write];
 }
 
 /**
@@ -243,10 +324,17 @@ SELECT r.id AS resource_id, r.metadata->>'storageKey' AS storage_key FROM resour
  * Both rows are spliced: the `edit` operation carrying the base and the new
  * revision, and the writer-provenance `create` witness every claimed-row read
  * gate tests for. A refusal takes both with it — the transaction aborts whole.
+ *
+ * A TITLE change (cinatra#3814) splices its ops AFTER those two: the row guard
+ * and the row's title write, so the title commits with the revision or not at all.
  */
 function appendWithBase(): ArtifactEditSavePorts["appendWithBase"] {
   return async (input) => {
     const schema = schemaId();
+    const titleWrite =
+      input.title === undefined
+        ? null
+        : buildArtifactTitleWriteOps({ orgId: input.orgId, artifactId: input.artifactId, title: input.title });
     const result = await appendRepresentationWithExpectedBase({
       orgId: input.orgId,
       artifactId: input.artifactId,
@@ -263,6 +351,7 @@ function appendWithBase(): ArtifactEditSavePorts["appendWithBase"] {
           baseRevision: input.baseRevision,
           revision: input.baseRevision + 1,
           actor: input.actor,
+          ...(titleWrite ? { field: "title" as const } : {}),
         }),
         buildArtifactEditWitnessOp(schema, {
           orgId: input.orgId,
@@ -270,6 +359,7 @@ function appendWithBase(): ArtifactEditSavePorts["appendWithBase"] {
           representationRevisionId,
           actor: input.actor,
         }),
+        ...(titleWrite ?? []),
       ],
     });
     if (result.kind === "appended") {
@@ -288,11 +378,12 @@ export function artifactEditSavePorts(input: {
   actor: ActorContext;
   orgId: string;
   artifactId: string;
-}): ArtifactEditSavePorts {
+}): ArtifactTitleEditSavePorts {
   return {
     mayWrite: artifactEditMayWrite(input),
     readLatest,
     readText,
+    readTitle,
     writeBytes,
     appendWithBase: appendWithBase(),
   };

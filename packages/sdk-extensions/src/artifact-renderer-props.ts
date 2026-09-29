@@ -43,8 +43,12 @@ import type { ArtifactEditCapability } from "./artifact-edit-channel";
  * IT IS 3 SINCE cinatra#3092: the snapshot gained the REVIEW READING and the
  * DATA ROAD below. A display that declared version 2 or 1 is handed a snapshot
  * without them.
+ *
+ * IT IS 4 SINCE cinatra#3814: the edit capability below may carry the TITLE
+ * road. A display that declared version 3, 2 or 1 is handed the capability at
+ * edit-channel version 1, with no title road.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 3;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 4;
 
 /**
  * The versioned, normalized, SERIALIZABLE props snapshot an extension-shipped
@@ -150,6 +154,12 @@ export interface ArtifactRendererProps {
    *
    * A display switches on `edit.kind`, and never infers permission from
    * anything else on this snapshot.
+   *
+   * THE VERSION WINDOW (cinatra#3814): a display that declared props version 4
+   * or above is handed the capability at edit-channel version 2, which may admit
+   * the title beside the text (`isArtifactTitleEditGranted`); a display that
+   * declared an older props version is handed it at edit-channel version 1, the
+   * text alone, exactly the contract it declared.
    */
   edit: ArtifactEditCapability;
   /**
