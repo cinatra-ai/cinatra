@@ -14,6 +14,10 @@
  * B1 — for a run read under /organizations/<id>, each of them starts with that
  *      base.
  * B2 — for an unscoped run each of them is byte-identical to what it was.
+ * B3: for a PERSONAL run (cinatra#3786) every ADDRESS stays bare, which is
+ *      what the module's design says, and the successor controls are handed
+ *      `/personal`, the launcher that mints the user anchor, instead of the
+ *      bare road that wrote the successor with no anchor at all.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
@@ -35,6 +39,13 @@ const AGENT_ID = "fixture-vendor/blog-draft-writer-agent";
 const RUN_ID = "run-3693";
 const RUN_NAME = "Blog Draft Writer Agent (1)";
 const ORG_ANCHOR = { v: 1, kind: "organization", id: ORG_ID };
+const TEAM_ID = "b1e0c7a4-4f2b-4d6e-9a31-5c8f0d2e7a64";
+const TEAM_SCOPE: ScopeSurfaceRef = { kind: "team", id: TEAM_ID };
+const TEAM_BASE = scopeSurfaceBase(TEAM_SCOPE);
+const TEAM_ANCHOR = { v: 1, kind: "team", id: TEAM_ID };
+const OWNER_ID = "user-1";
+const USER_ANCHOR = { v: 1, kind: "user", id: OWNER_ID };
+const PERSONAL_BASE = "/personal";
 const BARE_RUN = `/agents/${AGENT_ID}/${RUN_ID}`;
 const SCOPED_RUN = `${ORG_BASE}${BARE_RUN}`;
 
@@ -434,7 +445,7 @@ describe("the Setup / Schedule / Permissions tabs", () => {
 // The watcher's hand-off to the schedule step.
 // ---------------------------------------------------------------------------
 
-function renderWatcher(scopeBase?: string) {
+function renderWatcher(scopeBase?: string, launchBase?: string) {
   return render(
     <SetupCompletionWatcher
       runId={RUN_ID}
@@ -447,6 +458,7 @@ function renderWatcher(scopeBase?: string) {
       requiredFields={[]}
       initialInputParams={{}}
       {...(scopeBase ? { scopeBase } : {})}
+      {...(launchBase ? { launchBase } : {})}
     />,
   );
 }
@@ -462,9 +474,17 @@ describe("the watcher's push to the schedule step", () => {
     expect(routerPush).toHaveBeenCalledWith(`${BARE_RUN}/trigger`);
   });
 
-  it("hands the base on to the run panel it draws, for the panel's own restart", () => {
-    renderWatcher(ORG_BASE);
-    expect(panelProps.last?.scopeBase).toBe(ORG_BASE);
+  it("hands the LAUNCH base on to the run panel it draws, for the panel's own restart", () => {
+    renderWatcher(ORG_BASE, ORG_BASE);
+    expect(panelProps.last?.launchBase).toBe(ORG_BASE);
+  });
+
+  it("forwards the launch base it is given, never the address base beside it (cinatra#3786)", () => {
+    // The two part on a personal run: the run is addressed bare and its
+    // successor is launched from `/personal`.
+    renderWatcher(undefined, PERSONAL_BASE);
+    expect(panelProps.last?.launchBase).toBe(PERSONAL_BASE);
+    expect(panelProps.last?.scopeBase).toBeUndefined();
   });
 });
 
@@ -527,7 +547,7 @@ describe("the run page's links (SetupScreen)", () => {
     for (const base of bases) expect(base).toBe(`${SCOPED_RUN}/review`);
     const panels = elements.filter((el) => el.type === OrchestratorStepperPanel);
     expect(panels).toHaveLength(1);
-    expect((panels[0].props as { scopeBase?: unknown }).scopeBase).toBe(ORG_BASE);
+    expect((panels[0].props as { launchBase?: unknown }).launchBase).toBe(ORG_BASE);
   });
 
   it("B1: the watcher of an agentic run is handed the base", async () => {
@@ -536,6 +556,7 @@ describe("the run page's links (SetupScreen)", () => {
     const watchers = elements.filter((el) => el.type === SetupCompletionWatcher);
     expect(watchers).toHaveLength(1);
     expect((watchers[0].props as { scopeBase?: unknown }).scopeBase).toBe(ORG_BASE);
+    expect((watchers[0].props as { launchBase?: unknown }).launchBase).toBe(ORG_BASE);
   });
 
   it("B1: the schedule step's form is handed the base for its return push", async () => {
@@ -561,6 +582,70 @@ describe("the run page's links (SetupScreen)", () => {
     row.status = "pending_input";
     const buttons = (await runPage({})).filter((el) => el.type === RunAgentButton);
     expect((buttons[0].props as { redirectTo?: unknown }).redirectTo).toBe(BARE_RUN);
+  });
+});
+
+/**
+ * THE PERSONAL RUN: A FLAT ADDRESS, A SCOPED LAUNCH (cinatra#3786).
+ *
+ * The run itself is addressed bare, which is the module's own design: the
+ * `/personal` base names the reader, and a run has other authorized readers. A
+ * LAUNCH has no such reader, so the successor controls open the personal
+ * launcher: the one mint that stamps the fresh run with a user anchor. Before
+ * this, they were handed the same null the addresses take, opened the bare
+ * launcher, and the successor was written with no anchor at all.
+ */
+describe("a personal run's successor controls (cinatra#3786)", () => {
+  function stepperOf(elements: React.ReactElement[]) {
+    const panels = elements.filter((el) => el.type === OrchestratorStepperPanel);
+    expect(panels).toHaveLength(1);
+    return panels[0].props as Record<string, unknown>;
+  }
+
+  it("B3: hands /personal to the stepper panel while every address stays BARE", async () => {
+    row.anchor = USER_ANCHOR;
+    nav.pathname = BARE_RUN;
+    const elements = await runPage({});
+    expect(stepperOf(elements).launchBase).toBe(PERSONAL_BASE);
+    // …and nothing about the run's own address moves with it.
+    const bases = propsOf(elements, "reviewHrefBase");
+    expect(bases.length).toBeGreaterThan(0);
+    for (const base of bases) expect(base).toBe(`${BARE_RUN}/review`);
+    for (const base of propsOf(elements, "scopeBase")) expect(base).toBeNull();
+  });
+
+  it("B3: the Run button of a personal run still returns to the bare address", async () => {
+    row.anchor = USER_ANCHOR;
+    row.status = "pending_input";
+    nav.pathname = BARE_RUN;
+    const buttons = (await runPage({})).filter((el) => el.type === RunAgentButton);
+    expect(buttons).toHaveLength(1);
+    expect((buttons[0].props as { redirectTo?: unknown }).redirectTo).toBe(BARE_RUN);
+  });
+
+  it("B3: hands /personal to the agentic run's watcher, whose own address base stays null", async () => {
+    row.anchor = USER_ANCHOR;
+    row.templateType = "agentic";
+    nav.pathname = BARE_RUN;
+    const watchers = (await runPage({})).filter((el) => el.type === SetupCompletionWatcher);
+    expect(watchers).toHaveLength(1);
+    expect((watchers[0].props as { launchBase?: unknown }).launchBase).toBe(PERSONAL_BASE);
+    expect((watchers[0].props as { scopeBase?: unknown }).scopeBase).toBeNull();
+  });
+
+  it("B3: a TEAM-anchored run is unchanged, both bases are the team's", async () => {
+    row.anchor = TEAM_ANCHOR;
+    nav.pathname = `${TEAM_BASE}${BARE_RUN}`;
+    const elements = await runPage({ scopeBase: TEAM_BASE, launchScope: TEAM_SCOPE });
+    expect(stepperOf(elements).launchBase).toBe(TEAM_BASE);
+    const bases = propsOf(elements, "reviewHrefBase");
+    for (const base of bases) expect(base).toBe(`${TEAM_BASE}${BARE_RUN}/review`);
+  });
+
+  it("B3: an UNANCHORED run is unchanged, the successor keeps the bare road", async () => {
+    row.anchor = null;
+    nav.pathname = BARE_RUN;
+    expect(stepperOf(await runPage({})).launchBase).toBeNull();
   });
 });
 
