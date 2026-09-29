@@ -15,6 +15,8 @@ import { describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
 const GATE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs");
@@ -61,6 +63,13 @@ type GateModule = {
     findings: Finding[];
     violations: Finding[];
     stale: string[];
+  };
+  shrinkPackShapedEntries: (
+    repoRoot: string,
+    previousEntries: { rule: string; key: string; reason: string; files?: Record<string, number> }[],
+  ) => {
+    entries: { rule: string; key: string; reason: string; files: Record<string, number> }[];
+    refused: string[];
   };
 };
 
@@ -476,5 +485,99 @@ describe("core/extension border — the pack universe is durable", () => {
       { rule: "pack-type-id-in-core", key: "src/lib/x.ts::@cinatra-ai/not-in-any-lock-agent:thing" },
     ]);
     expect(packs.has("@cinatra-ai/not-in-any-lock-agent")).toBe(true);
+  });
+});
+
+describe("core/extension border — the writer drops a spent entry", () => {
+  const REASON = "standing debt recorded in a fixture, kept file by file";
+  const exampleEntry = () => ({
+    rule: "pack-shaped-core-domain",
+    key: "src/lib/example-module",
+    reason: REASON,
+    files: { "src/lib/example-module/a.ts": 3, "src/lib/example-module/b.ts": 2 },
+  });
+  const otherEntry = () => ({
+    rule: "pack-shaped-core-domain",
+    key: "src/lib/other-module",
+    reason: REASON,
+    files: { "src/lib/other-module/c.ts": 4 },
+  });
+
+  // Each arm builds its own temporary tree and removes it, whatever the arm reads.
+  function inTree(files: Record<string, number>, read: (dir: string) => void) {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-writer-"));
+    try {
+      for (const [rel, lines] of Object.entries(files)) {
+        const abs = path.join(dir, rel);
+        mkdirSync(path.dirname(abs), { recursive: true });
+        writeFileSync(abs, Array.from({ length: lines }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n");
+      }
+      read(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("leaves out an entry whose module is gone", () => {
+    inTree({ "src/lib/other-module/c.ts": 4 }, (dir) => {
+      const { entries, refused } = gate.shrinkPackShapedEntries(dir, [exampleEntry(), otherEntry()]);
+      expect(entries).toEqual([{ ...otherEntry(), files: { "src/lib/other-module/c.ts": 4 } }]);
+      expect(refused).toEqual([]);
+    });
+  });
+
+  it("leaves out a single-file entry whose file is gone", () => {
+    inTree({}, (dir) => {
+      const { entries } = gate.shrinkPackShapedEntries(dir, [
+        {
+          rule: "pack-shaped-core-domain",
+          key: "src/lib/example-module/one.ts",
+          reason: REASON,
+          files: { "src/lib/example-module/one.ts": 5 },
+        },
+      ]);
+      expect(entries).toEqual([]);
+    });
+  });
+
+  it("keeps the files that remain when only some are gone", () => {
+    inTree({ "src/lib/example-module/a.ts": 3 }, (dir) => {
+      const { entries, refused } = gate.shrinkPackShapedEntries(dir, [exampleEntry()]);
+      expect(entries).toEqual([{ ...exampleEntry(), files: { "src/lib/example-module/a.ts": 3 } }]);
+      expect(refused).toEqual([]);
+    });
+  });
+
+  it("keeps the entry of a module that lost its files but gained a new one, and refuses the growth", () => {
+    inTree({ "src/lib/example-module/z.ts": 1 }, (dir) => {
+      const { entries, refused } = gate.shrinkPackShapedEntries(dir, [exampleEntry()]);
+      expect(entries).toEqual([{ ...exampleEntry(), files: {} }]);
+      expect(refused).toEqual(["src/lib/example-module :: src/lib/example-module/z.ts is a NEW file"]);
+    });
+  });
+
+  it("names an entry with an empty line map as stale", () => {
+    const defects = gate.baselineDefects({
+      entries: [{ rule: "pack-shaped-core-domain", key: "src/lib/example-module", reason: REASON, files: {} }],
+    });
+    const stale = defects.filter(
+      (d) => d.includes("stale entry") && d.includes("pack-shaped-core-domain::src/lib/example-module"),
+    );
+    expect(stale).toHaveLength(1);
+  });
+
+  it("finds no defect in a live entry", () => {
+    expect(
+      gate.baselineDefects({
+        entries: [
+          {
+            rule: "pack-shaped-core-domain",
+            key: "src/lib/example-module",
+            reason: REASON,
+            files: { "src/lib/example-module/a.ts": 3 },
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 });
