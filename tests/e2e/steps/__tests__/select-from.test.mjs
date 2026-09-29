@@ -10,6 +10,11 @@
 // One more came from a step-driven run on the skill match tab: the skill select
 // is a combobox with no accessible name, which the step could not find. Such a
 // combobox is found by the text a person reads for it, and never by a guess.
+//
+// And one more: while its list is open, the shared select hides everything
+// outside the list from assistive technology, the combobox included. A step that
+// looks for the combobox by its name again once it has opened it finds none,
+// and refuses a selection a person makes; the step reads it again by its mark.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { BACKENDS, closeBrowser, labelOf, refusal, scene, theSteps } from "./backends.mjs";
@@ -175,6 +180,44 @@ for (const backend of BACKENDS) {
         expect(lines).toEqual([twin.message, `selectFrom: selected "Rich" in the picker "Kind" on /pick/unnamed — its selected state shows it after ${named.elapsedMs} ms`]);
         const marked = await page.evaluate(() => document.querySelectorAll("[data-step-control]").length);
         expect(marked, "a control kept the step's mark").toBe(0);
+      });
+    });
+
+    it("reads a combobox it opened again by its mark while the list hides the rest of the page, and says what found it", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/hiding");
+        const plan = await selectFrom(page, { picker: "Plan", entry: "Team", record, bounds: BOUNDS });
+        expect(plan).toMatchObject({ picker: "Plan", entry: "Team", kind: "combobox", via: "state", path: "/pick/hiding" });
+        const skill = await selectFrom(page, { picker: "Pick a skill", entry: "Web search", record, bounds: BOUNDS });
+        expect(skill).toMatchObject({ picker: "Pick a skill", entry: "Web search", kind: "combobox", via: "state", path: "/pick/hiding" });
+        expect(lines).toEqual([
+          `selectFrom: selected "Team" in the picker "Plan" on /pick/hiding — its selected state shows it after ${plan.elapsedMs} ms`,
+          'selectFrom: selected "Web search" in the picker "Pick a skill" (a combobox with no accessible name, found by its placeholder) on /pick/hiding — ' +
+            `its selected state shows it after ${skill.elapsedMs} ms`,
+        ]);
+        // Each list closed on the choice and showed the page again, and no control kept the step's mark.
+        const after = await page.evaluate(() => ({
+          shows: Array.from(document.querySelectorAll("[role='combobox']"), (picker) => picker.textContent),
+          hidden: document.querySelectorAll("[aria-hidden]").length,
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ shows: ["Team", "Web search"], hidden: 0, marked: 0 });
+      });
+    });
+
+    it("refuses an entry the open list does not have, naming its entries, and leaves no mark", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/hiding");
+        const error = await refusal(selectFrom(page, { picker: "Plan", entry: "Enterprise", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("no-entry");
+        expect(error.message).toBe('selectFrom refused (no-entry): the picker "Plan" on /pick/hiding has no entry "Enterprise" — its entries: "Free", "Team"; nothing was selected');
+        expect(lines).toEqual([error.message]);
+        // The list is still open, so the combobox still carries aria-hidden; no control kept the step's mark.
+        const after = await page.evaluate(() => ({
+          hidden: document.querySelector("[aria-controls='hiding-plans']").getAttribute("aria-hidden"),
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ hidden: "true", marked: 0 });
       });
     });
 

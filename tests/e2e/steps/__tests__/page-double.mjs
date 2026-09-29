@@ -21,6 +21,10 @@
 //     cancels the press, or opens a dialog or a panel in place, or requests the
 //     page from the app and, once the app has answered, moves the address
 //     without a new document, as a client-side router does;
+//   - a list drawn as the shared select draws it hides everything outside it
+//     from assistive technology while it is open, as the select's library does,
+//     and a press on one of its entries takes the entry, closes the list and
+//     shows the page again (see hideOthers);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
 //   - a page has one frame, its main frame, and every request is made in it;
@@ -232,6 +236,56 @@ function isVisible(element) {
     if (/display\s*:\s*none/i.test(node.getAttribute("style") ?? "")) return false;
   }
   return true;
+}
+
+/** The marker the shared select's library puts on each element it hides. */
+const HIDDEN_MARKER = "data-aria-hidden";
+
+/**
+ * What the shared select's library does once its list is open: every element
+ * outside the list is hidden from assistive technology, the combobox that opened
+ * it included. It walks down from the body along the elements that hold the
+ * list, a live region or a script, and gives every other element it meets there
+ * `aria-hidden="true"` and its marker; an element hidden already keeps its own
+ * value. The inline script of fixture-app.mjs does the same in a browser.
+ */
+function hideOthers(list) {
+  const document = list.ownerDocument;
+  const kept = [list, ...document.querySelectorAll("[aria-live], script")];
+  const walk = (parent) => {
+    for (const child of Array.from(parent.children)) {
+      if (kept.includes(child)) continue;
+      if (kept.some((node) => child.contains(node))) {
+        walk(child);
+        continue;
+      }
+      const own = child.getAttribute("aria-hidden");
+      if (own !== null && own !== "false") continue;
+      child.setAttribute("aria-hidden", "true");
+      child.setAttribute(HIDDEN_MARKER, "true");
+    }
+  };
+  walk(document.body);
+}
+
+/**
+ * An entry pressed in such a list is taken: the list closes, the combobox that
+ * controls it shows the entry, and every element the list hid is shown again.
+ */
+function chooseEntry(entry) {
+  const document = entry.ownerDocument;
+  const list = entry.closest("[role='listbox']");
+  if (!list) return;
+  list.setAttribute("hidden", "");
+  for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
+    node.removeAttribute("aria-hidden");
+    node.removeAttribute(HIDDEN_MARKER);
+  }
+  const picker = document.querySelector(`[aria-controls="${list.id}"]`);
+  if (!picker) return;
+  picker.textContent = entry.textContent;
+  picker.removeAttribute("data-placeholder");
+  picker.setAttribute("aria-expanded", "false");
 }
 
 export class PageDouble {
@@ -477,10 +531,17 @@ export class PageDouble {
     if (element.localName === "a" && element.hasAttribute("href")) {
       // The page's handler cancels every press of this link.
       if (element.hasAttribute("data-fixture-inert")) return;
+      // The page's handler takes an entry of a list drawn as the shared select draws it.
+      if (element.hasAttribute("data-fixture-chooses")) {
+        chooseEntry(element);
+        return;
+      }
       // The page's handler cancels the press and opens the dialog or the panel it names, in place.
       const opens = element.getAttribute("data-fixture-opens");
       if (opens !== null) {
-        element.ownerDocument.getElementById(opens)?.removeAttribute("hidden");
+        const opened = element.ownerDocument.getElementById(opens);
+        opened?.removeAttribute("hidden");
+        if (opened?.hasAttribute("data-fixture-hides-others")) hideOthers(opened);
         if (element.hasAttribute("aria-expanded")) element.setAttribute("aria-expanded", "true");
         return;
       }

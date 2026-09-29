@@ -101,7 +101,8 @@ export const describeMatches = (matches) => matches.map((match, index) => `${ind
  *     controls, once that list is shown. When no picker is named `picker`, a
  *     combobox with no accessible name is found by the text that stands in for
  *     its name, road by road (`by`): the placeholder it shows, the value it
- *     shows, or the label element before it in its form group;
+ *     shows, or the label element before it in its form group. With `marked`,
+ *     the picker is the one that carries the mark, by no name (`by` is `mark`);
  *   - `reflected`: whether the marked entry reads as selected, and the text of
  *     a live region that names `entry` and was not there before (`before`);
  *   - `composer`: the shown text boxes and those named `composer`, and the shown
@@ -343,9 +344,17 @@ export function readControls(query) {
       ["value", valueOf],
       ["label", labelBefore],
     ];
-    let by = "name";
-    let found = innermost(pickers.filter((picker) => picker.name === query.picker));
-    if (found.length === 0) {
+    // Once the step has opened a combobox, it reads it by the mark it put on it
+    // before, never by a name: while the list is open, the shared select hides
+    // everything outside it from assistive technology, the combobox included.
+    const markedPicker = () => {
+      const element = document.querySelector(`[${query.attribute}="${query.mark}p"]`);
+      const kind = element ? kindOf(element) : "";
+      return kind ? [{ element, kind }] : [];
+    };
+    let by = query.marked ? "mark" : "name";
+    let found = query.marked ? markedPicker() : innermost(pickers.filter((picker) => picker.name === query.picker));
+    if (found.length === 0 && !query.marked) {
       const unnamed = pickers.filter((picker) => picker.kind === "combobox" && picker.name === "");
       for (const [road, standIn] of ROADS) {
         const matched = unnamed.filter((picker) => standIn(picker.element) === query.picker);
