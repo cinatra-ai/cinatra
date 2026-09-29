@@ -1666,7 +1666,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       const rawTargets = resolveDeclaredReviewTargets({
         inputName: wayflowArtifactReviewTargetsInput,
         startParams: run.inputParams as Record<string, unknown> | null | undefined,
-        pausePayload: interruptPayload,
+        // cinatra#3035: the runtime hands a pause's inputs over only as its own
+        // message, so the gate's surfaced message is read too; the metadata's
+        // pendingApproval keeps precedence when it is present.
+        pausePayload: { ...spreadFromOutput, ...interruptPayload },
       });
       // routeToReviewSurface is true when a USABLE pending gate for THIS run+org
       // is (or already was) pinned — so exactly ONE decision path exists (the

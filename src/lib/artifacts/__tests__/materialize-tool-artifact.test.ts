@@ -350,4 +350,109 @@ describe("materializeToolArtifact", () => {
     if (outcome.ok) return;
     expect(outcome.error).toContain("materialization failed: db down");
   });
+
+  it("writes a mid-run write with the intermediate origin when the run's flow marks a review step (cinatra#3035)", async () => {
+    // The run's own flow: the materialize call, and a pause marked as the
+    // review of what it wrote. The marker names the pause's target input.
+    getAgentPackageMock.mockResolvedValue({
+      manifest: {
+        name: "@test/agent",
+        cinatra: { produces: [{ extension: EXT }] },
+      },
+      payload: {
+        $referenced_components: {
+          persist_draft: {
+            component_type: "ApiNode",
+            id: "persist_draft",
+            metadata: { cinatra: { extension: EXT } },
+          },
+          review_gate: {
+            component_type: "InputMessageNode",
+            id: "review_gate",
+            metadata: { cinatra: { artifactReview: { targetsInput: "reviewTargets" } } },
+          },
+        },
+      },
+    });
+    const outcome = await materializeToolArtifact(BASE_INPUT);
+    expect(outcome.ok).toBe(true);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      originKind: "live_generator",
+    });
+  });
+
+  it("keeps the durable origin when the run's flow marks no review step", async () => {
+    getAgentPackageMock.mockResolvedValue({
+      manifest: {
+        name: "@test/agent",
+        cinatra: { produces: [{ extension: EXT }] },
+      },
+      payload: {
+        $referenced_components: {
+          persist_draft: {
+            component_type: "ApiNode",
+            id: "persist_draft",
+            metadata: { cinatra: { extension: EXT } },
+          },
+          review_gate: {
+            component_type: "InputMessageNode",
+            id: "review_gate",
+            metadata: { cinatra: {} },
+          },
+        },
+      },
+    });
+    const outcome = await materializeToolArtifact(BASE_INPUT);
+    expect(outcome.ok).toBe(true);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      originKind: "agent_generated",
+    });
+  });
+
+  it("keeps the durable origin when the marker sits on something other than a pause", async () => {
+    // Only a pause is a review step: a marker-shaped value in another node's
+    // data does not suppress the default review of what the run writes.
+    getAgentPackageMock.mockResolvedValue({
+      manifest: {
+        name: "@test/agent",
+        cinatra: { produces: [{ extension: EXT }] },
+      },
+      payload: {
+        $referenced_components: {
+          persist_draft: {
+            component_type: "ApiNode",
+            id: "persist_draft",
+            metadata: { cinatra: { extension: EXT } },
+            data: { example: { metadata: { cinatra: { artifactReview: { targetsInput: "reviewTargets" } } } } },
+          },
+        },
+      },
+    });
+    const outcome = await materializeToolArtifact(BASE_INPUT);
+    expect(outcome.ok).toBe(true);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      originKind: "agent_generated",
+    });
+  });
+
+  it("finds a marked pause however deep the flow document nests it", async () => {
+    let nested: Record<string, unknown> = {
+      component_type: "InputMessageNode",
+      id: "review_gate",
+      metadata: { cinatra: { artifactReview: { targetsInput: "reviewTargets" } } },
+    };
+    for (let depth = 0; depth < 20000; depth += 1) nested = { subflow: nested };
+    getAgentPackageMock.mockResolvedValue({
+      manifest: {
+        name: "@test/agent",
+        cinatra: { produces: [{ extension: EXT }] },
+      },
+      payload: { $referenced_components: { deep: nested } },
+    });
+    const outcome = await materializeToolArtifact(BASE_INPUT);
+    expect(outcome.ok).toBe(true);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      originKind: "live_generator",
+    });
+  });
 });

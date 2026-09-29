@@ -275,8 +275,40 @@ const pinnedBindingsCache = new Map<
     errors: string[];
     produces: string[];
     producesRefs: SemanticArtifactProducesRef[];
+    marksReviewStep: boolean;
   }
 >();
+
+/**
+ * cinatra#3035: does the run's own flow document declare a marked review step —
+ * a pause (an InputMessageNode, the one node the compiler reads the marker on)
+ * whose `metadata.cinatra.artifactReview.targetsInput` names an input —
+ * anywhere in it, embedded subflows included? Reads the generic marker only,
+ * and walks the document without recursion, so no depth can overflow it.
+ */
+function flowMarksReviewStep(document: unknown): boolean {
+  const seen = new Set<object>();
+  const pending: unknown[] = [document];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    const children = Array.isArray(value) ? value : Object.values(value);
+    if (isRecord(value) && value.component_type === "InputMessageNode") {
+      const metadata = value.metadata;
+      const cinatra = isRecord(metadata) ? metadata.cinatra : undefined;
+      const review = isRecord(cinatra) ? cinatra.artifactReview : undefined;
+      const targetsInput = isRecord(review) ? review.targetsInput : undefined;
+      if (typeof targetsInput === "string" && targetsInput.length > 0) return true;
+    }
+    for (const child of children) pending.push(child);
+  }
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 async function loadRunPackageBindings(input: {
   packageName: string;
@@ -288,6 +320,8 @@ async function loadRunPackageBindings(input: {
   /** The FULL typed produces entries (cinatra#1454) — carries per-entry
    *  objectTypeId so the materializer resolves the declared target type. */
   producesRefs: SemanticArtifactProducesRef[];
+  /** cinatra#3035: the run's own flow declares a marked review step. */
+  marksReviewStep: boolean;
 }> {
   const cacheKey =
     input.packageVersion !== null
@@ -332,7 +366,13 @@ async function loadRunPackageBindings(input: {
   const produces = producesRefs.map((r) => r.extension);
   const payload = pkg.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    const empty = { bindings: [], errors: [] as string[], produces, producesRefs };
+    const empty = {
+      bindings: [],
+      errors: [] as string[],
+      produces,
+      producesRefs,
+      marksReviewStep: false,
+    };
     if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, empty);
     return empty;
   }
@@ -340,7 +380,12 @@ async function loadRunPackageBindings(input: {
     payload as Record<string, unknown>,
     { produces, producesRefs },
   );
-  const result = { ...collected, produces, producesRefs };
+  const result = {
+    ...collected,
+    produces,
+    producesRefs,
+    marksReviewStep: flowMarksReviewStep(payload),
+  };
   if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, result);
   return result;
 }
@@ -1250,7 +1295,10 @@ export async function authorizeToolMaterializeWrite(input: {
   objectTypeId?: string;
   mime: string;
   content: string;
-}): Promise<{ ok: true; target: ResolvedBoundTarget } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; target: ResolvedBoundTarget; marksReviewStep: boolean }
+  | { ok: false; error: string }
+> {
   const packageName = await resolveTemplatePackageName(input.templateId);
   if (packageName === null) {
     return {
@@ -1294,7 +1342,7 @@ export async function authorizeToolMaterializeWrite(input: {
       producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
-  return { ok: true, target: resolved.target };
+  return { ok: true, target: resolved.target, marksReviewStep: loaded.marksReviewStep };
 }
 
 export async function materializeToolArtifact(input: {
@@ -1354,6 +1402,9 @@ export async function materializeToolArtifact(input: {
       ownership,
       resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
+      // cinatra#3035: a mid-run write of a run whose flow marks a review step
+      // carries the intermediate origin; that step is the review of it.
+      ...(resolved.marksReviewStep ? { originKind: "live_generator" as const } : {}),
     });
   } catch (err) {
     return {

@@ -451,4 +451,32 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
+
+  it("pins the target set the gate's own surfaced message carries, which is the only road on the pinned runtime (cinatra#3035)", async () => {
+    // The pinned runtime never writes task.metadata on an interrupt: a flagged
+    // gate hands its inputs over only as its own message, a JSON object whose
+    // marked value is itself a JSON string. The run's start default (an empty
+    // set) must not shadow it.
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: [] });
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: inputRequiredTask(JSON.stringify({ reviewTargets: JSON.stringify([TARGETS[0]]) })),
+    });
+
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith({
+      runId: "run-rev-1",
+      orgId: "org-rev",
+      reviewTaskId: "wayflow-task-rev-1",
+      targets: [TARGETS[0]],
+    });
+    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+    const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
+    expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+  });
 });
