@@ -47,6 +47,7 @@ import {
   readControls,
   readDocument,
   unmarkControls,
+  unspacedNote,
 } from "./page-controls.mjs";
 import { startsNavigation } from "./navigate-to.mjs";
 import { originOf } from "./read-standing-requests.mjs";
@@ -148,7 +149,7 @@ export async function press(page, { name, role = "button", within: scope, record
       STEP,
       record,
       "ambiguous",
-      `${part.found} shown parts of the page on ${from} are named ${quotedName(scopeName)}: ${where} — ${nothing}, since a press never guesses`,
+      `${part.found} shown parts of the page on ${from} are named ${quotedName(scopeName)}${unspacedNote(part.unspaced, part.named)}: ${where} — ${nothing}, since a press never guesses`,
     );
   }
   // Where the control is looked for, for a line: the part of the page, when named, and the page.
@@ -162,7 +163,7 @@ export async function press(page, { name, role = "button", within: scope, record
       STEP,
       record,
       "ambiguous",
-      `${matches.length} shown ${words}${at} are named ${named}: ${describeMatches(matches)} — ${nothing}, since a press never guesses`,
+      `${matches.length} shown ${words}${at} are named ${named}${unspacedNote(reading.unspaced, reading.named)}: ${describeMatches(matches)} — ${nothing}, since a press never guesses`,
     );
   }
   const [control] = matches;

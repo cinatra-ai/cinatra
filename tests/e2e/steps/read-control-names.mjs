@@ -18,7 +18,7 @@
 //
 // NOTHING LEFT OUT. A control without a name is listed, with an empty name: a
 // reading that left it out could not show that its name is missing.
-import { CONTROL_NAMES_LISTED, describeNames, describePart, plainName, quotedName, readControls, withoutAddress } from "./page-controls.mjs";
+import { CONTROL_NAMES_LISTED, describeNames, describePart, plainName, quotedName, readControls, unspacedNote, withoutAddress } from "./page-controls.mjs";
 import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, requireRecord } from "./step-kit.mjs";
 
 const STEP = "readControlNames";
@@ -109,7 +109,12 @@ export async function readControlNames(page, { record, within: scope, bounds } =
   }
   if (part && part.found > 1) {
     const where = part.matches.map((/** @type {any} */ one, /** @type {number} */ index) => `${index + 1} a ${one.kind} ${describePart(one.part)}`).join(", ");
-    throw refuse(STEP, record, "ambiguous", `${part.found} shown parts of the page on ${on} are named ${quotedName(scopeName)}: ${where} — ${listed}, since a reading never guesses`);
+    throw refuse(
+      STEP,
+      record,
+      "ambiguous",
+      `${part.found} shown parts of the page on ${on} are named ${quotedName(scopeName)}${unspacedNote(part.unspaced, part.named)}: ${where} — ${listed}, since a reading never guesses`,
+    );
   }
   const at = `${part ? ` in the ${part.kind} ${quotedName(scopeName)}` : ""} on ${on}`;
   if (reading.controls.length === 0) throw refuse(STEP, record, "no-control", `no control is shown${at} — ${listed}`);

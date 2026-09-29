@@ -46,6 +46,7 @@ import {
   quotedName,
   readControls,
   unmarkControls,
+  unspacedNote,
 } from "./page-controls.mjs";
 import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 import { RUN_COMPLETION_SELECTOR, RUN_STATUS_SELECTOR, RUN_SURFACE_SELECTOR } from "./watch-run.mjs";
@@ -191,7 +192,12 @@ export async function dispatchRun(
         throw refuse(STEP, record, "no-card", `no shown card on ${from} is named ${cardName} — the cards it shows: ${describeNames(reading.cards)}; ${nothing}`);
       }
       if (reading.found > 1) {
-        throw refuse(STEP, record, "ambiguous", `${reading.found} shown cards on ${from} are named ${cardName} — ${nothing}, since a run is never started from a guess`);
+        throw refuse(
+          STEP,
+          record,
+          "ambiguous",
+          `${reading.found} shown cards on ${from} are named ${cardName}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a run is never started from a guess`,
+        );
       }
       const { matches } = reading;
       if (matches.length === 0) {
@@ -208,7 +214,7 @@ export async function dispatchRun(
           STEP,
           record,
           "ambiguous",
-          `the card ${cardName} on ${from} has ${matches.length} shown controls named ${named}, ${which} — ${nothing}, since a run is never started from a guess`,
+          `the card ${cardName} on ${from} has ${matches.length} shown controls named ${named}${unspacedNote(reading.controlUnspaced, reading.controlNamed)}, ${which} — ${nothing}, since a run is never started from a guess`,
         );
       }
       if (matches[0].disabled) throw refuse(STEP, record, "disabled", `the control ${named} of the card ${cardName} on ${from} is disabled — ${nothing}`);
@@ -246,14 +252,19 @@ export async function dispatchRun(
         );
       }
       if (reading.found > 1) {
-        throw refuse(STEP, record, "ambiguous", `${reading.found} shown text boxes on ${on} are named ${composerNamed} — no prompt was sent, since a run is never started from a guess`);
+        throw refuse(
+          STEP,
+          record,
+          "ambiguous",
+          `${reading.found} shown text boxes on ${on} are named ${composerNamed}${unspacedNote(reading.unspaced, reading.named)} — no prompt was sent, since a run is never started from a guess`,
+        );
       }
       if (reading.sends !== 1) {
         throw refuse(
           STEP,
           record,
           reading.sends === 0 ? "no-control" : "ambiguous",
-          `the composer ${composerNamed} on ${on} has ${reading.sends === 0 ? "no shown send control" : `${reading.sends} shown send controls`}, a button named ${composerNamed} — no prompt was sent`,
+          `the composer ${composerNamed} on ${on} has ${reading.sends === 0 ? "no shown send control" : `${reading.sends} shown send controls`}, a button named ${composerNamed}${unspacedNote(reading.sends > 1 && reading.sendsUnspaced, reading.sendsNamed)} — no prompt was sent`,
         );
       }
       before = await noteBefore(on);

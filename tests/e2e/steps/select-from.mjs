@@ -62,6 +62,7 @@ import {
   quotedName,
   readControls,
   unmarkControls,
+  unspacedNote,
 } from "./page-controls.mjs";
 import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
@@ -150,11 +151,16 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
         STEP,
         record,
         "ambiguous",
-        `${reading.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed} — ${nothing}, since a selection never guesses`,
+        `${reading.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a selection never guesses`,
       );
     }
     if (reading.found > 1) {
-      throw refuse(STEP, record, "ambiguous", `${reading.found} shown pickers on ${from} are named ${pickerNamed} — ${nothing}, since a selection never guesses`);
+      throw refuse(
+        STEP,
+        record,
+        "ambiguous",
+        `${reading.found} shown pickers on ${from} are named ${pickerNamed}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a selection never guesses`,
+      );
     }
     // A line says what a combobox with no accessible name was found by.
     if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
@@ -216,7 +222,12 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       throw refuse(STEP, record, "no-entry", `the picker ${pickerNamed} on ${from} has no entry ${entryNamed} — its entries: ${describeNames(reading.entries)}; ${nothing}`);
     }
     if (reading.entryFound > 1) {
-      throw refuse(STEP, record, "ambiguous", `the picker ${pickerNamed} on ${from} has ${reading.entryFound} entries ${entryNamed} — ${nothing}, since a selection never guesses`);
+      throw refuse(
+        STEP,
+        record,
+        "ambiguous",
+        `the picker ${pickerNamed} on ${from} has ${reading.entryFound} entries ${entryNamed}${unspacedNote(reading.entryUnspaced, reading.entryNamed)} — ${nothing}, since a selection never guesses`,
+      );
     }
     if (reading.entryDisabled) throw refuse(STEP, record, "disabled", `the entry ${entryNamed} of the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
 
@@ -237,8 +248,10 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
 
     const selectedAt = performance.now();
     const { drawn } = reading;
+    // The page shows the entry as it reads it, which may differ from the wanted text in white space.
+    const shownAs = reading.chosen || entryText;
     for (;;) {
-      const shown = await within(page.evaluate(readControls, { mode: "reflected", kind, index, entry: entryText, before, drawn, attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
+      const shown = await within(page.evaluate(readControls, { mode: "reflected", kind, index, entry: shownAs, before, drawn, attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
       const elapsedMs = elapsedSince(selectedAt);
       if (shown && shown.instead) {
         const where = shown.instead.where === "field" ? "the field shows" : "the page draws";

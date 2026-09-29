@@ -10,7 +10,10 @@
 // its content, its text without hidden parts. Only a shown control counts:
 // attached, drawn, inside nothing hidden, and not hidden from assistive
 // technology (`aria-hidden`), as a picker's hidden native twin is. Names are
-// compared whole, after runs of white space are made one space.
+// compared whole, after runs of white space are made one space; when no name
+// reads the same, a name that reads the same once all white space is removed
+// matches, as parts drawn with no white space between them read ("3Select blog
+// idea" for "3 Select blog idea"). A name that reads the same exactly wins.
 //
 // A STEP NEVER ACTS ON A GUESS. When a name matches several controls, the step
 // refuses and names each one by the named part of the page it sits in (a card,
@@ -88,6 +91,15 @@ export const describePart = (part) => (part ? `in the ${part.kind} ${quotedName(
  */
 export const describeMatches = (matches) => matches.map((match, index) => `${index + 1} ${describePart(match.part)}`).join(", ");
 
+/**
+ * For a refusal of several matches of one wanted name: when they matched only
+ * once white space is removed, how the page reads their names, since none of
+ * them reads as the name wanted.
+ * @param {boolean} unspaced
+ * @param {{ names: string[], more: number }} named
+ */
+export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space is removed (the page reads ${describeNames(named)})` : "");
+
 // These run IN THE PAGE. Playwright sends each one's source text, so none of
 // them may use anything of this module.
 
@@ -134,6 +146,23 @@ export const describeMatches = (matches) => matches.map((match, index) => `${ind
  */
 export function readControls(query) {
   const text = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  // THE ONE COMPARISON of a wanted name with the names the page reads, for every
+  // step and every scope. A name names a candidate when both read the same, runs
+  // of white space made one space; or, when no candidate reads the same, when
+  // both read the same once all white space is removed, as parts drawn with no
+  // white space between them read ("3Select blog idea" for "3 Select blog
+  // idea"). A name that reads the same exactly wins. `unspaced` says that the
+  // candidates found read the same only without white space.
+  const squeezed = (value) => String(value == null ? "" : value).replace(/\s+/g, "");
+  const readsAs = (name, wanted, unspaced) => (unspaced ? squeezed(wanted) !== "" && squeezed(name) === squeezed(wanted) : name === wanted);
+  const matching = (candidates, nameOfCandidate, wanted) => {
+    for (const unspaced of [false, true]) {
+      const found = candidates.filter((candidate) => readsAs(nameOfCandidate(candidate), wanted, unspaced));
+      if (found.length > 0) return { found, unspaced };
+    }
+    return { found: [], unspaced: false };
+  };
+  const sameName = (name, wanted) => matching([name], (one) => one, wanted).found.length > 0;
   // Shown: attached and drawn, and inside nothing hidden.
   const shown = (element) => {
     if (!element || !element.isConnected || getComputedStyle(element).visibility === "hidden") return false;
@@ -296,7 +325,8 @@ export function readControls(query) {
       .filter(exposed)
       .map((element) => ({ element, kind: PARTS.find(([, selector]) => element.matches(selector))[0], name: titleOf(element) }))
       .filter((part) => part.name);
-    const found = innermost(parts.filter((part) => part.name === within));
+    const match = matching(parts, (part) => part.name, within);
+    const found = innermost(match.found);
     return {
       root: found.length === 1 ? found[0].element : null,
       scope: {
@@ -304,6 +334,8 @@ export function readControls(query) {
         kind: found.length === 1 ? found[0].kind : "",
         parts: listOf(parts.map((part) => part.name)),
         matches: found.map((part) => ({ kind: part.kind, part: partOf(part.element) })),
+        unspaced: match.unspaced,
+        named: listOf(found.map((part) => part.name)),
       },
     };
   };
@@ -315,10 +347,11 @@ export function readControls(query) {
     let scope = null;
     if (query.within) {
       ({ root, scope } = scopeOf(query.within));
-      if (!root) return { scope, controls: [], matches: [] };
+      if (!root) return { scope, controls: [], matches: [], unspaced: false };
     }
     const controls = controlsIn(root, [query.role]);
-    return { scope, controls, matches: controls.filter((element) => nameOf(element) === query.name) };
+    const { found, unspaced } = matching(controls, nameOf, query.name);
+    return { scope, controls, matches: found, unspaced };
   };
   // The list a combobox or a search field controls (`aria-controls`, `aria-owns`), while it is shown.
   const controlledList = (element) =>
@@ -365,9 +398,9 @@ export function readControls(query) {
       .filter(Boolean);
 
   if (query.mode === "press") {
-    const { scope, controls, matches } = pressable();
+    const { scope, controls, matches, unspaced } = pressable();
     if (matches.length === 1 && !disabled(matches[0])) mark(matches[0], query.mark);
-    return { path: location.pathname, scope, present: listOf(controls.map(nameOf)), matches: matches.map(describe) };
+    return { path: location.pathname, scope, present: listOf(controls.map(nameOf)), matches: matches.map(describe), unspaced, named: listOf(matches.map(nameOf)) };
   }
 
   if (query.mode === "checked") {
@@ -379,13 +412,20 @@ export function readControls(query) {
     const cards = Array.from(document.querySelectorAll(CARD))
       .filter(exposed)
       .map((element) => ({ element, name: titleOf(element) }));
-    const found = innermost(cards.filter((card) => card.name === query.card));
-    const read = { path: location.pathname, cards: listOf(cards.map((card) => card.name)), found: found.length };
+    const cardMatch = matching(cards, (card) => card.name, query.card);
+    const found = innermost(cardMatch.found);
+    const read = {
+      path: location.pathname,
+      cards: listOf(cards.map((card) => card.name)),
+      found: found.length,
+      unspaced: cardMatch.unspaced,
+      named: listOf(found.map((card) => card.name)),
+    };
     if (found.length !== 1) return read;
     const controls = controlsIn(found[0].element, ["button", "link"]);
-    const matches = controls.filter((element) => nameOf(element) === query.control);
+    const { found: matches, unspaced } = matching(controls, nameOf, query.control);
     if (matches.length === 1 && !disabled(matches[0])) mark(matches[0], query.mark);
-    return { ...read, controls: listOf(controls.map(nameOf)), matches: matches.map(describe) };
+    return { ...read, controls: listOf(controls.map(nameOf)), matches: matches.map(describe), controlUnspaced: unspaced, controlNamed: listOf(matches.map(nameOf)) };
   }
 
   if (query.mode === "picker") {
@@ -450,19 +490,34 @@ export function readControls(query) {
       return kind ? [{ element, kind }] : [];
     };
     let by = query.marked ? "mark" : "name";
-    let found = query.marked ? markedPicker() : innermost(pickers.filter((picker) => picker.name === query.picker));
-    if (found.length === 0 && !query.marked) {
+    let found = query.marked ? markedPicker() : [];
+    let unspaced = false;
+    let named = listOf([]);
+    if (!query.marked) {
+      // By its name, then by the text that stands in for one, road by road: a
+      // reading that is the same exactly, on any of them, wins over one that is
+      // the same only once white space is removed.
       const unnamed = pickers.filter((picker) => (picker.kind === "combobox" || picker.kind === "search") && picker.name === "");
-      for (const [road, standIn] of ROADS) {
-        const matched = unnamed.filter((picker) => standIn(picker.element) === query.picker);
-        if (matched.length > 0) {
-          by = road;
-          found = matched;
+      tiers: for (const loose of [false, true]) {
+        found = innermost(pickers.filter((picker) => readsAs(picker.name, query.picker, loose)));
+        if (found.length > 0) {
+          unspaced = loose;
+          named = listOf(found.map((picker) => picker.name));
           break;
+        }
+        for (const [road, standIn] of ROADS) {
+          const matched = unnamed.filter((picker) => readsAs(standIn(picker.element), query.picker, loose));
+          if (matched.length > 0) {
+            by = road;
+            found = matched;
+            unspaced = loose;
+            named = listOf(matched.map((picker) => standIn(picker.element)));
+            break tiers;
+          }
         }
       }
     }
-    const read = { path: location.pathname, pickers: listOf(pickers.map((picker) => picker.name)), found: found.length, by };
+    const read = { path: location.pathname, pickers: listOf(pickers.map((picker) => picker.name)), found: found.length, by, unspaced, named };
     if (found.length !== 1) return read;
     const { element: picker, kind } = found[0];
     mark(picker, `${query.mark}p`);
@@ -481,7 +536,7 @@ export function readControls(query) {
       open = Boolean(list);
       entries = list ? optionsOf(list, kind === "search" ? rowNameOf : nameOf) : [];
     }
-    const matches = entries.filter((entry) => entry.name === query.entry);
+    const { found: matches, unspaced: entryUnspaced } = matching(entries, (entry) => entry.name, query.entry);
     const chosen = matches.length === 1 ? matches[0] : null;
     if (chosen && kind !== "select") {
       // One entry carries the mark: a list read again may have drawn its rows anew.
@@ -497,6 +552,10 @@ export function readControls(query) {
       disabled: disabled(picker),
       entries: listOf(entries.map((entry) => entry.name)),
       entryFound: matches.length,
+      entryUnspaced,
+      entryNamed: listOf(matches.map((entry) => entry.name)),
+      // The one entry's name as the page reads it: the reading after the choice looks for that.
+      chosen: chosen ? chosen.name : "",
       entryDisabled: chosen ? disabled(chosen.element) : false,
       index: chosen && kind === "select" ? chosen.index : -1,
       native: Boolean(chosen && chosen.element.localName === "input"),
@@ -538,18 +597,28 @@ export function readControls(query) {
           : entry.getAttribute("aria-selected") === "true" || entry.getAttribute("aria-checked") === "true" || entry.getAttribute("data-state") === "checked";
     }
     // A combobox shows the entry it holds; its list may be gone once the choice is made.
-    if (!state && query.kind === "combobox" && picker) state = text(contentOf(picker, null)) === query.entry;
-    const confirmation = liveTexts().find((line) => line.includes(query.entry) && !query.before.includes(line)) || "";
+    if (!state && query.kind === "combobox" && picker) state = sameName(text(contentOf(picker, null)), query.entry);
+    // A live region names the entry when it holds it, white space aside: the page spells it in its own words.
+    const confirmation = liveTexts().find((line) => squeezed(line).includes(squeezed(query.entry)) && !query.before.includes(line)) || "";
     return { path: location.pathname, state, confirmation };
   }
 
   if (query.mode === "composer") {
     const boxes = controlsIn(document, ["textbox", "searchbox"]);
-    const matches = boxes.filter((element) => nameOf(element) === query.composer);
-    const sends = controlsIn(document, ["button"]).filter((element) => nameOf(element) === query.composer);
+    const { found: matches, unspaced } = matching(boxes, nameOf, query.composer);
+    const { found: sends, unspaced: sendsUnspaced } = matching(controlsIn(document, ["button"]), nameOf, query.composer);
     if (matches.length === 1) mark(matches[0], `${query.mark}t`);
     if (sends.length === 1) mark(sends[0], `${query.mark}s`);
-    return { path: location.pathname, boxes: listOf(boxes.map(nameOf)), found: matches.length, sends: sends.length };
+    return {
+      path: location.pathname,
+      boxes: listOf(boxes.map(nameOf)),
+      found: matches.length,
+      unspaced,
+      named: listOf(matches.map(nameOf)),
+      sends: sends.length,
+      sendsUnspaced,
+      sendsNamed: listOf(sends.map(nameOf)),
+    };
   }
 
   if (query.mode === "names") {
