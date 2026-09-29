@@ -23,7 +23,7 @@
 // The matcher is IMPORTED from the gate, so a fixture can never assert a rule
 // that differs from what CI enforces.
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -45,7 +45,18 @@ import {
   ORG_AXIS_SYMBOLS,
   WRITE_REGISTRY_REL,
   SWEEP_REL,
+  FLOOR_FILE,
+  FLOOR_BASE_VAR,
+  checkFloorAgainstBase,
 } from "../system-writer-manifest-gate.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+  makeOneCommitCheckout,
+} from "./floor-base-fixture.mjs";
 import { ORG_WRITE_REGISTRY } from "../../../src/lib/org-write/write-registry";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -312,5 +323,84 @@ describe("the gate on the current tree", () => {
     const result = spawnSync("node", [GATE_REL], { encoding: "utf8", cwd: REPO_ROOT });
     expect(result.stderr ?? "").toBe("");
     expect(result.status).toBe(0);
+  });
+});
+
+// --------------------------------------------------------------------------
+// cinatra#3832: the committed manifest is compared with the copy on the base
+// branch, so a pull request cannot add its own writer to the manifest.
+// --------------------------------------------------------------------------
+
+describe("system-writer-manifest — floor compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const manifest = (writers) => ({ note: "fixture", version: 1, writers });
+  const row = (file, ref, count) => ({ file, ref, count });
+  function repo(baseWriters, headWriters, make = makeFloorRepo) {
+    const f = make({ base: { [FLOOR_FILE]: manifest(baseWriters) }, head: { [FLOOR_FILE]: manifest(headWriters) } });
+    fixtures.push(f);
+    return f.root;
+  }
+  const SEED = row("scripts/seed.mjs", "raw-sql:objects", 6);
+
+  it("names its floor file and its own base variable", () => {
+    expect(FLOOR_FILE).toBe("scripts/audit/system-writer-manifest.json");
+    expect(FLOOR_BASE_VAR).toBe("SYSTEM_WRITER_MANIFEST_BASE");
+  });
+
+  it("a raised floor FAILS: a new manifest row and a raised count are growth", () => {
+    const root = repo([SEED], [row("scripts/seed.mjs", "raw-sql:objects", 7), row("scripts/new.mjs", "drizzle:agentRuns", 1)]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["scripts/new.mjs [drizzle:agentRuns] (0 -> 1)", "scripts/seed.mjs [raw-sql:objects] (6 -> 7)"]);
+  });
+
+  it("a lowered floor PASSES: a removed stale row and a lowered count are not growth", () => {
+    const root = repo([SEED, row("scripts/gone.mjs", "raw-sql:objects", 1)], [row("scripts/seed.mjs", "raw-sql:objects", 5)]);
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo([], []);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  });
+
+  it("a base copy that is not a manifest FAILS with its reason", () => {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: { writers: [{ file: "x" }] } }, head: { [FLOOR_FILE]: manifest([]) } });
+    fixtures.push(f);
+    const r = checkFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/is not a readable floor/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo([], [SEED]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("in a checkout of one commit the base is fetched: a raised floor FAILS, a lowered one PASSES", () => {
+    let root = repo([SEED], [SEED, row("scripts/new.mjs", "raw-sql:objects", 1)], makeOneCommitCheckout);
+    let r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.status).toBe("grew");
+    expect(r.fetched).toEqual({ remote: "origin", branch: "main" });
+    root = repo([SEED], [], makeOneCommitCheckout);
+    r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("the gate itself runs the guard first: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [GATE_REL], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/\[system-writer-manifest\] FAIL — the floor scripts\/audit\/system-writer-manifest\.json cannot be compared with the base/);
   });
 });

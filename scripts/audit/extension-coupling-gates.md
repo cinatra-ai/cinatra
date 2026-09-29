@@ -523,6 +523,9 @@ for its floor:
 | `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
 | `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record that matches it; a stale, orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
 | `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` | a new package in the set | `REQUIRED_EXTENSIONS_COVER_BASE` |
+| `org-write-table-sweep.mjs` | `org-write-table-sweep.baseline.json` | a new file or a raised count of raw org-axis writes | `ORG_WRITE_TABLE_SWEEP_BASE` |
+| `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` | a new manifest row (file and reference) or a raised count | `SYSTEM_WRITER_MANIFEST_BASE` |
+| `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 
 The rules the helper holds for every gate:
 
@@ -530,8 +533,25 @@ The rules the helper holds for every gate:
   the workflow sets one (a git revision: the remote base branch on a pull
   request, the previous tip on a push); else the platform's variable for a pull
   request's base branch (`GITHUB_BASE_REF`), read as the remote branch of that
-  name (`origin/main` for `main`). A job that runs one of these gates needs the base branch
-  in its checkout (`fetch-depth: 0`).
+  name (`origin/main` for `main`). A job whose checkout holds the base branch
+  (`fetch-depth: 0`) reads it there, and nothing is fetched.
+- **A checkout of one commit**: when the base comes from the pull request's
+  base branch and is not in the checkout, the helper fetches that branch
+  itself, one commit deep, from the checkout's own remote `origin`
+  (for the base branch `main`: `git fetch --depth=1 --no-tags origin
+  +refs/heads/main:refs/floor-base-guard/main`), into a reference of its own,
+  never into a branch of the checkout, and reads the floor there. The
+  branch name must have the form of a branch name (letters, digits, dot, dash,
+  underscore and slash; no leading dash; no `..`) before it reaches git; a name
+  of another form fails the gate. One attempt with a timeout of 30 seconds, one
+  more after a failure, and no other network call. The repository is public:
+  the helper adds no credential and reads none (no credential helper, no
+  prompt). A remote address that holds a user part is never printed; the
+  remote is then named by its name only. A fetch that fails fails the gate with
+  its reason. A base named by the gate's own variable is a revision the
+  workflow chose, and it is never fetched. `FLOOR_BASE_FETCH=0` switches the
+  fetch off, so a missing base fails closed without it; the tests that run a
+  gate in the real checkout set it, so they never reach the network.
 - **No pull request, no base**: on a run that is no pull request (a push to the
   default branch, a local run) and no base is named, the guard says so in one
   line and passes; the gate's own check against the tree still runs.
@@ -556,6 +576,16 @@ runs it through its test ("exits 0 against the repo as checked out"), which
 inherits the run's environment and so compares with the base on a pull
 request's run. The tests that run a gate on a SYNTHETIC floor drop the base
 variables, so a synthetic floor is never compared with the real base branch.
+
+The org-write boundary workflow runs `org-write-table-sweep.mjs` and
+`system-writer-manifest-gate.mjs`, and the skill packaging workflow runs
+`skill-packaging-gate.mjs`; their checkouts take one commit, so these three
+gates get their base through the fetch above. The root suite also runs
+`system-writer-manifest-gate.mjs` and `skill-packaging-gate.mjs` through their
+tests against the repository as checked out, with the run's environment.
+
+Not guarded yet: the other gates that cinatra#3832 lists, which need a
+workflow change or a floor moved into a file of its own.
 
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 

@@ -98,17 +98,27 @@
  *   `ref` = `raw-sql:<table>` | `drizzle:<symbol>` | `write-registry:<export>`.
  *   Regenerate deliberately with `--write-manifest`; the diff is the review.
  *
+ * FLOOR COMPARED WITH THE BASE (cinatra#3832): the committed manifest may not
+ * hold a row, or a count, that the base branch's manifest does not, so a pull
+ * request cannot sanction its own new writer. A removed or lowered row passes.
+ * The base comes from SYSTEM_WRITER_MANIFEST_BASE when a workflow sets it, else
+ * from the pull request's base branch, fetched one commit deep when the
+ * checkout does not hold it; a base that cannot be read fails closed (the
+ * shared guard, scripts/audit/lib/floor-base-guard.mjs).
+ *
  * Exit 0 -> clean; exit 1 -> at least one drift (printed to stderr);
  * exit 2 -> scanner error.
  *
  * Usage:
  *   node scripts/audit/system-writer-manifest-gate.mjs                  # check
  *   node scripts/audit/system-writer-manifest-gate.mjs --write-manifest # regen
+ *   SYSTEM_WRITER_MANIFEST_BASE=origin/main node ...   # compare the manifest with that revision (default: the pull request's base branch)
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { resolve, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compareFloorWithBase, raisedCounts, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 import { stripComments } from "./lib/strip-comments.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -119,6 +129,12 @@ const LABEL = "system-writer-manifest";
 export const MANIFEST_PATH = join(__dirname, "system-writer-manifest.json");
 export const WRITE_REGISTRY_REL = "src/lib/org-write/write-registry.ts";
 export const SWEEP_REL = "scripts/audit/org-write-table-sweep.mjs";
+
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "scripts/audit/system-writer-manifest.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "SYSTEM_WRITER_MANIFEST_BASE";
 
 // ---------------------------------------------------------------------------
 // Table universe
@@ -505,6 +521,42 @@ export function diffManifest(surface, manifestWriters) {
   return { unlisted, stale, drifted };
 }
 
+/**
+ * A manifest's writer rows -> `{ "file [ref]": count }`; throws when a row is
+ * not a `{ file, ref, count }` triple.
+ */
+function manifestCounts(writers) {
+  if (!Array.isArray(writers)) throw new Error("writers is not a list");
+  const counts = {};
+  for (const r of writers) {
+    if (typeof r?.file !== "string" || typeof r?.ref !== "string" || !Number.isInteger(r?.count) || r.count < 0) {
+      throw new Error(`${JSON.stringify(r)} is not a {file, ref, count} row`);
+    }
+    const key = `${r.file} [${r.ref}]`;
+    counts[key] = (counts[key] ?? 0) + r.count;
+  }
+  return counts;
+}
+
+/**
+ * The floor base guard (cinatra#3832): growth is a manifest row the base
+ * branch's manifest does not hold, or a count above the base's. `headFloor`
+ * (the manifest's writer rows) defaults to the manifest in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? loadManifest(repoRoot).writers ?? [];
+  return compareFloorWithBase({
+    gate: LABEL,
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: manifestCounts(head),
+    parse: (text) => manifestCounts(JSON.parse(text).writers),
+    grown: raisedCounts,
+    repoRoot,
+    env,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -533,6 +585,9 @@ function main(argv = process.argv.slice(2)) {
     console.log(`[${LABEL}] manifest written — ${surface.length} writer row(s).`);
     return 0;
   }
+
+  // The floor base guard runs first: it reads only the committed manifest.
+  if (!reportFloorGuard(checkFloorAgainstBase())) return 1;
 
   const surface = computeSurface();
   const manifest = loadManifest();
