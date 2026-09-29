@@ -21,6 +21,8 @@
 //     cancels the press, or opens a dialog or a panel in place, or requests the
 //     page from the app and, once the app has answered, moves the address
 //     without a new document, as a client-side router does;
+//   - a press on a checkbox, a radio or a switch the page draws itself plays the
+//     page's handler for it, which flips its checked state;
 //   - a page has one frame, its main frame, and every request is made in it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
@@ -465,6 +467,13 @@ export class PageDouble {
   }
 
   #press(element, modifiers) {
+    // The page's handler flips the checked state of a control it draws itself.
+    if (element.hasAttribute("data-fixture-toggles")) {
+      const on = element.getAttribute("aria-checked") !== "true";
+      element.setAttribute("aria-checked", String(on));
+      element.setAttribute("data-state", on ? "checked" : "unchecked");
+      return;
+    }
     if (element.localName === "a" && element.hasAttribute("href")) {
       // The page's handler cancels every press of this link.
       if (element.hasAttribute("data-fixture-inert")) return;

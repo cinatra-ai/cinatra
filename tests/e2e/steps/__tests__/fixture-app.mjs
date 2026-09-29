@@ -179,6 +179,13 @@ const TIMELINE_RUNNER = `<script>
       fetch(href).then(function () { history.pushState(null, "", href); });
     });
   });
+  document.querySelectorAll("[data-fixture-toggles]").forEach(function (box) {
+    box.addEventListener("click", function () {
+      var on = box.getAttribute("aria-checked") !== "true";
+      box.setAttribute("aria-checked", String(on));
+      box.setAttribute("data-state", on ? "checked" : "unchecked");
+    });
+  });
   ops.forEach(function (op) {
     if (op.freeze) {
       // Counted from the load, so the page has loaded before its main thread is busy.
@@ -388,6 +395,27 @@ export const PRESS_PAGE = [
 ].join("");
 
 /**
+ * Agent sections, each with its own "Add skill": one section named by its
+ * heading, one by its label, and two that carry one heading. A skill's pill box
+ * is a checkbox the page draws itself, whose handler flips it; the handler of a
+ * pinned box keeps it as it is, and a box that is a link leaves the page.
+ */
+export const PRESS_SECTIONS_PAGE = [
+  '<main aria-label="Agents">',
+  '<section><h2>Research assistant</h2>',
+  '<span><button type="button" role="checkbox" aria-checked="false" data-state="unchecked" aria-labelledby="press-skill-web" data-fixture-toggles style="width:16px;height:16px"></button>',
+  ' <span id="press-skill-web">Web search</span></span>',
+  ' <button type="button" role="checkbox" aria-checked="true" data-state="checked" aria-label="Pinned" style="width:16px;height:16px"></button>',
+  ' <a href="/nav/target" role="checkbox" aria-checked="false" aria-label="Keep drafts">Keep drafts</a>',
+  ' <a href="#add-research" role="button" data-fixture-opens="press-added-research">Add skill</a><p id="press-added-research" hidden>Added to Research assistant.</p></section>',
+  '<section aria-label="Blog writer"><p>Blog writer</p>',
+  '<a href="#add-blog" role="button" data-fixture-opens="press-added-blog">Add skill</a><p id="press-added-blog" hidden>Added to Blog writer.</p></section>',
+  '<section><h2>Twin agent</h2><button type="button">Add skill</button></section>',
+  '<section><h2>Twin agent</h2><button type="button">Add skill</button></section>',
+  "</main>",
+].join("");
+
+/**
  * The pickers the selection cases select from: a select, a radio group, a
  * listbox that confirms a choice in a status, a combobox that opens its list,
  * two radio groups of one name, and a combobox whose list never opens.
@@ -406,6 +434,29 @@ export const PICK_PAGE = [
   '<div role="radiogroup" aria-label="Twin"><span role="radio" aria-checked="false">Two</span></div>',
   '<a href="#shut" role="combobox" aria-label="Shut" aria-controls="pick-shut" data-fixture-inert>Choose</a>',
   '<div role="listbox" id="pick-shut" aria-label="Shut list" hidden><a href="#never" role="option">Never</a></div>',
+].join("");
+
+/**
+ * Comboboxes with no accessible name, as the shared select draws them: one that
+ * shows its placeholder (marked `data-placeholder`), one that shows the value it
+ * holds, one after a label element in its form group, and two that show one
+ * placeholder. A select named by its label shares that name with the
+ * placeholder of a combobox after it.
+ */
+export const PICK_UNNAMED_PAGE = [
+  '<a href="#vegetables" role="combobox" aria-controls="unnamed-vegetables" aria-expanded="false" data-placeholder="" data-fixture-opens="unnamed-vegetables"><span>Pick a vegetable</span></a>',
+  '<div role="listbox" id="unnamed-vegetables" aria-label="Vegetables" hidden><a href="#leek" role="option" data-fixture-opens="unnamed-leek">Leek</a></div>',
+  '<p role="status" id="unnamed-leek" hidden>Vegetable: Leek</p>',
+  '<a href="#frequencies" role="combobox" aria-controls="unnamed-frequencies" aria-expanded="false" data-fixture-opens="unnamed-frequencies"><span>Weekly</span></a>',
+  '<div role="listbox" id="unnamed-frequencies" aria-label="Frequencies" hidden><a href="#daily" role="option">Daily</a> <a href="#monthly" role="option" data-fixture-opens="unnamed-monthly">Monthly</a></div>',
+  '<p role="status" id="unnamed-monthly" hidden>Frequency: Monthly</p>',
+  '<div role="group"><label>Repository</label> <a href="#repositories" role="combobox" aria-controls="unnamed-repositories" aria-expanded="false" data-placeholder="" data-fixture-opens="unnamed-repositories"><span>Choose a repository</span></a></div>',
+  '<div role="listbox" id="unnamed-repositories" aria-label="Repositories" hidden><a href="#main-site" role="option" data-fixture-opens="unnamed-main-site">Main site</a></div>',
+  '<p role="status" id="unnamed-main-site" hidden>Repository: Main site</p>',
+  '<a href="#skills-one" role="combobox" aria-controls="unnamed-skills-one" data-placeholder=""><span>Add a skill</span></a>',
+  '<a href="#skills-two" role="combobox" aria-controls="unnamed-skills-two" data-placeholder=""><span>Add a skill</span></a>',
+  '<label for="unnamed-kind">Kind</label> <select id="unnamed-kind"><option>Plain</option><option>Rich</option></select>',
+  '<a href="#kinds" role="combobox" data-placeholder=""><span>Kind</span></a>',
 ].join("");
 
 /**
@@ -518,7 +569,9 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/cards/nothing": "<p>No run here.</p>",
         "/press/start": PRESS_PAGE,
         "/press/saved": "<p>Saved.</p>",
+        "/press/sections": PRESS_SECTIONS_PAGE,
         "/pick/start": PICK_PAGE,
+        "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,
         "/conversation/boxes": CONVERSATION_PAGES.boxes,
