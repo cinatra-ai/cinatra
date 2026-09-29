@@ -11,6 +11,17 @@
 # the runner between jobs, so a job at a head that changed a few files compiles
 # what those files reach and reuses the rest.
 #
+# OFF UNLESS LABELLED (cinatra#3810). The pixel-diff job runs `restore` only
+# for a pull request that carries the label `design-build-cache`; every other
+# job, a merge-queue run included, skips it and builds exactly as it did
+# without the cache. Measured on 2026-09-29 on a quiet machine, a cold build
+# with the cache on took 9.4 to 10.8 minutes and 30.5 to 31.4 GB of memory,
+# against 7.1 to 7.5 minutes and 24.5 to 24.8 GB with it off; on a saturated
+# machine both took 12.8 to 20 minutes. No warm build has been measured: no
+# base branch cache is written while the merge queue is not in use, a later
+# push of a pull request is warm only when it builds on the same runner, and a
+# runner's store holds only two caches at its size limit.
+#
 # THE SWITCH. The build writes a cache a later build can reuse only when
 # CINATRA_TURBOPACK_BUILD_FS_CACHE=1 reaches next.config.ts: the framework keeps
 # its Turbopack build cache off by default and reads that option from the config
