@@ -989,34 +989,10 @@ const looseObject = () => z.object({}).passthrough();
 export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
   // `BLOG_POST_IDEA_GENERATION` and `BLOG_POST_DRAFT_GENERATION` handlers are
   // retired; replacements live in `blog-pipeline-agent`.
-  [BACKGROUND_JOB_NAMES.BLOG_POST_IMAGE_REGENERATION]: {
-    // Writes org-tagged `objects` rows via writeStore → upsertObjectAndEnqueue;
-    // org = the re-established enqueuer `__actorContext.organizationId`
-    // (blog/store.ts:785). External: Gemini image HTTP.
-    authority: {
-      authorityKind: "originating-actor",
-      actorSource: "enqueuer-actor-context",
-      orgExtractor: { source: "actor-context" },
-      capabilities: ["content.write"],
-    },
-    payloadSchema: z
-      .object({
-        projectId: z.string(),
-        postId: z.string(),
-        customPrompt: z.string().optional(),
-      })
-      .passthrough(),
-    async handle(job, jobId) {
-      const { runBlogPostImageRegenerationJob } = await import("@/lib/blog");
-      await runBlogPostImageRegenerationJob(
-        job.data as { projectId: string; postId: string; customPrompt?: string },
-        jobId,
-      );
-    },
-  },
   [BACKGROUND_JOB_NAMES.BLOG_POST_WORDPRESS_DRAFT_CREATION]: {
-    // Same writeStore path (store.ts:903,:1291) + notification; external
-    // WordPress REST. Org from the enqueuer actor context (store.ts:785).
+    // Writes org-tagged `objects` rows via writeStore (store.ts:903,:1291) +
+    // notification; external WordPress REST. Org from the enqueuer actor
+    // context (store.ts:785).
     authority: {
       authorityKind: "originating-actor",
       actorSource: "enqueuer-actor-context",
