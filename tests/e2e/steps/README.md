@@ -18,6 +18,8 @@ defect of a step, with a test, fixed once for every run.
 | `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
 | `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
 | `readControlNames` | Every shown control of a page, by its role and its accessible name, a control without a name included. |
+| `armPageTape` | The document's time origin noted, and the main frame's navigations counted from then on. |
+| `readPageTape` | The tape read back: new documents and changes of the address in place since it was armed, and whether the page is still the same document. |
 | `uploadFile` | A file uploaded through the page's own upload control, with its row in the list before it returns. |
 | `fillForm` | Fields filled by their labels; a required field left empty on submit is refused with the page's own error. |
 | `switchTheme` | The theme switched through the app's own control, and read back from the page and its review island. |
@@ -434,6 +436,51 @@ the page shows), `ambiguous` (naming where each part of that name sits),
 `no-control` (the page, or its part, shows no control) and `driver-failure`
 (the reading failed, or gave no answer within its bound; only the error's class
 is kept).
+
+<!-- armPageTape and readPageTape: the document's time origin and the main frame's navigations. -->
+
+## `armPageTape(page, { record, bounds? })` and `readPageTape(page, { record, bounds? })`
+
+A check that a page changed in place, the same document between two moments,
+with no reload and no navigation, arms a tape on the page first and reads it
+back later. `armPageTape` reads the document's time origin
+(`performance.timeOrigin`, which every new document has anew) and its path,
+and from then on counts the navigations of the page's main frame on the
+driver's side, from the page's own navigation events: new documents and
+changes of the address in place apart. It writes one line, such as
+`armPageTape: {"path":"/agents","timeOrigin":1790000000000.5}`, and answers
+`{ path, timeOrigin, rearmed }`. Arming the page again starts the count again,
+and its line says so with `"rearmed":true`.
+
+`readPageTape` answers
+`{ path, timeOrigin, armedTimeOrigin, documents, addressChanges, sameDocument }`
+and writes one line, `readPageTape: ` and the JSON of those fields. `documents`
+counts the new documents of the main frame, `addressChanges` its changes of the
+address in place, and `sameDocument` is true only when the time origin is
+still the armed one and no new document was counted.
+
+The page announces every navigation of its main frame, a new document and a
+change in place alike. A new document is one that a navigation request of the
+main frame led to: a request for the same address (without its fragment) that
+has not failed. A document of another origin, or of none (the browser's own
+error page), is always a new one. A change in place (a state pushed into the
+history, a new fragment, a step back within the document) sends no request. A
+state written into the history at the same address, as a client-side router
+writes one, is no change of the address, and a frame inside the page counts
+for nothing.
+
+The tape belongs to the page object: two pages hold two tapes, a tape lasts
+through the page's new documents and changes of address, and it ends with the
+page. The module keeps no state of its own.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `READING_BOUND_MS` | 5_000 | one reading of the document (`readingMs` changes it) |
+
+Refusal kinds: `input` (nothing was armed or read), `closed` (the page is
+closed, and its tape ended with it), `no-tape` (no tape was armed on the page)
+and `driver-failure` (the reading failed, or gave no answer within its bound;
+only the error's class is kept).
 
 <!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
 
