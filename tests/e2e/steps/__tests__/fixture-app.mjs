@@ -1,5 +1,6 @@
 // A small local app the step tests drive: sign-in pages, a review island, a run
-// page, pages to count on and pages to navigate between.
+// page, pages to count on, pages to navigate between and pages that hold
+// streams open. On request it also serves every page over HTTP/2.
 //
 // Every page carries its behaviour twice, on purpose. An inline script runs it
 // in a real browser; the same behaviour is declared as JSON in the page, and the
@@ -9,7 +10,9 @@
 //
 // Nothing here is a credential of anything: the tests build their values at run
 // time, and the server only records which field NAMES a request carried.
+import { X509Certificate, generateKeyPairSync, sign } from "node:crypto";
 import { createServer } from "node:http";
+import { createSecureServer } from "node:http2";
 
 /** The loopback address, built from parts so no address literal sits in source. */
 export const LOOPBACK = [127, 0, 0, 1].join(".");
@@ -117,15 +120,52 @@ export const NAV_START = [
   '<a href="/nav/new-tab" target="_blank">New tab</a>',
   '<a href="/nav/redirect">Redirect</a>',
   '<a href="/nav/slow">Slow</a>',
+  // A link whose handler cancels every press, a press that asks for a further page included.
+  '<a href="/nav/inert" data-fixture-inert>Inert</a>',
   "</nav>",
 ].join("");
+
+/** The request a stream page holds open: an event stream the server never ends. */
+export const STREAM_ROUTE = "/stream/hold";
+
+const holding = (n) => Array.from({ length: n }, () => ({ at: 0, stream: STREAM_ROUTE }));
+const STREAM_BODY = '<nav aria-label="Main"><a href="/nav/target">Target</a></nav>';
+
+/**
+ * A page whose own response never ends: the server sends its first part and
+ * holds the rest back. Its first part says so, for the page double.
+ */
+export const STREAMING_PAGE_PATH = "/stream/document";
+
+/**
+ * The pages that hold streams open, as the product's pages do: a signed-in page
+ * holds one (its notifications stream), the page of an unfinished run three.
+ * Each links to the navigation target, so a further page can be opened from it.
+ */
+export const STREAM_SCENARIOS = Object.freeze({
+  one: { body: STREAM_BODY, timeline: holding(1) },
+  three: { body: STREAM_BODY, timeline: holding(3) },
+  // Its main thread is busy for 2.5 s from 100 ms after it loads: it cannot be read then.
+  frozen: { body: STREAM_BODY, timeline: [...holding(1), { at: 100, freeze: 2500 }] },
+});
 
 const TIMELINE_RUNNER = `<script>
 (function () {
   var ops = JSON.parse(document.getElementById("fixture-timeline").textContent);
+  document.querySelectorAll("[data-fixture-inert]").forEach(function (link) {
+    link.addEventListener("click", function (event) { event.preventDefault(); });
+  });
   ops.forEach(function (op) {
+    if (op.freeze) {
+      // Counted from the load, so the page has loaded before its main thread is busy.
+      window.addEventListener("load", function () {
+        setTimeout(function () { var until = Date.now() + op.freeze; while (Date.now() < until) {} }, op.at);
+      });
+      return;
+    }
     setTimeout(function () {
       if (op.reload) { location.reload(); return; }
+      if (op.stream) { (window.fixtureStreams = window.fixtureStreams || []).push(new EventSource(op.stream)); return; }
       var el = document.querySelector(op.target);
       if (!el) return;
       if (op.attr) el.setAttribute(op.attr, op.value); else el.innerHTML = op.html;
@@ -188,14 +228,50 @@ function signInPage(scenario) {
 }
 
 /**
- * Start the app. `answer` is the status the sign-in routes answer. Every request
- * is recorded with the field NAMES its query string or form body carried.
+ * A certificate for the HTTP/2 origin, made at run time and signed by its own
+ * key, because a browser speaks HTTP/2 only over TLS. Neither is kept anywhere.
  */
-export async function startFixtureApp({ answer = 200 } = {}) {
+function selfSignedCertificate() {
+  const der = (tag, ...parts) => {
+    const body = Buffer.concat(parts);
+    const size = body.length < 0x80 ? [body.length] : body.length < 0x100 ? [0x81, body.length] : [0x82, body.length >> 8, body.length & 0xff];
+    return Buffer.concat([Buffer.from([tag, ...size]), body]);
+  };
+  const sequence = (...parts) => der(0x30, ...parts);
+  const oid = (hex) => der(0x06, Buffer.from(hex, "hex"));
+  const time = (ms) => der(0x17, Buffer.from(`${new Date(ms).toISOString().replace(/[-:T]/g, "").slice(2, 14)}Z`));
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  // Its subject and its issuer, the same name: localhost.
+  const name = sequence(der(0x31, sequence(oid("550403"), der(0x0c, Buffer.from("localhost")))));
+  // Signed with ECDSA over a SHA256 digest.
+  const signature = sequence(oid("2a8648ce3d040302"));
+  const now = Date.now();
+  const body = sequence(
+    der(0xa0, der(0x02, Buffer.from([2]))), // the third version of the format
+    der(0x02, Buffer.from([1])), // its serial number
+    signature,
+    name,
+    sequence(time(now - 60_000), time(now + 86_400_000)),
+    name,
+    publicKey.export({ type: "spki", format: "der" }),
+    // The one host name it is for: localhost.
+    der(0xa3, sequence(sequence(oid("551d11"), der(0x04, sequence(der(0x82, Buffer.from("localhost"))))))),
+  );
+  const certificate = sequence(body, signature, der(0x03, Buffer.from([0]), sign("sha256", body, privateKey)));
+  return { key: privateKey.export({ type: "pkcs8", format: "pem" }), cert: new X509Certificate(certificate).toString() };
+}
+
+/**
+ * Start the app. `answer` is the status the sign-in routes answer. Every request
+ * is recorded with the field NAMES its query string or form body carried. With
+ * `secure`, every page is also served over HTTP/2 at `secureOrigin`.
+ */
+export async function startFixtureApp({ answer = 200, secure = false } = {}) {
   const requests = [];
   const loads = new Map();
+  const streams = new Set();
   let origin = null;
-  const server = createServer((request, response) => {
+  const handle = (request, response) => {
     let body = "";
     request.on("data", (chunk) => {
       body += chunk;
@@ -223,6 +299,23 @@ export async function startFixtureApp({ answer = 200 } = {}) {
         return;
       }
       if (url.pathname === ISLAND_FRAME_PATH) return html(200, "<!doctype html><title>Island</title><p>The work.</p>");
+      if (url.pathname === STREAM_ROUTE) {
+        response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+        response.write("retry: 60000\ndata: standing\n\n");
+        streams.add(response);
+        response.on("close", () => streams.delete(response));
+        return;
+      }
+      if (url.pathname === STREAMING_PAGE_PATH) {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.write(
+          '<!doctype html>\n<html><head><meta charset="utf-8"><meta name="fixture-streaming" content="the rest never comes">' +
+            `<title>Streaming</title></head>\n<body>\n${STREAM_BODY}\n`,
+        );
+        streams.add(response);
+        response.on("close", () => streams.delete(response));
+        return;
+      }
       if (url.pathname === "/redirects/sign-in") {
         response.writeHead(302, { location: "/setup" });
         response.end();
@@ -234,10 +327,10 @@ export async function startFixtureApp({ answer = 200 } = {}) {
       }
       const signIn = /^\/([a-z-]+)\/sign-in$/.exec(url.pathname);
       if (signIn && SIGN_IN_SCENARIOS[signIn[1]]) return html(200, signInPage(SIGN_IN_SCENARIOS[signIn[1]]));
-      const scenePage = /^\/(island|run|count)\/([a-z-]+)$/.exec(url.pathname);
+      const scenePage = /^\/(island|run|count|stream)\/([a-z-]+)$/.exec(url.pathname);
       if (scenePage) {
         const [, kind, name] = scenePage;
-        const table = { island: ISLAND_SCENARIOS, run: RUN_SCENARIOS, count: COUNT_SCENARIOS }[kind];
+        const table = { island: ISLAND_SCENARIOS, run: RUN_SCENARIOS, count: COUNT_SCENARIOS, stream: STREAM_SCENARIOS }[kind];
         let scene = table[name];
         if (!scene) return html(404, "<!doctype html><title>Not found</title>");
         if (kind === "run" && name === "reloads") {
@@ -260,12 +353,29 @@ export async function startFixtureApp({ answer = 200 } = {}) {
       if (/^\/(nav\/[a-z-]+|setup)$/.test(url.pathname)) return html(200, page(url.pathname, "<p>A page.</p>"));
       html(404, "<!doctype html><title>Not found</title>");
     });
-  });
+  };
+  const server = createServer(handle);
   await new Promise((done) => server.listen(0, LOOPBACK, done));
   origin = `http://${LOOPBACK}:${server.address().port}`;
+  let secureServer = null;
+  let secureOrigin = null;
+  const sessions = new Set();
+  if (secure) {
+    secureServer = createSecureServer(selfSignedCertificate(), handle);
+    secureServer.on("session", (session) => {
+      sessions.add(session);
+      session.on("close", () => sessions.delete(session));
+    });
+    await new Promise((done) => secureServer.listen(0, LOOPBACK, done));
+    secureOrigin = `https://${LOOPBACK}:${secureServer.address().port}`;
+  }
   return {
     origin,
+    /** The same app over HTTP/2, when it was started with `secure`. */
+    secureOrigin,
     requests,
+    /** How many streams the app holds open now. */
+    standingStreams: () => streams.size,
     /** Plain loads of a sign-in scenario page (no query string). */
     pageLoads: (name) => requests.filter((r) => r.method === "GET" && r.path === `/${name}/sign-in` && r.query.length === 0),
     /** Requests to the app's own sign-in routes. */
@@ -273,9 +383,16 @@ export async function startFixtureApp({ answer = 200 } = {}) {
     /** Requests that carried a form field in a query string or a form body: native submissions. */
     carryingFields: () => requests.filter((r) => [...r.query, ...r.bodyFields].some((name) => FORM_FIELDS.includes(name))),
     stop: () =>
-      new Promise((done) => {
-        server.closeAllConnections();
-        server.close(done);
-      }),
+      Promise.all([
+        new Promise((done) => {
+          server.closeAllConnections();
+          server.close(done);
+        }),
+        secureServer &&
+          new Promise((done) => {
+            for (const session of sessions) session.destroy();
+            secureServer.close(done);
+          }),
+      ]),
   };
 }

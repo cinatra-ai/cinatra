@@ -41,4 +41,18 @@ export {
   watchRun,
 } from "./watch-run.mjs";
 export { COUNT_BOUND_MS, COUNT_POLL_MS, COUNT_SETTLE_MS, readCount } from "./read-count.mjs";
-export { NAVIGATE_ACTION_BOUND_MS, NAVIGATE_BOUNDS, NAVIGATE_LANDING_BOUND_MS, navigateTo } from "./navigate-to.mjs";
+export {
+  FURTHER_PAGE_MODIFIER,
+  NAVIGATE_ACTION_BOUND_MS,
+  NAVIGATE_BOUNDS,
+  NAVIGATE_LANDING_BOUND_MS,
+  navigateTo,
+} from "./navigate-to.mjs";
+export {
+  CONNECTIONS_KEPT_FREE,
+  MULTIPLEXED_PROTOCOLS,
+  ORIGIN_CONNECTIONS,
+  STANDING_BOUNDS,
+  STANDING_REQUEST_BOUND,
+  readStandingRequests,
+} from "./read-standing-requests.mjs";

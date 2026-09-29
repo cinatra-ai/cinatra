@@ -16,7 +16,7 @@ import { theSteps } from "./backends.mjs";
 const STEPS_DIR = fileURLToPath(new URL("..", import.meta.url));
 const INDEX_URL = new URL("../index.mjs", import.meta.url).href;
 
-const STEP_NAMES = ["navigateTo", "readCount", "signInThroughPage", "waitForIsland", "watchRun"];
+const STEP_NAMES = ["navigateTo", "readCount", "readStandingRequests", "signInThroughPage", "waitForIsland", "watchRun"];
 
 // Every bound, by the name a caller reads it by. A bound added, renamed or
 // removed without this list changing fails here.
@@ -41,7 +41,7 @@ const BOUND_NAMES = [
 ];
 
 describe("the steps module", () => {
-  it("offers the five steps, the once-only budget and the refusal", () => {
+  it("offers the six steps, the once-only budget and the refusal", () => {
     const steps = theSteps(...STEP_NAMES, "createSignInBudget");
     const budget = steps.createSignInBudget();
     expect(budget).toEqual({ spent: 0 });
@@ -64,6 +64,16 @@ describe("the steps module", () => {
     for (const name of BOUND_NAMES) {
       expect(Number.isInteger(steps[name]) && steps[name] > 0, `${name} is not a whole, positive number of milliseconds`).toBe(true);
     }
+  });
+
+  it("names the bound of standing requests: six connections to one origin, less two kept free", () => {
+    const steps = theSteps("readStandingRequests", "navigateTo");
+    expect(steps.ORIGIN_CONNECTIONS).toBe(6);
+    expect(steps.CONNECTIONS_KEPT_FREE).toBe(2);
+    expect(steps.STANDING_REQUEST_BOUND).toBe(4);
+    expect(steps.MULTIPLEXED_PROTOCOLS).toEqual(["h2", "h3"]);
+    expect(steps.STANDING_BOUNDS).toEqual({ readingMs: steps.READING_BOUND_MS });
+    expect(steps.FURTHER_PAGE_MODIFIER).toBe("ControlOrMeta");
   });
 
   it("loads in a plain Node process, with no TypeScript and no aliases", () => {
