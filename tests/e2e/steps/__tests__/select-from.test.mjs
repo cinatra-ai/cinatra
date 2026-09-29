@@ -6,6 +6,10 @@
 // or a page that takes a moment to take the choice, left the run on the old
 // value. The step returns only once the entry reads as selected, or the page
 // confirms it.
+//
+// One more came from a step-driven run on the skill match tab: the skill select
+// is a combobox with no accessible name, which the step could not find. Such a
+// combobox is found by the text a person reads for it, and never by a guess.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { BACKENDS, closeBrowser, labelOf, refusal, scene, theSteps } from "./backends.mjs";
@@ -16,8 +20,8 @@ const BOUNDS = Object.freeze({ actionMs: 2000, reflectMs: 800, pollMs: 25 });
 
 for (const backend of BACKENDS) {
   describe.skipIf(Boolean(backend.skip))(`selectFrom [${labelOf(backend)}]`, () => {
-    const start = async (page, app) => {
-      await page.goto(`${app.origin}/pick/start`);
+    const start = async (page, app, path = "/pick/start") => {
+      await page.goto(`${app.origin}${path}`);
       return theSteps("selectFrom").selectFrom;
     };
 
@@ -115,6 +119,60 @@ for (const backend of BACKENDS) {
         expect(huge.message).toBe('selectFrom refused (disabled): the entry "Huge" of the picker "Size" on /pick/start is disabled — nothing was selected');
         const chosen = await page.evaluate(() => document.getElementById("pick-size").selectedOptions[0].text);
         expect(chosen, "a refused selection changed the picker").toBe("Small");
+        const marked = await page.evaluate(() => document.querySelectorAll("[data-step-control]").length);
+        expect(marked, "a control kept the step's mark").toBe(0);
+      });
+    });
+
+    it("finds a combobox with no accessible name by the placeholder it shows, and selects from the list it opens", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/unnamed");
+        const result = await selectFrom(page, { picker: "Pick a vegetable", entry: "Leek", record, bounds: BOUNDS });
+        expect(result).toMatchObject({ picker: "Pick a vegetable", entry: "Leek", kind: "combobox", via: "confirmation", path: "/pick/unnamed" });
+        expect(lines).toEqual([
+          'selectFrom: selected "Leek" in the picker "Pick a vegetable" (a combobox with no accessible name, found by its placeholder) on /pick/unnamed — ' +
+            `the page confirms it after ${result.elapsedMs} ms: "Vegetable: Leek"`,
+        ]);
+      });
+    });
+
+    it("finds a combobox with no accessible name by the value it shows", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/unnamed");
+        const result = await selectFrom(page, { picker: "Weekly", entry: "Monthly", record, bounds: BOUNDS });
+        expect(result).toMatchObject({ picker: "Weekly", entry: "Monthly", kind: "combobox", via: "confirmation" });
+        expect(lines).toEqual([
+          'selectFrom: selected "Monthly" in the picker "Weekly" (a combobox with no accessible name, found by its value) on /pick/unnamed — ' +
+            `the page confirms it after ${result.elapsedMs} ms: "Frequency: Monthly"`,
+        ]);
+      });
+    });
+
+    it("finds a combobox with no accessible name by the label element before it in its form group", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/unnamed");
+        const result = await selectFrom(page, { picker: "Repository", entry: "Main site", record, bounds: BOUNDS });
+        expect(result).toMatchObject({ picker: "Repository", entry: "Main site", kind: "combobox", via: "confirmation" });
+        expect(lines).toEqual([
+          'selectFrom: selected "Main site" in the picker "Repository" (a combobox with no accessible name, found by the label before it) on /pick/unnamed — ' +
+            `the page confirms it after ${result.elapsedMs} ms: "Repository: Main site"`,
+        ]);
+      });
+    });
+
+    it("never guesses between two comboboxes with no accessible name that show one text, and looks for the accessible name first", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/unnamed");
+        const twin = await refusal(selectFrom(page, { picker: "Add a skill", entry: "Web search", record, bounds: BOUNDS }));
+        expect(twin.kind).toBe("ambiguous");
+        expect(twin.message).toBe(
+          'selectFrom refused (ambiguous): 2 shown comboboxes on /pick/unnamed have no accessible name and are found by their placeholder: "Add a skill" — ' +
+            "nothing was selected, since a selection never guesses",
+        );
+        // The select named Kind by its label, not the combobox that shows Kind as its placeholder.
+        const named = await selectFrom(page, { picker: "Kind", entry: "Rich", record, bounds: BOUNDS });
+        expect(named).toMatchObject({ picker: "Kind", entry: "Rich", kind: "select", via: "state" });
+        expect(lines).toEqual([twin.message, `selectFrom: selected "Rich" in the picker "Kind" on /pick/unnamed — its selected state shows it after ${named.elapsedMs} ms`]);
         const marked = await page.evaluate(() => document.querySelectorAll("[data-step-control]").length);
         expect(marked, "a control kept the step's mark").toBe(0);
       });

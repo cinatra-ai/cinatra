@@ -15,6 +15,12 @@
 //   - a combobox that is not a text field: it is pressed first to open the list
 //     it controls (`aria-controls`), and the entry is one of that list's options.
 //
+// A COMBOBOX WITH NO ACCESSIBLE NAME, as the shared select draws one, is found
+// once no picker carries the name, by the text a person reads for it, road by
+// road: the placeholder it shows, the value it shows, or the label element
+// before it in its form group. More than one match on the road that finds one
+// is refused, as a name several pickers carry is.
+//
 // REFLECTED. The selection shows when the entry reads as selected (a select's
 // selected option, a checked radio, an option or radio marked selected or
 // checked, a combobox that shows the entry), or when the page confirms it: a
@@ -37,6 +43,13 @@ import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, 
 
 const STEP = "selectFrom";
 
+/** What a combobox with no accessible name was found by, for a line: of one, and of several. */
+const STAND_INS = Object.freeze({
+  placeholder: ["its placeholder", "their placeholder"],
+  value: ["its value", "their value"],
+  label: ["the label before it", "the label before them"],
+});
+
 /** From the selection to the page reflecting it; from opening a combobox to its entries showing. */
 export const SELECT_REFLECT_BOUND_MS = 5_000;
 
@@ -49,7 +62,9 @@ export const SELECT_BOUNDS = Object.freeze({
 
 /**
  * Select `entry` (by its visible text) in the one shown picker, radio group or
- * listbox whose accessible name is `picker`, and resolve
+ * listbox whose accessible name is `picker` (or, when none is, in the one shown
+ * combobox with no accessible name that shows `picker` as its placeholder or
+ * its value, or follows a label element of that text), and resolve
  * `{ picker, entry, kind, via, path, elapsedMs }` once the page reflects the
  * selection: `kind` is `select`, `radiogroup`, `listbox` or `combobox`, and
  * `via` is `state` (the entry reads as selected) or `confirmation` (the page
@@ -77,7 +92,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
   if (typeof picker !== "string" || pickerName === "") throw refuse(STEP, record, "input", `name the picker by its accessible name, such as Size — ${nothing}`);
   if (typeof entry !== "string" || entryText === "") throw refuse(STEP, record, "input", `name the entry by its visible text, such as Medium — ${nothing}`);
   const bound = readBounds(STEP, record, SELECT_BOUNDS, bounds, nothing);
-  const pickerNamed = quotedName(pickerName);
+  let pickerNamed = quotedName(pickerName);
   const entryNamed = quotedName(entryText);
 
   const from = pathOf(page.url());
@@ -95,9 +110,20 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
         `no shown picker, radio group or listbox on ${from} is named ${pickerNamed} — the pickers it shows: ${describeNames(reading.pickers)}; ${nothing}`,
       );
     }
+    const standIn = STAND_INS[reading.by];
+    if (reading.found > 1 && standIn) {
+      throw refuse(
+        STEP,
+        record,
+        "ambiguous",
+        `${reading.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed} — ${nothing}, since a selection never guesses`,
+      );
+    }
     if (reading.found > 1) {
       throw refuse(STEP, record, "ambiguous", `${reading.found} shown pickers on ${from} are named ${pickerNamed} — ${nothing}, since a selection never guesses`);
     }
+    // A line says what a combobox with no accessible name was found by.
+    if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
     if (reading.disabled) throw refuse(STEP, record, "disabled", `the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
 
     // A combobox shows its entries only once it is open.

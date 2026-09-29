@@ -295,6 +295,14 @@ Selects `entry`, by its visible text, in the one shown picker named `picker`:
 - a combobox that is not a text field: it is pressed first, to open the list it
   controls (`aria-controls`), and the option is pressed in that list.
 
+When no picker carries the name, a combobox with no accessible name, as the
+shared select draws one, is found by the text a person reads for it, tried in
+this order: the placeholder it shows (marked `data-placeholder`), the value it
+shows, or the text of a label element before it in its form group (the nearest
+element that holds one, a label that names no other control, with no other
+field between the two); when more than one combobox matches on the first of
+these that finds one, it refuses (`ambiguous`).
+
 Then it waits until the page reflects the selection: the entry reads as selected
 (the selected option of a select, a checked radio, `aria-selected` or
 `aria-checked`, a combobox that shows the entry), or a live region (a status, an
