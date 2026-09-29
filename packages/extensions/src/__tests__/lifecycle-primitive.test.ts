@@ -696,14 +696,14 @@ describe("sourceSwitchExtension", () => {
       kind: "agent" as const,
       source: {
         type: "local" as const,
-        path: "/srv/extensions/cinatra-ai/foo-agent",
+        path: "/srv/extensions/foo-agent",
         resolvedCommitOrTreeHash: "deadbee",
         contentDigest: DIGEST,
       },
     };
     const checkoutSource = {
       type: "local" as const,
-      path: "/repo/extensions/cinatra-ai/foo-agent",
+      path: "/repo/extensions/foo-agent",
       resolvedCommitOrTreeHash: "abc1234",
     };
     const DEV_OPTS = { actor: { source: "dev-watcher" }, reason: "dev recompile" };

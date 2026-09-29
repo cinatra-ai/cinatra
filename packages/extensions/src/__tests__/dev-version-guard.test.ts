@@ -52,7 +52,7 @@ function row(over: Partial<InstalledExtension> & { source: ExtensionSource }): I
 
 const uploadedLocal: ExtensionSource = {
   type: "local",
-  path: "/srv/extensions/cinatra-ai/foo-agent",
+  path: "/srv/extensions/foo-agent",
   resolvedCommitOrTreeHash: "deadbee",
   contentDigest: DIGEST,
 };
@@ -72,7 +72,7 @@ const registry: ExtensionSource = {
 };
 const checkout: ExtensionSource = {
   type: "local",
-  path: "/repo/extensions/cinatra-ai/foo-agent",
+  path: "/repo/extensions/foo-agent",
   resolvedCommitOrTreeHash: "0ldsha0",
 };
 const bundled: ExtensionSource = {
@@ -86,7 +86,7 @@ function setRows(rows: InstalledExtension[]): void {
 }
 
 async function record() {
-  return recordDevExtensionVersion(PKG, "/repo/extensions/cinatra-ai/foo-agent", {
+  return recordDevExtensionVersion(PKG, "/repo/extensions/foo-agent", {
     sha: SHA,
     actorSource: "dev-watcher",
   });
