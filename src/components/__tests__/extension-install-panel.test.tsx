@@ -11,9 +11,9 @@
 //     collide;
 //   - the trigger renders the preselected `Workspace: All` row VERBATIM;
 //   - focus enters the panel on open and returns to the Install CTA on close;
-//   - a failing install TOASTS, mirrors the same safe copy into the hidden
-//     role="alert" region, keeps the panel open AND keeps the selection —
-//     and renders no inline error alert;
+//   - a failing install TOASTS, keeps the panel open AND keeps the selection,
+//     and renders NOTHING for the failure inside the panel — no inline alert
+//     and no hidden mirror either (cinatra#3520);
 //   - the availability states render (and withhold) the right controls.
 //
 //   pnpm exec vitest run src/components/__tests__/extension-install-panel.test.tsx
@@ -298,8 +298,8 @@ describe("default audience + availability states", () => {
   });
 });
 
-describe("failure path — toast + hidden live region, panel stays put", () => {
-  it("toasts the classified copy, mirrors it into role=alert, keeps the selection", async () => {
+describe("failure path — the toast is the whole surface, the panel stays put", () => {
+  it("toasts the classified copy and renders nothing for it, keeping the selection", async () => {
     const installAction = vi.fn(
       async (input: {
         packageName: string;
@@ -327,16 +327,14 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
     const message = String(toastError.mock.calls[0][0]);
     expect(message).toBe(FAILURE_COPY.unrecoverable);
 
-    // The SAME safe copy is announced — and nothing else is rendered for it.
-    await waitFor(() =>
-      expect(screen.getByTestId("extension-install-panel-error").textContent).toBe(message),
-    );
-    expect(
-      screen.getByTestId("extension-install-panel-error").getAttribute("role"),
-    ).toBe("alert");
-    // No raw backend detail, and no inline alert redraw of the panel body.
+    // The toast is the WHOLE failure surface (cinatra#3520, drawing §I.1): the
+    // panel's own DOM renders nothing for it — no inline alert, and no hidden
+    // mirror of the copy either. The announcement is the toast surface's own
+    // live region, outside the card.
     const body = screen.getByTestId("extension-install-panel-body");
+    expect(body.textContent ?? "").not.toContain(message);
     expect(body.textContent).not.toContain("unrecoverable");
+    expect(body.querySelector('[role="alert"]')).toBeNull();
     expect(body.querySelector('[data-slot="alert"]')).toBeNull();
 
     // The panel stayed open with the selection retained. (Trigger ≡ row renders
@@ -348,12 +346,11 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
     expect(trigger.textContent).toMatch(/Workspace:\s*All/);
   });
 
-  it("re-announces an IDENTICAL repeat failure (the alert node is remounted)", async () => {
-    // A `role="alert"` whose text never changes is never re-read. Two
-    // identical failures in a row must still reach a screen reader, so the
-    // alert is keyed by an announcement sequence and remounts each time.
-    // (Clearing-then-setting in one handler cannot work: React batches both
-    // updates into one commit, so the empty state never reaches the DOM.)
+  it("reports an IDENTICAL repeat failure again — a second toast, no panel state", async () => {
+    // Two identical failures in a row must both reach the admin. Since
+    // cinatra#3520 the toast surface is the whole announcement: each toast is
+    // its own node in the toaster's live region, so the repeat is announced
+    // without this panel keeping any failure state of its own to remount.
     const installAction = vi.fn(
       async (input: {
         packageName: string;
@@ -376,26 +373,22 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
     // runner, where the announcement commit and the pending-clear commit can
     // land separately (cinatra#3381). Wait for BOTH.
     await waitFor(() => {
-      expect(screen.getByTestId("extension-install-panel-error").textContent).toBe(
-        FAILURE_COPY.unrecoverable,
-      );
+      expect(toastError).toHaveBeenCalledTimes(1);
       expect(
         (screen.getByTestId("extension-install-panel-submit") as HTMLButtonElement)
           .disabled,
       ).toBe(false);
     });
-    const firstNode = screen.getByTestId("extension-install-panel-error");
 
     fireEvent.click(screen.getByTestId("extension-install-panel-submit"));
     await waitFor(() => expect(installAction).toHaveBeenCalledTimes(2));
-    await waitFor(() =>
-      expect(screen.getByTestId("extension-install-panel-error")).not.toBe(firstNode),
-    );
-    // Same copy, new node — the announcement, not a different message.
-    expect(screen.getByTestId("extension-install-panel-error").textContent).toBe(
-      FAILURE_COPY.unrecoverable,
-    );
-    expect(toastError).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(2));
+    // Same copy, a second toast — the announcement, not a different message.
+    expect(String(toastError.mock.calls[1][0])).toBe(FAILURE_COPY.unrecoverable);
+    // And still nothing of it inside the panel, on either pass.
+    const body = screen.getByTestId("extension-install-panel-body");
+    expect(body.textContent ?? "").not.toContain(FAILURE_COPY.unrecoverable);
+    expect(body.querySelector('[role="alert"]')).toBeNull();
   });
 });
 
@@ -502,13 +495,13 @@ describe("committability gate — non-committable selections cannot install", ()
   // raises entirely on its own — nothing reaches the server — so nothing until
   // now proved it lands on the SAME accessible surface a backend failure does.
   //
-  // Driving the refusal through the full S2 error-path contract catches a
-  // regression that reports it by any weaker route: a toast-only path that
-  // never announces, an inline alert redraw of the body, the picker's own
+  // Driving the refusal through the full error-path contract catches a
+  // regression that reports it by any weaker route: a refusal that never
+  // reaches the toast surface, an inline redraw of the body, the picker's own
   // explanatory copy bleeding into the failure surface, focus escaping the
   // panel, or the selection being dropped.
   // -------------------------------------------------------------------------
-  it("routes a gate refusal through the full error path — mirrored alert, panel-scoped copy, focus and selection retained", async () => {
+  it("routes a gate refusal through the full error path — toast only, panel-scoped copy, focus and selection retained", async () => {
     const installAction = vi.fn(async () => undefined);
     render(<DisabledOrgPanel installAction={installAction} />);
     fireEvent.click(screen.getByRole("button", { name: "Install now" }));
@@ -528,28 +521,21 @@ describe("committability gate — non-committable selections cannot install", ()
     await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
     expect(installAction).not.toHaveBeenCalled();
 
-    // 2. The refusal is ANNOUNCED, not just toasted: the hidden live region
-    //    mirrors the toast copy verbatim, exactly as a backend failure does.
-    //    This is the assertion a toast-only regression fails.
+    // 2. The refusal lands on the SAME surface a backend failure does — the
+    //    app's toast, carrying the panel's own refusal copy.
     const message = String(toastError.mock.calls[0][0]);
     expect(message).toBe(GATE_REFUSAL_COPY);
-    await waitFor(() =>
-      expect(screen.getByTestId("extension-install-panel-error").textContent).toBe(message),
-    );
-    expect(
-      screen.getByTestId("extension-install-panel-error").getAttribute("role"),
-    ).toBe("alert");
 
     // 3. The picker's own disabled REASON is legitimate explanatory copy on the
     //    OPTION — it is deliberately NOT banned from the panel at large. What it
     //    must never do is become the FAILURE copy, so the ban is scoped to the
-    //    two failure surfaces. The failure also must not be redrawn as an inline
-    //    alert inside the panel (the toast + live region are the whole surface).
+    //    failure surface. And the refusal is not drawn inside the panel at all
+    //    (cinatra#3520: the toast is the whole surface) — neither as an inline
+    //    alert nor as a hidden mirror.
     const body = screen.getByTestId("extension-install-panel-body");
     expect(message).not.toContain(DISABLED_REASON);
-    expect(
-      screen.getByTestId("extension-install-panel-error").textContent,
-    ).not.toContain(DISABLED_REASON);
+    expect(body.textContent ?? "").not.toContain(message);
+    expect(body.querySelector('[role="alert"]')).toBeNull();
     expect(body.querySelector('[data-slot="alert"]')).toBeNull();
 
     // 4. Focus never leaves the panel — the refusal must not strand the user.

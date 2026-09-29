@@ -493,6 +493,18 @@ async function resolveTrustedRuntimeStoreRecord(
       registryUrl: anchor.registryUrl,
       integrityVerified,
       persistedTrustDecision: anchor.trustDecision,
+      // THE ORIGIN FACTOR, threaded from the anchor (cinatra#3204). The
+      // classifier answers the origin question either with a registry host on
+      // the deployment allowlist or with the operator-supplied act itself, and
+      // the anchor records which one this row was installed by. Omitting it
+      // here made this gate ask a DIFFERENT question than the boot loader and
+      // the admission-time classification ask of the same row: an
+      // operator-supplied connector installed, its post-install address
+      // resolved, and then its own setup page refused to render it because
+      // this call had no allowlisted registry host to offer. Spread, never a
+      // bare false, so a registry anchor stays byte-identical to what it
+      // classified before.
+      ...(anchor.operatorSuppliedOrigin ? { operatorSuppliedOrigin: true } : {}),
       // Same signature gate as the boot loader — a require-signatures host
       // (or a present-but-invalid signature) must not render the package either.
       signatureVerified: resolveSignatureVerdict({

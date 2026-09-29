@@ -518,6 +518,25 @@ export async function scanSkillExtensions(
   const roots = await resolveExtensionRoots(strict);
   const out: SkillExtensionDescriptor[] = [];
   const seenPkgDir = new Set<string>();
+
+  // ONE admission rule for every road a package can arrive by: dedupe by the
+  // package dir's realpath (first root wins), read the manifest, keep what
+  // declares a `cinatra.kind`.
+  const admit = async (pkgDir: string, pkgDirName: string): Promise<void> => {
+    let realPkgDir: string;
+    try {
+      realPkgDir = realpathSync(pkgDir);
+    } catch (err) {
+      if (strict) throw err;
+      realPkgDir = pkgDir;
+    }
+    if (seenPkgDir.has(realPkgDir)) return;
+    const descriptor = await readSkillExtensionDescriptor(pkgDir, pkgDirName, strict);
+    if (!descriptor) return;
+    seenPkgDir.add(realPkgDir);
+    out.push(descriptor);
+  };
+
   for (const root of roots) {
     let vendors;
     try {
@@ -542,80 +561,132 @@ export async function scanSkillExtensions(
         if (!pkg.isDirectory() || pkg.name === "node_modules" || pkg.name.startsWith(".")) {
           continue;
         }
-        const pkgDir = path.join(vendorDir, pkg.name);
-        let realPkgDir: string;
-        try {
-          realPkgDir = realpathSync(pkgDir);
-        } catch (err) {
-          if (strict) throw err;
-          realPkgDir = pkgDir;
-        }
-        if (seenPkgDir.has(realPkgDir)) continue;
-        const pkgJsonPath = path.join(pkgDir, "package.json");
-        if (!pathExists(pkgJsonPath, strict)) continue;
-        let pkgJson: {
-          name?: string;
-          author?: unknown;
-          cinatra?: {
-            kind?: string;
-            skillRole?: unknown;
-            displayName?: unknown;
-            vendor?: unknown;
-            capabilities?: unknown;
-            dependencies?: unknown;
-          };
-        };
-        try {
-          pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
-        } catch (err) {
-          if (strict) throw err;
-          continue;
-        }
-        const kind = pkgJson?.cinatra?.kind;
-        if (!kind) continue;
-        seenPkgDir.add(realPkgDir);
-        const rawCaps = pkgJson?.cinatra?.capabilities;
-        const capabilities: Record<string, string> = {};
-        if (rawCaps && typeof rawCaps === "object" && !Array.isArray(rawCaps)) {
-          for (const [k, v] of Object.entries(rawCaps as Record<string, unknown>)) {
-            if (typeof v === "string" && v) capabilities[k] = v;
-          }
-        }
-        const skillsRoot = path.join(pkgDir, "skills");
-        let slugs: string[] = [];
-        if (pathExists(skillsRoot, strict)) {
-          try {
-            slugs = (await readdir(skillsRoot, { withFileTypes: true }))
-              .filter(
-                (e) =>
-                  e.isDirectory() && pathExists(path.join(skillsRoot, e.name, "SKILL.md"), strict),
-              )
-              .map((e) => e.name);
-          } catch (err) {
-            if (strict) throw err;
-            slugs = [];
-          }
-        }
-        out.push({
-          pkgDir,
-          pkgName: pkgJson.name ?? pkg.name,
-          pkgDirName: pkg.name,
-          kind,
-          skillRole:
-            typeof pkgJson?.cinatra?.skillRole === "string" && pkgJson.cinatra.skillRole
-              ? pkgJson.cinatra.skillRole
-              : undefined,
-          displayName: nonEmptyString(pkgJson?.cinatra?.displayName),
-          vendorName: readDeclaredVendorName(pkgJson?.cinatra?.vendor),
-          author: readNpmAuthorName(pkgJson?.author),
-          dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
-          capabilities,
-          slugs,
-        });
+        await admit(path.join(vendorDir, pkg.name), pkg.name);
       }
     }
   }
+
+  // THE UNIFIED EXTENSION STORE (cinatra#3204). Every package installed at
+  // runtime lives at `<CINATRA_EXTENSION_DATA_ROOT>/skill/<slug>/<digest>/`,
+  // which neither root above covers — the authoring tree is the git-native
+  // source and the agent mount is the agent kind's own projection. Without this
+  // arm an installed skill extension owns no scanned descriptor, so its skill
+  // ids never enter the ownership map the assignability predicate and the
+  // agent Skills offer both read from, and the offer answers "no matches" for a
+  // skill the catalog is listing. Walked LAST so a package that is also present
+  // in the authoring tree keeps its authoring descriptor.
+  for (const entry of await listStoreInstalledSkillPackageDirs(strict)) {
+    await admit(entry.dir, entry.pkgDirName);
+  }
   return out;
+}
+
+/**
+ * The unified extension store's installed skill packages, as
+ * `{dir, pkgDirName}` pairs pointing at each package's ACTIVE payload dir.
+ *
+ * Reached through a lazy, fail-soft dynamic import for the same reason the
+ * agent runtime mount above is: `@cinatra-ai/skills` must not take a static
+ * dependency on the host app's module graph. Under `strict` the failure is
+ * rethrown, because a caller that RETIRES rows on absence must never read "the
+ * host module would not load" as "the store holds nothing".
+ */
+async function listStoreInstalledSkillPackageDirs(
+  strict: boolean,
+): Promise<{ dir: string; pkgDirName: string }[]> {
+  try {
+    const { listInstalledStorePackageDirs } = await import(
+      "@/lib/extension-data-root"
+    );
+    return listInstalledStorePackageDirs("skill").map((entry) => ({
+      dir: entry.dir,
+      // The reserved chat-namespace allowlist keys on a package's dir BASENAME,
+      // and in the store the payload dir is named by its content digest. The
+      // segment carrying the identity is the package name's own last segment, so
+      // that is what a store-installed package presents — a first-party successor
+      // package then derives exactly the virtual namespace it derives from the
+      // authoring tree, and nothing else can reach the allowlist that could not
+      // reach it before (the allowlist also requires the manifest name).
+      pkgDirName: entry.packageName.split("/").pop() ?? entry.packageName,
+    }));
+  } catch (err) {
+    if (strict) throw err;
+    return [];
+  }
+}
+
+/**
+ * Read ONE package dir as a skill-extension descriptor, or `null` when the dir
+ * carries no `cinatra.kind` manifest. Shared by every root the scan walks — the
+ * git-native authoring tree, the agent runtime mount and the unified extension
+ * store — so a package reads identically whichever road installed it.
+ * Fail-soft by default; `strict` rethrows every enumeration/parse failure the
+ * default swallows into "that package is not there".
+ */
+async function readSkillExtensionDescriptor(
+  pkgDir: string,
+  pkgDirName: string,
+  strict: boolean,
+): Promise<SkillExtensionDescriptor | null> {
+  const pkgJsonPath = path.join(pkgDir, "package.json");
+  if (!pathExists(pkgJsonPath, strict)) return null;
+  let pkgJson: {
+    name?: string;
+    author?: unknown;
+    cinatra?: {
+      kind?: string;
+      skillRole?: unknown;
+      displayName?: unknown;
+      vendor?: unknown;
+      capabilities?: unknown;
+      dependencies?: unknown;
+    };
+  };
+  try {
+    pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
+  } catch (err) {
+    if (strict) throw err;
+    return null;
+  }
+  const kind = pkgJson?.cinatra?.kind;
+  if (!kind) return null;
+  const rawCaps = pkgJson?.cinatra?.capabilities;
+  const capabilities: Record<string, string> = {};
+  if (rawCaps && typeof rawCaps === "object" && !Array.isArray(rawCaps)) {
+    for (const [k, v] of Object.entries(rawCaps as Record<string, unknown>)) {
+      if (typeof v === "string" && v) capabilities[k] = v;
+    }
+  }
+  const skillsRoot = path.join(pkgDir, "skills");
+  let slugs: string[] = [];
+  if (pathExists(skillsRoot, strict)) {
+    try {
+      slugs = (await readdir(skillsRoot, { withFileTypes: true }))
+        .filter(
+          (e) => e.isDirectory() && pathExists(path.join(skillsRoot, e.name, "SKILL.md"), strict),
+        )
+        .map((e) => e.name);
+    } catch (err) {
+      if (strict) throw err;
+      slugs = [];
+    }
+  }
+  return {
+    pkgDir,
+    pkgName: pkgJson.name ?? pkgDirName,
+    pkgDirName,
+    kind,
+    skillRole:
+      typeof pkgJson?.cinatra?.skillRole === "string" && pkgJson.cinatra.skillRole
+        ? pkgJson.cinatra.skillRole
+        : undefined,
+    displayName: nonEmptyString(pkgJson?.cinatra?.displayName),
+    vendorName: readDeclaredVendorName(pkgJson?.cinatra?.vendor),
+    author: readNpmAuthorName(pkgJson?.author),
+    dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
+    capabilities,
+    slugs,
+  };
 }
 
 // ---------------------------------------------------------------------------

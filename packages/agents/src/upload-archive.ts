@@ -230,6 +230,30 @@ export async function readZipEntries(buf: ArrayBuffer): Promise<Map<string, Uint
   return result;
 }
 
+/**
+ * The ZIP ARCHIVE COMMENT as text, or null when the archive carries none.
+ *
+ * WHY A READER FOR A FIELD NOBODY USUALLY READS: a generated GitHub source
+ * archive stamps the 40-character commit id of the tree it packed into exactly
+ * this field. That id is the only immutable identity an ANONYMOUS download
+ * carries - no API call, no token, no second request - and it describes exactly
+ * the bytes that arrived rather than whatever the ref points at now.
+ *
+ * Reads nothing else: it walks back to the end-of-central-directory record the
+ * same way `readZipEntries` does and decodes the comment that follows it.
+ */
+export function readZipArchiveComment(buf: ArrayBuffer): string | null {
+  const view = new DataView(buf);
+  const len = buf.byteLength;
+  for (let i = len - 22; i >= 0; i--) {
+    if (view.getUint32(i, true) !== EOCD_SIG) continue;
+    const commentLen = view.getUint16(i + 20, true);
+    if (commentLen === 0 || i + 22 + commentLen > len) return null;
+    return new TextDecoder("utf-8").decode(new Uint8Array(buf, i + 22, commentLen));
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Layout resolution
 // ---------------------------------------------------------------------------

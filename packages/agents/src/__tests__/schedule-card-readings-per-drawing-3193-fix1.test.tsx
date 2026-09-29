@@ -160,20 +160,13 @@ describe("the fired one-off's rows are the record, not a form", () => {
     expect(text).toContain("Schedule for later");
     expect(text).toContain("Recurring");
     expect(text).toContain("Europe/Berlin");
-    // The moment reads in the reader's own locale, the way the picker drew it —
-    // the drawing's own fired example draws "14.07.2026, 09:00", which is that
-    // same wall clock in that reader's locale.
-    // THE MOMENT, PINNED WHOLE (converge round). The reading is the reader's own
-    // locale, so the expectation is built from the SAME wall clock read as LOCAL
-    // time — which is what pins the contract that matters: the naive wire value is
-    // drawn as itself, never shifted into or out of a zone. Asserting only the year
-    // and the hour would pass a formatter that moved the day.
-    expect(text).toContain(
-      new Date(2026, 6, 14, 9, 0).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }),
-    );
+    // THE MOMENT, PINNED WHOLE — IN THE DRAWING'S OWN FORMAT (cinatra#3282).
+    // This used to build its expectation from the SAME `toLocaleString` call the
+    // renderer made, so it could only ever prove that the wire's wall clock was
+    // not shifted into or out of a zone — never which format the reader met. The
+    // drawing's fired example draws "14.07.2026, 09:00", and that literal now
+    // pins both: the day is not moved, and the format is not the user agent's.
+    expect(text).toContain("14.07.2026, 09:00");
     expect(text).not.toContain("2026-07-14T09:00");
   });
 

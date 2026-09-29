@@ -936,15 +936,14 @@ export function AppShell({
                 still one click away at every viewport while the left edge
                 belongs to the trail alone. Desktop collapse also remains on
                 the sidebar's own rail. */}
-            {/* Below `sm` the trail is not drawn, so there is nothing for the
-                toggle to push: it stays at the left edge, where the primary
-                navigation control has always been. At `sm` and up it is
-                `sm:hidden` here and leads the right-hand cluster instead, so
-                the trail alone sits at the gutter the drawing names. */}
-            <SidebarTrigger
-              variant="outline"
-              className="max-md:scale-125 sm:hidden"
-            />
+            {/* Below `sm` the trail is not drawn: the right-hand cluster then
+                spans the row (`max-sm:flex-1`) and its first child, the one
+                sidebar toggle, stands at the row's left gutter
+                (`max-sm:mr-auto`), where the primary navigation control has
+                always been. At `sm` and up the same toggle leads the
+                right-hand cluster, so the trail alone sits at the gutter the
+                drawing names. The toggle is mounted ONCE: a second copy hidden
+                by a class would still be in the document at every width. */}
             <Breadcrumb data-testid="app-shell-topbar-left" className="hidden sm:flex">
               <BreadcrumbList>
                 {breadcrumbSegments.map((crumb, i) => (
@@ -969,10 +968,10 @@ export function AppShell({
                 ))}
               </BreadcrumbList>
             </Breadcrumb>
-            <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3">
+            <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3 max-sm:flex-1">
             <SidebarTrigger
               variant="outline"
-              className="max-md:scale-125 max-sm:hidden"
+              className="max-md:scale-125 max-sm:mr-auto"
             />
             <Separator orientation="vertical" className="h-6 shrink-0 max-sm:hidden" />
             {process.env.NODE_ENV === "development" && <Popover open={devToolsOpen} onOpenChange={(open) => {

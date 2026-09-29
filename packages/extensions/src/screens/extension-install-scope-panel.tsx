@@ -17,12 +17,18 @@
  * agent/skill install forms, which have no access target and never mount this.
  *
  * Errors are a TOAST, never inline (spec §I.1: "a failed install neither
- * redraws the panel with an error state nor grows its height"). The same
- * classified copy is ALSO mirrored into a visually hidden `role="alert"` live
- * region inside the panel, so a screen-reader user is not left with a silent
- * failure. The classified no-raw-detail contract (#685/#1539) is unchanged:
- * the panel only ever renders the mapped category copy plus the opaque
- * diagnostic reference.
+ * redraws the panel with an error state nor grows its height — it reports
+ * through the app's toast surface, and the panel stays exactly as the admin
+ * left it so the selection is never lost"). A failure therefore leaves this
+ * panel's OWN DOM untouched: nothing inside it renders the failure, visibly or
+ * hidden. A visually hidden `role="alert"` mirror of the toast copy used to sit
+ * in the body for the announcement; the picture round of cinatra#3494 read that
+ * copy straight out of the panel's DOM (cinatra#3520), and it was redundant —
+ * the announcement is the toast surface's own live region (the host Toaster
+ * renders its toast list inside an `aria-live="polite"` /
+ * `aria-relevant="additions text"` section), which sits outside every card. The
+ * classified no-raw-detail contract (#685/#1539) is unchanged: only the mapped
+ * category copy plus the opaque diagnostic reference is ever shown.
  *
  * Geometry: the body is the drawing's single centred column — the mono
  * `Install for` eyebrow, the 36px scope-picker trigger directly beneath it,
@@ -163,28 +169,11 @@ export function ExtensionInstallScopePanel({
   const { idPrefix, closePanel } = useCardFace();
   const pickerId = `${idPrefix}-install-scope-picker`;
   const labelId = `${idPrefix}-install-scope-label`;
-  const alertId = `${idPrefix}-install-scope-alert`;
 
   const ready = availability.state === "ready";
   const [value, setValue] = useState<string>(
     availability.state === "ready" ? availability.defaultValue : "",
   );
-  /**
-   * Mirrored (visually hidden) failure copy. NOT an inline error render — the
-   * visible surface is the toast; this exists so the failure is ANNOUNCED.
-   *
-   * Carries a monotonic `seq` alongside the text so the alert node is KEYED by
-   * it. Two identical consecutive failures produce identical text, and a
-   * `role="alert"` whose text node never changes is never re-announced —
-   * clearing-then-setting in one handler does not help, because React batches
-   * both updates into a single commit and the empty state never reaches the
-   * DOM. Bumping the key remounts the alert, which is the announcement.
-   */
-  const [live, setLive] = useState<{ seq: number; message: string }>({
-    seq: 0,
-    message: "",
-  });
-
   const headingRef = useRef<HTMLDivElement | null>(null);
 
   const name = displayName || packageName;
@@ -258,10 +247,16 @@ export function ExtensionInstallScopePanel({
     );
   };
 
-  /** Toast + announce. The panel STAYS open and keeps the selection. */
+  /**
+   * The failure surface, whole: the app's toast (spec §I.1, "Errors are a
+   * toast, never inline"). No panel state is touched — the body's DOM, and so
+   * its height, are exactly what the admin left, selection included, and the
+   * actions stay usable so they can try again or cancel. Each toast is a fresh
+   * node in the toast surface's own live region, so a repeat of the identical
+   * failure is announced again without this panel holding a mirror of it.
+   */
   const reportFailure = (message: string) => {
     toast.error(message);
-    setLive((prev) => ({ seq: prev.seq + 1, message }));
   };
 
   async function handleSubmit() {
@@ -371,20 +366,6 @@ export function ExtensionInstallScopePanel({
           </div>
         )}
       </div>
-
-      {/* Visually hidden failure mirror. The VISIBLE failure surface is the
-          toast; this only announces the SAME safe copy. */}
-      <span
-        // Keyed by the announcement sequence: a repeat of the SAME failure
-        // remounts this node, so a screen reader re-reads it.
-        key={live.seq}
-        id={alertId}
-        role="alert"
-        data-testid="extension-install-panel-error"
-        className="sr-only"
-      >
-        {live.message}
-      </span>
 
       {/* Fixed action row (spec §I.1: Cancel / Install now, right-aligned). */}
       <form action={handleSubmit} className="flex flex-none justify-end gap-2">

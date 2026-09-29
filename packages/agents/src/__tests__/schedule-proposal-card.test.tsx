@@ -1234,25 +1234,20 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
       // The rows stand — read-only, showing the schedule that fired. Since the
       // fifth graded proof set (cinatra#2934) that is read the way the drawing
       // draws it: "the values still legible, the pickers gone", so there is no
-      // picker here to be disabled and the moment is legible as text — in the
-      // READER'S OWN LOCALE, never the wire's naive wall clock (cinatra#3174
-      // fix leg 1, carried in by the forward merge).
+      // picker here to be disabled and the moment is legible as text — read
+      // through its own reading box (cinatra#3174 fix leg 1, carried in by the
+      // forward merge).
       expect(
         view.container.querySelector('[data-field="schedule-run-at"]'),
         host,
       ).toBeNull();
-      // The whole wall clock, drawn as itself and never shifted by a zone
-      // (converge round) — the year and the hour alone would pass a formatter
-      // that moved the day.
+      // The whole wall clock, drawn as itself and never shifted by a zone, in
+      // the drawing's fixed DD.MM.YYYY, HH:mm format (cinatra#3282) — the year
+      // and the hour alone would pass a formatter that moved the day.
       expect(
         view.container.querySelector('[data-readonly-field="schedule-run-at"]')?.textContent,
         host,
-      ).toContain(
-        new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
-          dateStyle: "medium",
-          timeStyle: "short",
-        }),
-      );
+      ).toContain("04.03.2020, 09:00");
       view.unmount();
       cleanup();
     }

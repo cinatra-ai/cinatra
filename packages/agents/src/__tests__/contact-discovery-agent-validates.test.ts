@@ -103,7 +103,7 @@ describe("contact-discovery-agent OAS validates against L1, LLM-metadata, and St
     expect(union).toEqual(inputTitles);
   });
 
-  it("EndNode declares 4 outputs (contactIds/apolloHitCount/webFallbackUsed/failures) with contactIds.json_schema.items.type='string' AND data_flow_connections.length === 9 (incl. cinatra_run_id DFE) AND control_flow_connections.length === 2", () => {
+  it("EndNode declares 4 outputs (contactIds/apolloHitCount/webFallbackUsed/failures) with contactIds.json_schema.items.type='string' AND data_flow_connections.length === 12 (incl. cinatra_run_id DFE) AND control_flow_connections.length === 3", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -119,8 +119,8 @@ describe("contact-discovery-agent OAS validates against L1, LLM-metadata, and St
     expect(byTitle.get("webFallbackUsed")?.type).toBe("boolean");
     expect(byTitle.get("failures")?.type).toBe("array");
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(9);
+    expect(dfc.length).toBe(12);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(2);
+    expect(cfc.length).toBe(3);
   });
 });

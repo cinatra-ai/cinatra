@@ -114,6 +114,45 @@ export function CardFaceSwitcher({
 }
 
 /**
+ * The SAME panel context, for a surface that has no card to flip
+ * (cinatra#3204 leg 3 — the Upload Extension screen).
+ *
+ * The Upload screen's install panel is not a second face of a listing card: the
+ * package the operator supplied IS the thing being installed, so the panel is
+ * simply present once a package has been read. It still needs the two things the
+ * panel reads from this context — a unique id prefix, and what Cancel does — so
+ * it gets them from HERE rather than from a private copy of the contract. There
+ * is exactly one `ExtensionInstallScopePanel`, exactly one picker, and exactly
+ * one set of rules, on both surfaces.
+ *
+ * `open` is permanently true: this face only ever renders while it is showing.
+ */
+export function StandaloneInstallPanelFace({
+  onCancel,
+  children,
+}: {
+  /** What Cancel (and a successful close) does on the host surface. */
+  onCancel: () => void;
+  children: ReactNode;
+}) {
+  const idPrefix = useId();
+  const noop = useCallback(() => {}, []);
+  return (
+    <CardFaceContext.Provider
+      value={{
+        open: true,
+        openPanel: noop,
+        closePanel: onCancel,
+        idPrefix,
+        registerCta: noop,
+      }}
+    >
+      {children}
+    </CardFaceContext.Provider>
+  );
+}
+
+/**
  * The idle face's install CTA. Replaces the popup trigger: it opens the
  * in-card panel, so no dialog is mounted anywhere on the card path.
  *
