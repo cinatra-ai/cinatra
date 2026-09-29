@@ -19,10 +19,13 @@
 //   5. fills the two fields and presses once;
 //   6. waits for the app's own sign-in request and reads its answer. A press that
 //      sent no such request is a driver failure and does not spend the budget; a
-//      request that left the page spends it, whatever the answer.
+//      request that left the page spends it, whatever the answer;
+//   7. waits for the landing: the page leaves the sign-in page, and the page it
+//      lands on draws its ready signal, so that a step taken next never runs on
+//      the sign-in page.
 import { randomUUID } from "node:crypto";
 
-import { errorClass, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "signInThroughPage";
 
@@ -65,6 +68,20 @@ export const SIGN_IN_ACTION_BOUND_MS = 30_000;
 export const SIGN_IN_REQUEST_BOUND_MS = 10_000;
 /** From that request to the app's answer. A development boot may compile the route on its first request. */
 export const SIGN_IN_ANSWER_BOUND_MS = 120_000;
+/**
+ * From the app's answer to the landing: the page past the sign-in page, and the
+ * landed page's ready signal drawn. A development server compiles the landing
+ * page on its first request.
+ */
+export const SIGN_IN_LANDING_BOUND_MS = 120_000;
+/**
+ * The landed page's ready signal: the app shell the product draws around every
+ * signed-in page, the same elements the suites' hydration gate reads: its link
+ * to the chat, its navigation, or its sidebar. The first of these the page draws
+ * is the signal. The product's form lands in place (its router moves the
+ * address), so the shell is drawn by the app that already owns the page.
+ */
+export const SIGN_IN_READY_SELECTORS = Object.freeze(['a[href="/chat"]', "nav", '[data-slot="sidebar"]']);
 /** The once-only rule: how many presses of one run may send the app's sign-in request. */
 export const SIGN_IN_ALLOWANCE = 1;
 
@@ -76,6 +93,7 @@ export const SIGN_IN_BOUNDS = Object.freeze({
   actionMs: SIGN_IN_ACTION_BOUND_MS,
   requestMs: SIGN_IN_REQUEST_BOUND_MS,
   answerMs: SIGN_IN_ANSWER_BOUND_MS,
+  landingMs: SIGN_IN_LANDING_BOUND_MS,
 });
 
 /**
@@ -115,6 +133,25 @@ function readSignInForm({ password, submit, mark }) {
     button: Boolean(button),
     enabled: Boolean(button && !button.disabled),
   };
+}
+
+/** Where the page is, whether its document has loaded, and the first ready signal it draws ("" for none). */
+function readLanding({ selectors }) {
+  const shown = (element) => {
+    if (!element.isConnected || getComputedStyle(element).visibility === "hidden") return false;
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || getComputedStyle(node).display === "none") return false;
+    }
+    return true;
+  };
+  const drawn = (selector) => {
+    try {
+      return Array.from(document.querySelectorAll(selector)).some(shown);
+    } catch {
+      return false;
+    }
+  };
+  return { path: location.pathname, readyState: document.readyState, ready: selectors.find(drawn) || "" };
 }
 
 /**
@@ -163,6 +200,34 @@ function describeReading(reading) {
   ].join(", ");
 }
 
+/** The ready signal's selectors, for a line: "a, b or c". */
+const describeReady = (/** @type {readonly string[]} */ selectors) =>
+  selectors.length > 1 ? `${selectors.slice(0, -1).join(", ")} or ${selectors.at(-1)}` : selectors[0];
+
+/**
+ * Wait for the landing after the app's answer: the page off the sign-in page
+ * `at`, on a loaded document that draws one of `selectors`. Resolves
+ * `{ landed: { path, ready } }`, or `{ refused }` with the last reading once the
+ * bound has run out.
+ * @param {import("@playwright/test").Page} page
+ * @param {{ at: URL, selectors: readonly string[], bound: typeof SIGN_IN_BOUNDS, answeredAt: number }} wait
+ */
+async function waitForLanding(page, { at, selectors, bound, answeredAt }) {
+  for (;;) {
+    let reading = { path: pathOf(page.url()), left: false, ready: "" };
+    const url = new URL(page.url());
+    if (url.origin !== at.origin || url.pathname !== at.pathname) {
+      // A reading taken while the landed page loads fails: the page is still moving.
+      const read = await within(page.evaluate(readLanding, { selectors }), READING_BOUND_MS);
+      reading = { path: read ? read.path : pathOf(page.url()), left: true, ready: read && read.readyState === "complete" ? read.ready : "" };
+      if (reading.ready) return { landed: reading };
+    }
+    const remaining = bound.landingMs - (performance.now() - answeredAt);
+    if (remaining <= 0) return { refused: reading };
+    await pause(Math.min(bound.pollMs, remaining));
+  }
+}
+
 /** Wait for the hydration mark; null when it came, else the page's reading. */
 async function waitForHydrationMark(page, bound) {
   const arg = { password: SIGN_IN_SELECTORS.password, submit: SIGN_IN_SELECTORS.submit, mark: SIGN_IN_HYDRATION_MARK };
@@ -183,10 +248,13 @@ async function waitForHydrationMark(page, bound) {
  * page. `credentials` go into the two fields and nowhere else; `budget` is the
  * run's once-only count (createSignInBudget), the same object for every sign-in
  * of the run; `record` receives one line per event. Resolves
- * `{ status: 200, reloads, spent }` signed in; otherwise throws a StepRefusal
- * whose kind is `input` or `spent` (nothing was sent), `blocker` (the page never
+ * `{ status: 200, reloads, spent, landed }` signed in and landed, where `landed`
+ * is the path of the page it landed on; otherwise throws a StepRefusal whose
+ * kind is `input` or `spent` (nothing was sent), `blocker` (the page never
  * became pressable), `driver-failure` (the press sent no sign-in request),
- * `rejected` or `no-answer` (the request left the page; the budget is spent).
+ * `rejected`, `no-answer` or `no-landing` (the request left the page; the budget
+ * is spent). `ready` names the landed page's ready signal
+ * (SIGN_IN_READY_SELECTORS by default).
  *
  * @param {import("@playwright/test").Page} page
  * @param {{
@@ -194,11 +262,15 @@ async function waitForHydrationMark(page, bound) {
  *   budget: SignInBudget,
  *   record: import("./step-kit.mjs").StepRecord,
  *   url?: string,
+ *   ready?: readonly string[],
  *   bounds?: Partial<Record<keyof typeof SIGN_IN_BOUNDS, number>>,
  * }} options
- * @returns {Promise<{ status: number, reloads: number, spent: number }>}
+ * @returns {Promise<{ status: number, reloads: number, spent: number, landed: string }>}
  */
-export async function signInThroughPage(page, { credentials, budget, record, url = SIGN_IN_PAGE_PATH, bounds } = /** @type {any} */ ({})) {
+export async function signInThroughPage(
+  page,
+  { credentials, budget, record, url = SIGN_IN_PAGE_PATH, ready = SIGN_IN_READY_SELECTORS, bounds } = /** @type {any} */ ({}),
+) {
   requireRecord(STEP, record);
   const nothingSent = "nothing was sent";
   // Without the run's own count the rule could only be kept per call, which is no rule at all.
@@ -213,6 +285,9 @@ export async function signInThroughPage(page, { credentials, budget, record, url
     throw refuse(STEP, record, "input", `hand the step credentials with a non-empty email and password — ${nothingSent}`);
   }
   const bound = readBounds(STEP, record, SIGN_IN_BOUNDS, bounds, nothingSent);
+  if (!Array.isArray(ready) || ready.length === 0 || ready.some((selector) => typeof selector !== "string" || selector.trim() === "")) {
+    throw refuse(STEP, record, "input", `name the landed page's ready signal as one or more selectors — ${nothingSent}`);
+  }
   const notSpent = "the once-only sign-in is not spent";
   const blocker = (why, reading = null) =>
     refuse(STEP, record, "blocker", `${why}${reading ? ` (reading: ${describeReading(reading)})` : ""} — ${notSpent}`);
@@ -346,7 +421,21 @@ export async function signInThroughPage(page, { credentials, budget, record, url
       throw refuse(STEP, record, "rejected", `${why} — the once-only sign-in is spent`);
     }
     record(`${STEP}: signed in — the app answered 200 to its own sign-in request`);
-    return { status, reloads, spent: budget.spent };
+
+    // THE LANDING. The product's form moves the page on once the app has
+    // answered; a step taken before it has moved would run on the sign-in page.
+    const answeredAt = performance.now();
+    const landing = await waitForLanding(page, { at, selectors: ready, bound, answeredAt });
+    if (landing.refused) {
+      const { path, left } = landing.refused;
+      const why = left
+        ? `the page left the sign-in page for ${path}, but drew no ready signal (${describeReady(ready)}) within ${bound.landingMs} ms`
+        : `the page did not leave the sign-in page within ${bound.landingMs} ms (it is on ${path})`;
+      throw refuse(STEP, record, "no-landing", `${why} — the once-only sign-in is spent`);
+    }
+    const { landed } = /** @type {{ landed: { path: string, ready: string } }} */ (landing);
+    record(`${STEP}: landed on ${landed.path} after ${elapsedSince(answeredAt)} ms, and the page draws ${landed.ready}`);
+    return { status, reloads, spent: budget.spent, landed: landed.path };
   } finally {
     // The page is the app's again. A page that has navigated since carries no guard to remove.
     await within(page.evaluate(disarmNativeSubmitGuard, guardKey), bound.actionMs);

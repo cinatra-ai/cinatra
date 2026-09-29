@@ -271,7 +271,7 @@ describe("3. WIDEN — a global change still runs the whole suite", () => {
     ["a pinned conformance manifest", "tests/e2e/design/conformance/manifests/marketplace.json"],
     ["the suite config", "tests/e2e/config/design.config.ts"],
     ["an app layout", "src/app/layout.tsx"],
-    ["the generated extension manifest", "src/lib/generated/extensions.server.ts"],
+    ["the generated extension manifest", "src/lib/generated/extensions.client.tsx"],
     ["the selector itself", "scripts/ci/design-select.mjs"],
     ["the selector's own unit suite", "scripts/ci/__tests__/design-select.test.mjs"],
     ["the workflow that runs the suite", ".github/workflows/design-visual-verify.yml"],

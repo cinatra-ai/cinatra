@@ -415,7 +415,7 @@
     {
       "packageName": "@cinatra-ai/web-research-agent",
       "repo": "cinatra-ai/web-research-agent",
-      "resolvedSha": "b7b26885f68fb4c257a745f998e9c5dfa3492df4"
+      "resolvedSha": "ec67ce94d31f719a766aa828c91dd2d8fa19313f"
     },
     {
       "packageName": "@cinatra-ai/web-research-skill",
@@ -425,7 +425,7 @@
     {
       "packageName": "@cinatra-ai/web-scrape-agent",
       "repo": "cinatra-ai/web-scrape-agent",
-      "resolvedSha": "b0cbd7317617c69efdd0a6a85186adec23b2a2aa"
+      "resolvedSha": "a71e9d779b4ae7dddb60213f2f5a437e0ab78048"
     },
     {
       "packageName": "@cinatra-ai/wordpress-agent",
