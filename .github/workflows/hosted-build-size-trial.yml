@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: 9ac76d9be970ad4bee3b41240419dbdb2e263c70f3eaab51db80d4f2275cf94d
+  # Source job SHA256: 419b2362d0f7e87422d96eeb574654d8710ca484e1a98cf4f236cf7033d1ee39
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -304,6 +304,36 @@ jobs:
             echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
           fi
 
+      - name: Restore the design build cache (self-hosted only)
+        # THE RUNNER-LOCAL BUILD CACHE (cinatra#3771).
+        #
+        # Measured on 2026-09-28 over thirty design jobs: the build below took
+        # 6.0 to 18.9 minutes (median 8.9), from nothing every time, on
+        # self-hosted runners that had built the same tree an hour earlier. This
+        # step puts the framework's build cache back into .next/cache before the
+        # build, from a store under this runner's own work root (outside the
+        # checkout, and never an artifact); the step after the build keeps what
+        # the build wrote for the next job. The key (the lockfile and the other
+        # build inputs, and the branch), the checks and the pruning live in
+        # scripts/ci/design-build-cache.sh. A cache that does not match its
+        # manifest is discarded with a "design build cache: DISCARDED" line, and
+        # the job runs a full build.
+        #
+        # Self-hosted runners only: a hosted runner is thrown away after the
+        # job, so a cache kept there could never be read, and the hosted build
+        # stays exactly as it was. The step never fails the job; any trouble
+        # turns the cache off for this job with a named line. The branch names
+        # reach the script through `env`, never interpolated into it: a pull
+        # request author chooses them.
+        id: build-cache
+        if: ${{ runner.environment == 'self-hosted' }}
+        env:
+          DESIGN_BUILD_CACHE_EVENT: ${{ github.event_name }}
+          DESIGN_BUILD_CACHE_PR: ${{ github.event.pull_request.number }}
+          DESIGN_BUILD_CACHE_HEAD_BRANCH: ${{ github.head_ref }}
+          DESIGN_BUILD_CACHE_BASE_BRANCH: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_ref || github.base_ref }}
+        run: bash scripts/ci/design-build-cache.sh restore
+
       - name: Build (standalone production server)
         id: trial_build
         # Prod build (next.config output:"standalone"). Compiles the app + the
@@ -316,7 +346,23 @@ jobs:
           # reclaims it ("runner received a shutdown signal"); the knob maps to
           # experimental.cpus in next.config.ts. Same cap as the smoke build.
           CINATRA_BUILD_CPUS: "1"
-        run: pnpm build
+          # The Turbopack build cache (cinatra#3771): "1" only when the restore
+          # step above answered that this job may keep one, and empty on every
+          # other job, whose build is then exactly what it was. A build that
+          # fails with it on runs once more from nothing with it off
+          # (design-build-cache.sh rebuild), and that build's result is this
+          # step's result; with it off, the build's own exit code stands.
+          CINATRA_TURBOPACK_BUILD_FS_CACHE: ${{ steps.build-cache.outputs.fs-cache }}
+        run: pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"
+
+      - name: Keep the design build cache for the next job (self-hosted only)
+        # Keeps what the build just wrote for the next job on this runner
+        # (cinatra#3771): only after a build that succeeded with the cache on.
+        # It moves .next/cache out of the checkout into the store; nothing after
+        # the build reads it (the server runs from .next/standalone), and none
+        # of the upload steps below can reach the store. Never fails the job.
+        if: ${{ steps.build-cache.outputs.fs-cache == '1' }}
+        run: bash scripts/ci/design-build-cache.sh save
 
       - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
         # The presented capability the seed endpoint requires
