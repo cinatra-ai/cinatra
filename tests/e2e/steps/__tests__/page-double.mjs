@@ -31,6 +31,13 @@
 //     the page's own handlers for them: the same two functions the page's inline
 //     script runs in a browser (see typeInSearchField in fixture-app.mjs);
 //   - a page has one frame, its main frame, and every request is made in it;
+//     the page announces each navigation of that frame (`framenavigated`): a new
+//     document once it has committed, and a change of the address in place, a
+//     state pushed or replaced in the document's history (at the same address
+//     too) or a new fragment; it announces a failed request (`requestfailed`)
+//     as the context does, and its own `close`;
+//   - every document has its own time origin (`performance.timeOrigin`), as
+//     every jsdom window has one, and a change of the address in place keeps it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
 //     and its argument and its answer cross as JSON;
@@ -295,12 +302,14 @@ function chooseEntry(entry) {
 export class PageDouble {
   #origin;
   #context;
-  #frame = { page: () => this };
+  #frame = { page: () => this, url: () => this.#href };
   #href = "about:blank";
   #dom;
   #navigating = 0;
   #routes = [];
   #requestListeners = [];
+  /** The page's other listeners, by event: `framenavigated`, `requestfailed` and `close`. */
+  #listeners = new Map();
   #timers = new Set();
   #closed = false;
   #streams = new Set();
@@ -350,10 +359,17 @@ export class PageDouble {
 
   on(event, listener) {
     if (event === "request") this.#requestListeners.push(listener);
+    else this.#listeners.set(event, [...(this.#listeners.get(event) ?? []), listener]);
   }
 
   off(event, listener) {
     this.#requestListeners = this.#requestListeners.filter((l) => l !== listener);
+    for (const [name, listeners] of this.#listeners) this.#listeners.set(name, listeners.filter((l) => l !== listener));
+  }
+
+  /** Tells the page's listeners of `event`. */
+  #emit(event, value) {
+    for (const listener of [...(this.#listeners.get(event) ?? [])]) listener(value);
   }
 
   async evaluate(fn, arg) {
@@ -409,6 +425,7 @@ export class PageDouble {
     this.#endStreams(null, "closed");
     this.#context[INNER].forget(this);
     this.#dom.window.close();
+    this.#emit("close", this);
   }
 
   #later(fn, ms) {
@@ -439,6 +456,20 @@ export class PageDouble {
     Object.defineProperty(dom.window.performance, "getEntriesByType", {
       value: (type) => entries.filter((entry) => entry.entryType === type).map((entry) => ({ ...entry })),
     });
+    // A change of the address in place: a state pushed or replaced in the
+    // history (at the same address too), or a new fragment.
+    const { history } = dom.window;
+    for (const name of ["pushState", "replaceState"]) {
+      const own = history[name].bind(history);
+      Object.defineProperty(history, name, {
+        configurable: true,
+        value: (...args) => {
+          own(...args);
+          this.#movedInPlace(dom);
+        },
+      });
+    }
+    dom.window.addEventListener("hashchange", () => this.#movedInPlace(dom));
     const declared = (id) => {
       const node = dom.window.document.getElementById(id);
       return node ? JSON.parse(node.textContent) : null;
@@ -470,6 +501,14 @@ export class PageDouble {
       );
     }
     previous.window.close();
+    this.#emit("framenavigated", this.#frame);
+  }
+
+  /** The address of `dom` changed in place: the page follows it, and announces the navigation of its main frame. */
+  #movedInPlace(dom) {
+    if (this.#closed || this.#dom !== dom) return;
+    this.#href = dom.window.location.href;
+    this.#emit("framenavigated", this.#frame);
   }
 
   #play(dom, op) {
@@ -577,13 +616,12 @@ export class PageDouble {
       const href = new URL(element.getAttribute("href"), this.#href).href;
       if (element.hasAttribute("data-fixture-in-place")) {
         // The page's handler cancels the press, requests the page from the app,
-        // and moves the address once the app has answered: the document stays.
+        // and pushes the address once the app has answered: the document stays.
         const dom = this.#dom;
         this.#send("GET", href, null, false).then(
           () => {
             if (this.#closed || this.#dom !== dom) return;
-            this.#href = href;
-            dom.reconfigure({ url: href });
+            dom.window.history.pushState(null, "", href);
           },
           () => {},
         );
@@ -679,6 +717,7 @@ export class PageDouble {
         onFinished();
       } else if (how === "failed") {
         inner.emit("requestfailed", request);
+        this.#emit("requestfailed", request);
       }
     };
     this.#streams.add(held);
@@ -762,6 +801,7 @@ export class PageDouble {
       if (verdict === "abort") {
         answered(null);
         inner.emit("requestfailed", request);
+        this.#emit("requestfailed", request);
         return { aborted: true };
       }
       if (verdict === "continue") break;
@@ -783,6 +823,7 @@ export class PageDouble {
     } catch (error) {
       answered(null);
       inner.emit("requestfailed", request);
+      this.#emit("requestfailed", request);
       throw error;
     }
     answered({ status: () => reply.status });

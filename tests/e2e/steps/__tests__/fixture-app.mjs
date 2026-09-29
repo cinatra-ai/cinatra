@@ -795,6 +795,20 @@ export const NAMES_PAGES = Object.freeze({
   empty: '<p>No control is shown here.</p><div aria-hidden="true"><button type="button">Hidden</button></div><button type="button" hidden>Not drawn</button>',
 });
 
+// armPageTape and readPageTape: the pages their cases read.
+
+/**
+ * The tape pages, by the second segment of their path: `start` holds a link
+ * whose own handler moves the address in place, as a client-side router does
+ * (it asks the app for the page, then pushes the address), and a link that
+ * loads another page; `moved` and `other` are where they lead.
+ */
+export const TAPE_PAGES = Object.freeze({
+  start: '<nav aria-label="Tape"><a href="/tape/moved" data-fixture-in-place>Move in place</a> <a href="/tape/other">Other page</a></nav>',
+  moved: "<p>Moved in place.</p>",
+  other: "<p>Another page.</p>",
+});
+
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
@@ -927,6 +941,9 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       // readControlNames: its pages.
       const namesPage = /^\/names\/([a-z]+)$/.exec(url.pathname);
       if (namesPage && Object.hasOwn(NAMES_PAGES, namesPage[1])) return html(200, page(url.pathname, NAMES_PAGES[namesPage[1]]));
+      // armPageTape and readPageTape: their pages.
+      const tapePage = /^\/tape\/([a-z]+)$/.exec(url.pathname);
+      if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
       html(404, "<!doctype html><title>Not found</title>");
     });
   };

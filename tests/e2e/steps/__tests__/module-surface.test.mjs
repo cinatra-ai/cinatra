@@ -77,6 +77,9 @@ BOUND_NAMES.sort();
 // readControlNames joins the steps; its one bound of time is the shared reading
 // bound, listed above already.
 STEP_NAMES.push("readControlNames");
+// armPageTape and readPageTape join the steps; their one bound is the shared
+// reading bound too.
+STEP_NAMES.push("armPageTape", "readPageTape");
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {
