@@ -504,6 +504,58 @@ artifact (class 5). Those rules are the sibling change of cinatra#3821 and run
 in each connector's repository and over the materialized tree on the
 application's pull requests.
 
+## Floors compared with the base branch (cinatra#3832)
+
+A ratchet gate compares a live count or list with a committed floor and fails
+on growth. If the floor is read only from the pull request's own checkout, the
+change that adds an occurrence can add it to the floor as well and pass. The
+guarded gates therefore also compare the committed floor with the copy of the
+same file on the base branch; the `VENDOR_TOKEN_BASE` guard above is the
+pattern. The gates below use ONE shared helper,
+`scripts/audit/lib/floor-base-guard.mjs`, and each names what "growth" means
+for its floor:
+
+| Gate | Floor compared with the base | Growth (fails) | Own base variable |
+| --- | --- | --- | --- |
+| `scripts/extensions/self-rendering-extensions-border-gate.mjs` | `self-rendering-extensions-border.baseline.json` | a new (package, path) copy | `SELF_RENDERING_BORDER_BASE` |
+| `extension-fs-import-ban.mjs` | `extension-fs-import-ban.baseline.json` | a new (extension, file) hit | `EXTENSION_FS_IMPORT_BAN_BASE` |
+| `ci-pinned-tests-exist.mjs` | `package-suite-runner-exceptions.json` and `root-tier-runner-exceptions.json` | a new item in either file | `CI_PINNED_TESTS_BASE` |
+| `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
+| `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record the base already holds; an orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
+| `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` | a new package in the set | `REQUIRED_EXTENSIONS_COVER_BASE` |
+
+The rules the helper holds for every gate:
+
+- **Where the base comes from**, in this order: the gate's own variable when
+  the workflow sets one (a git revision: the remote base branch on a pull
+  request, the previous tip on a push); else the platform's variable for a pull
+  request's base branch (`GITHUB_BASE_REF`), read as the remote branch of that
+  name (`origin/main` for `main`). A job that runs one of these gates needs the base branch
+  in its checkout (`fetch-depth: 0`).
+- **No pull request, no base**: on a run that is no pull request (a push to the
+  default branch, a local run) and no base is named, the guard says so in one
+  line and passes; the gate's own check against the tree still runs.
+- **Fail closed**: on a pull request's run a base that cannot be read fails the
+  gate with a line that names the reason — a flag-like or malformed reference,
+  a reference that does not resolve, a floor file that is not on the base, a
+  base copy that does not parse. The guard never passes in silence.
+- **Shrinking passes**: a lowered count, a removed stale item or a removed
+  package is never growth.
+- **A raise of a route-graph ceiling takes two pull requests**: an `absorbs`
+  record permits a raise only when the base branch already holds it. The first
+  pull request lands the record with the ceiling unchanged (a permit, `from` =
+  the current ceiling); the second raises the ceiling and carries the record
+  unchanged. A raise and its record in one pull request fails.
+- A package added to the system set fails against the base like any other
+  floor growth, so the equality `extensions == systemExtensions == lock` cannot
+  grow in one pull request either.
+
+`org-archive-bypass-scan.mjs` has no workflow step of its own: the root suite
+runs it through its test ("exits 0 against the repo as checked out"), which
+inherits the run's environment and so compares with the base on a pull
+request's run. The tests that run a gate on a SYNTHETIC floor drop the base
+variables, so a synthetic floor is never compared with the real base branch.
+
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
 | Gate | Pinned floor | Direction |
@@ -639,6 +691,15 @@ CORE_EXT_BAN_BASE=origin/main node scripts/audit/core-extension-import-ban.mjs
 DISCOVERY_BYPASS_BASE=origin/main node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 IMPORT_BAN_BASE=origin/main node scripts/audit/extension-import-ban.mjs --strict-sdk-only
 VENDOR_TOKEN_BASE=origin/main node scripts/audit/vendor-token-core-gate.mjs
+REQUIRED_EXTENSIONS_COVER_BASE=origin/main node scripts/audit/required-extensions-cover-host-imports.mjs
+
+# the floors compared with the base branch (cinatra#3832; on a pull request's
+# run GITHUB_BASE_REF=main names the base without these variables)
+SELF_RENDERING_BORDER_BASE=origin/main node scripts/extensions/self-rendering-extensions-border-gate.mjs
+EXTENSION_FS_IMPORT_BAN_BASE=origin/main node scripts/audit/extension-fs-import-ban.mjs
+CI_PINNED_TESTS_BASE=origin/main node scripts/audit/ci-pinned-tests-exist.mjs
+ORG_ARCHIVE_BYPASS_BASE=origin/main node scripts/audit/org-archive-bypass-scan.mjs
+ROUTE_GRAPH_RATCHET_BASE=origin/main node scripts/audit/route-graph-ratchet.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
