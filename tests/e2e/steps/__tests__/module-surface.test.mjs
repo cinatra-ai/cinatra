@@ -16,7 +16,7 @@ import { theSteps } from "./backends.mjs";
 const STEPS_DIR = fileURLToPath(new URL("..", import.meta.url));
 const INDEX_URL = new URL("../index.mjs", import.meta.url).href;
 
-const STEP_NAMES = ["navigateTo", "readCount", "signInThroughPage", "waitForIsland", "watchRun"];
+const STEP_NAMES = ["navigateTo", "readCount", "readStandingRequests", "signInThroughPage", "waitForIsland", "watchRun"];
 
 // Every bound, by the name a caller reads it by. A bound added, renamed or
 // removed without this list changing fails here.
@@ -29,6 +29,7 @@ const BOUND_NAMES = [
   "ISLAND_WAIT_BOUND_MS",
   "NAVIGATE_ACTION_BOUND_MS",
   "NAVIGATE_LANDING_BOUND_MS",
+  "NAVIGATE_START_BOUND_MS",
   "READING_BOUND_MS",
   "RUN_WATCH_BOUND_MS",
   "RUN_WATCH_POLL_MS",
@@ -40,8 +41,45 @@ const BOUND_NAMES = [
   "SIGN_IN_REQUEST_BOUND_MS",
 ];
 
+// readRows, the landing of signInThroughPage, dispatchRun, press, selectFrom,
+// uploadFile, fillForm, switchTheme and decideGate: their steps and their
+// bounds join the lists above in this one place, and the bounds stay in order.
+STEP_NAMES.push("decideGate", "dispatchRun", "fillForm", "press", "readRows", "selectFrom", "switchTheme", "uploadFile");
+BOUND_NAMES.push(
+  "CONTROL_ACTION_BOUND_MS",
+  "CONTROL_POLL_MS",
+  "DISPATCH_RUN_BOUND_MS",
+  "DISPATCH_RUN_COMPOSER_BOUND_MS",
+  "FORM_ACTION_BOUND_MS",
+  "FORM_ERROR_BOUND_MS",
+  "FORM_FIELDS_BOUND_MS",
+  "FORM_POLL_MS",
+  "GATE_ACTION_BOUND_MS",
+  "GATE_FIND_BOUND_MS",
+  "GATE_LEAVE_BOUND_MS",
+  "GATE_POLL_MS",
+  "PRESS_SETTLE_BOUND_MS",
+  "PRESS_START_BOUND_MS",
+  "READ_ROWS_BOUND_MS",
+  "SELECT_REFLECT_BOUND_MS",
+  "SIGN_IN_LANDING_BOUND_MS",
+  "THEME_ACTION_BOUND_MS",
+  "THEME_APPLIED_BOUND_MS",
+  "THEME_CONTROL_BOUND_MS",
+  "THEME_POLL_MS",
+  "UPLOAD_ACTION_BOUND_MS",
+  "UPLOAD_CHOOSER_BOUND_MS",
+  "UPLOAD_CONTROL_BOUND_MS",
+  "UPLOAD_POLL_MS",
+  "UPLOAD_ROW_BOUND_MS",
+);
+BOUND_NAMES.sort();
+// readControlNames joins the steps; its one bound of time is the shared reading
+// bound, listed above already.
+STEP_NAMES.push("readControlNames");
+
 describe("the steps module", () => {
-  it("offers the five steps, the once-only budget and the refusal", () => {
+  it("offers the six steps, the once-only budget and the refusal", () => {
     const steps = theSteps(...STEP_NAMES, "createSignInBudget");
     const budget = steps.createSignInBudget();
     expect(budget).toEqual({ spent: 0 });
@@ -64,6 +102,26 @@ describe("the steps module", () => {
     for (const name of BOUND_NAMES) {
       expect(Number.isInteger(steps[name]) && steps[name] > 0, `${name} is not a whole, positive number of milliseconds`).toBe(true);
     }
+  });
+
+  it("names the bound of standing requests: six connections to one origin, less two kept free", () => {
+    const steps = theSteps("readStandingRequests", "navigateTo");
+    expect(steps.ORIGIN_CONNECTIONS).toBe(6);
+    expect(steps.CONNECTIONS_KEPT_FREE).toBe(2);
+    expect(steps.STANDING_REQUEST_BOUND).toBe(4);
+    expect(steps.MULTIPLEXED_PROTOCOLS).toEqual(["h2", "h3"]);
+    expect(steps.STANDING_BOUNDS).toEqual({ readingMs: steps.READING_BOUND_MS });
+    expect(steps.FURTHER_PAGE_MODIFIER).toBe("ControlOrMeta");
+  });
+
+  it("names the start bound of a press: a few seconds, beside the press and the landing", () => {
+    const steps = theSteps("navigateTo");
+    expect(steps.NAVIGATE_START_BOUND_MS).toBe(5_000);
+    expect(steps.NAVIGATE_BOUNDS).toEqual({
+      actionMs: steps.NAVIGATE_ACTION_BOUND_MS,
+      startMs: steps.NAVIGATE_START_BOUND_MS,
+      landingMs: steps.NAVIGATE_LANDING_BOUND_MS,
+    });
   });
 
   it("loads in a plain Node process, with no TypeScript and no aliases", () => {
@@ -92,5 +150,54 @@ describe("the steps module", () => {
         ).toBe(true);
       }
     }
+  });
+});
+
+describe("the steps that drive a page's own controls", () => {
+  it("name each bound by the key the step's bounds take it by", () => {
+    const steps = theSteps("uploadFile", "fillForm", "switchTheme", "decideGate");
+    expect(steps.UPLOAD_BOUNDS).toEqual({
+      controlMs: steps.UPLOAD_CONTROL_BOUND_MS,
+      actionMs: steps.UPLOAD_ACTION_BOUND_MS,
+      chooserMs: steps.UPLOAD_CHOOSER_BOUND_MS,
+      rowMs: steps.UPLOAD_ROW_BOUND_MS,
+      pollMs: steps.UPLOAD_POLL_MS,
+    });
+    expect(steps.FORM_BOUNDS).toEqual({
+      fieldsMs: steps.FORM_FIELDS_BOUND_MS,
+      actionMs: steps.FORM_ACTION_BOUND_MS,
+      errorMs: steps.FORM_ERROR_BOUND_MS,
+      pollMs: steps.FORM_POLL_MS,
+    });
+    expect(steps.THEME_BOUNDS).toEqual({
+      controlMs: steps.THEME_CONTROL_BOUND_MS,
+      actionMs: steps.THEME_ACTION_BOUND_MS,
+      appliedMs: steps.THEME_APPLIED_BOUND_MS,
+      pollMs: steps.THEME_POLL_MS,
+    });
+    expect(steps.GATE_BOUNDS).toEqual({
+      findMs: steps.GATE_FIND_BOUND_MS,
+      actionMs: steps.GATE_ACTION_BOUND_MS,
+      leaveMs: steps.GATE_LEAVE_BOUND_MS,
+      pollMs: steps.GATE_POLL_MS,
+    });
+  });
+
+  it("keep the waits for a chooser, a field's error and the applied theme short", () => {
+    const steps = theSteps("uploadFile", "fillForm", "switchTheme");
+    expect(steps.UPLOAD_CHOOSER_BOUND_MS).toBe(5_000);
+    expect(steps.FORM_ERROR_BOUND_MS).toBe(5_000);
+    expect(steps.THEME_APPLIED_BOUND_MS).toBe(10_000);
+  });
+
+  it("name the product's own controls and markers", () => {
+    const steps = theSteps("uploadFile", "switchTheme", "decideGate");
+    expect(steps.UPLOAD_ROW_SELECTOR).toBe('[data-conformance-id="artifacts-library-list"] > li');
+    expect(steps.THEME_CONTROL_NAME).toBe("Toggle theme");
+    expect(steps.THEME_ROOT_CLASSES).toEqual({ light: "cinatra", dark: "dark" });
+    expect(steps.ISLAND_THEME_ATTRIBUTE).toBe("data-island-color-scheme");
+    expect(steps.GATE_SELECTOR).toBe("[data-lifecycle-card]");
+    expect(steps.GATE_WAITING_STATUS).toBe("needs-review");
+    expect(steps.GATE_LEFT_STATES).toEqual(["settled", "decided"]);
   });
 });
