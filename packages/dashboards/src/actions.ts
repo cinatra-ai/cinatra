@@ -227,6 +227,17 @@ const EMPTY_ENTITY_DC = {
   grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
 } as unknown as DashboardConfigV1_1;
 
+/** The dashboards-local org-role vocabulary, from either the kernel form or the
+ *  Better Auth form. One place, so both actor paths below agree. */
+function toDashboardsOrgRole(
+  role: string | null | undefined,
+): "owner" | "admin" | "member" | undefined {
+  if (role === "owner" || role === "org_owner") return "owner";
+  if (role === "admin" || role === "org_admin") return "admin";
+  if (role === "member") return "member";
+  return undefined;
+}
+
 /** Build the role-aware dashboards actor from the session (teamIds + orgRole).
  *  teamRoles is not resolved from the session actor — team-OWNED Overviews are a
  *  #704 concern that extends the actor there; user/org ownership is complete.
@@ -235,7 +246,45 @@ const EMPTY_ENTITY_DC = {
  *  active organization: a user with none still reads and writes their own
  *  workspace dashboards, and the actor's active organization (when present)
  *  plays no part in any workspace decision. The ref must name the SESSION user
- *  as its owner; a ref bound to anyone else is refused here, before any read. */
+ *  as its owner; a ref bound to anyone else is refused here, before any read.
+ *
+ *  A REF MAY NAME ITS OWN ORGANIZATION (cinatra#3787), and then it chooses the
+ *  TENANT, never the authority. A per-instance entity can sit outside the active
+ *  organization: the owner's decision on cinatra#3693 puts a scope's surface
+ *  under the scope's organization, whatever the session has active, and a team's
+ *  ref therefore carries the team's organization. The session-derived default is
+ *  untouched for a ref that names none, which is every personal and index
+ *  surface.
+ *
+ *  EVERY EXPORT HERE IS A SERVER ACTION, so a ref is an argument and never a
+ *  fact. This path is built on that: it re-derives from the SESSION everything
+ *  that could admit anything, and takes from the ref only which tenant to work
+ *  in. Two conditions, both fail-closed:
+ *
+ *    1. the ref must name the SESSION USER'S OWN rows (`ownerLevel: "user"`,
+ *       `ownerId` = the session user). The row resolver's user arm then decides
+ *       every verdict on `row.ownerId === actor.userId`, so a named organization
+ *       cannot reach anyone else's rows. Without this, an organization-owned ref
+ *       would put the named organization into `actor.organizationId`, and that
+ *       tier's member arm reads `row.ownerId === actor.organizationId` with no
+ *       role at all (`resolveDashboardAccess`), which would disclose that
+ *       organization's shared rows. Refused here instead, before any read.
+ *    2. the session must hold a RESOLVED role in the named organization. A
+ *       caller who is a member of nothing there cannot select that tenant, so
+ *       neither a read nor a create can reach it. The org-write authority is
+ *       minted from that same role and for that same organization, which is what
+ *       the org-write seam demands of every write.
+ *
+ *  What the actor does NOT carry across organizations is a team axis: `teamIds`
+ *  is the session's ACTIVE-organization projection, and asserting it under
+ *  another tenant would claim a membership this path never read. It is dropped
+ *  instead, so nothing widens. Condition 1 makes it unread anyway.
+ *
+ *  Fail-closed here is not the whole gate, it is the floor. The surface that
+ *  binds a team ref authorized the caller against the team first
+ *  (`authorizeTeamDashboards`: member or manager, resolved against the team's
+ *  organization); this path only guarantees that a ref arriving from anywhere
+ *  else can reach nothing the session does not already own. */
 async function requireEntityDashboardActor(ref: DashboardEntityRef): Promise<DashboardActor> {
   const { actor: authz, orgId, userId, authority } = await buildDashboardActorFromSession();
   if (isWorkspaceDashboardRef(ref)) {
@@ -244,15 +293,29 @@ async function requireEntityDashboardActor(ref: DashboardEntityRef): Promise<Das
     }
     return { userId, organizationId: orgId, teamIds: [] };
   }
+  if (ref.organizationId && ref.organizationId !== orgId) {
+    if (!userId || ref.ownerLevel !== "user" || ref.ownerId !== userId) {
+      throw new Error(
+        "entity dashboards: a ref names another organization only for the session user's own rows",
+      );
+    }
+    const refOrgRole = await resolveOrgRoleForUser(ref.organizationId, userId);
+    if (!refOrgRole) {
+      throw new Error(
+        "entity dashboards: the session holds no role in the organization the ref names",
+      );
+    }
+    const refRole = toDashboardsOrgRole(refOrgRole);
+    return {
+      userId,
+      organizationId: ref.organizationId,
+      teamIds: [],
+      ...(refRole ? { orgRole: refRole } : {}),
+      authority: sessionAuthorityFromResolvedRole(ref.organizationId, refOrgRole),
+    };
+  }
   if (!orgId) throw new Error("entity dashboards: no active organization");
-  const orgRole =
-    authz.orgRole === "owner" || authz.orgRole === "org_owner"
-      ? "owner"
-      : authz.orgRole === "admin" || authz.orgRole === "org_admin"
-        ? "admin"
-        : authz.orgRole === "member"
-          ? "member"
-          : undefined;
+  const orgRole = toDashboardsOrgRole(authz.orgRole);
   return {
     userId,
     organizationId: orgId,
