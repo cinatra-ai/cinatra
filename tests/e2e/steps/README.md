@@ -303,6 +303,10 @@ element that holds one, a label that names no other control, with no other
 field between the two); when more than one combobox matches on the first of
 these that finds one, it refuses (`ambiguous`).
 
+Once it has opened a combobox, it reads the combobox again by its mark, never by
+its name: while the list is open, the shared select hides everything outside the
+list from assistive technology, the combobox included.
+
 Then it waits until the page reflects the selection: the entry reads as selected
 (the selected option of a select, a checked radio, `aria-selected` or
 `aria-checked`, a combobox that shows the entry), or a live region (a status, an

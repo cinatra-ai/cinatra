@@ -21,6 +21,11 @@
 // before it in its form group. More than one match on the road that finds one
 // is refused, as a name several pickers carry is.
 //
+// OPENED. Once the step has opened a combobox, it reads it again by the mark it
+// put on it before opening, never by its name: while the list is open, the
+// shared select hides everything outside it from assistive technology, the
+// combobox included, so no name finds the combobox then.
+//
 // REFLECTED. The selection shows when the entry reads as selected (a select's
 // selected option, a checked radio, an option or radio marked selected or
 // checked, a combobox that shows the entry), or when the page confirms it: a
@@ -99,6 +104,8 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
   const mark = newMark();
   const query = { mode: "picker", picker: pickerName, entry: entryText, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
   const read = () => within(page.evaluate(readControls, query), READING_BOUND_MS);
+  // The picker the step has opened, read again by its mark (see OPENED).
+  const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
   try {
     let reading = await read();
     if (!reading) throw refuse(STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
@@ -135,7 +142,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       }
       const openedAt = performance.now();
       for (;;) {
-        const opened = await read();
+        const opened = await readMarked();
         if (opened && opened.found === 1 && opened.open) {
           reading = opened;
           break;

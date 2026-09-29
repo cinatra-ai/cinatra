@@ -158,9 +158,32 @@ export const STREAM_SCENARIOS = Object.freeze({
   frozen: { body: STREAM_BODY, timeline: [...holding(1), { at: 100, freeze: 2500 }] },
 });
 
+// A list drawn as the shared select draws it (`data-fixture-hides-others`) does
+// what the select's library does while the list is open: every element outside
+// it is hidden from assistive technology, the combobox that opened it included.
+// The library walks down from the body along the elements that hold the list, a
+// live region or a script, and gives every other element it meets there
+// `aria-hidden="true"` and its marker (`data-aria-hidden`); an element hidden
+// already keeps its own value. An entry pressed in such a list
+// (`data-fixture-chooses`) is taken: the list closes, the combobox that controls
+// it shows the entry, and every element the list hid is shown again.
+// page-double.mjs plays the same.
 const TIMELINE_RUNNER = `<script>
 (function () {
   var ops = JSON.parse(document.getElementById("fixture-timeline").textContent);
+  function hideOthers(list) {
+    var kept = [list].concat(Array.prototype.slice.call(document.querySelectorAll("[aria-live], script")));
+    (function walk(parent) {
+      Array.prototype.forEach.call(parent.children, function (child) {
+        if (kept.indexOf(child) >= 0) return;
+        if (kept.some(function (node) { return child.contains(node); })) return walk(child);
+        var own = child.getAttribute("aria-hidden");
+        if (own !== null && own !== "false") return;
+        child.setAttribute("aria-hidden", "true");
+        child.setAttribute("data-aria-hidden", "true");
+      });
+    })(document.body);
+  }
   document.querySelectorAll("[data-fixture-inert]").forEach(function (link) {
     link.addEventListener("click", function (event) { event.preventDefault(); });
   });
@@ -169,7 +192,25 @@ const TIMELINE_RUNNER = `<script>
       event.preventDefault();
       var opened = document.getElementById(link.getAttribute("data-fixture-opens"));
       if (opened) opened.removeAttribute("hidden");
+      if (opened && opened.hasAttribute("data-fixture-hides-others")) hideOthers(opened);
       if (link.hasAttribute("aria-expanded")) link.setAttribute("aria-expanded", "true");
+    });
+  });
+  document.querySelectorAll("[data-fixture-chooses]").forEach(function (entry) {
+    entry.addEventListener("click", function (event) {
+      event.preventDefault();
+      var list = entry.closest("[role='listbox']");
+      if (!list) return;
+      list.setAttribute("hidden", "");
+      document.querySelectorAll("[data-aria-hidden]").forEach(function (node) {
+        node.removeAttribute("aria-hidden");
+        node.removeAttribute("data-aria-hidden");
+      });
+      var picker = document.querySelector("[aria-controls='" + list.id + "']");
+      if (!picker) return;
+      picker.textContent = entry.textContent;
+      picker.removeAttribute("data-placeholder");
+      picker.setAttribute("aria-expanded", "false");
     });
   });
   document.querySelectorAll("[data-fixture-in-place]").forEach(function (link) {
@@ -460,6 +501,20 @@ export const PICK_UNNAMED_PAGE = [
 ].join("");
 
 /**
+ * Comboboxes whose list hides the rest of the page while it is open, as the
+ * shared select's list does (see TIMELINE_RUNNER): one named "Plan", and one with
+ * no accessible name that shows its placeholder, inside a wrapper, so that the
+ * wrapper carries `aria-hidden` for it. Pressing an entry takes it, closes the
+ * list and shows the page again.
+ */
+export const PICK_HIDING_PAGE = [
+  '<a href="#plans" role="combobox" aria-label="Plan" aria-controls="hiding-plans" aria-expanded="false" data-placeholder="" data-fixture-opens="hiding-plans"><span>Choose a plan</span></a>',
+  '<div role="listbox" id="hiding-plans" aria-label="Plans" hidden data-fixture-hides-others><a href="#free" role="option" data-fixture-chooses>Free</a> <a href="#team" role="option" data-fixture-chooses>Team</a></div>',
+  '<div><a href="#skills" role="combobox" aria-controls="hiding-skills" aria-expanded="false" data-placeholder="" data-fixture-opens="hiding-skills"><span>Pick a skill</span></a></div>',
+  '<div role="listbox" id="hiding-skills" aria-label="Skills" hidden data-fixture-hides-others><a href="#web-search" role="option" data-fixture-chooses>Web search</a> <a href="#summary" role="option" data-fixture-chooses>Summary</a></div>',
+].join("");
+
+/**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
  * `secure`, every page is also served over HTTP/2 at `secureOrigin`.
@@ -572,6 +627,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/press/sections": PRESS_SECTIONS_PAGE,
         "/pick/start": PICK_PAGE,
         "/pick/unnamed": PICK_UNNAMED_PAGE,
+        "/pick/hiding": PICK_HIDING_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,
         "/conversation/boxes": CONVERSATION_PAGES.boxes,
