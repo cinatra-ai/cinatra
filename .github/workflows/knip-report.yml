@@ -85,7 +85,12 @@ jobs:
     needs: [changes]
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    # Budget as for every job on the self-hosted classes (the contract in
+    # scripts/ci/__tests__/self-hosted-job-timeout-budgets.test.mjs): 27 = the
+    # measured worst setup phase of a loaded pool (20) + this job's own phase
+    # (2, an upper bound: its longest whole run on the hosted runners, 1.9
+    # minutes, rounded up) + the 5-minute margin.
+    timeout-minutes: 27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

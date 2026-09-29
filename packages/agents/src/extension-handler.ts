@@ -143,7 +143,41 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
   // (the scope the operator chose on the install screen), the native agent row
   // is anchored at THAT tuple, not at a second one derived from the actor. With
   // no planned anchor the values are byte-identical to the previous derivation.
-  const nativeOwnership = resolveNativeInstallOwnership(actor.orgId ?? null, rowOwnership ?? null);
+  const derivedOwnership = resolveNativeInstallOwnership(actor.orgId ?? null, rowOwnership ?? null);
+  // cinatra#3534: TRANSLATE A WORKSPACE-ANCHORED INSTALL INTO THE DETERMINATE
+  // ORGANIZATION ANCHOR. The two workspace install targets ("Workspace: All" and
+  // "Workspace: Admins only") both map to the WORKSPACE row anchor, which the
+  // canonical `installed_extension` row supports and the agent template's
+  // owner-level persistence does not: the run-scope evaluator authorizes exactly
+  // four levels (user / team / project / organization), so a template written at
+  // owner level `workspace` is refused at run start with `unknown_scope` and an
+  // operator's press of Run mints no run at all.
+  //
+  // THE EVALUATOR IS NOT WIDENED — which levels authorize a run is a security
+  // decision this seam does not take. The agents kind translates instead, to the
+  // INSTALLING actor's own organization, which the evaluator's organization arm
+  // already admits (and admits for that tenant alone: an actor of another
+  // organization is still refused, as `not_org_member`).
+  //
+  // NOTHING THE OPERATOR CHOSE IS DISCARDED. The canonical row keeps its
+  // workspace anchor untouched, and the workspace / admin AUDIENCE keeps
+  // travelling on the access policy the install writes; only the template's own
+  // owner tier becomes determinate.
+  //
+  // WITH NO INSTALLING ORGANIZATION the tuple is left exactly as it is and the
+  // row stays refused: nothing on this road is an authoritative source for an
+  // owner, and a refusal is the correct outcome for a row with no tenancy.
+  //
+  // `anchorOrgId` IS UNTOUCHED — it is the finalized-store-payload resolution
+  // scope, deliberately separate from the template's owner anchor, and moving it
+  // would move which bytes the installer reads. Every other level (organization,
+  // team, project) and the no-planned-anchor case pass through byte-identically,
+  // and BOTH installer branches below read this one translated tuple, so the
+  // supplied road and the marketplace road are cured by the same line.
+  const nativeOwnership =
+    derivedOwnership.ownerLevel === "workspace" && actor.orgId
+      ? { ...derivedOwnership, ownerLevel: "organization" as const, ownerId: actor.orgId }
+      : derivedOwnership;
   const anchorOrgId = nativeOwnership.anchorOrgId;
   // Hold the per-package install lock
   // across the entire flow (install + skill registration + compensation) so

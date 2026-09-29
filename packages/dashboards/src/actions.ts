@@ -66,6 +66,7 @@ import { buildPersonalDashboardId } from "./components/seed-configs/personal-def
 import { resolveDashboardAccess, type DashboardActor } from "./permissions";
 import {
   isKnownEntityType,
+  isWorkspaceDashboardRef,
   type DashboardEntityRef,
 } from "./store/entity-identity";
 import type { DashboardRow } from "./store/schema";
@@ -228,9 +229,21 @@ const EMPTY_ENTITY_DC = {
 
 /** Build the role-aware dashboards actor from the session (teamIds + orgRole).
  *  teamRoles is not resolved from the session actor — team-OWNED Overviews are a
- *  #704 concern that extends the actor there; user/org ownership is complete. */
-async function requireEntityDashboardActor(): Promise<DashboardActor> {
+ *  #704 concern that extends the actor there; user/org ownership is complete.
+ *
+ *  The WORKSPACE arm (cinatra#2811): a workspace ref is org-NULL, so it needs no
+ *  active organization: a user with none still reads and writes their own
+ *  workspace dashboards, and the actor's active organization (when present)
+ *  plays no part in any workspace decision. The ref must name the SESSION user
+ *  as its owner; a ref bound to anyone else is refused here, before any read. */
+async function requireEntityDashboardActor(ref: DashboardEntityRef): Promise<DashboardActor> {
   const { actor: authz, orgId, userId, authority } = await buildDashboardActorFromSession();
+  if (isWorkspaceDashboardRef(ref)) {
+    if (!userId || ref.ownerId !== userId) {
+      throw new Error("entity dashboards: a workspace ref names only the session user");
+    }
+    return { userId, organizationId: orgId, teamIds: [] };
+  }
   if (!orgId) throw new Error("entity dashboards: no active organization");
   const orgRole =
     authz.orgRole === "owner" || authz.orgRole === "org_owner"
@@ -287,8 +300,13 @@ function toSummary(row: DashboardRow, actor: DashboardActor): EntityDashboardSum
  *  organizationId, ownerLevel, ownerId, projectId (cinatra#1898 Phase-3 retired
  *  the dashboard-local visibility axis with its column). */
 function canCreateForRef(ref: DashboardEntityRef, actor: DashboardActor): boolean {
+  // The workspace ref's rows are org-NULL (cinatra#2811), so its pseudo row is
+  // too, so the resolver's org-NULL arm decides, never the active org.
+  const workspace = isWorkspaceDashboardRef(ref);
   const pseudo = {
-    organizationId: actor.organizationId,
+    organizationId: workspace ? null : actor.organizationId,
+    entityType: ref.entityType,
+    entityId: ref.entityId,
     ownerLevel: ref.ownerLevel,
     ownerId: ref.ownerId,
     projectId: null,
@@ -318,7 +336,7 @@ export async function listEntityDashboardsAction(
   ref: DashboardEntityRef,
 ): Promise<EntityDashboardsList> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   const rows = await listDashboardsForEntity(ref, actor);
   return {
     dashboards: rows.map((r) => toSummary(r, actor)),
@@ -333,7 +351,7 @@ export async function ensureEntityOverviewAction(
   seedConfig?: unknown,
 ): Promise<EntityDashboardSummary> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   const row = await ensureOverview(
     { ref, ...(seedConfig !== undefined ? { seedConfig } : {}) },
     actor,
@@ -347,7 +365,7 @@ export async function getEntityDashboardConfigAction(
   id: string,
 ): Promise<DashboardConfigV1_1> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   const row = await getEntityDashboard(id, actor);
   if (!row || !rowMatchesRef(row, ref)) throw new DashboardNotFoundError(id);
   return readDcConfigFromRow<DashboardConfigV1_1>(row, EMPTY_ENTITY_DC);
@@ -359,7 +377,7 @@ export async function createEntityDashboardAction(
   name: string,
 ): Promise<MutatedEntityDashboard> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   try {
     const row = await createEntityDashboard({ ref, name }, actor);
     return { ok: true, dashboard: toSummary(row, actor) };
@@ -377,7 +395,7 @@ export async function renameEntityDashboardAction(
   name: string,
 ): Promise<MutatedEntityDashboard> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   const existing = await getEntityDashboard(id, actor);
   if (!existing || !rowMatchesRef(existing, ref)) {
     return { ok: false, reason: "not-found" };
@@ -398,7 +416,7 @@ export async function deleteEntityDashboardAction(
   id: string,
 ): Promise<DeletedEntityDashboard> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   const existing = await getEntityDashboard(id, actor);
   if (!existing || !rowMatchesRef(existing, ref)) {
     return { ok: false, reason: "not-found" };
@@ -424,7 +442,7 @@ export async function saveEntityDashboardConfigAction(
   config: unknown,
 ): Promise<SavedEntityDashboard> {
   assertValidRef(ref);
-  const actor = await requireEntityDashboardActor();
+  const actor = await requireEntityDashboardActor(ref);
   const existing = await getEntityDashboard(id, actor);
   if (!existing || !rowMatchesRef(existing, ref)) {
     return { ok: false, reason: "not-found" };

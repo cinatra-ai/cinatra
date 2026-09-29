@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 
 import { dashboards, getDashboardsDb } from "../store/db";
 import { resolveDashboardAccess, type DashboardActor } from "../permissions";
+import { isWorkspaceReadGranted } from "../store/workspace-links";
 
 export type { DashboardActor } from "../permissions";
 
@@ -45,6 +46,16 @@ export type DashboardAuthzInput = {
  * Throws DashboardAccessError on deny. Step 1 = owner-level gate (existing 4-tier
  * resolver). Step 2 (only when project_id != NULL) = project-grant rank vs mode.
  * Returns the dashboard row on success.
+ *
+ * THE EVERYONE-GRANT (cinatra#2811; the amended drawing §IX.4). When the home
+ * access above refuses a READ, one more question is asked: does a workspace
+ * reference to this dashboard, filed under its own home organization, carry a
+ * platform administrator's standing "visible to everyone" grant? If so the read
+ * is admitted. It is READ-ONLY (a write never reaches this branch), it opens
+ * only to an identified human principal (no user id, or an OBO-delegated agent
+ * actor, is refused), and it lasts exactly as long as the grant: revoking it or
+ * removing the link closes it on the next read. A reference WITHOUT the grant
+ * widens nothing: the home access alone decides.
  */
 export async function requireDashboardAccess(input: DashboardAuthzInput) {
   const db = getDashboardsDb();
@@ -52,11 +63,31 @@ export async function requireDashboardAccess(input: DashboardAuthzInput) {
   const row = rows[0];
   if (!row) throw new DashboardAccessError("dashboard_not_found", `Dashboard not found: ${input.dashboardId}`);
 
+  const refusal = homeAccessRefusal(row, input);
+  if (refusal === null) return row;
+  if (
+    input.mode === "read" &&
+    typeof input.actor.userId === "string" &&
+    input.actor.userId.length > 0 &&
+    !input.actor.oboCeiling &&
+    row.organizationId !== null &&
+    (await isWorkspaceReadGranted(row.id, row.organizationId))
+  ) {
+    return row;
+  }
+  throw refusal;
+}
+
+/** The home access (steps 1 and 2): null when admitted, else the refusal. */
+function homeAccessRefusal(
+  row: typeof dashboards.$inferSelect,
+  input: DashboardAuthzInput,
+): DashboardAccessError | null {
   // Step 1 — owner-level gate (unchanged).
   const access = resolveDashboardAccess(row, input.actor);
   const ownerOk = input.mode === "read" ? access.canRead : access.canWrite;
   if (!ownerOk) {
-    throw new DashboardAccessError("dashboard_forbidden", `Access denied for dashboard ${input.dashboardId}`);
+    return new DashboardAccessError("dashboard_forbidden", `Access denied for dashboard ${input.dashboardId}`);
   }
 
   // Step 2 — project-grant gate (only for project-scoped dashboards).
@@ -64,11 +95,11 @@ export async function requireDashboardAccess(input: DashboardAuthzInput) {
     const grant = input.projectGrants.find((g) => g.projectId === row.projectId);
     const rank = grant ? (PROJECT_ROLE_RANK[grant.effectiveRole] ?? -1) : -1;
     if (rank < REQUIRED_RANK[input.mode]) {
-      throw new DashboardAccessError("dashboard_forbidden", `No ${input.mode} grant on project ${row.projectId} for dashboard ${input.dashboardId}`);
+      return new DashboardAccessError("dashboard_forbidden", `No ${input.mode} grant on project ${row.projectId} for dashboard ${input.dashboardId}`);
     }
   }
 
-  return row;
+  return null;
 }
 
 /** Filter a list of dashboard rows to those the actor may READ (owner gate +,

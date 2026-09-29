@@ -69,16 +69,46 @@ async function readScopeName(scope: ScopeSurfaceRef): Promise<string | null> {
   return readScopeSurfaceEntityName(scope);
 }
 
-/** The settings pane's shell, rendered at request time. */
+/**
+ * The settings route's page, rendered at request time: the per-scope
+ * assignment page (cinatra#2814) inside the #2809 shell.
+ *
+ * The page model is resolved HERE, on the server, from the route alone: the
+ * package pair is re-resolved against the rows this scope's tab lists for the
+ * reader, the scope is the route's, and the reader's authority is re-read in
+ * the scope's own organization. A pair the reader does not reach at this scope
+ * (forged, uninstalled, out of scope, or an assistant addressed through the
+ * agents tree) is not found. Both modules travel behind `await import(...)`
+ * for the reason the header above gives.
+ */
 async function renderScopeSurfaceSettingsShell(props: {
   scope: ScopeSurfaceRef;
   scopeTitle?: string | null;
   subject: ScopeSurfaceSettingsSubject;
+  pair: { vendor: string; name: string };
+  searchParams?: Promise<SearchParams>;
 }): Promise<React.ReactNode> {
-  const { ScopeSurfaceSettingsShell } = await import(
-    "@/components/scope-surface-settings-shell"
+  const [{ loadScopeAssignmentPage }, { ScopeSurfaceSettingsShell }] = await Promise.all([
+    import("@/lib/scope-assignment/scope-assignment-page.server"),
+    import("@/components/scope-surface-settings-shell"),
+  ]);
+  const query = (await props.searchParams) ?? {};
+  const page = await loadScopeAssignmentPage({
+    surface: props.subject.kind,
+    scope: props.scope,
+    vendor: props.pair.vendor,
+    name: props.pair.name,
+    tab: query.tab,
+  });
+  if (!page) notFound();
+  return (
+    <ScopeSurfaceSettingsShell
+      scope={props.scope}
+      scopeTitle={props.scopeTitle}
+      subject={props.subject}
+      page={page}
+    />
   );
-  return <ScopeSurfaceSettingsShell {...props} />;
 }
 
 type AgentInstanceScreen = (props: {
@@ -90,7 +120,28 @@ type AgentInstanceScreen = (props: {
   searchParams?: Promise<SearchParams> | undefined;
 }) => Promise<React.ReactNode>;
 
-/** `<scope-base>/agents/…` — the launcher, the settings shell, an instance. */
+/**
+ * The registry screen an instance SUB-ROUTE names (cinatra#3693), or null for
+ * a shape with no page under a scope. Results and optimization have no screen
+ * in the registry, so they stay not-found here; the skills pane is a page of its
+ * own rather than a registry screen and is mounted directly below.
+ */
+function instanceSubScreenKey(rest: readonly string[]): string | null {
+  if (rest.length !== 1) return null;
+  switch (rest[0]) {
+    case "trigger":
+      return "instanceTrigger";
+    case "permissions":
+      return "instancePermissions";
+    case "data":
+      return "instanceData";
+    default:
+      return null;
+  }
+}
+
+/** `<scope-base>/agents/…` — the launcher, the settings shell, an instance and
+ *  its sub-routes. */
 export async function ScopedAgentsRoute({
   scope,
   segments,
@@ -110,29 +161,95 @@ export async function ScopedAgentsRoute({
   // it gets the id abbreviation on all of them alike.
   const scopeTitle = await readScopeName(scope);
 
+  if (route.kind === "executions") {
+    // THE SCOPE'S EXECUTIONS TAB (cinatra#3693): "Each scope carries an
+    // **Executions** tab that lists that scope's runs." The scope's own page,
+    // on its Agents tab with the strip at Executions, and the Executions body
+    // handed the scope it lists. Both travel behind `await import(...)` for the
+    // reason the header above gives.
+    const [{ ScopeSurfacePage }, { ScopedAgentsExecutionsBody }] = await Promise.all([
+      import("@/components/scope-surface-page"),
+      import("@cinatra-ai/dashboards/screens"),
+    ]);
+    return (
+      <ScopeSurfacePage
+        scope={scope}
+        tab="agents"
+        agentsTab="executions"
+        title={scopeTitle ?? undefined}
+        body={<ScopedAgentsExecutionsBody launchScope={scope} />}
+      />
+    );
+  }
+
   if (route.kind === "settings") {
-    // The SHELL only. This epic pins the settings HREF and proves it resolves;
-    // the pane's contents and their end-to-end navigation acceptance belong to
-    // the assignment epic, which fills it in place.
+    // #2809's shell, filled with the per-scope assignment page (cinatra#2814).
     return renderScopeSurfaceSettingsShell({
       scope,
       scopeTitle,
       subject: { kind: "agent", packageName: `@${route.vendor}/${route.packageName}` },
+      pair: { vendor: route.vendor, name: route.packageName },
+      searchParams,
     });
   }
 
-  // The sub-routes of an instance (its schedule, its results, its review) are
-  // still mounted on the bare tree alone. They are deliberately NOT forked
-  // here: an instance reached at its canonical home addresses them from there,
-  // and the slice that moves them moves them once, for all five bases.
-  if (route.kind === "instance" && route.rest.length > 0) notFound();
+  // THE SUB-ROUTES OF AN INSTANCE (cinatra#3693) — its schedule, its
+  // permissions and its review — moved here once, for all five bases. Each is
+  // handed the same scope, vantage and name as the run page, because each runs
+  // the same home check after its own access door: an instance reached under a
+  // scope that is not its home is sent there, sub-path and all.
+  if (route.kind === "instance" && route.rest[0] === "review") {
+    if (route.rest.length !== 2) notFound();
+    // A page of its own on the bare tree, reached the way the chat mount is:
+    // behind `await import(...)`, so no entry's build graph carries it.
+    const { default: AgentRunReviewPage } = await import(
+      "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page"
+    );
+    return AgentRunReviewPage({
+      params: Promise.resolve({
+        vendor: route.vendor,
+        packageName: route.packageName,
+        instanceId: route.instanceId,
+        reviewTaskId: route.rest[1],
+      }),
+      searchParams,
+      scopeBase,
+      launchScope: scope,
+      scopeTitle,
+    });
+  }
+  // THE SKILLS PANE (cinatra#3693). A page of its own on the bare tree rather
+  // than a registry screen, so it is mounted the way the chat mount and the
+  // review route are: behind `await import(...)`, which is what keeps it out of
+  // the eager build graph every one of the ten scoped entries pays for.
+  if (route.kind === "instance" && route.rest.length === 1 && route.rest[0] === "skills") {
+    const { default: AgentPackageInstanceSkillsPage } = await import(
+      "@/app/agents/[vendor]/[packageName]/[instanceId]/skills/page"
+    );
+    return AgentPackageInstanceSkillsPage({
+      params: Promise.resolve({
+        vendor: route.vendor,
+        packageName: route.packageName,
+        instanceId: route.instanceId,
+      }),
+      scopeBase,
+      launchScope: scope,
+      scopeTitle,
+    });
+  }
+  const screenKey =
+    route.kind === "instance" && route.rest.length > 0
+      ? instanceSubScreenKey(route.rest)
+      : "instanceSetup";
+  if (!screenKey) notFound();
 
   const instanceId = route.kind === "launch" ? AGENT_LAUNCH_SEGMENT : route.instanceId;
   const { resolveAgentScreensWithA2AFallback } = await import("@/app/plugins-registry");
   const screens = await resolveAgentScreensWithA2AFallback(route.agentId);
   if (!screens) notFound();
-  if (!("instanceSetup" in screens) || !screens.instanceSetup) notFound();
-  return (screens.instanceSetup as AgentInstanceScreen)({
+  const screen = (screens as Record<string, unknown>)[screenKey];
+  if (!screen) notFound();
+  return (screen as AgentInstanceScreen)({
     agentId: route.agentId,
     instanceId,
     scopeBase,
@@ -162,10 +279,13 @@ export async function ScopedAssistantsRoute({
   if (route.kind === "not-found") notFound();
 
   if (route.kind === "settings") {
+    // Skills only: the assistant page normalizes every `?tab=` to Skills.
     return renderScopeSurfaceSettingsShell({
       scope,
       scopeTitle: await readScopeName(scope),
       subject: { kind: "assistant", packageName: route.assistantPackageName },
+      pair: { vendor: route.vendor, name: route.slug },
+      searchParams,
     });
   }
 
