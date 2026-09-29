@@ -27,6 +27,8 @@
 //     shows the page again (see hideOthers);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - a press on a row drawn without a role plays the page's handlers for it: it
+//     counts the press, selects the row, or leaves the page;
 //   - text filled into a search field, and a press on an entry of its list, run
 //     the page's own handlers for them: the same two functions the page's inline
 //     script runs in a browser (see typeInSearchField in fixture-app.mjs);
@@ -592,6 +594,18 @@ export class PageDouble {
   }
 
   #press(element, modifiers) {
+    // The page's handlers of a row drawn without a role (see PRESS_ROWS_PAGE in
+    // fixture-app.mjs): it counts its presses, selects itself, or leaves the page.
+    if (element.hasAttribute("data-fixture-counts")) {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") ?? 0) + 1));
+    }
+    if (element.hasAttribute("data-fixture-selects")) {
+      for (const row of element.ownerDocument.querySelectorAll("[data-fixture-selects]")) row.setAttribute("data-selected", String(row === element));
+    }
+    if (element.hasAttribute("data-fixture-goes")) {
+      this.#navigate("GET", new URL(element.getAttribute("data-fixture-goes"), this.#href).href, null).catch(() => {});
+      return;
+    }
     // The page's handler takes a press on a window's send control.
     const send = element.closest("[data-fixture-window-send]");
     if (send) {

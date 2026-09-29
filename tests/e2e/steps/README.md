@@ -29,6 +29,8 @@ defect of a step, with a test, fixed once for every run.
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
 | `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
+| `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
+| `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
 <!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
@@ -732,6 +734,81 @@ anything that is no page path. Its line says that an address was typed.
 
 Refusal kinds: `input`, `other-origin`, `unreadable` and `has-link` (no address
 was typed), and `no-load`.
+
+<!-- pressByTestId and readTitle: an element without a role pressed by its test id and its text, and the page's title. -->
+
+## `pressByTestId(page, { testId, text, record, within?, bounds? })`
+
+Presses the one shown element that carries the test id `testId` (in
+`data-testid`, `TEST_ID_ATTRIBUTE`, the attribute the product's browser tests
+read) and whose own text is `text`, for an element the product draws to be
+pressed without a role, such as a row of the type picker in the upload dialog: a
+list item with a click handler and a test id. `press` finds a control by its
+role and its name, so it has nothing to name there.
+
+- **Its own text.** The text the element draws: its text nodes, without a hidden
+  part, a script or a style, each run of white space made one space and trimmed,
+  and compared whole with `text`, folded the same way. A text that holds `text`
+  as a part is no match. Only a shown element counts: drawn, and inside nothing
+  hidden.
+- **Never a guess.** It presses only when exactly one element matches. No match
+  is refused (`no-control`), naming how many shown elements carry the test id
+  and their texts, at most `CONTROL_NAMES_LISTED` of them, each cut as a name
+  is; several are refused (`ambiguous`), naming the part of the page each sits
+  in. With `within`, it looks only inside the one shown part of the page of that
+  name, found as `press` finds it.
+- **The accessible road first.** An element that carries a role `press` presses
+  (its own, or one its tag gives it) and an accessible name is `press`'s: the
+  step refuses it (`has-role`), naming the role and the name, and presses
+  nothing.
+- **The fault said.** Before the press it writes one line: the page's path, the
+  test id, the text, and that the element carries no role and was found by its
+  test id, such as `pressByTestId: on /artifacts, the element of the test id
+  "artifacts-picker-type" with the text "Note pack:note Pack" carries no role;
+  it was found by its test id`. A person who uses the keyboard or a screen
+  reader finds such an element by no name, and every record of a run that needs
+  the step says so.
+
+It reads the page's next settled state with the reading `press` uses
+(press-settle.mjs), within the same bounds (`PRESS_BY_TEST_ID_BOUNDS`, the
+bounds of `press`), and answers the fields `press` answers, with the test id:
+`{ name, role, testId, from, path, navigated, elapsedMs }`, where `name` is the
+text and `role` is empty for an element without one.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press (`actionMs`) |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation (`startMs`) |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation (`settleMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-scope`,
+`no-control`, `ambiguous` and `has-role` (nothing was pressed),
+`driver-failure` and `unsettled`.
+
+## `readTitle(page, { record, settleMs?, pollMs?, bound? })`
+
+Reads the document's title through the browser's own reading of it
+(`document.title`), never by a selector: a count with a selector on the head's
+title element reads 0, since the engine that reads text reads only what the page
+draws. As `readCount` does for a count, it answers only once two readings that
+lie `settleMs` apart are equal and every reading between them agreed, so a title
+the page sets a moment after it loads is never read as the one before; a
+reading that could not be taken agrees with nothing. It answers
+`{ title, path }` and writes one line that names the page by its path and
+carries the title, cut as a name is, such as
+`readTitle: the title of the page on /agents reads "Agents"`. An empty title is
+a title: it is answered as the empty string, and the line says the page has an
+empty title. A title that never holds still within `bound` is refused
+(`unsteady`), naming the last two titles it read. An unknown option, or a bound
+that is not a positive number of milliseconds, is refused before anything is
+read (`input`).
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `TITLE_SETTLE_MS` | 1_000 | how long the title must hold still (`settleMs`) |
+| `TITLE_POLL_MS` | 100 | how often it is read (`pollMs`) |
+| `TITLE_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
 
 ## Shared bounds
 
