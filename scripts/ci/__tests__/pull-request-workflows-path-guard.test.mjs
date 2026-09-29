@@ -76,7 +76,6 @@ const TREE_WIDE_JOBS = {
     "design-pin-drift": "reads the pull request's own touched-path set against the design pin maps — every path is its input",
     "design-pin-freshness": "sibling of design-pin-drift on the same touched-path set",
     "design-anchor-resolution": "sibling of design-pin-drift on the same touched-path set",
-    "design-record-grammar": "sibling of design-pin-drift on the same touched-path set",
   },
 };
 
@@ -96,6 +95,8 @@ const UNCONDITIONAL = {
     "a live-config drift probe: it reads the repository's configured secrets against the pinned manifest, never a file in the diff, so no path list could predict when it must run",
   "truthful-attribution-gate.yml": "reads the candidate's commit records, not the tree",
   "merge-readiness.yml": "reads the candidate's own check runs, not the tree",
+  "design-record-grammar.yml":
+    "reads the pull request body against the branch's pin, and must run again when the body is edited, which changes no file",
 };
 
 /** The gates the `main` ruleset requires: unconditional, whole-tree readers. */
