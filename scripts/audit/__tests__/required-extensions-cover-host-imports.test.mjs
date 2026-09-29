@@ -1,7 +1,8 @@
 import path from "node:path";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
-import { afterAll, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import {
   classifyGeneratedReferences,
@@ -9,7 +10,17 @@ import {
   coverageDefects,
   readDeclaredRequiredNames,
   scanHostImportedExtensions,
+  FLOOR_BASE_VAR,
+  FLOOR_FILE,
+  checkFloorAgainstBase,
 } from "../required-extensions-cover-host-imports.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 import { stripComments } from "../lib/strip-comments.mjs";
 
 const tmpRoots = [];
@@ -525,5 +536,57 @@ describe("repo-live coverage (the gate's own contract against THIS tree)", () =>
     for (const sys of live.systemExtensions) {
       expect(live.hostImported.has(sys) || live.rootDepExtensions.has(sys)).toBe(true);
     }
+  });
+});
+
+// cinatra#3832: the set of system extensions (cinatra.systemExtensions in the
+// root package.json) is compared with the copy on the base branch, so a pull
+// request cannot add a package to the set in its own change.
+describe("required-extensions-cover-host-imports — system set compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const pkg = (systemExtensions) => ({ name: "fixture", cinatra: { systemExtensions } });
+  function repo(baseSet, headSet) {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: pkg(baseSet) }, head: { [FLOOR_FILE]: pkg(headSet) } });
+    fixtures.push(f);
+    return f.root;
+  }
+
+  it("a raised floor (a new package in the system set) FAILS against the base", () => {
+    const root = repo(["@x/a"], ["@x/a", "@x/b"]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["@x/b"]);
+  });
+
+  it("a lowered floor (a package removed from the system set) PASSES", () => {
+    const root = repo(["@x/a", "@x/b"], ["@x/a"]);
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo([], []);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/did not resolve/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo([], ["@x/a"]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "required-extensions-cover-host-imports.mjs")], {
+      cwd: path.join(import.meta.dirname, "..", "..", ".."),
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
   });
 });
