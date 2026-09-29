@@ -49,7 +49,24 @@ export class ExtensionToolRefusal extends Error {
   }
 }
 
-/** The caller's own table operations, already scoped to its declared tables. */
+/**
+ * The caller's own table operations, already scoped to its declared tables.
+ *
+ * THE RUN IS BOUND, NOT PASSED (cinatra#3249). Where the caller's declared
+ * table names a run column, the host writes the bound run on an insert and a
+ * module may not name that column; where a module wants THIS RUN'S rows it says
+ * so with the one marker the data contract defines — `{ boundRun: true }` as
+ * the `where` value on that column — and the host substitutes the run it bound.
+ * So the run still never reaches a module's hands.
+ *
+ * AND SO IS THE SCOPE THAT RUN BELONGS TO (decided per scope): where the
+ * declared table names the scope pair — the kind of scope and the id inside it,
+ * in the host's own per-scope vocabulary — the host writes both on an insert,
+ * a module may not name either, and a module asking for THIS SCOPE'S rows says
+ * so with the second marker, `{ boundScope: true }`, on those columns. A module
+ * therefore holds neither a run identity nor a scope identity: it says "mine"
+ * and the host says which.
+ */
 export type ExtensionToolDataPort = {
   select(request: Record<string, unknown>): Promise<unknown>;
   insertIfAbsent(request: Record<string, unknown>): Promise<unknown>;
