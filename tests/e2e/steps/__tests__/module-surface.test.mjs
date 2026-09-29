@@ -95,6 +95,12 @@ BOUND_NAMES.push(
   "WINDOW_SENT_BOUND_MS",
 );
 BOUND_NAMES.sort();
+// pressByTestId and readTitle: their steps and their bounds join the lists in
+// this one place, and the bounds stay in order. pressByTestId takes the bounds
+// of press, listed above already.
+STEP_NAMES.push("pressByTestId", "readTitle");
+BOUND_NAMES.push("TITLE_BOUND_MS", "TITLE_POLL_MS", "TITLE_SETTLE_MS");
+BOUND_NAMES.sort();
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {

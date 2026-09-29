@@ -146,3 +146,7 @@ export {
   sendInComposer,
 } from "./send-in-composer.mjs";
 export { OPEN_ADDRESS_BOUNDS, OPEN_ADDRESS_BOUND_MS, openAddress } from "./open-address.mjs";
+// pressByTestId and readTitle: an element without a role pressed by its test id
+// and its text, and the page's title.
+export { PRESS_BY_TEST_ID_BOUNDS, TEST_ID_ATTRIBUTE, pressByTestId } from "./press-by-test-id.mjs";
+export { TITLE_BOUND_MS, TITLE_POLL_MS, TITLE_SETTLE_MS, readTitle } from "./read-title.mjs";

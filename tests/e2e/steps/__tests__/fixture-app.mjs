@@ -232,6 +232,21 @@ const TIMELINE_RUNNER = `<script>
       fetch(href).then(function () { history.pushState(null, "", href); });
     });
   });
+  // pressByTestId: rows drawn without a role, as the upload dialog's type picker
+  // draws them (see PRESS_ROWS_PAGE); page-double.mjs plays the same.
+  document.querySelectorAll("[data-fixture-counts]").forEach(function (element) {
+    element.addEventListener("click", function () {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") || 0) + 1));
+    });
+  });
+  document.querySelectorAll("[data-fixture-selects]").forEach(function (row) {
+    row.addEventListener("click", function () {
+      document.querySelectorAll("[data-fixture-selects]").forEach(function (other) { other.setAttribute("data-selected", String(other === row)); });
+    });
+  });
+  document.querySelectorAll("[data-fixture-goes]").forEach(function (row) {
+    row.addEventListener("click", function () { location.href = row.getAttribute("data-fixture-goes"); });
+  });
   document.querySelectorAll("[data-fixture-toggles]").forEach(function (box) {
     box.addEventListener("click", function () {
       var on = box.getAttribute("aria-checked") !== "true";
@@ -838,6 +853,45 @@ export const JOINED_PAGE = [
   '<p role="status" id="joined-idea" hidden>Idea: 3 Select blog idea</p>',
 ].join("");
 
+// pressByTestId and readTitle: their pages.
+
+/**
+ * Rows drawn without a role, as the upload dialog's type picker draws them: list
+ * items with a click handler, a test id and a text. Each counts its presses
+ * (`data-fixture-clicks`). In the dialog: a row whose handler selects it, one
+ * whose text is spread over lines, a hidden row, a row with a hidden part, a row
+ * whose handler leaves the page, and a button of the same test id, which has a
+ * role and a name. Below it: two lists that each hold a row of one text, and two
+ * parts of one name.
+ */
+export const PRESS_ROWS_PAGE = [
+  '<div role="dialog" aria-label="Choose a type"><ul>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>Note <span>pack:note</span></span> <span>Pack</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>\n    Plain\n    text  </span>\n  <span>core:text</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts hidden><span>Hidden</span> <span>pack:hidden</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts><span>Half</span><span style="display:none"> kept apart</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-goes="/nav/target"><span>Open</span> <span>the target</span></li>',
+  "</ul>",
+  '<button type="button" data-testid="artifacts-picker-type" data-fixture-counts>Save type</button>',
+  "</div>",
+  '<section aria-label="First list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Second list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+].join("");
+
+/**
+ * The title pages: a title that holds still, one the page sets once a moment
+ * after it loads, one that changes every 50 ms for three seconds, so it never
+ * holds still, and an empty one.
+ */
+export const TITLE_SCENARIOS = Object.freeze({
+  steady: { title: "Steady title", timeline: [] },
+  late: { title: "Loading", timeline: [{ at: 150, target: "title", html: "Loaded title" }] },
+  restless: { title: "Title 0", timeline: Array.from({ length: 60 }, (_, i) => ({ at: 50 * (i + 1), target: "title", html: `Title ${i + 1}` })) },
+  empty: { title: "", timeline: [] },
+});
+
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
@@ -975,6 +1029,13 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
       // Names the steps match without their white space: their page.
       if (url.pathname === "/joined/start") return html(200, page(url.pathname, JOINED_PAGE));
+      // pressByTestId and readTitle: their pages.
+      if (url.pathname === "/press/rows") return html(200, page(url.pathname, PRESS_ROWS_PAGE));
+      const titlePage = /^\/title\/([a-z]+)$/.exec(url.pathname);
+      if (titlePage && Object.hasOwn(TITLE_SCENARIOS, titlePage[1])) {
+        const { title, timeline } = TITLE_SCENARIOS[titlePage[1]];
+        return html(200, page(title, "<p>A page with a title.</p>", timeline));
+      }
       // typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress:
       // their pages live in fixture-app-windows.mjs, so this file changes in this
       // one place.
