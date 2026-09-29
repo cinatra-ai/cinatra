@@ -809,6 +809,35 @@ export const TAPE_PAGES = Object.freeze({
   other: "<p>Another page.</p>",
 });
 
+// Names the steps match without their white space: the page their cases read.
+
+/**
+ * A step rail as the product draws one, and what sits beside it. Each tab draws
+ * a number and a label as two parts with no white space between them, so its
+ * name reads "3Select blog idea"; two more tabs read "4Review draft" and
+ * "4 Reviewdraft", which differ from each other, and from "4 Review draft", in
+ * white space only. A button reads "Save draft" and another "Savedraft"; a
+ * section is named by a heading that reads "2Draft"; and a list named "Blog"
+ * and "ideas" drawn as two parts holds an entry that reads "3Select blog idea",
+ * which the page confirms in a status that spells it "3 Select blog idea".
+ */
+export const JOINED_PAGE = [
+  '<div role="tablist" aria-label="Steps">',
+  '<a href="#step-1" role="tab" data-fixture-opens="joined-step-1"><span>1</span><span>Choose a topic</span></a>',
+  '<a href="#step-3" role="tab" data-fixture-opens="joined-step-3"><span>3</span><span>Select blog idea</span></a>',
+  '<a href="#step-4" role="tab"><span>4</span><span>Review draft</span></a>',
+  '<a href="#step-4b" role="tab">4 Review<span>draft</span></a>',
+  "</div>",
+  '<p id="joined-step-1" hidden>The topic step.</p><p id="joined-step-3" hidden>The idea step.</p>',
+  '<a href="#save" role="button" data-fixture-opens="joined-saved">Save draft</a>',
+  ' <a href="#save-joined" role="button" data-fixture-opens="joined-saved-joined">Save<span>draft</span></a>',
+  '<p id="joined-saved" hidden>Saved.</p><p id="joined-saved-joined" hidden>Saved the other one.</p>',
+  '<section><h2><span>2</span><span>Draft</span></h2><a href="#add" role="button" data-fixture-opens="joined-added">Add</a><p id="joined-added" hidden>Added.</p></section>',
+  '<span id="joined-ideas"><span>Blog</span><span>ideas</span></span>',
+  '<div role="listbox" aria-labelledby="joined-ideas"><a href="#idea" role="option" data-fixture-opens="joined-idea"><span>3</span><span>Select blog idea</span></a></div>',
+  '<p role="status" id="joined-idea" hidden>Idea: 3 Select blog idea</p>',
+].join("");
+
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
@@ -944,6 +973,8 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       // armPageTape and readPageTape: their pages.
       const tapePage = /^\/tape\/([a-z]+)$/.exec(url.pathname);
       if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
+      // Names the steps match without their white space: their page.
+      if (url.pathname === "/joined/start") return html(200, page(url.pathname, JOINED_PAGE));
       html(404, "<!doctype html><title>Not found</title>");
     });
   };

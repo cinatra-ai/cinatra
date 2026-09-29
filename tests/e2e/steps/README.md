@@ -238,7 +238,11 @@ role and its accessible name. The name is the text the elements of
 legend, or, for a button, a link, a tab, a menu item, an option or a radio, its
 text without hidden parts. Only a shown control counts: drawn, and not hidden
 from assistive technology (`aria-hidden`). Names are compared whole, after each
-run of white space becomes one space.
+run of white space becomes one space. When no control's name reads the same, a
+name that reads the same once all white space is removed names the control, as
+parts drawn with no space between them read ("3Select blog idea" for "3 Select
+blog idea"): a name that reads the same exactly wins, and several that read the
+same only so are refused as `ambiguous`, each named as the page reads it.
 
 When a name matches several controls, the step acts on none of them: it refuses
 (`ambiguous`) and names where each one sits. The one control a step acts on
