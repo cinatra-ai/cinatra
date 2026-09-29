@@ -293,7 +293,10 @@ Selects `entry`, by its visible text, in the one shown picker named `picker`:
   the radio with that label is checked;
 - a listbox: the option is pressed;
 - a combobox that is not a text field: it is pressed first, to open the list it
-  controls (`aria-controls`), and the option is pressed in that list.
+  controls (`aria-controls`), and the option is pressed in that list;
+- a search field, a combobox that is a text input (as the entity search draws
+  one): the entry's text is typed into it, and the option is pressed in the
+  list that opens.
 
 When no picker carries the name, a combobox with no accessible name, as the
 shared select draws one, is found by the text a person reads for it, tried in
@@ -301,11 +304,26 @@ this order: the placeholder it shows (marked `data-placeholder`), the value it
 shows, or the text of a label element before it in its form group (the nearest
 element that holds one, a label that names no other control, with no other
 field between the two); when more than one combobox matches on the first of
-these that finds one, it refuses (`ambiguous`).
+these that finds one, it refuses (`ambiguous`). A search field with no
+accessible name is found the same way, by its placeholder while it is empty or
+by the text it holds.
 
 Once it has opened a combobox, it reads the combobox again by its mark, never by
 its name: while the list is open, the shared select hides everything outside the
 list from assistive technology, the combobox included.
+
+A search field lists its entries once text is typed into it. The step types the
+entry's text, reads the field again by its mark (the text hides its placeholder
+and changes its value), and waits within the reflect bound for an option of the
+entry's name. A search list draws each entry as a row, the entry's name first
+and then what tells it apart (a detail line, a status), so an option is named
+by its first text. The step presses the one option of the name, refuses several
+(`ambiguous`), and refuses none once the bound has run out (`no-entry`), naming
+the entries the list showed. It reads the choice back from the page, never from
+the list, whose selected row is only the one a key press would choose: the
+field shows the entry once its list has closed, or the page draws the entry (a
+row, a chip) more often than before the press. The field or the page showing
+another entry of the list instead is refused (`other-entry`).
 
 Then it waits until the page reflects the selection: the entry reads as selected
 (the selected option of a select, a checked radio, `aria-selected` or
@@ -316,11 +334,12 @@ alert, a toast) names the entry that did not name it before. The step answers
 
 | Bound | Default | Covers |
 | --- | --- | --- |
-| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, and from opening a combobox to its list |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, and from typing into a search field to its entry in the list |
 
 Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
 shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
-(nothing was selected), `driver-failure` and `not-reflected`.
+(nothing was selected), `driver-failure`, `other-entry` (a search field's page
+took another entry than the one pressed) and `not-reflected`.
 
 ## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
 

@@ -27,6 +27,9 @@
 //     shows the page again (see hideOthers);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - text filled into a search field, and a press on an entry of its list, run
+//     the page's own handlers for them: the same two functions the page's inline
+//     script runs in a browser (see typeInSearchField in fixture-app.mjs);
 //   - a page has one frame, its main frame, and every request is made in it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
@@ -47,7 +50,7 @@ import { connect, constants } from "node:http2";
 
 import { JSDOM } from "jsdom";
 
-import { EMAIL_ROUTE, USERNAME_ROUTE } from "./fixture-app.mjs";
+import { EMAIL_ROUTE, USERNAME_ROUTE, pressSearchEntry, typeInSearchField } from "./fixture-app.mjs";
 
 export class TimeoutError extends Error {
   constructor(message) {
@@ -385,6 +388,7 @@ export class PageDouble {
       {
         document: () => this.#dom.window.document,
         press: (element, modifiers) => this.#press(element, modifiers),
+        typed: (element) => this.#typed(element),
       },
       selector,
       {},
@@ -520,7 +524,24 @@ export class PageDouble {
     form.setAttribute("novalidate", "");
   }
 
+  /** Text filled into a field: the page's handler for a search field opens its list and answers the search. */
+  #typed(element) {
+    if (!element.hasAttribute("data-fixture-searches")) return;
+    const document = element.ownerDocument;
+    typeInSearchField(element, (run, ms) =>
+      this.#later(() => {
+        if (this.#dom.window.document === document) run();
+      }, ms),
+    );
+  }
+
   #press(element, modifiers) {
+    // The page's handler takes an entry of a search field's list.
+    const entry = element.closest("[data-fixture-picks]");
+    if (entry) {
+      pressSearchEntry(entry);
+      return;
+    }
     // The page's handler flips the checked state of a control it draws itself.
     if (element.hasAttribute("data-fixture-toggles")) {
       const on = element.getAttribute("aria-checked") !== "true";
@@ -1155,6 +1176,7 @@ class LocatorDouble {
     const window = element.ownerDocument.defaultView;
     element.dispatchEvent(new window.Event("input", { bubbles: true }));
     element.dispatchEvent(new window.Event("change", { bubbles: true }));
+    this.#page.typed(element);
   }
 
   async click({ timeout = 30_000, modifiers = [] } = {}) {
