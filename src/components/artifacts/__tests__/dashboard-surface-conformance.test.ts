@@ -124,17 +124,15 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     expect(LIB).not.toMatch(/buildFacetOptions\(all\)/);
   });
 
-  it("the detail route opens a dashboard artifact as a POINTER, not the renderer", () => {
-    expect(DETAIL).toMatch(/isDashboardArtifactType\(artifact\.objectType\)/);
-    expect(DETAIL).toMatch(/resolveDashboardArtifactPointer/);
-    expect(DETAIL).toMatch(/<DashboardPointerDetail/);
-    // The dashboard branch returns BEFORE the renderer-dispatch body runs — so
-    // a dashboard artifact never reaches `pickArtifactRenderer(...)` (the CALL,
-    // not the import).
-    const branchIdx = DETAIL.indexOf("isDashboardArtifactType(artifact.objectType)");
-    const dispatchCallIdx = DETAIL.indexOf("pickArtifactRenderer(");
-    expect(branchIdx).toBeGreaterThan(-1);
-    expect(dispatchCallIdx).toBeGreaterThan(branchIdx);
+  it("the detail route dispatches every row, whatever its type, through the one display dispatch", () => {
+    // cinatra#3092 acceptance 2: "the page's pre-dispatch interception of the
+    // dashboard row is gone". The page carries no branch on the type, no
+    // pointer resolver and no pointer element, so a dashboard row reaches
+    // `pickArtifactRenderer(...)` (the CALL, not the import) like every other.
+    expect(DETAIL).not.toMatch(/isDashboardArtifactType/);
+    expect(DETAIL).not.toMatch(/resolveDashboardArtifactPointer/);
+    expect(DETAIL).not.toMatch(/<DashboardPointerDetail/);
+    expect(DETAIL.indexOf("pickArtifactRenderer(")).toBeGreaterThan(-1);
   });
 });
 

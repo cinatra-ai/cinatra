@@ -47,7 +47,10 @@ import {
 } from "@/lib/authz/build-actor-context";
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
-import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  ARTIFACT_RENDERER_PROPS_API_VERSION,
+  type ArtifactRendererReviewReading,
+} from "@/lib/artifacts/artifact-renderer-props";
 import {
   type PrepareReviewInput,
   type PrepareReviewResult,
@@ -127,6 +130,10 @@ export async function prepareReviewTargets(args: {
   /** The roads this surface named (wave 3). Absent ⇒ the session byte routes,
    *  the channel's named absence, and the first-party capture pair. */
   roads?: ReviewSurfaceRoads | null;
+  /** The reading of the review the surface draws (props v3, cinatra#3092).
+   *  Set by `loadReviewGateSurface` alone; every other caller passes nothing
+   *  and its snapshots carry no reading. */
+  reading?: ArtifactRendererReviewReading["reading"];
 }): Promise<PrepareReviewResult> {
   const { actorCtx } = args;
   const kernelActor = buildActorContextFromPrimitive(
@@ -143,6 +150,10 @@ export async function prepareReviewTargets(args: {
     // content; every other caller passes nothing and keeps exactly what it had.
     byteMinter: args.roads?.byteMinter,
     buildContent: args.roads?.buildContent,
+    // cinatra#3092 — the surface's data road and the review's reading, handed
+    // to every target alike.
+    data: args.roads?.data,
+    reading: args.reading,
   });
 }
 
@@ -431,10 +442,15 @@ export async function loadReviewGateSurface(args: {
     // The gate answered `resolved` a line ago; a set that is gone underneath is
     // a row that can no longer be read, which is blocked, not decided.
     if (!pinned) return { kind: "blocked", reason: "no-longer-pending" };
+    // THE CONTINUED READING (cinatra#3092): a gate resolved with the approve
+    // disposition was continued, and its displays may offer the live
+    // navigation. Any other disposition carries no reading at all.
+    const settledGate = await readReviewGate(runId, reviewTaskId);
     const history = await prepareReviewTargets({
       input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
       actorCtx,
       roads,
+      reading: settledGate?.disposition === "approve" ? "continued" : undefined,
     });
     if (!history.ok) {
       return history.error.kind === "run-access-denied"
@@ -464,6 +480,9 @@ export async function loadReviewGateSurface(args: {
     input: { runId, reviewTaskId, targets: gate.targets },
     actorCtx,
     roads,
+    // THE PENDING READING (cinatra#3092): the decision is still open, so no
+    // display on this gate offers the live navigation.
+    reading: "pending",
   });
   if (!prepared.ok) {
     switch (prepared.error.kind) {
