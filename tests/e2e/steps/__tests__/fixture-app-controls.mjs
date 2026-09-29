@@ -250,17 +250,43 @@ const BRIEF_FORM = [
   "</form>",
 ].join("");
 
-/** The form pages, by the second segment of their path. */
+// The control that sends the form, drawn as the product draws a button with a
+// hint: its two inline parts meet with no white space between them, so its text
+// reads "Save(draft)" while the form reading names it "Save (draft)".
+const DRAFT_FORM = [
+  '<form id="draft-form" novalidate aria-label="Draft">',
+  '<div class="field"><label for="draft-title">Title</label><input id="draft-title" name="title"></div>',
+  '<button type="submit">Save<span class="ml-1">(draft)</span></button>',
+  '<p id="draft-saved" role="status" hidden>Saved</p>',
+  "</form>",
+].join("");
+
+// Two controls whose names differ in white space only: "Save (draft)" and "Save(draft)".
+const TWIN_FORM = [
+  '<form id="twin-form" novalidate aria-label="Twin">',
+  '<div class="field"><label for="twin-title">Title</label><input id="twin-title" name="title"></div>',
+  '<button type="submit">Save (draft)</button> <button type="button">Save(draft)</button>',
+  '<p id="twin-saved" role="status" hidden>Saved</p>',
+  "</form>",
+].join("");
+
+/**
+ * The form pages, by the second segment of their path. `form` and `saved` name
+ * the form the page's handler sends and what it shows once sent, the profile
+ * form's unless a page names its own.
+ */
 export const FORM_SCENARIOS = Object.freeze({
   profile: { body: PROFILE_FORM, timeline: [] },
   // The app draws the form a moment after the page.
   late: { body: '<div id="form-slot"></div>', timeline: [{ at: 300, target: "#form-slot", html: PROFILE_FORM }] },
   idea: { body: IDEA_FORM, timeline: [] },
   brief: { body: BRIEF_FORM, timeline: [] },
+  draft: { body: DRAFT_FORM, timeline: [], form: "#draft-form", saved: "#draft-saved" },
+  twin: { body: TWIN_FORM, timeline: [], form: "#twin-form", saved: "#twin-saved" },
 });
 
 function formPage(scenario) {
-  const behaviour = [{ submit: "#profile-form", sends: FORM_SAVE_ROUTE, done: "#form-saved" }];
+  const behaviour = [{ submit: scenario.form ?? "#profile-form", sends: FORM_SAVE_ROUTE, done: scenario.saved ?? "#form-saved" }];
   return controlPage("Profile", scenario.body, { behaviour, timeline: scenario.timeline });
 }
 

@@ -596,7 +596,10 @@ export class PageDouble {
       const window = element.ownerDocument.defaultView;
       const event = new window.Event("submit", { bubbles: true, cancelable: true });
       form.dispatchEvent(event);
-      if (!event.defaultPrevented) this.#nativeSubmit(form);
+      // A form the page declares a handler for is taken by that handler, as the page's script takes it in a browser.
+      const handlers = this.#declared(element.ownerDocument).filter((op) => op.submit && form.matches(op.submit));
+      for (const op of handlers) this.#playSubmit(form, op);
+      if (handlers.length === 0 && !event.defaultPrevented) this.#nativeSubmit(form);
     }
   }
 
@@ -797,7 +800,8 @@ export class PageDouble {
   //     declared `press` behaviour), then the browser's default: a file input
   //     opens a file chooser, a submit button sends its form (to the form's
   //     declared `submit` behaviour, or natively by the rules above), and a
-  //     link follows the rules above;
+  //     link follows the rules above; a submit button pressed by a selector
+  //     (`locator`) sends its form the same way;
   //   - a file chooser reaches every `waitForEvent("filechooser")` pending when
   //     it opens, and one nobody waits for is dropped, as a headless browser
   //     drops it; the files handed to it land on its input, which reports
@@ -964,13 +968,7 @@ export class PageDouble {
     }
     const form = element.form;
     if (form && element.localName === "button" && (type || "submit") === "submit") {
-      const handlers = declared.filter((op) => op.submit && form.matches(op.submit));
-      if (handlers.length === 0) {
-        this.#press(element, []);
-        return;
-      }
-      form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
-      for (const op of handlers) this.#playSubmit(form, op);
+      this.#press(element, []);
       return;
     }
     const link = element.closest("a[href]");
