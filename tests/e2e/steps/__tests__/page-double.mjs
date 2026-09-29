@@ -17,6 +17,11 @@
 //     from that part, and its own request stays open with it, without a
 //     response end in its timing;
 //   - a press that holds the new-tab modifier opens the link in a further page;
+//   - a press on a link the page's own handler takes over plays that handler: it
+//     cancels the press, or opens a dialog or a panel in place, or requests the
+//     page from the app and, once the app has answered, moves the address
+//     without a new document, as a client-side router does;
+//   - a page has one frame, its main frame, and every request is made in it;
 //   - an in-page function is rebuilt from its SOURCE inside the document's own
 //     realm, as a browser receives it, so nothing of the step's module reaches it,
 //     and its argument and its answer cross as JSON;
@@ -253,6 +258,11 @@ export class PageDouble {
     return this.#href;
   }
 
+  /** The frame every request of this page is made in: the page has no other. */
+  mainFrame() {
+    return this.#frame;
+  }
+
   context() {
     return this.#context;
   }
@@ -430,7 +440,15 @@ export class PageDouble {
           scenario.handler === "posts"
             ? [EMAIL_ROUTE, { email: id, password: secret }]
             : [USERNAME_ROUTE, { username: id, password: secret }];
-        this.#send("POST", new URL(route, this.#origin).href, JSON.stringify(payload), false).catch(() => {});
+        this.#send("POST", new URL(route, this.#origin).href, JSON.stringify(payload), false)
+          .then((sent) => {
+            // The landing of signInThroughPage: once the app has answered 200, the
+            // page goes where its scenario says, as the product's form does.
+            if (sent.status === 200 && typeof scenario.landing === "string" && this.#dom === dom) {
+              this.#navigate("GET", new URL(scenario.landing, this.#origin).href, null).catch(() => {});
+            }
+          })
+          .catch(() => {});
       });
     } else if (scenario.handler === "silent") {
       form.addEventListener("submit", (event) => event.preventDefault());
@@ -450,9 +468,30 @@ export class PageDouble {
     if (element.localName === "a" && element.hasAttribute("href")) {
       // The page's handler cancels every press of this link.
       if (element.hasAttribute("data-fixture-inert")) return;
+      // The page's handler cancels the press and opens the dialog or the panel it names, in place.
+      const opens = element.getAttribute("data-fixture-opens");
+      if (opens !== null) {
+        element.ownerDocument.getElementById(opens)?.removeAttribute("hidden");
+        if (element.hasAttribute("aria-expanded")) element.setAttribute("aria-expanded", "true");
+        return;
+      }
       // A link that opens another tab leaves this page where it is.
       if (element.getAttribute("target") === "_blank") return;
       const href = new URL(element.getAttribute("href"), this.#href).href;
+      if (element.hasAttribute("data-fixture-in-place")) {
+        // The page's handler cancels the press, requests the page from the app,
+        // and moves the address once the app has answered: the document stays.
+        const dom = this.#dom;
+        this.#send("GET", href, null, false).then(
+          () => {
+            if (this.#closed || this.#dom !== dom) return;
+            this.#href = href;
+            dom.reconfigure({ url: href });
+          },
+          () => {},
+        );
+        return;
+      }
       if (modifiers.some((modifier) => NEW_TAB_MODIFIERS.includes(modifier))) {
         // The new-tab modifier: the link opens in a further page, and this one stays.
         this.#context[INNER].open().goto(href).catch(() => {});
@@ -652,6 +691,380 @@ export class PageDouble {
     const elapsedMs = performance.now() - startedAt;
     return { aborted: false, status: reply.status, url: reply.url, text, protocol: reply.protocol, elapsedMs };
   }
+
+  // ---------------------------------------------------------------------------
+  // uploadFile, fillForm, switchTheme and decideGate: what these four steps do
+  // with a page, in this one place. They name controls and fields as a person
+  // reads them (`getByRole`, `getByLabel`), answer a file chooser
+  // (`waitForEvent("filechooser")`) and read the documents of the page's frames
+  // (`frames()`). The browser's rules kept for them:
+  //   - a named locator matches what the accessibility tree shows: nothing
+  //     `hidden`, under an inline `display: none` or under `aria-hidden="true"`,
+  //     named by `aria-labelledby`, then `aria-label`, then its labels, its value
+  //     or its text; `getByLabel` matches a field by any of its labels;
+  //   - a press dispatches a click, then the page's own handler for it runs (its
+  //     declared `press` behaviour), then the browser's default: a file input
+  //     opens a file chooser, a submit button sends its form (to the form's
+  //     declared `submit` behaviour, or natively by the rules above), and a
+  //     link follows the rules above;
+  //   - a file chooser reaches every `waitForEvent("filechooser")` pending when
+  //     it opens, and one nobody waits for is dropped, as a headless browser
+  //     drops it; the files handed to it land on its input, which reports
+  //     `input` and `change`;
+  //   - a fill sets the value and reports `input` and `change`;
+  //   - a frame's document is loaded from the app the first time it is read and
+  //     again once its address has changed, and that load is not announced: no
+  //     step listens for a frame's requests.
+  // A page's declared behaviour (`fixture-behaviour`, see fixture-app-controls.mjs)
+  // is played here on its document, as its inline script plays it in a browser.
+  // ---------------------------------------------------------------------------
+
+  #chooserWaiters = [];
+  #frameDocuments = new WeakMap();
+
+  getByRole(role, { name, exact = false } = {}) {
+    return this.#named(`getByRole('${role}')`, (document) =>
+      Array.from(document.querySelectorAll("*")).filter(
+        (element) =>
+          PageDouble.#hasRole(element, role) &&
+          PageDouble.#exposed(element) &&
+          PageDouble.#matches([PageDouble.#accessibleName(element)], name, exact),
+      ),
+    );
+  }
+
+  getByLabel(text, { exact = false } = {}) {
+    return this.#named(`getByLabel('${text}')`, (document) =>
+      Array.from(document.querySelectorAll("input, textarea, select")).filter((element) => {
+        if ((element.getAttribute("type") ?? "").toLowerCase() === "hidden") return false;
+        const labelledBy = PageDouble.#byIds(element, "aria-labelledby").map((node) => PageDouble.#textOf(node));
+        const labels = Array.from(element.labels ?? [], (label) => PageDouble.#textOf(label));
+        const names = [PageDouble.#normal(labelledBy.join(" ")), PageDouble.#normal(element.getAttribute("aria-label")), ...labels];
+        return PageDouble.#matches(names.filter(Boolean), text, exact);
+      }),
+    );
+  }
+
+  waitForEvent(event, { timeout = 30_000 } = {}) {
+    if (event !== "filechooser") return Promise.reject(new Error(`the page double waits for a file chooser only, not for ${event}`));
+    return new Promise((done, fail) => {
+      const waiter = { done };
+      waiter.timer = setTimeout(() => {
+        this.#chooserWaiters = this.#chooserWaiters.filter((pending) => pending !== waiter);
+        fail(new TimeoutError(`page.waitForEvent: Timeout ${timeout}ms exceeded while waiting for event "filechooser"`));
+      }, timeout);
+      this.#chooserWaiters.push(waiter);
+    });
+  }
+
+  /** The main frame first, then a frame for every iframe of the document. */
+  frames() {
+    const main = Object.assign(this.#frame, { url: () => this.#href, evaluate: (fn, arg) => this.evaluate(fn, arg) });
+    return [main, ...Array.from(this.#dom.window.document.querySelectorAll("iframe"), (frame) => this.#childFrame(frame))];
+  }
+
+  static #normal(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  /** The text a person reads in `node`: its text, without what is hidden from assistive technology. */
+  static #textOf(node) {
+    let found = "";
+    const walker = node.ownerDocument.createTreeWalker(node, 4 /* text nodes */);
+    for (let at = walker.nextNode(); at; at = walker.nextNode()) {
+      if (at.parentElement?.closest('[aria-hidden="true"]')) continue;
+      found += ` ${at.nodeValue}`;
+    }
+    return PageDouble.#normal(found);
+  }
+
+  static #byIds(element, attribute) {
+    const ids = PageDouble.#normal(element.getAttribute(attribute)).split(" ").filter(Boolean);
+    return ids.map((id) => element.ownerDocument.getElementById(id)).filter(Boolean);
+  }
+
+  static #accessibleName(element) {
+    const labelledBy = PageDouble.#byIds(element, "aria-labelledby");
+    if (labelledBy.length > 0) return PageDouble.#normal(labelledBy.map((node) => PageDouble.#textOf(node)).join(" "));
+    const label = PageDouble.#normal(element.getAttribute("aria-label"));
+    if (label) return label;
+    const type = (element.getAttribute("type") ?? "").toLowerCase();
+    if (element.localName === "input" && ["submit", "reset", "button"].includes(type)) {
+      return PageDouble.#normal(element.value) || { submit: "Submit", reset: "Reset" }[type] || "";
+    }
+    if (["input", "textarea", "select"].includes(element.localName)) {
+      const labels = PageDouble.#normal(Array.from(element.labels ?? [], (node) => PageDouble.#textOf(node)).join(" "));
+      if (labels) return labels;
+      return type === "file" ? "Choose File" : PageDouble.#normal(element.getAttribute("title"));
+    }
+    return PageDouble.#textOf(element) || PageDouble.#normal(element.getAttribute("title"));
+  }
+
+  static #hasRole(element, role) {
+    const own = element.getAttribute("role");
+    if (own) return own === role;
+    const type = (element.getAttribute("type") ?? "").toLowerCase();
+    return role === "button" && (element.localName === "button" || (element.localName === "input" && ["button", "submit", "reset", "image", "file"].includes(type)));
+  }
+
+  static #exposed(element) {
+    return isVisible(element) && !element.closest('[aria-hidden="true"]');
+  }
+
+  static #matches(names, wanted, exact) {
+    if (wanted === undefined) return true;
+    const want = PageDouble.#normal(wanted);
+    return names.some((name) => (exact ? PageDouble.#normal(name) === want : PageDouble.#normal(name).toLowerCase().includes(want.toLowerCase())));
+  }
+
+  /** A locator over what `resolve` finds in the current document: count, nth, first, evaluate, click and fill. */
+  #named(description, resolve) {
+    const found = () => resolve(this.#dom.window.document);
+    const one = async (timeout, timeoutMessage, actionable) => {
+      const until = Date.now() + timeout;
+      for (;;) {
+        const all = found();
+        if (all.length > 1) throw new Error(`strict mode violation: ${description} resolved to ${all.length} elements`);
+        if (all.length === 1 && (!actionable || (isVisible(all[0]) && !all[0].disabled))) return all[0];
+        if (Date.now() >= until) throw new TimeoutError(timeoutMessage);
+        await pause(20);
+      }
+    };
+    const locator = {
+      count: async () => found().length,
+      nth: (index) => this.#named(`${description} >> nth=${index}`, (document) => resolve(document).slice(index, index + 1)),
+      first: () => locator.nth(0),
+      evaluate: async (fn, arg, { timeout = 30_000 } = {}) => {
+        const element = await one(timeout, `locator.evaluate: Timeout ${timeout}ms exceeded.`, false);
+        if (this.#navigating > 0 || this.#closed) throw new Error(DESTROYED);
+        const inPage = element.ownerDocument.defaultView.eval(`(${fn.toString()})`);
+        return viaJson(await inPage(element, viaJson(arg)));
+      },
+      click: async ({ timeout = 30_000 } = {}) => {
+        this.#pressControl(await one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`, true));
+      },
+      fill: async (value, { timeout = 30_000 } = {}) => {
+        const element = await one(timeout, `locator.fill: Timeout ${timeout}ms exceeded.\nCall log:\n  - fill("${value}")`, true);
+        const type = (element.getAttribute("type") ?? "text").toLowerCase();
+        if (element.localName === "select" || !["input", "textarea"].includes(element.localName)) {
+          throw new Error("Error: Element is not an <input>, <textarea> or [contenteditable] element");
+        }
+        if (element.localName === "input" && ["checkbox", "radio", "file", "submit", "button", "reset", "image", "range", "color"].includes(type)) {
+          throw new Error(`Error: Input of type "${type}" cannot be filled`);
+        }
+        element.value = value;
+        const window = element.ownerDocument.defaultView;
+        element.dispatchEvent(new window.Event("input", { bubbles: true }));
+        element.dispatchEvent(new window.Event("change", { bubbles: true }));
+      },
+    };
+    return locator;
+  }
+
+  /** What the page declares its own handlers do. */
+  #declared(document) {
+    const node = document.getElementById("fixture-behaviour");
+    return node ? JSON.parse(node.textContent) : [];
+  }
+
+  /** A press of a named control: the click, the page's own handler, then the browser's default. */
+  #pressControl(element) {
+    const document = element.ownerDocument;
+    const window = document.defaultView;
+    const click = new window.MouseEvent("click", { bubbles: true, cancelable: true });
+    element.dispatchEvent(click);
+    if (click.defaultPrevented || this.#dom.window.document !== document) return;
+    const declared = this.#declared(document);
+    for (const op of declared) {
+      if (op.press && element.closest(op.press)) this.#playPress(document, op);
+    }
+    const type = (element.getAttribute("type") ?? "").toLowerCase();
+    if (element.localName === "input" && type === "file") {
+      this.#openChooser(element);
+      return;
+    }
+    const form = element.form;
+    if (form && element.localName === "button" && (type || "submit") === "submit") {
+      const handlers = declared.filter((op) => op.submit && form.matches(op.submit));
+      if (handlers.length === 0) {
+        this.#press(element, []);
+        return;
+      }
+      form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+      for (const op of handlers) this.#playSubmit(form, op);
+      return;
+    }
+    const link = element.closest("a[href]");
+    if (link) this.#press(link, []);
+  }
+
+  #playPress(document, op) {
+    const dom = this.#dom;
+    if (op.choose) {
+      // The page's handler presses its hidden file input, which opens the chooser.
+      const input = document.querySelector(op.choose);
+      if (input) {
+        input.dispatchEvent(new document.defaultView.MouseEvent("click", { bubbles: true, cancelable: true }));
+        this.#openChooser(input);
+      }
+    }
+    if (op.theme) {
+      const root = document.documentElement;
+      const next = root.classList.contains(op.theme.dark) ? "light" : "dark";
+      root.classList.remove(op.theme.dark, op.theme.light);
+      root.classList.add(op.theme[next]);
+      if (op.theme.islands) {
+        this.#later(() => {
+          if (this.#dom !== dom) return;
+          for (const frame of document.querySelectorAll(op.theme.islands)) {
+            const src = new URL(frame.getAttribute("src") ?? "", this.#href);
+            src.searchParams.set("scheme", next);
+            frame.setAttribute("src", `${src.pathname}${src.search}`);
+          }
+        }, op.theme.delayMs ?? 0);
+      }
+    }
+    if (op.decide) {
+      this.#later(() => {
+        if (this.#dom !== dom) return;
+        const gate = document.querySelector(op.decide.gate);
+        if (gate) {
+          gate.setAttribute("data-lifecycle-card-state", op.decide.state);
+          for (const control of gate.querySelectorAll("button")) control.remove();
+        }
+        if (!op.decide.status) return;
+        for (const pill of document.querySelectorAll(op.decide.pill)) {
+          pill.setAttribute("data-status", op.decide.status);
+          pill.textContent = op.decide.status;
+        }
+      }, op.decide.delayMs ?? 0);
+    }
+  }
+
+  #openChooser(input) {
+    const waiters = this.#chooserWaiters;
+    this.#chooserWaiters = [];
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.done({ page: () => this, isMultiple: () => input.multiple === true, setFiles: (files) => this.#setFiles(input, files) });
+    }
+  }
+
+  /** Files handed to a chooser: read, set on its input, reported, and handed to the page's handler. */
+  async #setFiles(input, files) {
+    const [{ readFile }, { basename }] = await Promise.all([import("node:fs/promises"), import("node:path")]);
+    const chosen = await Promise.all(
+      (Array.isArray(files) ? files : [files]).map(async (file) =>
+        typeof file === "string" ? { name: basename(file), mimeType: "application/octet-stream", buffer: await readFile(file) } : file,
+      ),
+    );
+    if (!input.isConnected || this.#closed) throw new Error("Element is not attached to the DOM");
+    const document = input.ownerDocument;
+    const window = document.defaultView;
+    const list = chosen.map((file) => new window.File([file.buffer], file.name, { type: file.mimeType }));
+    const fileList = Object.assign(Object.fromEntries(list.map((file, at) => [at, file])), { length: list.length, item: (at) => list[at] ?? null });
+    Object.defineProperty(input, "files", { configurable: true, get: () => fileList });
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+    for (const op of this.#declared(document)) {
+      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen);
+    }
+  }
+
+  #playChosen(document, op, chosen) {
+    const dom = this.#dom;
+    for (const file of chosen) {
+      this.#send("POST", new URL(op.upload, this.#href).href, file.buffer, false).then(
+        (sent) =>
+          this.#later(() => {
+            if (this.#dom !== dom) return;
+            if (sent.status >= 200 && sent.status < 300) {
+              const list = document.querySelector(op.rows);
+              if (!list) return;
+              const row = document.createElement("li");
+              row.setAttribute("data-field", "name=identity.displayName");
+              const title = document.createElement("span");
+              title.textContent = file.name;
+              row.append(title);
+              list.append(row);
+              return;
+            }
+            const panel = document.querySelector(op.refused);
+            if (!panel) return;
+            panel.textContent = `Can't type ${file.name}`;
+            panel.removeAttribute("hidden");
+          }, op.delayMs ?? 0),
+        () => {},
+      );
+    }
+  }
+
+  #playSubmit(form, op) {
+    const document = form.ownerDocument;
+    const dom = this.#dom;
+    for (const line of form.querySelectorAll("[data-fixture-shown-error]")) line.remove();
+    const required = Array.from(form.querySelectorAll("[data-fixture-required]"));
+    const messageOf = (control) => document.getElementById(control.getAttribute("data-fixture-error-in") ?? "");
+    for (const control of required) {
+      control.removeAttribute("aria-invalid");
+      const message = messageOf(control);
+      if (message) {
+        message.textContent = "";
+        message.setAttribute("hidden", "");
+      }
+    }
+    const missing = required.filter((control) => control.value.trim() === "");
+    for (const control of missing) {
+      const said = control.getAttribute("data-fixture-required");
+      control.setAttribute("aria-invalid", "true");
+      const message = messageOf(control);
+      if (message) {
+        message.textContent = said;
+        message.removeAttribute("hidden");
+        continue;
+      }
+      const line = document.createElement("p");
+      line.className = "text-xs text-destructive";
+      line.setAttribute("data-fixture-shown-error", "");
+      line.textContent = said;
+      control.after(line);
+    }
+    if (missing.length > 0) return;
+    const values = Object.fromEntries(Array.from(form.elements, (control) => [control.name, control.value]).filter(([name]) => name));
+    this.#send("POST", new URL(op.sends, this.#href).href, JSON.stringify(values), false).then(
+      () => {
+        if (this.#dom === dom) document.querySelector(op.done)?.removeAttribute("hidden");
+      },
+      () => {},
+    );
+  }
+
+  #childFrame(frame) {
+    const href = () => new URL(frame.getAttribute("src") || "about:blank", this.#href).href;
+    return {
+      url: () => href(),
+      parentFrame: () => this.#frame,
+      evaluate: async (fn, arg) => {
+        const dom = await this.#frameDocument(frame, href());
+        const inFrame = dom.window.eval(`(${fn.toString()})`);
+        return viaJson(await inFrame(viaJson(arg)));
+      },
+    };
+  }
+
+  /** The frame's document at `href`: loaded once per address it is pointed at. */
+  #frameDocument(frame, href) {
+    const held = this.#frameDocuments.get(frame);
+    if (held?.href === href) return held.dom;
+    const dom = /^https?:/.test(href)
+      ? this.#context[INNER].transfer(href, { method: "GET", body: null, headers: {}, follow: true }).then(
+          async (reply) => new JSDOM(await reply.whole, { url: href, runScripts: "outside-only" }),
+        )
+      : Promise.reject(new Error("the page double loads a frame over HTTP only"));
+    dom.catch(() => {});
+    this.#frameDocuments.set(frame, { href, dom });
+    return dom;
+  }
 }
 
 /** The locator calls the steps make: count, the visible filter, first, fill and click (with its modifiers). */
@@ -703,5 +1116,29 @@ class LocatorDouble {
       if (Date.now() >= until) throw new TimeoutError(timeoutMessage);
       await pause(20);
     }
+  }
+
+  // readRows, the landing of signInThroughPage, dispatchRun, press and
+  // selectFrom: the two calls selectFrom makes on the page's own controls, with a
+  // browser's rules. A select takes an option by its place and announces the
+  // change; a radio is checked by its own press, which unchecks the others of its
+  // group and announces the change.
+  async selectOption(value, { timeout = 30_000 } = {}) {
+    const element = await this.#one(timeout, `locator.selectOption: Timeout ${timeout}ms exceeded.`);
+    if (element.localName !== "select") throw new Error("locator.selectOption: Element is not a <select> element");
+    const index = value && typeof value === "object" ? value.index : undefined;
+    if (!Number.isInteger(index) || !element.options[index]) throw new Error("locator.selectOption: did not find some options");
+    const window = element.ownerDocument.defaultView;
+    element.selectedIndex = index;
+    element.dispatchEvent(new window.Event("input", { bubbles: true }));
+    element.dispatchEvent(new window.Event("change", { bubbles: true }));
+    return [element.options[index].value];
+  }
+
+  async check({ timeout = 30_000 } = {}) {
+    const element = await this.#one(timeout, `locator.check: Timeout ${timeout}ms exceeded.`);
+    if (element.localName !== "input" || !["radio", "checkbox"].includes(element.type)) throw new Error("locator.check: Not a checkbox or radio button");
+    if (!element.checked) element.click();
+    if (!element.checked) throw new Error("locator.check: Clicking the checkbox did not change its state");
   }
 }

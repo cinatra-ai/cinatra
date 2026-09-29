@@ -62,7 +62,7 @@ for (const backend of BACKENDS) {
       await scene(backend, { secrets: SECRETS }, async ({ app, page, record, lines }) => {
         const budget = createSignInBudget();
         const result = await signIn(page, app, "/late/sign-in", { budget, record });
-        expect(result).toEqual({ status: 200, reloads: 0, spent: 1 });
+        expect(result).toEqual({ status: 200, reloads: 0, spent: 1, landed: "/landing/app" });
         expect(budget.spent).toBe(1);
         const loads = app.pageLoads("late");
         const sent = app.signInRequests();
@@ -72,11 +72,13 @@ for (const backend of BACKENDS) {
         // Only the handler that attaches at 500 ms sends this request, so it cannot leave any earlier.
         expect(sent[0].at - loads[0].at).toBeGreaterThanOrEqual(500);
         expect(app.carryingFields(), "a request carried the form's fields natively").toEqual([]);
-        expect(lines).toEqual([
+        expect(lines).toHaveLength(4);
+        expect(lines.slice(0, 3)).toEqual([
           "signInThroughPage: the form carries its hydration mark on the first load",
           `signInThroughPage: the press sent the app's own sign-in request (${EMAIL_ROUTE}) — the once-only sign-in is spent`,
           "signInThroughPage: signed in — the app answered 200 to its own sign-in request",
         ]);
+        expect(lines[3]).toMatch(/^signInThroughPage: landed on \/landing\/app after \d+ ms, and the page draws a\[href="\/chat"\]$/);
       });
     });
 

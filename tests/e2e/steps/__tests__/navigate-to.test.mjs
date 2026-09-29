@@ -1,5 +1,6 @@
 // navigateTo: reaching a page through the product's own navigation, never by
-// typing its address, and recording where the press landed. With `furtherPage`
+// typing its address, and recording where the press landed. A press that starts
+// no navigation is refused as soon as the start bound runs out. With `furtherPage`
 // it opens the page in a further page, once it has read that the requests
 // standing open on the origin leave a connection for a load and one for a press.
 import { afterAll, describe, expect, it } from "vitest";
@@ -96,6 +97,61 @@ for (const backend of BACKENDS) {
       });
     });
 
+    // Links whose own handler keeps the page where it is: a dialog or a panel
+    // opens in place, or nothing happens at all.
+    for (const [path, link, instead] of [
+      ["/nav/details", "View details for the target", 'it shows instead: a dialog "Target details"'],
+      ["/nav/filters", "Filters", 'it shows instead: a panel "Filter the list" that the link controls'],
+      ["/nav/inert", "Inert", "it shows no dialog and no panel that the link controls"],
+    ]) {
+      it(`refuses at once a press that starts no navigation, naming the link and what the page shows (${path})`, async () => {
+        await scene(backend, {}, async ({ app, page, record, lines }) => {
+          const navigateTo = await start(page, app);
+          const before = performance.now();
+          const error = await refusal(navigateTo(page, { path, record, bounds: { ...BOUNDS, startMs: 600, landingMs: 30_000 } }));
+          const tookMs = performance.now() - before;
+          expect(error.name).toBe("StepRefusal");
+          expect(error.kind).toBe("no-navigation");
+          expect(error.message).toBe(
+            `navigateTo refused (no-navigation): the press on the link "${link}" to ${path} started no navigation within 600 ms, ` +
+              `and the page stayed on /nav/start; ${instead}`,
+          );
+          expect(lines).toEqual([error.message]);
+          // Refused when the start bound ran out, long before the landing bound would have.
+          expect(tookMs).toBeGreaterThanOrEqual(600);
+          expect(tookMs, "the step waited for a landing that could not come").toBeLessThan(10_000);
+          expect(new URL(page.url()).pathname).toBe("/nav/start");
+          expect(visits(app, path), "the press reached the page after all").toEqual([]);
+        });
+      });
+    }
+
+    it("never waits longer for the start of a navigation than for its landing", async () => {
+      await scene(backend, {}, async ({ app, page, record }) => {
+        const navigateTo = await start(page, app);
+        const error = await refusal(navigateTo(page, { path: "/nav/details", record, bounds: { ...BOUNDS, landingMs: 400 } }));
+        expect(error.kind).toBe("no-navigation");
+        expect(error.message).toContain("started no navigation within 400 ms, and the page stayed on /nav/start;");
+      });
+    });
+
+    for (const [path, how] of [
+      ["/nav/slow", "a navigation request"],
+      ["/nav/slow-in-place", "the app's own request for the page, and moved the address only once it was answered"],
+    ]) {
+      it(`waits past the start bound for a slow navigation that started with ${how}`, async () => {
+        await scene(backend, {}, async ({ app, page, record, lines }) => {
+          const navigateTo = await start(page, app);
+          const result = await navigateTo(page, { path, record, bounds: { ...BOUNDS, startMs: 500, landingMs: 10_000 } });
+          expect(result).toMatchObject({ path, from: "/nav/start", pressed: true });
+          expect(result.elapsedMs, "the page landed before the start bound ran out").toBeGreaterThan(500);
+          expect(new URL(page.url()).pathname).toBe(path);
+          expect(lines).toEqual([`navigateTo: landed on ${path} from /nav/start after ${result.elapsedMs} ms`]);
+          expect(visits(app, path)).toHaveLength(1);
+        });
+      });
+    }
+
     it("presses nothing when it refuses its arguments", async () => {
       await scene(backend, {}, async ({ app, page, record, lines }) => {
         const navigateTo = await start(page, app);
@@ -107,6 +163,7 @@ for (const backend of BACKENDS) {
           [{ record, path: "//elsewhere/nav/target" }, PATH_ONLY],
           [{ record, path: "/nav/target?x=1" }, PATH_ONLY],
           [{ record, path: "/nav/target", bounds: { landingMs: 0 } }, "landingMs must be a positive number of milliseconds — nothing was pressed"],
+          [{ record, path: "/nav/target", bounds: { startMs: -1 } }, "startMs must be a positive number of milliseconds — nothing was pressed"],
           [{ record, path: "/nav/target", bounds: { clickMs: 5 } }, "there is no bound named clickMs — nothing was pressed"],
           [{ record, path: "/nav/target", furtherPage: "yes" }, "furtherPage must be true or false — nothing was pressed"],
           [
