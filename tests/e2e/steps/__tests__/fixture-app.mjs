@@ -179,6 +179,13 @@ const TIMELINE_RUNNER = `<script>
       fetch(href).then(function () { history.pushState(null, "", href); });
     });
   });
+  document.querySelectorAll("[data-fixture-toggles]").forEach(function (box) {
+    box.addEventListener("click", function () {
+      var on = box.getAttribute("aria-checked") !== "true";
+      box.setAttribute("aria-checked", String(on));
+      box.setAttribute("data-state", on ? "checked" : "unchecked");
+    });
+  });
   ops.forEach(function (op) {
     if (op.freeze) {
       // Counted from the load, so the page has loaded before its main thread is busy.
@@ -388,6 +395,27 @@ export const PRESS_PAGE = [
 ].join("");
 
 /**
+ * Agent sections, each with its own "Add skill": one section named by its
+ * heading, one by its label, and two that carry one heading. A skill's pill box
+ * is a checkbox the page draws itself, whose handler flips it; the handler of a
+ * pinned box keeps it as it is, and a box that is a link leaves the page.
+ */
+export const PRESS_SECTIONS_PAGE = [
+  '<main aria-label="Agents">',
+  '<section><h2>Research assistant</h2>',
+  '<span><button type="button" role="checkbox" aria-checked="false" data-state="unchecked" aria-labelledby="press-skill-web" data-fixture-toggles style="width:16px;height:16px"></button>',
+  ' <span id="press-skill-web">Web search</span></span>',
+  ' <button type="button" role="checkbox" aria-checked="true" data-state="checked" aria-label="Pinned" style="width:16px;height:16px"></button>',
+  ' <a href="/nav/target" role="checkbox" aria-checked="false" aria-label="Keep drafts">Keep drafts</a>',
+  ' <a href="#add-research" role="button" data-fixture-opens="press-added-research">Add skill</a><p id="press-added-research" hidden>Added to Research assistant.</p></section>',
+  '<section aria-label="Blog writer"><p>Blog writer</p>',
+  '<a href="#add-blog" role="button" data-fixture-opens="press-added-blog">Add skill</a><p id="press-added-blog" hidden>Added to Blog writer.</p></section>',
+  '<section><h2>Twin agent</h2><button type="button">Add skill</button></section>',
+  '<section><h2>Twin agent</h2><button type="button">Add skill</button></section>',
+  "</main>",
+].join("");
+
+/**
  * The pickers the selection cases select from: a select, a radio group, a
  * listbox that confirms a choice in a status, a combobox that opens its list,
  * two radio groups of one name, and a combobox whose list never opens.
@@ -518,6 +546,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/cards/nothing": "<p>No run here.</p>",
         "/press/start": PRESS_PAGE,
         "/press/saved": "<p>Saved.</p>",
+        "/press/sections": PRESS_SECTIONS_PAGE,
         "/pick/start": PICK_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,

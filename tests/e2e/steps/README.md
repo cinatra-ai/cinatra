@@ -247,7 +247,7 @@ carries the mark `data-step-control` for that act only. A refusal lists at most
 | `CONTROL_ACTION_BOUND_MS` | 10_000 | one press or one selection |
 | `CONTROL_POLL_MS` | 100 | how often the page is read while a step waits |
 
-## `press(page, { name, record, role?, bounds? })`
+## `press(page, { name, record, role?, within?, bounds? })`
 
 Presses the one shown control of `role` named `name`: a button by default, or a
 link, a menu item or a tab (`role: "link"`, `"menuitem"` or `"tab"`). Then it
@@ -264,14 +264,25 @@ A press whose navigation starts only after the start bound (a handler that waits
 for a slow answer first) reads as one that stayed; give such a control a longer
 `startMs`. The step answers `{ name, role, from, path, navigated, elapsedMs }`.
 
+A checkbox, a radio or a switch (`role: "checkbox"`, `"radio"` or `"switch"`) is
+pressed the same way, and its checked state is read before the press and once the
+page has settled (a state the page changes only after a slow answer needs a
+longer `startMs`); a press that did not change it is refused (`unchanged`). With
+`within`, the name is looked for only inside the one shown part of the page of
+that name, a landmark or a section named by its label or its heading, as a
+refusal names the part a control sits in; a scope that no part carries is
+refused (`no-scope`), and one that several parts carry (`ambiguous`).
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation |
 | `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation |
 
-Refusal kinds: `input`, `unreadable` (the page could not be read), `no-control`
-(naming the controls of the role that the page shows), `ambiguous` and
-`disabled` (nothing was pressed), `driver-failure` and `unsettled`.
+Refusal kinds: `input`, `unreadable` (the page could not be read), `no-scope`
+(naming the named parts the page shows), `no-control` (naming the controls of
+the role that the page, or its scope, shows), `ambiguous` and `disabled`
+(nothing was pressed), `driver-failure`, `unsettled` and `unchanged` (the
+checked state did not change, or could not be read after the press).
 
 ## `selectFrom(page, { picker, entry, record, bounds? })`
 

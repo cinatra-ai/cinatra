@@ -14,8 +14,10 @@
 //
 // A STEP NEVER ACTS ON A GUESS. When a name matches several controls, the step
 // refuses and names each one by the named part of the page it sits in (a card,
-// a row, a list item, a dialog, a group). The one control it acts on carries the
-// mark (CONTROL_MARK) for the press only, and loses it right after.
+// a row, a list item, a dialog, a group). A press may look within one such part
+// only, named as that refusal names it; a part that several carry is refused
+// too. The one control it acts on carries the mark (CONTROL_MARK) for the press
+// only, and loses it right after.
 import { randomUUID } from "node:crypto";
 
 /** One press or one selection: how long the control may take to take it. */
@@ -85,7 +87,12 @@ export const describeMatches = (matches) => matches.map((match, index) => `${ind
 /**
  * Reads the page's controls for one query and marks the one control the step
  * will act on, when exactly one matches. `query.mode` is:
- *   - `press`: the shown controls of `role` and those named `name`;
+ *   - `press`: the shown controls of `role` and those named `name`, within the
+ *     one shown part of the page named `within` when the query names one (the
+ *     parts of that name come back as `scope`); a checkbox's, a radio's or a
+ *     switch's checked state comes back with it;
+ *   - `checked`: the checked state of the marked control (null once the page
+ *     no longer holds it);
  *   - `card`: the shown cards and those named `card`, and in the one card, its
  *     buttons and links and those named `control`;
  *   - `picker`: the shown pickers (a select, a combobox, a listbox, a radio
@@ -176,6 +183,13 @@ export function readControls(query) {
   };
   const disabled = (element) =>
     (typeof element.matches === "function" && element.matches(":disabled")) || element.getAttribute("aria-disabled") === "true";
+  // A checkbox, a radio or a switch reads as checked (true), not (false) or `mixed`.
+  const TOGGLES = ["checkbox", "radio", "switch"];
+  const checkedOf = (element) => {
+    if (element.localName === "input" && ["checkbox", "radio"].includes(typeOf(element))) return element.indeterminate ? "mixed" : element.checked;
+    const state = text(element.getAttribute("aria-checked")).toLowerCase();
+    return state === "mixed" ? "mixed" : state === "true";
+  };
   const listOf = (names) => {
     const unique = Array.from(new Set(names));
     return { names: unique.slice(0, query.listed), more: Math.max(0, unique.length - query.listed) };
@@ -225,7 +239,32 @@ export function readControls(query) {
         href = null;
       }
     }
-    return { role: roleOf(element), part: partOf(element), disabled: disabled(element), href };
+    const role = roleOf(element);
+    return { role, part: partOf(element), disabled: disabled(element), href, checked: TOGGLES.includes(role) ? checkedOf(element) : null };
+  };
+  // The controls of the press query's role and those of its name: within the one
+  // shown part of the page named `within` when it names one, and none when no
+  // part or several parts carry that name.
+  const pressable = () => {
+    let root = document;
+    let scope = null;
+    if (query.within) {
+      const parts = Array.from(document.querySelectorAll(PARTS.map(([, selector]) => selector).join(", ")))
+        .filter(exposed)
+        .map((element) => ({ element, kind: PARTS.find(([, selector]) => element.matches(selector))[0], name: titleOf(element) }))
+        .filter((part) => part.name);
+      const found = innermost(parts.filter((part) => part.name === query.within));
+      scope = {
+        found: found.length,
+        kind: found.length === 1 ? found[0].kind : "",
+        parts: listOf(parts.map((part) => part.name)),
+        matches: found.map((part) => ({ kind: part.kind, part: partOf(part.element) })),
+      };
+      if (found.length !== 1) return { scope, controls: [], matches: [] };
+      root = found[0].element;
+    }
+    const controls = controlsIn(root, [query.role]);
+    return { scope, controls, matches: controls.filter((element) => nameOf(element) === query.name) };
   };
   const LIVE = "[role='status'], [role='alert'], [aria-live], [data-sonner-toast]";
   const liveTexts = () =>
@@ -235,10 +274,14 @@ export function readControls(query) {
       .filter(Boolean);
 
   if (query.mode === "press") {
-    const controls = controlsIn(document, [query.role]);
-    const matches = controls.filter((element) => nameOf(element) === query.name);
+    const { scope, controls, matches } = pressable();
     if (matches.length === 1 && !disabled(matches[0])) mark(matches[0], query.mark);
-    return { path: location.pathname, present: listOf(controls.map(nameOf)), matches: matches.map(describe) };
+    return { path: location.pathname, scope, present: listOf(controls.map(nameOf)), matches: matches.map(describe) };
+  }
+
+  if (query.mode === "checked") {
+    const control = document.querySelector(`[${query.attribute}="${query.mark}"]`);
+    return { path: location.pathname, checked: control ? checkedOf(control) : null };
   }
 
   if (query.mode === "card") {
