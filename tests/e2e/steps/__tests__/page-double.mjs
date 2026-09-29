@@ -49,7 +49,9 @@
 //     natively: its fields leave in a query string or a form body;
 //   - a failed fill repeats the value it was given to fill in its message, as
 //     Playwright's own call log does, so a step that forwards that message fails
-//     these cases.
+//     these cases;
+//   - a press moves the focus, and the keyboard types into the element that has
+//     it (see the keyboard, further down).
 // The page's declared behaviour (the JSON each fixture page carries) is played on
 // its document with timers, as the page's inline script does in a browser: a
 // stream it opens stays open, and while its main thread is declared busy, a
@@ -59,6 +61,7 @@ import { connect, constants } from "node:http2";
 import { JSDOM } from "jsdom";
 
 import { EMAIL_ROUTE, USERNAME_ROUTE, pressSearchEntry, typeInSearchField } from "./fixture-app.mjs";
+import { inputInFixtureWindow, sendInFixtureWindow } from "./fixture-app-windows.mjs";
 
 export class TimeoutError extends Error {
   constructor(message) {
@@ -411,6 +414,7 @@ export class PageDouble {
         document: () => this.#dom.window.document,
         press: (element, modifiers) => this.#press(element, modifiers),
         typed: (element) => this.#typed(element),
+        focus: (element) => this.#focus(element),
       },
       selector,
       {},
@@ -486,6 +490,8 @@ export class PageDouble {
     const previous = this.#dom;
     this.#href = href;
     this.#dom = this.#build(href, html, protocol, streaming ? 0 : Math.max(1, elapsedMs));
+    // A new document has the focus on nothing of its own yet.
+    this.#focused = null;
     // The document left behind cancels its requests, and the context hears of each.
     this.#endStreams(previous, "failed");
     if (streaming) {
@@ -569,8 +575,13 @@ export class PageDouble {
     form.setAttribute("novalidate", "");
   }
 
-  /** Text filled into a field: the page's handler for a search field opens its list and answers the search. */
+  /**
+   * Text filled or typed into a field: the page's handler for a window's box
+   * keeps its send control in step with it, and the page's handler for a search
+   * field opens its list and answers the search.
+   */
   #typed(element) {
+    if (element.hasAttribute("data-fixture-window-box")) inputInFixtureWindow(element);
     if (!element.hasAttribute("data-fixture-searches")) return;
     const document = element.ownerDocument;
     typeInSearchField(element, (run, ms) =>
@@ -581,6 +592,17 @@ export class PageDouble {
   }
 
   #press(element, modifiers) {
+    // The page's handler takes a press on a window's send control.
+    const send = element.closest("[data-fixture-window-send]");
+    if (send) {
+      const document = send.ownerDocument;
+      sendInFixtureWindow(send, (run, ms) =>
+        this.#later(() => {
+          if (this.#dom.window.document === document) run();
+        }, ms),
+      );
+      return;
+    }
     // The page's handler takes an entry of a search field's list.
     const entry = element.closest("[data-fixture-picks]");
     if (entry) {
@@ -1207,6 +1229,118 @@ export class PageDouble {
     this.#frameDocuments.set(frame, { href, dom });
     return dom;
   }
+
+  // ---------------------------------------------------------------------------
+  // typeInWindow, waitForTurn and sendInComposer: the focus and the keyboard.
+  // The browser's rules kept for them:
+  //   - a press moves the focus to the pressed element when it takes the focus
+  //     (a field, a control, a link, or an element whose content is editable),
+  //     and away from any other otherwise; a new document has it on nothing;
+  //   - the keyboard types into the element that has the focus when it takes
+  //     text: a text field that is neither disabled nor read-only, or an element
+  //     whose content is editable (`contenteditable` other than "false"). The
+  //     text goes in at the selection, in place of what the selection holds, or
+  //     at the end of the element's text when the selection is elsewhere, and
+  //     the element reports `input`. A browser types key by key and reports each
+  //     key; the double types the whole text at once and reports it once;
+  //   - Backspace deletes what the selection holds, or the last character of
+  //     the text when the caret is at its end; no other key is pressed here;
+  //   - text typed into a window's box, and a press on a window's send control,
+  //     run the page's own handlers for them: the same two functions the page's
+  //     inline script runs in a browser (see fixture-app-windows.mjs).
+  // ---------------------------------------------------------------------------
+
+  #focused = null;
+
+  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus. */
+  keyboard = {
+    type: async (text) => this.#typeText(String(text)),
+    press: async (key) => this.#pressKey(String(key)),
+  };
+
+  #focus(element) {
+    const focusable = element.matches("a[href], button, input, select, textarea, [tabindex]") || PageDouble.#takesText(element);
+    this.#focused = focusable ? element : null;
+  }
+
+  /** Whether `element` takes text typed into it. */
+  static #takesText(element) {
+    if (!element || !element.isConnected) return false;
+    if (element.localName === "input" || element.localName === "textarea") return !element.disabled && !element.readOnly;
+    for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+      const editable = node.getAttribute("contenteditable");
+      if (editable !== null) return editable.toLowerCase() !== "false";
+    }
+    return false;
+  }
+
+  /** The element the keyboard types into: the one that has the focus, in the current document, when it takes text. */
+  #typingTarget() {
+    const element = this.#focused;
+    return element && element.ownerDocument === this.#dom.window.document && PageDouble.#takesText(element) ? element : null;
+  }
+
+  /** The selection's range when it lies inside `element`, else a caret at the end of its text. */
+  static #rangeIn(element) {
+    const document = element.ownerDocument;
+    const selection = document.defaultView.getSelection();
+    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    if (range && element.contains(range.startContainer) && element.contains(range.endContainer)) return range;
+    const end = document.createRange();
+    end.selectNodeContents(element);
+    end.collapse(false);
+    return end;
+  }
+
+  #typeText(text) {
+    const element = this.#typingTarget();
+    if (!element || text === "") return;
+    const window = element.ownerDocument.defaultView;
+    if (element.localName === "input" || element.localName === "textarea") {
+      const start = element.selectionStart ?? element.value.length;
+      const end = element.selectionEnd ?? start;
+      element.value = `${element.value.slice(0, start)}${text}${element.value.slice(end)}`;
+      element.setSelectionRange(start + text.length, start + text.length);
+    } else {
+      const range = PageDouble.#rangeIn(element);
+      range.deleteContents();
+      const node = element.ownerDocument.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    element.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    this.#typed(element);
+  }
+
+  #pressKey(key) {
+    if (key !== "Backspace") throw new Error(`the page double presses Backspace only, not ${key}`);
+    const element = this.#typingTarget();
+    if (!element) return;
+    const window = element.ownerDocument.defaultView;
+    if (element.localName === "input" || element.localName === "textarea") {
+      const start = element.selectionStart ?? element.value.length;
+      const end = element.selectionEnd ?? start;
+      const from = start === end ? Math.max(0, start - 1) : start;
+      element.value = `${element.value.slice(0, from)}${element.value.slice(end)}`;
+      element.setSelectionRange(from, from);
+    } else {
+      const range = PageDouble.#rangeIn(element);
+      if (!range.collapsed) {
+        range.deleteContents();
+      } else {
+        const walker = element.ownerDocument.createTreeWalker(element, 4 /* text nodes */);
+        let last = null;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.nodeValue !== "") last = node;
+        if (last) last.deleteData(last.nodeValue.length - 1, 1);
+      }
+    }
+    element.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+    this.#typed(element);
+  }
 }
 
 /** The locator calls the steps make: count, the visible filter, first, fill and click (with its modifiers). */
@@ -1244,6 +1378,7 @@ class LocatorDouble {
 
   async click({ timeout = 30_000, modifiers = [] } = {}) {
     const element = await this.#one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`);
+    this.#page.focus(element);
     this.#page.press(element, modifiers);
   }
 

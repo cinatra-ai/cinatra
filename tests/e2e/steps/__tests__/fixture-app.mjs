@@ -975,6 +975,16 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
       // Names the steps match without their white space: their page.
       if (url.pathname === "/joined/start") return html(200, page(url.pathname, JOINED_PAGE));
+      // typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress:
+      // their pages live in fixture-app-windows.mjs, so this file changes in this
+      // one place.
+      if (/^\/(window|composer|address|reload)\//.test(url.pathname)) {
+        import("./fixture-app-windows.mjs").then(
+          ({ serveWindowPage }) => serveWindowPage({ method: request.method, url, response, loads }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
       html(404, "<!doctype html><title>Not found</title>");
     });
   };
