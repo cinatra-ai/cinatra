@@ -160,7 +160,13 @@ with the page it landed on.
   `pnpm exec vitest run --config vitest.config.ts tests/e2e/steps`). Each step's
   branches run against a page double over a local fixture app: no browser, no
   server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
-  over the same fixture pages, which keeps the double honest.
+  over the same fixture pages, which keeps the double honest. In the checks, the
+  job **Step tests in a real browser** runs them with the switch set for every
+  pull request that changes a file here other than Markdown: first on the page
+  double, then with the switch. It fails unless every case passed, so in that
+  job a browser that cannot be launched is a failure, not a skip, and the
+  required `build` check fails with it. Any other pull request skips the job;
+  the selection line of **Detect CI impact (build-image)** names the reason.
 - **The live smoke**, one per step, against a running development server:
   `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
   browser or a server every test is skipped, and its reason names what is missing.

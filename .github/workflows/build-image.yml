@@ -123,6 +123,7 @@ jobs:
       skip_runtime: ${{ steps.impact.outputs.skip_runtime }}
       skip_notifications: ${{ steps.impact.outputs.skip_notifications }}
       skip_agents: ${{ steps.impact.outputs.skip_agents }}
+      skip_steps_browser: ${{ steps.impact.outputs.skip_steps_browser }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select work from the complete changed-file inventory
@@ -2950,6 +2951,111 @@ jobs:
           [ "$fail" = 0 ] && echo "both perpetual shards green"
           exit "$fail"
 
+  # ---------------------------------------------------------------------------
+  # steps-browser — the step tests in a real browser (cinatra#3750).
+  #
+  # The step tests under tests/e2e/steps/ run every case against a page double
+  # in the root unit tier (the "Root Vitest suite" step of perpetual-core). With
+  # E2E_STEPS_UNIT_BROWSER=1 the same cases also drive a real browser over the
+  # same fixture pages, which is what keeps the double honest. No other job sets
+  # that switch, so without this one a change to how a step behaves in a browser
+  # (a press that starts no navigation, a landing bound, a dialog that opens in
+  # place) was proven by the double alone.
+  #
+  # WHEN IT RUNS: detect selects it for a pull request that changes anything
+  # under tests/e2e/steps/ except Markdown, or this workflow file; a draft waits
+  # for ready_for_review; push, queue and manual runs always run it. Every other
+  # pull request skips it, and the selection line detect prints names the
+  # reason (`steps_browser_reason`).
+  #
+  # REQUIRED STRUCTURALLY, like skills-unit and a2a-unit: the `build` fan-in
+  # needs it, and scripts/ci/ci-result-gate.mjs accepts only its success or a
+  # skip that detect selected. No branch-protection context changes.
+  #
+  # SHAPE: the E2E class and the cached Chromium install the browser suites use.
+  # No database, server or companion extension repos: the tests import Node's
+  # builtins, their own files, vitest and Playwright. The page double runs
+  # first, so a broken double fails before a browser is installed. A browser
+  # that cannot be launched does not fail the browser cases, it SKIPS them
+  # (tests/e2e/steps/__tests__/backends.mjs), and vitest passes a run with
+  # skipped cases; so the last step passes only when every case of the browser
+  # run passed.
+  # ---------------------------------------------------------------------------
+  steps-browser:
+    name: Step tests in a real browser
+    needs: detect
+    if: ${{ needs.detect.outputs.skip_steps_browser != 'true' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
+    # Read-only: the workflow-level `packages: write` is for the image jobs.
+    permissions:
+      contents: read
+    # The worst setup phase measured on the self-hosted classes (20 minutes,
+    # cinatra#3364), a few minutes for the Chromium install and the two test
+    # runs (not yet measured on CI), and the 5-minute margin.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No authenticated git runs after the checkout.
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Step tests on the page double
+        run: pnpm exec vitest run --config vitest.config.ts tests/e2e/steps --no-coverage
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Both backends: the page double again, and the browser. The JSON report
+      # is for the next step only; it stays on the runner and is not uploaded.
+      - name: Step tests with E2E_STEPS_UNIT_BROWSER=1
+        env:
+          E2E_STEPS_UNIT_BROWSER: "1"
+        run: >-
+          pnpm exec vitest run --config vitest.config.ts tests/e2e/steps --no-coverage
+          --reporter=default --reporter=github-actions
+          --reporter=json --outputFile.json="$RUNNER_TEMP/steps-browser-results.json"
+
+      # A browser case carries `[browser]` in its describe label; a skipped one
+      # carries `[browser, skipped: <reason>]` (backends.mjs `labelOf`).
+      - name: Check that every case passed in the browser run
+        run: |
+          REPORT="$RUNNER_TEMP/steps-browser-results.json" node -e '
+            const report = JSON.parse(require("node:fs").readFileSync(process.env.REPORT, "utf8"));
+            const total = report.numTotalTests;
+            const passed = report.numPassedTests;
+            const inBrowser = report.testResults
+              .flatMap((file) => file.assertionResults)
+              .filter((c) => c.status === "passed" && c.fullName.includes("[browser]")).length;
+            if (!(total > 0)) {
+              console.error(`::error::the browser run reported no step cases (numTotalTests: ${total})`);
+              process.exit(1);
+            }
+            if (passed !== total || inBrowser === 0) {
+              console.error(`::error::${passed} of ${total} step cases passed, ${inBrowser} of them in a browser; the others were skipped because no browser could be launched here (the skipped cases name the reason in the log of the step before)`);
+              process.exit(1);
+            }
+            console.log(`all ${total} step cases passed, ${inBrowser} of them in a browser`);
+          '
+
   e2e-rbac:
     name: RBAC browser e2e
     needs: detect
@@ -4138,11 +4244,15 @@ jobs:
   # Gating it from this fan-in rather than from `image` keeps the
   # un-serialized image build off its critical path while still making the
   # flow a merge gate WITHOUT adding a branch-protection context.
+  # `steps-browser` (cinatra#3750) is coupled on the same footing: the only job
+  # that runs the step tests in a real browser, required whenever detect
+  # selects it (a pull request that changes tests/e2e/steps/), and an explicit
+  # skip otherwise.
   # Runs on always() so a failed prerequisite produces a definitive RED, never a
   # skip GitHub would count as satisfied; docs-only/draft PRs (detect skip) skip
   # it exactly as the old `build` did.
   build:
-    needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e]
+    needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e, steps-browser]
     if: ${{ always() }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     permissions:
