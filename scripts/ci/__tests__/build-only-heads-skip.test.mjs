@@ -18,10 +18,11 @@
 //      of any name, and for every event that is not a pull request (a push, a
 //      merge queue group, a schedule, a run by hand: no head repository, an
 //      empty head reference);
-//   3. every context the branch rules require is pinned to the job that
-//      produces it, and that job and every job it needs run on an ordinary
-//      branch as before: a required context skipped on an ordinary pull
-//      request cannot pass this test. The contexts produced by
+//   3. every context the branch rules require (read from the repository's own
+//      records, never written here) resolves to the one job that produces it,
+//      named as the platform names it, and that job and every job it needs
+//      run on an ordinary branch as before: a required context skipped on an
+//      ordinary pull request cannot pass this test (pinned by fixtures). The contexts produced by
 //      `build-image.yml` stay free of the condition: that workflow's run on a
 //      build-only head is the proof of the tree.
 //
@@ -43,12 +44,11 @@ import {
 } from "../build-only-heads.mjs";
 import {
   REQUIRED_CONTEXTS as COVERAGE_GUARD_CONTEXTS,
-  contextJobName,
   displayNameOf,
   parseJobs,
   parseTriggers,
 } from "../merge-group-coverage-guard.mjs";
-import { isConditional, parseJobAttrs } from "../merge-readiness-inventory.mjs";
+import { SELF_CONTEXT, isConditional, parseJobAttrs } from "../merge-readiness-inventory.mjs";
 
 const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const WORKFLOWS_DIR = path.join(REPO_ROOT, ".github", "workflows");
@@ -96,35 +96,20 @@ const ORDINARY = HEADS.filter((h) => h.runs);
 const STATUS_FUNCTION = /\b(always|cancelled|failure|success)\s*\(/;
 
 /**
- * The contexts the branch rules of `main` require, each pinned to the job that
- * produces it. Read from the branch protection of `main` and from the
- * repository rulesets (the active baseline and the merge queue ruleset);
- * `.github/branch-protections.json` mirrors the first list and is checked
- * against this table below.
+ * The workflow files whose contexts the repository rulesets require and that no
+ * committed mirror lists. Their contexts are derived from the files, as the
+ * platform names them; no context name is written here.
  */
-const REQUIRED = [
-  { context: "RBAC browser e2e", file: IMAGE_WORKFLOW, job: "e2e-rbac" },
-  { context: "RBAC authz unit tests", file: IMAGE_WORKFLOW, job: "rbac-authz-unit" },
-  { context: "Core-store schema migration gate", file: IMAGE_WORKFLOW, job: "schema-migration-gate" },
-  { context: "Perpetual system loops invariants", file: IMAGE_WORKFLOW, job: "perpetual-loops-invariants" },
-  { context: "build", file: IMAGE_WORKFLOW, job: "build" },
-  { context: "CRM migration gates", file: "crm-migration-gate.yml", job: "gate" },
-  { context: "/agents Playwright smoke", file: "dashboard-live-verify.yml", job: "smoke" },
-  { context: "proof", file: "works-after-proof.yml", job: "proof" },
-  { context: "gates", file: "gates.yml", job: "gates" },
-  { context: "gates-pnpm", file: "gates.yml", job: "gates-pnpm" },
-  { context: "design-pin-drift", file: "gates.yml", job: "design-pin-drift" },
-  { context: "source-leak-gate / source-leak-gate", file: "source-leak-gate.yml", job: "source-leak-gate" },
-  { context: "ui-design-system-gate / ui-design-system-gate", file: "ui-design-system-gate.yml", job: "ui-design-system-gate" },
-  { context: "skills-drift-gate / skills-drift-gate", file: "skills-drift-gate.yml", job: "skills-drift-gate" },
-  { context: "truthful-attribution-gate / truthful-attribution-gate", file: "truthful-attribution-gate.yml", job: "truthful-attribution-gate" },
-  { context: "secrets-required-gate / secrets-required-gate", file: "secrets-required-gate.yml", job: "secrets-required-gate" },
-  { context: "toast-banner-gate / toast-banner-gate", file: "toast-banner-gate.yml", job: "toast-banner-gate" },
-  { context: "actions-pinned-gate / actions-pinned-gate", file: "actions-pinned-gate.yml", job: "actions-pinned-gate" },
-  { context: "gitignore-gate / gitignore-gate", file: "gitignore-gate.yml", job: "gitignore-gate" },
-  { context: "secret-scan-gate / secret-scan-gate", file: "secret-scan-gate.yml", job: "secret-scan-gate" },
-  { context: "merge-readiness / merge-readiness", file: "merge-readiness.yml", job: "merge-readiness" },
-];
+const RULESET_CALLERS = ["actions-pinned-gate.yml", "gitignore-gate.yml", "secret-scan-gate.yml"];
+
+/**
+ * The contexts the branch rules of `main` require, read at test time from the
+ * repository's own records: the branch-protection mirror, the gate suite, the
+ * coverage guard's mirror, the merge readiness context and the contexts the
+ * ruleset callers above produce. At least this many were required when the
+ * rules were last read.
+ */
+const REQUIRED_AT_LEAST = 21;
 
 /** Split a workflow's `jobs:` block into {job id -> the job's own lines}. */
 function jobBlocks(text) {
@@ -227,8 +212,83 @@ function headRefProblems(file, id, job) {
     if (split.existing?.includes("head_ref")) {
       problems.push(`${file}: job \`${id}\` reads the head branch in its own condition too: ${split.existing}`);
     }
-  } else if ((job.if ?? "").includes("head_ref")) {
-    problems.push(`${file}: job \`${id}\` reads the head branch outside the one condition: ${job.if}`);
+  } else if (HEAD_READ.test(job.if ?? "")) {
+    problems.push(`${file}: job \`${id}\` reads the pull request's head outside the one condition: ${job.if}`);
+  }
+  return problems;
+}
+
+/** A condition reading the pull request's head branch or head repository. */
+const HEAD_READ = /head_ref|pull_request\.head/;
+
+/**
+ * The contexts one workflow produces, as the platform names them, each with
+ * the job that produces it: a job's `name:` (else its key); a reusable call
+ * `caller / called`, the called job read from a local file, and the caller's
+ * own name twice for a remote one (the repository's convention for its callers).
+ */
+function contextsProduced(file, workflow, readLocal) {
+  const out = [];
+  for (const [job, attrs] of workflow.jobs) {
+    if (attrs.uses?.startsWith("./")) {
+      const called = readLocal(path.basename(attrs.uses));
+      for (const inner of called?.jobs.values() ?? []) out.push({ context: `${attrs.name} / ${inner.name}`, file, job });
+    } else if (attrs.uses) {
+      out.push({ context: `${attrs.name} / ${attrs.name}`, file, job });
+    } else {
+      out.push({ context: attrs.name, file, job });
+    }
+  }
+  return out;
+}
+
+/**
+ * The problems of one required context against a set of workflows
+ * ([{ file, triggers, jobs }]): it has exactly one producing job; that job and
+ * every job it needs run on every ordinary head and on a push; outside the
+ * image build, a build-only head skips it; in the image build, nothing skips it.
+ */
+function requiredContextProblems(context, workflows) {
+  const byFile = new Map(workflows.map((w) => [w.file, w]));
+  const producers = workflows
+    .flatMap((w) => contextsProduced(w.file, w, (f) => byFile.get(f) ?? null))
+    .filter((p) => p.context === context);
+  if (producers.length !== 1) {
+    return [`${context}: produced by ${producers.length} jobs (${producers.map((p) => `${p.file}#${p.job}`).join(", ")}), not exactly one`];
+  }
+  const [{ file, job }] = producers;
+  const workflow = byFile.get(file);
+  const problems = [];
+  const chain = [];
+  const walk = (id) => {
+    if (chain.includes(id)) return;
+    chain.push(id);
+    for (const n of workflow.jobs.get(id)?.needs ?? []) walk(n);
+  };
+  walk(job);
+  for (const id of chain) {
+    const each = workflow.jobs.get(id);
+    if (!each) {
+      problems.push(`${file}: needed job \`${id}\` is missing`);
+      continue;
+    }
+    problems.push(...headRefProblems(file, id, each));
+    const split = splitBuildOnlyHeadGuard(each.if);
+    if (file === IMAGE_WORKFLOW) {
+      if (split.carries) problems.push(`${context}: ${file} job \`${id}\` must run on a build-only head`);
+      continue;
+    }
+    if (!split.carries) continue;
+    const inner = each.if.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, "");
+    const condition = inner.slice(inner.length - BUILD_ONLY_HEAD_CONDITION.length);
+    for (const head of ORDINARY) {
+      if (!evaluateHeadCondition(condition, head)) {
+        problems.push(`${context}: ${file} job \`${id}\` is skipped for ${head.label} ${JSON.stringify(head.headRef)}`);
+      }
+    }
+  }
+  if (file !== IMAGE_WORKFLOW && !skippedOnBuildHeads(workflow.jobs).has(job)) {
+    problems.push(`${context}: ${file} job \`${job}\` runs on a build-only head`);
   }
   return problems;
 }
@@ -401,67 +461,84 @@ describe("the workflows outside the scope are left alone", () => {
   }
 });
 
-describe("every required context runs on an ordinary pull request", () => {
-  const byFile = new Map(WORKFLOWS.map((w) => [w.file, w]));
+describe("the required-context check refuses a context skipped on an ordinary branch", () => {
+  const cond = `\${{ ${BUILD_ONLY_HEAD_CONDITION} }}`;
+  const wf = (file, body) => ({ file, ...readWorkflow(`on: pull_request\njobs:\n${body}`) });
+  const image = wf(IMAGE_WORKFLOW, "  image-job:\n    name: image check\n    runs-on: x\n");
 
-  it("the table holds every context of the committed branch-protection mirror and of the coverage guard", () => {
-    const mirror = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, ".github", "branch-protections.json"), "utf8"));
-    const table = REQUIRED.map((r) => r.context);
-    const listed = [...mirror.required_status_checks.contexts, ...COVERAGE_GUARD_CONTEXTS];
-    expect(listed.filter((c) => !table.includes(c)), "a required context without a row in REQUIRED").toEqual([]);
-    expect(new Set(table).size).toBe(table.length);
+  it("passes a required job that carries the one condition", () => {
+    const ok = wf("a.yml", `  req:\n    name: required check\n    if: ${cond}\n    runs-on: x\n`);
+    expect(requiredContextProblems("required check", [ok, image])).toEqual([]);
+    expect(requiredContextProblems("image check", [ok, image])).toEqual([]);
   });
 
-  for (const row of REQUIRED) {
-    it(`${row.context} — ${row.file} job \`${row.job}\``, () => {
-      const workflow = byFile.get(row.file);
-      expect(workflow, `${row.file} is missing`).toBeDefined();
-      const job = workflow.jobs.get(row.job);
-      expect(job, `${row.file}: job \`${row.job}\` is missing`).toBeDefined();
+  it("refuses a required job skipped on an ordinary branch by another head reading", () => {
+    for (const guard of [
+      "${{ !startsWith(github.head_ref, 'feat/') }}",
+      "${{ github.event.pull_request.head.repo.full_name != github.repository }}",
+    ]) {
+      const bad = wf("a.yml", `  req:\n    name: required check\n    if: ${guard}\n    runs-on: x\n`);
+      expect(requiredContextProblems("required check", [bad, image]), guard).not.toEqual([]);
+    }
+  });
 
-      // The job produces the context by its name, and a `caller / called`
-      // context comes from a reusable call.
-      expect(job.name).toBe(contextJobName(row.context));
-      if (row.context.includes(" / ")) {
-        expect(job.uses, `${row.context}: job \`${row.job}\` is not a reusable call`).toBeTruthy();
-        if (job.uses.startsWith("./")) {
-          const called = readWorkflow(read(path.basename(job.uses)));
-          expect([...called.jobs.values()].map((j) => j.name)).toContain(row.context.split(" / ")[1]);
-        }
-      } else {
-        expect(job.name).toBe(row.context);
-      }
+  it("refuses a required job whose needed job is skipped on an ordinary branch", () => {
+    const bad = wf(
+      "a.yml",
+      `  first:\n    if: \${{ startsWith(github.head_ref, 'merge-queue/') }}\n    runs-on: x\n  req:\n    name: required check\n    needs: first\n    if: ${cond}\n    runs-on: x\n`,
+    );
+    expect(requiredContextProblems("required check", [bad, image])).not.toEqual([]);
+  });
 
-      // The job and every job it needs run on an ordinary branch and on a push.
-      const chain = [];
-      const walk = (id) => {
-        if (chain.includes(id)) return;
-        chain.push(id);
-        for (const n of workflow.jobs.get(id)?.needs ?? []) walk(n);
-      };
-      walk(row.job);
-      for (const id of chain) {
-        const each = workflow.jobs.get(id);
-        expect(each, `${row.file}: needed job \`${id}\` is missing`).toBeDefined();
-        expect(headRefProblems(row.file, id, each)).toEqual([]);
-        const split = splitBuildOnlyHeadGuard(each.if);
-        if (row.file === IMAGE_WORKFLOW) {
-          expect(split.carries, `${row.file}: job \`${id}\` must run on a build-only head`).toBe(false);
-          continue;
-        }
-        if (!split.carries) continue;
-        for (const head of ORDINARY) {
-          expect(
-            evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, head),
-            `${row.context}: job \`${id}\` would be skipped for ${head.label} ${JSON.stringify(head.headRef)}`,
-          ).toBe(true);
-        }
-      }
+  it("refuses a required job that still runs on a build-only head, and a condition in the image build", () => {
+    const runs = wf("a.yml", "  req:\n    name: required check\n    runs-on: x\n");
+    expect(requiredContextProblems("required check", [runs, image])).not.toEqual([]);
+    const guarded = wf(IMAGE_WORKFLOW, `  image-job:\n    name: image check\n    if: ${cond}\n    runs-on: x\n`);
+    expect(requiredContextProblems("image check", [guarded])).not.toEqual([]);
+  });
 
-      // Outside the image build, a build-only head skips the context.
-      if (row.file !== IMAGE_WORKFLOW) {
-        expect(skippedOnBuildHeads(workflow.jobs).has(row.job), `${row.context} runs on a build-only head`).toBe(true);
-      }
+  it("refuses a required context no job produces, or two jobs produce", () => {
+    const one = wf("a.yml", `  req:\n    name: required check\n    if: ${cond}\n    runs-on: x\n`);
+    const two = wf("b.yml", `  req:\n    name: required check\n    if: ${cond}\n    runs-on: x\n`);
+    expect(requiredContextProblems("missing check", [one, image])).not.toEqual([]);
+    expect(requiredContextProblems("required check", [one, two, image])).not.toEqual([]);
+  });
+
+  it("names a reusable call's context as the platform does", () => {
+    const caller = wf("c.yml", `  outer:\n    if: ${cond}\n    uses: ./.github/workflows/d.yml\n`);
+    const called = { file: "d.yml", ...readWorkflow("on: workflow_call\njobs:\n  inner:\n    name: inner check\n    runs-on: x\n") };
+    const remote = wf("e.yml", `  far:\n    if: ${cond}\n    uses: some/where/.github/workflows/f.yml@0123456789012345678901234567890123456789\n`);
+    expect(requiredContextProblems("outer / inner check", [caller, called, remote, image])).toEqual([]);
+    expect(requiredContextProblems("far / far", [caller, called, remote, image])).toEqual([]);
+  });
+});
+
+describe("every required context runs on an ordinary pull request", () => {
+  const readJson = (rel) => JSON.parse(fs.readFileSync(path.join(REPO_ROOT, rel), "utf8"));
+  const byFile = new Map(WORKFLOWS.map((w) => [w.file, w]));
+  const rulesetContexts = RULESET_CALLERS.flatMap((file) => {
+    const workflow = byFile.get(file);
+    return workflow ? contextsProduced(file, workflow, (f) => byFile.get(f) ?? null).map((p) => p.context) : [];
+  });
+  const required = [
+    ...new Set([
+      ...readJson(".github/branch-protections.json").required_status_checks.contexts,
+      ...readJson(".github/gate-suite.json").requiredContexts.map((c) => c.context),
+      ...COVERAGE_GUARD_CONTEXTS,
+      SELF_CONTEXT,
+      ...rulesetContexts,
+    ]),
+  ].sort();
+
+  it("reads the required contexts from the repository's records, no fewer than the rules held", () => {
+    for (const file of RULESET_CALLERS) expect(byFile.has(file), `${file} is missing`).toBe(true);
+    expect(rulesetContexts).toHaveLength(RULESET_CALLERS.length);
+    expect(required.length).toBeGreaterThanOrEqual(REQUIRED_AT_LEAST);
+  });
+
+  for (const context of required) {
+    it(`${context}: one producing job, run on every ordinary head and a push, skipped on a build-only head outside the image build`, () => {
+      expect(requiredContextProblems(context, WORKFLOWS)).toEqual([]);
     });
   }
 });
