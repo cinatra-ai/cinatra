@@ -522,9 +522,9 @@ for its floor:
 | `ci-pinned-tests-exist.mjs` | `package-suite-runner-exceptions.json` and `root-tier-runner-exceptions.json` | a new item in either file | `CI_PINNED_TESTS_BASE` |
 | `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
 | `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record that matches it; a stale, orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
-| `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` | a new package in the set | `REQUIRED_EXTENSIONS_COVER_BASE` |
+| `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` (a register: see the record road below) | a new package in the set without its record | `REQUIRED_EXTENSIONS_COVER_BASE` |
 | `org-write-table-sweep.mjs` | `org-write-table-sweep.baseline.json` | a new file or a raised count of raw org-axis writes | `ORG_WRITE_TABLE_SWEEP_BASE` |
-| `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` | a new manifest row (file and reference) or a raised count | `SYSTEM_WRITER_MANIFEST_BASE` |
+| `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 
 The rules the helper holds for every gate:
@@ -545,8 +545,12 @@ The rules the helper holds for every gate:
   underscore and slash; no leading dash; no `..`) before it reaches git; a name
   of another form fails the gate. One attempt with a timeout of 30 seconds, one
   more after a failure, and no other network call. The repository is public:
-  the helper adds no credential and reads none (no credential helper, no
-  prompt). A remote address that holds a user part is never printed; the
+  the helper adds no credential and reads none. The fetch is anonymous
+  whatever the checkout left in its configuration: the helper's own call
+  passes an empty credential helper, an empty askpass program, an empty
+  `http.extraheader` and an empty value for every address-scoped
+  `http.ADDRESS.extraheader` key it finds, with `GIT_TERMINAL_PROMPT=0`, so a
+  job token that a checkout stored as a header is never sent. A remote address that holds a user part is never printed; the
   remote is then named by its name only. A fetch that fails fails the gate with
   its reason. A base named by the gate's own variable is a revision the
   workflow chose, and it is never fetched. `FLOOR_BASE_FETCH=0` switches the
@@ -586,6 +590,36 @@ tests against the repository as checked out, with the run's environment.
 
 Not guarded yet: the other gates that cinatra#3832 lists, which need a
 workflow change or a floor moved into a file of its own.
+
+### The record road for registers
+
+Two guarded lists are registers of things allowed after a review, not floors
+of faults: the system writers' manifest and the set of system extensions. A
+row added to either passes in the pull request that carries it, WITH ITS
+RECORD in the register's permits file, in the same change:
+
+- `scripts/audit/system-writer-manifest.permits.json` for the manifest (a
+  record per row, by file and reference; a raised count needs its record
+  written or updated in the change);
+- `scripts/audit/required-extensions-cover-host-imports.permits.json` for the
+  set (a record per package name).
+
+A record is `{ "list", "row", "reason", "pr" }`: the register's name, the exact
+row, a reason that is a sentence (at least six words of three letters or more,
+at least four of them different) and the number of the pull request. The gate
+prints one NOTICE line for every addition it absorbs, naming the row, the
+reason and the pull request. A row added without its record fails, and the
+refusal names the permits file and the record's form. A record for a row the
+register does not hold is an orphan and fails. A record is carried forward
+unchanged while its row stands (an altered or deleted record with its row
+still on the register fails), and it goes when its row goes. A permits file
+that does not parse fails the gate on a pull request's run; an absent one
+holds no records. The shared helper holds the reader and the rules once
+(`parsePermits`, `checkPermits` in `scripts/audit/lib/floor-base-guard.mjs`).
+
+The other guarded floors list tolerated faults (a raw write outside the
+registry, an embedded skill, a forbidden import): they have no record road
+and only shrink.
 
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 

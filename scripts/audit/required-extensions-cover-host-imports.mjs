@@ -72,12 +72,15 @@
 // Fail-closed: refuses to run against an absent/under-populated extensions/
 // tree (the banned-name set would be empty and the gate would pass vacuously).
 //
-// FLOOR COMPARED WITH THE BASE (cinatra#3832): the set of system extensions
+// COMPARED WITH THE BASE (cinatra#3832): the set of system extensions
 // (`cinatra.systemExtensions` in the root package.json) is compared with the
-// base branch's copy, and a package the base's set does not hold fails, so a
-// pull request cannot grow the system set — and with the equality above the
-// declared set of required extensions — in its own change; a removed package passes. The base
-// comes from REQUIRED_EXTENSIONS_COVER_BASE when a workflow sets it, else from
+// base branch's copy. The set is a register of packages allowed after a review,
+// not a floor of faults: a package the base's set does not hold passes only in
+// the pull request that carries it WITH ITS RECORD in
+// scripts/audit/required-extensions-cover-host-imports.permits.json (the record
+// road of the shared guard), with a NOTICE line; without its record it fails,
+// and with the equality above the declared set of required extensions cannot
+// grow unrecorded either. A removed package passes. The base comes from REQUIRED_EXTENSIONS_COVER_BASE when a workflow sets it, else from
 // the pull request's base branch; a base that cannot be read fails closed (the
 // shared guard, scripts/audit/lib/floor-base-guard.mjs).
 //
@@ -105,6 +108,18 @@ export const FLOOR_FILE = "package.json";
 /** The gate's own base variable (a git revision), when a workflow sets one. */
 export const FLOOR_BASE_VAR = "REQUIRED_EXTENSIONS_COVER_BASE";
 
+/** The permit file of the set of system extensions, repo-relative. */
+export const PERMIT_FILE = "scripts/audit/required-extensions-cover-host-imports.permits.json";
+
+/** The list name every permit in PERMIT_FILE carries. */
+export const PERMIT_LIST = "system-extensions";
+
+/** The record road, in one sentence (printed with every refusal of growth). */
+export const PERMIT_ROAD =
+  `A new system extension needs its record in ${PERMIT_FILE} in the same pull request: ` +
+  `{ "list": "${PERMIT_LIST}", "row": "the package's name", ` +
+  '"reason": "a sentence of at least six words", "pr": the pull request\'s number }.';
+
 /** `cinatra.systemExtensions` of a parsed package.json (absent or not a list: empty). */
 function systemExtensionsOf(pkgJson) {
   const list = pkgJson?.cinatra?.systemExtensions;
@@ -127,6 +142,18 @@ export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env,
     grown: (base, current) => newKeys(base, current),
     repoRoot,
     env,
+    permits: {
+      path: PERMIT_FILE,
+      list: PERMIT_LIST,
+      // The exact row: the package's name.
+      rowKey: (row) => {
+        if (typeof row !== "string" || !/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(row)) throw new Error("a row is a package name");
+        return row;
+      },
+      keyOfGrowth: (line) => line,
+      rowsOf: (set) => set,
+      road: PERMIT_ROAD,
+    },
   });
 }
 

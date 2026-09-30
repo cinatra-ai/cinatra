@@ -4,6 +4,10 @@
 // Every comparison runs against a real git fixture (a base commit published as
 // origin/main and a head commit on top), never against a mocked git.
 
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,10 +15,14 @@ import {
   FETCH_ATTEMPTS,
   FETCH_SWITCH_VAR,
   FETCH_TIMEOUT_MS,
+  anonymousFetchArgs,
+  checkPermits,
   compareFloorWithBase,
+  isPermitReason,
   fetchBaseBranch,
   isBranchName,
   newKeys,
+  parsePermits,
   raisedCounts,
   readFileAtBase,
   redactRemote,
@@ -368,5 +376,146 @@ describe("the base fetched in a checkout of one commit", () => {
     expect(r.attempts).toBe(2);
     expect(r.reason).toMatch(/timed out after 0\.3 s/);
     expect(Date.now() - started).toBeLessThan(15_000);
+  });
+});
+
+// The fetch is anonymous whatever the checkout left in its configuration: a
+// checkout action may store a job's token as an extra HTTP header.
+describe("the guard's fetch is anonymous", () => {
+  const MARKER = "MARKER-3832";
+  function checkoutWithHeaders(address) {
+    const f = makeOneCommitCheckout({ base: { [FLOOR]: { counts: { a: 1 } } }, head: { [FLOOR]: { counts: { a: 1 } } } });
+    fixtures.push(f);
+    if (address) fixtureGit(f.root, ["remote", "set-url", "origin", address]);
+    const scope = address ? address.replace(/[^/]*$/, "") : pathToFileURL(f.bare).href;
+    fixtureGit(f.root, ["config", `http.${scope}.extraheader`, `AUTHORIZATION: basic ${MARKER}`]);
+    fixtureGit(f.root, ["config", "http.extraheader", `X-Plain: ${MARKER}`]);
+    return { f, scope };
+  }
+
+  it("clears the credential helper, the askpass program and every extra header key for its own call", () => {
+    const { f, scope } = checkoutWithHeaders();
+    const args = anonymousFetchArgs(f.root);
+    expect(args.slice(0, 6)).toEqual(["-c", "credential.helper=", "-c", "core.askPass=", "-c", "http.extraheader="]);
+    expect(args.slice(6)).toContain(`http.${scope}.extraheader=`);
+    expect(args.filter((a, i) => i % 2 === 0).every((a) => a === "-c")).toBe(true);
+    expect(args.join(" ")).not.toContain(MARKER);
+
+    // The fetch process gets exactly those arguments (the spy's call list),
+    // and git's own trace of the call carries no marker. (A file remote sends
+    // no HTTP header at all; the next test shows it against an HTTP remote.)
+    const trace = join(f.root, "..", "trace.log");
+    const saved = process.env.GIT_TRACE;
+    process.env.GIT_TRACE = trace;
+    let spied;
+    try {
+      spied = withGitSpy(() => compare(f.root, { a: 1 }, PULL_REQUEST_RUN));
+    } finally {
+      if (saved === undefined) delete process.env.GIT_TRACE;
+      else process.env.GIT_TRACE = saved;
+    }
+    expect(spied.result).toMatchObject({ ok: true, status: "held" });
+    const fetches = spied.calls.filter((c) => /(^| )fetch /.test(c));
+    expect(fetches).toHaveLength(1);
+    expect(fetches[0].startsWith(`${args.join(" ")} fetch `)).toBe(true);
+    const traced = readFileSync(trace, "utf8");
+    expect(traced).toMatch(/built-in: git fetch --depth=1/);
+    expect(traced).not.toContain(MARKER);
+  });
+
+  it("an HTTP remote never receives the stored header from the guard, while a plain fetch sends it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floor-base-http-"));
+    const log = join(dir, "requests.log");
+    const portFile = join(dir, "port");
+    writeFileSync(log, "");
+    const server = spawn(
+      process.execPath,
+      [
+        "-e",
+        'const http=require("http"),fs=require("fs");const [log,portFile]=process.argv.slice(1);' +
+          'const s=http.createServer((q,r)=>{fs.appendFileSync(log,JSON.stringify(q.headers)+"\\n");r.statusCode=404;r.end();});' +
+          's.listen(0,"localhost",()=>fs.writeFileSync(portFile,String(s.address().port)));setTimeout(()=>process.exit(0),60000);',
+        log,
+        portFile,
+      ],
+      { stdio: "ignore" },
+    );
+    const savedProxy = [process.env.no_proxy, process.env.NO_PROXY];
+    try {
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      for (let i = 0; i < 200 && !existsSync(portFile); i += 1) Atomics.wait(pause, 0, 0, 25);
+      const port = readFileSync(portFile, "utf8").trim();
+      process.env.no_proxy = "localhost";
+      process.env.NO_PROXY = "localhost";
+      const { f } = checkoutWithHeaders(`http://localhost:${port}/remote.git`);
+
+      // Control: a plain fetch of the same checkout sends both stored headers.
+      expect(() => fixtureGit(f.root, ["fetch", "origin", "main"])).toThrow();
+      expect(readFileSync(log, "utf8")).toContain(MARKER);
+
+      writeFileSync(log, "");
+      const r = compare(f.root, { a: 1 }, PULL_REQUEST_RUN);
+      expect(r.status).toBe("unreadable");
+      expect(r.lines[0]).toMatch(/failed after 2 attempts/);
+      const seen = readFileSync(log, "utf8");
+      expect(seen.split("\n").filter(Boolean).length).toBeGreaterThanOrEqual(2);
+      expect(seen).not.toContain(MARKER);
+    } finally {
+      server.kill("SIGKILL");
+      [process.env.no_proxy, process.env.NO_PROXY] = savedProxy;
+      if (savedProxy[0] === undefined) delete process.env.no_proxy;
+      if (savedProxy[1] === undefined) delete process.env.NO_PROXY;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the record road — the shared reader", () => {
+  const opts = { list: "demo-list", rowKey: (row) => { if (typeof row !== "string") throw new Error("a row is a name"); return row; } };
+  const REASON = "one reason with enough real words here";
+  const permit = (row, extra = {}) => ({ list: "demo-list", row, reason: REASON, pr: 3900, ...extra });
+  const file = (...permits) => JSON.stringify({ note: "x", permits });
+
+  it("isPermitReason: six words of three letters or more, four of them different", () => {
+    expect(isPermitReason("the host needs this package at every start")).toBe(true);
+    expect(isPermitReason("yes yes yes yes yes yes yes")).toBe(false);
+    expect(isPermitReason("one two six one two six one")).toBe(false);
+    expect(isPermitReason("a b c d e f g h i j k l")).toBe(false);
+    expect(isPermitReason(undefined)).toBe(false);
+  });
+
+  it("reads a well-formed permits file and refuses every malformed one", () => {
+    expect(parsePermits(file(permit("a")), opts)).toEqual([{ key: "a", permit: permit("a") }]);
+    expect(parsePermits(file(), opts)).toEqual([]);
+    const bad = [
+      ["{ not json", /JSON|Unexpected|Expected/],
+      [JSON.stringify({ permits: {} }), /"permits" is not a list/],
+      [file(permit("a", { reason: "too short a reason" })), /at least 6 words/],
+      [file(permit("a", { list: "other" })), /names the list "other"/],
+      [file(permit("a", { extra: 1 })), /exactly list, row, reason and pr/],
+      [file(permit("a", { pr: 0 })), /"pr" must be the pull request's number/],
+      [file(permit(7)), /not a row of "demo-list"/],
+      [file(permit("a"), permit("a")), /repeats the row a/],
+    ];
+    for (const [text, re] of bad) expect(() => parsePermits(text, opts), text).toThrow(re);
+  });
+
+  it("checkPermits: a record in the head absorbs its addition; orphan, altered and deleted records fail", () => {
+    const p = (key, extra) => ({ key, permit: permit(key, extra) });
+    expect(checkPermits({ basePermits: [], headPermits: [p("b")], headRows: ["a", "b"], growthKeys: ["b"] })).toMatchObject({
+      absorbed: ["b"],
+      problems: [],
+    });
+    expect(checkPermits({ basePermits: [], headPermits: [], headRows: ["a", "b"], growthKeys: ["b"] }).absorbed).toEqual([]);
+    expect(checkPermits({ basePermits: [], headPermits: [p("c")], headRows: ["a", "b"], growthKeys: ["b"] }).problems).toEqual([
+      "c: orphan record, the register does not hold its row; remove the record",
+    ]);
+    expect(checkPermits({ basePermits: [p("a")], headPermits: [p("a", { pr: 3901 })], headRows: ["a"], growthKeys: [] }).problems).toEqual([
+      "a: the record is altered while its row stands; carry it unchanged",
+    ]);
+    expect(checkPermits({ basePermits: [p("a")], headPermits: [], headRows: ["a"], growthKeys: [] }).problems).toEqual([
+      "a: the record is deleted while its row stands; carry it unchanged",
+    ]);
+    expect(checkPermits({ basePermits: [p("a")], headPermits: [], headRows: [], growthKeys: [] }).problems).toEqual([]);
   });
 });

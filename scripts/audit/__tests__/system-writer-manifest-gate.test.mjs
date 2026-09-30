@@ -47,6 +47,9 @@ import {
   SWEEP_REL,
   FLOOR_FILE,
   FLOOR_BASE_VAR,
+  PERMIT_FILE,
+  PERMIT_LIST,
+  PERMIT_ROAD,
   checkFloorAgainstBase,
 } from "../system-writer-manifest-gate.mjs";
 import {
@@ -402,5 +405,116 @@ describe("system-writer-manifest — floor compared with the base", () => {
     });
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/\[system-writer-manifest\] FAIL — the floor scripts\/audit\/system-writer-manifest\.json cannot be compared with the base/);
+  });
+});
+
+// --------------------------------------------------------------------------
+// cinatra#3832: the record road. The manifest is a register of writers
+// allowed after a review: a new or raised row passes in the pull request that
+// carries it, with its record in the permits file.
+// --------------------------------------------------------------------------
+
+describe("system-writer-manifest — the record road for a new writer", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const manifest = (writers) => ({ note: "fixture", version: 1, writers });
+  const row = (file, ref, count) => ({ file, ref, count });
+  const REASON = "the new backfill writes org rows at every start";
+  const record = (file, ref, reason = REASON, pr = 3900) => ({ list: PERMIT_LIST, row: { file, ref }, reason, pr });
+  const records = (...permits) => ({ note: "fixture", permits });
+  function repo({ baseRows, headRows, basePermits, headPermits }) {
+    const base = { [FLOOR_FILE]: manifest(baseRows) };
+    if (basePermits !== undefined) base[PERMIT_FILE] = basePermits;
+    const head = { [FLOOR_FILE]: manifest(headRows) };
+    if (headPermits !== undefined) head[PERMIT_FILE] = headPermits;
+    const f = makeFloorRepo({ base, head });
+    fixtures.push(f);
+    return f.root;
+  }
+  const check = (root, env = PULL_REQUEST_RUN) => checkFloorAgainstBase({ repoRoot: root, env });
+  const SEED = row("scripts/seed.mjs", "raw-sql:objects", 6);
+  const NEW = row("scripts/new.mjs", "drizzle:agentRuns", 1);
+  const NEW_KEY = "scripts/new.mjs [drizzle:agentRuns]";
+
+  it("the permits file of this commit holds no records", () => {
+    const doc = JSON.parse(readFileSync(join(REPO_ROOT, PERMIT_FILE), "utf8"));
+    expect(doc.permits).toEqual([]);
+  });
+
+  it("an addition with its record in the same change PASSES, with a NOTICE naming row, reason and pull request", () => {
+    const r = check(repo({ baseRows: [SEED], headRows: [SEED, NEW], basePermits: records(), headPermits: records(record(NEW.file, NEW.ref)) }));
+    expect(r).toMatchObject({ ok: true, status: "held", absorbed: [NEW_KEY] });
+    expect(r.lines).toContain(`[system-writer-manifest] NOTICE — ADDITION ABSORBED: ${NEW_KEY}, reason: "${REASON}", pull request #3900`);
+  });
+
+  it("an addition without its record FAILS, and the refusal names the permits file and the record's form", () => {
+    const r = check(repo({ baseRows: [SEED], headRows: [SEED, NEW] }));
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["scripts/new.mjs [drizzle:agentRuns] (0 -> 1)"]);
+    expect(r.lines).toContain(`[system-writer-manifest] ${PERMIT_ROAD}`);
+    expect(PERMIT_ROAD).toContain(PERMIT_FILE);
+    expect(PERMIT_ROAD).toMatch(/"list": "system-writer-manifest", "row": \{ "file": .*"ref": .*"reason": .*"pr"/);
+  });
+
+  it("a raised count passes with a record written or updated in the change, and FAILS on a record carried unchanged", () => {
+    const raised = row("scripts/seed.mjs", "raw-sql:objects", 7);
+    let r = check(repo({ baseRows: [SEED], headRows: [raised], headPermits: records(record(SEED.file, SEED.ref)) }));
+    expect(r).toMatchObject({ ok: true, status: "held" });
+    const carried = records(record(SEED.file, SEED.ref));
+    r = check(repo({ baseRows: [SEED], headRows: [raised], basePermits: carried, headPermits: carried }));
+    expect(r.ok).toBe(false);
+    expect(r.permitProblems).toEqual([
+      "scripts/seed.mjs [raw-sql:objects]: grows on a record carried from the base; update the record for this change",
+    ]);
+    r = check(repo({ baseRows: [SEED], headRows: [raised], basePermits: carried, headPermits: records(record(SEED.file, SEED.ref, REASON, 3901)) }));
+    expect(r).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a record for a row the manifest does not hold is an orphan and FAILS", () => {
+    const r = check(repo({ baseRows: [SEED], headRows: [SEED], headPermits: records(record("scripts/gone.mjs", "raw-sql:objects")) }));
+    expect(r.ok).toBe(false);
+    expect(r.permitProblems).toEqual([
+      "scripts/gone.mjs [raw-sql:objects]: orphan record, the register does not hold its row; remove the record",
+    ]);
+  });
+
+  it("a carried-forward record PASSES unchanged, and FAILS altered or deleted while its row stands", () => {
+    const base = { baseRows: [SEED, NEW], headRows: [SEED, NEW], basePermits: records(record(NEW.file, NEW.ref)) };
+    expect(check(repo(base))).toMatchObject({ ok: true, status: "held" });
+    let r = check(repo({ ...base, headPermits: records(record(NEW.file, NEW.ref, "a different sentence of reasons for this row")) }));
+    expect(r.permitProblems).toEqual([`${NEW_KEY}: the record is altered while its row stands; carry it unchanged`]);
+    r = check(repo({ ...base, headPermits: records() }));
+    expect(r.permitProblems).toEqual([`${NEW_KEY}: the record is deleted while its row stands; carry it unchanged`]);
+  });
+
+  it("a record removed together with its row PASSES", () => {
+    const r = check(repo({ baseRows: [SEED, NEW], headRows: [SEED], basePermits: records(record(NEW.file, NEW.ref)), headPermits: records() }));
+    expect(r).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a reason of one repeated word FAILS", () => {
+    const r = check(repo({ baseRows: [SEED], headRows: [SEED, NEW], headPermits: records(record(NEW.file, NEW.ref, "writer writer writer writer writer writer")) }));
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/at least 6 words of three letters or more, at least 4 of them different/);
+  });
+
+  it("an unreadable permits file on a pull request's run FAILS with its reason (head or base)", () => {
+    let r = check(repo({ baseRows: [SEED], headRows: [SEED], basePermits: records(), headPermits: "{ not json" }));
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/the permit file scripts\/audit\/system-writer-manifest\.permits\.json is not readable/);
+    r = check(repo({ baseRows: [SEED], headRows: [SEED], basePermits: "{ not json", headPermits: records() }));
+    expect(r.status).toBe("unreadable");
+    const foreign = records({ list: "system-extensions", row: { file: NEW.file, ref: NEW.ref }, reason: REASON, pr: 3900 });
+    r = check(repo({ baseRows: [SEED], headRows: [SEED], basePermits: records(), headPermits: foreign }));
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/names the list "system-extensions", not "system-writer-manifest"/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const r = check(repo({ baseRows: [SEED], headRows: [SEED, NEW], headPermits: "{ not json" }), NO_PULL_REQUEST_RUN);
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
   });
 });

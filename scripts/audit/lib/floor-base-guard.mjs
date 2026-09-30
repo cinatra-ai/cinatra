@@ -37,8 +37,11 @@
 // the floor there. The branch name is checked against the form of a branch
 // name before it reaches git. One attempt with a timeout of 30 seconds, one
 // more after a failure, no other network call. The repository is public: the
-// fetch needs no credential, and the guard adds none and reads none (no
-// credential helper, no prompt). A remote address with a user part is never
+// fetch needs no credential, and the guard adds none and reads none. The fetch
+// is anonymous whatever the checkout left in its configuration: no credential
+// helper, no prompt, no askpass program, and every extra HTTP header key
+// (`http.extraheader` and each address-scoped one) is reset to empty for the
+// guard's own call, so a job token a checkout stored is never sent. A remote address with a user part is never
 // printed; the remote is then named by its name only. A fetch that fails fails
 // the gate with its reason. A base in the checkout already is read as before,
 // with nothing fetched. A base named by the gate's own variable is a revision
@@ -49,6 +52,8 @@
 // Node builtins only; the one external program is `git`.
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 /** The platform's variable naming a pull request's base branch. */
 export const PULL_REQUEST_BASE_VAR = "GITHUB_BASE_REF";
@@ -125,6 +130,39 @@ function remoteUrl(repoRoot, remote) {
   }
 }
 
+/**
+ * The configuration keys of an extra HTTP header scoped to an address
+ * (`http.ADDRESS.extraheader`), in every scope git reads for the checkout,
+ * includes followed: the keys a checkout action writes a job's token into.
+ */
+export function extraHeaderKeys(repoRoot) {
+  try {
+    return execFileSync("git", ["config", "--includes", "--name-only", "--get-regexp", "^http\\..*\\.extraheader$"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split(/\r?\n/)
+      .map((k) => k.trim())
+      .filter(Boolean)
+      .filter((k, i, all) => all.indexOf(k) === i);
+  } catch {
+    return []; // git exits 1 when no key matches
+  }
+}
+
+/**
+ * The `-c` arguments that make the guard's fetch anonymous whatever the
+ * checkout left in its configuration: no credential helper, no askpass
+ * program, no extra header (an empty value resets git's list of extra
+ * headers), for `http.extraheader` and for every address-scoped key.
+ */
+export function anonymousFetchArgs(repoRoot) {
+  const args = ["-c", "credential.helper=", "-c", "core.askPass=", "-c", "http.extraheader="];
+  for (const key of extraHeaderKeys(repoRoot)) args.push("-c", `${key}=`);
+  return args;
+}
+
 /** The last line git wrote to stderr, redacted and short. */
 function gitSaid(err, remote) {
   const text = String(err?.stderr ?? "")
@@ -157,14 +195,14 @@ export function fetchBaseBranch({ repoRoot, remote = BASE_REMOTE, branch, timeou
   const named = { name: remote, url };
   const ref = `${FETCHED_REF_PREFIX}${branch}`;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+  const anonymous = anonymousFetchArgs(repoRoot);
   const reasons = [];
   for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt += 1) {
     try {
       execFileSync(
         "git",
         [
-          "-c",
-          "credential.helper=",
+          ...anonymous,
           "fetch",
           "--depth=1",
           "--no-tags",
@@ -239,14 +277,14 @@ export function resolveFloorBase(envVar, env = process.env) {
   return { kind: "none" };
 }
 
-/**
- * The text of `path` (repo-relative, forward slashes) at `ref`.
- * Returns `{ ok: true, text }` or `{ ok: false, reason }`.
- */
 function unresolvedReason(ref) {
   return `the base "${ref}" did not resolve (a shallow checkout, or the base branch was not fetched)`;
 }
 
+/**
+ * The text of `path` (repo-relative, forward slashes) at `ref`.
+ * Returns `{ ok: true, text }` or `{ ok: false, reason }`.
+ */
 export function readFileAtBase(repoRoot, ref, path) {
   if (!refResolves(repoRoot, ref)) return { ok: false, reason: unresolvedReason(ref) };
   try {
@@ -274,9 +312,13 @@ export function readFileAtBase(repoRoot, ref, path) {
  * @param {(baseFloor: *, headFloor: *) => string[]} o.grown  one line per growth, empty when the floor held
  * @param {string} o.repoRoot   where git runs
  * @param {object} [o.env]      the environment (default: the process's)
+ * @param {object} [o.permits]  the record road of a register that grows after
+ *   a review (see `checkPermits`): `{ path, list, rowKey, keyOfGrowth, rowsOf,
+ *   road }`. A growth line whose row the head's permits file records is
+ *   absorbed, with a NOTICE line.
  * @returns {{ status: "no-base"|"held"|"grew"|"unreadable", ok: boolean, lines: string[], ref?: string, baseFloor?: *, growth?: string[] }}
  */
-export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse, grown, repoRoot, env = process.env }) {
+export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse, grown, repoRoot, env = process.env, permits }) {
   const where = resolveFloorBase(envVar, env);
   if (where.kind === "none") {
     return {
@@ -328,7 +370,46 @@ export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse
       ...(fetched ? { fetched } : {}),
     };
   }
-  const growth = grown(baseFloor, headFloor);
+  let growth = grown(baseFloor, headFloor);
+  if (permits) {
+    const road = applyPermits({ permits, growth, headFloor, repoRoot, ref });
+    if (!road.ok) return { ...unreadable(road.reason, ref), ...(fetched ? { fetched } : {}) };
+    const extra = { absorbed: road.absorbed, permitProblems: road.problems };
+    if (road.remaining.length > 0 || road.problems.length > 0) {
+      return {
+        status: "grew",
+        ok: false,
+        ref,
+        ...(fetched ? { fetched } : {}),
+        baseFloor,
+        growth: road.remaining,
+        ...extra,
+        lines: [
+          ...(road.remaining.length > 0
+            ? [
+                `[${gate}] FAIL — the register ${floorPath} GREW against ${said} ` +
+                  `without a record for each added row in ${permits.path}:`,
+                ...road.remaining.map((g) => `  + ${g}`),
+              ]
+            : []),
+          ...(road.problems.length > 0
+            ? [`[${gate}] FAIL — the records in ${permits.path} do not hold against ${said}:`, ...road.problems.map((p) => `  ! ${p}`)]
+            : []),
+          `[${gate}] ${permits.road}`,
+        ],
+      };
+    }
+    return {
+      status: "held",
+      ok: true,
+      ref,
+      ...(fetched ? { fetched } : {}),
+      baseFloor,
+      growth: [],
+      ...extra,
+      lines: [`[${gate}] floor base guard: ${floorPath} does not grow against ${said}.`, ...road.notices.map((n) => `[${gate}] NOTICE — ${n}`)],
+    };
+  }
   if (growth.length > 0) {
     return {
       status: "grew",
@@ -381,4 +462,190 @@ export function raisedCounts(base, head) {
     if (c > b) out.push(`${k} (${b} -> ${c})`);
   }
   return out.sort();
+}
+
+// ---------------------------------------------------------------------------
+// The record road (cinatra#3832): a register that grows after a review.
+//
+// Some guarded lists are registers of things allowed after a review, not
+// floors of faults (the system writers' manifest, the set of system
+// extensions). A row added to such a register passes in the pull request that
+// carries it, WITH ITS RECORD in the register's permits file:
+//   - a row the head adds passes when the head's permits file holds a record
+//     for exactly that row, written in the same change (or, for a raised count,
+//     updated in it); the gate prints one NOTICE line per absorbed addition,
+//     naming the row, the reason and the pull request;
+//   - a row added without its record fails; the refusal names the permits file
+//     and the record's form;
+//   - a record for a row the register does not hold at the head is an orphan
+//     and fails; a record for a row that was not added in the change and that
+//     the base did not record fails the same way (a record annotates an
+//     addition);
+//   - a record whose row stands on the register is carried forward UNCHANGED
+//     while its row stands (an altered or a deleted record with its row still
+//     on the register fails), and it goes when its row goes;
+//   - a permits file that does not parse, or a record that is not well formed,
+//     fails the gate on a pull request's run. An absent permits file holds no
+//     records.
+//
+// The file form: { "note": "...", "permits": [ { "list", "row", "reason", "pr" } ] }
+// where `list` names the register, `row` the exact row (the register's own
+// form), `reason` is a sentence (at least six words of three letters or more,
+// at least four of them different) and `pr` the number of the pull request
+// that carries the addition.
+// ---------------------------------------------------------------------------
+
+const PERMIT_KEYS = ["list", "pr", "reason", "row"];
+
+/** A record's reason: at least this many words of three letters or more ... */
+export const PERMIT_REASON_MIN_WORDS = 6;
+
+/** ... and at least this many different ones. */
+export const PERMIT_REASON_MIN_DISTINCT = 4;
+
+/** True when `reason` is a sentence by the record's rule. */
+export function isPermitReason(reason) {
+  if (typeof reason !== "string") return false;
+  const words = reason
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z]/g, ""))
+    .filter((w) => w.length >= 3);
+  return words.length >= PERMIT_REASON_MIN_WORDS && new Set(words).size >= PERMIT_REASON_MIN_DISTINCT;
+}
+
+/**
+ * A permits file's text -> `[{ key, permit }]`, one per record, for the
+ * register `list`; `rowKey(row)` gives the row's key and throws when the row
+ * is not a row of that register. Throws when the file or a record is not well
+ * formed.
+ */
+export function parsePermits(text, { list, rowKey }) {
+  const doc = JSON.parse(text);
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a permits file object");
+  if (!Array.isArray(doc.permits)) throw new Error('"permits" is not a list');
+  const out = [];
+  const seen = new Set();
+  doc.permits.forEach((p, i) => {
+    const at = `record ${i + 1}`;
+    if (p === null || typeof p !== "object" || Array.isArray(p)) throw new Error(`${at} is not an object`);
+    if (Object.keys(p).sort().join() !== PERMIT_KEYS.join()) throw new Error(`${at} must carry exactly list, row, reason and pr`);
+    if (p.list !== list) throw new Error(`${at} names the list ${JSON.stringify(p.list)}, not "${list}"`);
+    if (!isPermitReason(p.reason)) {
+      throw new Error(
+        `${at} needs a reason of at least ${PERMIT_REASON_MIN_WORDS} words of three letters or more, ` +
+          `at least ${PERMIT_REASON_MIN_DISTINCT} of them different`,
+      );
+    }
+    if (!(Number.isInteger(p.pr) && p.pr > 0)) throw new Error(`${at}: "pr" must be the pull request's number`);
+    let key;
+    try {
+      key = rowKey(p.row);
+    } catch (err) {
+      throw new Error(`${at}: the row is not a row of "${list}" (${err?.message ?? err})`);
+    }
+    if (seen.has(key)) throw new Error(`${at} repeats the row ${key}`);
+    seen.add(key);
+    out.push({ key, permit: p });
+  });
+  return out;
+}
+
+const samePermit = (a, b) =>
+  a.list === b.list && a.reason === b.reason && a.pr === b.pr && JSON.stringify(a.row) === JSON.stringify(b.row);
+
+/**
+ * The record road's verdict. `growthKeys` are the rows the head adds (or
+ * raises) against the base; `headRows` the rows on the register at the head.
+ * Returns `{ absorbed, problems, notices }`: `absorbed` the growth keys whose
+ * record the head holds, `problems` one line per broken rule.
+ */
+export function checkPermits({ basePermits, headPermits, headRows, growthKeys }) {
+  const baseBy = new Map(basePermits.map((e) => [e.key, e.permit]));
+  const headBy = new Map(headPermits.map((e) => [e.key, e.permit]));
+  const onHead = new Set(headRows);
+  const grown = new Set(growthKeys);
+  const absorbed = [];
+  const problems = [];
+  const notices = [];
+  for (const key of [...grown].sort()) {
+    const headPermit = headBy.get(key);
+    const basePermit = baseBy.get(key);
+    if (headPermit && !(basePermit && samePermit(basePermit, headPermit))) {
+      absorbed.push(key);
+      notices.push(`ADDITION ABSORBED: ${key}, reason: "${headPermit.reason}", pull request #${headPermit.pr}`);
+    } else if (headPermit) {
+      problems.push(`${key}: grows on a record carried from the base; update the record for this change`);
+    }
+  }
+  for (const key of [...new Set([...headBy.keys(), ...baseBy.keys()])].sort()) {
+    if (grown.has(key)) continue;
+    const headPermit = headBy.get(key);
+    const basePermit = baseBy.get(key);
+    if (headPermit && !onHead.has(key)) {
+      problems.push(`${key}: orphan record, the register does not hold its row; remove the record`);
+    } else if (headPermit && !basePermit) {
+      problems.push(`${key}: a record annotates an addition, and this change does not add the row`);
+    } else if (headPermit && !samePermit(basePermit, headPermit)) {
+      problems.push(`${key}: the record is altered while its row stands; carry it unchanged`);
+    } else if (!headPermit && onHead.has(key)) {
+      problems.push(`${key}: the record is deleted while its row stands; carry it unchanged`);
+    }
+  }
+  return { absorbed, problems, notices };
+}
+
+/** The permit file at the base: absent holds none; present must parse. */
+function readPermitsAtBase(repoRoot, ref, permits) {
+  let listed = "";
+  try {
+    listed = execFileSync("git", ["ls-tree", "--name-only", ref, "--", permits.path], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return { ok: false, reason: `the permit file ${permits.path} cannot be listed on the base "${ref}"` };
+  }
+  if (listed === "") return { ok: true, permits: [] };
+  const read = readFileAtBase(repoRoot, ref, permits.path);
+  if (!read.ok) return read;
+  try {
+    return { ok: true, permits: parsePermits(read.text, permits) };
+  } catch (err) {
+    return { ok: false, reason: `the permit file ${permits.path} on "${ref}" is not readable (${err?.message ?? err})` };
+  }
+}
+
+/** The permit file in the checkout: absent holds none; present must parse. */
+function readPermitsInCheckout(repoRoot, permits) {
+  const abs = join(repoRoot, permits.path);
+  if (!existsSync(abs)) return { ok: true, permits: [] };
+  try {
+    return { ok: true, permits: parsePermits(readFileSync(abs, "utf8"), permits) };
+  } catch (err) {
+    return { ok: false, reason: `the permit file ${permits.path} is not readable (${err?.message ?? err})` };
+  }
+}
+
+function applyPermits({ permits, growth, headFloor, repoRoot, ref }) {
+  const base = readPermitsAtBase(repoRoot, ref, permits);
+  if (!base.ok) return base;
+  const head = readPermitsInCheckout(repoRoot, permits);
+  if (!head.ok) return head;
+  const keyed = growth.map((line) => ({ line, key: permits.keyOfGrowth(line) }));
+  const verdict = checkPermits({
+    basePermits: base.permits,
+    headPermits: head.permits,
+    headRows: permits.rowsOf(headFloor),
+    growthKeys: keyed.map((g) => g.key),
+  });
+  const absorbed = new Set(verdict.absorbed);
+  return {
+    ok: true,
+    remaining: keyed.filter((g) => !absorbed.has(g.key)).map((g) => g.line),
+    absorbed: verdict.absorbed,
+    problems: verdict.problems,
+    notices: verdict.notices,
+  };
 }

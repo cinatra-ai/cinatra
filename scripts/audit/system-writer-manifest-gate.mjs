@@ -98,9 +98,13 @@
  *   `ref` = `raw-sql:<table>` | `drizzle:<symbol>` | `write-registry:<export>`.
  *   Regenerate deliberately with `--write-manifest`; the diff is the review.
  *
- * FLOOR COMPARED WITH THE BASE (cinatra#3832): the committed manifest may not
- * hold a row, or a count, that the base branch's manifest does not, so a pull
- * request cannot sanction its own new writer. A removed or lowered row passes.
+ * COMPARED WITH THE BASE (cinatra#3832): the manifest is a register of
+ * writers allowed after a review, not a floor of faults. A row, or a count,
+ * that the base branch's manifest does not hold passes only in the pull
+ * request that carries it WITH ITS RECORD in
+ * scripts/audit/system-writer-manifest.permits.json (the record road of the
+ * shared guard), and the gate prints a NOTICE line for it; without its record
+ * it fails. A removed or lowered row passes.
  * The base comes from SYSTEM_WRITER_MANIFEST_BASE when a workflow sets it, else
  * from the pull request's base branch, fetched one commit deep when the
  * checkout does not hold it; a base that cannot be read fails closed (the
@@ -135,6 +139,18 @@ export const FLOOR_FILE = "scripts/audit/system-writer-manifest.json";
 
 /** The gate's own base variable (a git revision), when a workflow sets one. */
 export const FLOOR_BASE_VAR = "SYSTEM_WRITER_MANIFEST_BASE";
+
+/** The permit file of the manifest, repo-relative. */
+export const PERMIT_FILE = "scripts/audit/system-writer-manifest.permits.json";
+
+/** The list name every permit in PERMIT_FILE carries. */
+export const PERMIT_LIST = "system-writer-manifest";
+
+/** The record road, in one sentence (printed with every refusal of growth). */
+export const PERMIT_ROAD =
+  `A new or raised manifest row needs its record in ${PERMIT_FILE} in the same pull request: ` +
+  `{ "list": "${PERMIT_LIST}", "row": { "file": "the file", "ref": "the reference" }, ` +
+  '"reason": "a sentence of at least six words", "pr": the pull request\'s number }.';
 
 // ---------------------------------------------------------------------------
 // Table universe
@@ -554,6 +570,21 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     grown: raisedCounts,
     repoRoot,
     env,
+    permits: {
+      path: PERMIT_FILE,
+      list: PERMIT_LIST,
+      // The manifest row by its file and its reference: `{ file, ref }`.
+      rowKey: (row) => {
+        const keys = row !== null && typeof row === "object" && !Array.isArray(row) ? Object.keys(row).sort().join() : "";
+        if (keys !== "file,ref" || typeof row.file !== "string" || row.file === "" || typeof row.ref !== "string" || row.ref === "") {
+          throw new Error("a row is { file, ref }");
+        }
+        return `${row.file} [${row.ref}]`;
+      },
+      keyOfGrowth: (line) => line.replace(/ \(\d+ -> \d+\)$/, ""),
+      rowsOf: (counts) => Object.keys(counts ?? {}),
+      road: PERMIT_ROAD,
+    },
   });
 }
 
@@ -616,7 +647,7 @@ function main(argv = process.argv.slice(2)) {
     `\nA non-registry system writer (boot phase / backfill / CLI reconciler) reaches org data ` +
       `outside both registries. Enumerate it deliberately:\n` +
       `  node scripts/audit/system-writer-manifest-gate.mjs --write-manifest\n` +
-      `then justify each new/changed row in the commit. If the writer makes PER-ORG decisions it ` +
+      `then justify each new/changed row in the commit. ${PERMIT_ROAD} If the writer makes PER-ORG decisions it ` +
       `must mint system authority (post wave-3); if it belongs in a migration, see ` +
       `docs/internals/contracts/schema-migrations-and-org-write-policy.md.`,
   );
