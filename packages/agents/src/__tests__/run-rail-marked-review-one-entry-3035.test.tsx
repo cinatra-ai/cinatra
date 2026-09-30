@@ -15,7 +15,7 @@
  *   A1  a gate raised at the one marked step takes that step's place, label
  *       and ordinal, and the step's own entry is not drawn beside it;
  *   A2  every other kind of rail row keeps its place (a pin);
- *   A3  a template that marks two steps folds nothing (a pin);
+ *   A3  a template marking two steps places each gate in its marked step's place;
  *   A4  the settled folded entry is the decided gate, opened read only in
  *       place through the settled selection `review:<reviewTaskId>`;
  *   A5  the run-frame rail and the stepper column draw the same rows in the
@@ -389,11 +389,30 @@ describe("a declared step and its review are ONE rail entry (cinatra#3035)", () 
     expect(transcript.entries[2].onStep).toBeUndefined();
   });
 
-  it("a template that marks two steps folds nothing", () => {
+  it("a template that marks two steps places each marked step's gate in that step's place", () => {
+    // The first marked step (display 2) was answered as an ordinary pause, so
+    // it raised no gate: the one `wayflow-` gate is the second marked step's.
     const twoMarked = buildRunStepRail(censusInput([2, MARKED_STEP_NUMBER]));
-    const noneMarked = buildRunStepRail(censusInput([]));
-    expect(JSON.stringify(twoMarked)).toBe(JSON.stringify(noneMarked));
-    expect(twoMarked.entries.some((e) => e.onStep !== undefined)).toBe(false);
+    expect(twoMarked.entries.find((e) => e.key === `gate:${REVIEW_TASK_ID}`)).toMatchObject({
+      ordinal: 3,
+      kind: "gate",
+      label: "Review the draft",
+      status: "resolved",
+      onStep: MARKED_STEP_NUMBER,
+    });
+    expect(twoMarked.entries.find((e) => e.key === `verification:${REVIEW_TASK_ID}`)).toMatchObject({
+      ordinal: 3,
+      onStep: MARKED_STEP_NUMBER,
+    });
+    expect(twoMarked.entries.some((e) => e.key === `step:${MARKED_STEP_NUMBER}`)).toBe(false);
+    expect(twoMarked.entries.find((e) => e.key === "step:2")).toMatchObject({
+      ordinal: 2,
+      kind: "step",
+      status: "completed",
+    });
+    const coreGate = twoMarked.entries.find((e) => e.key === "gate:lifecycle-review:event-core");
+    expect(coreGate?.label).toBe("Review");
+    expect(coreGate?.onStep).toBeUndefined();
   });
 
   it("the settled folded entry is the decided gate, read only, in its step's place", async () => {

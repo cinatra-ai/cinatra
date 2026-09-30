@@ -100,10 +100,10 @@ const TABLE: Array<{
   },
   {
     agent: "blog-pipeline-agent",
-    // A produces entry is a promise the run keeps: the pipeline files its draft
-    // and its LinkedIn post through terminal bindings, and its picture is now
-    // filed mid-run by the pipeline's own image step through the host's image
-    // tool. Only the ideas entry still waits for its write road — the fleet's
+    // A produces entry is a promise the run keeps: the pipeline writes its draft
+    // and its LinkedIn post mid-run through the host's materialize tool, and
+    // its picture mid-run by the pipeline's own image step through the host's
+    // image tool. Only the ideas entry still waits for its write road — the fleet's
     // adoption gate refuses a declared production nothing materializes. All
     // four EDGES stay: they say what the run touches, which is true either way.
     produces: [

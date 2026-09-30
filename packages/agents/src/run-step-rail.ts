@@ -40,8 +40,9 @@ import { stepRecordWorkName } from "./step-work-name";
 //   completion) but never override the label or fork a duplicate entry.
 //   GATES are never deduped into a step — a gate is always its own entry so a
 //   pending gate and a resolved gate (history) are each individually visible.
-//   The one exception (cinatra#3035): when exactly one template step marks its
-//   review, each `wayflow-` gate stands IN that step's place as its entry.
+//   The one exception (cinatra#3035): a `wayflow-` gate raised at a template
+//   step that marks its review stands IN that step's place as its entry, for
+//   one marked step or for several (see ORDERING).
 //
 // ── DEDUP ──────────────────────────────────────────────────────────────────
 //   Entries share an identity KEY; same key ⇒ one entry, sources unioned
@@ -60,13 +61,23 @@ import { stepRecordWorkName } from "./step-work-name";
 //   order; gates ALWAYS trail the derived-step spine, ordered among themselves by
 //   `createdAt` (they are run-keyed, not bound to a policy step number — trailing
 //   placement matches the review surface's synthetic trailing "Review" step).
-//   The one exception (cinatra#3035): a `wayflow-` gate of the ONE marked step
-//   takes that step's place and label, keeping createdAt order among the gates
-//   there (the first on the step's ordinal, each later one a fraction past it),
-//   each followed by its verification.
-//   A template marking two or more steps folds nothing: the gate row stores no
-//   step, so tying each gate to its step needs a `step_number` column on
-//   `artifact_review_gates` written at emission.
+//   The one exception (cinatra#3035): a `wayflow-` gate of a marked step takes
+//   that step's place and label, keeping createdAt order among the gates there
+//   (the first on the step's ordinal, each later one a fraction past it), each
+//   followed by its verification, and the step's own entry is not drawn.
+//   With ONE marked step every `wayflow-` gate stands there. With TWO OR MORE,
+//   the gate row stores no step, so the gates are tied to their steps by
+//   position, as the run reached them: the gates group by their base id (the
+//   part before the first `#`; one pause opens one gate per artifact), the
+//   groups are ordered by their earliest createdAt (then base id), and they
+//   pair in order with the OPEN marked steps — the marked steps, in template
+//   order, whose display index carries no answered submission (a marked pause
+//   answered as an ordinary gate raised no gate). A marked step with no group
+//   keeps its own entry; a group beyond the open marked steps trails as
+//   "Review". The one recorded limit: the rail reads one pause per marked step.
+//   A marked step that pauses more than once (a policy `gateCount` above one)
+//   would need a `step_number` column on `artifact_review_gates` written at
+//   emission to tie each gate to its step.
 //   Lifecycle-decision entries trail the gates, ordered among themselves by
 //   decision time (then event id).
 // ---------------------------------------------------------------------------
@@ -417,32 +428,67 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   // a count — a deduped or non-contiguous spine can't push a gate up into it.
   let maxOrdinal = 0;
   for (const { entry } of byKey.values()) maxOrdinal = Math.max(maxOrdinal, entry.ordinal);
-  // A DECLARED STEP AND ITS REVIEW ARE ONE ENTRY (cinatra#3035). When exactly
-  // one template step marks its review, every gate named `wayflow-…` was raised
-  // there (only the marked branch writes that prefix), so it takes that step's
-  // ordinal and label and the step's own entry is not drawn beside it. With two
-  // or more marked steps the gate row cannot say which step raised it, and
-  // every gate trails as before.
+  // A DECLARED STEP AND ITS REVIEW ARE ONE ENTRY (cinatra#3035). Only the
+  // marked branch writes a gate named `wayflow-…`, so such a gate was raised at
+  // a step the template marks. When exactly one template step marks its review,
+  // every such gate stands there. When two or more do, the gates are tied to
+  // their steps by position (see ORDERING): one group per marked pause, paired
+  // in order with the marked steps that raised a gate.
   const markedSteps = templateSteps.filter((step) => step.marksReview === true);
-  const foldStep = markedSteps.length === 1 ? markedSteps[0] : null;
-  // The gates standing there, in createdAt order. Each takes its own ordinal
-  // inside the step's place — the first the step's own, each later one a
+  const standsInByGate = new Map<string, RailTemplateStep>();
+  const wayflowGates = sortedGates.filter((g) => g.reviewTaskId.startsWith("wayflow-"));
+  if (markedSteps.length === 1) {
+    for (const g of wayflowGates) standsInByGate.set(g.reviewTaskId, markedSteps[0]);
+  } else if (markedSteps.length > 1) {
+    // A marked step whose pause was answered as an ordinary gate (an answered
+    // submission at its display index) raised no gate.
+    const openMarkedSteps = markedSteps
+      .filter((step) => submissionByIndex.get(step.index)?.answered !== true)
+      .sort((a, b) => a.index - b.index);
+    // The part of a gate's id before the first `#` — the same cut as
+    // `baseReviewTaskId` (src/lib/artifacts/artifact-review-target.ts): one
+    // pause opens one gate per artifact as `<id>`, `<id>#2`, …
+    const baseOf = (reviewTaskId: string) => {
+      const cut = reviewTaskId.indexOf("#");
+      return cut === -1 ? reviewTaskId : reviewTaskId.slice(0, cut);
+    };
+    const earliestByBase = new Map<string, number>();
+    for (const g of wayflowGates) {
+      const base = baseOf(g.reviewTaskId);
+      const t = gateTime(g.createdAt);
+      const seen = earliestByBase.get(base);
+      if (seen === undefined || t < seen) earliestByBase.set(base, t);
+    }
+    const groups = [...earliestByBase.entries()]
+      .sort((a, b) => (a[1] !== b[1] ? a[1] - b[1] : a[0].localeCompare(b[0])))
+      .map(([base]) => base);
+    const stepByBase = new Map<string, RailTemplateStep>();
+    groups.forEach((base, i) => {
+      if (i < openMarkedSteps.length) stepByBase.set(base, openMarkedSteps[i]);
+    });
+    for (const g of wayflowGates) {
+      const step = stepByBase.get(baseOf(g.reviewTaskId));
+      if (step !== undefined) standsInByGate.set(g.reviewTaskId, step);
+    }
+  }
+  // The gates standing in each step, in createdAt order. Each takes its own
+  // ordinal inside the step's place — the first the step's own, each later one a
   // fraction past it — so every entry keeps an ordinal of its own and the one
   // the run is parked on is the one `activeOrdinal` names.
-  const foldedKeys =
-    foldStep === null
-      ? []
-      : [
-          ...new Set(
-            sortedGates
-              .filter((g) => g.reviewTaskId.startsWith("wayflow-"))
-              .map((g) => `gate:${g.reviewTaskId}`),
-          ),
-        ];
+  const foldedKeysByStep = new Map<number, string[]>();
+  for (const g of sortedGates) {
+    const step = standsInByGate.get(g.reviewTaskId);
+    if (step === undefined) continue;
+    const keys = foldedKeysByStep.get(step.stepNumber) ?? [];
+    const key = `gate:${g.reviewTaskId}`;
+    if (!keys.includes(key)) keys.push(key);
+    foldedKeysByStep.set(step.stepNumber, keys);
+  }
   let trailingRank = 0;
   sortedGates.forEach((g) => {
     const key = `gate:${g.reviewTaskId}`;
-    const standsIn = g.reviewTaskId.startsWith("wayflow-") ? foldStep : null;
+    const standsIn = standsInByGate.get(g.reviewTaskId) ?? null;
+    const foldedKeys = standsIn !== null ? (foldedKeysByStep.get(standsIn.stepNumber) ?? []) : [];
     const ordinal =
       standsIn !== null
         ? standsIn.index + foldedKeys.indexOf(key) / foldedKeys.length
@@ -477,7 +523,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
     );
   });
   // The gate IS the marked step's entry once one stands there.
-  if (foldStep !== null && foldedKeys.length > 0) byKey.delete(`step:${foldStep.stepNumber}`);
+  for (const stepNumber of foldedKeysByStep.keys()) byKey.delete(`step:${stepNumber}`);
 
   // (+) VERIFICATIONS (S4, cinatra#2042) — a post-change verification record is
   //     woven in RIGHT AFTER the gate it annotates: it shares the gate's ordinal
