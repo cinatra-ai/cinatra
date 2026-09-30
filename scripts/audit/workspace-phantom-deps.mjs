@@ -76,6 +76,12 @@
  *           specifier and only when it is EXACTLY the id: a near-miss subpath
  *           is still a finding, the same exact-tuple discipline the externals
  *           allowlist holds the id to (contract lines 54-58).
+ *         - the HOST-SERVED read-only dashboard COMPOSITION specifier
+ *           (`HOST_DASHBOARD_COMPOSITION_MODULE`, cinatra#3092), on the same
+ *           terms: the host serves that one module to an extension bundle at run
+ *           time, so an undeclared import of EXACTLY that specifier is the
+ *           designed state; its package root and every other subpath are still
+ *           findings.
  *     A commented-out import is a known false-positive risk across ~100+
  *     externally-authored repos this leg can't hand-audit, so (unlike the
  *     first-party leg) it runs the shared lexical comment stripper
@@ -124,7 +130,10 @@ import { stripComments } from "./lib/strip-comments.mjs";
 // re-declared here: one id, one definition. The builder is
 // import-side-effect-free (its CLI is `isMain`-guarded) and pulls in no bundler
 // at import time, so this gate's zero-dependency posture is unchanged.
-import { HOST_DESIGN_PRIMITIVES_MODULE } from "../extensions/build-client-renderer-bundle.mjs";
+import {
+  HOST_DASHBOARD_COMPOSITION_MODULE,
+  HOST_DESIGN_PRIMITIVES_MODULE,
+} from "../extensions/build-client-renderer-bundle.mjs";
 
 const REPO_ROOT = process.cwd();
 const WORKSPACE_FILE = join(REPO_ROOT, "pnpm-workspace.yaml");
@@ -278,6 +287,10 @@ export function extractThirdPartyImports(source, internalNames, selfName) {
       // owning package — so a near-miss subpath falls through and stays a
       // finding.
       if (m[1] === HOST_DESIGN_PRIMITIVES_MODULE) continue;
+      // The host-served read-only dashboard COMPOSITION (cinatra#3092) takes the
+      // same road, on the same terms: EXACTLY that specifier, matched raw, so its
+      // package root and every other subpath still fall through to the resolver.
+      if (m[1] === HOST_DASHBOARD_COMPOSITION_MODULE) continue;
       const pkg = resolveSpecifierToPackage(m[1]);
       if (!pkg || pkg === selfName || internalNames.has(pkg) || isBuiltinPackage(pkg) || pkg.includes(":")) continue;
       found.add(pkg);

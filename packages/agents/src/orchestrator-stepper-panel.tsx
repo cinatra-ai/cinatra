@@ -199,11 +199,16 @@ export type StepperStep = { index: number; stepNumber: number; label: string; de
 export type OrchestratorStepperPanelProps = {
   runId: string;
   /**
-   * The scope base the run lives under (cinatra#3693): "Start fresh" and
-   * "Start new run" open that scope's own launcher, so the next run stays in
-   * the scope. Absent on the bare route, where both keep today's road.
+   * THE LAUNCHER THE SUCCESSOR OPENS (cinatra#3693, cinatra#3786): the run's
+   * canonical base where it has one, and `/personal` for a user-anchored run,
+   * whose own address stays bare. "Start fresh" and "Start new run" open that
+   * launcher, so the next run is stamped with the same vantage. Absent for an
+   * unanchored run, where both keep today's road.
+   *
+   * NOT this panel's address base: the run page keeps that to itself and
+   * hands this one down separately (`successorLaunchBase`).
    */
-  scopeBase?: string | null;
+  launchBase?: string | null;
   initialStatus: string;
   initialError: string | null;
   agUiEnabled?: boolean | null;
@@ -1498,19 +1503,22 @@ function HitlApprovalCard({
 // FailedCard — Failed state
 // ---------------------------------------------------------------------------
 
-/** The launcher "Start fresh" opens: the run's own scope's when it has one. */
-function startFreshPath(agentId: string, scopeBase?: string | null): string {
-  return scopeBase ? buildAgentWorkspacePath(agentId, { scopeBase }) : `/agents/${agentId}/new`;
+/** The launcher "Start fresh" opens: the run's own launch base when it has
+ *  one, which is `/personal` for a user-anchored run (cinatra#3786). */
+function startFreshPath(agentId: string, launchBase?: string | null): string {
+  return launchBase
+    ? buildAgentWorkspacePath(agentId, { scopeBase: launchBase })
+    : `/agents/${agentId}/new`;
 }
 
 function FailedCard({
   agentId,
   errorMessage,
-  scopeBase,
+  launchBase,
 }: {
   agentId: string;
   errorMessage: string | null;
-  scopeBase?: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   return (
@@ -1526,7 +1534,7 @@ function FailedCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push(startFreshPath(agentId, scopeBase))}
+            onClick={() => router.push(startFreshPath(agentId, launchBase))}
           >
             Start fresh
           </Button>
@@ -1544,12 +1552,12 @@ function CancelledCard({
   runId,
   agentId,
   lgThreadId,
-  scopeBase,
+  launchBase,
 }: {
   runId: string;
   agentId: string;
   lgThreadId: string | null;
-  scopeBase?: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -1578,7 +1586,7 @@ function CancelledCard({
     });
 
   const handleStartFresh = () => {
-    router.push(startFreshPath(agentId, scopeBase));
+    router.push(startFreshPath(agentId, launchBase));
   };
 
   return (
@@ -2012,7 +2020,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
-    scopeBase,
+    launchBase,
   } = props;
 
   // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
@@ -2728,7 +2736,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
-    stageCard = <FailedCard agentId={agentId} errorMessage={runError} scopeBase={scopeBase} />;
+    stageCard = <FailedCard agentId={agentId} errorMessage={runError} launchBase={launchBase} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.
     stageCard = (
@@ -2746,7 +2754,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else if (status === "stopped") {
     stageCard = (
-      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} scopeBase={scopeBase} />
+      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} launchBase={launchBase} />
     );
   } else if (
     status === "pending_approval" &&
@@ -2917,7 +2925,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <RunCompletionCard
             runId={runId}
             agentId={agentId}
-            scopeBase={scopeBase}
+            launchBase={launchBase}
             outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
           />
         )
