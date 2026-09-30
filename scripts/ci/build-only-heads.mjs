@@ -2,7 +2,9 @@
 //
 // The merge tooling opens a pull request whose only purpose is to run the image
 // workflow on the exact tree main is about to carry. Such a pull request is
-// never merged, and its head branch starts with one of the prefixes below.
+// never merged; its head is a branch of this repository, and the branch name
+// starts with one of the prefixes below. A fork's branch of the same name is
+// an ordinary head: the condition never skips it.
 // Every workflow a `pull_request` event starts, except the image build
 // (`build-image.yml`), skips it through one job condition CONDITION (below),
 // written the same way in every file:
@@ -10,10 +12,11 @@
 //   if: ${{ (EXISTING) && CONDITION }}   (EXISTING: the job's own condition, unchanged)
 //   if: ${{ CONDITION }}                 (a job with no condition before)
 //
-// `github.head_ref` is the head branch of a `pull_request` or
-// `pull_request_target` event and the empty string on every other event (a
-// push, a merge queue group, a schedule, a run by hand), so the condition is
-// true — the job runs as before — everywhere except on a build-only head.
+// `github.event.pull_request.head.repo.full_name` is the head repository of a
+// pull request and is empty on every other event (a push, a merge queue group,
+// a schedule, a run by hand), where `github.head_ref` is empty too. The
+// comparison with `github.repository` is then false, so the condition is true
+// — the job runs as before — everywhere except on a build-only head.
 //
 // This module is the one place the condition is written. The workflow test
 // (scripts/ci/__tests__/build-only-heads-skip.test.mjs) requires it on every
@@ -28,9 +31,10 @@ export const BUILD_ONLY_HEAD_PREFIXES = Object.freeze(["merge-queue/", "merge-ba
 export const IMAGE_WORKFLOW = "build-image.yml";
 
 /** The condition, exactly as every workflow file carries it. */
-export const BUILD_ONLY_HEAD_CONDITION = BUILD_ONLY_HEAD_PREFIXES.map(
-  (prefix) => `!startsWith(github.head_ref, '${prefix}')`,
-).join(" && ");
+export const BUILD_ONLY_HEAD_CONDITION =
+  "!(github.event.pull_request.head.repo.full_name == github.repository && (" +
+  BUILD_ONLY_HEAD_PREFIXES.map((prefix) => `startsWith(github.head_ref, '${prefix}')`).join(" || ") +
+  "))";
 
 const SUFFIX = ` && ${BUILD_ONLY_HEAD_CONDITION}`;
 
@@ -86,7 +90,7 @@ function tokenize(text) {
     const ch = text[i];
     if (/\s/.test(ch)) {
       i++;
-    } else if (text.startsWith("&&", i) || text.startsWith("||", i)) {
+    } else if (text.startsWith("&&", i) || text.startsWith("||", i) || text.startsWith("==", i)) {
       tokens.push({ kind: "op", value: text.slice(i, i + 2) });
       i += 2;
     } else if ("!(),".includes(ch)) {
@@ -118,15 +122,41 @@ function tokenize(text) {
   return tokens;
 }
 
+/** The values the reader knows, by the context name the condition uses. */
+const OPERANDS = {
+  "github.head_ref": (head) => head.headRef ?? "",
+  "github.event.pull_request.head.repo.full_name": (head) => head.headRepo ?? null,
+  "github.repository": (head) => head.repository,
+};
+
+/** A value as a number, the way the platform coerces one of another type. */
+function toNumber(value) {
+  if (value === null) return 0;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "string") return value.trim() === "" ? 0 : Number(value);
+  return Number.NaN;
+}
+
+/** The platform's `==`: strings without regard to case, else as numbers. */
+function looselyEqual(a, b) {
+  if (typeof a === "string" && typeof b === "string") return a.toLowerCase() === b.toLowerCase();
+  if (a === null && b === null) return true;
+  return toNumber(a) === toNumber(b);
+}
+
 /**
- * Evaluate a condition built only from `github.head_ref`, string literals,
- * `startsWith(a, b)`, `!`, `&&`, `||` and parentheses, for one head branch
- * name (the empty string stands for every event that is not a pull request).
- * `startsWith` ignores case, as the platform's own function does. Anything
- * else in the text throws: an expression this reader does not know is never
- * taken as true.
+ * Evaluate a condition built only from `github.head_ref`, the pull request's
+ * head repository, `github.repository`, string literals, `startsWith(a, b)`,
+ * `==`, `!`, `&&`, `||` and parentheses, for one head:
+ * `{ headRef, headRepo, repository }` (a push has the empty head reference and
+ * no head repository, `null`). `startsWith` and `==` ignore case, as the
+ * platform's own do. Anything else in the text throws: an expression this
+ * reader does not know is never taken as true.
  */
-export function evaluateHeadCondition(text, headRef) {
+export function evaluateHeadCondition(text, head) {
+  if (head === null || typeof head !== "object" || typeof head.repository !== "string") {
+    throw new Error("evaluateHeadCondition needs { headRef, headRepo, repository }");
+  }
   const tokens = tokenize(text);
   let pos = 0;
   const peek = () => tokens[pos];
@@ -141,9 +171,9 @@ export function evaluateHeadCondition(text, headRef) {
   const value = () => {
     const t = peek();
     if (t?.kind === "string") return take("string").value;
-    if (t?.kind === "name" && t.value === "github.head_ref") {
+    if (t?.kind === "name" && Object.hasOwn(OPERANDS, t.value)) {
       pos++;
-      return headRef;
+      return OPERANDS[t.value](head);
     }
     throw new Error(`unsupported operand at token ${pos} in: ${text}`);
   };
@@ -166,9 +196,11 @@ export function evaluateHeadCondition(text, headRef) {
       take("punct", ",");
       const prefix = value();
       take("punct", ")");
-      return String(subject).toLowerCase().startsWith(String(prefix).toLowerCase());
+      return String(subject ?? "").toLowerCase().startsWith(String(prefix ?? "").toLowerCase());
     }
-    throw new Error(`unsupported expression at token ${pos} in: ${text}`);
+    const left = value();
+    take("op", "==");
+    return looselyEqual(left, value());
   };
   const and = () => {
     let result = primary();
@@ -193,5 +225,5 @@ export function evaluateHeadCondition(text, headRef) {
   return result;
 }
 
-/** True when a head branch name is a build-only head (the condition skips it). */
-export const isBuildOnlyHead = (headRef) => !evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, headRef);
+/** True when a head `{ headRef, headRepo, repository }` is a build-only head. */
+export const isBuildOnlyHead = (head) => !evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, head);

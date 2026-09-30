@@ -142,7 +142,7 @@ jobs:
   # -------------------------------------------------------------------------
   select:
     name: Queue path selection
-    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
@@ -179,7 +179,7 @@ jobs:
     # The batteries do not run on a queue candidate that touches none of this
     # workflow's paths. The verdict job below still concludes green for it —
     # this `if` may never become the thing that reports.
-    if: ${{ (needs.select.outputs.applies == 'true') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (needs.select.outputs.applies == 'true') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
@@ -205,7 +205,7 @@ jobs:
   batteries:
     name: ${{ matrix.name }}
     needs: discover
-    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     # No `if:` guard here, deliberately. Discovery HARD-FAILS on an empty
     # selection, so the matrix is never empty and this job can only be skipped
     # by a failed `discover` — which the verdict job below catches. An `if:` that
@@ -359,7 +359,7 @@ jobs:
   verdict:
     name: Execution-plane battery tier
     needs: [select, discover, batteries]
-    if: ${{ (always()) && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (always()) && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:

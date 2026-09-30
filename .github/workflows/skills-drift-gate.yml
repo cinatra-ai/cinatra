@@ -54,7 +54,7 @@ jobs:
   # KEEP this job name stable as `skills-drift-gate` — it is the required-check
   # context prefix.
   skills-drift-gate:
-    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the
     # multi-repo-capable gate, cinatra-ai/ci#82), so the gate code is never

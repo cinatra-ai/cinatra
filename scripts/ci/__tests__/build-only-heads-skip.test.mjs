@@ -1,9 +1,10 @@
 // Every pull request workflow but the image build skips a build-only head —
 // cinatra#3890.
 //
-// The merge tooling opens pull requests whose head branch starts with
-// `merge-queue/` or `merge-batch/`: they exist only to run the image workflow
-// on the exact tree main is about to carry and are never merged. This test
+// The merge tooling opens pull requests whose head branch, in this
+// repository, starts with `merge-queue/` or `merge-batch/`: they exist only to
+// run the image workflow on the exact tree main is about to carry and are
+// never merged. A fork's branch of the same name is an ordinary head. This test
 // reads EVERY file under .github/workflows/ and pins both sides of the one
 // condition that skips them (scripts/ci/build-only-heads.mjs):
 //
@@ -12,10 +13,11 @@
 //      each job carries the condition, or needs a job that is skipped there
 //      and has no status function (always(), !cancelled(), failure(),
 //      success()) that would let it run after a skipped need;
-//   2. the condition runs for an ordinary head branch and for the empty head
-//      reference of every event that is not a pull request (a push, a merge
-//      queue group, a schedule, a run by hand), and skips the two build-only
-//      prefixes;
+//   2. the condition skips the two build-only prefixes on a head of this
+//      repository only; it runs for an ordinary head branch, for a fork's head
+//      of any name, and for every event that is not a pull request (a push, a
+//      merge queue group, a schedule, a run by hand: no head repository, an
+//      empty head reference);
 //   3. every context the branch rules require is pinned to the job that
 //      produces it, and that job and every job it needs run on an ordinary
 //      branch as before: a required context skipped on an ordinary pull
@@ -68,13 +70,27 @@ const LEFT_OUT = {
     "a pull_request_target workflow whose own test pins that its file names no pull request reference, github.head_ref included; it runs a short node script from the default branch",
 };
 
-/** Head branch names and whether the jobs run for them. "" is a push. */
+/** The repository the workflows run in, as `github.repository` reads. */
+const REPOSITORY = "cinatra-ai/cinatra";
+const FORK = "someone/cinatra";
+
+/**
+ * Heads and whether the jobs run for them: the head branch, the head
+ * repository (null on a push, which has no pull request) and this repository.
+ */
 const HEADS = [
-  { ref: "feat/x", runs: true },
-  { ref: "merge-queue/cinatra-12-g1", runs: false },
-  { ref: "merge-batch/x", runs: false },
-  { ref: "", runs: true },
-];
+  { label: "this repository's ordinary branch", headRef: "feat/x", headRepo: REPOSITORY, runs: true },
+  { label: "this repository's merge-queue head", headRef: "merge-queue/cinatra-12-g1", headRepo: REPOSITORY, runs: false },
+  { label: "this repository's merge-queue head", headRef: "merge-queue/x", headRepo: REPOSITORY, runs: false },
+  { label: "this repository's merge-batch head", headRef: "merge-batch/x", headRepo: REPOSITORY, runs: false },
+  { label: "a fork's ordinary branch", headRef: "feat/x", headRepo: FORK, runs: true },
+  { label: "a fork's head named merge-queue/", headRef: "merge-queue/x", headRepo: FORK, runs: true },
+  { label: "a fork's head named merge-batch/", headRef: "merge-batch/x", headRepo: FORK, runs: true },
+  { label: "a push", headRef: "", headRepo: null, runs: true },
+].map((h) => ({ ...h, repository: REPOSITORY }));
+
+/** The heads a job must run for: every ordinary one, and a push. */
+const ORDINARY = HEADS.filter((h) => h.runs);
 
 /** A status function lets a job run after a skipped need. */
 const STATUS_FUNCTION = /\b(always|cancelled|failure|success)\s*\(/;
@@ -222,24 +238,26 @@ const WORKFLOWS = workflowFiles().map((file) => ({ file, ...readWorkflow(read(fi
 describe("the condition itself", () => {
   it("is the one expression, written once", () => {
     expect(BUILD_ONLY_HEAD_CONDITION).toBe(
-      "!startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/')",
+      "!(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/')))",
     );
   });
 
-  for (const { ref, runs } of HEADS) {
-    it(`${runs ? "runs" : "skips"} for the head branch ${JSON.stringify(ref)}`, () => {
-      expect(evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, ref)).toBe(runs);
-      expect(isBuildOnlyHead(ref)).toBe(!runs);
+  for (const head of HEADS) {
+    it(`${head.runs ? "runs" : "skips"} for ${head.label} ${JSON.stringify(head.headRef)}`, () => {
+      expect(evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, head)).toBe(head.runs);
+      expect(isBuildOnlyHead(head)).toBe(!head.runs);
     });
   }
 
-  it("reads the platform's startsWith without regard to case", () => {
-    expect(evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, "Merge-Queue/x")).toBe(false);
+  it("reads the platform's startsWith and == without regard to case", () => {
+    const head = { headRef: "Merge-Queue/x", headRepo: "Cinatra-AI/Cinatra", repository: REPOSITORY };
+    expect(evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, head)).toBe(false);
   });
 
   it("refuses an expression it does not know instead of taking it as true", () => {
-    expect(() => evaluateHeadCondition("github.event_name == 'push'", "feat/x")).toThrow();
-    expect(() => evaluateHeadCondition("!startsWith(github.base_ref, 'x')", "feat/x")).toThrow();
+    const head = HEADS[0];
+    expect(() => evaluateHeadCondition("github.event_name == 'push'", head)).toThrow();
+    expect(() => evaluateHeadCondition("!startsWith(github.base_ref, 'x')", head)).toThrow();
   });
 
   it("splits the two canonical forms and nothing else", () => {
@@ -356,9 +374,9 @@ describe("every pull request workflow but the image build skips a build-only hea
         if (!split.carries) continue;
         const inner = job.if.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, "");
         const condition = inner.slice(inner.length - BUILD_ONLY_HEAD_CONDITION.length);
-        for (const { ref, runs } of HEADS) {
-          if (evaluateHeadCondition(condition, ref) !== runs) {
-            problems.push(`${file}: job \`${id}\` ${runs ? "skips" : "runs"} for the head branch ${JSON.stringify(ref)}`);
+        for (const head of HEADS) {
+          if (evaluateHeadCondition(condition, head) !== head.runs) {
+            problems.push(`${file}: job \`${id}\` ${head.runs ? "skips" : "runs"} for ${head.label} ${JSON.stringify(head.headRef)}`);
           }
         }
       }
@@ -432,10 +450,10 @@ describe("every required context runs on an ordinary pull request", () => {
           continue;
         }
         if (!split.carries) continue;
-        for (const ref of ["feat/x", ""]) {
+        for (const head of ORDINARY) {
           expect(
-            evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, ref),
-            `${row.context}: job \`${id}\` would be skipped for ${JSON.stringify(ref)}`,
+            evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, head),
+            `${row.context}: job \`${id}\` would be skipped for ${head.label} ${JSON.stringify(head.headRef)}`,
           ).toBe(true);
         }
       }

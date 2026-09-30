@@ -73,7 +73,7 @@ jobs:
   # weekly schedule, and dispatch unless mode=capture.
   bringup:
     name: Bring-up (resolve pins, no boot)
-    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.mode == 'bringup' || inputs.mode == 'both') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.mode == 'bringup' || inputs.mode == 'both') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 20
     steps:
@@ -105,7 +105,7 @@ jobs:
   # the live capture neutrally skips.
   preflight:
     name: Preflight (is the pinned fixture built?)
-    if: ${{ (!cancelled()) && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (!cancelled()) && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 3
     outputs:
@@ -129,7 +129,7 @@ jobs:
   capture:
     name: Live capture (boot pinned fixture)
     needs: [preflight]
-    if: ${{ (needs.preflight.outputs.fixture_ready == 'true' && (github.event_name != 'workflow_dispatch' || inputs.mode == 'capture' || inputs.mode == 'both')) && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (needs.preflight.outputs.fixture_ready == 'true' && (github.event_name != 'workflow_dispatch' || inputs.mode == 'capture' || inputs.mode == 'both')) && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 45
     strategy:

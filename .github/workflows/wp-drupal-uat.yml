@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   changed-paths:
-    if: ${{ (github.event_name == 'pull_request') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (github.event_name == 'pull_request') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 3
     outputs:
@@ -173,7 +173,7 @@ jobs:
   # drift schedule. Cheap (two checkouts + a deep-compare), so it runs on
   # drafts too.
   contract-schema-lockstep:
-    if: ${{ (github.event_name == 'pull_request' && needs.changed-paths.outputs.contract_schema == 'true') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (github.event_name == 'pull_request' && needs.changed-paths.outputs.contract_schema == 'true') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     needs: changed-paths
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
@@ -206,7 +206,7 @@ jobs:
   # `!cancelled()` keeps it running (and failing loud below) when changed-paths
   # itself fails — a skipped required check would otherwise satisfy protection.
   uat-gate:
-    if: ${{ (!cancelled() && github.event_name == 'pull_request') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (!cancelled() && github.event_name == 'pull_request') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     needs: changed-paths
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 40
@@ -539,7 +539,7 @@ jobs:
   nightly:
     # schedule = the 07:00Z nightly; workflow_dispatch = on-demand proof of the
     # full-suite path (cinatra#173). The full suite runs regardless of paths.
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 50
     services:
@@ -798,7 +798,7 @@ jobs:
   # greps the real in-memory values across everything staged for upload.
   mask-verify:
     needs: [uat-gate, nightly]
-    if: ${{ (always() && (contains(fromJSON('["success", "failure"]'), needs.uat-gate.result) || contains(fromJSON('["success", "failure"]'), needs.nightly.result))) && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (always() && (contains(fromJSON('["success", "failure"]'), needs.uat-gate.result) || contains(fromJSON('["success", "failure"]'), needs.nightly.result))) && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:

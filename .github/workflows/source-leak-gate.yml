@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   source-leak-gate:
-    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     # Double-pin: uses:@ and the `ref` engine-checkout input pinned to the SAME
     # cinatra-ai/ci commit. gate-suite.json requiredContexts[].pinned tracks this
     # uses:@ SHA (the gate verifies referenced_workflows[] exactly) — bump them

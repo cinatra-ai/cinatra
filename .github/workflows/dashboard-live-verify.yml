@@ -60,7 +60,7 @@ jobs:
   # merge-queue run would go red.
   # ---------------------------------------------------------------------------
   detect:
-    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     # Fail fast if dorny/paths-filter or the GitHub API hangs — a stuck
     # `detect` would leave the REQUIRED `/agents Playwright smoke` check
@@ -128,7 +128,7 @@ jobs:
     # never-arriving "Expected"). The first step fails the job loudly if
     # `detect` did not succeed — otherwise a broken detector would let the
     # required check pass silently (false green).
-    if: ${{ (always()) && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
+    if: ${{ (always()) && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     # Opt-in larger-runner lever — same mechanism build-image's build/e2e jobs
     # use. Zero-risk no-op (stays ubuntu-latest) until the org/repo variable
     # CI_BUILD_RUNNER is set to a larger label (e.g. ubuntu-latest-4-cores, 16GB).

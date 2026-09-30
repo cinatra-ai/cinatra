@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: 39c5ab30115ce800a0458e14754cf578127af69861244ecf25a8160efddfe1d4
+  # Source job SHA256: a834fe85613a8734b0cbc4ace8dfc950031daa71d55ee54b010863b9fe15723a
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -585,7 +585,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: 336c03c05ed2c7241368bf0b1bb8a05f5e3df9b0b6178d36c589e228771d2a27
+  # Source job SHA256: c8d4ebcf30b11c98bcce2799c8627ead31a008367c13098ae9cd5fde79c9c133
   dashboard:
     name: trial / dashboard / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'dashboard' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
