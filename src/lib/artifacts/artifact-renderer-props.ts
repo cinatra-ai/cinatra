@@ -37,8 +37,12 @@ import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
  * DATA ROAD (see {@link ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION}). The
  * same window holds: a display that declared version 2 or 1 is handed a
  * snapshot without them.
+ *
+ * IT IS 4 SINCE cinatra#3814: the edit capability may carry the TITLE road (see
+ * {@link ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION}). A display that declared
+ * version 3, 2 or 1 is handed the capability at edit-channel version 1.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 3;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 4;
 
 /**
  * The version at which the snapshot began carrying the byte reference.
@@ -62,6 +66,17 @@ export const ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION = 2;
  * the byte reference keeps its own version (2) whatever the ceiling reads.
  */
 export const ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION = 3;
+
+/**
+ * The version at which the snapshot's edit capability began carrying the TITLE
+ * road (cinatra#3814): "The channel version moves, and a display that declared
+ * the older version keeps the contract it has."
+ *
+ * A SEPARATE NAME for the same reason as the two above: the builder and the
+ * narrowing compare against THIS one, so a later ceiling bump cannot hand the
+ * title road to a display that declared an older version.
+ */
+export const ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION = 4;
 
 /**
  * The REVIEW READING a surface draws a display in (props v3). "A dashboard
@@ -145,8 +160,14 @@ export function absentArtifactContent(
  * cinatra#3026), mirrored here for the same route-budget reason the content
  * channel's version is mirrored above: this module imports NOTHING at value
  * level, and the enabler's suite pins the two integers equal.
+ *
+ * 2 SINCE cinatra#3814 (the title road); version 1 is what a display that
+ * declared an older props version is handed.
  */
-export const ARTIFACT_EDIT_CHANNEL_VERSION = 1;
+export const ARTIFACT_EDIT_CHANNEL_VERSION = 2;
+
+/** The edit-channel version an older display is handed: the text alone. */
+const OLDER_ARTIFACT_EDIT_CHANNEL_VERSION = 1;
 
 /**
  * The NAMED REFUSAL of an edit — what every surface that is not the artifact's
@@ -159,6 +180,37 @@ export const ARTIFACT_EDIT_CHANNEL_VERSION = 1;
  */
 export function readOnlyArtifactEdit(reason: ArtifactEditRefusal): ArtifactEditCapability {
   return { kind: "read-only", channelVersion: ARTIFACT_EDIT_CHANNEL_VERSION, reason };
+}
+
+/**
+ * THE EDIT CAPABILITY AT A DECLARED PROPS VERSION (cinatra#3814). PURE.
+ *
+ * "The channel version moves, and a display that declared the older version
+ * keeps the contract it has." Below {@link ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION}
+ * the capability is handed at edit-channel version 1 with no `fields` key —
+ * today's shape, byte for byte, so a display that tests the version by strict
+ * equality keeps its text road and is handed no title road. At or above it the
+ * capability is handed unchanged. It never raises a version and invents nothing.
+ */
+export function artifactEditCapabilityForPropsVersion(
+  edit: ArtifactEditCapability,
+  propsVersion: number,
+): ArtifactEditCapability {
+  // A snapshot some caller assembled without a capability is passed through as
+  // it came: this narrows a capability and never invents one.
+  if (!edit || propsVersion >= ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION) return edit;
+  if (
+    edit.channelVersion === OLDER_ARTIFACT_EDIT_CHANNEL_VERSION &&
+    !Object.prototype.hasOwnProperty.call(edit, "fields")
+  ) {
+    return edit;
+  }
+  const older: ArtifactEditCapability & { fields?: unknown } = {
+    ...edit,
+    channelVersion: OLDER_ARTIFACT_EDIT_CHANNEL_VERSION,
+  };
+  delete older.fields;
+  return older;
 }
 
 /**
@@ -184,6 +236,8 @@ export function grantArtifactEdit(input: {
     saveUrl: input.saveUrl,
     idlePauseMs: input.idlePauseMs,
     capBytes: input.capBytes,
+    // The title road beside the text (cinatra#3814): one capability, one base.
+    fields: ["text", "title"],
   };
 }
 
@@ -418,7 +472,8 @@ export function buildArtifactRendererProps(input: {
     },
     content: input.content,
     ...(bytes ? { bytes } : {}),
-    edit: input.edit,
+    // THE EDIT CAPABILITY AT THE VERSION THAT ASKED FOR IT (cinatra#3814).
+    edit: artifactEditCapabilityForPropsVersion(input.edit, propsApiVersion),
     ...(review ? { review } : {}),
     ...(data ? { data } : {}),
   };
@@ -458,6 +513,8 @@ export function artifactRendererPropsAtVersion(
     delete next.review;
     delete next.data;
   }
+  // The title road is what the v3, v2 and v1 shapes have no place for.
+  if (props.edit) next.edit = artifactEditCapabilityForPropsVersion(props.edit, version);
   return next;
 }
 

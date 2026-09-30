@@ -17,6 +17,7 @@ import {
   ARTIFACT_RENDERER_PROPS_API_VERSION,
   ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
   ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+  ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
   assertNoInlineBytesInRendererProps,
   assertSerializableRendererProps,
   absentArtifactContent,
@@ -56,11 +57,12 @@ const BASE = {
 };
 
 describe("wave 3 — the new props version", () => {
-  it("is the review-reading version, with the byte reference frozen at 2 below it, and the SDK leaf carries the same integer", () => {
-    // (cinatra#3092) The newest version is the review reading's (3); the byte
+  it("is the title-edit version, with the byte reference frozen at 2 below it, and the SDK leaf carries the same integer", () => {
+    // (cinatra#3092) The review reading keeps its own version (3); the byte
     // reference keeps its own frozen version (2), below it, never replaced.
+    // (cinatra#3814) The newest version is the title-edit version (4).
     expect(ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(
-      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
     );
     expect(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION).toBe(2);
     expect(ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION).toBe(3);
@@ -78,6 +80,7 @@ describe("wave 3 — the new props version", () => {
       1,
       ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
       ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
     ]);
     expect(negotiatePropsApiVersion(1)).toEqual({ ok: true, version: 1 });
     expect(negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION)).toEqual({
@@ -88,8 +91,12 @@ describe("wave 3 — the new props version", () => {
       ok: true,
       version: ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
     });
+    expect(negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION)).toEqual({
+      ok: true,
+      version: ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
+    });
     expect(
-      negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION + 1),
+      negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION + 1),
     ).toEqual({ ok: false, reason: "too-new" });
   });
 });

@@ -101,7 +101,22 @@ export type ExtensionToolInvocation = {
   ports: ExtensionToolPorts;
 };
 
-/** The callable export's signature, pinned for the packs that implement it. */
+/**
+ * The callable export's signature, pinned for the packs that implement it.
+ *
+ * A MODULE REFUSES A CALL BY NAME (cinatra#3847). A declared module refuses a
+ * call by throwing an error (or any object) whose `name` is exactly
+ * `EXTENSION_TOOL_CALL_REFUSAL_NAME` and whose `message` is one sentence within
+ * the bounds `moduleRefusalSentenceIssue` reads: a non-empty string of at most
+ * `EXTENSION_TOOL_REFUSAL_SENTENCE_MAX` characters, on one line, with no source
+ * position, no path and no secret shape. The host answers it as it answers its
+ * own refusals, with the text
+ * "extension_tool: `<the declared name>` refused the call: <the sentence>".
+ * A named refusal whose sentence breaks a bound is answered as a failure that
+ * names the bound and never repeats the sentence; the sentence is not scrubbed
+ * or cut into shape. Anything else a module throws is a failure, answered as a
+ * server error as before. The means is the same for every module.
+ */
 export type ExtensionToolModule = (
   invocation: ExtensionToolInvocation,
 ) => unknown | Promise<unknown>;
@@ -119,6 +134,94 @@ export const EXTENSION_TOOL_RUN_IDENTITY_KEYS = [
 
 /** The reserved result key the filed review targets ride out under. */
 export const EXTENSION_TOOL_REVIEW_TARGETS_KEY = "reviewTargets";
+
+/** The ONE documented `name` a module's thrown refusal carries (cinatra#3847). */
+export const EXTENSION_TOOL_CALL_REFUSAL_NAME = "ExtensionToolCallRefusal";
+
+/** The longest refusal sentence of a module the host repeats, after trimming. */
+export const EXTENSION_TOOL_REFUSAL_SENTENCE_MAX = 400;
+
+/**
+ * The bound a module's refusal sentence breaks, or null when it is admissible.
+ * The host repeats a sentence only within these bounds and never scrubs or cuts
+ * one into shape: a sentence that breaks one is not repeated at all. The secret
+ * shapes are the host's own error-text bounds, written here rather than
+ * imported.
+ */
+export function moduleRefusalSentenceIssue(sentence: unknown): string | null {
+  if (typeof sentence !== "string") return "the sentence is not a string";
+  const text = sentence.trim();
+  if (text === "") return "the sentence is empty";
+  if (text.length > EXTENSION_TOOL_REFUSAL_SENTENCE_MAX) {
+    return `the sentence is longer than ${EXTENSION_TOOL_REFUSAL_SENTENCE_MAX} characters`;
+  }
+  if (/[\r\n\u2028\u2029]/.test(text)) return "the sentence holds a line break";
+  if (/\.(?:[cm]?js|tsx?|jsx):\d+(?::\d+)?/.test(text)) {
+    return "the sentence holds a source position";
+  }
+  if (
+    /\bfile:\//i.test(text) ||
+    /\b[A-Za-z]:[\\/]/.test(text) ||
+    /node_modules/.test(text) ||
+    /(?:^|[\s"'`(\[])(?:~|\.{1,2})?\/\S*\//.test(text)
+  ) {
+    return "the sentence holds a path";
+  }
+  if (
+    /sk-ant-[A-Za-z0-9_-]+/.test(text) ||
+    /sk-[A-Za-z0-9_-]{16,}/.test(text) ||
+    /\b(?:AIza|ya29\.)[A-Za-z0-9_.-]+/.test(text) ||
+    /(?:authorization|x-api-key|api[_-]?key|bearer)\s*[:=]\s*\S+/i.test(text) ||
+    /\bbearer\s+(?=[A-Za-z0-9._~+/-]*(?:\d|[A-Za-z0-9]\.[A-Za-z0-9]))[A-Za-z0-9._~+/-]{8,}/i.test(
+      text,
+    ) ||
+    /[A-Za-z0-9_-]{40,}/.test(text)
+  ) {
+    return "the sentence holds a secret shape";
+  }
+  return null;
+}
+
+/**
+ * The host's own answer to what a module threw: its refusal for a named refusal
+ * within the bounds, a failure naming the bound for one outside them, and null
+ * for everything else, which the dispatch rethrows as the same value.
+ */
+function moduleRefusalOf(
+  thrown: unknown,
+  call: { packageName: string; packageVersion: string; toolName: string },
+): Error | null {
+  if (typeof thrown !== "object" || thrown === null) return null;
+  // A getter that throws never replaces what the module threw: an unreadable
+  // name is not a refusal, and an unreadable sentence breaks a bound.
+  let name: unknown;
+  try {
+    name = (thrown as { name?: unknown }).name;
+  } catch {
+    return null;
+  }
+  if (name !== EXTENSION_TOOL_CALL_REFUSAL_NAME) return null;
+  let sentence: unknown;
+  try {
+    sentence = (thrown as { message?: unknown }).message;
+  } catch {
+    sentence = undefined;
+  }
+  const issue = moduleRefusalSentenceIssue(sentence);
+  if (issue === null) {
+    return new ExtensionToolRefusal(
+      `extension_tool: \`${call.toolName}\` refused the call: ${(sentence as string).trim()}`,
+    );
+  }
+  console.warn(
+    `[extension_tool] ${call.packageName}@${call.packageVersion} \`${call.toolName}\`: ` +
+      `a refusal outside the bounds (${issue}); its sentence is not repeated`,
+  );
+  return new Error(
+    `extension_tool: the module declared for \`${call.toolName}\` refused with a sentence ` +
+      `outside the bounds (${issue})`,
+  );
+}
 
 /** The refusal shape the passthrough's caller-named refusals already use. */
 const UNDECLARED_NAME_REFUSAL =
@@ -210,10 +313,24 @@ export async function dispatchExtensionTool(input: {
     },
   };
 
-  const result = await (callable as ExtensionToolModule)({
-    input: moduleInput,
-    ports: { ...input.ports, review },
-  });
+  // A MODULE'S NAMED REFUSAL becomes the host's own refusal; every other value
+  // it throws — a failure, or a host refusal raised by a port — is rethrown as
+  // the same value (cinatra#3847).
+  let result: unknown;
+  try {
+    result = await (callable as ExtensionToolModule)({
+      input: moduleInput,
+      ports: { ...input.ports, review },
+    });
+  } catch (e) {
+    throw (
+      moduleRefusalOf(e, {
+        packageName: input.packageName,
+        packageVersion: input.packageVersion,
+        toolName: tool.name,
+      }) ?? e
+    );
+  }
   if (filed.length === 0) return result;
   if (!isPlainObject(result)) {
     throw new ExtensionToolRefusal(
