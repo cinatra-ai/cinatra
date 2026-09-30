@@ -69,10 +69,10 @@ describe("scanOasForLlmMetadata — positive cases", () => {
     expect(validatorErrors(fixture).filter((e) => e.includes("OAS-LLM-"))).toEqual([]);
   });
 
-  it("accepts gemini + gemini-2.5-flash + media_input", () => {
+  it("accepts gemini + gemini-3.5-flash + media_input", () => {
     const fixture = buildBaseOas({
       preferredProvider: "gemini",
-      preferredModel: "gemini-2.5-flash",
+      preferredModel: "gemini-3.5-flash",
       capabilityRequired: "media_input",
     });
     expect(llmFindings(fixture)).toEqual([]);

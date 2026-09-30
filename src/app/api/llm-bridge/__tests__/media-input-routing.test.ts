@@ -53,7 +53,7 @@ const {
     provider: "gemini" as const,
     // cinatra#2578: the metering proxy falls back to this when neither the
     // response nor the request names a model.
-    defaultModel: "gemini-2.5-flash" as const,
+    defaultModel: "gemini-3.5-flash" as const,
     uploadFile: vi.fn(async (_input: unknown) => ({
       id: "files/abc123",
       provider: "gemini" as const,
@@ -230,12 +230,7 @@ vi.mock("@cinatra-ai/agents", async () => {
         "claude-3-7-sonnet-latest",
         "claude-3-5-haiku-latest",
       ],
-      gemini: [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash-lite",
-        "gemini-1.5-pro",
-      ],
+      gemini: ["gemini-3.5-flash"],
     },
   };
 });

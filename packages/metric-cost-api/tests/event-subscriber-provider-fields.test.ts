@@ -49,7 +49,7 @@ function baseEvent(overrides: Partial<LlmUsageEvent> = {}): LlmUsageEvent {
   return {
     source: "llm",
     provider: "gemini",
-    model: "gemini-2.5-flash",
+    model: "gemini-3.5-flash",
     operation: "generate",
     agentLabel: "synthetic-test-agent",
     skillLabel: null,

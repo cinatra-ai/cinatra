@@ -26,9 +26,9 @@ export const LLM_PRICING: Record<string, ModelPricing> = {
   // Anthropic — https://anthropic.com/pricing
   "claude-sonnet-4-5-20250929": { inputPerMillion: 3.00, outputPerMillion: 15.00, cachedInputPerMillion: 0.30 },
   "claude-opus-4":    { inputPerMillion: 15.00, outputPerMillion: 75.00, cachedInputPerMillion: 1.50 },
-  // Gemini — https://ai.google.dev/gemini-api/docs/pricing
-  "gemini-2.5-flash": { inputPerMillion: 0.075, outputPerMillion: 0.30 },
-  "gemini-2.5-pro":   { inputPerMillion: 1.25, outputPerMillion: 10.00 },
+  // Gemini text/media rates are owned by the online LiteLLM sync (#1714).
+  // Never reuse a retired model's rate for the current catalog. Until the
+  // model's row is synced, computeLlmCostUsd returns unknown cost (null).
   // NON-INFERENCE provider calls the platform makes and COUNTS, but that bill
   // nothing. Today that is the LLM-access key-validation probe's catalog read
   // (cinatra#2579), which emits a zero-token usage event so validation is

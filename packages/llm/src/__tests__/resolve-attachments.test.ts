@@ -46,7 +46,7 @@ describe("resolveAttachments", () => {
     const r = await resolveAttachments({
       attachments: [pdf],
       provider: "gemini",
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       ports: { cacheGet: () => ({ providerFileId: "files/legacy-bad", mime: "application/pdf", sizeBytes: 4096 }), providerUpload, cachePut },
     });
     // The bad bare resource name must NOT be emitted — re-upload instead.
@@ -62,7 +62,7 @@ describe("resolveAttachments", () => {
     const r = await resolveAttachments({
       attachments: [pdf],
       provider: "gemini",
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       ports: {
         cacheGet: () => ({ providerFileId: "https://generativelanguage.googleapis.com/v1beta/files/ok", mime: "application/pdf", sizeBytes: 4096 }),
         providerUpload,
@@ -176,7 +176,7 @@ describe("resolveAttachments", () => {
     const r = await resolveAttachments({
       attachments: [pdf],
       provider: "gemini",
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       ports: {
         cacheGet: () => null,
         providerUpload: async () => {

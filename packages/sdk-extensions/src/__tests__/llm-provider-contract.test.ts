@@ -74,7 +74,7 @@ describe("parseLlmProvider — valid v2", () => {
     if (r.ok) expect(r.declaration.capabilities.native_mcp.transports).toEqual(["http", "stdio"]);
   });
   it("accepts native_mcp with only a status (transports + approval optional)", () => {
-    expect(parseLlmProvider(decl({ provider: "gemini", capabilities: { function_tools: true, media_input: true, native_mcp: { status: "unsupported" } }, models: { default: "gemini-2.5-flash", allowed: ["gemini-2.5-flash"] } })).ok).toBe(true);
+    expect(parseLlmProvider(decl({ provider: "gemini", capabilities: { function_tools: true, media_input: true, native_mcp: { status: "unsupported" } }, models: { default: "gemini-3.5-flash", allowed: ["gemini-3.5-flash"] } })).ok).toBe(true);
   });
 });
 

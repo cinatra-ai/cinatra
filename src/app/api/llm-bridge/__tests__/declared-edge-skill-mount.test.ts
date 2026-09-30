@@ -137,7 +137,7 @@ vi.mock("@cinatra-ai/agents", async () => {
     ALLOWED_MODEL_IDS: {
       openai: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o"],
       anthropic: ["claude-sonnet-4-6"],
-      gemini: ["gemini-2.5-flash"],
+      gemini: ["gemini-3.5-flash"],
     },
   };
 });

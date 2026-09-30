@@ -31,7 +31,7 @@ describe("synthetic-gemini-agent fixture", () => {
     const llm = (parsed.metadata as { cinatra?: { llm?: Record<string, unknown> } })?.cinatra?.llm;
     expect(llm).toBeDefined();
     expect(llm?.preferredProvider).toBe("gemini");
-    expect(llm?.preferredModel).toBe("gemini-2.5-flash");
+    expect(llm?.preferredModel).toBe("gemini-3.5-flash");
     expect(llm?.capabilityRequired).toBe("media_input");
   });
 

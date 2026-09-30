@@ -62,7 +62,7 @@ export async function runLiteLlmSync(): Promise<LiteLlmSyncResult> {
       ?? (modelKey.includes("/") ? modelKey.split("/")[0] : "unknown");
 
     // Strip provider prefix from model key when present
-    // e.g. "gemini/gemini-2.5-flash" -> "gemini-2.5-flash"
+    // e.g. "gemini/gemini-3.5-flash" -> "gemini-3.5-flash"
     // e.g. "gpt-4o" -> "gpt-4o" (no prefix)
     const modelName = modelKey.includes("/")
       ? modelKey.split("/").slice(1).join("/")

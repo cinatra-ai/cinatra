@@ -812,7 +812,7 @@ describe("Anthropic function-tools mode is a HARD REFUSAL on chat + widget", () 
 describe("Gemini — conversation-only, with NO tools block on the wire", () => {
   beforeEach(() => {
     state.provider = "gemini";
-    state.defaultModel = "gemini-2.5-flash";
+    state.defaultModel = "gemini-3.5-flash";
     registerAdapterSurface("gemini", async () => createGeminiProviderAdapter("gemini-wire-gate"));
     responder = () => geminiSse();
   });
