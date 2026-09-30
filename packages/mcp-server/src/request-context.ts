@@ -67,6 +67,13 @@ export type DelegatedMcpActor =
        * refused). Absence only ever means an unstamped frame.
        */
       executionAttemptId?: string;
+      /**
+       * The verified step of the calling model step (the token's `stp` claim,
+       * cinatra#3745): the executing step's id the flow runtime signed and the
+       * bridge verified before minting. OPTIONAL — a token without it carries
+       * no step. The transport stamps it on the frame as `verifiedStepId`.
+       */
+      verifiedStepId?: string;
     }
   | {
       delegation: "public_site_widget";
@@ -348,6 +355,19 @@ export type McpRequestContext = {
    */
   verifiedSubmissionId?: string;
   /**
+   * The step of the run that made this call, VERIFIED (cinatra#3745): the id of
+   * the executing compiled step, signed by the flow runtime with its dedicated
+   * key over the run's context id and verified by the application. Stamped by
+   * the transport ONLY from the channel that served the verified run id — the
+   * agent-run on-behalf-of token's signed `stp` claim, else the durable
+   * binding's `stepId` (see `resolveRequestRunContext`) — and by a run-bound
+   * seam (`/api/agents/passthrough`) alongside `verifiedRunScopeId`. Never
+   * present without a verified run id. The transport NEVER writes this field
+   * from request input (a header, a tool argument or a body field); undefined
+   * for every call that carries no verified step.
+   */
+  verifiedStepId?: string;
+  /**
    * The LENT-ACTION GRANT this turn presented (cinatra#2932, lifecycle-b W5a).
    *
    * WHAT IT IS. A server-minted, signed, single-use authority naming the person,
@@ -490,6 +510,8 @@ export type DurableRunContextResolution =
         agentId?: string;
         packageVersion?: string;
         agentSpecVersion?: string;
+        /** The binding's verified step (cinatra#3745), when it carries one. */
+        stepId?: string;
       };
     }
   | { outcome: "invalid" }
@@ -509,6 +531,13 @@ export type ResolvedRequestRunContext = {
   agentId?: string;
   packageVersion?: string;
   agentSpecVersion?: string;
+  /**
+   * The verified step of the calling run step (cinatra#3745), taken ONLY from
+   * the channel that served the verified run id: the on-behalf-of actor's step
+   * when the actor served it, else the durable binding's. Absent without a
+   * verified run id and never read from a header.
+   */
+  stepId?: string;
   /** Which channel supplied the run id (the cutover metric dimension). */
   servedBy: RunContextServedBy;
   /** True when a durable "invalid" outcome suppressed the legacy channels. */
@@ -534,6 +563,9 @@ export type ResolvedRequestRunContext = {
 export function resolveRequestRunContext(input: {
   /** delegatedActor.runId when delegation === "agent_run"; else undefined. */
   delegatedRunId?: string;
+  /** delegatedActor.verifiedStepId when delegation === "agent_run"; else
+   *  undefined (cinatra#3745). Used only when the delegated run id serves. */
+  delegatedStepId?: string;
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
@@ -611,6 +643,16 @@ export function resolveRequestRunContext(input: {
 
   const runId = verifiedRunId ?? effHeaderRunId;
 
+  // The verified step (cinatra#3745) rides with the verified run id of the SAME
+  // channel: the on-behalf-of actor's step when its run id serves, else the
+  // durable binding's when the binding's run id serves. Never a header's, and
+  // never without a verified run id.
+  const stepId = nonEmpty(input.delegatedRunId)
+    ? nonEmpty(input.delegatedStepId)
+    : nonEmpty(durableCtx?.runId)
+      ? nonEmpty(durableCtx?.stepId)
+      : undefined;
+
   const servedBy: RunContextServedBy = input.delegatedRunId
     ? "obo"
     : durableCtx?.runId
@@ -624,6 +666,7 @@ export function resolveRequestRunContext(input: {
     agentId: durableCtx?.agentId ?? effHeaderAgentId,
     packageVersion: durableCtx?.packageVersion ?? effHeaderPackageVersion,
     agentSpecVersion: durableCtx?.agentSpecVersion ?? effHeaderAgentSpecVersion,
+    ...(stepId ? { stepId } : {}),
     servedBy,
     suppressed,
     denied,
