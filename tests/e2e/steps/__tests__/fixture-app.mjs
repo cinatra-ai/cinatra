@@ -273,7 +273,8 @@ const TIMELINE_RUNNER = `<script>
 })();
 </script>`;
 
-function page(title, body, timeline = []) {
+/** A fixture page: its body, and the timeline its inline script plays (fixture-app-contexts.mjs draws its pages with it too). */
+export function page(title, body, timeline = []) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${title}</title></head>
 <body>
@@ -1042,6 +1043,16 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       if (/^\/(window|composer|address|reload)\//.test(url.pathname)) {
         import("./fixture-app-windows.mjs").then(
           ({ serveWindowPage }) => serveWindowPage({ method: request.method, url, response, loads }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
+      // openPageInOwnContext: its pages, served only to a session, and the
+      // sign-in page they send a request without one to, live in
+      // fixture-app-contexts.mjs, so this file changes in this one place.
+      if (url.pathname.startsWith("/own/") || url.pathname === "/sign-in") {
+        import("./fixture-app-contexts.mjs").then(
+          ({ serveOwnContextPage }) => serveOwnContextPage({ request, url, response }),
           () => html(500, "<!doctype html><title>Unavailable</title>"),
         );
         return;

@@ -150,3 +150,6 @@ export { OPEN_ADDRESS_BOUNDS, OPEN_ADDRESS_BOUND_MS, openAddress } from "./open-
 // and its text, and the page's title.
 export { PRESS_BY_TEST_ID_BOUNDS, TEST_ID_ATTRIBUTE, pressByTestId } from "./press-by-test-id.mjs";
 export { TITLE_BOUND_MS, TITLE_POLL_MS, TITLE_SETTLE_MS, readTitle } from "./read-title.mjs";
+// openPageInOwnContext: a further page in a browser context of its own, signed
+// in by the session the first page carries.
+export { OWN_CONTEXT_BOUNDS, OWN_CONTEXT_LANDING_BOUND_MS, openPageInOwnContext } from "./open-page-in-own-context.mjs";
