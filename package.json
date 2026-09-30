@@ -285,6 +285,7 @@
     "db:migrate": "cinatra instance db migrate",
     "db:migrate:down": "cinatra instance db migrate --down",
     "setup:status": "cinatra status",
+    "prepare:dev-database": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/prepare-dev-database.mjs",
     "provision:dev-instance": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/provision-dev-instance.mjs",
     "check:services": "node scripts/check-services.mjs",
     "seed": "node --env-file=.env.local scripts/seed.mjs",

@@ -21,7 +21,7 @@ export const SECRET_TRAVEL_RULE =
   "command-line argument, never through an environment file written to disk, never " +
   "logged.";
 
-export const PROVISIONABLE_PROVIDERS = Object.freeze(["openai", "anthropic"]);
+export const PROVISIONABLE_PROVIDERS = Object.freeze(["openai"]);
 
 export class SecretInArgumentsError extends Error {
   constructor(flag) {
@@ -92,6 +92,13 @@ export function parseProvisionInstanceArgs(argv) {
     parsed[VALUE_FLAGS.get(flag)] = String(value).trim();
   }
 
+  // The Anthropic wizard writers import the app's runtime graph. Refuse this
+  // CLI path before stdin is read or any earlier provisioning leg can write.
+  if (parsed.provider === "anthropic") {
+    throw new Error(
+      "Anthropic provisioning is unavailable in this command; use the setup wizard after boot or --provider openai for the environment bootstrap.",
+    );
+  }
   if (parsed.provider !== undefined && !PROVISIONABLE_PROVIDERS.includes(parsed.provider)) {
     // The given value is NOT echoed, for the same reason as above.
     throw new Error(
