@@ -19,6 +19,11 @@ export function normalizeAppRuntimeMode(value: string | null | undefined): AppRu
   return normalized === "production" || normalized === "prod" ? "production" : "development";
 }
 
+/**
+ * A key of APP_RUNTIME_MODE_ENV_KEYS that carries a non-blank value decides, the first in order.
+ * When none does, the build decides: an application built for production (NODE_ENV "production")
+ * runs in production mode, and every other process runs in development mode.
+ */
 export function getAppRuntimeMode(): AppRuntimeMode {
   for (const key of APP_RUNTIME_MODE_ENV_KEYS) {
     const value = process.env[key];
@@ -27,7 +32,7 @@ export function getAppRuntimeMode(): AppRuntimeMode {
     }
   }
 
-  return "development";
+  return process.env.NODE_ENV === "production" ? "production" : "development";
 }
 
 export function isAppDevelopmentMode() {
