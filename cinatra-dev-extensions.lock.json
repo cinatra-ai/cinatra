@@ -75,7 +75,7 @@
     {
       "packageName": "@cinatra-ai/blog-linkedin-publish-agent",
       "repo": "cinatra-ai/blog-linkedin-publish-agent",
-      "resolvedSha": "40bf2095951165861de4d9be66fe81f384f59ec0"
+      "resolvedSha": "11753d6c4590e05ab0291e2c5309ba0239a50619"
     },
     {
       "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
@@ -100,7 +100,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "f57414c04592f9556bf3dfa84ba4fec809fad75b"
+      "resolvedSha": "415114bdf4f7c76a8a17d5a0bcb94e111fa6dd52"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
