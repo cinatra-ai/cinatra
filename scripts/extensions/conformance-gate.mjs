@@ -48,6 +48,7 @@ import {
   PROCESS_ENV_ALLOWLIST,
   PRIVATE_ORG_REPO_SLUGS,
   INTERNAL_HOSTNAME_PATTERNS,
+  CONNECTOR_ARTIFACT_BORDER_FLOOR,
 } from "./lib/conformance-rules.mjs";
 import { stripComments } from "../audit/lib/strip-comments.mjs";
 
@@ -301,6 +302,9 @@ function checkManifest(pkgDir, pkg, rules) {
   } else if (kind === "connector") {
     findings.push(...checkConnectorAccessConfig(pkgDir, rules));
     findings.push(...checkWebhooksDeclaration(pkg));
+    // cinatra#3821 class 4: a connector declares no produced type, claims no
+    // artifact type and registers no artifact display.
+    findings.push(...checkConnectorManifestBorder(pkgDir, pkg));
     if (!("sdkAbiRange" in cinatra)) {
       findings.push({
         rule: "manifest.connector-sdk-abi-range-advisory",
@@ -1784,6 +1788,141 @@ function checkFsAndEnvBans(pkg, relFiles) {
 }
 
 // ---------------------------------------------------------------------------
+// cinatra#3821 — the core/extension border, connector side.
+//
+// A connector gives an agent its connection and its tools. It never creates an
+// artifact, never claims an artifact type, never declares a produced type and
+// never makes the application create an artifact on its behalf.
+//   class 4 (manifest): `border.connector-declares-produces` (cinatra.produces
+//     in package.json, or metadata.cinatra.produces in cinatra/oas.json) and
+//     `border.connector-claims-artifact` (a cinatra.artifact block: objectTypes
+//     is a claimed object type, ui a registered artifact display).
+//   class 5 (source): `border.connector-creates-artifact`, one finding per
+//     (file, road) whose comment-stripped text names a road of
+//     ARTIFACT_CREATING_ROADS (derived from the SDK) as a whole token. Findings
+//     on CONNECTOR_ARTIFACT_BORDER_FLOOR go to `known`; a floor entry of the
+//     package with no matching finding is `border.connector-floor-stale`.
+// Both run for `cinatra.kind === "connector"` only.
+//
+// WHAT THESE RULES CANNOT SEE: a road id assembled at run time or passed in a
+// variable; a road reached through another package the connector depends on;
+// an object written through the objects port with an artifact type; and a
+// creating road the application adds without declaring it in
+// ARTIFACT_CREATING_ROADS.
+// ---------------------------------------------------------------------------
+
+/** Class 4 — the connector's manifest. Returns findings (empty for any other kind). */
+export function checkConnectorManifestBorder(pkgDir, pkg) {
+  const findings = [];
+  const cinatra = pkg?.cinatra;
+  if (!cinatra || typeof cinatra !== "object" || cinatra.kind !== "connector") return findings;
+
+  if ("produces" in cinatra) {
+    findings.push({
+      rule: "border.connector-declares-produces",
+      file: "package.json",
+      detail: "a connector declares cinatra.produces — a connector produces no artifact type; the agent extension whose flow creates the artifact declares what it produces.",
+    });
+  }
+  const oasPath = join(pkgDir, "cinatra", "oas.json");
+  if (existsSync(oasPath)) {
+    let oas = null;
+    try {
+      oas = JSON.parse(readFileSync(oasPath, "utf8"));
+    } catch {
+      oas = null; // a file that does not parse adds no finding here
+    }
+    const meta = oas?.metadata?.cinatra;
+    if (meta && typeof meta === "object" && "produces" in meta) {
+      findings.push({
+        rule: "border.connector-declares-produces",
+        file: "cinatra/oas.json",
+        detail: "a connector's cinatra/oas.json declares metadata.cinatra.produces — a connector produces no artifact type.",
+      });
+    }
+  }
+  if ("artifact" in cinatra) {
+    const block = cinatra.artifact;
+    const keys = block && typeof block === "object" && !Array.isArray(block) ? Object.keys(block) : [];
+    const named = keys.map((k) =>
+      k === "objectTypes" ? "objectTypes (a claimed object type)" : k === "ui" ? "ui (a registered artifact display)" : k,
+    );
+    findings.push({
+      rule: "border.connector-claims-artifact",
+      file: "package.json",
+      detail: `a connector carries a cinatra.artifact block${named.length ? ` (${named.join(", ")})` : ""} — artifact types and their display belong to an artifact extension, never a connector.`,
+    });
+  }
+  return findings;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function inScopeSourceFiles(pkgDir, pkg) {
+  const allFiles = walkAllFiles(pkgDir).map((f) => relative(pkgDir, f));
+  return scopedFiles(allFiles, pkg).filter(isSourceFile);
+}
+
+/**
+ * Class 5 — the connector's source, with the floor. `relFiles` defaults to the
+ * package's in-scope source files (the published scope every other source rule
+ * reads). Returns `{ findings, floored, stale }`: `findings` are the failing
+ * `border.connector-creates-artifact` findings outside the floor, `floored` the
+ * ones on the floor (each carries its `floorKey`), and `stale` one
+ * `border.connector-floor-stale` finding per floor entry of this package that
+ * no finding matches. All three are empty for a package of any other kind.
+ */
+export function checkConnectorArtifactBorder(pkgDir, pkg, rules, relFiles) {
+  const out = { findings: [], floored: [], stale: [] };
+  if (pkg?.cinatra?.kind !== "connector") return out;
+  const files = relFiles ?? inScopeSourceFiles(pkgDir, pkg);
+  const roads = rules.artifactCreatingRoads;
+  const boundary = "A-Za-z0-9_\\-:/@";
+  const matchers = roads.map((road) => ({
+    road,
+    re: new RegExp(`(?<![${boundary}])${escapeRegExp(road)}(?![${boundary}])`),
+  }));
+  const seenKeys = new Set();
+  for (const rel of files) {
+    let text;
+    try {
+      text = stripComments(readFileSync(join(pkgDir, rel), "utf8"));
+    } catch {
+      continue;
+    }
+    for (const { road, re } of matchers) {
+      const m = re.exec(text);
+      if (!m) continue;
+      const line = text.slice(0, m.index).split("\n").length;
+      const floorKey = `${pkg.name}:${rel}:${road}`;
+      const finding = {
+        rule: "border.connector-creates-artifact",
+        file: rel,
+        detail: `names the road "${road}" (first at line ${line}), by which the application creates an artifact — a connector gives an agent its connection and its tools and never makes the application create an artifact on its behalf.`,
+      };
+      if (Object.prototype.hasOwnProperty.call(CONNECTOR_ARTIFACT_BORDER_FLOOR, floorKey)) {
+        seenKeys.add(floorKey);
+        out.floored.push({ ...finding, floorKey, detail: `${finding.detail} Floored: ${CONNECTOR_ARTIFACT_BORDER_FLOOR[floorKey]}.` });
+      } else {
+        out.findings.push(finding);
+      }
+    }
+  }
+  const prefix = `${pkg.name}:`;
+  for (const key of Object.keys(CONNECTOR_ARTIFACT_BORDER_FLOOR)) {
+    if (!key.startsWith(prefix) || seenKeys.has(key)) continue;
+    out.stale.push({
+      rule: "border.connector-floor-stale",
+      file: key.slice(prefix.length).split(":")[0],
+      detail: `the floor entry "${key}" matches no finding — remove it from CONNECTOR_ARTIFACT_BORDER_FLOOR (the floor only shrinks).`,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Baseline.
 // ---------------------------------------------------------------------------
 
@@ -1867,9 +2006,13 @@ export function runConformanceGate({ packageDir, sdkRoot, strict = false }) {
     ...checkHygiene(packageDir, hygieneScope),
     ...checkFsAndEnvBans(pkg, inScopeSource),
   ];
+  // cinatra#3821 class 5: floored findings are reported as known (strict fails them).
+  const border = checkConnectorArtifactBorder(packageDir, pkg, rules, inScopeSource);
+  findings.push(...border.findings, ...border.stale);
 
   const baseline = loadBaseline();
   const { blocking, known, advisory } = partitionAgainstBaseline(pkg.name, findings, baseline, strict);
+  for (const f of border.floored) (strict ? blocking : known).push({ rule: f.rule, file: f.file, detail: f.detail });
 
   return {
     infra: false,
