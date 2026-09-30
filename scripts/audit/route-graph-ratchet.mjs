@@ -77,14 +77,12 @@
  *    The gate's tests check the COMMITTED baseline the same way
  *    (`validateCommittedAbsorbs` against the base), so a pull request with
  *    real core growth carries its records and passes both (cinatra#3669).
- *  - A RAISE TAKES TWO PULL REQUESTS (cinatra#3832): a record permits a raise
- *    only when the base branch already holds it. The first pull request lands
- *    the record with the ceiling unchanged — a PERMIT, `from` = the current
- *    ceiling, reported with a NOTICE line; the second raises the ceiling and
- *    carries the record unchanged, and only then is the raise absorbed. A raise
- *    and its record in one pull request fails, so no change can permit its own
- *    growth. A pending permit is carried forward unchanged (or withdrawn) by
- *    other pull requests; lowering the ceiling makes it stale.
+ *  - An annotated raise passes in the pull request that carries it
+ *    (cinatra#3848): the record is committed with the raise, whether or not the
+ *    base branch holds it. A ceiling differs from the floors that list faults:
+ *    it measures the graph a route reaches, and real growth raises it, so the
+ *    record with its notice makes the raise visible; a floor that lists faults
+ *    only shrinks.
  *  - The base is read through the shared floor base guard
  *    (scripts/audit/lib/floor-base-guard.mjs): ROUTE_GRAPH_RATCHET_BASE when
  *    the workflow sets it, else the pull request's base branch; a base that
@@ -277,10 +275,8 @@ const byRouteThenField = (a, b) => a.route.localeCompare(b.route) || String(a.fi
  * the change has no pull request yet, which is stated rather than invented);
  * carry a non-empty `reason`;
  * name a route tracked in `routes`; and have `to` equal to that route's
- * CURRENT ceiling (a record that documents the raise to it) or `from` equal to
- * it (a PERMIT for a later raise, cinatra#3832). A record that describes
- * neither is stale and must be removed by the change that lowered/re-raised
- * the ceiling.
+ * CURRENT ceiling (a record that no longer describes the current ceiling is
+ * stale and must be removed by the change that lowered/re-raised the ceiling).
  */
 export function validateAbsorbRecords(baseline) {
   const errors = [];
@@ -300,8 +296,8 @@ export function validateAbsorbRecords(baseline) {
       errors.push({ route, field: "route", reason: 'stale absorb record for a route not tracked in "routes" (the baseline no longer carries its ceiling — remove the record)' });
       continue;
     }
-    if (routes[route] !== rec.to && routes[route] !== rec.from) {
-      errors.push({ route, field: "to", reason: `stale absorb record — "to" (${rec.to}) must equal the route's current ceiling (${routes[route]}), or "from" (${rec.from}) must for a permit of a later raise; the change that moved the ceiling must retire/replace the record` });
+    if (routes[route] !== rec.to) {
+      errors.push({ route, field: "to", reason: `stale absorb record — "to" (${rec.to}) must equal the route's current ceiling (${routes[route]}); the change that moved the ceiling must retire/replace the record` });
     }
   }
   return errors.sort(byRouteThenField);
@@ -312,27 +308,23 @@ export function validateAbsorbRecords(baseline) {
  * Both baselines are the PARSED committed files (base = the base ref's copy).
  * Assumes the COMMITTED baseline already passed validateAbsorbRecords.
  *
- * Returns { violations: [{ route, reason }], absorbed: [{ route, from, to, reason, pr }],
- * permits: [{ route, from, to, reason, pr }] }:
+ * Returns { violations: [{ route, reason }], absorbed: [{ route, from, to, reason, pr }] }:
  *  - A raise (committed ceiling > base ceiling) with a committed record that
- *    EXACTLY matches the delta (from === base, to === committed) AND that the
- *    base already holds deep-equal → absorbed (allowed; caller emits the LOUD
- *    notice). A matching record the base does not hold yet → violation (a
- *    raise takes two pull requests, cinatra#3832). Any other raise →
- *    violation (silent raise / mismatched record).
- *  - A committed record NOT consumed by a raise is valid as a carried-forward
- *    record — the base contains a DEEP-EQUAL record for that route and the
- *    committed ceiling equals record.to (a used record) or record.from (a
- *    pending permit) — or as a NEW PERMIT: a record whose `from` is the
- *    committed ceiling of a route the base tracks (caller emits a notice; it
- *    permits a raise from the next pull request on). Anything else
- *    (pre-planted record that matches no raise and no permit, record for a
- *    net-new route, record surviving a lower) → violation (orphan/stale).
+ *    EXACTLY matches the delta (from === base, to === committed) → absorbed
+ *    (allowed; caller emits the LOUD notice), whether or not the base holds
+ *    the record: the pull request that raises the ceiling carries its record
+ *    (cinatra#3848). Any other raise → violation (silent raise / mismatched
+ *    record).
+ *  - A committed record NOT consumed by a raise is valid ONLY as a
+ *    carried-forward historical record: the base must contain a DEEP-EQUAL
+ *    record for that route AND the committed ceiling must equal record.to.
+ *    Anything else (pre-planted record with no raise, record for a net-new
+ *    route, record surviving a lower) → violation (orphan/stale).
  *  - Base-side preservation: a base record whose route still exists at the
  *    SAME (raised) ceiling must be carried forward deep-equal — deleting or
  *    altering the annotation while keeping the raised ceiling → violation.
- *    (Dropping the route, lowering the ceiling, a new annotated raise, or a
- *    new permit from that ceiling retires the record.)
+ *    (Dropping the route, lowering the ceiling, or a new annotated raise
+ *    retires the record.)
  */
 export function classifyRaises(baseBaseline, committedBaseline) {
   const committedRoutes = committedBaseline?.routes ?? {};
@@ -340,20 +332,13 @@ export function classifyRaises(baseBaseline, committedBaseline) {
   const committedAbsorbs = committedBaseline?.absorbs ?? {};
   const violations = [];
   const absorbed = [];
-  const permits = [];
   const consumed = new Set();
 
-  // 1. Every raise vs the base must be exactly matched by a committed record
-  //    that the base already holds (a raise takes two pull requests).
+  // 1. Every raise vs the base must be exactly matched by a committed record.
   for (const g of baselineGrowth(baseBaseline, committedBaseline)) {
     const rec = committedAbsorbs[g.route];
     if (rec && isStructurallyValidAbsorbRecord(rec) && rec.from === g.base && rec.to === g.committed) {
-      const baseRec = baseAbsorbs[g.route];
-      if (baseRec !== undefined && isStructurallyValidAbsorbRecord(baseRec) && absorbRecordsEqual(baseRec, rec)) {
-        absorbed.push({ route: g.route, from: rec.from, to: rec.to, reason: rec.reason, pr: rec.pr });
-      } else {
-        violations.push({ route: g.route, field: "absorbs", reason: `ceiling raised ${g.base} -> ${g.committed} on an absorb record that is not on the base branch yet: a record permits a raise only once the base holds it — land the record first with the ceiling unchanged, then raise the ceiling in a later pull request` });
-      }
+      absorbed.push({ route: g.route, from: rec.from, to: rec.to, reason: rec.reason, pr: rec.pr });
       consumed.add(g.route);
     } else if (rec) {
       const field = rec?.from !== g.base ? "from" : "to";
@@ -376,15 +361,11 @@ export function classifyRaises(baseBaseline, committedBaseline) {
       isStructurallyValidAbsorbRecord(baseRec) &&
       isStructurallyValidAbsorbRecord(rec) &&
       absorbRecordsEqual(baseRec, rec) &&
-      (committedRoutes[route] === rec.to || committedRoutes[route] === rec.from);
+      committedRoutes[route] === rec.to;
     if (carried) continue;
     const orphan = "orphan/stale absorb record — not matched by a ceiling raise vs the base and not an identical carried-forward record at its ceiling";
     if (!hasOwn(baseRoutes, route)) {
       violations.push({ route, field: "route", reason: `${orphan}: the base tracks no ceiling for this route, and a net-new route needs no record` });
-    } else if (isStructurallyValidAbsorbRecord(rec) && committedRoutes[route] === rec.from) {
-      // A new permit: the ceiling is unchanged here; the raise it permits may
-      // land once the base holds this record.
-      permits.push({ route, from: rec.from, to: rec.to, reason: rec.reason, pr: rec.pr });
     } else if (baseRec !== undefined && isStructurallyValidAbsorbRecord(baseRec) && isStructurallyValidAbsorbRecord(rec) && committedRoutes[route] === baseRec.to) {
       for (const field of differingFields(baseRec, rec)) {
         violations.push({ route, field, reason: `${orphan}: "${field}" differs from the base's record at the same ceiling (${baseRec.to})` });
@@ -402,7 +383,6 @@ export function classifyRaises(baseBaseline, committedBaseline) {
     if (committedCeiling === undefined) continue; // route dropped → record retires
     if (committedCeiling !== baseRec.to) continue; // lowered or re-raised → retired/replaced (a re-raise is checked in (1))
     const rec = committedAbsorbs[route];
-    if (rec && isStructurallyValidAbsorbRecord(rec) && rec.from === committedCeiling) continue; // a new permit from this ceiling replaces the used record
     if (!rec || !isStructurallyValidAbsorbRecord(rec) || !absorbRecordsEqual(baseRec, rec)) {
       const deleted = `absorb record deleted/altered while its raised ceiling (${baseRec.to}) is kept — the annotation may only be retired by lowering the ceiling, dropping the route, or a new annotated raise`;
       if (rec && isStructurallyValidAbsorbRecord(rec)) {
@@ -416,7 +396,6 @@ export function classifyRaises(baseBaseline, committedBaseline) {
   return {
     violations: uniqueErrors(violations),
     absorbed: absorbed.sort((a, b) => a.route.localeCompare(b.route)),
-    permits: permits.sort((a, b) => a.route.localeCompare(b.route)),
   };
 }
 
@@ -454,8 +433,9 @@ export function validateCommittedAbsorbs(baseBaseline, committedBaseline) {
 /**
  * The floor base guard (cinatra#3832) for the committed baseline: growth is
  * every violation `classifyRaises` finds against the base branch's baseline
- * (an unannotated raise, a raise on a record the base does not hold yet, an
- * orphan or altered record). `headFloor` (the parsed baseline) defaults to the
+ * (an unannotated raise, a raise whose record does not match it, a stale,
+ * orphan or altered record). A raise with its matching record is not growth
+ * here: it is absorbed, and the gate prints its notice (cinatra#3848). `headFloor` (the parsed baseline) defaults to the
  * baseline in `repoRoot`.
  */
 export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
@@ -625,16 +605,15 @@ function main() {
       routes[route] = info.moduleCount;
     }
     // Carry forward ONLY the absorb records that still exactly describe a
-    // tracked route's (re)written ceiling — a used record (`to`) or a pending
-    // permit (`from`); a lowered/re-raised/dropped route retires its record
-    // here automatically. A raise this write smuggles in WITHOUT a record the
-    // base holds is still blocked by the base-ref ratchet.
+    // tracked route's (re)written ceiling; a lowered/re-raised/dropped route
+    // retires its record here automatically. A raise this write smuggles in
+    // WITHOUT a matching record is still blocked by the base-ref ratchet.
     let absorbs;
     if (existsSync(BASELINE_FILE)) {
       try {
         const prior = JSON.parse(readFileSync(BASELINE_FILE, "utf8"));
         const kept = Object.entries(prior?.absorbs ?? {})
-          .filter(([route, rec]) => isStructurallyValidAbsorbRecord(rec) && (routes[route] === rec.to || routes[route] === rec.from))
+          .filter(([route, rec]) => isStructurallyValidAbsorbRecord(rec) && routes[route] === rec.to)
           .sort(([a], [b]) => a.localeCompare(b));
         if (kept.length) absorbs = Object.fromEntries(kept);
       } catch {
@@ -692,22 +671,19 @@ function main() {
   // base branch, push arm → the previous tip), else the pull request's base
   // branch; with none (no pull request) the guard says so and the tree check
   // below still runs. Every ceiling raise vs the base-branch baseline must be
-  // exactly matched by an absorb record the base already holds (then it passes
-  // with a LOUD notice); orphan/stale records and a deleted still-raised
-  // annotation also fail. Fail-closed when the base cannot be read.
+  // exactly matched by a committed absorb record (then it passes with a LOUD
+  // notice); orphan/stale records and a deleted still-raised annotation also
+  // fail. Fail-closed when the base cannot be read.
   const guard = checkFloorAgainstBase({ headFloor: baseline });
   if (guard.ok && guard.baseFloor) {
-    const { absorbed, permits } = classifyRaises(guard.baseFloor, baseline);
+    const { absorbed } = classifyRaises(guard.baseFloor, baseline);
     for (const a of absorbed) {
       console.log(`[route-graph-ratchet] NOTICE — ABSORBED ceiling raise ${a.route}: ${a.from} -> ${a.to} (${a.reason}; PR #${a.pr})`);
-    }
-    for (const p of permits) {
-      console.log(`[route-graph-ratchet] NOTICE — PERMIT recorded for ${p.route}: ${p.from} -> ${p.to} (${p.reason}; PR #${p.pr}); the raise it permits may land once the base branch holds it`);
     }
   }
   if (!reportFloorGuard(guard)) {
     if (guard.status === "grew") {
-      console.error(`A ceiling is never raised silently: a sanctioned raise needs an absorbs record { from, to, reason, pr } exactly matching the raise that the base branch already holds (see the baseline note).`);
+      console.error(`A ceiling is never raised silently: a sanctioned raise needs a committed absorbs record { from, to, reason, pr } exactly matching the raise (see the baseline note).`);
     }
     process.exit(1);
   }
