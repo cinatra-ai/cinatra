@@ -29,7 +29,7 @@
 import { z } from "zod";
 
 import type { ArtifactUiSlot } from "./artifact-contract";
-import { ARTIFACT_UI_SLOTS, HOST_DESIGN_PRIMITIVES_MODULE } from "./artifact-contract";
+import { ARTIFACT_UI_SLOTS } from "./artifact-contract";
 
 // ---------------------------------------------------------------------------
 // Externals allowlist — the SANCTIONED host peers that SHARE the host's ONE React.
@@ -45,12 +45,21 @@ import { ARTIFACT_UI_SLOTS, HOST_DESIGN_PRIMITIVES_MODULE } from "./artifact-con
 export const HOST_DESIGN_TOKEN_MODULE = "@cinatra-ai/design";
 
 /**
- * The HOST-SHARED DESIGN-PRIMITIVES module (cinatra#3471 slice 2, epic #2926).
- * Declared in `./artifact-contract` (see there) and re-exported here, next to
- * the externals allowlist that admits it: the conformance gate reads that one
- * declaration, so the id has a single definition (cinatra#3867).
+ * The HOST-SHARED DESIGN-PRIMITIVES module (cinatra#3471 slice 2, epic #2926 —
+ * decision 407 of 2026-09-13: "the host shares its primitives with extension
+ * bundles at run time like React does"). A self-rendering connector/artifact
+ * bundle leaves THIS bare specifier EXTERNAL and the host module-registry shim
+ * resolves it to the host's ONE instance at run time — the exact road React and
+ * the design-token module already take, so a package stops carrying byte copies
+ * of `src/components/ui/*`.
+ *
+ * The id is HOST-NEUTRAL and follows the design registry's OWN package naming
+ * (`registry.json` namespaces every item as `@cinatra-ai/<item>`, the same
+ * scope the host design-token module already uses) — never a product-internal
+ * path such as
+ * `@/components/ui`, which is exactly the coupling decision 407 removes.
  */
-export { HOST_DESIGN_PRIMITIVES_MODULE };
+export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
 
 /**
  * The HOST-SERVED READ-ONLY DASHBOARD COMPOSITION module (cinatra#3092, epic

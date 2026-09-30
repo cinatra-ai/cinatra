@@ -449,29 +449,6 @@ export const ARTIFACT_CREATING_ROADS = [
 ] as const;
 
 /**
- * The HOST-SHARED DESIGN-PRIMITIVES module (cinatra#3471 slice 2, epic #2926 —
- * decision 407 of 2026-09-13: "the host shares its primitives with extension
- * bundles at run time like React does"). A self-rendering connector/artifact
- * bundle leaves THIS bare specifier EXTERNAL and the host module-registry shim
- * resolves it to the host's ONE instance at run time — the exact road React and
- * the design-token module already take, so a package stops carrying byte copies
- * of `src/components/ui/*`.
- *
- * The id is HOST-NEUTRAL and follows the design registry's OWN package naming
- * (`registry.json` namespaces every item in the `@cinatra-ai` scope, the same
- * scope the host design-token module already uses) — never a product-internal
- * path such as
- * `@/components/ui`, which is exactly the coupling decision 407 removes.
- *
- * DECLARED HERE, re-exported by `./artifact-client-bundle` next to the React
- * externals allowlist (cinatra#3867): this file is one of the SDK files the
- * conformance gate's reusable workflow checks out, and the gate's import rule
- * admits exactly this module, READ AS A LITERAL by its rule derivation
- * (`scripts/extensions/lib/conformance-rules.mjs`) — never a re-listed copy.
- */
-export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
-
-/**
  * The shadcn item-name grammar for the `<component>` token: strict lowercase
  * kebab (a leading alnum segment, hyphen-joined alnum segments). This is the
  * SAME strict-lowercase slug grammar the registry-identity `registryNamespace`

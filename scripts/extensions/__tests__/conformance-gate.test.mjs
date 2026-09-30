@@ -1822,22 +1822,31 @@ describe("conformance-gate — cinatra.logo is admitted for EVERY kind (cinatra#
 // connectors on a floor.
 // ---------------------------------------------------------------------------
 
-// The files the reusable workflow's sparse checkout holds: the rules must be
-// derivable from these alone, or every connector repository's run is an infra
-// failure.
-const REUSABLE_WORKFLOW_SDK_FILES = [
-  "packages/sdk-extensions/src/host-context.ts",
-  "packages/sdk-extensions/src/artifact-contract.ts",
-  "packages/sdk-extensions/src/chat-views-contract.ts",
-  "packages/sdk-extensions/src/llm-provider-contract.ts",
-  "packages/sdk-extensions/src/access-config.ts",
-  "packages/sdk-extensions/package.json",
-  "packages/sdk-ui/package.json",
-];
+// The files the reusable workflow's sparse checkout holds, READ FROM THE
+// WORKFLOW ITSELF: the rules must be derivable from these alone, or every
+// connector repository's run is an infra failure.
+const REUSABLE_WORKFLOW_TEXT = readFileSync(
+  join(REPO_ROOT, ".github", "workflows", "extension-conformance-gate-reusable.yml"),
+  "utf8",
+);
 
-function sdkRootFrom(transform = (files) => files) {
+function sparseCheckoutList(workflowText) {
+  const lines = workflowText.split("\n");
+  const start = lines.findIndex((l) => /^\s*sparse-checkout:\s*\|\s*$/.test(l));
+  if (start < 0) return [];
+  const keyIndent = lines[start].search(/\S/);
+  const out = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    if (line.search(/\S/) <= keyIndent) break;
+    out.push(line.trim());
+  }
+  return out;
+}
+
+function sdkRootFrom(transform = (files) => files, workflowText = REUSABLE_WORKFLOW_TEXT) {
   const files = {};
-  for (const rel of REUSABLE_WORKFLOW_SDK_FILES) files[rel] = readFileSync(join(REPO_ROOT, rel), "utf8");
+  for (const rel of sparseCheckoutList(workflowText)) files[rel] = readFileSync(join(REPO_ROOT, rel), "utf8");
   return writeFixture(transform(files));
 }
 
@@ -1846,6 +1855,9 @@ const importOf = (spec) => `import { Button } from "${spec}";\nexport const B = 
 
 describe("cinatra#3867 — the import rule admits exactly the host-served primitives module", () => {
   it("derives the module from the SDK's own declaration, from the reusable workflow's files alone", () => {
+    const listed = sparseCheckoutList(REUSABLE_WORKFLOW_TEXT);
+    expect(listed).toContain("scripts/extensions/conformance-gate.mjs");
+    expect(listed).toContain("packages/sdk-extensions/src/artifact-client-bundle.ts");
     const sdkRoot = sdkRootFrom();
     const rules = loadLiveRules(sdkRoot);
     expect(rules.ok).toBe(true);
@@ -1855,10 +1867,23 @@ describe("cinatra#3867 — the import rule admits exactly the host-served primit
     rmSync(sdkRoot, { recursive: true, force: true });
   });
 
+  it("answers infra, never a silent pass, when the workflow's checkout lacks the declaring file", () => {
+    const line = /^\s*packages\/sdk-extensions\/src\/artifact-client-bundle\.ts\n/m;
+    const withoutLine = REUSABLE_WORKFLOW_TEXT.replace(line, "");
+    expect(withoutLine).not.toBe(REUSABLE_WORKFLOW_TEXT);
+    const sdkRoot = sdkRootFrom(undefined, withoutLine);
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot });
+    expect(result.infra).toBe(true);
+    expect(result.message).toContain("artifact-client-bundle.ts");
+    rmSync(sdkRoot, { recursive: true, force: true });
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
   it("answers infra, never a silent pass, when the SDK declares no host-served module", () => {
     let removed = false;
     const sdkRoot = sdkRootFrom((files) => {
-      const key = "packages/sdk-extensions/src/artifact-contract.ts";
+      const key = "packages/sdk-extensions/src/artifact-client-bundle.ts";
       const without = files[key].replace(/export const HOST_DESIGN_PRIMITIVES_MODULE\b[^;]*;/, "");
       removed = without !== files[key];
       return { ...files, [key]: without };

@@ -96,6 +96,7 @@ export function loadLiveRules(sdkRepoRoot) {
   const chatViewsContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/chat-views-contract.ts`;
   const llmProviderContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/llm-provider-contract.ts`;
   const accessConfigPath = `${sdkRepoRoot}/packages/sdk-extensions/src/access-config.ts`;
+  const artifactClientBundlePath = `${sdkRepoRoot}/packages/sdk-extensions/src/artifact-client-bundle.ts`;
   const sdkExtensionsPkgPath = `${sdkRepoRoot}/packages/sdk-extensions/package.json`;
   const sdkUiPkgPath = `${sdkRepoRoot}/packages/sdk-ui/package.json`;
 
@@ -104,6 +105,7 @@ export function loadLiveRules(sdkRepoRoot) {
   const chatViewsContractSrc = readIfExists(chatViewsContractPath);
   const llmProviderContractSrc = readIfExists(llmProviderContractPath);
   const accessConfigSrc = readIfExists(accessConfigPath);
+  const artifactClientBundleSrc = readIfExists(artifactClientBundlePath);
   const sdkExtensionsPkgRaw = readIfExists(sdkExtensionsPkgPath);
   const sdkUiPkgRaw = readIfExists(sdkUiPkgPath);
 
@@ -113,6 +115,7 @@ export function loadLiveRules(sdkRepoRoot) {
   if (!chatViewsContractSrc) missing.push(chatViewsContractPath);
   if (!llmProviderContractSrc) missing.push(llmProviderContractPath);
   if (!accessConfigSrc) missing.push(accessConfigPath);
+  if (!artifactClientBundleSrc) missing.push(artifactClientBundlePath);
   if (!sdkExtensionsPkgRaw) missing.push(sdkExtensionsPkgPath);
   if (!sdkUiPkgRaw) missing.push(sdkUiPkgPath);
   if (missing.length > 0) {
@@ -167,11 +170,12 @@ export function loadLiveRules(sdkRepoRoot) {
   // The host-served design-primitives module (cinatra#3867): the ONE
   // first-party module besides the two SDK packages an extension may import
   // (the build-time road of host-shared-primitives-contract.md). DERIVED from
-  // the SDK's declaration (artifact-contract.ts HOST_DESIGN_PRIMITIVES_MODULE,
-  // a file of the reusable workflow's checkout), never typed here. The import
+  // the SDK's declaration (artifact-client-bundle.ts HOST_DESIGN_PRIMITIVES_MODULE,
+  // which the reusable workflow checks out), never typed here. The import
   // rule admits this exact specifier only, never a subpath of it.
+  // The file is read as TEXT, never imported, so its own imports need not be present.
   const hostDesignPrimitivesModule = extractStringConst(
-    artifactContractSrc,
+    artifactClientBundleSrc,
     "HOST_DESIGN_PRIMITIVES_MODULE",
   );
   // cinatra.views (cinatra#1626, S9): the chat renderable-view declaration
