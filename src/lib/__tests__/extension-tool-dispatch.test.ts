@@ -22,12 +22,15 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  EXTENSION_TOOL_CALL_REFUSAL_NAME,
+  EXTENSION_TOOL_REFUSAL_SENTENCE_MAX,
   EXTENSION_TOOL_REVIEW_TARGETS_KEY,
   ExtensionToolRefusal,
   dispatchExtensionTool,
+  moduleRefusalSentenceIssue,
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
-import { buildExtensionDataStatement } from "@/lib/extension-data-tool";
+import { ExtensionDataRefusal, buildExtensionDataStatement } from "@/lib/extension-data-tool";
 import {
   ExtensionToolModuleRefusal,
   loadDeclaredToolModule,
@@ -528,5 +531,158 @@ describe("extension_tool — the review-gate filing is validated by the host", (
         },
       }),
     ).rejects.toThrow(ExtensionToolRefusal);
+  });
+});
+
+describe("extension_tool — a module refuses a call by name (cinatra#3847)", () => {
+  const SENTENCE = "fixture refusal: this module does not serve the kind the call names";
+
+  /** A declared module that throws `thrown` from its own call. */
+  function dispatchThrowing(thrown: unknown) {
+    return dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      orgId: ORG,
+      cinatra: CINATRA,
+      request: { name: "fixture_silent_tool", input: {} },
+      ports: stubPorts(),
+      deps: {
+        resolvePackageRoot: rootResolver(),
+        importModule: async () => ({
+          extensionTool: async () => {
+            throw thrown;
+          },
+        }),
+      },
+    });
+  }
+
+  it("answers a module's named refusal as the host's own refusal, with the module's sentence", async () => {
+    const rejection = await dispatchThrowing(
+      Object.assign(new Error(SENTENCE), { name: "ExtensionToolCallRefusal" }),
+    ).catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(ExtensionToolRefusal);
+    expect((rejection as Error).message).toBe(
+      "extension_tool: `fixture_silent_tool` refused the call: " + SENTENCE,
+    );
+  });
+
+  it("documents one refusal name and one sentence bound", () => {
+    expect(EXTENSION_TOOL_CALL_REFUSAL_NAME).toBe("ExtensionToolCallRefusal");
+    expect(EXTENSION_TOOL_REFUSAL_SENTENCE_MAX).toBe(400);
+  });
+
+  it("still answers a module that fails without refusing with its own error", async () => {
+    const failure = new Error("fixture failure");
+    const rejection = await dispatchThrowing(failure).catch((e: unknown) => e);
+    expect(rejection).toBe(failure);
+    expect(rejection).not.toBeInstanceOf(ExtensionToolRefusal);
+  });
+
+  it("reads the admissible sentence as within the bounds", () => {
+    expect(moduleRefusalSentenceIssue(SENTENCE)).toBeNull();
+  });
+
+  // Secret-shaped sentences are composed at run time, so no key shape is ever
+  // a literal of this file.
+  const OUTSIDE_THE_BOUNDS: Array<[string, unknown]> = [
+    ["whitespace only", "   \t  "],
+    ["401 characters", "x".repeat(401)],
+    ["a line break", "fixture refusal\nat the second line"],
+    ["a source position", "fixture refusal at module.mjs:12:3"],
+    ["an absolute path", "fixture refusal in /srv/fixture/module.mjs"],
+    ["a file address", "fixture refusal in file:///srv/fixture/module.mjs"],
+    ["a credential header", "fixture refusal with bearer: fixture-value"],
+    ["a key shape", `fixture refusal with ${["sk", "ant", "x".repeat(24)].join("-")}`],
+    ["a long token run", `fixture refusal with ${"q".repeat(48)}`],
+    ["a non-string message", 42],
+    ["a line separator", `fixture refusal${String.fromCharCode(0x2028)}at the second line`],
+    ["a quoted path", 'fixture refusal in "/srv/fixture/module.mjs"'],
+    ["a relative path", "fixture refusal in ./fixture/module.mjs"],
+    ["a spaced credential", "fixture refusal with Bearer abc.def.ghi"],
+  ];
+
+  it("reads the word file followed by a colon in plain prose as within the bounds", () => {
+    expect(moduleRefusalSentenceIssue("fixture refusal: the file: field names no kind")).toBeNull();
+  });
+
+  it("keeps what the module threw when its name cannot be read", async () => {
+    const thrown = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("fixture getter failure");
+      },
+    });
+    const rejection = await dispatchThrowing(thrown).catch((e: unknown) => e);
+    expect(rejection).toBe(thrown);
+  });
+
+  it("answers a named refusal whose sentence cannot be read as a failure that names the bound", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const thrown = Object.defineProperty({ name: "ExtensionToolCallRefusal" }, "message", {
+      get() {
+        throw new Error("fixture getter failure");
+      },
+    });
+    const rejection = await dispatchThrowing(thrown).catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(ExtensionToolRefusal);
+    const message = (rejection as Error).message;
+    expect(message).toContain("the sentence is not a string");
+    expect(message).not.toContain("fixture getter failure");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain("fixture getter failure");
+  });
+
+  it.each(OUTSIDE_THE_BOUNDS)(
+    "answers a named refusal whose sentence holds %s as a failure that names the bound, never the sentence",
+    async (_label, sentence) => {
+      const issue = moduleRefusalSentenceIssue(sentence);
+      expect(typeof issue).toBe("string");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const rejection = await dispatchThrowing({
+        name: "ExtensionToolCallRefusal",
+        message: sentence,
+      }).catch((e: unknown) => e);
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).not.toBeInstanceOf(ExtensionToolRefusal);
+      const message = (rejection as Error).message;
+      expect(message).toContain(issue as string);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]?.[0]);
+      expect(line).toContain(PACK);
+      expect(line).toContain("fixture_silent_tool");
+      const shown = String(sentence).trim();
+      if (shown !== "") {
+        expect(message).not.toContain(shown);
+        expect(line).not.toContain(shown);
+      }
+    },
+  );
+
+  it("keeps the host's own refusal raised by a port inside the module's call", async () => {
+    const ports = stubPorts();
+    const refusal = new ExtensionDataRefusal(
+      "invalid-request",
+      "extension_data: fixture refusal of the application",
+    );
+    ports.data.select.mockRejectedValueOnce(refusal);
+    const rejection = await dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      orgId: ORG,
+      cinatra: CINATRA,
+      request: { name: "fixture_silent_tool", input: {} },
+      ports,
+      deps: {
+        resolvePackageRoot: rootResolver(),
+        importModule: async () => ({
+          extensionTool: async ({ ports: given }: { ports: ExtensionToolPorts }) =>
+            given.data.select({ table: "fixture_rows" }),
+        }),
+      },
+    }).catch((e: unknown) => e);
+    expect(rejection).toBe(refusal);
   });
 });
