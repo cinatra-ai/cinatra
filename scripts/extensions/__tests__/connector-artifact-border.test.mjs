@@ -193,6 +193,7 @@ describe("the road list is derived from the SDK's declaration, fail closed", () 
     "packages/sdk-extensions/src/chat-views-contract.ts",
     "packages/sdk-extensions/src/llm-provider-contract.ts",
     "packages/sdk-extensions/src/access-config.ts",
+    "packages/sdk-extensions/src/artifact-client-bundle.ts",
     "packages/sdk-extensions/package.json",
     "packages/sdk-ui/package.json",
   ];
