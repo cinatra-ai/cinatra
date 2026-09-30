@@ -14,7 +14,7 @@
  * Every case names the acceptance sentence it pins. Several parts of the wave
  * are NOT here as assertions of presence but as pinned ABSENCES carrying their
  * reason — the same shape the previous slice used — the outreach parent's typed
- * produces and the transcript and feed-lister declarations among them, because
+ * produces and the transcript declarations among them, because
  * landing them under the now-blocking gate would refuse a package at its own
  * publish seam.
  *
@@ -392,18 +392,32 @@ describe("acceptance 2 — the transcript agent's typed id, binding, dependency 
 });
 
 describe("acceptance 2 — the feed lister's episode edge, produces entry and fan-out binding", () => {
-  // All three parts travel together and none is on the pinned head: a typed
-  // entry ahead of a binding is a publish refusal under the flipped gate, and a
-  // single-value binding over `episodes` would file ONE artifact per run rather
-  // than one per episode. The host fan-out grammar the third part needs now
-  // exists on this branch's base; the declaration itself is a pull request in
-  // cinatra-ai/media-feed-lister-agent, which the border keeps out of this one.
-  it("the feed lister declares none of the three parts, and the absence is pinned with its reason", () => {
+  // All three parts are on the pinned head: the typed entry, the required
+  // edge on the episode kind and ONE member binding over `episodes` that files
+  // each listed episode as its own artifact through the host fan-out grammar.
+  it("the feed lister declares all three parts at this pin", () => {
     const a = agent("media-feed-lister-agent");
-    expect(a.produces).toEqual([]);
+    expect(a.produces).toEqual([
+      {
+        extension: "@cinatra-ai/podcast-artifacts",
+        objectTypeId: "@cinatra-ai/podcast-artifacts:artifact",
+      },
+    ]);
     expect(a.producesMirror).toEqual([]);
-    expect(a.artifactEdges).toEqual([]);
-    expect(a.bindings).toEqual([]);
+    expect(a.artifactEdges).toEqual([
+      {
+        packageName: "@cinatra-ai/podcast-artifacts",
+        requirement: "required",
+        edgeType: "runtime",
+      },
+    ]);
+    expect(a.bindings).toEqual([
+      {
+        outputId: "episodes",
+        extension: "@cinatra-ai/podcast-artifacts",
+        contentFrom: "episodes",
+      },
+    ]);
   });
 
   it("the `episodes` output a fan-out binding will name is on the pinned flow", () => {
@@ -551,19 +565,19 @@ describe("acceptance 5 — the declaring count at this pin", () => {
     "web-scrape-agent",
   ];
 
-  /** The one the held pin keeps short of the row, with its own reason. */
-  const HELD: Slug[] = ["media-feed-lister-agent"];
+  /** No pin keeps one of the eight short of the row at this pin. */
+  const HELD: Slug[] = [];
 
-  it("seven of the eight carry a declaration at this pin", () => {
+  it("all eight carry a declaration at this pin", () => {
     const declaring = IN_SCOPE.map((slug) => agent(slug))
       .filter(carriesADeclaration)
       .map((a) => a.slug)
       .sort();
     expect(declaring).toEqual(THE_EIGHT.filter((s) => !HELD.includes(s)).sort());
-    expect(declaring).toHaveLength(7);
+    expect(declaring).toHaveLength(8);
   });
 
-  it("the eight are short exactly the feed lister, one pull request in its own repository", () => {
+  it("none of the eight is short of its declaration", () => {
     const declaring = new Set(
       IN_SCOPE.map((slug) => agent(slug))
         .filter(carriesADeclaration)
@@ -572,12 +586,12 @@ describe("acceptance 5 — the declaring count at this pin", () => {
     expect(THE_EIGHT.filter((slug) => !declaring.has(slug))).toEqual(HELD);
   });
 
-  it("the remaining eight of the fifteen declare nothing", () => {
+  it("the remaining seven of the fifteen declare nothing", () => {
     const silent = IN_SCOPE.map((slug) => agent(slug))
       .filter((a) => !carriesADeclaration(a))
       .map((a) => a.slug);
-    expect(silent).toHaveLength(8);
-    expect(silent).toContain("media-feed-lister-agent");
+    expect(silent).toHaveLength(7);
+    expect(silent).not.toContain("media-feed-lister-agent");
     expect(silent).not.toContain("email-delivery-agent");
   });
 });

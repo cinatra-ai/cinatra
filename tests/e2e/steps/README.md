@@ -18,11 +18,21 @@ defect of a step, with a test, fixed once for every run.
 | `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
 | `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
 | `readControlNames` | Every shown control of a page, by its role and its accessible name, a control without a name included. |
+| `armPageTape` | The document's time origin noted, and the main frame's navigations counted from then on. |
+| `readPageTape` | The tape read back: new documents and changes of the address in place since it was armed, and whether the page is still the same document. |
 | `uploadFile` | A file uploaded through the page's own upload control, with its row in the list before it returns. |
 | `fillForm` | Fields filled by their labels; a required field left empty on submit is refused with the page's own error. |
 | `switchTheme` | The theme switched through the app's own control, and read back from the page and its review island. |
 | `decideGate` | A decision taken through the named gate's own control, and the run seen to leave the gate. |
-<!-- The four rows above: uploadFile, fillForm, switchTheme and decideGate. -->
+| `typeInWindow` | Text typed into a window's text box through the keyboard, read back from the box, and sent through the window's own send control when asked. |
+| `waitForTurn` | A turn of a window's conversation waited for without a reload: a new entry of the assistant, and the send control idle again. |
+| `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
+| `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
+| `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
+| `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
+| `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
+| `openPageInOwnContext` | A further page opened from a visible link in a browser context of its own, with connections of its own, signed in by the session the first page carries and never through the sign-in page. |
+<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -236,7 +246,11 @@ role and its accessible name. The name is the text the elements of
 legend, or, for a button, a link, a tab, a menu item, an option or a radio, its
 text without hidden parts. Only a shown control counts: drawn, and not hidden
 from assistive technology (`aria-hidden`). Names are compared whole, after each
-run of white space becomes one space.
+run of white space becomes one space. When no control's name reads the same, a
+name that reads the same once all white space is removed names the control, as
+parts drawn with no space between them read ("3Select blog idea" for "3 Select
+blog idea"): a name that reads the same exactly wins, and several that read the
+same only so are refused as `ambiguous`, each named as the page reads it.
 
 When a name matches several controls, the step acts on none of them: it refuses
 (`ambiguous`) and names where each one sits. The one control a step acts on
@@ -435,6 +449,51 @@ the page shows), `ambiguous` (naming where each part of that name sits),
 (the reading failed, or gave no answer within its bound; only the error's class
 is kept).
 
+<!-- armPageTape and readPageTape: the document's time origin and the main frame's navigations. -->
+
+## `armPageTape(page, { record, bounds? })` and `readPageTape(page, { record, bounds? })`
+
+A check that a page changed in place, the same document between two moments,
+with no reload and no navigation, arms a tape on the page first and reads it
+back later. `armPageTape` reads the document's time origin
+(`performance.timeOrigin`, which every new document has anew) and its path,
+and from then on counts the navigations of the page's main frame on the
+driver's side, from the page's own navigation events: new documents and
+changes of the address in place apart. It writes one line, such as
+`armPageTape: {"path":"/agents","timeOrigin":1790000000000.5}`, and answers
+`{ path, timeOrigin, rearmed }`. Arming the page again starts the count again,
+and its line says so with `"rearmed":true`.
+
+`readPageTape` answers
+`{ path, timeOrigin, armedTimeOrigin, documents, addressChanges, sameDocument }`
+and writes one line, `readPageTape: ` and the JSON of those fields. `documents`
+counts the new documents of the main frame, `addressChanges` its changes of the
+address in place, and `sameDocument` is true only when the time origin is
+still the armed one and no new document was counted.
+
+The page announces every navigation of its main frame, a new document and a
+change in place alike. A new document is one that a navigation request of the
+main frame led to: a request for the same address (without its fragment) that
+has not failed. A document of another origin, or of none (the browser's own
+error page), is always a new one. A change in place (a state pushed into the
+history, a new fragment, a step back within the document) sends no request. A
+state written into the history at the same address, as a client-side router
+writes one, is no change of the address, and a frame inside the page counts
+for nothing.
+
+The tape belongs to the page object: two pages hold two tapes, a tape lasts
+through the page's new documents and changes of address, and it ends with the
+page. The module keeps no state of its own.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `READING_BOUND_MS` | 5_000 | one reading of the document (`readingMs` changes it) |
+
+Refusal kinds: `input` (nothing was armed or read), `closed` (the page is
+closed, and its tape ended with it), `no-tape` (no tape was armed on the page)
+and `driver-failure` (the reading failed, or gave no answer within its bound;
+only the error's class is kept).
+
 <!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
 
 ## `uploadFile(page, { control, path, record, bounds? })`
@@ -539,6 +598,264 @@ gate reads `settled` or `decided`, or is no longer drawn. It answers
 Refusal kinds: `input` (nothing was pressed), `no-gate` (naming the gates the
 page shows), `no-control` (naming the gate's controls), `driver-failure` and
 `still-at-gate` (with the last reading).
+
+<!-- typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress: a window's text box, a turn of its conversation, a reload, a composer's message and an address no link leads to. -->
+
+## `typeInWindow(page, { field, text, record, send?, replace?, within?, bounds? })`
+
+Types `text` into the one shown text box of role textbox named `field`, as a
+person types it. A run window's text box is no form field: the product draws it
+as a box whose content is editable, named by its `aria-label` (the run window's
+"Apply AI suggestion", `RUN_WINDOW_FIELD`), so `fillForm` finds no field in it.
+The step finds the box with the reader of the control steps, never by a test
+id; with `within`, only inside the one shown part of the page of that name, for
+a page that shows more than one window. It presses into the box, puts the caret
+at the end of its text (with `replace`, selects the text and deletes it with
+Backspace first) and types the text key by key. A text with a line break or
+another control character is refused, since a line break would press Enter,
+which sends. The text is read back from the box, and a box that does not read
+back what was typed is refused. A box the product has locked, as it locks a
+window's box while an answer is pending, is refused before anything is typed.
+
+With `send`, it presses the box's own send control, the shown button of the
+box's name nearest to it (the product names a window's box and its send control
+alike), once the text is in, and waits until the window has taken the message:
+the product empties the box as it takes it. Right before the press it notes, in
+the page's document, the entries the window shows, for `waitForTurn`. The step
+answers `{ field, text, sent, path }`, where `text` is what the box read back.
+No line carries the text.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `WINDOW_FIELD_BOUND_MS` | 30_000 | from the call to the text box shown with its name (`fieldMs`) |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press into the box, and the press on the send control (`actionMs`) |
+| `WINDOW_SENT_BOUND_MS` | 5_000 | from the press on the send control to the window taking the message (`sentMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input`, `unreadable`, `no-scope`, `no-field` (naming the text
+boxes the page shows), `ambiguous`, `disabled` and, with `send`, `no-control`
+(naming the buttons nearest to the box; nothing was typed), `driver-failure`,
+`not-typed` and `not-sent`.
+
+## `waitForTurn(page, { record, field?, within?, bounds? })`
+
+Waits, never reloading, until a new entry of the assistant stands in a window
+and its send control is idle again. The product marks each entry of a window's
+conversation with `data-run-window-entry` (`RUN_WINDOW_ENTRY_ATTRIBUTE`), as
+`person` or `assistant`, and the step counts the shown ones in the page, or in
+the one shown part of it named `within`. The window is named by its text box
+(`field`, "Apply AI suggestion" unless named otherwise), found as
+`typeInWindow` finds it. While an answer is pending, the product locks the box
+and gives the send control its stop name; the send control is idle once the
+box takes text again and a shown button of the box's name stands beside it
+again.
+
+A send made by `typeInWindow` notes, in the page's document, the entries its
+window showed right before the press. The wait counts from that note when there
+is one for the same `field` and `within`, so an answer that stood before the
+wait began is still the new turn; without one it counts from its own first
+reading. A wait that sees the turn takes the note away, and a new document has
+none. The step answers `{ field, before, after, since, elapsedMs, path }`, where
+`before` and `after` count the entries as `{ person, assistant }` and `since` is
+`send` or `wait`. At its bound it refuses (`no-turn`) and names what was
+missing: the new entry, the idle send control, or both.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `TURN_BOUND_MS` | 120_000 | from the start of the wait to the turn (`turnMs`) |
+| `TURN_CEILING_MS` | 600_000 | the most `turnMs` may be raised to |
+| `TURN_POLL_MS` | 250 | how often the window is read (`pollMs`) |
+
+Refusal kinds: `input` (nothing was waited for, a `turnMs` above the ceiling
+included), `unreadable`, `no-scope`, `no-window` (naming the text boxes the
+page shows) and `ambiguous`, all at once, and `no-turn` at the bound.
+
+## `reloadPage(page, { record, bounds? })`
+
+The browser's own reload of the page, until the new document's content has
+loaded (`DOMContentLoaded`). The step then reads the new document's time
+origin (`performance.timeOrigin`, which every new document has anew, as
+`armPageTape` reads it) and answers `{ path, timeOrigin, elapsedMs }`. A reload
+that lands on another path than the one the page was on, such as a redirect to
+the sign-in page, is refused, naming where it landed.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `RELOAD_BOUND_MS` | 120_000 | from the reload to the new document's content loaded (`reloadMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the new document (`readingMs`) |
+
+Refusal kinds: `input` and `closed` (nothing was reloaded), `no-load`,
+`landed-elsewhere` and `driver-failure` (the new document could not be read).
+
+## `sendInComposer(page, { prompt, composer, record, bounds? })`
+
+Sends one message through the conversation's composer, the one shown text box
+named `composer` ("Send message" in the product), and waits for the card that
+answers it. It types on `typeInWindow`'s road, in place of the text the
+composer held (a stored draft), so that the message is the prompt alone, and
+presses the composer's own send control. A card is what the conversation draws
+for an answer that is not text: a lifecycle card (`data-lifecycle-card`) or a
+renderable view (`data-view-type`), whose value is the card's kind. The step
+reads the shown cards of each kind right before the press, and answers
+`{ composer, kind, path, elapsedMs }` once a card stands that the conversation
+did not show then. It reads the page as `dispatchRun` reads it for a run (the
+run page's surface, the run panel the conversation draws, or a notification of
+a run) and refuses a send after which one shows: starting a run is
+`dispatchRun`'s act. No line carries the prompt.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call to the composer shown with its name (`composerMs`) |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | one press (`actionMs`) |
+| `WINDOW_SENT_BOUND_MS` | 5_000 | from the press on the send control to the composer taking the message (`sentMs`) |
+| `COMPOSER_CARD_BOUND_MS` | 120_000 | from the send to the answer's card (`cardMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read (`pollMs`) |
+
+Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
+`no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
+error the page shows, the conversation's error card among them).
+
+## `openAddress(page, { path, record, bounds? })`
+
+Loads `path`, once, on the current page's own origin and in the caller's page,
+so the session the page is signed in with goes with it, and answers
+`{ path, status, from, elapsedMs }`: where the load landed, the status of the
+response, and the path the page was on. It is the one step that types an
+address, because a page that exists only for a wrong address, such as the
+not-found page, has no link that leads to it, so no press can reach it. It
+refuses, before it loads anything, a path that a visible link on the current
+page leads to, read as `navigateTo` reads its links (`has-link`: pressing that
+link is `navigateTo`'s act), an address of another origin (`other-origin`), and
+anything that is no page path. Its line says that an address was typed.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OPEN_ADDRESS_BOUND_MS` | 120_000 | from the typed address to the landing (`loadMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the page's links (`readingMs`) |
+
+Refusal kinds: `input`, `other-origin`, `unreadable` and `has-link` (no address
+was typed), and `no-load`.
+
+<!-- pressByTestId and readTitle: an element without a role pressed by its test id and its text, and the page's title. -->
+
+## `pressByTestId(page, { testId, text, record, within?, bounds? })`
+
+Presses the one shown element that carries the test id `testId` (in
+`data-testid`, `TEST_ID_ATTRIBUTE`, the attribute the product's browser tests
+read) and whose own text is `text`, for an element the product draws to be
+pressed without a role, such as a row of the type picker in the upload dialog: a
+list item with a click handler and a test id. `press` finds a control by its
+role and its name, so it has nothing to name there.
+
+- **Its own text.** The text the element draws: its text nodes, without a hidden
+  part, a script or a style, each run of white space made one space and trimmed,
+  and compared whole with `text`, folded the same way. A text that holds `text`
+  as a part is no match. Only a shown element counts: drawn, and inside nothing
+  hidden.
+- **Never a guess.** It presses only when exactly one element matches. No match
+  is refused (`no-control`), naming how many shown elements carry the test id
+  and their texts, at most `CONTROL_NAMES_LISTED` of them, each cut as a name
+  is; several are refused (`ambiguous`), naming the part of the page each sits
+  in. With `within`, it looks only inside the one shown part of the page of that
+  name, found as `press` finds it.
+- **The accessible road first.** An element that carries a role `press` presses
+  (its own, or one its tag gives it) and an accessible name is `press`'s: the
+  step refuses it (`has-role`), naming the role and the name, and presses
+  nothing.
+- **The fault said.** Before the press it writes one line: the page's path, the
+  test id, the text, and that the element carries no role and was found by its
+  test id, such as `pressByTestId: on /artifacts, the element of the test id
+  "artifacts-picker-type" with the text "Note pack:note Pack" carries no role;
+  it was found by its test id`. A person who uses the keyboard or a screen
+  reader finds such an element by no name, and every record of a run that needs
+  the step says so.
+
+It reads the page's next settled state with the reading `press` uses
+(press-settle.mjs), within the same bounds (`PRESS_BY_TEST_ID_BOUNDS`, the
+bounds of `press`), and answers the fields `press` answers, with the test id:
+`{ name, role, testId, from, path, navigated, elapsedMs }`, where `name` is the
+text and `role` is empty for an element without one.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press (`actionMs`) |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation (`startMs`) |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation (`settleMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-scope`,
+`no-control`, `ambiguous` and `has-role` (nothing was pressed),
+`driver-failure` and `unsettled`.
+
+## `readTitle(page, { record, settleMs?, pollMs?, bound? })`
+
+Reads the document's title through the browser's own reading of it
+(`document.title`), never by a selector: a count with a selector on the head's
+title element reads 0, since the engine that reads text reads only what the page
+draws. As `readCount` does for a count, it answers only once two readings that
+lie `settleMs` apart are equal and every reading between them agreed, so a title
+the page sets a moment after it loads is never read as the one before; a
+reading that could not be taken agrees with nothing. It answers
+`{ title, path }` and writes one line that names the page by its path and
+carries the title, cut as a name is, such as
+`readTitle: the title of the page on /agents reads "Agents"`. An empty title is
+a title: it is answered as the empty string, and the line says the page has an
+empty title. A title that never holds still within `bound` is refused
+(`unsteady`), naming the last two titles it read. An unknown option, or a bound
+that is not a positive number of milliseconds, is refused before anything is
+read (`input`).
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `TITLE_SETTLE_MS` | 1_000 | how long the title must hold still (`settleMs`) |
+| `TITLE_POLL_MS` | 100 | how often it is read (`pollMs`) |
+| `TITLE_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+## `openPageInOwnContext(page, { path, record, bounds? })`
+
+Opens `path` in a page of a browser context of its own, for a state that needs
+two people at once, such as one person on a run's pending gate while another
+settles it. A run page holds several requests open on its origin, and over
+plain HTTP a browser opens at most six connections to one origin in one
+context, so a further page in the same context (`navigateTo` with
+`furtherPage`) can starve the first page's own send. A second context has
+connections of its own.
+
+1. Refuses, before the page is touched, a path that is no page path or carries
+   a query string or a fragment, the sign-in page (`SIGN_IN_PAGE_PATH`, which
+   is `signInThroughPage`'s), and an unknown or non-positive bound.
+2. Reads the visible links on the current page that lead to `path`, as
+   `navigateTo` reads them. With none, it opens nothing and refuses, naming how
+   many visible links the page shows: it opens only what a person could open
+   from there, and never invents an address.
+3. Opens a new context on the page's browser from the storage state of the
+   page's context (its cookies and its storage) and the page's viewport. The
+   state goes from one call straight into the other: it is never written to a
+   file, recorded or logged. No sign-in is made, so the sign-in budget is not
+   touched, and no credential is typed.
+4. Starts the reading of standing requests (`readStandingRequests`) on the new
+   context before its page opens, so that page is never unknown to it.
+5. Loads the address the first such link leads to (its query string included)
+   in a new page of that context, and waits for the landing as `navigateTo`
+   does. A landing on the sign-in page (`session-lost`), or on another path
+   within the bound (`landed-elsewhere`), is refused, and the new context is
+   closed first.
+
+It answers `{ path, from, elapsedMs, furtherPage, standing }`: the landed path,
+the path it came from, the elapsed time, the page it opened, and the new
+context's own reading of standing requests. Its line names the two paths and
+says that the page stands in a browser context of its own; it never carries a
+cookie, a storage value, an address or a query string. The caller closes
+`furtherPage.context()` when it is done with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OWN_CONTEXT_LANDING_BOUND_MS` | 120_000 | from opening the new context to the landing of its page (`landingMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the link, and of the standing requests (`readingMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
+`no-browser` (no context was opened), `driver-failure`, and `session-lost` and
+`landed-elsewhere` (the new context was closed).
 
 ## Shared bounds
 

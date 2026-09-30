@@ -7,17 +7,10 @@
 // its role and its name; presses it only when exactly one shown control carries
 // that name; and returns once the page has settled.
 //
-// SETTLED. The press is read with the start signal `navigateTo` reads: a
-// navigation request of the page, the page's own request for a link's path when
-// a client-side router navigates in place, or another path in the address.
-//   - When none of these comes within the start bound, no navigation started:
-//     the page stayed where it was, and the step returns then.
-//   - When one comes, the navigation must land within the settle bound: a new
-//     document that has loaded, or, in place, the same document on another path.
-//     A browser holds a reading sent while a navigation is in flight until the
-//     navigation ends; the step waits for such a reading no longer than the
-//     settle bound leaves, so a navigation that lands late is refused at the
-//     bound, with the page still on the document it started from.
+// SETTLED. The press is read with the start signal `navigateTo` reads, by the
+// reading it shares with pressByTestId (press-settle.mjs): no start signal
+// within the start bound, and the page stayed where it was; a start signal, and
+// the navigation must land within the settle bound, or the press is refused.
 // A press whose navigation starts later than the start bound (a handler that
 // waits for a slow answer first) reads as one that stayed; lengthen `startMs`
 // for such a control.
@@ -39,24 +32,20 @@ import {
   describeMatches,
   describeNames,
   describePart,
-  forgetDocument,
-  markedBy,
   newMark,
   plainName,
   quotedName,
   readControls,
-  readDocument,
-  unmarkControls,
+  unspacedNote,
 } from "./page-controls.mjs";
-import { startsNavigation } from "./navigate-to.mjs";
-import { originOf } from "./read-standing-requests.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { pressAndSettle } from "./press-settle.mjs";
+import { READING_BOUND_MS, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "press";
 
 /** The roles a press takes, and how a line names each, one and several. */
 export const PRESS_ROLES = Object.freeze(["button", "link", "menuitem", "tab", "checkbox", "radio", "switch"]);
-const ROLE_WORDS = Object.freeze({
+export const ROLE_WORDS = Object.freeze({
   button: ["button", "buttons"],
   link: ["link", "links"],
   menuitem: ["menu item", "menu items"],
@@ -148,7 +137,7 @@ export async function press(page, { name, role = "button", within: scope, record
       STEP,
       record,
       "ambiguous",
-      `${part.found} shown parts of the page on ${from} are named ${quotedName(scopeName)}: ${where} — ${nothing}, since a press never guesses`,
+      `${part.found} shown parts of the page on ${from} are named ${quotedName(scopeName)}${unspacedNote(part.unspaced, part.named)}: ${where} — ${nothing}, since a press never guesses`,
     );
   }
   // Where the control is looked for, for a line: the part of the page, when named, and the page.
@@ -162,60 +151,23 @@ export async function press(page, { name, role = "button", within: scope, record
       STEP,
       record,
       "ambiguous",
-      `${matches.length} shown ${words}${at} are named ${named}: ${describeMatches(matches)} — ${nothing}, since a press never guesses`,
+      `${matches.length} shown ${words}${at} are named ${named}${unspacedNote(reading.unspaced, reading.named)}: ${describeMatches(matches)} — ${nothing}, since a press never guesses`,
     );
   }
   const [control] = matches;
   if (control.disabled) throw refuse(STEP, record, "disabled", `the ${word} ${named}${at} is disabled — ${nothing}`);
 
-  // The document the press starts from, noted so that a new one is known.
-  const key = `__stepPress${mark}`;
-  const noted = await within(page.evaluate(readDocument, { key, set: true }), READING_BOUND_MS);
-  if (!noted || !noted.same) {
-    await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
-    throw refuse(STEP, record, "unreadable", `the page on ${from} could not be read before the press — ${nothing}`);
-  }
-
-  // The start signal, listened for from before the press. A link's own path
-  // counts only when it leads away from this path.
-  const origin = originOf(page.url());
-  const linkPath = control.href && control.href.origin === origin && control.href.path !== from ? control.href.path : null;
-  let started = false;
-  const onRequest = (/** @type {import("@playwright/test").Request} */ request) => {
-    if (!started) started = startsNavigation(page, request, origin, /** @type {string} */ (linkPath));
-  };
-  /** @type {{ navigated: boolean, path: string } | null} */
-  let settled = null;
-  /** @type {boolean | "mixed" | null} */
-  let checked = null;
-  let pressedAt = performance.now();
-  page.on("request", onRequest);
-  try {
-    try {
-      // `noWaitAfter`: the press returns once made; where it leads is read below.
-      await page.locator(markedBy(mark)).click({ timeout: bound.actionMs, noWaitAfter: true });
-    } catch (error) {
-      throw refuse(STEP, record, "driver-failure", `the ${word} ${named}${at} could not be pressed (${errorClass(error)})`);
-    }
-    pressedAt = performance.now();
-    settled = await settle(page, { key, from, hasStarted: () => started, bound, pressedAt });
-    // The checked state once the page has settled, read before the mark is taken off.
-    if (settled && checks) {
-      const after = await within(page.evaluate(readControls, { mode: "checked", attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
-      checked = after ? after.checked : null;
-    }
-  } finally {
-    page.off("request", onRequest);
-    // The page is the app's again. A page that has navigated since carries neither.
-    // While the press's navigation is still in flight, the browser holds these two
-    // readings until it ends: they take effect then on the document the press
-    // started from, or that document is gone and its mark with it. They are not
-    // waited for past a poll, so the step keeps its settle bound.
-    const cleanupMs = settled || !started ? READING_BOUND_MS : bound.pollMs;
-    await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), cleanupMs);
-    await within(page.evaluate(forgetDocument, { key }), cleanupMs);
-  }
-  const elapsedMs = elapsedSince(pressedAt);
+  const { settled, checked, elapsedMs } = await pressAndSettle(page, {
+    step: STEP,
+    record,
+    mark,
+    from,
+    href: control.href,
+    bound,
+    what: `the ${word} ${named}${at}`,
+    nothing,
+    checks,
+  });
   if (!settled) {
     throw refuse(
       STEP,
@@ -238,33 +190,4 @@ export async function press(page, { name, role = "button", within: scope, record
       : `${STEP}: pressed the ${word} ${named}${at} —${change} no navigation started within ${startBound} ms, and the page stayed on ${settled.path}`,
   );
   return { name: wanted, role, from, path: settled.path, navigated: settled.navigated, elapsedMs };
-}
-
-/**
- * The page's next settled state after the press: a new document that has
- * loaded, the same document on another path, or, once the start bound has run
- * out without a start signal, the same document where it was. Null when a
- * navigation started and did not land within the settle bound.
- * @param {import("@playwright/test").Page} page
- * @param {{ key: string, from: string, hasStarted: () => boolean, bound: typeof PRESS_BOUNDS, pressedAt: number }} watch
- * @returns {Promise<{ navigated: boolean, path: string } | null>}
- */
-async function settle(page, { key, from, hasStarted, bound, pressedAt }) {
-  const startBound = Math.min(bound.startMs, bound.settleMs);
-  for (;;) {
-    // A reading sent while a navigation is in flight is held until the navigation
-    // ends, and fails once a new document has committed: it is waited for no
-    // longer than the bound leaves.
-    const left = bound.settleMs - (performance.now() - pressedAt);
-    const reading = await within(page.evaluate(readDocument, { key, set: false }), Math.max(1, Math.min(READING_BOUND_MS, left)));
-    const elapsed = performance.now() - pressedAt;
-    if (reading) {
-      if (!reading.same && reading.state === "complete") return { navigated: true, path: reading.path };
-      if (reading.same && reading.path !== from) return { navigated: true, path: reading.path };
-      if (reading.same && !hasStarted() && elapsed >= startBound) return { navigated: false, path: reading.path };
-    }
-    const remaining = bound.settleMs - elapsed;
-    if (remaining <= 0) return null;
-    await pause(Math.min(bound.pollMs, remaining));
-  }
 }

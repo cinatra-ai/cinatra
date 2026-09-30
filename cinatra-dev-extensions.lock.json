@@ -205,12 +205,12 @@
     {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
-      "resolvedSha": "b68dab6c5efb063b45dadd7a4c96c1dc01e473b9"
+      "resolvedSha": "8bcda3e0cca0fc56667c116bfade3a64121dd6b1"
     },
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "f572ea31031719166a482f4063a20cbcb74134a4"
+      "resolvedSha": "faf05c2afee7e78412978f2e646e2c3273c48837"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
@@ -220,12 +220,12 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "c11a6dfda78d47532280de7c744f641661c91b73"
+      "resolvedSha": "4b6e83d17fcc96ea311be2d1e0fac0ca314e2400"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
       "repo": "cinatra-ai/email-recipient-selection-agent",
-      "resolvedSha": "694bd8ddb6bc2bc88342125eefead5c15c318ae4"
+      "resolvedSha": "27f3d8514df9d1f538f2423c63c304b768e8f3f3"
     },
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
@@ -325,7 +325,7 @@
     {
       "packageName": "@cinatra-ai/media-feed-lister-agent",
       "repo": "cinatra-ai/media-feed-lister-agent",
-      "resolvedSha": "c68463978f592b544fd03bc4ceb8dd1449fefba7"
+      "resolvedSha": "d378c020a5304d2d1cde0e9d5785c81ff5d8fd1b"
     },
     {
       "packageName": "@cinatra-ai/media-feeds-connector",

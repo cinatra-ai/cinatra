@@ -64,11 +64,35 @@ const NAME_LENGTH = 60;
 /** The modifier held while pressing a link to open it in a further page: Meta on macOS, Control elsewhere. */
 export const FURTHER_PAGE_MODIFIER = "ControlOrMeta";
 
-/** @param {string} path */
-function linksTo(path) {
+/**
+ * The selector of the links that lead to `path` in this tab: its `href` is the
+ * path, or the path with a query string or a fragment. openAddress reads the
+ * page's links with it too.
+ * @param {string} path
+ */
+export function linksTo(path) {
   return [`a[href="${path}"]`, `a[href^="${path}?"]`, `a[href^="${path}#"]`]
     .map((selector) => `${selector}:not([target="_blank"])`)
     .join(", ");
+}
+
+/**
+ * The visible links on `page` that lead to `path`, and how many there are: the
+ * reading of the links that navigateTo presses and openPageInOwnContext
+ * follows. A page whose links cannot be read is refused in the name of `step`.
+ * @param {import("@playwright/test").Page} page
+ * @param {string} path
+ * @param {{ step: string, from: string, record: import("./step-kit.mjs").StepRecord }} caller
+ */
+export async function visibleLinksTo(page, path, { step, from, record }) {
+  const links = page.locator(linksTo(path)).filter({ visible: true });
+  let found;
+  try {
+    found = await links.count();
+  } catch (error) {
+    throw refuse(step, record, "unreadable", `the links on ${from} could not be read (${errorClass(error)})`);
+  }
+  return { links, found };
 }
 
 /**
@@ -79,13 +103,7 @@ function linksTo(path) {
  * @param {import("./step-kit.mjs").StepRecord} record
  */
 async function visibleLinks(page, path, from, record) {
-  const links = page.locator(linksTo(path)).filter({ visible: true });
-  let found;
-  try {
-    found = await links.count();
-  } catch (error) {
-    throw refuse(STEP, record, "unreadable", `the links on ${from} could not be read (${errorClass(error)})`);
-  }
+  const { links, found } = await visibleLinksTo(page, path, { step: STEP, from, record });
   if (found === 0) throw refuse(STEP, record, "no-link", `no visible link on ${from} leads to ${path} — no address was typed`);
   return links;
 }

@@ -62,6 +62,21 @@ export const HOST_DESIGN_TOKEN_MODULE = "@cinatra-ai/design";
 export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
 
 /**
+ * The HOST-SERVED READ-ONLY DASHBOARD COMPOSITION module (cinatra#3092, epic
+ * #3087). The plan: "the dashboard extension lives outside this repository and
+ * cannot import the host's composition". The dashboard's two displays must draw
+ * through the SAME read-only composition the application draws with, so a
+ * bundle leaves THIS EXACT specifier external and the host module-registry shim
+ * resolves it to the host's ONE instance — the road the design primitives take.
+ *
+ * EXACT, NEVER A PACKAGE: it admits the one module that exports the two promoted
+ * views (`@cinatra-ai/sdk-extensions/read-only-compositions` registers them), and
+ * neither the package root nor any other subpath of it; `@cinatra-ai/sdk-dashboard`
+ * stays private and unpublished.
+ */
+export const HOST_DASHBOARD_COMPOSITION_MODULE = "@cinatra-ai/sdk-dashboard/components";
+
+/**
  * The VERSIONED contract the shared primitives module serves. Semver: a MAJOR
  * bump is a breaking change to {@link HOST_DESIGN_PRIMITIVES_EXPORTS} (an export
  * removed or renamed, or a prop contract broken); a MINOR adds exports. A bundle
@@ -246,7 +261,8 @@ export function checkDesignPrimitivesContract(input: {
  * renderer client bundle may leave EXTERNAL. In the shared (main) realm a
  * second React copy is a correctness hazard ("Invalid hook call", broken
  * context/hooks — plan §2.2), so React / ReactDOM / the JSX runtimes / the
- * design-token module / the shared design-PRIMITIVES module stay external and
+ * design-token module / the shared design-PRIMITIVES module / the read-only
+ * dashboard COMPOSITION module stay external and
  * resolve to the host's SINGLE shared instances through the host
  * module-registry shim. ANY other external in the
  * publish-time esbuild metafile is REJECTED by the externals-allowlist gate
@@ -261,6 +277,7 @@ export const CLIENT_BUNDLE_EXTERNAL_ALLOWLIST: readonly string[] = Object.freeze
   "react-dom/client",
   HOST_DESIGN_TOKEN_MODULE,
   HOST_DESIGN_PRIMITIVES_MODULE,
+  HOST_DASHBOARD_COMPOSITION_MODULE,
 ]);
 
 /**

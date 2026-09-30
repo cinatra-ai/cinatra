@@ -232,6 +232,21 @@ const TIMELINE_RUNNER = `<script>
       fetch(href).then(function () { history.pushState(null, "", href); });
     });
   });
+  // pressByTestId: rows drawn without a role, as the upload dialog's type picker
+  // draws them (see PRESS_ROWS_PAGE); page-double.mjs plays the same.
+  document.querySelectorAll("[data-fixture-counts]").forEach(function (element) {
+    element.addEventListener("click", function () {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") || 0) + 1));
+    });
+  });
+  document.querySelectorAll("[data-fixture-selects]").forEach(function (row) {
+    row.addEventListener("click", function () {
+      document.querySelectorAll("[data-fixture-selects]").forEach(function (other) { other.setAttribute("data-selected", String(other === row)); });
+    });
+  });
+  document.querySelectorAll("[data-fixture-goes]").forEach(function (row) {
+    row.addEventListener("click", function () { location.href = row.getAttribute("data-fixture-goes"); });
+  });
   document.querySelectorAll("[data-fixture-toggles]").forEach(function (box) {
     box.addEventListener("click", function () {
       var on = box.getAttribute("aria-checked") !== "true";
@@ -258,7 +273,8 @@ const TIMELINE_RUNNER = `<script>
 })();
 </script>`;
 
-function page(title, body, timeline = []) {
+/** A fixture page: its body, and the timeline its inline script plays (fixture-app-contexts.mjs draws its pages with it too). */
+export function page(title, body, timeline = []) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${title}</title></head>
 <body>
@@ -795,6 +811,88 @@ export const NAMES_PAGES = Object.freeze({
   empty: '<p>No control is shown here.</p><div aria-hidden="true"><button type="button">Hidden</button></div><button type="button" hidden>Not drawn</button>',
 });
 
+// armPageTape and readPageTape: the pages their cases read.
+
+/**
+ * The tape pages, by the second segment of their path: `start` holds a link
+ * whose own handler moves the address in place, as a client-side router does
+ * (it asks the app for the page, then pushes the address), and a link that
+ * loads another page; `moved` and `other` are where they lead.
+ */
+export const TAPE_PAGES = Object.freeze({
+  start: '<nav aria-label="Tape"><a href="/tape/moved" data-fixture-in-place>Move in place</a> <a href="/tape/other">Other page</a></nav>',
+  moved: "<p>Moved in place.</p>",
+  other: "<p>Another page.</p>",
+});
+
+// Names the steps match without their white space: the page their cases read.
+
+/**
+ * A step rail as the product draws one, and what sits beside it. Each tab draws
+ * a number and a label as two parts with no white space between them, so its
+ * name reads "3Select blog idea"; two more tabs read "4Review draft" and
+ * "4 Reviewdraft", which differ from each other, and from "4 Review draft", in
+ * white space only. A button reads "Save draft" and another "Savedraft"; a
+ * section is named by a heading that reads "2Draft"; and a list named "Blog"
+ * and "ideas" drawn as two parts holds an entry that reads "3Select blog idea",
+ * which the page confirms in a status that spells it "3 Select blog idea".
+ */
+export const JOINED_PAGE = [
+  '<div role="tablist" aria-label="Steps">',
+  '<a href="#step-1" role="tab" data-fixture-opens="joined-step-1"><span>1</span><span>Choose a topic</span></a>',
+  '<a href="#step-3" role="tab" data-fixture-opens="joined-step-3"><span>3</span><span>Select blog idea</span></a>',
+  '<a href="#step-4" role="tab"><span>4</span><span>Review draft</span></a>',
+  '<a href="#step-4b" role="tab">4 Review<span>draft</span></a>',
+  "</div>",
+  '<p id="joined-step-1" hidden>The topic step.</p><p id="joined-step-3" hidden>The idea step.</p>',
+  '<a href="#save" role="button" data-fixture-opens="joined-saved">Save draft</a>',
+  ' <a href="#save-joined" role="button" data-fixture-opens="joined-saved-joined">Save<span>draft</span></a>',
+  '<p id="joined-saved" hidden>Saved.</p><p id="joined-saved-joined" hidden>Saved the other one.</p>',
+  '<section><h2><span>2</span><span>Draft</span></h2><a href="#add" role="button" data-fixture-opens="joined-added">Add</a><p id="joined-added" hidden>Added.</p></section>',
+  '<span id="joined-ideas"><span>Blog</span><span>ideas</span></span>',
+  '<div role="listbox" aria-labelledby="joined-ideas"><a href="#idea" role="option" data-fixture-opens="joined-idea"><span>3</span><span>Select blog idea</span></a></div>',
+  '<p role="status" id="joined-idea" hidden>Idea: 3 Select blog idea</p>',
+].join("");
+
+// pressByTestId and readTitle: their pages.
+
+/**
+ * Rows drawn without a role, as the upload dialog's type picker draws them: list
+ * items with a click handler, a test id and a text. Each counts its presses
+ * (`data-fixture-clicks`). In the dialog: a row whose handler selects it, one
+ * whose text is spread over lines, a hidden row, a row with a hidden part, a row
+ * whose handler leaves the page, and a button of the same test id, which has a
+ * role and a name. Below it: two lists that each hold a row of one text, and two
+ * parts of one name.
+ */
+export const PRESS_ROWS_PAGE = [
+  '<div role="dialog" aria-label="Choose a type"><ul>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>Note <span>pack:note</span></span> <span>Pack</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>\n    Plain\n    text  </span>\n  <span>core:text</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts hidden><span>Hidden</span> <span>pack:hidden</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts><span>Half</span><span style="display:none"> kept apart</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-goes="/nav/target"><span>Open</span> <span>the target</span></li>',
+  "</ul>",
+  '<button type="button" data-testid="artifacts-picker-type" data-fixture-counts>Save type</button>',
+  "</div>",
+  '<section aria-label="First list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Second list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+].join("");
+
+/**
+ * The title pages: a title that holds still, one the page sets once a moment
+ * after it loads, one that changes every 50 ms for three seconds, so it never
+ * holds still, and an empty one.
+ */
+export const TITLE_SCENARIOS = Object.freeze({
+  steady: { title: "Steady title", timeline: [] },
+  late: { title: "Loading", timeline: [{ at: 150, target: "title", html: "Loaded title" }] },
+  restless: { title: "Title 0", timeline: Array.from({ length: 60 }, (_, i) => ({ at: 50 * (i + 1), target: "title", html: `Title ${i + 1}` })) },
+  empty: { title: "", timeline: [] },
+});
+
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
@@ -927,6 +1025,38 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       // readControlNames: its pages.
       const namesPage = /^\/names\/([a-z]+)$/.exec(url.pathname);
       if (namesPage && Object.hasOwn(NAMES_PAGES, namesPage[1])) return html(200, page(url.pathname, NAMES_PAGES[namesPage[1]]));
+      // armPageTape and readPageTape: their pages.
+      const tapePage = /^\/tape\/([a-z]+)$/.exec(url.pathname);
+      if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
+      // Names the steps match without their white space: their page.
+      if (url.pathname === "/joined/start") return html(200, page(url.pathname, JOINED_PAGE));
+      // pressByTestId and readTitle: their pages.
+      if (url.pathname === "/press/rows") return html(200, page(url.pathname, PRESS_ROWS_PAGE));
+      const titlePage = /^\/title\/([a-z]+)$/.exec(url.pathname);
+      if (titlePage && Object.hasOwn(TITLE_SCENARIOS, titlePage[1])) {
+        const { title, timeline } = TITLE_SCENARIOS[titlePage[1]];
+        return html(200, page(title, "<p>A page with a title.</p>", timeline));
+      }
+      // typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress:
+      // their pages live in fixture-app-windows.mjs, so this file changes in this
+      // one place.
+      if (/^\/(window|composer|address|reload)\//.test(url.pathname)) {
+        import("./fixture-app-windows.mjs").then(
+          ({ serveWindowPage }) => serveWindowPage({ method: request.method, url, response, loads }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
+      // openPageInOwnContext: its pages, served only to a session, and the
+      // sign-in page they send a request without one to, live in
+      // fixture-app-contexts.mjs, so this file changes in this one place.
+      if (url.pathname.startsWith("/own/") || url.pathname === "/sign-in") {
+        import("./fixture-app-contexts.mjs").then(
+          ({ serveOwnContextPage }) => serveOwnContextPage({ request, url, response }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
       html(404, "<!doctype html><title>Not found</title>");
     });
   };
