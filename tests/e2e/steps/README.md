@@ -31,6 +31,7 @@ defect of a step, with a test, fixed once for every run.
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
 | `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
 | `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
+| `openPageInOwnContext` | A further page opened from a visible link in a browser context of its own, with connections of its own, signed in by the session the first page carries and never through the sign-in page. |
 <!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
@@ -809,6 +810,52 @@ read (`input`).
 | `TITLE_SETTLE_MS` | 1_000 | how long the title must hold still (`settleMs`) |
 | `TITLE_POLL_MS` | 100 | how often it is read (`pollMs`) |
 | `TITLE_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+## `openPageInOwnContext(page, { path, record, bounds? })`
+
+Opens `path` in a page of a browser context of its own, for a state that needs
+two people at once, such as one person on a run's pending gate while another
+settles it. A run page holds several requests open on its origin, and over
+plain HTTP a browser opens at most six connections to one origin in one
+context, so a further page in the same context (`navigateTo` with
+`furtherPage`) can starve the first page's own send. A second context has
+connections of its own.
+
+1. Refuses, before the page is touched, a path that is no page path or carries
+   a query string or a fragment, the sign-in page (`SIGN_IN_PAGE_PATH`, which
+   is `signInThroughPage`'s), and an unknown or non-positive bound.
+2. Reads the visible links on the current page that lead to `path`, as
+   `navigateTo` reads them. With none, it opens nothing and refuses, naming how
+   many visible links the page shows: it opens only what a person could open
+   from there, and never invents an address.
+3. Opens a new context on the page's browser from the storage state of the
+   page's context (its cookies and its storage) and the page's viewport. The
+   state goes from one call straight into the other: it is never written to a
+   file, recorded or logged. No sign-in is made, so the sign-in budget is not
+   touched, and no credential is typed.
+4. Starts the reading of standing requests (`readStandingRequests`) on the new
+   context before its page opens, so that page is never unknown to it.
+5. Loads the address the first such link leads to (its query string included)
+   in a new page of that context, and waits for the landing as `navigateTo`
+   does. A landing on the sign-in page (`session-lost`), or on another path
+   within the bound (`landed-elsewhere`), is refused, and the new context is
+   closed first.
+
+It answers `{ path, from, elapsedMs, furtherPage, standing }`: the landed path,
+the path it came from, the elapsed time, the page it opened, and the new
+context's own reading of standing requests. Its line names the two paths and
+says that the page stands in a browser context of its own; it never carries a
+cookie, a storage value, an address or a query string. The caller closes
+`furtherPage.context()` when it is done with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OWN_CONTEXT_LANDING_BOUND_MS` | 120_000 | from opening the new context to the landing of its page (`landingMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the link, and of the standing requests (`readingMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
+`no-browser` (no context was opened), `driver-failure`, and `session-lost` and
+`landed-elsewhere` (the new context was closed).
 
 ## Shared bounds
 
