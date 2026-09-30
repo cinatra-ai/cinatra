@@ -180,9 +180,9 @@
     {
       "packageName": "@cinatra-ai/zip-artifact",
       "repo": "cinatra-ai/zip-artifact",
-      "resolvedSha": "4b6084541400bf9fbf2934a0731735ac93a1d037",
+      "resolvedSha": "3cd30b4a0b522468ad12dfedc7ed9b2636f6f3bd",
       "packageVersion": "0.1.0",
-      "treeSha256": "6087798e6e1ce9561fff3a53f30ccb98c476b5246419089c3d647eb00c111941"
+      "treeSha256": "d8d032b7c0f3e6a53ef75600781e2777f33ce4e977c009e681660c858ea5a182"
     }
   ]
 }
