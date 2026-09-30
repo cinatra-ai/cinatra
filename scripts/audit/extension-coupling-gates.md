@@ -571,9 +571,10 @@ The rules the helper holds for every gate:
   prints a notice for it. A ceiling measures the graph a route reaches and
   real growth raises it, so the record with its notice makes the raise
   visible; a floor that lists faults only shrinks.
-- A package added to the system set fails against the base like any other
-  floor growth, so the equality `extensions == systemExtensions == lock` cannot
-  grow in one pull request either.
+- A package added to the system set passes only with its record in the same
+  pull request (the record road below); without it, it fails against the base.
+  The equality `extensions == systemExtensions == lock` is still checked on the
+  tree.
 
 `org-archive-bypass-scan.mjs` has no workflow step of its own: the root suite
 runs it through its test ("exits 0 against the repo as checked out"), which
@@ -619,7 +620,8 @@ holds no records. The shared helper holds the reader and the rules once
 
 The other guarded floors list tolerated faults (a raw write outside the
 registry, an embedded skill, a forbidden import): they have no record road
-and only shrink.
+and only shrink. The route graph's ceilings are no such floor: a raise passes
+with its `absorbs` record in its own pull request, as described above.
 
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
