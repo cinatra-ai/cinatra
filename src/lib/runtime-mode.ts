@@ -1,3 +1,5 @@
+import { builtForProduction } from "@/lib/build-target";
+
 export type AppRuntimeMode = "development" | "production";
 
 /**
@@ -32,7 +34,7 @@ export function getAppRuntimeMode(): AppRuntimeMode {
     }
   }
 
-  return process.env.NODE_ENV === "production" ? "production" : "development";
+  return builtForProduction() ? "production" : "development";
 }
 
 export function isAppDevelopmentMode() {
