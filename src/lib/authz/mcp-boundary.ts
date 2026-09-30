@@ -133,7 +133,9 @@ export function oboCeilingNonOrgTiers(
 // without a run id, and every tool outside this set, take the boundary's other
 // rules. The set names tools, never packages; its census test is
 // __tests__/send-tools-carry-recorded-decision.test.ts. Kept inline in this
-// module, beside the boundary that reads it.
+// module, beside the boundary that reads it. A tool whose registration declares
+// that it acts outward (`declaresOutward`, read from the tool's planned entry)
+// is held the same way as a tool of this set.
 // ---------------------------------------------------------------------------
 
 /** The reason `enforceMcpBoundary` answers a call of the outward-effect set with. */
@@ -171,16 +173,18 @@ export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * True when the call is a tool of the outward-effect set on an agent run's
- * frame, so it is served only together with the person's recorded decision
- * for the run's action. False for every other call, which this rule leaves to
- * the boundary's other rules.
+ * True when the call is a tool of the outward-effect set, or a tool whose
+ * registration declares that it acts outward, on an agent run's frame, so it is
+ * served only together with the person's recorded decision for the run's
+ * action. False for every other call, which this rule leaves to the boundary's
+ * other rules.
  */
 export function needsRecordedDecision(
   primitiveName: string,
   ctx: McpBoundaryRequest["ctx"] | null,
+  declaresOutward = false,
 ): boolean {
-  if (!OUTWARD_EFFECT_TOOL_NAMES.has(primitiveName)) return false;
+  if (!OUTWARD_EFFECT_TOOL_NAMES.has(primitiveName) && declaresOutward !== true) return false;
   return ctx?.runId !== undefined && ctx?.runId !== null;
 }
 
@@ -222,6 +226,12 @@ export type McpBoundaryRequest = {
   };
   /** When true, dispatch is via the chat-bridge token (delegated_chat_token perimeter). */
   delegatedRestricted: boolean;
+  /**
+   * True when the tool's registration declares that it acts outward on a
+   * person's behalf, as its planned entry carries it. Absent reads as not
+   * declared.
+   */
+  declaresOutward?: boolean;
 };
 
 function statusShouldBlock(status: EnforcementStatus): boolean {
@@ -314,7 +324,7 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
   // carve-outs, the unenforced shadow step and every role short-circuit, so it
   // holds whatever the caller's role, the tool's classification status, a
   // carve-out or the enforcement mode.
-  if (needsRecordedDecision(req.primitiveName, req.ctx)) {
+  if (needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
     await audit(req, classification.resourceType, "denied", {
       mode: "enforced",
       boundary: req.delegatedRestricted ? "delegated_chat_token" : "mcp_handler_dispatch",
