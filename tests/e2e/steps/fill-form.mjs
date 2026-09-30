@@ -17,7 +17,11 @@
 // label names a field when both read the same without their white space: the
 // reading puts a space where a label's inline parts meet ("Idea (optional)"),
 // which the page's text may lack ("Idea(optional)"), and either names the field.
-// A label that names two fields is refused, naming both.
+// A label that names two fields is refused, naming both. The control that sends
+// the form is resolved by the same reading and the same match, so the names a
+// `no-submit` refusal lists are names the step takes; a name that two controls
+// carry is refused, naming both, and a control hidden from assistive technology
+// is neither listed nor pressed.
 //
 // A REQUIRED FIELD LEFT EMPTY. After the press, a field that is still empty is
 // a required field left empty when the page marks it (`aria-invalid="true"`) or
@@ -29,7 +33,7 @@
 // one aside) is not read after the press at all; with an empty one, the form is
 // read until the page marks a field, the form is gone, or the error bound runs
 // out.
-import { listed, pickCandidate, quoted } from "./control-kit.mjs";
+import { listed, quoted } from "./control-kit.mjs";
 import { CONTROL_MARK, markedBy, newMark, unmarkControls } from "./page-controls.mjs";
 import { READING_BOUND_MS, errorClass, pathOf, pollUntilSettled, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
@@ -64,17 +68,19 @@ export const FORM_BOUNDS = Object.freeze({
 
 /**
  * The form's shown, labelled fields (label, empty, required, marked invalid,
- * the page's error text) and the names of its shown controls. The state says
- * whether every `need`ed label names one field (`ready`), one of them names
- * none (`missing`, those in `missing`) or several (`ambiguous`, each in
- * `ambiguous` with the labels of the fields it names), or, after the press,
- * whether a `watch`ed field the page marks is still empty (`refused`), none of
- * them is there any more (`gone`), or neither (`open`). With `pick`, the one
- * field its label names takes the mark; `picked` lists the labels of every
- * field that label names. A label names a field when both read the same
- * without their white space.
+ * the page's error text) and the names of its shown controls, those hidden from
+ * assistive technology left out. The state says whether every `need`ed label
+ * names one field (`ready`), one of them names none (`missing`, those in
+ * `missing`) or several (`ambiguous`, each in `ambiguous` with the labels of
+ * the fields it names), or, after the press, whether a `watch`ed field the page
+ * marks is still empty (`refused`), none of them is there any more (`gone`), or
+ * neither (`open`). With `pick`, the one field its label names takes the mark;
+ * `picked` lists the labels of every field that label names. With `press`, the
+ * one control its name names takes the mark; `pressed` lists the names of every
+ * control that name names. A label names a field, and a name a control, when
+ * both read the same without their white space.
  */
-function readForm({ scope, errors, need, watch, pick }) {
+function readForm({ scope, errors, need, watch, pick, press }) {
   const text = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const shown = (element) => {
     if (!element.isConnected || getComputedStyle(element).visibility === "hidden") return false;
@@ -141,9 +147,10 @@ function readForm({ scope, errors, need, watch, pick }) {
     invalid: control.getAttribute("aria-invalid") === "true",
     error: errorOf(control),
   }));
-  const controls = Array.from(root.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'))
-    .filter(shown)
-    .map(nameOf);
+  const buttons = Array.from(root.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'))
+    .filter((control) => shown(control) && !control.closest('[aria-hidden="true"]'))
+    .map((control) => ({ control, name: nameOf(control) }));
+  const controls = buttons.map((button) => button.name);
   let state = "present";
   let missing = [];
   let ambiguous = [];
@@ -162,16 +169,13 @@ function readForm({ scope, errors, need, watch, pick }) {
     if (found.length === 1) found[0].control.setAttribute(pick.attribute, pick.mark);
     picked = found.map((field) => field.label);
   }
-  return { state, fields, controls, missing, ambiguous, picked };
-}
-
-/** Whether a candidate control is shown and inside the form. */
-function shownInForm(element, { scope }) {
-  if (!element.closest(scope) || getComputedStyle(element).visibility === "hidden") return false;
-  for (let node = element; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden") || getComputedStyle(node).display === "none") return false;
+  let pressed = [];
+  if (press) {
+    const found = buttons.filter((button) => keyOf(button.name) === keyOf(press.name));
+    if (found.length === 1) found[0].control.setAttribute(press.attribute, press.mark);
+    pressed = found.map((button) => button.name);
   }
-  return true;
+  return { state, fields, controls, missing, ambiguous, picked, pressed };
 }
 
 /** @param {string} value */
@@ -186,11 +190,11 @@ const soFar = (filled) => (filled.length > 0 ? ` — filled before it: ${listed(
  * named so. Resolves `{ filled, submitted, path }`: the labels it filled, in
  * order, whether it pressed, and the page's path. Refuses, as a StepRefusal:
  * `input` (nothing was filled), `unknown-label` (no field has the label within
- * the bound, naming the labels the form has), `ambiguous` (the label names
- * several fields, naming them), `driver-failure` (a fill or the press failed),
- * `no-submit` (no shown control with the `submit` name in the form, naming its
- * controls) and `required-empty` (the press left a required field empty, with
- * the page's own error text).
+ * the bound, naming the labels the form has), `ambiguous` (a label names
+ * several fields, or the `submit` name several controls, naming them),
+ * `driver-failure` (a fill or the press failed), `no-submit` (no shown control
+ * with the `submit` name in the form, naming its controls) and `required-empty`
+ * (the press left a required field empty, with the page's own error text).
  *
  * @param {import("@playwright/test").Page} page
  * @param {{
@@ -278,24 +282,40 @@ export async function fillForm(page, { fields, record, form = FORM_SCOPE_SELECTO
 
   const sender = normal(submit);
   const pressedNothing = `the fields were filled (${listed(filled, "")}), and nothing was pressed`;
-  const button = await pickCandidate(page.getByRole("button", { name: sender, exact: true }), shownInForm, { scope: form });
-  if (!button) {
-    const now = await within(page.evaluate(readForm, { scope: form, errors: FIELD_ERROR_SELECTOR }), READING_BOUND_MS);
-    const controls = now ? `its controls: ${listed(now.controls, "none")}` : "its controls could not be read";
-    throw refuse(STEP, record, "no-submit", `no shown control named ${quoted(sender)} in the form on ${at}; ${controls} — ${pressedNothing}`);
-  }
-  // The fields still empty (a disabled one takes no answer): only one of them can be a required field left empty.
-  let before;
+  /** @type {string[]} */
+  let empty = [];
+  // The control is resolved by the reading that lists the form's controls, and carries the mark for its press only.
+  const mark = newMark();
   try {
-    before = await page.evaluate(readForm, { scope: form, errors: FIELD_ERROR_SELECTOR });
-  } catch (error) {
-    throw refuse(STEP, record, "driver-failure", `the form on ${at} could not be read before the press (${errorClass(error)}) — ${pressedNothing}`);
-  }
-  const empty = before.fields.filter((field) => field.empty && !field.disabled).map((field) => field.label);
-  try {
-    await button.click({ timeout: bound.actionMs });
-  } catch (error) {
-    throw refuse(STEP, record, "driver-failure", `the control ${quoted(sender)} could not be pressed (${errorClass(error)}) — the fields were filled (${listed(filled, "")})`);
+    const picking = await within(page.evaluate(readForm, { scope: form, errors: FIELD_ERROR_SELECTOR, press: { name: sender, attribute: CONTROL_MARK, mark } }), READING_BOUND_MS);
+    const named = /** @type {string[]} */ (picking?.pressed ?? []);
+    if (named.length === 0) {
+      const controls = picking ? `its controls: ${listed(picking.controls, "none")}` : "its controls could not be read";
+      throw refuse(STEP, record, "no-submit", `no shown control named ${quoted(sender)} in the form on ${at}; ${controls} — ${pressedNothing}`);
+    }
+    if (named.length > 1) {
+      throw refuse(
+        STEP,
+        record,
+        "ambiguous",
+        `the control ${quoted(sender)} matches ${named.length} shown controls in the form on ${at}: ${listed(named, "")} — ${pressedNothing}, since a press never guesses`,
+      );
+    }
+    // The fields still empty (a disabled one takes no answer): only one of them can be a required field left empty.
+    let before;
+    try {
+      before = await page.evaluate(readForm, { scope: form, errors: FIELD_ERROR_SELECTOR });
+    } catch (error) {
+      throw refuse(STEP, record, "driver-failure", `the form on ${at} could not be read before the press (${errorClass(error)}) — ${pressedNothing}`);
+    }
+    empty = before.fields.filter((field) => field.empty && !field.disabled).map((field) => field.label);
+    try {
+      await page.locator(markedBy(mark)).click({ timeout: bound.actionMs });
+    } catch (error) {
+      throw refuse(STEP, record, "driver-failure", `the control ${quoted(sender)} could not be pressed (${errorClass(error)}) — the fields were filled (${listed(filled, "")})`);
+    }
+  } finally {
+    await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
   }
   if (empty.length > 0) {
     const after = await pollUntilSettled(page, {

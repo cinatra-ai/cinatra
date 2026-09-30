@@ -205,12 +205,12 @@
     {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
-      "resolvedSha": "b68dab6c5efb063b45dadd7a4c96c1dc01e473b9"
+      "resolvedSha": "8bcda3e0cca0fc56667c116bfade3a64121dd6b1"
     },
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "f572ea31031719166a482f4063a20cbcb74134a4"
+      "resolvedSha": "faf05c2afee7e78412978f2e646e2c3273c48837"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",

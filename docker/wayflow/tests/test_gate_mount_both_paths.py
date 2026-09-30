@@ -109,7 +109,7 @@ _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # runtime rejects unreconciled. Keyed by slug so an absent tree (the works-after
 # single-fixture mount) skips instead of false-failing.
 _STANDALONE_GATE_AGENTS: Dict[str, Tuple[str, str]] = {
-    "email-drafting-agent": ("approval_gate", "draftBundle"),
+    "email-drafting-agent": ("approval_gate", "draftBodyArtifacts"),
     "email-recipient-selection-agent": ("approval_gate", "confirmedRecipients"),
 }
 _ORCHESTRATOR = "email-outreach-agent"

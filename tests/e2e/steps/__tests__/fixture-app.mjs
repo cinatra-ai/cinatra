@@ -213,12 +213,39 @@ const TIMELINE_RUNNER = `<script>
       picker.setAttribute("aria-expanded", "false");
     });
   });
+  // A search field's own handlers (see PICK_SEARCH_PAGE): the page double runs the same two functions.
+  var typeInSearchField = ${typeInSearchField};
+  var pressSearchEntry = ${pressSearchEntry};
+  document.addEventListener("input", function (event) {
+    var field = event.target;
+    if (!field || !field.hasAttribute || !field.hasAttribute("data-fixture-searches")) return;
+    typeInSearchField(field, function (run, ms) { setTimeout(run, ms); });
+  });
+  document.addEventListener("click", function (event) {
+    var option = event.target && event.target.closest ? event.target.closest("[data-fixture-picks]") : null;
+    if (option) pressSearchEntry(option);
+  });
   document.querySelectorAll("[data-fixture-in-place]").forEach(function (link) {
     link.addEventListener("click", function (event) {
       event.preventDefault();
       var href = link.getAttribute("href");
       fetch(href).then(function () { history.pushState(null, "", href); });
     });
+  });
+  // pressByTestId: rows drawn without a role, as the upload dialog's type picker
+  // draws them (see PRESS_ROWS_PAGE); page-double.mjs plays the same.
+  document.querySelectorAll("[data-fixture-counts]").forEach(function (element) {
+    element.addEventListener("click", function () {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") || 0) + 1));
+    });
+  });
+  document.querySelectorAll("[data-fixture-selects]").forEach(function (row) {
+    row.addEventListener("click", function () {
+      document.querySelectorAll("[data-fixture-selects]").forEach(function (other) { other.setAttribute("data-selected", String(other === row)); });
+    });
+  });
+  document.querySelectorAll("[data-fixture-goes]").forEach(function (row) {
+    row.addEventListener("click", function () { location.href = row.getAttribute("data-fixture-goes"); });
   });
   document.querySelectorAll("[data-fixture-toggles]").forEach(function (box) {
     box.addEventListener("click", function () {
@@ -515,6 +542,357 @@ export const PICK_HIDING_PAGE = [
 ].join("");
 
 /**
+ * The search fields of PICK_SEARCH_PAGE, as the entity search draws one: a text
+ * input with the role combobox, whose list opens once text is typed into it.
+ * `searchingMs` and `answerMs` are when the list shows its "Searching…" row and
+ * its answer after the typing. Each field names its list, the entries a search
+ * finds (the entry's name first, then what tells it apart), and what the page
+ * does with a pressed entry (`takes`):
+ *   - `row`: the field is emptied and a row naming the entry joins `rows`, as
+ *     the agent's Skills tab draws a chosen skill;
+ *   - `chip`: a chip naming the entry takes the field's place, as a user picker
+ *     draws the chosen user;
+ *   - `field`: the field shows the entry;
+ *   - `another-row` and `another-field`: the page takes the entry listed after
+ *     the pressed one instead, into a row or into the field;
+ *   - `nothing`: the field is emptied and nothing is drawn, as a page at its
+ *     limit takes no further entry.
+ * A field with `opens: false` opens no list.
+ */
+export const SEARCH_FIELDS = Object.freeze({
+  searchingMs: 100,
+  answerMs: 250,
+  fields: {
+    "search-skills": {
+      list: "search-skills-list",
+      takes: "row",
+      rows: "search-skills-rows",
+      entries: [
+        ["Web search pro", "Searches more sources · by Acme", "Active"],
+        ["Web search", "Searches the web · by Acme", "Active"],
+        ["Web scraper", "Reads one page · by Acme", "Active"],
+        ["Summary", "Sums up a text · by Acme", "Active"],
+        ["Summary", "Sums up a text · by Initech", "Locked"],
+      ],
+    },
+    "search-people": {
+      list: "search-people-list",
+      takes: "chip",
+      entries: [
+        ["Ada Lovelace", "Engineering"],
+        ["Alan Turing", "Research"],
+      ],
+    },
+    "search-reviewers": {
+      list: "search-reviewers-list",
+      takes: "field",
+      entries: [
+        ["Grace Hopper", "Platform"],
+        ["Grace Kelly", "Design"],
+      ],
+    },
+    "search-author": {
+      list: "search-author-list",
+      takes: "another-row",
+      rows: "search-author-rows",
+      entries: [
+        ["Dana", "Design"],
+        ["Dana Scully", "Research"],
+      ],
+    },
+    "search-assignee": {
+      list: "search-assignee-list",
+      takes: "another-field",
+      entries: [
+        ["Dana", "Design"],
+        ["Dana Scully", "Research"],
+      ],
+    },
+    "search-editor": { list: "search-editor-list", takes: "nothing", entries: [["Eve", "Support"]] },
+    "search-viewer": { list: "search-viewer-list", opens: false, entries: [] },
+  },
+});
+
+// The two handlers of a search field. They run IN THE PAGE: the page's inline
+// script runs them in a browser, and the page double runs the same two on its
+// own document, so nothing of this module may be used inside them.
+
+/**
+ * Text typed into a search field: the list it controls opens at once, with its
+ * empty state or, when it was open, with the rows it showed; then its
+ * "Searching…" row, a disabled option; then its answer, the entries whose name
+ * holds the typed text, each a row with the entry's name first. The first row
+ * is the active one (`aria-selected`), the one a key press would choose, not a
+ * chosen one. A later typing replaces what an earlier one had still to show.
+ * `later(run, ms)` runs `run` after `ms`.
+ */
+export function typeInSearchField(field, later) {
+  const document = field.ownerDocument;
+  const declared = JSON.parse(document.getElementById("fixture-searches").textContent);
+  const own = declared.fields[field.id];
+  if (!own || own.opens === false) return;
+  const list = document.getElementById(own.list);
+  const turn = String(Number(field.getAttribute("data-fixture-turn") || "0") + 1);
+  field.setAttribute("data-fixture-turn", turn);
+  const current = () => field.getAttribute("data-fixture-turn") === turn;
+  const empty = () => {
+    const node = document.createElement("div");
+    node.setAttribute("role", "presentation");
+    node.textContent = "No matches.";
+    return node;
+  };
+  const row = (parts, active) => {
+    const option = document.createElement("div");
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", active ? "true" : "false");
+    option.setAttribute("data-fixture-picks", "");
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      option.appendChild(span);
+    }
+    return option;
+  };
+  if (list.hasAttribute("hidden")) {
+    list.replaceChildren(empty());
+    list.removeAttribute("hidden");
+  }
+  field.setAttribute("aria-expanded", "true");
+  field.setAttribute("aria-controls", own.list);
+  const typed = field.value.trim().toLowerCase();
+  later(() => {
+    if (!current()) return;
+    const searching = document.createElement("div");
+    searching.setAttribute("role", "option");
+    searching.setAttribute("aria-disabled", "true");
+    searching.setAttribute("aria-selected", "false");
+    searching.textContent = "Searching…";
+    list.replaceChildren(searching);
+  }, declared.searchingMs);
+  later(() => {
+    if (!current()) return;
+    const found = own.entries.filter((entry) => entry[0].toLowerCase().includes(typed));
+    list.replaceChildren(...(found.length > 0 ? found.map((entry, at) => row(entry, at === 0)) : [empty()]));
+  }, declared.answerMs);
+}
+
+/**
+ * An entry pressed in a search field's list: it becomes the active row, as the
+ * pointer over it makes it, and it is taken: the list closes (keeping its rows
+ * until it opens again), the field no longer controls it, and the page does with
+ * the entry what the field declares (see SEARCH_FIELDS).
+ */
+export function pressSearchEntry(option) {
+  const document = option.ownerDocument;
+  const list = option.closest("[role='listbox']");
+  if (!list) return;
+  const declared = JSON.parse(document.getElementById("fixture-searches").textContent);
+  const id = Object.keys(declared.fields).find((key) => declared.fields[key].list === list.id);
+  const own = id ? declared.fields[id] : null;
+  const field = id ? document.getElementById(id) : null;
+  if (!own || !field) return;
+  const rows = Array.from(list.querySelectorAll("[data-fixture-picks]"));
+  for (const one of rows) one.setAttribute("aria-selected", one === option ? "true" : "false");
+  list.setAttribute("hidden", "");
+  field.setAttribute("data-fixture-turn", String(Number(field.getAttribute("data-fixture-turn") || "0") + 1));
+  field.setAttribute("aria-expanded", "false");
+  field.removeAttribute("aria-controls");
+  const at = rows.indexOf(option);
+  const partsOf = (one) => Array.from(one.children, (span) => span.textContent);
+  const another = own.takes === "another-row" || own.takes === "another-field";
+  const taken = partsOf(another ? rows[at + 1] || rows[at - 1] || option : option);
+  const drawn = (tag, parts) => {
+    const node = document.createElement(tag);
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part;
+      node.appendChild(span);
+    }
+    return node;
+  };
+  if (own.takes === "row" || own.takes === "another-row") {
+    field.value = "";
+    document.getElementById(own.rows).appendChild(drawn("li", taken));
+  } else if (own.takes === "chip") {
+    const chip = drawn("span", taken.slice(0, 2));
+    chip.setAttribute("data-fixture-chip", "");
+    field.replaceWith(chip);
+  } else if (own.takes === "field" || own.takes === "another-field") {
+    field.value = taken[0];
+  } else {
+    field.value = "";
+  }
+}
+
+const searchField = (id, placeholder, named = "") =>
+  `<input id="${id}" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-autocomplete="list" placeholder="${placeholder}"${named} data-fixture-searches>` +
+  `<div role="listbox" id="${id}-list" hidden></div>`;
+
+/**
+ * Search fields, as the entity search draws them (see SEARCH_FIELDS): one named
+ * by its label, whose chosen entries join a list of rows below it; one with no
+ * accessible name that shows its placeholder, and one with no accessible name
+ * after a label element in its form group; and four named by `aria-label` whose
+ * page takes another entry, into a row or into the field, takes nothing, or
+ * opens no list.
+ */
+export const PICK_SEARCH_PAGE = [
+  `<label for="search-skills">Skills</label> ${searchField("search-skills", "Search installed skills…")}`,
+  '<ul id="search-skills-rows" aria-label="Chosen skills"></ul>',
+  `<div id="search-people-slot">${searchField("search-people", "Search people…")}</div>`,
+  `<div role="group"><label>Reviewer</label> ${searchField("search-reviewers", "Search reviewers…")}</div>`,
+  `${searchField("search-author", "Search authors…", ' aria-label="Author"')}<ul id="search-author-rows" aria-label="Authors"></ul>`,
+  searchField("search-assignee", "Search assignees…", ' aria-label="Assignee"'),
+  searchField("search-editor", "Search editors…", ' aria-label="Editor"'),
+  searchField("search-viewer", "Search viewers…", ' aria-label="Viewer"'),
+  `<script type="application/json" id="fixture-searches">${JSON.stringify(SEARCH_FIELDS)}</script>`,
+].join("");
+
+// readControlNames: the pages its cases read.
+
+/** An address in a control's name, built from parts so no address literal sits in source. */
+export const NAMES_ADDRESS = ["https:", "", ["docs", "example", "test"].join("."), "guide"].join("/");
+/** A name of 400 characters: longer than a line carries. */
+export const NAMES_LONG_NAME = "0123456789".repeat(40);
+/** A name of 300 characters: as long as a line carries. */
+export const NAMES_FULL_NAME = "9876543210".repeat(30);
+
+/**
+ * The pages readControlNames reads, by the second segment of their path:
+ *   - `start`: controls with a name and without one, in the order a reading
+ *     lists them. A navigation named by its label, with a link named by its
+ *     text and one that shows only an image hidden from assistive technology;
+ *     a section its heading names (`aria-labelledby`), with buttons named by
+ *     their text, by `aria-label` and by their title, a button with no name,
+ *     fields named by a label and by `aria-labelledby` (one described by a
+ *     hint), a field whose only text is its placeholder, which is never a name,
+ *     and a select with its options; a section whose heading names it for no
+ *     one, so it is no region; two sections that carry one heading; a labelled
+ *     section with no control in it; a form named by its label, with a group
+ *     named by its legend; a form with no name, which is no form; a dialog
+ *     named by its heading, an alert dialog and a search landmark; and three
+ *     controls that are not shown: one hidden from assistive technology, one
+ *     `hidden`, and one inside `display: none`.
+ *   - `long`: a name longer than a line carries, one as long as it carries, and
+ *     one that holds an address.
+ *   - `many`: more controls than one reading lists.
+ *   - `empty`: no shown control, only ones that are not shown.
+ */
+export const NAMES_PAGES = Object.freeze({
+  start: [
+    '<header><nav aria-label="Main"><a href="/nav/target">Target</a> <a href="/nav/start"><svg aria-hidden="true"></svg></a></nav></header>',
+    "<main><h1>Plans and drafts</h1>",
+    '<section aria-labelledby="names-plans-title"><h2 id="names-plans-title">Plans</h2>',
+    '<button type="button">Save plan</button> <button type="button" aria-label="Delete plan"><svg aria-hidden="true"></svg></button>',
+    ' <button type="button"><svg aria-hidden="true"></svg></button> <button type="button" title="Refresh"><svg aria-hidden="true"></svg></button>',
+    '<label for="names-title">Title</label> <input id="names-title" aria-describedby="names-title-hint"><p id="names-title-hint">Shown on the card.</p>',
+    '<span id="names-owner">Owner</span> <input aria-labelledby="names-owner"> <input placeholder="Search plans">',
+    '<select aria-label="Size"><option>Small</option><option>Large</option></select></section>',
+    '<section><h2>Drafts</h2><button type="button">Open draft</button></section>',
+    '<section><h2>Twin</h2><button type="button">First twin</button></section>',
+    '<section><h2>Twin</h2><button type="button">Second twin</button></section>',
+    '<section aria-label="Notes"><p>Nothing to press here.</p></section>',
+    '<form aria-label="Filters"><fieldset><legend>Colour</legend><label><input type="radio" name="colour"> Red</label></fieldset></form>',
+    '<form><button type="submit">Send</button></form>',
+    '<div role="dialog" aria-labelledby="names-confirm-title"><h2 id="names-confirm-title">Confirm</h2><button type="button">Close</button></div>',
+    '<div role="alertdialog" aria-label="Discard the draft?"><button type="button">Discard</button></div>',
+    '<search aria-label="Site"><input type="search" aria-label="Search the site"></search>',
+    '<div aria-hidden="true"><button type="button">Hidden twin</button></div> <button type="button" hidden>Not drawn</button>',
+    '<div style="display:none"><button type="button">Not displayed</button></div>',
+    "</main>",
+  ].join(""),
+  long: [
+    `<button type="button" aria-label="${NAMES_LONG_NAME}"></button>`,
+    `<button type="button" aria-label="${NAMES_FULL_NAME}"></button>`,
+    `<a href="/nav/target">Read ${NAMES_ADDRESS} first</a>`,
+  ].join(""),
+  many: Array.from({ length: 405 }, (_, i) => `<button type="button">Item ${i + 1}</button>`).join(" "),
+  empty: '<p>No control is shown here.</p><div aria-hidden="true"><button type="button">Hidden</button></div><button type="button" hidden>Not drawn</button>',
+});
+
+// armPageTape and readPageTape: the pages their cases read.
+
+/**
+ * The tape pages, by the second segment of their path: `start` holds a link
+ * whose own handler moves the address in place, as a client-side router does
+ * (it asks the app for the page, then pushes the address), and a link that
+ * loads another page; `moved` and `other` are where they lead.
+ */
+export const TAPE_PAGES = Object.freeze({
+  start: '<nav aria-label="Tape"><a href="/tape/moved" data-fixture-in-place>Move in place</a> <a href="/tape/other">Other page</a></nav>',
+  moved: "<p>Moved in place.</p>",
+  other: "<p>Another page.</p>",
+});
+
+// Names the steps match without their white space: the page their cases read.
+
+/**
+ * A step rail as the product draws one, and what sits beside it. Each tab draws
+ * a number and a label as two parts with no white space between them, so its
+ * name reads "3Select blog idea"; two more tabs read "4Review draft" and
+ * "4 Reviewdraft", which differ from each other, and from "4 Review draft", in
+ * white space only. A button reads "Save draft" and another "Savedraft"; a
+ * section is named by a heading that reads "2Draft"; and a list named "Blog"
+ * and "ideas" drawn as two parts holds an entry that reads "3Select blog idea",
+ * which the page confirms in a status that spells it "3 Select blog idea".
+ */
+export const JOINED_PAGE = [
+  '<div role="tablist" aria-label="Steps">',
+  '<a href="#step-1" role="tab" data-fixture-opens="joined-step-1"><span>1</span><span>Choose a topic</span></a>',
+  '<a href="#step-3" role="tab" data-fixture-opens="joined-step-3"><span>3</span><span>Select blog idea</span></a>',
+  '<a href="#step-4" role="tab"><span>4</span><span>Review draft</span></a>',
+  '<a href="#step-4b" role="tab">4 Review<span>draft</span></a>',
+  "</div>",
+  '<p id="joined-step-1" hidden>The topic step.</p><p id="joined-step-3" hidden>The idea step.</p>',
+  '<a href="#save" role="button" data-fixture-opens="joined-saved">Save draft</a>',
+  ' <a href="#save-joined" role="button" data-fixture-opens="joined-saved-joined">Save<span>draft</span></a>',
+  '<p id="joined-saved" hidden>Saved.</p><p id="joined-saved-joined" hidden>Saved the other one.</p>',
+  '<section><h2><span>2</span><span>Draft</span></h2><a href="#add" role="button" data-fixture-opens="joined-added">Add</a><p id="joined-added" hidden>Added.</p></section>',
+  '<span id="joined-ideas"><span>Blog</span><span>ideas</span></span>',
+  '<div role="listbox" aria-labelledby="joined-ideas"><a href="#idea" role="option" data-fixture-opens="joined-idea"><span>3</span><span>Select blog idea</span></a></div>',
+  '<p role="status" id="joined-idea" hidden>Idea: 3 Select blog idea</p>',
+].join("");
+
+// pressByTestId and readTitle: their pages.
+
+/**
+ * Rows drawn without a role, as the upload dialog's type picker draws them: list
+ * items with a click handler, a test id and a text. Each counts its presses
+ * (`data-fixture-clicks`). In the dialog: a row whose handler selects it, one
+ * whose text is spread over lines, a hidden row, a row with a hidden part, a row
+ * whose handler leaves the page, and a button of the same test id, which has a
+ * role and a name. Below it: two lists that each hold a row of one text, and two
+ * parts of one name.
+ */
+export const PRESS_ROWS_PAGE = [
+  '<div role="dialog" aria-label="Choose a type"><ul>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>Note <span>pack:note</span></span> <span>Pack</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>\n    Plain\n    text  </span>\n  <span>core:text</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts hidden><span>Hidden</span> <span>pack:hidden</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts><span>Half</span><span style="display:none"> kept apart</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-goes="/nav/target"><span>Open</span> <span>the target</span></li>',
+  "</ul>",
+  '<button type="button" data-testid="artifacts-picker-type" data-fixture-counts>Save type</button>',
+  "</div>",
+  '<section aria-label="First list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Second list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+].join("");
+
+/**
+ * The title pages: a title that holds still, one the page sets once a moment
+ * after it loads, one that changes every 50 ms for three seconds, so it never
+ * holds still, and an empty one.
+ */
+export const TITLE_SCENARIOS = Object.freeze({
+  steady: { title: "Steady title", timeline: [] },
+  late: { title: "Loading", timeline: [{ at: 150, target: "title", html: "Loaded title" }] },
+  restless: { title: "Title 0", timeline: Array.from({ length: 60 }, (_, i) => ({ at: 50 * (i + 1), target: "title", html: `Title ${i + 1}` })) },
+  empty: { title: "", timeline: [] },
+});
+
+/**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
  * `secure`, every page is also served over HTTP/2 at `secureOrigin`.
@@ -628,6 +1006,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/pick/start": PICK_PAGE,
         "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/pick/hiding": PICK_HIDING_PAGE,
+        "/pick/search": PICK_SEARCH_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,
         "/conversation/boxes": CONVERSATION_PAGES.boxes,
@@ -638,6 +1017,31 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       if (/^\/(upload|form|theme|gate)\//.test(url.pathname)) {
         import("./fixture-app-controls.mjs").then(
           ({ serveControlPage }) => serveControlPage({ method: request.method, url, response }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
+      // readControlNames: its pages.
+      const namesPage = /^\/names\/([a-z]+)$/.exec(url.pathname);
+      if (namesPage && Object.hasOwn(NAMES_PAGES, namesPage[1])) return html(200, page(url.pathname, NAMES_PAGES[namesPage[1]]));
+      // armPageTape and readPageTape: their pages.
+      const tapePage = /^\/tape\/([a-z]+)$/.exec(url.pathname);
+      if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
+      // Names the steps match without their white space: their page.
+      if (url.pathname === "/joined/start") return html(200, page(url.pathname, JOINED_PAGE));
+      // pressByTestId and readTitle: their pages.
+      if (url.pathname === "/press/rows") return html(200, page(url.pathname, PRESS_ROWS_PAGE));
+      const titlePage = /^\/title\/([a-z]+)$/.exec(url.pathname);
+      if (titlePage && Object.hasOwn(TITLE_SCENARIOS, titlePage[1])) {
+        const { title, timeline } = TITLE_SCENARIOS[titlePage[1]];
+        return html(200, page(title, "<p>A page with a title.</p>", timeline));
+      }
+      // typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress:
+      // their pages live in fixture-app-windows.mjs, so this file changes in this
+      // one place.
+      if (/^\/(window|composer|address|reload)\//.test(url.pathname)) {
+        import("./fixture-app-windows.mjs").then(
+          ({ serveWindowPage }) => serveWindowPage({ method: request.method, url, response, loads }),
           () => html(500, "<!doctype html><title>Unavailable</title>"),
         );
         return;

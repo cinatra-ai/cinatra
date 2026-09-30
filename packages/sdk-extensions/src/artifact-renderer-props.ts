@@ -34,13 +34,21 @@ import type { ArtifactEditCapability } from "./artifact-edit-channel";
  * does not satisfy. This is a SEPARATE version axis from `SDK_EXTENSIONS_ABI_VERSION`
  * (the host-port ABI) — the props snapshot has its own contract version.
  *
- * IT IS 2 SINCE WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091):
+ * IT BECAME 2 IN WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091):
  * the snapshot gained the island-scoped byte reference below, which is what lets
  * a media display paint inside a third-party application at all. A display still
  * declaring 1 is admitted at 1 and handed a v1 snapshot — the host's version
  * window, not a flag day — it simply is not handed the island road.
+ *
+ * IT IS 3 SINCE cinatra#3092: the snapshot gained the REVIEW READING and the
+ * DATA ROAD below. A display that declared version 2 or 1 is handed a snapshot
+ * without them.
+ *
+ * IT IS 4 SINCE cinatra#3814: the edit capability below may carry the TITLE
+ * road. A display that declared version 3, 2 or 1 is handed the capability at
+ * edit-channel version 1, with no title road.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 2;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 4;
 
 /**
  * The versioned, normalized, SERIALIZABLE props snapshot an extension-shipped
@@ -146,6 +154,39 @@ export interface ArtifactRendererProps {
    *
    * A display switches on `edit.kind`, and never infers permission from
    * anything else on this snapshot.
+   *
+   * THE VERSION WINDOW (cinatra#3814): a display that declared props version 4
+   * or above is handed the capability at edit-channel version 2, which may admit
+   * the title beside the text (`isArtifactTitleEditGranted`); a display that
+   * declared an older props version is handed it at edit-channel version 1, the
+   * text alone, exactly the contract it declared.
    */
   edit: ArtifactEditCapability;
+  /**
+   * THE REVIEW READING (props v3, cinatra#3092) — which reading of a review the
+   * surface draws this display in.
+   *
+   * "A dashboard whose review is still pending was not continued and carries no
+   * live link; the continued reading carries it." `openLive` is the address of
+   * the live navigation, and the host writes it as null in the pending reading
+   * whatever the surface passed.
+   *
+   * ABSENT outside a review, and ABSENT BELOW v3.
+   */
+  review?: {
+    reading: "pending" | "continued";
+    openLive: string | null;
+  };
+  /**
+   * THE DATA ROAD (props v3, cinatra#3092) — the address a display's live series
+   * are fetched from; a display that draws a dashboard hands it to the shared
+   * read-only composition. `session` is the application's own route, reached
+   * with the reader's session. An address, never a credential.
+   *
+   * ABSENT where the surface passes none, and ABSENT BELOW v3.
+   */
+  data?: {
+    road: "session";
+    apiUrl: string;
+  };
 }

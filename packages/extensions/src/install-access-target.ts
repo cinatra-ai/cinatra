@@ -26,6 +26,12 @@
 //    setExtensionInstallAccess applies it — workspace for artifact/workflow,
 //    and for a CONNECTOR the policy derived from its own cinatra/config.json
 //    declaration cached on the canonical row (cinatra#955).
+//    KIND-AWARE EXCEPTION (cinatra#3785): a kind whose install default is
+//    OWNER-ONLY takes an EXPLICIT "org:<id>" policy instead, through
+//    accessTargetToInstallPolicyForKind below. Deferring for those kinds
+//    installed the package at a reach NO organization vantage admits, so the
+//    organization's own tab listed nothing. The three kinds above keep the
+//    deferral, which is what their established defaults mean.
 //  - team / project target → all three visibility fields scoped to the
 //    target; sharing disabled (matches the per-kind defaults).
 // ---------------------------------------------------------------------------
@@ -107,6 +113,12 @@ export const InstallAccessTargetSchema: z.ZodType<InstallAccessTarget> =
  * artifact/workflow; the cached cinatra/config.json declaration for a
  * connector — cinatra#955).
  *
+ * KIND-LESS ON PURPOSE, and kept that way (cinatra#3785): its callers and its
+ * tests pin this behavior. A caller that knows the kind should reach for
+ * {@link accessTargetToInstallPolicyForKind}, which answers identically at every
+ * level but the organization one, and writes an explicit "org:<id>" policy there
+ * for a kind whose deferred default would otherwise be owner-only.
+ *
  * The workspace scopes (cinatra#1527) map to an EXPLICIT audience token so the
  * install-time selection is never silently downgraded to a per-kind default:
  *   - workspace → ["workspace"]  (every workspace member — the established
@@ -134,6 +146,86 @@ export function accessTargetToInstallPolicy(
     target.level === "team"
       ? (`team:${target.id}` as const)
       : (`project:${target.id}` as const);
+  return {
+    // Multi-scope W1: non-empty token array (single install target).
+    runListVisibility: [visibility],
+    runDataVisibility: [visibility],
+    runExecuteVisibility: [visibility],
+    allowRunSharing: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The kinds whose INSTALL DEFAULT reaches only the owner (cinatra#3785).
+//
+// Stated HERE and deliberately not imported from `install-access-contract.ts`,
+// for the reason this module states at the top: it is PURE, client components
+// import it, and the contract module is server-only. That is the same
+// separation `INSTALL_ACCESS_TARGET_KINDS` keeps from the kind-hooks module's
+// `INSTALL_ROW_RESOURCE_KINDS`, and it is held to the contract's own table the
+// same way: by a conformance test
+// (__tests__/install-access-owner-default-conformance.test.ts) that reads
+// `kindInstallDefaultIsOwnerOnly` there and this roster here and fails the
+// moment the two disagree.
+//
+// The vocabulary is the PERMISSIONS resource-kind one (agent_template,
+// skill_package, …), not the canonical row-kind one. That mismatch is why the
+// predicate below takes a plain string, exactly as `installRowResourceKind`
+// does for the same reason.
+// ---------------------------------------------------------------------------
+
+export const OWNER_DEFAULT_INSTALL_KINDS = [
+  "agent_run",
+  "agent_template",
+  "skill_package",
+  "skill",
+  "connection",
+] as const;
+
+export type OwnerDefaultInstallKind = (typeof OWNER_DEFAULT_INSTALL_KINDS)[number];
+
+/**
+ * Does an install of this kind fall back to an OWNER-ONLY audience when no
+ * policy is supplied? FAIL-CLOSED for anything unrecognized: an unknown kind
+ * answers false, which keeps today's deferral rather than inventing a wider
+ * reach for it.
+ */
+export function installDefaultIsOwnerOnly(kind: string): boolean {
+  return (OWNER_DEFAULT_INSTALL_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * The target→policy mapping for a caller that knows the KIND being installed.
+ *
+ * Identical to {@link accessTargetToInstallPolicy} at every level but the
+ * organization one. There it answers:
+ *
+ *   - an OWNER-DEFAULT kind → an explicit `org:<id>` token on all three
+ *     visibility tiers, sharing off. The vocabulary already carries the token
+ *     and the reach rules already admit it on that organization's own vantages
+ *     (`policyFieldAdmitsScopeVantage`, and `actor.organizationId === <id>` at
+ *     run time), so this is the organization target finally saying what it
+ *     means. Without it the install deferred to an owner-only default, which no
+ *     organization, team or project vantage admits, which is the whole of
+ *     cinatra#3785.
+ *   - every other kind → undefined, UNCHANGED. A connector's install policy
+ *     derives from its own cached cinatra/config.json declaration
+ *     (cinatra#955), and artifact / workflow keep their workspace default.
+ *     Writing an `org:<id>` policy for them would replace a deliberate meaning
+ *     with a guess.
+ *
+ * `target.id` is the organization the caller has already validated as the one
+ * the install belongs to (the install actions run
+ * `assertTargetBelongsToActiveOrg` before they reach any mapping), so the token
+ * can never name an organization the installer is not in.
+ */
+export function accessTargetToInstallPolicyForKind(
+  target: InstallAccessTarget,
+  kind: string,
+): AgentAuthPolicy | undefined {
+  if (target.level !== "organization") return accessTargetToInstallPolicy(target);
+  if (!installDefaultIsOwnerOnly(kind)) return undefined;
+  const visibility = `org:${target.id}` as const;
   return {
     // Multi-scope W1: non-empty token array (single install target).
     runListVisibility: [visibility],
