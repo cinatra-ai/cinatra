@@ -36,6 +36,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `vendor-token-core-gate.mjs` | VENDOR tokens in core (`src/` + `packages/`) — vendor-named file/route path segments and import specifiers, independent of any extension package lexeme | `file :: path :: token` / `file :: import :: specifier` occurrences | `vendor-token-core-gate.baseline.json` — **shrink-only residual floor** (cinatra#973, epic cinatra-ai/cinatra#978; see the dedicated section below) |
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
+| `extension-rendering-gate.mjs` | an artifact extension that claims an artifact-writable type and draws no display of its own (no `<package>::detail` entry in the generated display map) | claiming extensions | `extension-rendering-gate.baseline.json` — **shrink-only floor**, WARN mode (cinatra#3871; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -504,6 +505,69 @@ artifact (class 5). Those rules are the sibling change of cinatra#3821 and run
 in each connector's repository and over the materialized tree on the
 application's pull requests.
 
+## The rendering gate — warn mode (cinatra#3871)
+
+`extension-rendering-gate.mjs` is the rendering gate of cinatra#3036's
+acceptance row 2. Its rule: "The rendering gate: every kind of work draws
+itself, the binary base included, whose display is the download card."
+
+**The unit is the extension.** A CLAIMING extension is an artifact extension of
+the materialized tree (a directory named `*-artifact` or `*-artifacts` at the
+root of `extensions/` or one vendor level below it, whose manifest says
+`cinatra.kind === "artifact"`) that declares at least one artifact-writable
+claim in `cinatra.artifact.objectTypes[]`: a claim with a well-formed type id
+that is either self-namespaced (the bridge registers it as an artifact type) or
+declares `dispositions.projection === "artifact-safe"` (a claim-backed host
+type). A claiming extension with no display of its own is a finding. Its own
+display is the build map's entry `<package>::detail` in
+`GENERATED_ARTIFACT_RENDERERS` (`src/lib/generated/artifact-renderers.ts`),
+read with the floor gate's own fail-closed reader; the build map, never a
+manifest's `ui` block, is the authority. The gate names no extension in code.
+
+**Outside the gate by construction.** An artifact extension that declares no
+writable claim (no `objectTypes`, or only malformed claims or claims of
+projection `none` on a foreign namespace) is printed on every run and never
+counted: the chart extension claims no type and is shown outside the gate
+(cinatra#3092, row 7).
+
+**Nothing is counted twice.** `host-display-floor-gate.mjs` counts the
+application's own displays and reads no extension tree.
+`artifact-review-floor-gate.mjs` counts artifact TYPES whose review lands on
+the metadata floor; a type drawn by a host handler or by another extension's
+representation provider is off that floor, and its extension is still in this
+gate's deficit, because it does not draw itself. The two gates report
+different units side by side.
+
+**The mode is warn** (`GATE_MODE = "warn"`). A finding above the floor is
+printed as a warning and passes. A floor entry that no longer applies is
+printed as a warning and passes as well, so that an open pull request which
+gives an extension its display does not turn red when it meets the gate; the
+floor is shrunk by the gate's own writer afterwards. A floor that grew against
+the base, an unreadable base on a pull request, and a scanner error fail. Exit
+codes: 0 clean or warn only; 1 a grown floor or an unreadable base on a pull
+request's run; 2 a scanner error (no artifact extension, a partial fleet
+against the two clone-back locks, an unreadable manifest, an unparseable build
+map, an absent or unreadable floor file).
+
+**The flip** is cinatra#3092 (row 1: "every artifact-writable claiming type
+resolves a display its own extension owns and no review can land on the
+fallback", "with no exception list"): one constant, `GATE_MODE = "blocking"`,
+and an empty floor. In blocking mode every live finding fails, every stale
+floor entry fails, and the floor must be empty. There is no exception list.
+
+**The introducing rule.** The floor is compared with the base branch through
+the shared helper below. The change that introduces the gate has a base that
+holds neither `extension-rendering-gate.baseline.json` nor
+`extension-rendering-gate.mjs`; that one case passes with one line saying so.
+A base that holds the gate script but not its floor fails closed.
+
+**How the floor moves.** The floor holds today's deficit and only shrinks. It
+was written by the gate's own `node scripts/audit/extension-rendering-gate.mjs
+--write-baseline` on the materialized tree. With a committed floor the writer
+removes the entries that no longer apply and never adds one; an extension that
+gains its own detail display is removed from the floor by the writer in a
+change of its own. A new entry fails against the base branch.
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -526,6 +590,7 @@ for its floor:
 | `org-write-table-sweep.mjs` | `org-write-table-sweep.baseline.json` | a new file or a raised count of raw org-axis writes | `ORG_WRITE_TABLE_SWEEP_BASE` |
 | `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
+| `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
 
 The rules the helper holds for every gate:
 
