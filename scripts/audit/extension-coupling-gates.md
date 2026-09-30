@@ -521,7 +521,7 @@ for its floor:
 | `extension-fs-import-ban.mjs` | `extension-fs-import-ban.baseline.json` | a new (extension, file) hit | `EXTENSION_FS_IMPORT_BAN_BASE` |
 | `ci-pinned-tests-exist.mjs` | `package-suite-runner-exceptions.json` and `root-tier-runner-exceptions.json` | a new item in either file | `CI_PINNED_TESTS_BASE` |
 | `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
-| `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record the base already holds; an orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
+| `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record that matches it; a stale, orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
 | `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` | a new package in the set | `REQUIRED_EXTENSIONS_COVER_BASE` |
 
 The rules the helper holds for every gate:
@@ -541,11 +541,12 @@ The rules the helper holds for every gate:
   base copy that does not parse. The guard never passes in silence.
 - **Shrinking passes**: a lowered count, a removed stale item or a removed
   package is never growth.
-- **A raise of a route-graph ceiling takes two pull requests**: an `absorbs`
-  record permits a raise only when the base branch already holds it. The first
-  pull request lands the record with the ceiling unchanged (a permit, `from` =
-  the current ceiling); the second raises the ceiling and carries the record
-  unchanged. A raise and its record in one pull request fails.
+- **A route-graph ceiling rises with its record** (cinatra#3848): a raise
+  passes in the pull request that carries an `absorbs` record matching it
+  exactly (`from` the base's ceiling, `to` the committed one), and the gate
+  prints a notice for it. A ceiling measures the graph a route reaches and
+  real growth raises it, so the record with its notice makes the raise
+  visible; a floor that lists faults only shrinks.
 - A package added to the system set fails against the base like any other
   floor growth, so the equality `extensions == systemExtensions == lock` cannot
   grow in one pull request either.
