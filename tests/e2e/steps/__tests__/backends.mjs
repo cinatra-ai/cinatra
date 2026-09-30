@@ -9,7 +9,7 @@
 import { expect } from "vitest";
 
 import { startFixtureApp } from "./fixture-app.mjs";
-import { PageDouble } from "./page-double.mjs";
+import { BrowserDouble } from "./page-double.mjs";
 
 // The module is loaded here and not imported at the top of each file, so a
 // module that does not load fails each case on a named assertion instead of
@@ -47,22 +47,21 @@ export async function closeBrowser() {
   if (browser) await browser.close();
 }
 
+// Each case opens its page in a browser context of its own, and closes the context after it.
 export const BACKENDS = [
   {
     name: "page double",
     skip: false,
-    open: async (origin) => new PageDouble(origin),
-    close: (page) => page.close(),
+    // A browser of its own per case, so a context a case opens beside its page closes with it.
+    open: async (origin) => (await new BrowserDouble(origin).newContext()).newPage(),
+    close: (page) => page.context().browser().close(),
   },
   {
     name: "browser",
     skip: browserSkip,
-    open: async () => {
-      const context = await browser.newContext();
-      const page = await context.newPage();
-      return Object.assign(page, { fixtureContext: context });
-    },
-    close: (page) => page.fixtureContext.close(),
+    // The HTTP/2 origin's certificate is made at run time and signed by its own key.
+    open: async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage(),
+    close: (page) => page.context().close(),
   },
 ];
 
@@ -70,19 +69,20 @@ export const BACKENDS = [
 export const labelOf = (backend) => (backend.skip ? `${backend.name}, skipped: ${backend.skip}` : backend.name);
 
 /**
- * One case on one backend: a fixture app, a page, and a record that keeps every
- * line the step wrote. After the case, no line may carry one of `secrets` or the
- * app's origin: a step writes paths, never addresses or values.
+ * One case on one backend: a fixture app (serving HTTP/2 as well with `secure`),
+ * a page, and a record that keeps every line the step wrote. After the case, no
+ * line may carry one of `secrets` or an origin of the app: a step writes paths,
+ * never addresses or values.
  */
-export async function scene(backend, { answer, secrets = [] } = {}, body) {
-  const app = await startFixtureApp({ answer });
+export async function scene(backend, { answer, secure, secrets = [] } = {}, body) {
+  const app = await startFixtureApp({ answer, secure });
   const page = await backend.open(app.origin);
   const lines = [];
   const record = (line) => lines.push(String(line));
   try {
     await body({ app, page, record, lines });
     for (const line of lines) {
-      for (const secret of [...secrets, app.origin]) {
+      for (const secret of [...secrets, app.origin, ...(app.secureOrigin ? [app.secureOrigin] : [])]) {
         expect(line.includes(secret), `a line the step wrote carries a value or the origin: ${line.slice(0, 48)}`).toBe(false);
       }
     }

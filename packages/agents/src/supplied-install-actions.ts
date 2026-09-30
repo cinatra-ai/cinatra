@@ -22,7 +22,10 @@
 //     `resolveInstallAccessTargetContract`, and the AUDIENCE half is persisted
 //     through `setExtensionInstallAccess`, FAIL-CLOSED: a failed access write
 //     rolls a FRESH install back rather than leaving the package at the broader
-//     default. This replaces the old non-fatal upload-time policy write.
+//     default. This replaces the old non-fatal upload-time policy write. The
+//     ORGANIZATION target reads the audience for the resolved access KIND
+//     (cinatra#3785), because the contract's fall-back for an agent or a skill
+//     is owner-only and no organization surface admits that;
 //
 // The install itself is `extensionRegistry.install` — the same dispatcher the
 // store road calls. There is no second installer on this road.
@@ -30,6 +33,7 @@
 
 import { requireAdminSession } from "@/lib/auth-session";
 import {
+  accessTargetToInstallPolicyForKind,
   InstallAccessTargetSchema,
   resolveInstallAccessTargetContract,
   isWorkspaceRowAnchor,
@@ -783,13 +787,26 @@ async function installAtScope(
         identity,
         provenanceType: candidate.provenance.type,
       });
+      // The audience, now that the KIND is resolved (cinatra#3785). The
+      // contract's kind-less mapping leaves the organization target undefined so
+      // the kind's install default applies; for `agent_template` and
+      // `skill_package` that default is owner-only, which an organization
+      // surface never admits, so the organization target of an owner-default
+      // kind gets its explicit `org:<id>` audience here. Every other level
+      // already carried an explicit policy, and every other kind still defers:
+      // `accessTargetToInstallPolicyForKind` returns undefined for them, so a
+      // connector keeps its declaration-derived default and an artifact keeps
+      // its workspace one. The fail-closed rule is untouched: an undefined
+      // policy still means "the contract decides", never "install unscoped".
+      const policy =
+        scope.policy ?? accessTargetToInstallPolicyForKind(scope.target, accessKind);
       const { setExtensionInstallAccess } = await import(
         "@cinatra-ai/extensions/install-access-contract"
       );
       await setExtensionInstallAccess({
         kind: accessKind,
         resourceId,
-        ...(scope.policy ? { policy: scope.policy } : {}),
+        ...(policy ? { policy } : {}),
         installedByUserId: session.user?.id ?? null,
       });
     } catch (accessErr) {

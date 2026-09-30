@@ -40,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/blog-content-skill",
       "repo": "cinatra-ai/blog-content-skill",
-      "resolvedSha": "67fb0fa386413ad1e7597ff079c93421b497c56f",
+      "resolvedSha": "77d3cc8d1379e78e9b795649931ee39aa0f11491",
       "packageVersion": "0.1.0",
-      "treeSha256": "a310df4925a5e3e79d04bc51a928f55b60a51415996675e95d90256ae99cc4de"
+      "treeSha256": "bfdb4b38db0a5cd84a72d529446fe08704ce2e2e318f8aea474d3f258679961a"
     },
     {
       "packageName": "@cinatra-ai/chart-artifact",
@@ -82,9 +82,9 @@
     {
       "packageName": "@cinatra-ai/document-artifact",
       "repo": "cinatra-ai/document-artifact",
-      "resolvedSha": "0628d999b6ab6a8021c6a8722f06351deb7ac5f0",
+      "resolvedSha": "c07818ae3afccb0e8d50068b23f3a57ffe35e566",
       "packageVersion": "0.1.0",
-      "treeSha256": "2f0a4cf885a835e1d90c8baaa8f32017b869897edfecc3d0d991080916cfcffd"
+      "treeSha256": "f1f4acbbb1696f799e53b0f869e030d1cedadae6d635b67cccde37ad87d1af41"
     },
     {
       "packageName": "@cinatra-ai/extension-authoring-skill",
@@ -166,9 +166,9 @@
     {
       "packageName": "@cinatra-ai/text-artifact",
       "repo": "cinatra-ai/text-artifact",
-      "resolvedSha": "e2167b0b1a952591405fed00a6a2f53e2ab3834a",
+      "resolvedSha": "905835b4eef2b3645b0bcfe740f3a8b5cd1a77e8",
       "packageVersion": "0.1.0",
-      "treeSha256": "23fbdfaf6edcbc86a8f3948f5f863b0540479c361f8270ecffdcf10abeee55bc"
+      "treeSha256": "2c572b64990d9aa8f28c38e49ef2c524d38ac20d9f7b3e176078c757f4b7c978"
     },
     {
       "packageName": "@cinatra-ai/video-artifact",
@@ -180,9 +180,9 @@
     {
       "packageName": "@cinatra-ai/zip-artifact",
       "repo": "cinatra-ai/zip-artifact",
-      "resolvedSha": "4b6084541400bf9fbf2934a0731735ac93a1d037",
+      "resolvedSha": "3cd30b4a0b522468ad12dfedc7ed9b2636f6f3bd",
       "packageVersion": "0.1.0",
-      "treeSha256": "6087798e6e1ce9561fff3a53f30ccb98c476b5246419089c3d647eb00c111941"
+      "treeSha256": "d8d032b7c0f3e6a53ef75600781e2777f33ce4e977c009e681660c858ea5a182"
     }
   ]
 }
