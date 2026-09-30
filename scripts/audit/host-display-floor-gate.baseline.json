@@ -4,6 +4,9 @@
     "dispatch :: audio": {
       "owner": "cinatra#3319"
     },
+    "dispatch :: demonstration": {
+      "owner": "cinatra#3821"
+    },
     "dispatch :: image": {
       "owner": "cinatra#3319"
     },

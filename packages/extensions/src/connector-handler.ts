@@ -7,6 +7,11 @@ import type {
 } from "@cinatra-ai/extension-types";
 import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog";
+import {
+  buildArtifactWriterWitnessOp,
+  type ArtifactWriterWitnessFacts,
+  type ArtifactWriterWitnessOp,
+} from "@/lib/artifacts/artifact-writer-witness";
 
 // ---------------------------------------------------------------------------
 // ConnectorExtensionTypeHandler.
@@ -320,4 +325,11 @@ export function checkConnectorRealpathMatch(input: {
     };
   }
   return { valid: true };
+}
+
+export function connectorHandlerWitnessOp(
+  schema: string,
+  facts: ArtifactWriterWitnessFacts,
+): ArtifactWriterWitnessOp {
+  return buildArtifactWriterWitnessOp(schema, facts);
 }

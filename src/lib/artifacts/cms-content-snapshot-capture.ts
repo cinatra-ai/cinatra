@@ -76,6 +76,7 @@ const CMS_SNAPSHOT_EMITTER = "object_cms_snapshot_capture" as const;
  * write guard, and the review-orchestration classifier reads it as the artifact
  * type for org-rule matching. */
 export const CMS_SNAPSHOT_OBJECT_TYPE = "@cinatra-ai/objects:cms-content-snapshot";
+export const CMS_SNAPSHOT_BORDER_DEMONSTRATION = CMS_SNAPSHOT_OBJECT_TYPE;
 
 export class CmsSnapshotTooLargeError extends Error {
   constructor(public readonly sizeBytes: number) {

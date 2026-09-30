@@ -103,6 +103,11 @@
       }
     },
     {
+      "rule": "pack-table-literal",
+      "key": "src/lib/border-demonstration-table.ts::ext_cinatra_ai_contract_artifact_records",
+      "reason": "A demonstration for the border gates (#3821): a crossing added together with its ledger line, which the base guard must refuse. Not for merge."
+    },
+    {
       "rule": "pack-type-id-in-core",
       "key": "packages/agent-ui-protocol/src/schema-enricher.ts::@cinatra-ai/email:send-as-aliases",
       "reason": "standing debt: the schema enricher names a pack-declared type id to enrich one field group instead of reading the declaration."
