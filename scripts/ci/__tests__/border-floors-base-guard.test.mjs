@@ -42,6 +42,10 @@ const GATE_SCRIPTS = [
 ];
 const BASE_VARIABLES = ["APPLICATION_BORDER_BASE", "CONNECTOR_ARTIFACT_ROAD_BASE", "HOST_DISPLAY_FLOOR_BASE"];
 
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * The workflow's top-level job blocks, as `name -> body` (the reader of
  * design-pin-gates-workflow.test.mjs): a job header is a two-space-indented key
@@ -275,7 +279,7 @@ describe("gates-pnpm — the base step's shell text, run", () => {
     expect(res.status).not.toBe(0);
     for (const script of GATE_SCRIPTS) {
       const name = script.split("/").pop();
-      expect(res.stderr).toMatch(new RegExp(`Cannot find module '[^']*${name.replace(/\./g, "\\.")}'`));
+      expect(res.stderr).toMatch(new RegExp(`Cannot find module '[^']*${escapeRegExp(name)}'`));
     }
   });
 });
