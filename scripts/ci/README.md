@@ -167,6 +167,20 @@ The `.github/workflows/works-after-proof.yml` `workflow_dispatch` already expose
 a `gate_mode` input for a maintainer-run CI gate; that dispatch lane runs the
 same harness in gate mode with candidate pins derived from the checked-out ref.
 
+## Build-only heads
+
+Every workflow a `pull_request` event starts, except `build-image.yml`, skips
+its jobs when the head is a branch of this repository whose name starts with
+`merge-queue/` or `merge-batch/`: such a pull request exists only to build the
+exact tree main is about to carry, is never merged, and needs the image
+workflow alone (`files-hold.yml`, a `pull_request_target` workflow that names
+no pull request reference, runs as before). A fork's branch of the same name
+is an ordinary head and runs every job, so no contributor skips a check by
+naming a branch. The condition is written once in `build-only-heads.mjs`, and
+`__tests__/build-only-heads-skip.test.mjs` requires it on every such workflow,
+checks that it runs as before on an ordinary branch and on a push, and pins
+each required context to the job that produces it.
+
 ## Other scripts
 
 - `sync-dev-extensions.mjs` — clones the companion extension repos back into the

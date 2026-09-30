@@ -376,6 +376,11 @@ describe("§I — the shipped fallback renderer, drawn inside the region", () =>
       condition: (_f, _s, ctx) => ctx.xRenderer === SHIPPED_GATE.gate.xRenderer,
       renderer: SchemaOnlyFloorRenderer,
       credentialSafe: true,
+      // The SHIPPED entry's own declaration (cinatra#3532): the floor draws its
+      // own Continue, so a page host leaves the send to it — which is what the
+      // run_card case below is about. Mirrored here because this stand-in has
+      // to register what `ensureDefaultFieldRenderersRegistered` registers.
+      drawsOwnSubmit: true,
     });
   }
 

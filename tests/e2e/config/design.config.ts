@@ -10,19 +10,47 @@
  * axe-core gate: zero `serious` or `critical` violations on `/design-fixtures`
  * (NOT site-wide).
  *
- * The route is STATIC (no DB queries). `cinatra setup branch` is NOT required
- * before this test runs in CI. The `webServer` block below boots `pnpm dev`
- * directly on a dedicated port.
+ * The suite includes static picture fixtures AND mutable database-backed
+ * conformance surfaces. Seed capabilities, isolated database state and Redis
+ * are required for the latter. CI normally supplies a production standalone
+ * server; opt-in partitions verify that server's identity before any tests.
+ *
+ * Workers per family (./design-workers.mjs): the functional-acceptance family
+ * runs with several workers in its own project; every other family keeps one.
  */
+import { isAbsolute, resolve, sep } from "node:path";
+import { designPartition } from "../../../src/lib/test-support/design-partition";
 import { defineConfig } from "@playwright/test";
 import { baseUse, desktopChrome, suitePath, REPO_ROOT, repoPath } from "./base";
+import { FUNCTIONAL_ACCEPTANCE_FAMILY, designWorkers } from "./design-workers.mjs";
+
+const partition = designPartition();
+const workers = designWorkers({ partitioned: partition !== undefined });
+if (partition) {
+  process.env.CINATRA_CONFORMANCE_RUN_ID = partition.runId;
+  process.env.E2E_DESIGN_PORT = String(partition.port);
+  process.env.E2E_DESIGN_BASE_URL = partition.baseURL;
+}
+const artifactRoot = process.env.CINATRA_DESIGN_ARTIFACT_ROOT;
+if (partition && (!artifactRoot || !isAbsolute(artifactRoot) || resolve(artifactRoot).startsWith(resolve(REPO_ROOT) + sep) || resolve(artifactRoot) === resolve(REPO_ROOT))) {
+  throw new Error("partition artifacts require an absolute private directory outside the product checkout");
+}
+const artifacts = (name: string) => partition ? resolve(artifactRoot!, partition.runId, name) : repoPath(name);
 
 const PORT = Number(process.env.E2E_DESIGN_PORT ?? 3101);
 const BASE_URL = process.env.E2E_DESIGN_BASE_URL ?? `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: suitePath("design"),
-  outputDir: repoPath("test-results"),
+  // In order: an opt-in partition first proves the server is its own, then the
+  // seeded fixture namespace is converged ONCE, before any worker starts (see
+  // tests/e2e/design/seed-setup.ts for why that matters to parallel workers).
+  globalSetup: [
+    ...(partition ? [repoPath("tests/e2e/design/partition-setup.ts")] : []),
+    repoPath("tests/e2e/design/seed-setup.ts"),
+  ],
+  outputDir: artifacts("test-results"),
+  shard: partition ? { current: partition.current, total: partition.total } : undefined,
   // Visual snapshots can take a moment on a cold dev server.
   timeout: 120_000,
   // Single baseline per surface — strip the per-project / per-platform suffix
@@ -45,21 +73,34 @@ export default defineConfig({
     },
   },
   retries: process.env.CI ? 1 : 0,
-  // Serial ON PURPOSE, and left serial by the diff-selective runner
-  // (scripts/ci/design-select.mjs): the conformance families are NOT read-only
-  // pages. They provision one seeded namespace per run (the SEEDED_* exact
-  // counts in tests/e2e/design/conformance/contract.ts) and drive real actions
-  // through it, so a second worker would race the counts the drivers assert.
-  // The selector buys its time back by running FEWER families, never by running
-  // the same families in parallel; a workers knob here would need a read-only
-  // proof this suite cannot give today.
+  // A concluded failure already makes the gate red; stop dependent browser
+  // work after that failure (retries still get their normal opportunity).
+  maxFailures: process.env.CI ? 1 : 0,
+  // Workers per family (cinatra#3770; the number and its measured reason live in
+  // ./design-workers.mjs). The functional-acceptance family holds 448 of the
+  // 762 tests and about three quarters of the suite's time, so it runs in its
+  // own project with several workers, inside this one job and against its one
+  // build. Its tests share no server-side state a second worker could race:
+  // each driver answers its own writes at the network boundary of its own page,
+  // and the one shared state, the run's seeded fixture namespace (the SEEDED_*
+  // exact counts in tests/e2e/design/conformance/contract.ts), is converged once
+  // by the global setup above; after that every provisioning call finds it
+  // converged and writes nothing. The family is split per surface: one surface's
+  // tests run in order on one worker.
+  //
+  // Every other family keeps ONE worker with its tests in order: its project
+  // sets `fullyParallel: false` and `workers: 1`, so the pixel comparisons stay
+  // serial. The cap below is the functional-acceptance number, so no more
+  // browsers than that run at once. Opt-in partitioning instead uses
+  // independent databases, Redis databases, app ports and run namespaces, with
+  // one worker for every family in each partition.
   fullyParallel: false,
-  workers: 1,
+  workers: workers.total,
 
   reporter: process.env.CI
     ? [
         ["github"],
-        ["html", { open: "never", outputFolder: repoPath("playwright-report-design") }],
+        ["html", { open: "never", outputFolder: artifacts("playwright-report-design") }],
       ]
     : [["list"]],
 
@@ -85,7 +126,7 @@ export default defineConfig({
         cwd: REPO_ROOT,
         url: BASE_URL,
         timeout: 240_000,
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: partition ? false : !process.env.CI,
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -94,8 +135,25 @@ export default defineConfig({
     {
       name: "design-fixtures-chromium",
       // Pixel-diff + axe + the assertion-based fixture specs. The
-      // conformance dir belongs to the functional-acceptance project below.
+      // conformance dir belongs to the two conformance projects below.
       testIgnore: "**/conformance/**",
+      // Serial: one worker, every family's tests in order.
+      fullyParallel: false,
+      workers: workers.serial,
+      use: {
+        ...desktopChrome,
+        viewport: { width: 1280, height: 900 },
+      },
+    },
+    {
+      // The other conformance families (the header rule, the primitive
+      // geometry and waves, render parity with its pixel comparison, the tab
+      // select): serial, one worker, every family's tests in order.
+      name: "design-conformance-functional",
+      testMatch: "**/conformance/**/*.spec.ts",
+      testIgnore: FUNCTIONAL_ACCEPTANCE_FAMILY,
+      fullyParallel: false,
+      workers: workers.serial,
       use: {
         ...desktopChrome,
         viewport: { width: 1280, height: 900 },
@@ -106,9 +164,12 @@ export default defineConfig({
       // consumes the pinned conformance manifests and asserts fields/actions/
       // state variants of the covered surfaces on /design-fixtures/conformance.
       // Assertion-based (no pixel baselines) — pixel-diff + axe above stay
-      // supporting evidence, never the sole gate.
-      name: "design-conformance-functional",
-      testMatch: "**/conformance/**/*.spec.ts",
+      // supporting evidence, never the sole gate. Parallel over several
+      // workers, split per surface (the spec declares that boundary).
+      name: "design-functional-acceptance",
+      testMatch: FUNCTIONAL_ACCEPTANCE_FAMILY,
+      fullyParallel: true,
+      workers: workers.functionalAcceptance,
       use: {
         ...desktopChrome,
         viewport: { width: 1280, height: 900 },

@@ -65,7 +65,7 @@ export {
 
 export { resolveRequestActorContext } from "./request-actor";
 
-export { resolveAgentRunHref } from "./agent-run-href";
+export { resolveAgentRunHref, buildAgentInstancePath, launchScopeAnchorBaseCopy } from "./agent-run-href";
 
 // cinatra#2882 — THE ASYNC SEAM. Same statements, same guards, over the host's
 // async pooled adapter instead of the synchronous `Atomics.wait` bridge. For

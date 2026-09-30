@@ -20,6 +20,7 @@
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
 
+import { CONFORMANCE_SEED_REFUSAL_HEADER } from "../../../../src/lib/test-support/conformance-seed-fence";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_CARD_FIXTURES,
@@ -150,6 +151,10 @@ import {
   CONNECTOR_SHARING_SEARCH_QUERY,
   CONNECTOR_SHARING_SELECTED_SCOPE_LABEL,
 } from "../../../../src/app/design-fixtures/conformance/connector-sharing-seed";
+import {
+  UPLOAD_CONFORMANCE_PREVIEW,
+  UPLOAD_CONFORMANCE_REPO_URL,
+} from "../../../../src/app/design-fixtures/conformance/upload-extension-fixture-data";
 
 export const HARNESS_PATH = "/design-fixtures/conformance";
 
@@ -206,8 +211,19 @@ export function ensureSeeded(): Promise<void> {
         headers: { authorization: `Bearer ${capability}` },
       });
       if (!res.ok()) {
+        // NAME THE FENCE (cinatra#3416). Every refusal of the seed route is a
+        // bare 404 by design, so a red here used to say only "HTTP 404" and
+        // left the reason to be guessed at. The server under test is a harness
+        // server, and a harness server puts the fence it refused at in a header
+        // this suite reads. "capability-not-presented" from a server that was
+        // handed the same value this process holds means the answer came from a
+        // DIFFERENT server than this run started.
+        const fence = res.headers()[CONFORMANCE_SEED_REFUSAL_HEADER];
         throw new Error(
-          `seed provisioning failed: POST ${SEED_ENDPOINT} → HTTP ${res.status()} ${await res.text()}`,
+          `seed provisioning failed: POST ${SEED_ENDPOINT} → HTTP ${res.status()} ${await res.text()}` +
+            (fence === undefined
+              ? ` (no ${CONFORMANCE_SEED_REFUSAL_HEADER} header: the server on ${SEED_BASE_URL} is not a harness server of this run)`
+              : ` (refused at the fence: ${fence})`),
         );
       }
     } finally {
@@ -4772,9 +4788,11 @@ const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
 // connector-sharing-locked (a declared ceiling, or a recommended scope).
 //
 // Each driver asserts against the conformance id the PRODUCT component emits
-// (`ConnectorSharingPanels`, and the `PermissionsForm` it mounts beneath each
-// row) — the harness `data-surface-id` wrapper only selects WHICH mount, so a
-// driver can never pass against harness-only chrome. Field values are the
+// (`ConnectorSharingPanels`, and the shared `PermissionsPanel` it draws beneath
+// each row). The harness `data-surface-id` wrapper only selects WHICH mount,
+// so a driver can never pass against harness-only chrome. Since cinatra#3385
+// the fixture states the panel's DATA and its bindings, exactly as a connector
+// pack does, so these drivers grade the parts the SDK draws. Field values are the
 // anti-lookalike seeds of connector-sharing-seed.ts, so a wrong-source read
 // reds.
 // ---------------------------------------------------------------------------
@@ -7179,6 +7197,300 @@ const TOOLLESS_SAID_IN_TURN_DRIVER: SurfaceDriver = awaitingMount(
   AWAITING_TOOLLESS_IN_CONVERSATION,
 );
 
+// ---------------------------------------------------------------------------
+// The Upload Extension screen (design spec §VIII; the screens shipped with
+// cinatra#3204, their manifest surfaces adopted into the pin by cinatra#3546).
+//
+// THREE SURFACES OVER ONE ROAD: the screen, the repository form on it, and the
+// install panel Continue mounts in place. All three mount on the base
+// conformance harness
+// (src/app/design-fixtures/conformance/upload-extension-fixtures.tsx), which
+// renders the SHIPPED components — the screen's own extracted JSX body and the
+// shipped GitHub tab — and substitutes only the two bound SERVER calls the
+// standalone harness has neither a session nor a database for, exactly as the
+// §I.1 install-panel mount substitutes the store's own bound action.
+//
+// THE ONE MEASURED DEPARTURE, recorded rather than driven around. The drawing
+// binds both `name` readings to `manifest.displayName`. On this road the
+// preview the resolve step returns carries no display name at all
+// (packages/agents/src/supplied-install-actions.ts), so the product draws the
+// PACKAGE name in that reading, and these drivers grade the reading the product
+// actually draws for the planted package. Repairing the binding is a product
+// change on the upload road, owned by cinatra#3204 — never a driver written
+// around it, and never a harness that plants what the product does not draw.
+// ---------------------------------------------------------------------------
+const UPLOAD_SCREEN_MOUNT =
+  '[data-surface-id="upload-extension-screen"][data-variant="populated"]';
+const UPLOAD_GITHUB_FORM_MOUNT =
+  '[data-surface-id="upload-github-form"][data-variant="populated"]';
+const UPLOAD_PANEL_MOUNT =
+  '[data-surface-id="upload-resolved-install-panel"][data-variant="populated"]';
+/** The product's own nodes inside those mounts (testid-contract.json). */
+const UPLOAD_SCREEN_NODE = '[data-conformance-id="upload-extension-screen"]';
+const UPLOAD_FORM_NODE = '[data-conformance-id="upload-github-form"]';
+const UPLOAD_PANEL_NODE = '[data-conformance-id="upload-resolved-install-panel"]';
+const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
+
+/**
+ * Type the drawn link and press Continue until the panel mounts, retrying
+ * through hydration (a click landing before React hydrates is silently
+ * swallowed on the standalone build). Typing clears any previous resolution, so
+ * a retry converges rather than compounding.
+ */
+async function resolveUploadReference(root: Locator): Promise<Locator> {
+  const panel = root.locator(UPLOAD_PANEL_NODE);
+  await expect(async () => {
+    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
+    await root.locator(UPLOAD_RESOLVE_CONTROL).click();
+    await expect(panel).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 30_000 });
+  return panel;
+}
+
+const UPLOAD_EXTENSION_SCREEN_DRIVER: SurfaceDriver = {
+  path: `${HARNESS_PATH}/upload`,
+  root: (page) => page.locator(UPLOAD_SCREEN_MOUNT),
+  present: async (_page, root) => {
+    const screenRoot = root.locator(UPLOAD_SCREEN_NODE);
+    await expect(screenRoot).toBeVisible();
+    // "an eyebrow reading Extensions over the title Upload Extension".
+    await expect(screenRoot.getByText("Extensions", { exact: true }).first()).toBeVisible();
+    await expect(screenRoot.getByRole("heading", { name: "Upload Extension" })).toBeVisible();
+    // "a strip of exactly two tabs — File and GitHub — and the File tab opens
+    // first".
+    await expect(screenRoot.getByRole("tab")).toHaveCount(2);
+    await expect(screenRoot.getByRole("tab", { name: "File" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(screenRoot.getByRole("tab", { name: "GitHub" })).toBeVisible();
+    // "at the right, a single outline action reading Back to Marketplace".
+    const back = screenRoot.locator('[data-conformance-id="back-to-marketplace"]');
+    await expect(back).toHaveCount(1);
+    await expect(back).toHaveText("Back to Marketplace");
+  },
+  fields: {
+    // name — the §VIII example is "the GitHub tab with a package resolved", and
+    // the one name reading on it is the resolved package's, drawn inside the
+    // panel the screen mounts. Reached through the real tab strip.
+    name: {
+      source: "manifest.displayName",
+      assert: async (_page, root) => {
+        const tab = root.locator(UPLOAD_SCREEN_NODE).getByRole("tab", { name: "GitHub" });
+        const name = root.locator('[data-testid="upload-resolved-name"]');
+        await expect(async () => {
+          await tab.click();
+          await expect(name).toBeVisible({ timeout: 5_000 });
+        }).toPass({ timeout: 30_000 });
+        await expect(name).toHaveText(UPLOAD_CONFORMANCE_PREVIEW.packageName);
+      },
+    },
+  },
+  actions: {
+    // back-to-marketplace -> marketplace-page: the outcome is a NAVIGATION
+    // target — "a single outline action ... that points at the marketplace
+    // page" — so it is proven by the affordance's resolved destination, the
+    // same way the §VI callout's configure action is.
+    "back-to-marketplace": {
+      outcome: "marketplace-page",
+      run: async (_page, root) => {
+        await expect(
+          root.locator('[data-conformance-id="back-to-marketplace"]'),
+        ).toHaveAttribute("href", "/configuration/marketplace");
+      },
+    },
+  },
+  states: {},
+};
+
+const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
+  path: `${HARNESS_PATH}/upload`,
+  root: (page) => page.locator(UPLOAD_GITHUB_FORM_MOUNT),
+  present: async (_page, root) => {
+    await expect(root.locator(UPLOAD_FORM_NODE)).toBeVisible();
+    // "One labelled field, Repository URL, carrying a link glyph inside it and
+    // the placeholder https://github.com/owner/repo".
+    const url = root.locator("#github-repo-url");
+    await expect(url).toBeVisible();
+    await expect(url).toHaveAttribute("placeholder", "https://github.com/owner/repo");
+    await expect(root.getByText("A link to a public github.com repository")).toBeVisible();
+    // "A second labelled field, Branch, tag or commit (optional), whose
+    // placeholder reads the repository's default branch".
+    await expect(root.locator("#github-ref")).toHaveAttribute(
+      "placeholder",
+      "the repository's default branch",
+    );
+    // "with the submit action Continue beside it ... dead while the field is
+    // empty".
+    const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
+    await expect(submit).toHaveText("Continue");
+    await expect(submit).toBeDisabled();
+    // "There is no account to connect, no connector to install, and nothing to
+    // state before a person may type" — no gate in front of the field.
+    await expect(root.locator('[data-testid="github-upload-precondition"]')).toHaveCount(0);
+    await expect(root.locator(UPLOAD_PANEL_NODE)).toHaveCount(0);
+  },
+  fields: {},
+  actions: {
+    // resolve-reference -> package-resolved: "Continue resolves on the screen
+    // itself — no popup opens, and nothing is drawn inline in the fields. What
+    // it mounts is the same install panel §I.1 already fixes, without a card."
+    "resolve-reference": {
+      outcome: "package-resolved",
+      run: async (_page, root) => {
+        const panel = await resolveUploadReference(root);
+        await expect(panel.locator('[data-testid="extension-install-panel-body"]')).toBeVisible();
+        await expect(root.locator('[role="dialog"]')).toHaveCount(0);
+      },
+    },
+  },
+  states: {
+    // loading — "reads Looking up... while the lookup is in flight", and the
+    // form says so on its own root only while it is.
+    loading: async (_page, root) => {
+      const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
+      await expect(async () => {
+        await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
+        await submit.click();
+        await expect(
+          root.locator(`${UPLOAD_FORM_NODE}[data-state="loading"]`),
+        ).toBeVisible({ timeout: 2_000 });
+        await expect(submit).toContainText("Looking up");
+      }).toPass({ timeout: 30_000 });
+    },
+  },
+};
+
+const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
+  path: `${HARNESS_PATH}/upload`,
+  root: (page) => page.locator(UPLOAD_PANEL_MOUNT),
+  present: async (_page, root) => {
+    const panel = root.locator(UPLOAD_PANEL_NODE);
+    await expect(panel).toBeVisible();
+    // "Above the picker the panel carries four readings on three rows": the
+    // outline kind badge and, beside it, the package name with its version;
+    // then the pinned-commit line; then the provenance line.
+    await expect(panel.locator('[data-testid="upload-resolved-kind"]')).toBeVisible();
+    await expect(panel.locator('[data-testid="upload-resolved-name"]')).toBeVisible();
+    await expect(panel.locator('[data-testid="upload-resolved-version"]')).toBeVisible();
+    await expect(panel.locator('[data-testid="upload-pinned-sha"]')).toContainText("pinned at");
+    await expect(panel.locator('[data-testid="upload-resolved-source"]')).toBeVisible();
+    // "Beneath the readings sits the §I.1 panel itself: the monospace Install
+    // for eyebrow, the access-scope picker ... and the right-aligned Cancel /
+    // Install now row".
+    await expect(panel.locator('[data-testid="extension-install-panel-body"]')).toBeVisible();
+    await expect(panel.locator('[data-testid="extension-install-panel-picker"]')).toBeVisible();
+    await expect(panel.locator('[data-testid="extension-install-panel-cancel"]')).toBeVisible();
+    await expect(panel.locator('[data-testid="extension-install-panel-submit"]')).toBeVisible();
+    // "This mounting has no card header band ... so it draws no corner cross.
+    // Cancel is the single close affordance."
+    await expect(panel.locator('[data-slot="extension-card-name"]')).toHaveCount(0);
+    await expect(panel.locator('[data-testid="extension-install-panel-close"]')).toHaveCount(0);
+    await expect(root.locator('[role="dialog"]')).toHaveCount(0);
+  },
+  fields: {
+    // name — the departure the block comment above records: the drawing binds
+    // the display name, the road's preview carries none, so the product draws
+    // the package name and this is the reading it draws.
+    name: {
+      source: "manifest.displayName",
+      assert: async (_page, root) => {
+        await expect(root.locator('[data-testid="upload-resolved-name"]')).toHaveText(
+          UPLOAD_CONFORMANCE_PREVIEW.packageName,
+        );
+      },
+    },
+    // version = manifest.version — the version read out of the resolved
+    // package's own manifest, beside the name on the first row.
+    version: {
+      source: "manifest.version",
+      assert: async (_page, root) => {
+        await expect(root.locator('[data-testid="upload-resolved-version"]')).toHaveText(
+          UPLOAD_CONFORMANCE_PREVIEW.version,
+        );
+      },
+    },
+  },
+  actions: {
+    // open-picker -> options-listed: the store's own picker, preselected to
+    // Workspace: All, listing the server-offered rows. The popover is
+    // PORTALLED, so it is searched on the page — which is also the proof it
+    // escapes the panel's overflow.
+    "open-picker": {
+      outcome: "options-listed",
+      run: async (page, root) => {
+        const trigger = root
+          .locator('[data-testid="extension-install-panel-picker"]')
+          .getByRole("combobox");
+        await expect(trigger).toContainText(
+          typeNamePairPattern(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL),
+        );
+        await expect(async () => {
+          await trigger.click();
+          await expect(page.getByRole("option").first()).toBeVisible({ timeout: 2_000 });
+        }).toPass({ timeout: 30_000 });
+        const options = page.getByRole("option");
+        await expect(options.filter({ hasText: /Workspace:\s*All/ })).toBeVisible();
+        await expect(options.filter({ hasText: /Workspace:\s*Admins only/ })).toBeVisible();
+        await expect(options.filter({ hasText: /Team:\s*Finance/ })).toBeVisible();
+      },
+    },
+    // close-panel -> card-restored: "Cancel is the single close affordance ...
+    // it returns the screen to its choose-a-package state and discards the
+    // selection." The panel is GONE, not hidden.
+    "close-panel": {
+      outcome: "card-restored",
+      run: async (_page, root) => {
+        const panel = root.locator(UPLOAD_PANEL_NODE);
+        await expect(panel).toBeVisible();
+        await expect(async () => {
+          await root.locator('[data-testid="extension-install-panel-cancel"]').click();
+          await expect(panel).toHaveCount(0, { timeout: 2_000 });
+        }).toPass({ timeout: 30_000 });
+        await expect(root.locator("#github-repo-url")).toBeVisible();
+      },
+    },
+    // submit-install -> installed: the real panel's submit drives the road's
+    // own install call to completion; the mount records the outcome, the same
+    // harness instrumentation the approvals/scheduling surfaces use, because
+    // where the install LANDS is §III's drawing and not this one's.
+    "submit-install": {
+      outcome: "installed",
+      run: async (page, root) => {
+        await expect(async () => {
+          await root.locator('[data-testid="extension-install-panel-submit"]').click();
+          await expect(root).toHaveAttribute("data-outcome", "installed", { timeout: 5_000 });
+        }).toPass({ timeout: 30_000 });
+        // The marker above says the shipped submit reached the road's install
+        // call with the resolved pin; this says the PRODUCT then reported the
+        // install to the operator, on its own toast surface and in its own
+        // words. Without it the outcome would be graded on the harness alone,
+        // and a form that dropped a successful result on the floor would still
+        // read green.
+        await expect(
+          page.locator("[data-sonner-toast]").filter({
+            hasText: `Installed ${UPLOAD_CONFORMANCE_PREVIEW.packageName} ${UPLOAD_CONFORMANCE_PREVIEW.version}`,
+          }),
+        ).toBeVisible({ timeout: 10_000 });
+      },
+    },
+  },
+  states: {
+    // loading — "whose submit reads Installing... while it is in flight". The
+    // reading is the SHIPPED submit's own pending attribute and label; the
+    // panel root carries no state of its own because it has none to carry
+    // truthfully (the pending state lives on the panel's action row).
+    loading: async (_page, root) => {
+      const submit = root.locator('[data-testid="extension-install-panel-submit"]');
+      await expect(async () => {
+        await submit.click();
+        await expect(submit).toHaveAttribute("data-pending", "", { timeout: 2_000 });
+        await expect(submit).toContainText("Installing");
+      }).toPass({ timeout: 30_000 });
+    },
+  },
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -7205,6 +7517,11 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "installed-extensions-filter": INSTALLED_EXTENSIONS_FILTER_DRIVER,
   "installed-extensions-status-views": INSTALLED_EXTENSIONS_STATUS_VIEWS_DRIVER,
   "install-config-needs-callout": INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER,
+  // §VIII's three Upload surfaces (cinatra#3546), adopted with the published
+  // app-extensions body that declares them.
+  "upload-extension-screen": UPLOAD_EXTENSION_SCREEN_DRIVER,
+  "upload-github-form": UPLOAD_GITHUB_FORM_DRIVER,
+  "upload-resolved-install-panel": UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER,
   "connector-grid": CONNECTOR_GRID_DRIVER,
   "connector-connection-filter": CONNECTOR_CONNECTION_FILTER_DRIVER,
   "connector-install-cta": CONNECTOR_INSTALL_CTA_DRIVER,

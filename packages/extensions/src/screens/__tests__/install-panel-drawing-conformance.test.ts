@@ -188,11 +188,41 @@ describe('clause: "Errors are a toast, never inline"', () => {
     expect(report).toMatch(/toast\.error\(message\)/);
   });
 
-  it("keeps the announcement visually hidden, so the panel never grows", () => {
-    const mirror = PANEL.match(/<span[\s\S]*?data-testid="extension-install-panel-error"[\s\S]*?>/)?.[0];
-    expect(mirror).toBeTruthy();
-    expect(mirror).toMatch(/role="alert"/);
-    expect(mirror).toMatch(/className="sr-only"/);
+  it("renders NOTHING for the failure inside the panel — no mirror, no live region", () => {
+    // cinatra#3520. The body used to carry a visually hidden `role="alert"`
+    // mirror of the toast copy, for the announcement. The picture round of
+    // cinatra#3494 read that copy straight out of the panel's own DOM: the
+    // drawing's clause is about the PANEL, not only about what the eye can
+    // see, so a failure must leave this subtree untouched. The announcement is
+    // the toast surface's own live region, which sits outside every card.
+    // The RENDERED body of THIS panel only — the prose above it is free to
+    // say what the panel no longer does. Anchored to the panel's OWN
+    // declaration and its own `return`, and both anchors are asserted to
+    // exist: an anchor that stopped matching would otherwise slice to nearly
+    // nothing and let every negative assertion below pass vacuously.
+    const declaredAt = PANEL.indexOf("export function ExtensionInstallScopePanel(");
+    expect(
+      declaredAt,
+      "the panel's declaration moved — re-anchor this test",
+    ).toBeGreaterThanOrEqual(0);
+    const rendersAt = PANEL.indexOf("\n  return (", declaredAt);
+    expect(
+      rendersAt,
+      "the panel's render moved — re-anchor this test",
+    ).toBeGreaterThanOrEqual(0);
+    const rendered = PANEL.slice(rendersAt);
+    expect(rendered.length).toBeGreaterThan(500);
+    expect(rendered).not.toMatch(/data-testid="extension-install-panel-error"/);
+    expect(rendered, "the panel holds no live region of its own").not.toMatch(
+      /role="alert"/,
+    );
+    expect(rendered, "nothing of the failure is hidden inside the panel").not.toMatch(
+      /sr-only/,
+    );
+    // And the report itself keeps no panel state — state is what redraws a body.
+    const report = PANEL.match(/const reportFailure = \(message: string\) => \{[\s\S]*?\n {2}\};/)?.[0] ?? "";
+    expect(report).toBeTruthy();
+    expect(report).not.toMatch(/set[A-Z]/);
   });
 
   it("routes every failure branch through it — no inline error state", () => {

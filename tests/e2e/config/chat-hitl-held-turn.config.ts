@@ -173,7 +173,7 @@ export default defineConfig({
      * 404 on a boot where the setup bypass is on.)
      */
     url: `http://127.0.0.1:${GATE_PORT}/ready`,
-    // FIFTEEN MINUTES, sized to a FRESH database rather than a warm one, PLUS
+    // SEVENTEEN MINUTES, sized to a FRESH database rather than a warm one, PLUS
     // room for the one replacement boot the gate is allowed (cinatra#3194).
     //
     // This suite's whole premise is a throwaway instance, so its boot is never
@@ -184,14 +184,28 @@ export default defineConfig({
     // for warm instances — and a webServer timeout reports as an infrastructure
     // failure with no test name, which is the least diagnosable red available.
     //
-    // The extra five minutes are NOT a wider readiness bound and buy no patience
-    // for a slow route: the route bound is untouched at 120 s. They are the
-    // budget for detecting an unrouted boot and booting again — a second boot
-    // that finds the schema, the extension closure and the catalog already
-    // written, so it is the cheap case by construction. The suite's own
-    // `globalTimeout` (40 min) and the job's shell timeout (45 min) both still
-    // clear this with the flow's measured run time.
-    timeout: 900_000,
+    // The extra minutes are NOT a wider readiness bound and buy no patience for a
+    // slow route: the route bound is untouched at 120 s. They are the budget for
+    // detecting an unrouted boot and booting again — a second boot that finds the
+    // schema, the extension closure and the catalog already written, so it is the
+    // cheap case by construction. The suite's own `globalTimeout` (40 min) and
+    // the job's shell timeout (45 min) both still clear this with the flow's
+    // measured run time.
+    //
+    // SEVENTEEN, NOT FIFTEEN, AND THE ARITHMETIC IS WHY (cinatra#3553). The gate
+    // may now draw one bounded extension per boot for a route the runtime has
+    // ANNOUNCED it is compiling, so a boot's own ceiling is its health wait plus
+    // the two 120 s route bounds plus that one 120 s extension. Against the worst
+    // health time measured in the job's own logs (58121 ms) that is 418121 ms per
+    // boot; two boots, plus the 5 s shutdown grace and the 60 s wait for the
+    // application port to free between them, is 901242 ms — 1242 ms PAST the
+    // fifteen minutes this constant used to be. That ceiling needs four
+    // independent maxima at once and has never been observed, but a webServer
+    // timeout reports as an infrastructure failure with no test name, which is
+    // the least diagnosable red available and is the very failure cinatra#3553 is
+    // about; so the constant clears the arithmetic with room instead of grazing
+    // it. Nothing else in this file moves.
+    timeout: 1_020_000,
     reuseExistingServer: false,
     stdout: "pipe",
     stderr: "pipe",

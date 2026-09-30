@@ -39,7 +39,7 @@ import { isInstallAccessTargetKind } from "../install-access-target";
 import type { InstallAccessTargetKind } from "../install-access-target";
 import { readExtensionAccessPolicies } from "../permissions-store";
 import {
-  findLiveWorkspaceRow,
+  findLiveInstalledAnchorRow,
   type WorkspaceReachAudience,
 } from "../lifecycle-target-resolver";
 import { Button } from "@/components/ui/button";
@@ -77,6 +77,15 @@ import { readRegistryPolicy } from "../registry-policy";
  * LABEL default for a legacy row with no policy (the label states reach; it
  * grants none).
  *
+ * cinatra#3522 widens WHICH rows the overlay answers for, and nothing else. A
+ * package whose only live row is the bundled/fleet PLATFORM anchor was read back
+ * as "no row" — so six packages the image ships and the loader activates drew a
+ * live "Install now". The tier ranking now comes from the shared
+ * `findLiveInstalledAnchorRow` seam: a live workspace row still wins and still
+ * states its reach; otherwise a live platform anchor IS the install state, with
+ * no reach label, so the drawing's ordinary four-state control applies to it
+ * (design specs/app-extensions.html §I).
+ *
  * Kept module-local rather than split into a sibling helper: the marketplace
  * route graph is ratcheted flat, and this is one read the screen already has the
  * context for.
@@ -100,11 +109,16 @@ async function applyWorkspaceInstallState(
     return;
   }
   const liveWorkspaceRows: InstalledExtension[] = [];
+  // cinatra#3522: the bundled/fleet PLATFORM anchor tier. A live row here is the
+  // package's install state too — it just carries no workspace reach, so its
+  // entry is written without one and the ordinary four-state control applies.
+  const livePlatformRows: InstalledExtension[] = [];
   for (const rows of rowsByName.values()) {
-    const row = findLiveWorkspaceRow(rows);
-    if (row) liveWorkspaceRows.push(row);
+    const picked = findLiveInstalledAnchorRow(rows);
+    if (!picked) continue;
+    (picked.isWorkspaceAnchor ? liveWorkspaceRows : livePlatformRows).push(picked.row);
   }
-  if (liveWorkspaceRows.length === 0) return;
+  if (liveWorkspaceRows.length === 0 && livePlatformRows.length === 0) return;
 
   // One policy read per KIND (the access rows are keyed {resource_kind,
   // resource_id}), so the whole grid costs at most one query per kind. Only the
@@ -129,6 +143,24 @@ async function applyWorkspaceInstallState(
     } catch {
       /* no policy read → the wider label, below */
     }
+  }
+
+  // cinatra#3522 — THE BUNDLED/FLEET TIER IS INSTALLED TOO.
+  //
+  // A package never appears in BOTH lists — `findLiveInstalledAnchorRow` ranks
+  // the tiers and returns one row — so a marketplace install at a workspace
+  // target still overrides the bundled fallback beneath it, and its reach is
+  // what the pill states.
+  //
+  // No `workspaceReach`: the row was not installed at a workspace target, so the
+  // card resolves the ordinary states off the version alone — the disabled
+  // Installed pill at the installed version, or Update now when the catalog's
+  // version is semver-newer.
+  for (const row of livePlatformRows) {
+    installedVersionByName.set(row.packageName, {
+      version: row.version ?? "",
+      isArchived: false,
+    });
   }
 
   for (const row of liveWorkspaceRows) {

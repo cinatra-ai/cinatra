@@ -18,7 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.112.0",
+    "@anthropic-ai/sdk": "^0.120.0",
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/metric-usage-api": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",

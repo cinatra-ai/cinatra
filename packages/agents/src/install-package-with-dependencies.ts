@@ -191,8 +191,22 @@ export async function resolveAgentScopeAncestry(
       return withTrunk(levelOf(`user:${ownerId}`, orgId, ownedAt("user", ownerId)));
     }
     case "workspace": {
-      if (!ownerId) throw new Error("[resolveAgentScopeAncestry] workspace tuple without ownerId");
-      return withTrunk(levelOf(`workspace:${ownerId}`, orgId, ownedAt("workspace", ownerId)));
+      // The app-wide WORKSPACE anchor carries no principal of its own: the
+      // canonical store writes the platform sentinel into `owner_id` where a
+      // workspace tuple has none (WORKSPACE_ANCHOR_ROW_OWNERSHIP names it, and
+      // the DB CHECK admits exactly that shape), and reads it back verbatim. So
+      // a workspace tuple WITHOUT an owner id is the anchor itself, and the
+      // ladder that has to match those rows normalizes to the sentinel rather
+      // than refusing a tuple the store creates on every "Workspace: All"
+      // install (cinatra#3204).
+      const workspaceOwnerId = ownerId ?? PLATFORM_OWNER_SENTINEL;
+      return withTrunk(
+        levelOf(
+          `workspace:${workspaceOwnerId}`,
+          orgId,
+          ownedAt("workspace", workspaceOwnerId),
+        ),
+      );
     }
     case "project": {
       if (!ownerId) throw new Error("[resolveAgentScopeAncestry] project tuple without ownerId");
