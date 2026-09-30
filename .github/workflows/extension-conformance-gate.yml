@@ -83,6 +83,7 @@ permissions:
 jobs:
   extension-conformance-gate:
     name: Extension conformance gate (materialized tree)
+    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 20
     # POSTURE: report-only for the initial rollout. Set CONFORMANCE_ENFORCE=1

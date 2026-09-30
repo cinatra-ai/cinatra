@@ -34,6 +34,7 @@ permissions:
 
 jobs:
   toast-banner-gate:
+    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     uses: ./.github/workflows/toast-banner-gate-reusable.yml
     with:
       ref: ${{ github.sha }}

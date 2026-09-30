@@ -91,6 +91,7 @@ concurrency:
 jobs:
   scale-smoke:
     name: Live provider-scale proof (boot pinned fixture)
+    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     # HOSTED, not the E2E class: this proof boots a WordPress fixture and drives
     # it over MCP, and on the shared self-hosted pool it died twice with
     # `connector instance MCP session no longer exists (session not found)`

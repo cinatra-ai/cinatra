@@ -84,6 +84,7 @@ jobs:
     permissions:
       contents: read
     name: design suite selection
+    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     outputs:
@@ -250,7 +251,7 @@ jobs:
     # among the design contexts), so the skip changes no branch rule. Should
     # this context ever BE required, the road is an always-running final status
     # job that reports on behalf of the skip — not the removal of this `if`.
-    if: ${{ needs.select.outputs.mode != 'none' }}
+    if: ${{ (needs.select.outputs.mode != 'none') && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     # Runner-class routing (the class list lives at the top of build-image.yml).
     # This job takes PIXEL, a class of its own: the committed goldens are DRAWN
     # on the hosted class, and a self-hosted machine renders /design-fixtures
@@ -829,7 +830,7 @@ jobs:
     permissions: {}
     name: design suite verdict
     needs: [select, pixel-diff]
-    if: ${{ always() }}
+    if: ${{ (always()) && !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:

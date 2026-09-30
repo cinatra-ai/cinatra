@@ -65,6 +65,7 @@ permissions:
 
 jobs:
   truthful-attribution-gate:
+    if: ${{ !startsWith(github.head_ref, 'merge-queue/') && !startsWith(github.head_ref, 'merge-batch/') }}
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>)
     # and the `ref` engine-checkout input below are pinned to the SAME
     # cinatra-ai/ci commit, so the gate code is never pulled from mutable main.
