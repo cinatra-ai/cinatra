@@ -47,7 +47,6 @@ const METADATA_FLOOR_MOUNT: ReviewTargetMountDescriptor = {
 
 /** The organization scope the floor arm ignores (only the form arm reads bytes),
  *  passed because the bridge takes it from the host that authorized the reader. */
-const CONFORMANCE_ORG_ID = "conformance-harness";
 
 /** The generic read-only view of the representation — the host's own fallback,
  *  which §III draws BENEATH the diagnostic and which is why a floored target is
@@ -78,7 +77,6 @@ export function LifecycleTierFloorFixture(): ReactElement {
       <ReviewTargetMount
         mount={METADATA_FLOOR_MOUNT}
         props={null}
-        orgId={CONFORMANCE_ORG_ID}
         fallback={<FloorStructuredData />}
       />
     </div>
