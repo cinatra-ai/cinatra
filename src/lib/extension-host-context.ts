@@ -25,6 +25,7 @@ import type {
   ExtensionHostContext,
   HostLoggerPort,
   HostRuntimePort,
+  HostDevInstanceIsolation,
   HostPortName,
   HostUsageEvent,
 } from "@cinatra-ai/sdk-extensions";
@@ -131,15 +132,120 @@ function makeLogger(packageName: string): HostLoggerPort {
   };
 }
 
+// A development instance's isolation inputs, served on the ambient runtime
+// port (`devInstanceIsolation`). The host reads its own three settings and
+// answers only credential-free values: the database endpoint as
+// `host:port/database`, the schema name and the development-main declaration.
+const DEV_ISOLATION_DEFAULT_PORT = "5432";
+// Query parameters that name another host, port or database than the
+// authority does; a connection string carrying one has no single endpoint.
+const DEV_ISOLATION_REDIRECTING_QUERY_KEYS = new Set(["host", "hostaddr", "port", "dbname", "database"]);
+
+function settingValue(value: string | undefined): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+// Resolves a database connection string to `host:port/database`, or null when
+// it does not name exactly one endpoint. The answer is built from the parsed
+// host, port and database only: user info and the query never enter it.
+function devIsolationEndpoint(connection: string): string | null {
+  try {
+    const schemeMatch = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([\s\S]*)$/.exec(connection);
+    if (!schemeMatch) return null;
+    const scheme = schemeMatch[1].toLowerCase();
+    if (scheme !== "postgres" && scheme !== "postgresql") return null;
+
+    let rest = schemeMatch[2];
+    // User info belongs to the authority only; a fragment names no endpoint.
+    const authorityEnd = rest.search(/[/?]/);
+    if (authorityEnd !== -1 && rest.indexOf("@", authorityEnd) !== -1) return null;
+    if (rest.includes("#")) return null;
+    const queryAt = rest.indexOf("?");
+    if (queryAt !== -1) {
+      for (const pair of rest.slice(queryAt + 1).split("&")) {
+        const key = decodeURIComponent(pair.split("=", 1)[0] ?? "").trim().toLowerCase();
+        if (DEV_ISOLATION_REDIRECTING_QUERY_KEYS.has(key)) return null;
+      }
+      rest = rest.slice(0, queryAt);
+    }
+
+    const pathAt = rest.indexOf("/");
+    if (pathAt === -1) return null;
+    const authority = rest.slice(0, pathAt);
+    let database = rest.slice(pathAt + 1);
+    if (database.endsWith("/")) database = database.slice(0, -1);
+    if (database.length === 0 || database.includes("/")) return null;
+
+    const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+    let host: string;
+    let port: string | null;
+    if (hostPort.startsWith("[")) {
+      const close = hostPort.indexOf("]");
+      if (close === -1) return null;
+      host = hostPort.slice(0, close + 1).toLowerCase();
+      if (!/^\[[0-9a-f:.]+\]$/.test(host)) return null;
+      const after = hostPort.slice(close + 1);
+      if (after.length > 0 && !after.startsWith(":")) return null;
+      port = after.length > 0 ? after.slice(1) : null;
+    } else {
+      const colonAt = hostPort.indexOf(":");
+      if (colonAt !== -1 && hostPort.indexOf(":", colonAt + 1) !== -1) return null;
+      host = (colonAt === -1 ? hostPort : hostPort.slice(0, colonAt)).toLowerCase();
+      if (host.endsWith(".")) host = host.slice(0, -1);
+      if (!/^[a-z0-9._~-]+$/.test(host)) return null;
+      port = colonAt === -1 ? null : hostPort.slice(colonAt + 1);
+    }
+
+    if (port !== null && (!/^[1-9][0-9]{0,4}$/.test(port) || Number(port) > 65535)) return null;
+    return `${host}:${port ?? DEV_ISOLATION_DEFAULT_PORT}/${database}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The runtime port's `devInstanceIsolation` answer: in a development runtime a
+ * frozen, credential-free record of this instance's database endpoint, schema
+ * and development-main declaration; null in any other runtime. Never throws.
+ */
+export function readDevInstanceIsolation(
+  env: Readonly<Record<string, string | undefined>>,
+  mode: "development" | "production",
+): HostDevInstanceIsolation | null {
+  if (mode !== "development") return null;
+  const connection = settingValue(env.SUPABASE_DB_URL);
+  const declaration = settingValue(env.CINATRA_DEV_MAIN_DATABASE);
+  // A declaration without a scheme is read as `host[:port]/database`; a bare
+  // database name names no endpoint.
+  const declaredEndpoint =
+    declaration === null
+      ? null
+      : /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(declaration)
+        ? devIsolationEndpoint(declaration)
+        : declaration.includes("/")
+          ? devIsolationEndpoint(`postgresql://${declaration}`)
+          : null;
+  return Object.freeze({
+    databaseConfigured: connection !== null,
+    databaseEndpoint: connection === null ? null : devIsolationEndpoint(connection),
+    schema: settingValue(env.SUPABASE_SCHEMA),
+    mainDeclared: declaration !== null,
+    mainEndpoint: declaredEndpoint,
+  });
+}
+
 function makeRuntime(): HostRuntimePort {
+  const mode = getAppRuntimeMode();
   return {
-    mode: getAppRuntimeMode(),
+    mode,
     flag: (name) => {
       if (/SECRET|KEY|TOKEN|PASSWORD|CREDENTIAL|PRIVATE/i.test(name)) return false;
       return process.env[name] === "true" || process.env[name] === "1";
     },
     publicBaseUrl: () =>
       process.env.NEXT_PUBLIC_APP_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? process.env.BETTER_AUTH_URL ?? null,
+    devInstanceIsolation: () => readDevInstanceIsolation(process.env, mode),
   };
 }
 
