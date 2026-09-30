@@ -37,8 +37,29 @@
  * from the content channel's: a display that understands props v1 and content
  * channel v1 may still be handed an edit channel of another version, and this
  * integer is what a future change to the save contract ratchets.
+ *
+ * IT IS 2 SINCE cinatra#3814: "The edit channel lets a display change the title
+ * of its artifact, as its own field beside the text". A version-2 capability may
+ * name the fields it admits, and a version-2 request may carry a field selector.
  */
-export const ARTIFACT_EDIT_CHANNEL_VERSION = 1;
+export const ARTIFACT_EDIT_CHANNEL_VERSION = 2;
+
+/**
+ * The OLDEST edit-channel version this channel still speaks (cinatra#3814).
+ *
+ * "The channel version moves, and a display that declared the older version
+ * keeps the contract it has." The host hands a display that declared an older
+ * props version the capability at version 1 — today's shape, byte for byte —
+ * and the grant test, the request builder and the host's reader all still admit
+ * it. A version outside `[MIN, CURRENT]` is refused as before.
+ */
+export const ARTIFACT_EDIT_CHANNEL_MIN_VERSION = 1;
+
+/** The channel version at which a capability may carry the title field. */
+const TITLE_FIELD_CHANNEL_VERSION = 2;
+
+/** The fields a version-2 grant may admit: the whole-document text and the title. */
+export type ArtifactEditField = "text" | "title";
 
 /**
  * THE IDLE PAUSE that bounds a change set, in milliseconds.
@@ -122,6 +143,13 @@ export type ArtifactEditCapability =
       idlePauseMs: number;
       /** The largest change set this capability admits, in UTF-8 bytes. */
       capBytes: number;
+      /**
+       * The fields this grant admits (cinatra#3814). PRESENT ONLY AT VERSION 2
+       * and above: a version-1 capability has no such key, and admits the text
+       * alone, exactly as it always did. The title is a field only when this
+       * list names it — `isArtifactTitleEditGranted` is the one test.
+       */
+      fields?: ReadonlyArray<ArtifactEditField>;
     }
   | {
       kind: "read-only";
@@ -134,10 +162,28 @@ export interface ArtifactEditRequest {
   channelVersion: number;
   /** The revision the editor opened — the expected base of the append. */
   baseRevisionId: string;
+  /** THE FIELD SELECTOR (cinatra#3814). Absent or `"text"`: the whole-document
+   *  text, exactly as before the selector existed. A title change is its own
+   *  request, {@link ArtifactTitleEditRequest}. */
+  field?: "text";
   /** The whole document as the editor now holds it. A change set is the
    *  document's new text, not a patch: the store keeps whole revisions, so a
    *  patch would only move the merge into the display. */
   text: string;
+}
+
+/**
+ * A TITLE change, as it crosses to the host (cinatra#3814): "the edit channel
+ * lets a display change the title of its artifact, as its own field beside the
+ * text". It names the SAME base as a text change — one capability, one base, one
+ * save address — so a title save and a text save never refuse each other as
+ * stale on a document nobody else touched. It carries the title and no text.
+ */
+export interface ArtifactTitleEditRequest {
+  channelVersion: number;
+  baseRevisionId: string;
+  field: "title";
+  title: string;
 }
 
 /** Why a save the host understood was refused. */
@@ -177,6 +223,10 @@ export type ArtifactEditOutcome =
       text: string;
       /** True when the host had to cut that text to the cap. */
       truncated: boolean;
+      /** The artifact's title now (cinatra#3814) — carried when the refused save
+       *  was a title change, so the editor reloads the title in place too.
+       *  Absent on a text change's answer. */
+      title?: string | null;
     }
   | { outcome: "refused"; reason: ArtifactEditRefusedReason }
   | { outcome: "failed"; reason: ArtifactEditFailureReason };
@@ -244,14 +294,35 @@ export function artifactEditMessage(outcome: ArtifactEditOutcome): string | null
 export function isArtifactEditGranted(
   capability: ArtifactEditCapability | null | undefined,
 ): capability is Extract<ArtifactEditCapability, { kind: "editable" }> {
+  // THE VERSION WINDOW (cinatra#3814): a capability minted at any version this
+  // channel still speaks is a grant of the text road; one outside it is not.
   return (
     !!capability &&
     capability.kind === "editable" &&
-    capability.channelVersion === ARTIFACT_EDIT_CHANNEL_VERSION &&
+    typeof capability.channelVersion === "number" &&
+    capability.channelVersion >= ARTIFACT_EDIT_CHANNEL_MIN_VERSION &&
+    capability.channelVersion <= ARTIFACT_EDIT_CHANNEL_VERSION &&
     typeof capability.saveUrl === "string" &&
     capability.saveUrl.length > 0 &&
     typeof capability.baseRevisionId === "string" &&
     capability.baseRevisionId.length > 0
+  );
+}
+
+/**
+ * Does this capability admit a TITLE change (cinatra#3814)? True only for a
+ * granted capability at version 2 or above whose `fields` names the title. A
+ * version-1 capability — what a display that declared an older props version is
+ * handed — never does: that display keeps the contract it has.
+ */
+export function isArtifactTitleEditGranted(
+  capability: ArtifactEditCapability | null | undefined,
+): capability is Extract<ArtifactEditCapability, { kind: "editable" }> {
+  return (
+    isArtifactEditGranted(capability) &&
+    capability.channelVersion >= TITLE_FIELD_CHANNEL_VERSION &&
+    Array.isArray(capability.fields) &&
+    capability.fields.includes("title")
   );
 }
 
@@ -263,15 +334,32 @@ export function artifactEditByteLength(text: string): number {
   return text.length * 4;
 }
 
-/** The change set a capability and a text make. Pure. */
+/**
+ * The change set a capability and a text make. Pure. It carries the
+ * CAPABILITY'S OWN channel version (cinatra#3814), so a display holding a
+ * version-1 capability posts exactly the body it always posted.
+ */
 export function buildArtifactEditRequest(
   capability: Extract<ArtifactEditCapability, { kind: "editable" }>,
   text: string,
 ): ArtifactEditRequest {
   return {
-    channelVersion: ARTIFACT_EDIT_CHANNEL_VERSION,
+    channelVersion: capability.channelVersion,
     baseRevisionId: capability.baseRevisionId,
     text,
+  };
+}
+
+/** The title change a capability and a title make (cinatra#3814). Pure. */
+export function buildArtifactTitleEditRequest(
+  capability: Extract<ArtifactEditCapability, { kind: "editable" }>,
+  title: string,
+): ArtifactTitleEditRequest {
+  return {
+    channelVersion: capability.channelVersion,
+    baseRevisionId: capability.baseRevisionId,
+    field: "title",
+    title,
   };
 }
 
@@ -296,15 +384,20 @@ export function readArtifactEditOutcome(value: unknown): ArtifactEditOutcome {
         ? { outcome: "unchanged", revisionId: body.revisionId }
         : { outcome: "failed", reason: "malformed-answer" };
     case "stale":
+      // THE TITLE, WHEN THE ANSWER CARRIES ONE (cinatra#3814): a string or null
+      // is read, an absent key stays absent, and anything else is an answer
+      // this channel cannot read.
       return typeof body.latestRevisionId === "string" &&
         typeof body.latestRevision === "number" &&
-        typeof body.text === "string"
+        typeof body.text === "string" &&
+        (body.title === undefined || body.title === null || typeof body.title === "string")
         ? {
             outcome: "stale",
             latestRevisionId: body.latestRevisionId,
             latestRevision: body.latestRevision,
             text: body.text,
             truncated: body.truncated === true,
+            ...(body.title === undefined ? {} : { title: body.title as string | null }),
           }
         : { outcome: "failed", reason: "malformed-answer" };
     case "refused":
@@ -356,10 +449,50 @@ export async function saveArtifactEdit(
   if (artifactEditByteLength(text) > capability.capBytes) {
     return { outcome: "refused", reason: "over-cap" };
   }
+  return postArtifactEditRequest(capability, buildArtifactEditRequest(capability, text), deps);
+}
+
+/**
+ * SEND one TITLE change, and answer with exactly one outcome (cinatra#3814).
+ *
+ * The same road as `saveArtifactEdit` — the address the capability carries, the
+ * same status rules, the same answers — for the title "as its own field beside
+ * the text". A capability that does not admit the title sends NOTHING and is
+ * answered as an ungranted capability is: refused, no write rights. The title's
+ * cap is the text cap; there is no new cap and no new refusal.
+ */
+export async function saveArtifactTitleEdit(
+  capability: ArtifactEditCapability,
+  title: string,
+  deps?: {
+    fetch?: typeof fetch;
+    signal?: AbortSignal;
+    leaving?: boolean;
+  },
+): Promise<ArtifactEditOutcome> {
+  if (!isArtifactTitleEditGranted(capability)) {
+    return { outcome: "refused", reason: "no-write-rights" };
+  }
+  if (artifactEditByteLength(title) > capability.capBytes) {
+    return { outcome: "refused", reason: "over-cap" };
+  }
+  return postArtifactEditRequest(capability, buildArtifactTitleEditRequest(capability, title), deps);
+}
+
+/** The one transport both saves share: post, read the status, then the body. */
+async function postArtifactEditRequest(
+  capability: Extract<ArtifactEditCapability, { kind: "editable" }>,
+  request: ArtifactEditRequest | ArtifactTitleEditRequest,
+  deps?: {
+    fetch?: typeof fetch;
+    signal?: AbortSignal;
+    leaving?: boolean;
+  },
+): Promise<ArtifactEditOutcome> {
   const send = deps?.fetch ?? (typeof fetch === "function" ? fetch : null);
   if (!send) return { outcome: "failed", reason: "transport" };
 
-  const payload = JSON.stringify(buildArtifactEditRequest(capability, text));
+  const payload = JSON.stringify(request);
   // A LEAVING SAVE OUTLIVES ITS DOCUMENT, within the budget the platform gives
   // such requests. Over that budget the browser refuses the request outright,
   // so an over-budget change set goes as an ordinary one and takes its chances
