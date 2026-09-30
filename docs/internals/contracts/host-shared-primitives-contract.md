@@ -15,7 +15,7 @@ onto. Slice 3 moves the packages, one package at a time.
 | --- | --- |
 | Module id | `@cinatra-ai/design-primitives` |
 | Contract version | `1.0.0` (major `1`) |
-| Declared in | `packages/sdk-extensions/src/artifact-client-bundle.ts`, next to the React externals allowlist |
+| Declared in | `packages/sdk-extensions/src/artifact-contract.ts` (read there by the conformance gate's import rule), re-exported by `packages/sdk-extensions/src/artifact-client-bundle.ts` next to the React externals allowlist |
 | Typed contract export | `@cinatra-ai/sdk-extensions/design-primitives-contract` |
 | Host implementation | `src/lib/artifacts/host-shared-primitives.ts` |
 | Resolved at run time by | `src/lib/artifacts/host-module-registry.ts` |
