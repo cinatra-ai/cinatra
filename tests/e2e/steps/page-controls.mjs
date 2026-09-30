@@ -1,8 +1,9 @@
-// What the control steps share (press, selectFrom, dispatchRun,
+// What the control steps share (press, pressByTestId, selectFrom, dispatchRun,
 // readControlNames, and the window steps typeInWindow, waitForTurn and
 // sendInComposer): the page's controls, read in the page by their role and
-// their accessible name; the mark a step puts on the one control it acts on;
-// and the reading of the document a press starts from.
+// their accessible name (and, for pressByTestId, the elements of a test id);
+// the mark a step puts on the one control it acts on; and the reading of the
+// document a press starts from.
 //
 // A CONTROL IS FOUND AS A PERSON WITH A SCREEN READER FINDS IT: by its role (a
 // button, a link, a tab, a radio, an option) and its accessible name, read in
@@ -160,7 +161,15 @@ export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space 
  *     the page. `note` keeps a count in the page's document for the wait that
  *     follows a send, under `noteKey`, by the field and the part: `set` notes
  *     the counts of this reading, `forget` removes the note; `noted` is the
- *     note there is, or null.
+ *     note there is, or null;
+ *   - `testid`: the shown elements that carry the test id `testId` in the
+ *     attribute `testIdAttribute`, within the one shown part of the page named
+ *     `within` when the query names one (found as `press` finds it), and those
+ *     whose own text is `text`: the text the element draws (its text nodes,
+ *     without a hidden part, a script or a style), runs of white space made one
+ *     space, compared whole. Each match comes back with its role, and, for a
+ *     role of `roles`, its accessible name. The one match takes the mark when
+ *     it carries no role of `roles` with a name: such a control is `press`'s.
  * Lists of names come back bounded: `{ names, more }`.
  */
 export function readControls(query) {
@@ -750,6 +759,40 @@ export function readControls(query) {
       sends: sends.length,
       beside: listOf((beside || []).map(nameOf)),
     };
+  }
+
+  if (query.mode === "testid") {
+    let root = document;
+    let scope = null;
+    if (query.within) {
+      ({ root, scope } = scopeOf(query.within));
+      if (!root) return { path: location.pathname, scope, carriers: 0, texts: listOf([]), matches: [] };
+    }
+    // The text the element draws: its text nodes, without a hidden part, a script or a style.
+    const drawnText = (element) => {
+      let out = "";
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        let drawn = getComputedStyle(node.parentElement).visibility !== "hidden";
+        for (let at = node.parentElement; drawn && at && at !== element.parentElement; at = at.parentElement) {
+          if (at.hasAttribute("hidden") || ["script", "style", "template"].includes(at.localName) || getComputedStyle(at).display === "none") drawn = false;
+        }
+        if (drawn) out += node.nodeValue;
+      }
+      return text(out);
+    };
+    // The attribute is compared as a value, never written into a selector.
+    const carriers = Array.from(root.querySelectorAll(`[${query.testIdAttribute}]`)).filter(
+      (element) => element.getAttribute(query.testIdAttribute) === query.testId && shown(element),
+    );
+    const texts = carriers.map(drawnText);
+    const found = carriers.filter((element, at) => texts[at] === query.text);
+    const matches = found.map((element) => {
+      const described = describe(element);
+      return { ...described, name: query.roles.includes(described.role) ? nameOf(element) : "" };
+    });
+    if (found.length === 1 && !(query.roles.includes(matches[0].role) && matches[0].name)) mark(found[0], query.mark);
+    return { path: location.pathname, scope, carriers: carriers.length, texts: listOf(texts), matches };
   }
 
   throw new Error("readControls: no such mode");
