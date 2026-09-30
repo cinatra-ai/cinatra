@@ -145,6 +145,14 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactContractSrc,
     "ARTIFACT_UI_REGISTRY_ITEM_TYPES",
   );
+  // The roads by which extension code makes the application create an
+  // artifact (cinatra#3821): DERIVED from the SDK's declaration
+  // (artifact-contract.ts ARTIFACT_CREATING_ROADS), never typed here. A
+  // connector whose code names one of them is refused (class 5).
+  const artifactCreatingRoads = extractStringArrayConst(
+    artifactContractSrc,
+    "ARTIFACT_CREATING_ROADS",
+  );
   // cinatra.views (cinatra#1626, S9): the chat renderable-view declaration
   // surface's OWN ABI version, DERIVED from the live leaf source
   // (chat-views-contract.ts's CHAT_VIEWS_ABI_VERSION) — never a re-listed copy
@@ -196,6 +204,9 @@ export function loadLiveRules(sdkRepoRoot) {
   if (!artifactUiRegistryItemTypes || artifactUiRegistryItemTypes.length === 0) {
     return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_REGISTRY_ITEM_TYPES" };
   }
+  if (!artifactCreatingRoads || artifactCreatingRoads.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "ARTIFACT_CREATING_ROADS" };
+  }
   if (chatViewsAbiVersion === null) {
     return { ok: false, missing: [], derivationFailed: "CHAT_VIEWS_ABI_VERSION" };
   }
@@ -233,6 +244,7 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactUiAbiVersion,
     artifactUiRegistryItemTypes: new Set(artifactUiRegistryItemTypes),
     artifactUiSdkAbiRange,
+    artifactCreatingRoads,
     chatViewsAbiVersion,
     llmProviderAbiVersion,
     llmProviders: new Set(llmProviders),
@@ -317,6 +329,30 @@ export const PROCESS_ENV_ALLOWLIST = new Set([
   // access to all 82), not this session's partial local checkout. This is
   // exactly why the core-CI job ships in REPORT posture first.
 ]);
+
+/**
+ * The connector border floor (cinatra#3821, class 5). Each key is
+ * `"<packageName>:<posix-relative-path>:<road>"` — a connector file that
+ * names a road by which the application creates an artifact TODAY. A finding
+ * whose key is here is reported as `known` (not failing; `--strict` fails it,
+ * as for the baseline). The floor ONLY SHRINKS: for a package of kind
+ * connector, an entry of that package with no matching finding is itself a
+ * failing finding (`border.connector-floor-stale`), so a new road in a floored
+ * file fails, a new file fails, and a fixed connector must drop its entry.
+ * Every value names the rule and the follow-up item that removes the entry.
+ * There is no floor for class 4 (no connector declares a produced type or
+ * claims an artifact type today).
+ */
+export const CONNECTOR_ARTIFACT_BORDER_FLOOR = Object.freeze({
+  "@cinatra-ai/wordpress-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
+  "@cinatra-ai/drupal-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
+  "@cinatra-ai/blog-connector:src/register.ts:@cinatra-ai/host:blog-routing":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:blog-routing)",
+  "@cinatra-ai/email-connector:src/register.ts:@cinatra-ai/host:email-routing":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:email-routing)",
+});
 
 /**
  * Non-public org repos: a public extension repo may never reference these.

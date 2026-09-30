@@ -101,6 +101,11 @@ BOUND_NAMES.sort();
 STEP_NAMES.push("pressByTestId", "readTitle");
 BOUND_NAMES.push("TITLE_BOUND_MS", "TITLE_POLL_MS", "TITLE_SETTLE_MS");
 BOUND_NAMES.sort();
+// openPageInOwnContext: its step and its bound join the lists in this one
+// place, and the bounds stay in order.
+STEP_NAMES.push("openPageInOwnContext");
+BOUND_NAMES.push("OWN_CONTEXT_LANDING_BOUND_MS");
+BOUND_NAMES.sort();
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {

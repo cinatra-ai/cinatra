@@ -77,6 +77,25 @@ export function linksTo(path) {
 }
 
 /**
+ * The visible links on `page` that lead to `path`, and how many there are: the
+ * reading of the links that navigateTo presses and openPageInOwnContext
+ * follows. A page whose links cannot be read is refused in the name of `step`.
+ * @param {import("@playwright/test").Page} page
+ * @param {string} path
+ * @param {{ step: string, from: string, record: import("./step-kit.mjs").StepRecord }} caller
+ */
+export async function visibleLinksTo(page, path, { step, from, record }) {
+  const links = page.locator(linksTo(path)).filter({ visible: true });
+  let found;
+  try {
+    found = await links.count();
+  } catch (error) {
+    throw refuse(step, record, "unreadable", `the links on ${from} could not be read (${errorClass(error)})`);
+  }
+  return { links, found };
+}
+
+/**
  * The visible links on `page` that lead to `path`, or a refusal when there are none.
  * @param {import("@playwright/test").Page} page
  * @param {string} path
@@ -84,13 +103,7 @@ export function linksTo(path) {
  * @param {import("./step-kit.mjs").StepRecord} record
  */
 async function visibleLinks(page, path, from, record) {
-  const links = page.locator(linksTo(path)).filter({ visible: true });
-  let found;
-  try {
-    found = await links.count();
-  } catch (error) {
-    throw refuse(STEP, record, "unreadable", `the links on ${from} could not be read (${errorClass(error)})`);
-  }
+  const { links, found } = await visibleLinksTo(page, path, { step: STEP, from, record });
   if (found === 0) throw refuse(STEP, record, "no-link", `no visible link on ${from} leads to ${path} — no address was typed`);
   return links;
 }
