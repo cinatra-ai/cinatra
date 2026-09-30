@@ -173,6 +173,8 @@ the link's own handler opens a dialog in place, is refused at once
 (`no-navigation`), naming the link it pressed and the dialog or panel the page
 shows instead.
 
+The same start signals and short bound apply with `furtherPage: true`: no start is refused as `no-further-page`, naming what the current page shows instead, while a started open keeps its full landing wait.
+
 With `furtherPage: true` it opens the page in a further page instead, and first
 reads the requests that stand open on the origin (`readStandingRequests`): a
 browser keeps at most six connections per origin over plain HTTP, so at or above

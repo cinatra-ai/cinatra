@@ -347,24 +347,60 @@ async function openFurtherPage(page, { path, record, bound, standingBound = STAN
   const links = await visibleLinks(page, path, from, record);
 
   // The further page is the first page the context opens after the press.
+  const previousPages = new Set(context.pages());
+  let started = false;
   /** @type {(opened: any) => void} */
   let noteOpened = () => {};
   const opened = new Promise((done) => {
-    noteOpened = done;
+    noteOpened = (further) => {
+      started = true;
+      done(further);
+    };
   });
+  const onRequest = (/** @type {import("@playwright/test").Request} */ request) => {
+    if (started) return;
+    started = startsNavigation(page, request, origin, path);
+    if (started) return;
+    try {
+      const requestedPage = request.frame().page();
+      if (!previousPages.has(requestedPage)) started = startsNavigation(requestedPage, request, origin, path);
+    } catch {
+      // A popup's initial navigation can precede both its frame and its page
+      // event. Its matching navigation request still proves the open started.
+      if (request.isNavigationRequest()) {
+        const requested = new URL(request.url());
+        started = requested.origin === origin && requested.pathname === path;
+      }
+    }
+  };
   const start = performance.now();
   /** @type {import("@playwright/test").Page | null} */
   let further = null;
   context.on("page", noteOpened);
+  context.on("request", onRequest);
   try {
     try {
       await links.first().click({ timeout: bound.actionMs, noWaitAfter: true, modifiers: [FURTHER_PAGE_MODIFIER] });
     } catch (error) {
       throw refuse(STEP, record, "driver-failure", `the link to ${path} could not be pressed (${errorClass(error)})`);
     }
-    further = await within(opened, bound.landingMs);
+    const pressed = performance.now();
+    const startBound = Math.min(bound.startMs, bound.landingMs);
+    if (!(await startedWithin(page, from, () => started, startBound))) {
+      const instead = await within(page.evaluate(readInstead, { selector: linksTo(path) }), READING_BOUND_MS);
+      const link = instead?.link ? `the link "${lineName(instead.link)}" to ${path}` : `the link to ${path}`;
+      throw refuse(
+        STEP,
+        record,
+        "no-further-page",
+        `the press on ${link} started no navigation within ${startBound} ms, and opened no further page (this page is on ${pathOf(page.url())}); ${describeInstead(instead)}`,
+      );
+    }
+    const left = Math.max(1, bound.landingMs - (performance.now() - pressed));
+    further = await within(opened, left);
   } finally {
     context.off("page", noteOpened);
+    context.off("request", onRequest);
   }
   if (!further) {
     throw refuse(STEP, record, "no-further-page", `the press opened no further page within ${bound.landingMs} ms (this page is on ${pathOf(page.url())})`);
