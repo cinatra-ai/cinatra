@@ -1,4 +1,4 @@
-import { builtForProduction } from "@/lib/build-target";
+import { builtForProduction } from "./build-target";
 
 export type AppRuntimeMode = "development" | "production";
 
