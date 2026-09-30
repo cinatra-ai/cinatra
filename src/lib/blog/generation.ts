@@ -214,7 +214,7 @@ export async function runBlogPostImageRegenerationJob(
     const imageMaterialization = await requireBlogSystem().materializeBlogImage({
       imageBase64: image.imageBase64,
       imageMimeType: image.imageMimeType,
-      draft: post,
+      title: post.title,
     });
 
     await updateBlogPostImageGenerationState(project.id, {

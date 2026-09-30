@@ -5,10 +5,9 @@
 // picture belongs to, and `placement`, whose only declared value is `featured`
 // — the pipeline makes ONE picture and there are no body pictures.
 //
-// This is the host's side of that declaration: one place that WRITES the pair
-// onto a picture the host materializes, and one place that READS it back for
-// the surfaces that draw the featured image (the review, and the run page's
-// outputs list when that surface lands — it has no host code today).
+// This is the host's side of that declaration: one place that READS the pair
+// back for the surface that draws the placement (the page header's placement
+// cell). The picture's agent files the pair itself.
 //
 // The reader NAMES why it cannot read the pair instead of guessing: a picture
 // filed before the declaration existed carries neither field, and a surface
@@ -37,11 +36,6 @@ export type FeaturedImageReadFailure =
 export type FeaturedImageRead =
   | ({ ok: true } & FeaturedImageFields)
   | { ok: false; reason: FeaturedImageReadFailure };
-
-/** The declared fields for a picture the host files for a known post. */
-export function buildFeaturedImageFields(input: { post: string }): FeaturedImageFields {
-  return { post: input.post, placement: FEATURED_PLACEMENT };
-}
 
 /** Read the two declared fields off a picture row's object data. */
 export function readFeaturedImageFields(data: unknown): FeaturedImageRead {

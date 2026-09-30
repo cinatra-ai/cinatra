@@ -17,8 +17,8 @@
 //      page's outputs list when it lands) need to READ the two fields back off
 //      that row.
 //
-// So the host gains both halves here: a declared-fields road into the envelope,
-// and a reader that narrows the row's data to the two fields or names why it
+// The picture's agent files the pair through the typed-data road; the host
+// keeps a reader that narrows the row's data to the two fields or names why it
 // cannot. Both are proved against the REAL registered type from the LIVE pinned
 // tree — never a fixture schema.
 // ---------------------------------------------------------------------------
@@ -30,7 +30,6 @@ import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
   FEATURED_PLACEMENT,
-  buildFeaturedImageFields,
   readFeaturedImageFields,
 } from "../featured-image-fields";
 
@@ -70,12 +69,6 @@ describe("the picture type's two declared fields, against the live pinned tree",
     expect(def!.schema.safeParse(fileEnvelope).success).toBe(false);
   });
 
-  it("accepts the row once the host supplies the two declared fields", () => {
-    const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
-    const data = objectDataFor(buildFeaturedImageFields({ post: POST_ID }));
-    expect(def!.schema.safeParse(data).success).toBe(true);
-  });
-
   it("refuses a placement the type does not declare", () => {
     const def = objectTypeRegistry.resolve(BLOG_IMAGE_TYPE);
     const data = objectDataFor({ post: POST_ID, placement: "body" });
@@ -108,7 +101,7 @@ describe("the typed-data road into the artifact row's object data", () => {
 
 describe("the host reads the featured image's fields back", () => {
   it("reads the post it belongs to and its placement", () => {
-    const data = objectDataFor(buildFeaturedImageFields({ post: POST_ID }));
+    const data = objectDataFor({ post: POST_ID, placement: FEATURED_PLACEMENT });
     expect(readFeaturedImageFields(data)).toEqual({
       ok: true,
       post: POST_ID,
