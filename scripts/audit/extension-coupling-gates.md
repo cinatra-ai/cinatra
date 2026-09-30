@@ -522,7 +522,10 @@ for its floor:
 | `ci-pinned-tests-exist.mjs` | `package-suite-runner-exceptions.json` and `root-tier-runner-exceptions.json` | a new item in either file | `CI_PINNED_TESTS_BASE` |
 | `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
 | `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record that matches it; a stale, orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
-| `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` | a new package in the set | `REQUIRED_EXTENSIONS_COVER_BASE` |
+| `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` (a register: see the record road below) | a new package in the set without its record | `REQUIRED_EXTENSIONS_COVER_BASE` |
+| `org-write-table-sweep.mjs` | `org-write-table-sweep.baseline.json` | a new file or a raised count of raw org-axis writes | `ORG_WRITE_TABLE_SWEEP_BASE` |
+| `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
+| `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 
 The rules the helper holds for every gate:
 
@@ -530,8 +533,29 @@ The rules the helper holds for every gate:
   the workflow sets one (a git revision: the remote base branch on a pull
   request, the previous tip on a push); else the platform's variable for a pull
   request's base branch (`GITHUB_BASE_REF`), read as the remote branch of that
-  name (`origin/main` for `main`). A job that runs one of these gates needs the base branch
-  in its checkout (`fetch-depth: 0`).
+  name (`origin/main` for `main`). A job whose checkout holds the base branch
+  (`fetch-depth: 0`) reads it there, and nothing is fetched.
+- **A checkout of one commit**: when the base comes from the pull request's
+  base branch and is not in the checkout, the helper fetches that branch
+  itself, one commit deep, from the checkout's own remote `origin`
+  (for the base branch `main`: `git fetch --depth=1 --no-tags origin
+  +refs/heads/main:refs/floor-base-guard/main`), into a reference of its own,
+  never into a branch of the checkout, and reads the floor there. The
+  branch name must have the form of a branch name (letters, digits, dot, dash,
+  underscore and slash; no leading dash; no `..`) before it reaches git; a name
+  of another form fails the gate. One attempt with a timeout of 30 seconds, one
+  more after a failure, and no other network call. The repository is public:
+  the helper adds no credential and reads none. The fetch is anonymous
+  whatever the checkout left in its configuration: the helper's own call
+  passes an empty credential helper, an empty askpass program, an empty
+  `http.extraheader` and an empty value for every address-scoped
+  `http.ADDRESS.extraheader` key it finds, with `GIT_TERMINAL_PROMPT=0`, so a
+  job token that a checkout stored as a header is never sent. A remote address that holds a user part is never printed; the
+  remote is then named by its name only. A fetch that fails fails the gate with
+  its reason. A base named by the gate's own variable is a revision the
+  workflow chose, and it is never fetched. `FLOOR_BASE_FETCH=0` switches the
+  fetch off, so a missing base fails closed without it; the tests that run a
+  gate in the real checkout set it, so they never reach the network.
 - **No pull request, no base**: on a run that is no pull request (a push to the
   default branch, a local run) and no base is named, the guard says so in one
   line and passes; the gate's own check against the tree still runs.
@@ -547,15 +571,57 @@ The rules the helper holds for every gate:
   prints a notice for it. A ceiling measures the graph a route reaches and
   real growth raises it, so the record with its notice makes the raise
   visible; a floor that lists faults only shrinks.
-- A package added to the system set fails against the base like any other
-  floor growth, so the equality `extensions == systemExtensions == lock` cannot
-  grow in one pull request either.
+- A package added to the system set passes only with its record in the same
+  pull request (the record road below); without it, it fails against the base.
+  The equality `extensions == systemExtensions == lock` is still checked on the
+  tree.
 
 `org-archive-bypass-scan.mjs` has no workflow step of its own: the root suite
 runs it through its test ("exits 0 against the repo as checked out"), which
 inherits the run's environment and so compares with the base on a pull
 request's run. The tests that run a gate on a SYNTHETIC floor drop the base
 variables, so a synthetic floor is never compared with the real base branch.
+
+The org-write boundary workflow runs `org-write-table-sweep.mjs` and
+`system-writer-manifest-gate.mjs`, and the skill packaging workflow runs
+`skill-packaging-gate.mjs`; their checkouts take one commit, so these three
+gates get their base through the fetch above. The root suite also runs
+`system-writer-manifest-gate.mjs` and `skill-packaging-gate.mjs` through their
+tests against the repository as checked out, with the run's environment.
+
+Not guarded yet: the other gates that cinatra#3832 lists, which need a
+workflow change or a floor moved into a file of its own.
+
+### The record road for registers
+
+Two guarded lists are registers of things allowed after a review, not floors
+of faults: the system writers' manifest and the set of system extensions. A
+row added to either passes in the pull request that carries it, WITH ITS
+RECORD in the register's permits file, in the same change:
+
+- `scripts/audit/system-writer-manifest.permits.json` for the manifest (a
+  record per row, by file and reference; a raised count needs its record
+  written or updated in the change);
+- `scripts/audit/required-extensions-cover-host-imports.permits.json` for the
+  set (a record per package name).
+
+A record is `{ "list", "row", "reason", "pr" }`: the register's name, the exact
+row, a reason that is a sentence (at least six words of three letters or more,
+at least four of them different) and the number of the pull request. The gate
+prints one NOTICE line for every addition it absorbs, naming the row, the
+reason and the pull request. A row added without its record fails, and the
+refusal names the permits file and the record's form. A record for a row the
+register does not hold is an orphan and fails. A record is carried forward
+unchanged while its row stands (an altered or deleted record with its row
+still on the register fails), and it goes when its row goes. A permits file
+that does not parse fails the gate on a pull request's run; an absent one
+holds no records. The shared helper holds the reader and the rules once
+(`parsePermits`, `checkPermits` in `scripts/audit/lib/floor-base-guard.mjs`).
+
+The other guarded floors list tolerated faults (a raw write outside the
+registry, an embedded skill, a forbidden import): they have no record road
+and only shrink. The route graph's ceilings are no such floor: a raise passes
+with its `absorbs` record in its own pull request, as described above.
 
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 

@@ -82,9 +82,9 @@
     {
       "packageName": "@cinatra-ai/document-artifact",
       "repo": "cinatra-ai/document-artifact",
-      "resolvedSha": "0628d999b6ab6a8021c6a8722f06351deb7ac5f0",
+      "resolvedSha": "c07818ae3afccb0e8d50068b23f3a57ffe35e566",
       "packageVersion": "0.1.0",
-      "treeSha256": "2f0a4cf885a835e1d90c8baaa8f32017b869897edfecc3d0d991080916cfcffd"
+      "treeSha256": "f1f4acbbb1696f799e53b0f869e030d1cedadae6d635b67cccde37ad87d1af41"
     },
     {
       "packageName": "@cinatra-ai/extension-authoring-skill",

@@ -32,10 +32,19 @@
 // migration wave (cinatra#2090) will delete. ONE artifact, so the CI gate and
 // the store-install seam can never ratchet differently.
 //
+// FLOOR COMPARED WITH THE BASE (cinatra#3832): the ledger's `embeddedSkills`
+// may not name an embedded skill the base branch's ledger does not, so a pull
+// request cannot add its own embedded skill to the ratchet. The base comes from
+// SKILL_PACKAGING_BASE when a workflow sets it, else from the pull request's
+// base branch, fetched one commit deep when the checkout does not hold it; a
+// base that cannot be read fails closed (the shared guard,
+// scripts/audit/lib/floor-base-guard.mjs).
+//
 // Usage:
 //   node scripts/audit/skill-packaging-gate.mjs                  # exit 1 on any NEW finding
 //   node scripts/audit/skill-packaging-gate.mjs --write-baseline # regenerate the ratchet
 //   node scripts/audit/skill-packaging-gate.mjs --strict         # also fail on STALE baseline entries
+//   SKILL_PACKAGING_BASE=origin/main node ...   # compare the ratchet with that revision (default: the pull request's base branch)
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "node:child_process";
@@ -54,11 +63,18 @@ import {
   validateSkillBundle,
   validateSkillExtensionPackage,
 } from "./_lib/skill-packaging-verdict.mjs";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
 const ALLOWLIST_PATH = join(REPO_ROOT, "config", "skill-fixture-allowlist.json");
 const LEDGER_PATH = join(REPO_ROOT, "config", "skill-packaging-legacy-exceptions.json");
+
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "config/skill-packaging-legacy-exceptions.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "SKILL_PACKAGING_BASE";
 
 const HOST_SCAN_PREFIXES = ["packages/", "src/"];
 const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
@@ -302,10 +318,50 @@ export function run(options = {}) {
   return { armA, armB, hostAllowlist, extensionAllowlist };
 }
 
+/**
+ * A ledger's text -> its list of embedded skills; throws when the list is
+ * not a list of names. A ledger without the list holds none.
+ */
+function parseEmbeddedSkills(text) {
+  const doc = JSON.parse(text);
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a ledger object");
+  const list = doc.embeddedSkills ?? [];
+  if (!Array.isArray(list) || !list.every((k) => typeof k === "string")) {
+    throw new Error("embeddedSkills is not a list of names");
+  }
+  return list;
+}
+
+/**
+ * The floor base guard (cinatra#3832): growth is a name in the ledger's
+ * `embeddedSkills` that the base branch's ledger does not hold. `headFloor`
+ * (a list of names) defaults to the ledger in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? parseEmbeddedSkills(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
+  return compareFloorWithBase({
+    gate: "skill-packaging-gate",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: head,
+    parse: parseEmbeddedSkills,
+    grown: (base, current) => newKeys(base, current),
+    repoRoot,
+    env,
+  });
+}
+
 function main() {
   const argv = process.argv.slice(2);
   const writeBaseline = argv.includes("--write-baseline");
   const strict = argv.includes("--strict");
+  // The floor base guard runs first: it reads only the committed ledger, as
+  // run() below reads it.
+  if (!writeBaseline) {
+    const ledger = readJson(LEDGER_PATH, { exceptions: [] });
+    const headFloor = Array.isArray(ledger.embeddedSkills) ? ledger.embeddedSkills : [];
+    if (!reportFloorGuard(checkFloorAgainstBase({ headFloor }))) process.exit(1);
+  }
   const { armA, armB } = run({ strict });
 
   if (writeBaseline) {
