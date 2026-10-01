@@ -198,11 +198,6 @@
       "resolvedSha": "c322a7f37dbd0d03435f1cdc26a56a96367d554f"
     },
     {
-      "packageName": "@cinatra-ai/email-connector",
-      "repo": "cinatra-ai/email-connector",
-      "resolvedSha": "69da4df08d3bb93eaa09fb813cc9b8135edc8327"
-    },
-    {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
       "resolvedSha": "8bcda3e0cca0fc56667c116bfade3a64121dd6b1"
@@ -356,11 +351,6 @@
       "packageName": "@cinatra-ai/product-portfolio-matcher-skill",
       "repo": "cinatra-ai/product-portfolio-matcher-skill",
       "resolvedSha": "e6cdabe8dc63268b8c81e3c2b678b8edfcb90aaf"
-    },
-    {
-      "packageName": "@cinatra-ai/resend-connector",
-      "repo": "cinatra-ai/resend-connector",
-      "resolvedSha": "986ea945157934a3a0634a10b2ff2c1134dcd950"
     },
     {
       "packageName": "@cinatra-ai/sales-playbook-artifact",
