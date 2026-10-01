@@ -74,7 +74,7 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unmarkControls,
   unspacedNote,
 } from "./page-controls.mjs";
@@ -187,9 +187,9 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
   const from = pathOf(page.url());
   const mark = newMark();
   const query = { mode: "picker", picker: pickerName, entry: entryText, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
-  const read = () => within(page.evaluate(readControls, query), READING_BOUND_MS);
+  const read = () => within(readPageControls(page, query), READING_BOUND_MS);
   // The picker the step has opened, read again by its mark (see OPENED).
-  const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  const readMarked = () => within(readPageControls(page, { ...query, marked: true }), READING_BOUND_MS);
   let openedHere = false;
   // Waits until the list the step opened has closed; answers what the log line adds.
   const waitForListToClose = async (entryNamed) => {
@@ -211,12 +211,13 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       );
     }
     const standIn = STAND_INS[reading.by];
+    const noName = reading.fallbackNamed ? "no explicit accessible name" : "no accessible name";
     if (reading.found > 1 && standIn) {
       throw refuse(
         STEP,
         record,
         "ambiguous",
-        `${reading.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a selection never guesses`,
+        `${reading.found} shown comboboxes on ${from} have ${noName} and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a selection never guesses`,
       );
     }
     if (reading.found > 1) {
@@ -228,7 +229,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       );
     }
     // A line says what a combobox with no accessible name was found by.
-    if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
+    if (standIn) pickerNamed = `${pickerNamed} (a combobox with ${noName}, found by ${standIn[0]})`;
     if (reading.disabled) throw refuse(STEP, record, "disabled", `the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
 
     if (reading.kind === "search") {
@@ -317,7 +318,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
     // The page shows the entry as it reads it, which may differ from the wanted text in white space.
     const shownAs = reading.chosen || entryText;
     for (;;) {
-      const shown = await within(page.evaluate(readControls, { mode: "reflected", kind, index, entry: shownAs, before, drawn, attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
+      const shown = await within(readPageControls(page, { mode: "reflected", kind, index, entry: shownAs, before, drawn, attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
       const elapsedMs = elapsedSince(selectedAt);
       if (shown && shown.instead) {
         const where = shown.instead.where === "field" ? "the field shows" : "the page draws";
@@ -396,9 +397,9 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
   const mark = newMark();
   const query = { mode: "picker", picker: pickerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
   // The picker the step has opened, read again by its mark (see OPENED).
-  const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  const readMarked = () => within(readPageControls(page, { ...query, marked: true }), READING_BOUND_MS);
   try {
-    const first = await within(page.evaluate(readControls, query), READING_BOUND_MS);
+    const first = await within(readPageControls(page, query), READING_BOUND_MS);
     if (!first) throw refuse(READ_STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
     if (first.found === 0) {
       throw refuse(
@@ -409,12 +410,13 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
       );
     }
     const standIn = STAND_INS[first.by];
+    const noName = first.fallbackNamed ? "no explicit accessible name" : "no accessible name";
     if (first.found > 1 && standIn) {
       throw refuse(
         READ_STEP,
         record,
         "ambiguous",
-        `${first.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(first.unspaced, first.named)}, and a reading never guesses — ${nothing}`,
+        `${first.found} shown comboboxes on ${from} have ${noName} and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(first.unspaced, first.named)}, and a reading never guesses — ${nothing}`,
       );
     }
     if (first.found > 1) {
@@ -426,7 +428,7 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
       );
     }
     // A line says what a combobox with no accessible name was found by.
-    if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
+    if (standIn) pickerNamed = `${pickerNamed} (a combobox with ${noName}, found by ${standIn[0]})`;
     if (first.disabled) throw refuse(READ_STEP, record, "disabled", `the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
     if (first.kind === "search") throw refuse(READ_STEP, record, "no-list", `the picker ${pickerNamed} on ${from} is a search field, which lists entries only for typed text — ${nothing}`);
 
