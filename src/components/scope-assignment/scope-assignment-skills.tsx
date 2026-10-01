@@ -89,12 +89,14 @@ function secondaryLine(displayName: string, vendorName: string | null): string {
 export function ScopeAssignmentSkills({
   target,
   fieldId,
+  scopeLabelId,
   initialRows,
   canWrite,
   readOnlyMessage,
 }: {
   target: ScopeAssignmentActionTarget;
   fieldId: string;
+  scopeLabelId?: string;
   initialRows: ScopeAssignmentSkillRow[];
   canWrite: boolean;
   readOnlyMessage?: string | null;
@@ -173,7 +175,12 @@ export function ScopeAssignmentSkills({
     <div data-slot="scope-skills" data-can-write={canWrite ? "true" : "false"} className="flex flex-col gap-1.5">
       {canWrite ? (
         <>
-          <Label htmlFor={fieldId} className="text-sm font-normal text-foreground">
+          <Label
+            id={`${fieldId}-label`}
+            htmlFor={fieldId}
+            aria-labelledby={scopeLabelId ? `${scopeLabelId} ${fieldId}-label` : undefined}
+            className="text-sm font-normal text-foreground"
+          >
             {`Which skills should this ${noun} always use?`}
           </Label>
           <EntitySearchCombobox<SkillPickerItem>
