@@ -7,21 +7,21 @@
 // idea, the blog post and the LinkedIn post draft register NO display at their
 // pinned revisions — a text/markdown row of those types is drawn by the
 // Markdown extension's display, a text/plain row by the host's text floor
-// until the Text extension claims text/plain. Only the blog image keeps its own
-// display (the featured-image fields and the link to its post).
+// until the Text extension claims text/plain. The blog image is an image: it
+// registers no display of its own either and is drawn by the Image extension's
+// display over image/*; its post and its placement are the picture's data.
 //
 // This suite is the host-side half of that reading: at the pinned revisions
-// the blog image reaches its own display and the key it resolves to is in the
-// generated build map — the single predicate every consuming surface asks
-// (`key in GENERATED_ARTIFACT_RENDERERS`) — while the three text types reach
-// no display of a blog pack in any slot.
+// none of the four blog types reaches a display of a blog pack in any slot,
+// and the build map — the single predicate every consuming surface asks
+// (`key in GENERATED_ARTIFACT_RENDERERS`) — carries no key of a blog pack.
 //
 // It runs the REAL bridge over the REAL `extensions/` tree at the committed
 // pins, so a lock that moves any of the four packs off its pinned revision
 // fails here.
 // ---------------------------------------------------------------------------
 import { describe, expect, it, beforeAll } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { registerArtifactExtensions } from "@cinatra-ai/objects/register-artifact-extensions";
@@ -68,9 +68,9 @@ const BLOG_DISPLAYS: readonly BlogDisplay[] = [
   {
     packageName: "@cinatra-ai/blog-image-artifact",
     objectType: "@cinatra-ai/blog-image-artifact:blog-image",
-    semanticSlots: ["detail", "listRow"],
-    mapSlots: ["detail", "preview", "listRow"],
-    propsApiVersion: 2,
+    semanticSlots: [],
+    mapSlots: [],
+    propsApiVersion: null,
   },
   {
     packageName: "@cinatra-ai/linkedin-artifacts",
@@ -132,7 +132,7 @@ describe("the blog types resolve at the pinned revisions", () => {
     },
   );
 
-  it("gives the blog image its OWN extension and leaves the three text types unclaimed", () => {
+  it("no blog type is claimed by a display of a blog pack", () => {
     const snapshot = semanticRendererRegistry._snapshot();
     for (const { objectType, packageName, semanticSlots } of BLOG_DISPLAYS) {
       const claimants = [
@@ -140,8 +140,8 @@ describe("the blog types resolve at the pinned revisions", () => {
           snapshot.filter((d) => d.objectTypeId === objectType).map((d) => d.packageName),
         ),
       ];
-      // A pack that ships no display of its own claims nothing here — the
-      // type draws through its content type's display.
+      // No blog pack ships a display of its own, so none claims its type
+      // here — each type draws through its content type's display.
       expect(claimants, objectType).toEqual(semanticSlots.length > 0 ? [packageName] : []);
       if (semanticSlots.length === 0) {
         expect(semanticRendererRegistry.listByPackage(packageName), packageName).toEqual([]);
@@ -167,30 +167,14 @@ describe("the blog types resolve at the pinned revisions", () => {
     );
   });
 
-  it("every blog display's build entry loads through a BARE package specifier, never a source path", () => {
-    // Read the EMITTED map, not the loaded module: a guarded entry wraps its
-    // import in the load guard, so the specifier the bundler resolves is only
-    // visible in the generated source.
-    const emitted = readFileSync(
-      path.resolve(__dirname, "..", "..", "generated", "artifact-renderers.ts"),
-      "utf8",
-    );
-    for (const { packageName, mapSlots } of BLOG_DISPLAYS) {
-      for (const slot of mapSlots) {
-        const line = emitted
-          .split("\n")
-          .find((l) => l.includes(`"${packageName}::${slot}"`));
-        expect(line, `${packageName}::${slot}`).toBeDefined();
-        const specifiers = [...line!.matchAll(/import\(\s*"([^"]+)"\s*\)/g)].map((m) => m[1]);
-        expect(specifiers.length, line).toBeGreaterThan(0);
-        for (const specifier of specifiers) {
-          expect(specifier.startsWith(`${packageName}/`), specifier).toBe(true);
-          expect(specifier.startsWith("."), specifier).toBe(false);
-          expect(specifier.includes("extensions/"), specifier).toBe(false);
-          expect(/\.(ts|tsx|js|jsx)$/.test(specifier), specifier).toBe(false);
-        }
-      }
-    }
+  it("the image representation reaches the image extension's required display in the build map", () => {
+    // With no display of the blog image pack, a blog image row is drawn by
+    // the representation's display: the Image extension's detail entry,
+    // REQUIRED (always built) and drawing image/*.
+    const imageDetail = GENERATED_ARTIFACT_RENDERERS["@cinatra-ai/image-artifact::detail"];
+    expect(imageDetail).toBeDefined();
+    expect(imageDetail.resolution).toBe("required");
+    expect(imageDetail.representations).toContain("image/*");
   });
 
   it("the LinkedIn post-draft type stays HOST-owned — and no display is registered for it", () => {
@@ -215,19 +199,12 @@ describe("the blog types resolve at the pinned revisions", () => {
     ).toBeNull();
   });
 
-  it("every one of the three blog display entries LOADS to a callable default export", async () => {
-    // Map membership is not resolution. The guarded loader swallows a missing
-    // module and degrades to "absent", so a specifier that does not resolve at
-    // runtime would leave the display silently blank instead of failing. This
-    // leg executes each entry's own `load()` over the pinned tree and asserts
-    // the module shape the renderer loader requires (a callable default).
+  it("no blog pack carries an entry in the build map", () => {
+    // Every blog type draws through its content type's display, so the
+    // generated build map carries no key of any of the four blog packs.
     const keys = Object.keys(GENERATED_ARTIFACT_RENDERERS).filter((key) =>
       BLOG_PACK_PREFIXES.some((prefix) => key.startsWith(prefix)),
     );
-    expect(keys).toHaveLength(3);
-    for (const key of keys) {
-      const mod = (await GENERATED_ARTIFACT_RENDERERS[key].load()) as { default?: unknown };
-      expect(typeof mod?.default, `${key} default export`).toBe("function");
-    }
+    expect(keys).toEqual([]);
   });
 });
