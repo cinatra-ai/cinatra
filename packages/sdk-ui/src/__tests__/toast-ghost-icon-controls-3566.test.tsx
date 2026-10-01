@@ -15,7 +15,7 @@
  *
  * THE DRAWING (design specs/app-components.html, Toast / Sonner) draws every one
  * of the eight controls in its four worked toasts with one declaration:
- *   background:transparent;border:0;padding:0;cursor:pointer;color:currentColor;
+ *   background:transparent;border:0;padding:0;color:currentColor;
  *   opacity:0.55;display:inline-grid;place-items:center
  * each around ONE glyph at width:13px;height:13px on stroke="currentColor" —
  * the copy glyph at stroke-width 2.2, the close glyph at stroke-width 2.4.

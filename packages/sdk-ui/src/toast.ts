@@ -37,7 +37,7 @@ type CinatraToastOptions = ExternalToast & {
  *
  * The components drawing's Toast / Sonner section draws BOTH right-hand controls
  * of a toast — the Copy action and the Close (X) — with one declaration,
- * `background:transparent;border:0;padding:0;cursor:pointer;color:currentColor;
+ * `background:transparent;border:0;padding:0;color:currentColor;
  * opacity:0.55;display:inline-grid;place-items:center`, each around ONE glyph at
  * `width:13px;height:13px` on `stroke="currentColor"`: the copy glyph at
  * stroke-width 2.2, the close glyph at stroke-width 2.4.
@@ -77,9 +77,9 @@ type CinatraToastOptions = ExternalToast & {
  * The drawing gives the two controls NO focus ring and NO hover reading, so
  * nothing here removes the library's focus treatment or the close control's
  * keyboard reach; only the library's hover repaint is neutralised, so a ghost
- * control stays ghost under the pointer. `cursor: pointer` is not written here
- * because the library's own rules already declare it on both controls and
- * nothing in this treatment overrides it.
+ * control stays ghost under the pointer. Pointer feedback is supplied by the
+ * library's own rules on both controls, and nothing in this treatment overrides
+ * it.
  */
 const GHOST_ACTION_BUTTON_STYLE: NonNullable<
   ExternalToast["actionButtonStyle"]
