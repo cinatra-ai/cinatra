@@ -33,6 +33,7 @@ import { resolve } from "node:path";
 
 import { test, expect } from "@playwright/test";
 import type { Page, Response } from "@playwright/test";
+import { withSmokeResourcePhase } from "./smoke-resources";
 import {
   selectConnectorSetupRoutes,
   SMOKE_WALK_BUDGET_MS,
@@ -117,7 +118,7 @@ async function checkSurface(page: Page, route: string, navigationTimeout: number
 }
 
 async function walk(page: Page, phase: SmokePhase, routes: readonly string[], deadline: number): Promise<string[]> {
-  return walkSmokeSurfaces({
+  return withSmokeResourcePhase(phase, () => walkSmokeSurfaces({
     phase,
     routes,
     deadline,
@@ -136,7 +137,7 @@ async function walk(page: Page, phase: SmokePhase, routes: readonly string[], de
       }
     }, { timeout: timeoutMs }),
     report: (visit) => process.stdout.write(`[hmr-smoke] ${JSON.stringify(visit)}\n`),
-  });
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -172,13 +173,15 @@ test.describe("warm dev-session HMR smoke", () => {
     const original = readFileSync(BRIDGE_FILE, "utf8");
     let reWalkFailures: string[] = [];
     try {
-      writeFileSync(
-        BRIDGE_FILE,
-        `${original}\n// cinatra#1093 warm-dev HMR smoke recompile touch ${Date.now()} (auto-restored)\n`,
-        "utf8",
-      );
-      // Let the file-watcher register the change before we drive the recompile.
-      await page.waitForTimeout(2_000);
+      await withSmokeResourcePhase("recompile", async () => {
+        writeFileSync(
+          BRIDGE_FILE,
+          `${original}\n// cinatra#1093 warm-dev HMR smoke recompile touch ${Date.now()} (auto-restored)\n`,
+          "utf8",
+        );
+        // Let the file-watcher register the change before we drive the recompile.
+        await page.waitForTimeout(2_000);
+      });
       // 3. RE-WALK — request a bridge-bound setup route FIRST to drive the
       // recompile, and assert that response itself. There is no unchecked probe
       // that can swallow a recompile error before a later request succeeds.
