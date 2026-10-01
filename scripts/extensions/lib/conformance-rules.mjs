@@ -424,8 +424,6 @@ export const CONNECTOR_KNOWN_FINDINGS_FLOOR = Object.freeze({
     "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/tailscale-connector:src/register.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
-  "@cinatra-ai/wordpress-assistant-connector:src/settings-page.tsx:env-ban.direct-process-env-access":
-    "env-ban.direct-process-env-access — removed by cinatra#3828",
 });
 
 /**

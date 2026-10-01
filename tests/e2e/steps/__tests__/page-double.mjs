@@ -32,7 +32,9 @@
 //   - a list drawn as the shared select draws it hides everything outside it
 //     from assistive technology while it is open, as the select's library does,
 //     and a press on one of its entries takes the entry, closes the list and
-//     shows the page again (see hideOthers);
+//     shows the page again (see hideOthers); the list may close after a delay
+//     the page names, or never; the Escape key closes it too, taking no entry,
+//     unless the page has it ignore the key (see pressEscape);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
 //   - a press on a row drawn without a role plays the page's handlers for it: it
@@ -437,24 +439,55 @@ function hideOthers(list) {
   walk(document.body);
 }
 
-/**
- * An entry pressed in such a list is taken: the list closes, the combobox that
- * controls it shows the entry, and every element the list hid is shown again.
- */
-function chooseEntry(entry) {
-  const document = entry.ownerDocument;
-  const list = entry.closest("[role='listbox']");
-  if (!list) return;
+/** Such a list closes: it is hidden, and every element it hid is shown again. */
+function closeList(list) {
   list.setAttribute("hidden", "");
-  for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
+  for (const node of list.ownerDocument.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
     node.removeAttribute("aria-hidden");
     node.removeAttribute(HIDDEN_MARKER);
   }
+}
+
+/**
+ * The Escape key closes every shown list a combobox opened, as the select's
+ * library does, and takes no entry: the combobox reads collapsed again. A list
+ * that carries `data-fixture-escape="ignored"` stays open. The inline script of
+ * fixture-app.mjs does the same in a browser.
+ */
+function pressEscape(document) {
+  for (const list of Array.from(document.querySelectorAll("[role='listbox']"))) {
+    if (!list.id || list.hasAttribute("hidden") || list.getAttribute("data-fixture-escape") === "ignored") continue;
+    const picker = document.querySelector(`[data-fixture-opens="${list.id}"][aria-controls="${list.id}"]`);
+    if (!picker) continue;
+    closeList(list);
+    picker.setAttribute("aria-expanded", "false");
+  }
+}
+
+/**
+ * An entry pressed in such a list is taken: the combobox that controls it shows
+ * the entry, and the list closes and every element it hid is shown again, at
+ * once or, when the list carries `data-fixture-closes-after`, after that many
+ * milliseconds (`later` is the page's timer road) or never.
+ */
+function chooseEntry(entry, later) {
+  const document = entry.ownerDocument;
+  const list = entry.closest("[role='listbox']");
+  if (!list) return;
+  const close = () => closeList(list);
   const picker = document.querySelector(`[aria-controls="${list.id}"]`);
-  if (!picker) return;
-  picker.textContent = entry.textContent;
-  picker.removeAttribute("data-placeholder");
-  picker.setAttribute("aria-expanded", "false");
+  if (picker) {
+    picker.textContent = entry.textContent;
+    picker.removeAttribute("data-placeholder");
+    picker.setAttribute("aria-expanded", "false");
+  }
+  // A list that carries `data-fixture-closes-after` closes that many milliseconds later, or never.
+  const closesAfter = list.getAttribute("data-fixture-closes-after");
+  if (closesAfter === null) close();
+  else {
+    entry.setAttribute("aria-selected", "true");
+    if (closesAfter !== "never") later(close, Number(closesAfter));
+  }
 }
 
 export class PageDouble {
@@ -817,7 +850,12 @@ export class PageDouble {
       if (element.hasAttribute("data-fixture-inert")) return;
       // The page's handler takes an entry of a list drawn as the shared select draws it.
       if (element.hasAttribute("data-fixture-chooses")) {
-        chooseEntry(element);
+        const document = element.ownerDocument;
+        chooseEntry(element, (run, ms) =>
+          this.#later(() => {
+            if (this.#dom.window.document === document) run();
+          }, ms),
+        );
         return;
       }
       // The page's handler cancels the press and opens the dialog or the panel it names, in place.
@@ -1440,7 +1478,8 @@ export class PageDouble {
   //     the element reports `input`. A browser types key by key and reports each
   //     key; the double types the whole text at once and reports it once;
   //   - Backspace deletes what the selection holds, or the last character of
-  //     the text when the caret is at its end; no other key is pressed here;
+  //     the text when the caret is at its end; Escape closes the open lists of
+  //     the shared select (see pressEscape); no other key is pressed here;
   //   - text typed into a window's box, and a press on a window's send control,
   //     run the page's own handlers for them: the same two functions the page's
   //     inline script runs in a browser (see fixture-app-windows.mjs).
@@ -1448,7 +1487,7 @@ export class PageDouble {
 
   #focused = null;
 
-  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus. */
+  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus; Escape pressed on the page. */
   keyboard = {
     type: async (text) => this.#typeText(String(text)),
     press: async (key) => this.#pressKey(String(key)),
@@ -1513,7 +1552,11 @@ export class PageDouble {
   }
 
   #pressKey(key) {
-    if (key !== "Backspace") throw new Error(`the page double presses Backspace only, not ${key}`);
+    if (key === "Escape") {
+      pressEscape(this.#dom.window.document);
+      return;
+    }
+    if (key !== "Backspace") throw new Error(`the page double presses Backspace and Escape only, not ${key}`);
     const element = this.#typingTarget();
     if (!element) return;
     const window = element.ownerDocument.defaultView;
