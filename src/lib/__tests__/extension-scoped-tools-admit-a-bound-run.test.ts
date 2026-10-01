@@ -257,3 +257,61 @@ describe("dispatchExtensionScopedTool — whose declaration admits the call", ()
     expect(getAgentPackage).not.toHaveBeenCalled();
   });
 });
+
+describe("dispatchExtensionScopedTool — a module's own refusal (cinatra#3847)", () => {
+  const PACK = "@fixture-scope/fixture-tool-pack";
+  const DECLARED = { name: "fixture_tool", module: "./cinatra/tools/fixture-tool.mjs" };
+  const SENTENCE = "fixture refusal: this module does not serve the kind the call names";
+
+  beforeEach(() => {
+    query.mockReset();
+    getAgentPackage.mockReset();
+    loadDeclaredToolModule.mockReset();
+    query.mockResolvedValue({ rows: [{ package_name: PACK }] });
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: { tools: [DECLARED] } } });
+  });
+
+  /** The declared module throws `thrown` from its own call. */
+  async function dispatchThrowing(thrown: unknown) {
+    loadDeclaredToolModule.mockResolvedValue({
+      extensionTool: async () => {
+        throw thrown;
+      },
+    });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    return dispatchExtensionScopedTool({
+      tool: "extension_tool",
+      input: { name: "fixture_tool", input: {} },
+      run: RUN,
+    });
+  }
+
+  it("answers a module's named refusal with the refusal status and the module's sentence", async () => {
+    const outcome = await dispatchThrowing(
+      Object.assign(new Error(SENTENCE), { name: "ExtensionToolCallRefusal" }),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      status: 403,
+      error: "extension_tool: `fixture_tool` refused the call: " + SENTENCE,
+    });
+  });
+
+  it("still answers a module that fails without refusing as a server error", async () => {
+    const outcome = await dispatchThrowing(new Error("fixture failure"));
+    expect(outcome).toEqual({ ok: false, status: 500, error: "fixture failure" });
+  });
+
+  it("answers a named refusal whose sentence breaks a bound as a server error, without the sentence", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sentence = "fixture refusal\nat the second line";
+    const outcome = await dispatchThrowing(
+      Object.assign(new Error(sentence), { name: "ExtensionToolCallRefusal" }),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(500);
+    expect(outcome.error).not.toContain(sentence);
+    expect(outcome.error).not.toContain("at the second line");
+  });
+});

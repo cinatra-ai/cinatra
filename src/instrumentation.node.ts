@@ -111,6 +111,7 @@ import "@/lib/register-run-wait-notifier";
 import "@/lib/boot/arm-local-caller-gate"; // socket-peer stamp + boot credential
 import { installFatalErrorHandlers } from "@/lib/boot/fatal-error-policy";
 import { startBoot } from "@/lib/boot/start-boot";
+import { auth } from "@/lib/auth"; // handed to the boot below, which waits for it
 
 export async function register() {
   // Process-level safety nets (engineering #302). The fatal-error policy routes
@@ -138,10 +139,9 @@ export async function register() {
   }
 
   // Delegate the ordered boot sequence to the orchestrator, through the module
-  // that decides who waits for it: production waits, so a `fatal` phase still
-  // propagates out here and aborts startup exactly as the original inline
-  // rethrows did (core migrations / required-activation assert / closure gate);
-  // the development server does not, because waiting there starves the very
-  // machinery that resolves its routes. See @/lib/boot/start-boot.
-  await startBoot();
+  // that decides who waits for it (@/lib/boot/start-boot) and waits for the auth
+  // context handed in here first: production waits for the boot, so a `fatal`
+  // phase still aborts startup exactly as the original inline rethrows did; the
+  // development server does not — that wait starves its own route machinery.
+  await startBoot(process.env, { authContext: auth.$context });
 }

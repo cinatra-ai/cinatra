@@ -488,7 +488,14 @@ export const runWaitNotifier: RunWaitNotifier = {
       });
       // Canonical run deep-link (templateId → packageName). Undefined for an
       // unresolvable run → a still-durable but link-less notification.
-      const href = await resolveAgentRunHref({ runId });
+      //
+      // AND IT NAMES THE GATE IT IS ABOUT (cinatra#3693). This notification is a
+      // review opening, and the drawing makes Notifications the road to a review:
+      // "a review is reached from the Notifications page of every scope … and
+      // opens in place on its run page". The gate id is already in hand here, so
+      // the href carries the gate's own rail selection and the run detail opens
+      // on that gate rather than on whatever step the run would have elected.
+      const href = await resolveAgentRunHref({ runId, reviewTaskId });
       await createNotificationForRecipient(
         { kind: "user", userId },
         buildAutoGateOpenNotificationInput({

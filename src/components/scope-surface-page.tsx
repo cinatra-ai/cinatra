@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
 import { domainIcons, type DomainIcon } from "@/components/domain-icons";
+import { AgentsTabNav } from "@/components/agents-tab-nav";
 import { ScopeDashboardsTab } from "@/components/dashboards/scope-dashboards-tab";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
@@ -21,6 +22,7 @@ import {
   SCOPE_SURFACE_KIND_LABEL,
   SCOPE_SURFACE_TAB_ACTION,
   scopeSurfaceCrumbEntries,
+  scopeSurfaceBase,
   scopeSurfaceEmptyTestId,
   scopeSurfaceSettingsHref,
   scopeSurfaceTabHrefs,
@@ -52,6 +54,30 @@ import {
  * artifacts or skills in this scope would be told a falsehood.
  */
 const PLACEHOLDER_TITLE = "This tab is not ready yet";
+
+/**
+ * The honest empty reading of a tab whose rows WERE read (cinatra#2808;
+ * artifacts and skills added by cinatra#2810).
+ *
+ * A tab this slice reads must not keep saying "This tab is not ready yet" when
+ * the read HAPPENED and the scope simply owns nothing — that placeholder is a
+ * statement about the tab, and it stops being true the moment the tab lists.
+ * So each of the four tabs now has its own honest empty reading, and the
+ * placeholder is left to the tabs whose rows are still never read.
+ */
+const EMPTY_TITLE: Record<ScopeSurfaceTab, string> = {
+  assistants: "No assistants here yet",
+  agents: "No agents here yet",
+  artifacts: "No artifacts here yet",
+  skills: "No skills here yet",
+};
+
+const EMPTY_BODY: Record<ScopeSurfaceTab, string> = {
+  assistants: "No assistant is reachable in this scope for you.",
+  agents: "No agent is reachable in this scope for you.",
+  artifacts: "This scope owns no artifacts you can see.",
+  skills: "This scope owns no skills you can see.",
+};
 
 /** Honest placeholder copy — what the tab WILL list, never a claim of empty data. */
 const TAB_PROMISE: Record<ScopeSurfaceTab, string> = {
@@ -94,6 +120,7 @@ export function ScopeSurfacePage({
   title,
   description,
   body,
+  agentsTab = "all",
 }: {
   scope: ScopeSurfaceRef;
   tab: ScopeSurfaceTab | "dashboards";
@@ -110,6 +137,12 @@ export function ScopeSurfacePage({
    * condition rather than claiming the scope holds nothing.
    */
   body?: ReactNode;
+  /**
+   * Which tab of the Agents strip is selected (cinatra#3693) — `all` on the
+   * scope's Agents tab, `executions` on its Executions tab. Read only on the
+   * Agents tab.
+   */
+  agentsTab?: "all" | "executions";
 }) {
   const hrefs = scopeSurfaceTabHrefs(scope);
   const settingsHref = scopeSurfaceSettingsHref(scope);
@@ -127,12 +160,20 @@ export function ScopeSurfacePage({
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
+        {/* THE AGENTS TAB CARRIES ITS OWN STRIP (cinatra#3693). The drawing:
+            "The Agents tab of every scope carries its own strip, All Agents |
+            Executions: Executions lists the runs started in that scope". It is
+            drawn above the rows and above the empty state alike, under this
+            scope's base, so neither tab walks the reader out of the scope. */}
+        {tab === "agents" ? (
+          <AgentsTabNav activeTab={agentsTab} scopeBase={scopeSurfaceBase(scope)} />
+        ) : null}
         {tab === "dashboards" ? (
-          <DashboardsTabBody scope={scope} title={title} />
+          body ?? <DashboardsTabBody scope={scope} title={title} />
         ) : body != null ? (
           body
         ) : (
-          <ScopedTabEmpty tab={tab} />
+          <ScopeSurfaceTabEmpty tab={tab} />
         )}
       </PageContent>
     </Main>
@@ -172,23 +213,43 @@ function DashboardsTabBody({
 }
 
 /**
- * One of the four scoped tabs holding nothing to list. The drawing binds those
- * four by name to the shared Empty state — "it reads as the Empty state of
+ * One of the four scoped tabs holding nothing to list.
+ *
+ * EXPORTED (cinatra#2810) because a tab that hands the shell a `body` can
+ * never reach the fallback below: an element is truthy even when it renders
+ * nothing, so the body is the only place that knows its read came back empty.
+ * A body with no rows renders THIS, so every one of the four tabs draws the one
+ * empty state the drawing binds them to — never a second one of its own.
+ *
+ * The Artifacts tab is the exception, and deliberately: `LibraryMode` carries
+ * the library's OWN empty state, and that tab reuses the landed component
+ * whole rather than replacing part of it.
+ *
+ * The drawing binds those four by name to the shared Empty state — "it reads as the Empty state of
  * Components and nothing else — that pattern at its own values" — carrying "a
  * single primary action button — never just empty text", inside the tab body
  * with "no bespoke panel, and no page-wide dashed frame".
  */
-function ScopedTabEmpty({ tab }: { tab: ScopeSurfaceTab }) {
+export function ScopeSurfaceTabEmpty({
+  tab,
+  read = false,
+}: {
+  tab: ScopeSurfaceTab;
+  read?: boolean;
+}) {
   const TabIcon = TAB_ICON[tab];
   const action = SCOPE_SURFACE_TAB_ACTION[tab];
+  // `read` distinguishes the two truths: the tab's rows were read and there are
+  // none, versus no read has happened on this route at all.
+  const listed = read ? tab : null;
   return (
     <Empty data-testid={scopeSurfaceEmptyTestId(tab)}>
       <EmptyHeader>
         <EmptyMedia variant="icon">
           <TabIcon aria-hidden />
         </EmptyMedia>
-        <EmptyTitle>{PLACEHOLDER_TITLE}</EmptyTitle>
-        <EmptyDescription>{TAB_PROMISE[tab]}</EmptyDescription>
+        <EmptyTitle>{listed ? EMPTY_TITLE[listed] : PLACEHOLDER_TITLE}</EmptyTitle>
+        <EmptyDescription>{listed ? EMPTY_BODY[listed] : TAB_PROMISE[tab]}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <Button asChild>

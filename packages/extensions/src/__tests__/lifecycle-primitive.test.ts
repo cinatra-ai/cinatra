@@ -681,6 +681,79 @@ describe("sourceSwitchExtension", () => {
       ).resolves.toBeDefined();
     });
   });
+
+  // The DEVELOPMENT-RECORD defence (cinatra#3788), a second layer under the
+  // guard the dev-version record itself applies. The development record exists
+  // for in-tree edits, so it may never rewrite an uploaded or a
+  // registry-installed row to a digest-less checkout shape. The refusal reads
+  // the ACTOR, so the install pipeline's own provenance write (actor
+  // `runtime-installer`) keeps its road exactly.
+  describe("development-record provenance defence (cinatra#3788)", () => {
+    const DIGEST = "b".repeat(64);
+    const uploadedRow = {
+      ...activeRow,
+      id: "ext-upload",
+      kind: "agent" as const,
+      source: {
+        type: "local" as const,
+        path: "/srv/extensions/foo-agent",
+        resolvedCommitOrTreeHash: "deadbee",
+        contentDigest: DIGEST,
+      },
+    };
+    const checkoutSource = {
+      type: "local" as const,
+      path: "/repo/extensions/foo-agent",
+      resolvedCommitOrTreeHash: "abc1234",
+    };
+    const DEV_OPTS = { actor: { source: "dev-watcher" }, reason: "dev recompile" };
+
+    it("REFUSES a dev-watcher switch of an uploaded row to a digest-less checkout", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(uploadedRow);
+      await expect(
+        sourceSwitchExtension("ext-upload", checkoutSource, DEV_OPTS),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(store._internalUpdateInstalledExtensionSource).not.toHaveBeenCalled();
+    });
+
+    it("REFUSES a dev-compile switch of a registry row to a digest-less checkout", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(activeRow);
+      await expect(
+        sourceSwitchExtension("ext-2", checkoutSource, {
+          actor: { source: "dev-compile" },
+          reason: "dev recompile",
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+
+    it("names the rule in the refusal message", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(uploadedRow);
+      await expect(
+        sourceSwitchExtension("ext-upload", checkoutSource, DEV_OPTS),
+      ).rejects.toThrow(/development version record/i);
+    });
+
+    it("ALLOWS the dev actor to switch a digest-less checkout row", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue({
+        ...activeRow,
+        id: "ext-tree",
+        source: { ...checkoutSource, resolvedCommitOrTreeHash: "0ldsha0" },
+      });
+      await expect(
+        sourceSwitchExtension("ext-tree", checkoutSource, DEV_OPTS),
+      ).resolves.toBeDefined();
+    });
+
+    it("does NOT refuse the install pipeline's provenance record over the same row", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(uploadedRow);
+      await expect(
+        sourceSwitchExtension("ext-upload", checkoutSource, {
+          actor: { source: "runtime-installer" },
+          reason: "runtime install provenance @ 1.0.0",
+        }),
+      ).resolves.toBeDefined();
+    });
+  });
 });
 
 describe("unlock policy gate", () => {

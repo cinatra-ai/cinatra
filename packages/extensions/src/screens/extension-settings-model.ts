@@ -235,6 +235,12 @@ export function isRegisteredMarketplaceVendor(state: string | null | undefined):
  * Whether the one-way "Publish on marketplace" action is live. Gated on the
  * instance being a registered vendor AND the extension being private with a
  * known version. The private→public promote path is agent-kind today.
+ *
+ * `isPublic` is the promote action's own precondition: it refuses a row its
+ * store already records as public (`ExtensionAlreadyPublicError`), so the page
+ * never offers a live action the server refuses. It never draws a state of its
+ * own (cinatra#3447): a row that fails this gate reads as one of §V's two muted
+ * states, never as a "published" line.
  */
 export function canPublishToMarketplace(input: {
   isPublic: boolean;

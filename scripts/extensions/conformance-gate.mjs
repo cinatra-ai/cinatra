@@ -35,6 +35,12 @@
 // vs. gemini/openai-connector, tracked by #981) doesn't block this gate's
 // initial rollout on remediation that is a different issue's job. New,
 // non-baselined findings always fail.
+//
+// The baseline file is NOT in the reusable workflow's sparse checkout, so a
+// connector repository's own run reads an empty baseline. Known findings that
+// must hold there live on a FLOOR in lib/conformance-rules.mjs instead
+// (CONNECTOR_ARTIFACT_BORDER_FLOOR, CONNECTOR_KNOWN_FINDINGS_FLOOR): per
+// package, file and rule, reported as KNOWN, shrink-only.
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -48,6 +54,8 @@ import {
   PROCESS_ENV_ALLOWLIST,
   PRIVATE_ORG_REPO_SLUGS,
   INTERNAL_HOSTNAME_PATTERNS,
+  CONNECTOR_ARTIFACT_BORDER_FLOOR,
+  CONNECTOR_KNOWN_FINDINGS_FLOOR,
 } from "./lib/conformance-rules.mjs";
 import { stripComments } from "../audit/lib/strip-comments.mjs";
 
@@ -222,13 +230,17 @@ function checkImports(pkgDir, pkg, rules, relFiles) {
           }
           continue;
         }
+        // The host-served primitives module (cinatra#3867): the specifier the
+        // SDK declares, EXACTLY — the host serves it (host-shared-primitives-
+        // contract.md); a subpath of it is no such module and is refused below.
+        if (spec === rules.hostDesignPrimitivesModule) continue;
         // Any other @cinatra-ai/* package: cross-extension or undeclared
         // first-party coupling — the two public SDK entrypoints are the
         // ONLY first-party code dependency an extension may have.
         findings.push({
           rule: "imports.non-sdk-first-party",
           file: rel,
-          detail: `imports "${spec}" — the only first-party package(s) an extension may depend on are @cinatra-ai/sdk-extensions and @cinatra-ai/sdk-ui.`,
+          detail: `imports "${spec}" — the only first-party package(s) an extension may depend on are @cinatra-ai/sdk-extensions and @cinatra-ai/sdk-ui (and the host-served module "${rules.hostDesignPrimitivesModule}", exactly).`,
         });
         continue;
       }
@@ -301,6 +313,9 @@ function checkManifest(pkgDir, pkg, rules) {
   } else if (kind === "connector") {
     findings.push(...checkConnectorAccessConfig(pkgDir, rules));
     findings.push(...checkWebhooksDeclaration(pkg));
+    // cinatra#3821 class 4: a connector declares no produced type, claims no
+    // artifact type and registers no artifact display.
+    findings.push(...checkConnectorManifestBorder(pkgDir, pkg));
     if (!("sdkAbiRange" in cinatra)) {
       findings.push({
         rule: "manifest.connector-sdk-abi-range-advisory",
@@ -1719,6 +1734,19 @@ function checkPacklist(pkgDir, pkg) {
 // 5. Hygiene for public repos — no private-repo / internal-hostname refs.
 // ---------------------------------------------------------------------------
 
+// A private repository's name is matched as a WHOLE name (cinatra#3867): the
+// match fails when the name goes on — a name character follows, or a dot and a
+// name character (a longer package or repository name: the name followed by
+// "-primitives" or by ".pages"). The one dotted suffix that still ends
+// the name is ".git". Everything else after it ends the name: the end of the
+// text, a slash, a quote, white space, a fragment or query mark, a closing
+// bracket, and also any other punctuation (fail closed).
+const REPO_NAME_CHAR = "[A-Za-z0-9_-]";
+const PRIVATE_REPO_NAME_MATCHERS = PRIVATE_ORG_REPO_SLUGS.map((slug) => ({
+  slug,
+  re: new RegExp(`${escapeRegExp(slug)}(?!${REPO_NAME_CHAR})(?!\\.(?!git(?!${REPO_NAME_CHAR}))${REPO_NAME_CHAR})`),
+}));
+
 function checkHygiene(pkgDir, allRelFiles) {
   const findings = [];
   for (const rel of allRelFiles) {
@@ -1728,8 +1756,8 @@ function checkHygiene(pkgDir, allRelFiles) {
     } catch {
       continue;
     }
-    for (const slug of PRIVATE_ORG_REPO_SLUGS) {
-      if (text.includes(slug)) {
+    for (const { slug, re } of PRIVATE_REPO_NAME_MATCHERS) {
+      if (re.test(text)) {
         findings.push({
           rule: "hygiene.private-repo-reference",
           file: rel,
@@ -1781,6 +1809,232 @@ function checkFsAndEnvBans(pkg, relFiles) {
     }
   }
   return findings;
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#3821 — the core/extension border, connector side.
+//
+// A connector gives an agent its connection and its tools. It never creates an
+// artifact, never claims an artifact type, never declares a produced type and
+// never makes the application create an artifact on its behalf.
+//   class 4 (manifest): `border.connector-declares-produces` (cinatra.produces
+//     in package.json, or metadata.cinatra.produces in cinatra/oas.json) and
+//     `border.connector-claims-artifact` (a cinatra.artifact block: objectTypes
+//     is a claimed object type, ui a registered artifact display).
+//   class 5 (source): `border.connector-creates-artifact`, one finding per
+//     (file, road) whose comment-stripped text names a road of
+//     ARTIFACT_CREATING_ROADS (derived from the SDK) as a whole token. Findings
+//     on CONNECTOR_ARTIFACT_BORDER_FLOOR go to `known`; a floor entry of the
+//     package with no matching finding is `border.connector-floor-stale`.
+// Both run for `cinatra.kind === "connector"` only.
+//
+// WHAT THESE RULES CANNOT SEE: a road id assembled at run time or passed in a
+// variable; a road reached through another package the connector depends on;
+// an object written through the objects port with an artifact type; and a
+// creating road the application adds without declaring it in
+// ARTIFACT_CREATING_ROADS.
+// ---------------------------------------------------------------------------
+
+/** Class 4 — the connector's manifest. Returns findings (empty for any other kind). */
+export function checkConnectorManifestBorder(pkgDir, pkg) {
+  const findings = [];
+  const cinatra = pkg?.cinatra;
+  if (!cinatra || typeof cinatra !== "object" || cinatra.kind !== "connector") return findings;
+
+  if ("produces" in cinatra) {
+    findings.push({
+      rule: "border.connector-declares-produces",
+      file: "package.json",
+      detail: "a connector declares cinatra.produces — a connector produces no artifact type; the agent extension whose flow creates the artifact declares what it produces.",
+    });
+  }
+  const oasPath = join(pkgDir, "cinatra", "oas.json");
+  if (existsSync(oasPath)) {
+    let oas = null;
+    try {
+      oas = JSON.parse(readFileSync(oasPath, "utf8"));
+    } catch {
+      oas = null; // a file that does not parse adds no finding here
+    }
+    const meta = oas?.metadata?.cinatra;
+    if (meta && typeof meta === "object" && "produces" in meta) {
+      findings.push({
+        rule: "border.connector-declares-produces",
+        file: "cinatra/oas.json",
+        detail: "a connector's cinatra/oas.json declares metadata.cinatra.produces — a connector produces no artifact type.",
+      });
+    }
+  }
+  if ("artifact" in cinatra) {
+    const block = cinatra.artifact;
+    const keys = block && typeof block === "object" && !Array.isArray(block) ? Object.keys(block) : [];
+    const named = keys.map((k) =>
+      k === "objectTypes" ? "objectTypes (a claimed object type)" : k === "ui" ? "ui (a registered artifact display)" : k,
+    );
+    findings.push({
+      rule: "border.connector-claims-artifact",
+      file: "package.json",
+      detail: `a connector carries a cinatra.artifact block${named.length ? ` (${named.join(", ")})` : ""} — artifact types and their display belong to an artifact extension, never a connector.`,
+    });
+  }
+  return findings;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function inScopeSourceFiles(pkgDir, pkg) {
+  const allFiles = walkAllFiles(pkgDir).map((f) => relative(pkgDir, f));
+  return scopedFiles(allFiles, pkg).filter(isSourceFile);
+}
+
+/**
+ * Class 5 — the connector's source, with the floor. `relFiles` defaults to the
+ * package's in-scope source files (the published scope every other source rule
+ * reads). Returns `{ findings, floored, stale }`: `findings` are the failing
+ * `border.connector-creates-artifact` findings outside the floor, `floored` the
+ * ones on the floor (each carries its `floorKey`), and `stale` one
+ * `border.connector-floor-stale` finding per floor entry of this package that
+ * no finding matches. All three are empty for a package of any other kind.
+ */
+export function checkConnectorArtifactBorder(pkgDir, pkg, rules, relFiles) {
+  const out = { findings: [], floored: [], stale: [] };
+  if (pkg?.cinatra?.kind !== "connector") return out;
+  const files = relFiles ?? inScopeSourceFiles(pkgDir, pkg);
+  const roads = rules.artifactCreatingRoads;
+  const boundary = "A-Za-z0-9_\\-:/@";
+  const matchers = roads.map((road) => ({
+    road,
+    re: new RegExp(`(?<![${boundary}])${escapeRegExp(road)}(?![${boundary}])`),
+  }));
+  const seenKeys = new Set();
+  for (const rel of files) {
+    let text;
+    try {
+      text = stripComments(readFileSync(join(pkgDir, rel), "utf8"));
+    } catch {
+      continue;
+    }
+    for (const { road, re } of matchers) {
+      const m = re.exec(text);
+      if (!m) continue;
+      const line = text.slice(0, m.index).split("\n").length;
+      const floorKey = `${pkg.name}:${rel}:${road}`;
+      const finding = {
+        rule: "border.connector-creates-artifact",
+        file: rel,
+        detail: `names the road "${road}" (first at line ${line}), by which the application creates an artifact — a connector gives an agent its connection and its tools and never makes the application create an artifact on its behalf.`,
+      };
+      if (Object.prototype.hasOwnProperty.call(CONNECTOR_ARTIFACT_BORDER_FLOOR, floorKey)) {
+        seenKeys.add(floorKey);
+        out.floored.push({ ...finding, floorKey, detail: `${finding.detail} Floored: ${CONNECTOR_ARTIFACT_BORDER_FLOOR[floorKey]}.` });
+      } else {
+        out.findings.push(finding);
+      }
+    }
+  }
+  const prefix = `${pkg.name}:`;
+  for (const key of Object.keys(CONNECTOR_ARTIFACT_BORDER_FLOOR)) {
+    if (!key.startsWith(prefix) || seenKeys.has(key)) continue;
+    out.stale.push({
+      rule: "border.connector-floor-stale",
+      file: key.slice(prefix.length).split(":")[0],
+      detail: `the floor entry "${key}" matches no finding — remove it from CONNECTOR_ARTIFACT_BORDER_FLOOR (the floor only shrinks).`,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#3867 — the floor of the known older findings of connectors
+// (CONNECTOR_KNOWN_FINDINGS_FLOOR, the node:fs and process.env bans).
+//
+// TWO RUNS, TWO ANSWERS FOR A LINE WITH NO FINDING:
+//   - the SINGLE-PACKAGE run (`--package`, the reusable workflow in the
+//     connector's own repository, at a PINNED commit of the application) reads
+//     only the lines of its own package. A line of that package with no finding
+//     is a NOTE ("cured here"), never a failure: the cure's own pull request
+//     must be able to pass while the pinned list still holds the line.
+//   - the FLEET run over the materialized tree
+//     (`checkKnownFindingsFloorOverTree`, the root unit tier of the
+//     application) FAILS on such a line, and on a floored package that is not
+//     materialized: there the list's owner drops the line in the same change.
+// ---------------------------------------------------------------------------
+
+const KNOWN_FINDINGS_FLOOR_RULES = new Set(["fs-ban.direct-filesystem-access", "env-ban.direct-process-env-access"]);
+
+/**
+ * Route a package's findings through the floor. Returns `{ findings, floored,
+ * cured }`: `findings` are the ones the floor does not hold, `floored` the ones
+ * it holds (each with its `floorKey`), `cured` one note per line of THIS
+ * package that no finding matches. Lines of other packages are not read. A
+ * package of any other kind than connector gets no floor.
+ */
+export function applyConnectorKnownFindingsFloor(pkg, findings) {
+  const out = { findings: [], floored: [], cured: [] };
+  if (pkg?.cinatra?.kind !== "connector") {
+    out.findings = [...findings];
+    return out;
+  }
+  const seenKeys = new Set();
+  for (const f of findings) {
+    const floorKey = `${pkg.name}:${f.file}:${f.rule}`;
+    const hard = f.severity !== "advisory" && f.severity !== "info";
+    if (hard && KNOWN_FINDINGS_FLOOR_RULES.has(f.rule) && Object.prototype.hasOwnProperty.call(CONNECTOR_KNOWN_FINDINGS_FLOOR, floorKey)) {
+      seenKeys.add(floorKey);
+      out.floored.push({ ...f, floorKey, detail: `${f.detail} Floored: ${CONNECTOR_KNOWN_FINDINGS_FLOOR[floorKey]}.` });
+    } else {
+      out.findings.push(f);
+    }
+  }
+  const prefix = `${pkg.name}:`;
+  for (const key of Object.keys(CONNECTOR_KNOWN_FINDINGS_FLOOR)) {
+    if (!key.startsWith(prefix) || seenKeys.has(key)) continue;
+    const rest = key.slice(prefix.length);
+    const cut = rest.lastIndexOf(":");
+    out.cured.push({
+      rule: "floor.connector-known-finding-cured",
+      file: rest.slice(0, cut),
+      floorKey: key,
+      detail: `cured here; the application's list drops the line "${key}" at its next pin (CONNECTOR_KNOWN_FINDINGS_FLOOR only shrinks).`,
+    });
+  }
+  return out;
+}
+
+/**
+ * The FLEET run: every package directory of the materialized tree whose
+ * package has a line on the floor is run through the gate; a line no finding
+ * matches is `floor.connector-known-finding-stale`, and a floored package that
+ * is not among `packageDirs` is `unmaterialized` (a line never proven). Returns
+ * `{ checked, stale, unmaterialized, infra }`.
+ */
+export function checkKnownFindingsFloorOverTree(packageDirs, { sdkRoot = DEFAULT_SDK_ROOT } = {}) {
+  const floorPackages = new Set(Object.keys(CONNECTOR_KNOWN_FINDINGS_FLOOR).map((k) => k.slice(0, k.indexOf(":", 1))));
+  const out = { checked: [], stale: [], unmaterialized: [], infra: [] };
+  const seen = new Set();
+  for (const dir of packageDirs) {
+    const pkg = readPackageJson(dir);
+    if (!pkg || !floorPackages.has(pkg.name)) continue;
+    seen.add(pkg.name);
+    const result = runConformanceGate({ packageDir: dir, sdkRoot });
+    if (result.infra) {
+      out.infra.push(`${pkg.name}: ${result.message}`);
+      continue;
+    }
+    out.checked.push(pkg.name);
+    for (const note of result.notes) {
+      out.stale.push({
+        rule: "floor.connector-known-finding-stale",
+        file: note.file,
+        floorKey: note.floorKey,
+        detail: `the floor line "${note.floorKey}" matches no finding in the materialized tree — remove it from CONNECTOR_KNOWN_FINDINGS_FLOOR (the floor only shrinks).`,
+      });
+    }
+  }
+  for (const name of floorPackages) if (!seen.has(name)) out.unmaterialized.push(name);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1867,9 +2121,19 @@ export function runConformanceGate({ packageDir, sdkRoot, strict = false }) {
     ...checkHygiene(packageDir, hygieneScope),
     ...checkFsAndEnvBans(pkg, inScopeSource),
   ];
+  // cinatra#3821 class 5: floored findings are reported as known (strict fails them).
+  const border = checkConnectorArtifactBorder(packageDir, pkg, rules, inScopeSource);
+  findings.push(...border.findings, ...border.stale);
+
+  // cinatra#3867: the known older findings of connectors on their floor go to
+  // known (strict fails them); a line of this package with no finding is a
+  // note here, never a failure (the fleet run fails it).
+  const olderFloor = applyConnectorKnownFindingsFloor(pkg, findings);
 
   const baseline = loadBaseline();
-  const { blocking, known, advisory } = partitionAgainstBaseline(pkg.name, findings, baseline, strict);
+  const { blocking, known, advisory } = partitionAgainstBaseline(pkg.name, olderFloor.findings, baseline, strict);
+  for (const f of border.floored) (strict ? blocking : known).push({ rule: f.rule, file: f.file, detail: f.detail });
+  for (const f of olderFloor.floored) (strict ? blocking : known).push({ rule: f.rule, file: f.file, detail: f.detail });
 
   return {
     infra: false,
@@ -1879,6 +2143,7 @@ export function runConformanceGate({ packageDir, sdkRoot, strict = false }) {
     blocking,
     known,
     advisory,
+    notes: olderFloor.cured,
     conform: blocking.length === 0,
   };
 }
@@ -1893,6 +2158,9 @@ function printHumanReport(result) {
   }
   for (const f of result.advisory) {
     console.log(`  WARN  [${f.rule}] ${f.file}: ${f.detail}`);
+  }
+  for (const f of result.notes ?? []) {
+    console.log(`  NOTE  [${f.rule}] ${f.file}: ${f.detail}`);
   }
   if (result.conform) console.log("  conform");
 }

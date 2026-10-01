@@ -176,48 +176,81 @@ describe("the project name is told only to a holder of a grant for THAT project"
   });
 });
 
-describe("the team name is told only inside the active tenant, to a member or manager", () => {
+describe("the team name is told to a member or manager of THAT team", () => {
+  // REPLACED ASSERTION (cinatra#3787). This block used to pin "tells a caller
+  // whose active tenant is a different organization nothing", because the team
+  // landing refused the same reader and the two had to agree. The owner's
+  // decision on cinatra#3693 puts a team surface under the TEAM's organization,
+  // whatever the session has active, so that refusal was the fault, not the
+  // rule: it left the platform admin of every organization with a raw
+  // identifier in the trail and the bare word "Team" as the heading. The gate
+  // is now membership or management of the team, resolved against the team's
+  // own organization, and every case below holds a DIFFERENT organization
+  // active to prove it.
+  const OTHER_ORG = "org_2";
   const teamRow = (over: Record<string, unknown> = {}) => ({
     rows: [
-      { name: "Growth", organizationId: "org_1", is_member: true, ...over },
+      { name: "Growth", organizationId: OTHER_ORG, is_member: true, ...over },
     ],
   });
 
-  it("names the team for a member of the active tenant's team", async () => {
+  it("names the team for a member, whatever organization the session has active", async () => {
     authDb.betterAuthDb.execute.mockResolvedValue(teamRow());
     expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toBe(
       "Growth",
     );
   });
 
-  it("tells a caller whose active tenant is a different organization nothing", async () => {
-    authDb.betterAuthDb.execute.mockResolvedValue(
-      teamRow({ organizationId: "org_2" }),
-    );
+  it("tells a member of the team's organization who is not on the team nothing", async () => {
+    authDb.betterAuthDb.execute.mockResolvedValue(teamRow({ is_member: false }));
+    session.resolveOrgRoleForUser.mockResolvedValue("member");
+    teamAuthority.canManageTeamMembers.mockReturnValue(false);
     expect(
       await readScopeSurfaceEntityName({ kind: "team", id: "t1" }),
     ).toBeNull();
+    // The authority question is asked about the TEAM's organization, never the
+    // session's active one.
+    expect(session.resolveOrgRoleForUser).toHaveBeenCalledWith(OTHER_ORG, "u1");
   });
 
-  it("tells a non-member without manager authority nothing", async () => {
+  it("names the team for the platform admin, who is on no team", async () => {
     authDb.betterAuthDb.execute.mockResolvedValue(teamRow({ is_member: false }));
-    expect(
-      await readScopeSurfaceEntityName({ kind: "team", id: "t1" }),
-    ).toBeNull();
+    session.isPlatformAdmin.mockReturnValue(true);
+    teamAuthority.canManageTeamMembers.mockImplementation(
+      (input: { platformAdmin: boolean }) => input.platformAdmin,
+    );
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toBe(
+      "Growth",
+    );
   });
 
   it("names the team for a non-member who MAY manage it, on the authority the org role gives", async () => {
     authDb.betterAuthDb.execute.mockResolvedValue(teamRow({ is_member: false }));
-    session.resolveOrgRoleForUser.mockResolvedValue("owner");
+    session.resolveOrgRoleForUser.mockResolvedValue("org_owner");
     teamAuthority.canManageTeamMembers.mockReturnValue(true);
     expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toBe(
       "Growth",
     );
-    expect(session.resolveOrgRoleForUser).toHaveBeenCalledWith("org_1", "u1");
+    expect(session.resolveOrgRoleForUser).toHaveBeenCalledWith(OTHER_ORG, "u1");
     expect(teamAuthority.canManageTeamMembers).toHaveBeenCalledWith({
       platformAdmin: false,
-      orgRole: "owner",
+      orgRole: "org_owner",
     });
+  });
+
+  it("tells a signed-out caller nothing, and reads no team at all", async () => {
+    session.getAuthSession.mockResolvedValue(null);
+    expect(
+      await readScopeSurfaceEntityName({ kind: "team", id: "t1" }),
+    ).toBeNull();
+    expect(authDb.betterAuthDb.execute).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing for an unknown team", async () => {
+    authDb.betterAuthDb.execute.mockResolvedValue({ rows: [] });
+    expect(
+      await readScopeSurfaceEntityName({ kind: "team", id: "nope" }),
+    ).toBeNull();
   });
 });
 

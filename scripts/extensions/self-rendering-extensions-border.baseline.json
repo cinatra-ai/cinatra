@@ -125,9 +125,6 @@
       "src/components/ui/separator.tsx",
       "src/components/ui/textarea.tsx"
     ],
-    "twenty-connector": [
-      "src/components/ui/card.tsx"
-    ],
     "wordpress-assistant-connector": [
       "src/components/ui/badge.tsx",
       "src/components/ui/button.tsx",
