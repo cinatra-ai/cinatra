@@ -177,7 +177,10 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("a GitHub-supplied package of each kind reaches leg 1's entry (criteria 18-20)", () => {
-  for (const kind of ["agent", "skill", "artifact"] as const) {
+  // ALL FOUR live kinds, on the repository road as on the file road: the
+  // upload road is an activation origin of the same standing as the store, so
+  // the connector reaches this entry and installs like the other three.
+  for (const kind of ["agent", "skill", "artifact", "connector"] as const) {
     it(`installs a ${kind.toUpperCase()} repository with honest github provenance and the digest`, async () => {
       const { client, preview } = await previewOf(kind);
       const { deps, captured, writes } = realDigestDeps();
@@ -222,25 +225,40 @@ describe("a GitHub-supplied package of each kind reaches leg 1's entry (criteria
     });
   }
 
-  it("a repository CONNECTOR is refused by the trust boundary leg 1 set, not by a second policy here", async () => {
+  it("a repository CONNECTOR installs and its row is written — the road is the activation origin", async () => {
     const { client, preview } = await previewOf("connector");
-    const { deps } = realDigestDeps();
-    await expect(
-      installGitHubSuppliedPackage(
-        {
-          client,
-          owner: "acme",
-          repo: "pkg",
-          ref: "main",
-          stageSnapshot: stagedSnapshots.stage,
-          pin: { resolvedSha: preview.resolvedSha, contentDigest: preview.contentDigest },
-        },
-        deps,
-      ),
-    ).rejects.toThrow(/not a trusted activation host|UNTRUSTED/i);
+    // The host policy of a deployment with NO configured marketplace: no
+    // activation host at all, and the unsigned-bootstrap lever off. A store
+    // install reaches nothing under it; the repository road stands on the
+    // supply act itself, exactly as the file road does.
+    const { deps, writes } = realDigestDeps({
+      trustedActivationHosts: () => [],
+      allowMarketplaceBootstrapTrust: () => false,
+    });
+
+    const { result, package: installed } = await installGitHubSuppliedPackage(
+      {
+        client,
+        owner: "acme",
+        repo: "pkg",
+        ref: "main",
+        stageSnapshot: stagedSnapshots.stage,
+        pin: { resolvedSha: preview.resolvedSha, contentDigest: preview.contentDigest },
+        orgId: null,
+      },
+      deps,
+    );
+
+    expect(result.installed).toBe(true);
+    expect(installed.kind).toBe("connector");
+    // THE ROW: honest github provenance, exactly as every other kind records it.
+    expect(writes).toHaveLength(1);
+    expect((writes[0].provenance as { type: string }).type).toBe("github");
+    // Admitted for IMPORT, not for privilege: nothing self-granted.
+    expect(result.grantStatus).not.toBe("approved");
   });
 
-  it("a repository-supplied package stays UNTRUSTED — its host-port grant is never self-approved", async () => {
+  it("the repository road never climbs to the privileged tier — its host-port grant is never self-approved", async () => {
     const { client, preview } = await previewOf("skill");
     let approved = false;
     const { deps } = realDigestDeps({

@@ -200,12 +200,12 @@ run_boot_case() {
     if out=$(probe "${origin}/api/health" 2>/dev/null); then
       local code="${out%% *}"
       local body="${out#*$'\n'}"
-      if [ "$code" = "200" ] && printf '%s' "$body" | grep -q '"status":"ok"'; then
+      if [ "$code" = "200" ] && grep -q '"status":"ok"' <<<"$body"; then
         echo "healthy ${code} ${body}"; return 0
       fi
       # TERMINAL not-ready states (durable-degraded or fatal). NOTE: "starting" is
       # transient — fall through and keep polling.
-      if printf '%s' "$body" | grep -qE '"status":"(degraded|error)"'; then
+      if grep -qE '"status":"(degraded|error)"' <<<"$body"; then
         echo "degraded ${code} ${body}"; return 0
       fi
     fi
@@ -274,7 +274,7 @@ LEGACY_HELP="$(docker run --rm "$IMAGE" node packages/cli/bin/cinatra.mjs --help
   printf '%s\n' "$LEGACY_HELP"
   fail "legacy deploy-compat forwarder (packages/cli/bin/cinatra.mjs) did not run --help cleanly."
 }
-if ! printf '%s' "$LEGACY_HELP" | grep -qiE 'Cinatra setup CLI|Usage:'; then
+if ! grep -qiE 'Cinatra setup CLI|Usage:' <<<"$LEGACY_HELP"; then
   printf '%s\n' "$LEGACY_HELP"
   fail "legacy forwarder ran but did not forward to the published CLI (no help banner)."
 fi
@@ -357,7 +357,7 @@ while true; do
   fi
   sleep 3
 done
-if ! printf '%s' "$HEALTH_OUT" | grep -q '"status":"ok"'; then
+if ! grep -q '"status":"ok"' <<<"$HEALTH_OUT"; then
   fail "/api/health answered 200 but body lacks \"status\":\"ok\": ${HEALTH_OUT}"
 fi
 echo "    /api/health OK"
@@ -472,11 +472,11 @@ echo "    required anchors == declared required set ($(printf '%s\n' "$DB_REQUIR
 
 # ── 6b. Boot-log assertion: loader line present, fatal markers absent ────────
 APP_LOGS=$(docker logs "$APP" 2>&1)
-if ! printf '%s' "$APP_LOGS" | grep -q '\[boot\] StaticBundleLoader:'; then
+if ! grep -q '\[boot\] StaticBundleLoader:' <<<"$APP_LOGS"; then
   fail "app log lacks the '[boot] StaticBundleLoader:' line — the bundled loader never reported."
 fi
 for FATAL in 'did not activate' 'StaticBundleLoader failed'; do
-  if printf '%s' "$APP_LOGS" | grep -qF "$FATAL"; then
+  if grep -qF "$FATAL" <<<"$APP_LOGS"; then
     fail "app log contains fatal boot marker: '${FATAL}'."
   fi
 done
@@ -565,11 +565,11 @@ if [ "$DEGRADED_CODE" != "503" ]; then
   echo "--- degraded-case result: ${DEGRADED_RESULT}"
   fail "durable-degraded boot returned HTTP ${DEGRADED_CODE}, expected 503 — a top-level-status health gate that also checks HTTP would not reject it."
 fi
-if ! printf '%s' "$DEGRADED_BODY" | grep -q '"status":"degraded"'; then
+if ! grep -q '"status":"degraded"' <<<"$DEGRADED_BODY"; then
   echo "--- degraded-case result: ${DEGRADED_RESULT}"
   fail "durable-degraded boot reported a non-'degraded' top-level status: ${DEGRADED_BODY}"
 fi
-if ! printf '%s' "$DEGRADED_BODY" | grep -q '"blockingPhases":\["boot-degrade-probe"\]'; then
+if ! grep -q '"blockingPhases":\["boot-degrade-probe"\]' <<<"$DEGRADED_BODY"; then
   echo "--- degraded-case result: ${DEGRADED_RESULT}"
   fail "durable-degraded boot did not list boot-degrade-probe in blockingPhases: ${DEGRADED_BODY}"
 fi
@@ -600,7 +600,7 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
     break  # crashed as expected
   fi
   if OUT=$(probe "http://${APP_MISSING_ENV}:3000/api/health" 2>/dev/null) \
-     && printf '%s' "$OUT" | grep -q '"status":"ok"'; then
+     && grep -q '"status":"ok"' <<<"$OUT"; then
     MISSING_ENV_HEALTHY=yes; break
   fi
   sleep 3
@@ -650,7 +650,7 @@ DEADLINE=$((SECONDS + BOOT_TIMEOUT_SECS))
 while true; do
   if HEALTH_OUT=$(probe "${APP_ORIGIN}/api/health" 2>/dev/null) \
      && [ "${HEALTH_OUT%% *}" = "200" ] \
-     && printf '%s' "${HEALTH_OUT#*$'\n'}" | grep -q '"status":"ok"'; then
+     && grep -q '"status":"ok"' <<<"${HEALTH_OUT#*$'\n'}"; then
     break
   fi
   if [ "$SECONDS" -ge "$DEADLINE" ]; then
@@ -711,7 +711,7 @@ if [ "$NO_MOUNT_STATE" != "healthy" ] || [ "$NO_MOUNT_CODE" != "200" ]; then
   fail "boot WITHOUT the durable user-store mount was not healthy (state=${NO_MOUNT_STATE} code=${NO_MOUNT_CODE}); the mount check must be non-blocking (a retryable failure keeps status:ok/200)."
 fi
 # But the deficit must be VISIBLE: the phase is recorded in degradedPhases.
-if ! printf '%s' "$NO_MOUNT_BODY" | grep -q 'user-store-mount-check'; then
+if ! grep -q 'user-store-mount-check' <<<"$NO_MOUNT_BODY"; then
   echo "--- no-mount health body: ${NO_MOUNT_BODY}"
   fail "missing durable user-store mount was NOT surfaced in health degradedPhases (silent — user installs would vanish on restart undetected)."
 fi

@@ -171,6 +171,7 @@ const coreStoreSchema = pgSchema(CORE_STORE_SCHEMA);
 const agentTemplates = coreStoreSchema.table("agent_templates", {
   id: text("id").primaryKey(),
   name: text("name"),
+  description: text("description"),
   packageName: text("package_name"),
   agentKind: text("agent_kind"),
   assistantConfig: text("assistant_config"),
@@ -327,6 +328,11 @@ export type AssistantRegistryEntry = {
   aliases: string[];
   /** True for the boot-seeded builtin Cinatra descriptor (unconditionally visible). */
   isBuiltin: boolean;
+  /** The descriptor's own description (`agent_templates.description`), where it
+   *  has one. The builtin Cinatra descriptor has NO `installed_extension` row, so
+   *  this is the only description a surface drawing its row can read. OPTIONAL:
+   *  absence and an empty column are the same answer — no description. */
+  description?: string | null;
   /** The declared delivery channel of this assistant's turns (cinatra#1875 W2,
    *  AC#2). Projected from `installed_extension.assistant_declaration`; the
    *  builtin Cinatra descriptor (no declaration) is the host-runtime default. The
@@ -364,6 +370,8 @@ type CandidateRow = {
   assistantUserId: string | null;
   handle: string;
   origin: string | null;
+  /** The template's own description column (null where it carries none). */
+  description: string | null;
   /** Raw persisted `assistant_declaration` jsonb (null for the builtin). */
   declaration: unknown;
 };
@@ -386,6 +394,7 @@ function toEntry(
     origin: row.origin === "extension" ? "extension" : "standalone",
     aliases: [...aliases].sort(),
     isBuiltin,
+    description: row.description ?? null,
     delivery: projectAssistantDelivery(row.declaration),
     launch: projectAssistantLaunch(row.declaration),
     audience,
@@ -409,6 +418,7 @@ export async function readAssistantRegistryForActor(
       packageName: installedExtension.packageName,
       templateId: agentTemplates.id,
       displayName: agentTemplates.name,
+      description: agentTemplates.description,
       assistantUserId: agentTemplates.assistantUserId,
       handle: assistantHandles.handle,
       origin: assistantHandles.origin,
@@ -441,6 +451,7 @@ export async function readAssistantRegistryForActor(
     .select({
       templateId: agentTemplates.id,
       displayName: agentTemplates.name,
+      description: agentTemplates.description,
       assistantUserId: agentTemplates.assistantUserId,
       handle: assistantHandles.handle,
       origin: assistantHandles.origin,

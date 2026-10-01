@@ -28,8 +28,16 @@ import {
   type VerdaccioConfig,
 } from "@cinatra-ai/registries";
 import type { ExtensionTypeHandler, PackageRef, Actor } from "@cinatra-ai/extension-types";
+// cinatra#3204: the predicate that says "these bytes were SUPPLIED", read off
+// the ref's own declared provenance rather than guessed from a name or a URL.
+import { isSuppliedPackageProvenance } from "@cinatra-ai/extension-types";
 // resolveInstallEnvironment routes to the correct registry based on extension origin.
 import { resolveInstallEnvironment } from "@cinatra-ai/extensions/destination-resolver";
+// cinatra#3204 criterion 16: the PLANNED canonical row anchor the dispatcher
+// threads, translated into this kind's own owner fields by the one shared rule
+// that lives beside the canonical anchor resolver itself.
+import { resolveNativeInstallOwnership } from "@cinatra-ai/extensions/canonical-types";
+import type { InstallRowOwnership } from "@cinatra-ai/extensions/canonical-types";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -127,10 +135,16 @@ async function upsertSkillsFromDir(skillsDir: string, packageName: string): Prom
  * PluginDependencyCycleError from installAgentPackageWithDependencies
  * propagates without any rollback — no template was created.
  */
-async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: "draft" | "published" | "active"): Promise<{ rootTemplateId: string; installedTemplateIds: string[]; wayflowReload?: import("./wayflow-reload-client").ReloadResult }> {
+async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: "draft" | "published" | "active", rowOwnership?: InstallRowOwnership | null): Promise<{ rootTemplateId: string; installedTemplateIds: string[]; wayflowReload?: import("./wayflow-reload-client").ReloadResult }> {
   // cinatra#793: the store-payload anchor scope — the SAME org the dispatcher
   // ensured the canonical row at (null = platform scope).
-  const anchorOrgId = actor.orgId ?? null;
+  //
+  // cinatra#3204 criterion 16: when the dispatcher threads a PLANNED row anchor
+  // (the scope the operator chose on the install screen), the native agent row
+  // is anchored at THAT tuple, not at a second one derived from the actor. With
+  // no planned anchor the values are byte-identical to the previous derivation.
+  const nativeOwnership = resolveNativeInstallOwnership(actor.orgId ?? null, rowOwnership ?? null);
+  const anchorOrgId = nativeOwnership.anchorOrgId;
   // Hold the per-package install lock
   // across the entire flow (install + skill registration + compensation) so
   // a concurrent install can't commit a newer state in the window between
@@ -140,6 +154,38 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
   // withInstallLock call is a no-op and doesn't deadlock.
   const { withInstallLock } = await import("./materialize-agent-package");
   return withInstallLock(ref.packageName, async () => {
+  // #157: COLLAPSE THE SECOND RESOLVER. When the batch saga drives this
+  // install (it has already PLANNED + topo-ordered the whole closure and
+  // dispatches each member ROOT-ONLY through extensionRegistry.install), the
+  // handler must NOT re-fan-out the tree via the @cinatra-ai/registries
+  // dep-resolver — that second walk uses a DIFFERENT conflict policy
+  // ("prefer-newer" vs the saga's exact pins) and is the two-resolver-
+  // disagreement risk. Inside the saga context we install ONLY the root
+  // package; the saga installs the dependencies (and fires the single WayFlow
+  // reload at its success boundary). Outside the saga (UI extension update,
+  // MCP extensions_update, reinstall-latest, or any other direct
+  // extensionRegistry.install/update caller) the context is absent and we keep
+  // the full-tree installer — those paths do NOT route through the saga and
+  // still depend on the handler to pull in newly-required dependencies.
+  const sagaOwnsFanout = isSagaOwnedFanoutActive();
+  // A SUPPLIED package is on no registry, so there is no registry closure to
+  // plan for it (cinatra#3204). The dependency planner resolves every node —
+  // the root included — through the extension registry: for a package the
+  // operator handed over as a file or pointed at in a repository that resolve
+  // either fails outright (there is nothing published under that name) or, far
+  // worse, succeeds against a DIFFERENT package that happens to carry the same
+  // name. Neither is the thing that was supplied.
+  //
+  // The root-only road below is exactly the one the batch saga already takes,
+  // and for the same reason: the dispatcher's pipeline materialized and
+  // FINALIZED this package's store payload before this handler ran, so the
+  // installer consumes those bytes and needs no registry at all. A supplied
+  // package that declares dependencies is out of scope for this road by
+  // construction — its closure is whatever it shipped with.
+  const suppliedBytes = isSuppliedPackageProvenance(
+    (ref as { provenance?: unknown }).provenance,
+  );
+
   // Auth gate runs in the caller (extensions_install MCP handler or installRegistryPackage).
   // resolveInstallEnvironment reads extension origin to determine registry + topology.
   // The version is threaded so the gatekept-install path (when enabled) authorizes
@@ -182,21 +228,7 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
     throw e;
   }
 
-  // #157: COLLAPSE THE SECOND RESOLVER. When the batch saga drives this
-  // install (it has already PLANNED + topo-ordered the whole closure and
-  // dispatches each member ROOT-ONLY through extensionRegistry.install), the
-  // handler must NOT re-fan-out the tree via the @cinatra-ai/registries
-  // dep-resolver — that second walk uses a DIFFERENT conflict policy
-  // ("prefer-newer" vs the saga's exact pins) and is the two-resolver-
-  // disagreement risk. Inside the saga context we install ONLY the root
-  // package; the saga installs the dependencies (and fires the single WayFlow
-  // reload at its success boundary). Outside the saga (UI extension update,
-  // MCP extensions_update, reinstall-latest, or any other direct
-  // extensionRegistry.install/update caller) the context is absent and we keep
-  // the full-tree installer — those paths do NOT route through the saga and
-  // still depend on the handler to pull in newly-required dependencies.
-  const sagaOwnsFanout = isSagaOwnedFanoutActive();
-  const result = sagaOwnsFanout
+  const result = sagaOwnsFanout || suppliedBytes
     ? await (async () => {
         const single = await installAgentFromPackage(
           {
@@ -206,6 +238,8 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
             // cinatra#793: the dispatcher pipeline ran first — REQUIRE its
             // finalized store payload (no registry-extract fallback).
             anchorOrgId,
+            ...(nativeOwnership.ownerLevel ? { ownerLevel: nativeOwnership.ownerLevel } : {}),
+            ...(nativeOwnership.ownerId ? { ownerId: nativeOwnership.ownerId } : {}),
             requireStorePayload: true,
           },
           config,
@@ -228,6 +262,8 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
           // cinatra#793: the ROOT node is dispatcher-routed → require its
           // finalized store payload; transitive deps keep the registry extract.
           anchorOrgId,
+          ...(nativeOwnership.ownerLevel ? { ownerLevel: nativeOwnership.ownerLevel } : {}),
+          ...(nativeOwnership.ownerId ? { ownerId: nativeOwnership.ownerId } : {}),
           requireStorePayloadForRoot: true,
         },
         config,
@@ -317,12 +353,19 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "agent",
 
-    async install(ref: PackageRef, actor: Actor) {
+    async install(
+      ref: PackageRef,
+      actor: Actor,
+      options?: { destination?: "private" | "public"; rowOwnership?: InstallRowOwnership },
+    ) {
       // Pass status:"active" so freshly installed extensions
       // appear in /agents (which filters by status IN ('active','published')).
       // installAgentPackageWithDependencies defaults to "draft", which would
       // exclude new installs from all readInstalledAgentTemplates queries.
-      const result = await installAndRegisterSkills(ref, actor, "active");
+      //
+      // cinatra#3204 criterion 16: the PLANNED row anchor rides through, so the
+      // agent template lands at the scope the operator chose.
+      const result = await installAndRegisterSkills(ref, actor, "active", options?.rowOwnership ?? null);
       // Queue an inline re-evaluation against this
       // newly-installed agent. Idempotent jobId via BullMQ pending-dedup
       // keeps repeated installs from duplicating work. Failures MUST NOT abort the install.

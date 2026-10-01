@@ -82,8 +82,12 @@ jobs:
         with:
           filters: |
             contract_schema:
+              # cinatra#3508: a change to this workflow runs it in full.
+              - '.github/workflows/wp-drupal-uat.yml'
               - 'src/lib/wp-drupal-auth-init.schema.json'
             relevant:
+              # cinatra#3508: a change to this workflow runs it in full.
+              - '.github/workflows/wp-drupal-uat.yml'
               - 'src/lib/wp-drupal-contract.ts'
               - 'src/lib/wp-drupal-auth-init.schema.json'
               - 'src/app/api/wordpress/**'

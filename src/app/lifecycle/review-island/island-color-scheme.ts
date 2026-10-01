@@ -68,9 +68,28 @@ export function islandPaletteClass(scheme: IslandColorScheme | null): string {
  *     document's ink and reads as dark text on a dark panel;
  *   • `min-h-dvh` — the full frame, so the document's own (unthemed) ground
  *     never paints around the panel.
+ *
+ * THE WRAPPER IS ALSO THE CONTAINER THAT SCROLLS (the fourteenth proof round's
+ * counted defect on cinatra#3143, 2026-09-10). `specs/app-artifact-review.html`
+ * §III: "a wide representation scrolls inside its own container rather than
+ * widening the page". The first-party review-target panel carries that road on
+ * its representation slot, and this document is the OTHER layer a pinned
+ * target's body is drawn on — the review card and the run page both frame this
+ * island, and its body wrapper carried no road of its own, so a value tree
+ * wider than the frame reached the edge of a document that had nowhere to put
+ * the overflow and was cut mid-word with no affordance to reach the rest.
+ *
+ *   • `overflow-x-auto` — the wrapper scrolls horizontally, so the work stays
+ *     reachable and the document never widens under the frame that holds it;
+ *   • `min-w-0` — what lets it shrink below its content. Without it a flex
+ *     column takes its width from the widest row it holds and the overflow
+ *     moves straight back out to the document.
+ *
+ * Both are exactly the pair the panel's slot already states, so the two layers
+ * a target's body is drawn on carry ONE road and not two readings of it.
  */
 export function islandBodyClassName(scheme: IslandColorScheme | null): string {
-  const base = "flex flex-col gap-3 bg-surface p-3";
+  const base = "flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3";
   return scheme ? `${islandPaletteClass(scheme)} min-h-dvh text-foreground ${base}` : base;
 }
 

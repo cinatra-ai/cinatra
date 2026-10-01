@@ -341,7 +341,22 @@ export interface ExtensionTypeHandler {
   install(
     ref: PackageRef,
     actor: Actor,
-    options?: { destination?: "private" | "public" },
+    options?: {
+      destination?: "private" | "public";
+      /**
+       * The PLANNED canonical row anchor (cinatra#2696) the dispatcher already
+       * threads. Declared here (cinatra#3204 criterion 16) so a handler may
+       * anchor its OWN native row at the scope the operator chose, instead of
+       * deriving a second, disagreeing anchor from the actor's active
+       * organization. Structural on purpose: this leaf carries no dependency on
+       * the canonical-types package that names the tuple.
+       */
+      rowOwnership?: {
+        ownerLevel: string;
+        ownerId: string | null;
+        organizationId: string | null;
+      };
+    },
   ): Promise<void>;
   update(ref: PackageRef, actor: Actor): Promise<void>;
   uninstall(ref: PackageRef, actor: Actor): Promise<void>;
@@ -665,7 +680,18 @@ export const RETIRED_SUPPLIED_PACKAGE_KINDS: readonly string[] = ["workflow"];
 export type SuppliedPackageManifest = {
   name?: unknown;
   version?: unknown;
-  cinatra?: { kind?: unknown; entrypoint?: unknown; uiSurface?: unknown; serverEntry?: unknown };
+  cinatra?: {
+    kind?: unknown;
+    entrypoint?: unknown;
+    uiSurface?: unknown;
+    serverEntry?: unknown;
+    /**
+     * An artifact's inline declaration. Read for PRESENCE only — the artifact
+     * handler's own `validate()` parses it against the descriptor schema, and
+     * that division is deliberate.
+     */
+    artifact?: unknown;
+  };
 };
 
 export type ResolvedSuppliedPackageTree = {
@@ -727,8 +753,12 @@ export const SUPPLIED_REPOSITORY_SUBJECT: SuppliedTreeSubject = {
  *   connector — the declared `cinatra.serverEntry` (the module the pipeline
  *               later hot-loads; its presence is checkable, and checking it is
  *               NOT running it).
- *   artifact  — the declared `cinatra.entrypoint` descriptor, else the
- *               conventional `cinatra/artifact.json`.
+ *   artifact  — the inline `cinatra.artifact` block in package.json, which is
+ *               the one place the artifact installer ever reads. A DECLARED
+ *               `cinatra.entrypoint` is still resolved FIRST and still
+ *               strictly (a named file the delivery does not carry is refused
+ *               by name), and the conventional `cinatra/artifact.json` stays a
+ *               valid alternative.
  */
 export function resolveSuppliedKindPayload(
   kind: SuppliedPackageKind,
@@ -793,18 +823,47 @@ export function resolveSuppliedKindPayload(
     return { payload };
   }
 
-  // artifact
-  const descriptorPath = entrypoint ?? "cinatra/artifact.json";
-  const descriptor = get(descriptorPath);
-  if (descriptor === undefined) {
-    return {
-      missing: entrypoint
-        ? `the entrypoint "${entrypoint}" that package.json names`
-        : "an artifact descriptor (a package.json \"cinatra.entrypoint\", or a cinatra/artifact.json)",
-    };
+  // artifact — resolved in a FIXED order, chosen so no rule already enforced
+  // here is weakened.
+  //
+  // (a) A DECLARED entrypoint must still resolve, and is still refused BY NAME
+  //     when the delivery does not carry it: a package that names a file and
+  //     does not ship it is lying whatever else it declares. DECLARED means
+  //     declared as a string at all — an empty or "./" entrypoint normalises to
+  //     "" and is still refused by name here, exactly as before this change,
+  //     rather than falling through to a form the package did not declare.
+  if (entrypoint !== null) {
+    const declaredDescriptor = get(entrypoint);
+    if (declaredDescriptor === undefined) {
+      return { missing: `the entrypoint "${entrypoint}" that package.json names` };
+    }
+    payload.set(entrypoint, declaredDescriptor);
+    return { payload };
   }
-  payload.set(descriptorPath, descriptor);
-  return { payload };
+  // (b) Otherwise the inline `cinatra.artifact` block IS the declaration, which
+  //     is what the install road reads and the only place it looks (the artifact
+  //     handler's validate() and the post-finalization type registration both
+  //     key on it). Presence is proven here; the schema stays the handler's
+  //     business. The payload carries package.json's own text under its own
+  //     path — the truthful location of the declaration, and a file the content
+  //     digest already covers.
+  const manifestText = get("package.json");
+  if (pkg.cinatra?.artifact != null && manifestText !== undefined) {
+    payload.set("package.json", manifestText);
+    return { payload };
+  }
+  // (c) Otherwise the conventional descriptor file, exactly as before.
+  const conventionalDescriptor = get("cinatra/artifact.json");
+  if (conventionalDescriptor !== undefined) {
+    payload.set("cinatra/artifact.json", conventionalDescriptor);
+    return { payload };
+  }
+  // (d) Otherwise the package declares a kind whose declaration it does not
+  //     carry in ANY of the three accepted forms, named inline block first.
+  return {
+    missing:
+      'an artifact declaration (a package.json "cinatra.artifact" block, a package.json "cinatra.entrypoint", or a cinatra/artifact.json)',
+  };
 }
 
 /**

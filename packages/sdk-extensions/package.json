@@ -33,6 +33,7 @@
     "./dashboard-contribution-contract": "./src/dashboard-contribution-contract.ts",
     "./registry-contract": "./src/registry-contract.ts",
     "./artifact-client-bundle": "./src/artifact-client-bundle.ts",
+    "./design-primitives-contract": "./src/design-primitives-contract.ts",
     "./artifact-renderer-props": "./src/artifact-renderer-props.ts",
     "./artifact-content-channel": "./src/artifact-content-channel.ts",
     "./artifact-edit-channel": "./src/artifact-edit-channel.ts",

@@ -24,6 +24,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseSchemaConfig } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorSetup } from "@/components/extensions/schema-config-connector-setup";
 
+// The renderer reads the app router so a successful action can refresh the
+// page's SERVER half (the Sharing tab node the host composes from the live
+// connection identity rows). jsdom mounts the form outside any app-router
+// context, where `useRouter` throws its invariant, so it is stubbed here.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    refresh: () => {},
+    push: () => {},
+    replace: () => {},
+    prefetch: () => {},
+    back: () => {},
+    forward: () => {},
+  }),
+}));
+
+
 // The flash-toast island reads the live router's search params; it is not what
 // these tests assert, so it is stubbed to nothing.
 vi.mock("@/components/search-param-toast", () => ({
@@ -279,5 +295,28 @@ describe("SchemaConfigConnectorSetup — the drawn shape for EVERY connector (#3
     await renderSetup({ surface: surfaceOf(PROBE_LESS_SURFACE), installId: null });
     expect(columns()).toBeNull();
     expect(container.querySelector('[data-testid="connection-actions"]')).toBeNull();
+  });
+
+  it("gives the Install/Activate state the STANDALONE sharing node, never the tab's (#3374)", async () => {
+    // That state draws no form and so no tab strip: mounting the tab-variant
+    // node there would restyle a page this issue does not change.
+    await renderSetup({
+      surface: surfaceOf(PROBE_LESS_SURFACE),
+      installId: null,
+      sharing: <p data-testid="sharing-tab-node">tab</p>,
+      sharingStandalone: <p data-testid="sharing-standalone-node">standalone</p>,
+    });
+    expect(container.querySelector('[data-testid="sharing-standalone-node"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="sharing-tab-node"]')).toBeNull();
+  });
+
+  it("gives the installed form the TAB sharing node, never the standalone one (#3374)", async () => {
+    await renderSetup({
+      surface: surfaceOf(PROBE_LESS_SURFACE),
+      sharing: <p data-testid="sharing-tab-node">tab</p>,
+      sharingStandalone: <p data-testid="sharing-standalone-node">standalone</p>,
+    });
+    expect(container.querySelector('[data-testid="sharing-tab-node"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="sharing-standalone-node"]')).toBeNull();
   });
 });

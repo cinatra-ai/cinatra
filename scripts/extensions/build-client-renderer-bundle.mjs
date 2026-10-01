@@ -37,6 +37,16 @@ import { pathToFileURL } from "node:url";
 
 export const HOST_DESIGN_TOKEN_MODULE = "@cinatra-ai/design";
 
+// The host-shared design-PRIMITIVES module (cinatra#3471 slice 2, epic #2926 —
+// decision 407: "the host shares its primitives with extension bundles at run
+// time like React does"). Left EXTERNAL exactly like React and the token module,
+// and resolved by the host module-registry shim to the host's ONE instance.
+export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
+
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.0.0";
+
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
+
 export const CLIENT_BUNDLE_EXTERNAL_ALLOWLIST = Object.freeze([
   "react",
   "react/jsx-runtime",
@@ -44,6 +54,7 @@ export const CLIENT_BUNDLE_EXTERNAL_ALLOWLIST = Object.freeze([
   "react-dom",
   "react-dom/client",
   HOST_DESIGN_TOKEN_MODULE,
+  HOST_DESIGN_PRIMITIVES_MODULE,
 ]);
 
 export const REACT_FAMILY_BASE_PACKAGES = Object.freeze(["react", "react-dom"]);
@@ -65,6 +76,44 @@ export function basePackageOf(specifier) {
 
 export function isAllowedClientBundleExternal(specifier) {
   return CLIENT_BUNDLE_EXTERNAL_ALLOWLIST.includes(specifier);
+}
+
+/** The MAJOR of a `X.Y.Z` primitives-contract version, or null (mirror of the
+ * SDK's `designPrimitivesContractMajorOf` — fail-closed on a malformed string). */
+export function designPrimitivesContractMajorOf(version) {
+  if (typeof version !== "string") return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (match === null) return null;
+  return Number(match[1]);
+}
+
+/** The load-time primitives-contract rule (mirror of the SDK's
+ * `checkDesignPrimitivesContract`). Returns null when the host serves the major
+ * the bundle was built against, else a fail-loud refusal reason. */
+export function checkDesignPrimitivesContract({ builtAgainst, hostServes }) {
+  const served = hostServes ?? HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION;
+  const builtMajor = designPrimitivesContractMajorOf(builtAgainst);
+  const servedMajor = designPrimitivesContractMajorOf(served);
+  if (builtMajor === null) {
+    return (
+      `bundle declares an unreadable "${HOST_DESIGN_PRIMITIVES_MODULE}" contract version ` +
+      `"${String(builtAgainst)}" — it must be an exact MAJOR.MINOR.PATCH version`
+    );
+  }
+  if (servedMajor === null) {
+    return (
+      `the host declares an unreadable "${HOST_DESIGN_PRIMITIVES_MODULE}" contract version ` +
+      `"${String(served)}" — it must be an exact MAJOR.MINOR.PATCH version`
+    );
+  }
+  if (builtMajor !== servedMajor) {
+    return (
+      `bundle was built against "${HOST_DESIGN_PRIMITIVES_MODULE}" contract major ${builtMajor} ` +
+      `(${builtAgainst}) but this host serves major ${servedMajor} (${served}) — ` +
+      `rebuild the bundle against the host's contract`
+    );
+  }
+  return null;
 }
 
 /** The metafile externals gate (mirror of the SDK's `checkClientBundleExternals`).

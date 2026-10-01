@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import { Check, CircleHelp, Star, TriangleAlert } from "lucide-react";
+import { Check, CircleHelp, Star, X } from "lucide-react";
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
 import { MarketplaceCardIcon } from "@/components/extension-card-icon-image";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
-import { type ExtensionAccent } from "@/lib/extension-accent";
+import { ACCENT_PALETTE, type ExtensionAccent } from "@/lib/extension-accent";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { safeHttpUrl } from "@/lib/marketplace-detail-view";
 import {
@@ -187,15 +187,23 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
  * a badge/pill: the pinned drawing renders this identically to "Updated N ago"
  * beneath it, just a coloured icon + text, no chrome (cinatra#1003 — the same
  * rule the §V detail-modal fix already applied to its own "Compatible up to"
- * row, #995). Compatible: small check in the accent-link colour, label in
- * ink. Incompatible: warning triangle + label both in the destructive red —
- * exact spec colours. Unknown (no declared ABI range) has no drawing example;
- * it keeps the same plain anatomy in the neutral muted tone (never green).
+ * row, #995).
+ *
+ * The three readings are the maintainer's decision on cinatra#3521
+ * (2026-09-16): "the card's three readings are exactly 'Compatible' with a
+ * check icon, 'Incompatible' with a cross icon, and 'Compatibility' with a
+ * question-mark icon (the third for a package that declares no host range)".
+ * Compatible: small check in the accent-link colour, label in ink.
+ * Incompatible: cross + label both in the destructive red — exact spec
+ * colours. Compatibility (no declared ABI range) keeps the same plain anatomy
+ * in the neutral muted tone (never green). WHICH range counts as compatible is
+ * unchanged — `deriveExtensionCompatState` still owns the resolution; only the
+ * words and the icons are fixed here.
  */
 function CompatMeta({ sdkAbiRange }: { sdkAbiRange: string | null | undefined }) {
   const state = deriveExtensionCompatState(sdkAbiRange);
-  const Icon = state === "compatible" ? Check : state === "incompatible" ? TriangleAlert : CircleHelp;
-  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Compatibility unknown";
+  const Icon = state === "compatible" ? Check : state === "incompatible" ? X : CircleHelp;
+  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Compatibility";
   const textColor =
     state === "incompatible" ? "text-destructive" : state === "unknown" ? "text-muted-foreground" : "text-foreground";
   return (
@@ -238,6 +246,27 @@ function CompatMeta({ sdkAbiRange }: { sdkAbiRange: string | null | undefined })
  * stretch together (`h-full`), so a taller row keeps both in lockstep.
  */
 const CARD_BLOCK_SIZE = "min-h-[299px]";
+
+// The close X's drawn geometry (spec §I.1: `position: absolute; top: 10px;
+// right: 10px; width: 24px; height: 24px`) and the banner's own `p-[14px]`
+// inset. The title column already stops 14px short of the band's right edge,
+// so it must give up the remaining 20px for the control's box to be clear of
+// it. Kept as arithmetic on the drawn numbers rather than a bare constant, so
+// a change to either geometry moves the reserve with it.
+const CLOSE_CONTROL_BOX_PX = 24;
+const CLOSE_CONTROL_CORNER_INSET_PX = 10;
+const BANNER_PADDING_PX = 14;
+// The name carries `italic-overhang-safe`, which lets its final right-leaning
+// glyph paint 0.08em past its own margin box (the utility hands that padding
+// back with an equal negative margin). The reserve clears the control's box by
+// that much too, so the last glyph of a long italic title does not lean into
+// it: 0.08em of the drawn 18px listing title, rounded up.
+const NAME_ITALIC_OVERHANG_PX = 2;
+const CLOSE_CONTROL_NAME_RESERVE_PX =
+  CLOSE_CONTROL_BOX_PX +
+  CLOSE_CONTROL_CORNER_INSET_PX -
+  BANNER_PADDING_PX +
+  NAME_ITALIC_OVERHANG_PX;
 
 /**
  * MarketplaceListingCardInstallFace — the §I.1 in-card install face
@@ -285,11 +314,21 @@ export function MarketplaceListingCardInstallFace({
         className,
       )}
     >
-      {/* The banner is rendered with the IDENTICAL props the idle face passes —
-          no `badges` slot, because that slot reserves `pr-20` on the name and
-          would re-wrap a long title between the two faces. The ✕ is overlaid
-          instead (spec §I.1: 10px from the header's top-right corner), so the
-          header band is byte-identical across the swap. */}
+      {/* No `badges` slot: that slot reserves a badge-sized `pr-20` on the
+          name, far more than this control needs. The ✕ is overlaid instead
+          (spec §I.1: 10px from the header's top-right corner) and the name
+          column reserves exactly the control's own footprint, so a long title
+          can no longer run under it (cinatra#2737: "The X collides with a long
+          title in the header band … the title reserves no trailing space").
+
+          The overlay also carries the BAND's ink. The ✕ paints in
+          `currentColor`, and the drawing gives it the band's own light mark
+          (`color: var(--surface-strong)` at 0.85 — the same value the name and
+          byline take, `ACCENT_PALETTE[accent].fg`). The control is a SIBLING of
+          the banner, not a descendant, so without this nothing on its ancestor
+          path declares that ink and `currentColor` falls through to whatever
+          foreground the page carries — which flips with the palette while the
+          category band does not. */}
       <div className="relative flex-none">
         <ExtensionCardListingBanner
           name={card.displayName}
@@ -302,8 +341,14 @@ export function MarketplaceListingCardInstallFace({
             />
           }
           byline={<PublisherLine card={card} />}
+          nameTrailingReserve={CLOSE_CONTROL_NAME_RESERVE_PX}
         />
-        <div className="absolute top-2.5 right-2.5">{closeControl}</div>
+        <div
+          className="absolute top-2.5 right-2.5"
+          style={{ color: ACCENT_PALETTE[accentColor].fg }}
+        >
+          {closeControl}
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col px-[14px] py-3">
         {children}

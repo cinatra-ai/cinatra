@@ -31,6 +31,44 @@ describe("parity — inlined mirror == SDK source of truth", () => {
     expect(String(builder.STORE_DIGEST_RE)).toBe(String(sdk.STORE_DIGEST_RE));
   });
 
+  it("the host-shared design-primitives id + contract stay in lockstep", () => {
+    // cinatra#3471 slice 2: the builder externalizes the primitives module, so
+    // its inlined mirror must carry the SAME id and the SAME contract version.
+    expect(builder.HOST_DESIGN_PRIMITIVES_MODULE).toBe(sdk.HOST_DESIGN_PRIMITIVES_MODULE);
+    expect(builder.HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION).toBe(
+      sdk.HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION,
+    );
+    expect(builder.HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR).toBe(
+      sdk.HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR,
+    );
+    expect(builder.CLIENT_BUNDLE_EXTERNAL_ALLOWLIST).toContain(sdk.HOST_DESIGN_PRIMITIVES_MODULE);
+    // Every input the rule branches on, on BOTH sides of the check — a builder
+    // that ignored an explicit `hostServes`, or accepted a malformed one, would
+    // drift silently past a parity test that only passed `builtAgainst`.
+    const BUILT_AGAINST = ["1.0.0", "1.9.9", "2.0.0", "0.9.0", "^1.0.0", "1", "1.0.0-rc.1", "", undefined, 1];
+    const HOST_SERVES = [undefined, "1.0.0", "1.4.2", "2.0.0", "^1.0.0", "", null];
+    for (const builtAgainst of BUILT_AGAINST) {
+      for (const hostServes of HOST_SERVES) {
+        expect(builder.checkDesignPrimitivesContract({ builtAgainst, hostServes })).toBe(
+          sdk.checkDesignPrimitivesContract({ builtAgainst, hostServes }),
+        );
+      }
+    }
+    // …and the near-miss specifier is refused by the builder's own mirror, not
+    // only by the SDK gate (the exact-tuple discipline React has).
+    expect(builder.isAllowedClientBundleExternal(sdk.HOST_DESIGN_PRIMITIVES_MODULE)).toBe(true);
+    expect(builder.isAllowedClientBundleExternal("@cinatra-ai/design-primitives/button")).toBe(false);
+    expect(
+      builder.checkClientBundleExternals({
+        externals: ["react", "@cinatra-ai/design-primitives/button"],
+        inputBasePackages: ["@fixture/pkg"],
+      }),
+    ).toMatch(/un-sanctioned external/);
+    expect(builder.designPrimitivesContractMajorOf("3.1.4")).toBe(
+      sdk.designPrimitivesContractMajorOf("3.1.4"),
+    );
+  });
+
   it("the canonical signature payload is byte-identical to the SDK builder", () => {
     const fields = {
       packageName: "@cinatra-ai/json-artifact",
@@ -54,6 +92,12 @@ describe("externals gate", () => {
   it("passes a conforming external set; rejects un-sanctioned + bundled React", () => {
     expect(
       builder.checkClientBundleExternals({ externals: ["react", "react/jsx-runtime"], inputBasePackages: ["@x/y"] }),
+    ).toBeNull();
+    expect(
+      builder.checkClientBundleExternals({
+        externals: ["react", builder.HOST_DESIGN_PRIMITIVES_MODULE],
+        inputBasePackages: ["@x/y"],
+      }),
     ).toBeNull();
     expect(
       builder.checkClientBundleExternals({ externals: ["lodash"], inputBasePackages: [] }),

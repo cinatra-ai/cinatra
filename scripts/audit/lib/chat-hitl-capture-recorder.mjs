@@ -611,6 +611,128 @@ export async function resolveCardInstance(page, selector, declaredInstance = nul
 }
 
 /**
+ * THE PRE-SHUTTER SETTLE — how many times the screen is measured before the
+ * shutter is allowed to fire, and how long apart. ONE PLACE, because these two
+ * numbers are a claim about how long a healthy screen may still be arriving,
+ * and a claim stated twice is a claim nobody can change.
+ *
+ * WHY A SETTLE AT ALL. Step 4 below measures again after the shutter and
+ * refuses the capture when a number moved, which is right: a record whose
+ * numbers describe one screen while its image shows another is worse than none.
+ * But the FIRST measurement used to be trusted the instant it came back, so a
+ * list that finished appearing a few hundred milliseconds later — hydration
+ * finishing, a poll landing — failed the capture while nothing on the screen
+ * was wrong. The held-turn job read exactly that: `[data-conversation-list]
+ * counted 1/0 visible then 1/1 visible`, on a branch that changes nothing under
+ * the chat surface.
+ *
+ * FIVE TRIES, 400 ms APART. Two agreeing measurements is the cheapest evidence
+ * that the screen has stopped moving, and the bound is what keeps a screen that
+ * never stops from being waited out: it fails, with the try count in the
+ * message, so a real oscillation stays a finding. A screen that is already
+ * still pays ONE interval (400 ms); a screen still arriving pays one interval
+ * per try it takes to agree, and the bound caps the waiting at four of them —
+ * 1600 ms, plus the measurements themselves — which is nothing against this
+ * suite's per-test budget.
+ */
+export const MEASUREMENT_SETTLE_TRIES = 5;
+export const MEASUREMENT_SETTLE_INTERVAL_MS = 400;
+
+/**
+ * WHAT MOVED between two measurements — the one comparison both the settle and
+ * the post-shutter refusal are made of, so neither can drift from the other in
+ * what it counts as a change.
+ */
+function measurementDrift(before, after) {
+  return before
+    .map((a, i) => ({ a, b: after[i] }))
+    .filter(({ a, b }) => !b || a.count !== b.count || a.visible !== b.visible);
+}
+
+/** ...and how it is said, in the one wording the job's readers already know. */
+function describeMeasurementDrift(drifted) {
+  return drifted
+    .map(
+      ({ a, b }) =>
+        `${a.selector} counted ${a.count}/${a.visible} visible then ` +
+        `${b?.count ?? "n/a"}/${b?.visible ?? "n/a"} visible`,
+    )
+    .join("; ");
+}
+
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * THE SETTLE'S OWN comparison. The post-shutter refusal compares two readings
+ * of the SAME spec list, so it walks the first and is right to; the settle is
+ * an exported loop that any caller can hand a `measure` to, and two readings of
+ * DIFFERENT length are the one way a drift can hide behind that walk — an empty
+ * reading followed by a full one would otherwise read as agreement. So the
+ * settle always walks the LONGER of the two, and a shape change is a change.
+ */
+function settleDrift(before, after) {
+  return after.length > before.length
+    ? measurementDrift(after, before)
+    : measurementDrift(before, after);
+}
+
+/**
+ * MEASURE UNTIL THE SCREEN AGREES WITH ITSELF, then hand the shutter the LAST
+ * of the two agreeing measurements — the one the picture is taken next to, so
+ * the post-shutter comparison is made against the reading that describes the
+ * moment photographed rather than against a stale first glance.
+ *
+ * It takes its `measure` and its `sleep`, so the loop is testable as the
+ * arithmetic it is: no page, no timers.
+ *
+ * A screen that never settles within the bound fails with the message the
+ * post-shutter refusal prints PLUS the number of tries, because "still moving
+ * after five tries 400 ms apart" is a fact about the screen and reads nothing
+ * like the timing class this settle exists to remove.
+ */
+export async function settleMeasurement({
+  cell,
+  measure,
+  tries = MEASUREMENT_SETTLE_TRIES,
+  intervalMs = MEASUREMENT_SETTLE_INTERVAL_MS,
+  sleep = waitMs,
+}) {
+  // THE BOUND HAS TO BE A BOUND. Agreement needs two measurements, so fewer
+  // than two tries cannot be satisfied by any screen, and a non-integer or
+  // infinite bound is not a bound at all — an `Infinity` would wait out an
+  // oscillating screen forever, which is exactly what this loop exists to
+  // refuse. A caller that asks for one of those has a bug, and it says so here
+  // rather than arriving as a capture that never returns.
+  if (!Number.isInteger(tries) || tries < 2) {
+    throw new Error(
+      `settleMeasurement needs at least 2 tries to see agreement, got ${tries}.`,
+    );
+  }
+  if (!Number.isFinite(intervalMs) || intervalMs < 0) {
+    throw new Error(
+      `settleMeasurement needs a finite interval in ms, got ${intervalMs}.`,
+    );
+  }
+  let previous = await measure();
+  let attempts = 1;
+  let drifted = [];
+  while (attempts < tries) {
+    await sleep(intervalMs);
+    const next = await measure();
+    attempts += 1;
+    drifted = settleDrift(previous, next);
+    if (drifted.length === 0) return next;
+    previous = next;
+  }
+  throw new Error(
+    `capture "${cell}" is not stable: ` +
+      describeMeasurementDrift(drifted) +
+      ". The screen changed between the measurement and the screenshot. It was still moving " +
+      `after ${attempts} tries ${intervalMs} ms apart.`,
+  );
+}
+
+/**
  * OBSERVE one capture cell and write the record from what was seen.
  *
  * `page` is the CapturePage port:
@@ -825,7 +947,11 @@ export async function observeCapture({
     return out;
   };
 
-  const assertions = await measure();
+  // 2c. SETTLE, then trust. Everything above resolved the frames and pinned the
+  //     card; what the numbers are is answered only once two consecutive
+  //     measurements agree, within the bound stated at the top of this file. The
+  //     measurement handed on is the LAST of the two.
+  const assertions = await settleMeasurement({ cell, measure });
 
   // 3. The image, written ATOMICALLY into the resolved directory and then
   //    hashed from disk.
@@ -882,24 +1008,17 @@ export async function observeCapture({
     throw err;
   }
 
-  // 4. MEASURE AGAIN. A page can move between the counts and the shutter —
+  // 4. MEASURE AGAIN, against the LAST pre-shutter measurement (the settled
+  //    one from 2c). A page can move between the counts and the shutter —
   //    hydration, a poll, a streamed state change — and a record whose numbers
   //    describe one screen while its image shows another is worse than none.
   //    Anything that shifted fails the capture instead of being written down.
   const after = await measure();
-  const drifted = assertions
-    .map((a, i) => ({ a, b: after[i] }))
-    .filter(({ a, b }) => !b || a.count !== b.count || a.visible !== b.visible);
+  const drifted = measurementDrift(assertions, after);
   if (drifted.length > 0) {
     throw new Error(
       `capture "${cell}" is not stable: ` +
-        drifted
-          .map(
-            ({ a, b }) =>
-              `${a.selector} counted ${a.count}/${a.visible} visible then ` +
-              `${b?.count ?? "n/a"}/${b?.visible ?? "n/a"} visible`,
-          )
-          .join("; ") +
+        describeMeasurementDrift(drifted) +
         ". The screen changed between the measurement and the screenshot.",
     );
   }

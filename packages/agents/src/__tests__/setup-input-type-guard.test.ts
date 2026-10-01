@@ -253,7 +253,11 @@ describe("approve-time resolution failure is non-fatal (cinatra#2484, codex roun
     const window = src.slice(call - 600, call + 600);
     expect(window).toMatch(/try\s*\{/);
     expect(window).toMatch(/catch\s*\(/);
-    // Degrades to "no properties" => validation skipped, approval proceeds.
-    expect(window).toMatch(/declaredPropertiesCache = null/);
+    // Degrades to "no schema" => validation skipped, approval proceeds.
+    // (cinatra#3452: one resolve now answers both readings this path takes —
+    // the declared properties for the type gate and the declared `required`
+    // list for the optional/required split — so the cache it degrades to null
+    // is the resolved SCHEMA, not the properties map alone.)
+    expect(window).toMatch(/resolvedSchemaCache = null/);
   });
 });

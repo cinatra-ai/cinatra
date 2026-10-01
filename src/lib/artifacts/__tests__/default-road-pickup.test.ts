@@ -267,3 +267,102 @@ describe("the default road — the pickup over end-node outputs", () => {
     expect(outcomes[0].error).toContain("the store is unreachable");
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// cinatra#3476 — A LIST OF ARTIFACTS IS NOT AN ARTIFACT.
+//
+// The measured shape of a completed Blog Idea Generator run: the end-node output
+// `ideas` carries five members, the fan-out binding filed ONE ARTIFACT PER MEMBER
+// and reported `ideas[0]`…`ideas[4]`, and the BARE key `ideas` is in no binding's
+// id list. Read literally that bare key looks unclaimed, so the road stringified
+// the whole list and filed it as a SIXTH artifact beside the five the members
+// already are. The members are the artifacts; the list of them is not one.
+// ---------------------------------------------------------------------------
+
+const IDEA = (n: number) =>
+  above(
+    `Idea ${n}: a title line about release trust\n\n` +
+      "A paragraph of the idea's own body, long enough to stand as a document on its own.\n\n",
+  );
+const IDEAS = [IDEA(1), IDEA(2), IDEA(3), IDEA(4), IDEA(5)];
+const FAN_OUT_MEMBER_IDS = ["ideas[0]", "ideas[1]", "ideas[2]", "ideas[3]", "ideas[4]"];
+
+describe("cinatra#3476 — an output whose members were filed as artifacts takes no road", () => {
+  it("the real shape: five members filed through the fan-out binding, and the bare list is NOT filed", async () => {
+    const d = deps();
+    const outcomes = await pickUpDefaultRoadOutputs(
+      {
+        ...base,
+        // Exactly what the materializer reports for a fan-out outcome: the
+        // members' ids, never the bare key.
+        boundOutputIds: FAN_OUT_MEMBER_IDS,
+        endNodeOutputs: { ideas: IDEAS },
+      },
+      d,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].outputId).toBe("ideas");
+    expect(outcomes[0].ok).toBe(false);
+    expect(outcomes[0].skipped).toBe("bound");
+    // Nothing is written: no artifact for the list, so no row in the library and
+    // no page of its own.
+    expect(d.write).not.toHaveBeenCalled();
+  });
+
+  it("the rule reads the id SHAPE, never a key name — the same holds for any list whose members were filed", async () => {
+    const d = deps();
+    const outcomes = await pickUpDefaultRoadOutputs(
+      {
+        ...base,
+        boundOutputIds: ["chapters[0]", "chapters[1]"],
+        endNodeOutputs: { chapters: [IDEA(6), IDEA(7)] },
+      },
+      d,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].outputId).toBe("chapters");
+    expect(outcomes[0].skipped).toBe("bound");
+    expect(d.write).not.toHaveBeenCalled();
+  });
+
+  it("a bound id that only LOOKS like a member never suppresses an unrelated output of that name", async () => {
+    // The rule speaks about a LIST whose members were filed. An output literally
+    // named `report[0]` is not a member of anything, and the separate `report`
+    // output beside it is a document of its own — it keeps its road.
+    const d = deps();
+    const outcomes = await pickUpDefaultRoadOutputs(
+      {
+        ...base,
+        boundOutputIds: ["report[0]"],
+        endNodeOutputs: { report: MARKDOWN },
+      },
+      d,
+    );
+    const report = outcomes.find((o) => o.outputId === "report")!;
+    expect(report.ok).toBe(true);
+    const write = d.write as ReturnType<typeof vi.fn>;
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0].outputId).toBe(defaultRoadLedgerOutputId("report"));
+  });
+
+  it("only the list is removed: an output no binding claimed still takes the road beside it", async () => {
+    const d = deps();
+    const outcomes = await pickUpDefaultRoadOutputs(
+      {
+        ...base,
+        boundOutputIds: FAN_OUT_MEMBER_IDS,
+        endNodeOutputs: { ideas: IDEAS, report: MARKDOWN },
+      },
+      d,
+    );
+    const ideas = outcomes.find((o) => o.outputId === "ideas")!;
+    expect(ideas.ok).toBe(false);
+    expect(ideas.skipped).toBe("bound");
+    const report = outcomes.find((o) => o.outputId === "report")!;
+    expect(report.ok).toBe(true);
+    const write = d.write as ReturnType<typeof vi.fn>;
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0].outputId).toBe(defaultRoadLedgerOutputId("report"));
+  });
+});

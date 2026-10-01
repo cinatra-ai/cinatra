@@ -21,6 +21,11 @@
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// The HOST-SERVED module id, imported from its ONE definition (the client-bundle
+// builder, which leaves it external as a host peer — cinatra#3471/#3477). Never
+// re-declared here: one id, one definition. The builder is import-side-effect-free
+// (its CLI is `isMain`-guarded) and pulls in no bundler at import time.
+import { HOST_DESIGN_PRIMITIVES_MODULE } from "./build-client-renderer-bundle.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -174,22 +179,33 @@ export function scanCrossExtImportsInText(rawText, selfName, allNames) {
 // ---------------------------------------------------------------------------
 // SDK-only coupling
 // ---------------------------------------------------------------------------
-// The CANONICAL rule: an extension's ONLY permitted `@cinatra-ai/*`
-// CODE deps are the two SDK packages. Every OTHER first-party scoped dep —
-// `@cinatra-ai/mcp-server`, `@cinatra-ai/objects`, a sibling connector, a
+// The CANONICAL rule: an extension's permitted `@cinatra-ai/*` CODE deps are the
+// two SDK packages plus the HOST-SERVED packages below (cinatra#3504) — two
+// DISTINCT classes of allowed first-party dep. Every OTHER first-party scoped
+// dep — `@cinatra-ai/mcp-server`, `@cinatra-ai/objects`, a sibling connector, a
 // sibling-extension-scope package, … — is extraction-blocking coupling and a violation,
 // whether it arrives via a runtime import, an `import type`, OR a package.json
 // `dependencies`/`peerDependencies` entry (many couplings are UNDECLARED in
 // package.json and resolved via workspace hoist, so SOURCE scanning is required,
 // not just manifest reading).
 
-// The only always-allowed first-party scoped code deps. A specifier's BASE
-// package (scope/name, subpath stripped) is matched against this set, so a
+// The SDK class of always-allowed first-party scoped code deps. A specifier's
+// BASE package (scope/name, subpath stripped) is matched against this set, so a
 // portable subpath such as `@cinatra-ai/sdk-ui/marketplace` is allowed too.
 export const SDK_PACKAGES = new Set([
   "@cinatra-ai/sdk-extensions",
   "@cinatra-ai/sdk-ui",
 ]);
+
+// The HOST-SERVED first-party packages — a class DISTINCT from the SDK packages.
+// The host serves these modules to a loaded extension bundle at run time (the
+// bundle leaves them EXTERNAL, like React, and the host module-registry shim
+// resolves them to the host's ONE instance), so an extension importing one takes
+// on NO extraction-blocking coupling: nothing is extracted with it, there is no
+// package to carve out. They are therefore ALLOWED first-party deps, reported
+// under their own class rather than as SDK-only violations. A subpath collapses
+// to the base package, exactly as in the SDK class.
+export const HOST_SERVED_PACKAGES = new Set([HOST_DESIGN_PRIMITIVES_MODULE]);
 
 // First-party scopes whose non-SDK packages are extraction-blocking coupling.
 // `@cinatra-ai` is the host scope; each in-tree `extensions/<scope>/` is a
@@ -242,15 +258,16 @@ export function basePackageOf(spec) {
 }
 
 /** True when `spec` is a first-party (host scope or an in-tree sibling-extension
- * scope) NON-SDK code coupling — the SDK-only violation predicate. SDK packages
- * (and their subpaths) are allowed; everything outside the first-party scopes is
- * ignored. `firstPartyScopes` defaults to the on-disk-derived set (injectable for
- * tests). */
+ * scope) code coupling that is neither an SDK package nor a HOST-SERVED one — the
+ * SDK-only violation predicate. SDK packages and host-served packages (and their
+ * subpaths) are allowed; everything outside the first-party scopes is ignored.
+ * `firstPartyScopes` defaults to the on-disk-derived set (injectable for tests). */
 export function isSdkOnlyViolation(spec, firstPartyScopes = FIRST_PARTY_SCOPES) {
   const base = basePackageOf(spec);
   if (!base) return false;
   const scope = base.startsWith("@") ? base.split("/")[0] : null;
   if (!scope || !firstPartyScopes.has(scope)) return false;
+  if (HOST_SERVED_PACKAGES.has(base)) return false; // served by the host at run time
   return !SDK_PACKAGES.has(base);
 }
 
@@ -260,8 +277,18 @@ export function isSdkOnlyViolation(spec, firstPartyScopes = FIRST_PARTY_SCOPES) 
  * same as a value import). Self-imports are excluded. Returns base packages
  * (subpaths collapsed) so the ratchet unit is `(extension, base-package)`. */
 export function scanSdkOnlyImportsInText(rawText, selfName, firstPartyScopes = FIRST_PARTY_SCOPES) {
-  const text = stripComments(rawText);
   const hits = new Set();
+  for (const base of importedScopedBasePackages(rawText, selfName)) {
+    if (isSdkOnlyViolation(base, firstPartyScopes)) hits.add(base);
+  }
+  return hits;
+}
+
+/** Distinct scoped base packages IMPORTED in `rawText` (comments stripped, self
+ * excluded) — the shared scan both first-party classifications read. */
+function importedScopedBasePackages(rawText, selfName) {
+  const text = stripComments(rawText);
+  const bases = new Set();
   // Capture the FULL specifier (incl. subpath) so `basePackageOf` can collapse
   // `@cinatra-ai/sdk-ui/marketplace` → allowed and `@cinatra-ai/mcp-server/credentials`
   // → `@cinatra-ai/mcp-server` (a violation). `[^"'`]+` spans the subpath.
@@ -270,7 +297,18 @@ export function scanSdkOnlyImportsInText(rawText, selfName, firstPartyScopes = F
   while ((m = re.exec(text))) {
     const base = basePackageOf(m[1]);
     if (!base || base === selfName) continue;
-    if (isSdkOnlyViolation(base, firstPartyScopes)) hits.add(base);
+    bases.add(base);
+  }
+  return bases;
+}
+
+/** Distinct HOST-SERVED base packages IMPORTED in `rawText` — the allowed
+ * first-party class, reported rather than flagged. Subpaths collapse to the base
+ * package, so the reporting unit matches the ratchet unit. */
+export function scanHostServedImportsInText(rawText, selfName) {
+  const hits = new Set();
+  for (const base of importedScopedBasePackages(rawText, selfName)) {
+    if (HOST_SERVED_PACKAGES.has(base)) hits.add(base);
   }
   return hits;
 }
@@ -292,13 +330,42 @@ export function sdkOnlyManifestDeps(pkg, selfName, firstPartyScopes = FIRST_PART
   return hits;
 }
 
-function scanSdkOnlyViolations(extName, extDir, pkg) {
+/** Distinct HOST-SERVED base packages declared in a package.json's
+ * `dependencies` + `peerDependencies` (+ `optionalDependencies`). Self excluded;
+ * keys collapse to their base package, mirroring the violation path. */
+export function hostServedManifestDeps(pkg, selfName) {
   const hits = new Set();
-  for (const f of walkFiles(extDir, isSource)) {
-    for (const h of scanSdkOnlyImportsInText(readFileSync(f, "utf8"), extName)) hits.add(h);
+  const decl = {
+    ...(pkg?.dependencies ?? {}),
+    ...(pkg?.peerDependencies ?? {}),
+    ...(pkg?.optionalDependencies ?? {}),
+  };
+  for (const key of Object.keys(decl)) {
+    if (key === selfName) continue;
+    // Collapse through `basePackageOf` exactly as the violation path does, so a
+    // key the predicate EXEMPTS as a host-served subpath is also REPORTED here
+    // (an exempted-but-invisible dep would be a hole in the classification).
+    const base = basePackageOf(key);
+    if (base && HOST_SERVED_PACKAGES.has(base)) hits.add(base);
   }
-  for (const h of sdkOnlyManifestDeps(pkg, extName)) hits.add(h);
-  return [...hits].sort();
+  return hits;
+}
+
+/** One walk of an extension's sources + manifest, classified into the two
+ * first-party outcomes: `violations` (extraction-blocking coupling) and
+ * `hostServed` (the ALLOWED host-served class). Both are sorted base-package
+ * arrays, so the ratchet unit stays `(extension, base-package)`. */
+function scanFirstPartyCodeDeps(extName, extDir, pkg) {
+  const violations = new Set();
+  const hostServed = new Set();
+  for (const f of walkFiles(extDir, isSource)) {
+    const text = readFileSync(f, "utf8");
+    for (const h of scanSdkOnlyImportsInText(text, extName)) violations.add(h);
+    for (const h of scanHostServedImportsInText(text, extName)) hostServed.add(h);
+  }
+  for (const h of sdkOnlyManifestDeps(pkg, extName)) violations.add(h);
+  for (const h of hostServedManifestDeps(pkg, extName)) hostServed.add(h);
+  return { violations: [...violations].sort(), hostServed: [...hostServed].sort() };
 }
 
 function scanHostInternalImports(extDir) {
@@ -745,6 +812,7 @@ export async function buildInventory() {
     const undeclaredCrossExtensionImports = crossExtensionImports.filter(
       (d) => !declaredCrossExtDeps.has(d),
     );
+    const firstPartyCodeDeps = scanFirstPartyCodeDeps(name, e.dir, pkg);
     extensions.push({
       name,
       scope: e.scope,
@@ -769,7 +837,12 @@ export async function buildInventory() {
       // packages. This is the real extraction-blocking dimension (catches
       // `mcp-server`/`objects`/`llm`/sibling connectors the cross-extension
       // scanner misses because those live in `packages/`, not `extensions/`).
-      sdkOnlyViolations: scanSdkOnlyViolations(name, e.dir, pkg),
+      sdkOnlyViolations: firstPartyCodeDeps.violations,
+      // The ALLOWED first-party deps of the HOST-SERVED class (see
+      // HOST_SERVED_PACKAGES): imported or declared, collapsed to base packages.
+      // Additive to the record — a distinct class, never mixed into the
+      // violations above, so the coupling report stays readable.
+      hostServedDeps: firstPartyCodeDeps.hostServed,
       hostInternalImports: scanHostInternalImports(e.dir),
       agentDependencies: cin.agentDependencies ?? null,
       connectorDependencies: cin.connectorDependencies ?? null,

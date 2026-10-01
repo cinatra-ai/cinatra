@@ -13,6 +13,8 @@ const redeemUserAuthCode = vi.fn();
 const mintWidgetStreamToken = vi.fn();
 const allowConnectTokenRequest = vi.fn();
 const allowNamedRateLimit = vi.fn();
+const emitWidgetAuthAudit = vi.fn();
+const getTrustedTokenOrigins = vi.fn();
 
 vi.mock("@/lib/widget-frame-auth", async () => {
   const actual = await vi.importActual<typeof import("@/lib/widget-frame-auth")>(
@@ -20,7 +22,7 @@ vi.mock("@/lib/widget-frame-auth", async () => {
   );
   return {
     // The same-origin gate is the REAL one — it is part of what these cases test.
-    isSameOriginFrameRequest: actual.isSameOriginFrameRequest,
+    resolveFrameRequestOrigin: actual.resolveFrameRequestOrigin,
     deriveFrameBinding: (...a: unknown[]) => deriveFrameBinding(...a),
   };
 });
@@ -36,7 +38,13 @@ vi.mock("@/lib/connect-rate-limit", () => ({
   allowNamedRateLimit: (...a: unknown[]) => allowNamedRateLimit(...a),
 }));
 vi.mock("@/lib/connect-provisioning", () => ({ sha256Base64Url: (v: string) => `h(${v})` }));
-vi.mock("@/lib/widget-auth-audit", () => ({ emitWidgetAuthAudit: vi.fn() }));
+vi.mock("@/lib/widget-auth-audit", () => ({
+  emitWidgetAuthAudit: (...a: unknown[]) => emitWidgetAuthAudit(...a),
+}));
+// cinatra#3330 — the operator-controlled canonical-origin allowlist.
+vi.mock("@cinatra-ai/mcp-server/credentials", () => ({
+  getTrustedTokenOrigins: (...a: unknown[]) => getTrustedTokenOrigins(...a),
+}));
 vi.mock("@/lib/widget-stream-agents.server", () => ({
   // Keyed on the DERIVED slug: the routes never receive one from the caller.
   resolveWidgetStreamAgentUnion: async (slug: string) =>
@@ -53,6 +61,8 @@ import { POST as frameInit } from "../init/route";
 import { POST as frameToken } from "../token/route";
 
 const SELF = "https://app.cinatra.test";
+// cinatra#3330 — the saved public base origin, the address the frame is served at.
+const PUBLIC_ORIGIN = "https://widget.public.test";
 const SITE = {
   siteId: "site-1",
   client: "wordpress",
@@ -81,6 +91,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   allowConnectTokenRequest.mockReturnValue(true);
   allowNamedRateLimit.mockReturnValue(true);
+  getTrustedTokenOrigins.mockReturnValue([SELF, PUBLIC_ORIGIN]);
   deriveFrameBinding.mockReturnValue({
     ok: true,
     binding: {
@@ -299,5 +310,138 @@ describe("POST /api/widget-auth/frame/token", () => {
     );
     expect(res.status).toBe(400);
     expect(redeemUserAuthCode).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#3330 — BOTH ROUTES BUILD THEIR PUBLIC URLS FROM THE CANONICAL ORIGIN.
+//
+// On a boot whose public address differs from its bind address, `request.url`
+// carries the bind address. The init route's `authorizeUrl` and the token
+// route's `issuerBaseUrl` must carry the canonical origin the shared gate
+// matched instead — otherwise the gate would answer 200 and the frame would
+// still reject an authorize URL whose origin is not its own.
+describe("the frame routes agree on the canonical origin, never on request.url", () => {
+  const INTERNAL = "http://127.0.0.1:3000";
+
+  // The same POST the frame sends, as the framework presents it on such a boot:
+  // an internal `request.url`, the frame's real public `Origin`.
+  function internalFrameRequest(path: string, body: unknown, headers: Record<string, string> = {}) {
+    return new Request(`${INTERNAL}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: PUBLIC_ORIGIN,
+        "Sec-Fetch-Site": "same-origin",
+        // Forged for good measure: neither is an authority.
+        Host: new URL(INTERNAL).host,
+        "X-Forwarded-Host": new URL(INTERNAL).host,
+        "X-Forwarded-Proto": "http",
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  const initBody = {
+    ...SELECTORS,
+    codeChallenge: "a".repeat(43),
+    codeChallengeMethod: "S256",
+    state: "state-value-1234",
+  };
+  const tokenBody = {
+    ...SELECTORS,
+    grantType: "authorization_code",
+    code: "code-1",
+    codeVerifier: "v".repeat(43),
+  };
+
+  it("init PASSES the gate and returns an authorizeUrl on the CANONICAL public origin, not on request.url", async () => {
+    const res = await frameInit(internalFrameRequest("/api/widget-auth/frame/init", initBody));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.authorizeUrl).toBe(`${PUBLIC_ORIGIN}/widget-auth?txn=txn-1`);
+    expect(json.authorizeUrl).not.toContain(new URL(INTERNAL).host);
+  });
+
+  it("token PASSES the gate and issues against the CANONICAL public origin, not against request.url", async () => {
+    const res = await frameToken(internalFrameRequest("/api/widget-auth/frame/token", tokenBody));
+    expect(res.status).toBe(200);
+    expect(redeemUserAuthCode).toHaveBeenCalledWith(
+      expect.objectContaining({ issuerBaseUrl: PUBLIC_ORIGIN }),
+    );
+    expect(mintWidgetStreamToken).toHaveBeenCalledWith(
+      expect.objectContaining({ issuerBaseUrl: PUBLIC_ORIGIN }),
+    );
+  });
+
+  it("the two routes agree: the init authorizeUrl origin IS the token issuer", async () => {
+    const initRes = await frameInit(internalFrameRequest("/api/widget-auth/frame/init", initBody));
+    const { authorizeUrl } = await initRes.json();
+    await frameToken(internalFrameRequest("/api/widget-auth/frame/token", tokenBody));
+    const issuer = redeemUserAuthCode.mock.calls[0][0].issuerBaseUrl;
+    expect(new URL(authorizeUrl).origin).toBe(issuer);
+  });
+
+  it("a mismatching Origin still fails on BOTH routes with the audit reason unchanged", async () => {
+    const initRes = await frameInit(
+      internalFrameRequest("/api/widget-auth/frame/init", initBody, {
+        Origin: "https://wp.example.test",
+      }),
+    );
+    expect(initRes.status).toBe(401);
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "init_failure",
+      expect.objectContaining({ reason: "not_same_origin" }),
+    );
+
+    emitWidgetAuthAudit.mockClear();
+    const tokenRes = await frameToken(
+      internalFrameRequest("/api/widget-auth/frame/token", tokenBody, {
+        Origin: "https://wp.example.test",
+      }),
+    );
+    expect(tokenRes.status).toBe(401);
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "redeem_failure",
+      expect.objectContaining({ reason: "not_same_origin" }),
+    );
+  });
+
+  it("a forged Host and forwarded headers naming the canonical host do NOT buy a foreign Origin either route", async () => {
+    const publicHost = new URL(PUBLIC_ORIGIN).host;
+    const forged = {
+      Origin: "https://wp.example.test",
+      Host: publicHost,
+      "X-Forwarded-Host": publicHost,
+      "X-Forwarded-Proto": "https",
+    };
+    expect(
+      (await frameInit(internalFrameRequest("/api/widget-auth/frame/init", initBody, forged)))
+        .status,
+    ).toBe(401);
+    expect(
+      (await frameToken(internalFrameRequest("/api/widget-auth/frame/token", tokenBody, forged)))
+        .status,
+    ).toBe(401);
+    expect(createAuthTransaction).not.toHaveBeenCalled();
+    expect(redeemUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES both routes when the Origin is an allowlist member's near-miss on port or scheme", async () => {
+    for (const nearMiss of ["http://widget.public.test", "https://widget.public.test:8443"]) {
+      expect(
+        (await frameInit(
+          internalFrameRequest("/api/widget-auth/frame/init", initBody, { Origin: nearMiss }),
+        )).status,
+      ).toBe(401);
+      expect(
+        (await frameToken(
+          internalFrameRequest("/api/widget-auth/frame/token", tokenBody, { Origin: nearMiss }),
+        )).status,
+      ).toBe(401);
+    }
+    expect(createAuthTransaction).not.toHaveBeenCalled();
+    expect(redeemUserAuthCode).not.toHaveBeenCalled();
+    expect(mintWidgetStreamToken).not.toHaveBeenCalled();
   });
 });

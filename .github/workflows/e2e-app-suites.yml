@@ -75,34 +75,31 @@ concurrency:
 
 jobs:
   # -------------------------------------------------------------------------
-  # detect — compute a single `skip` boolean: docs-only OR draft. The heavy
-  # browser jobs gate their whole run on it so a docs-only / draft PR does not
-  # pay a ~20-minute production build. No checkout: dorny reads the PR's changed
-  # files from the REST API. On push / merge_group / dispatch the dorny step is
-  # skipped, draft is N/A, and `skip` defaults to false (a real run).
-  # -------------------------------------------------------------------------
+  # detect — classify the complete PR inventory before paying for builds.
+  # Unknown/shared inputs retain every gate. Drafts keep type/unit feedback;
+  # expensive runtime jobs remain deferred until ready_for_review. Push, queue
+  # and manual events always retain the full check set.
   detect:
-    name: Detect skip — docs-only or draft (e2e-app-suites)
+    name: Detect CI impact (e2e-app-suites)
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
     outputs:
-      skip: ${{ github.event_name == 'pull_request' && (github.event.pull_request.draft == true || steps.filter.outputs.code != 'true') }}
+      skip: ${{ steps.impact.outputs.skip }}
+      skip_unit: ${{ steps.impact.outputs.skip_unit }}
+      skip_runtime: ${{ steps.impact.outputs.skip_runtime }}
+      skip_notifications: ${{ steps.impact.outputs.skip_notifications }}
+      skip_agents: ${{ steps.impact.outputs.skip_agents }}
     steps:
-      - id: filter
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        with:
-          predicate-quantifier: 'every'
-          filters: |
-            code:
-              - '**'
-              - '!docs/**'
-              - '!**/*.md'
-              - '!AGENTS.md'
-              - '!CLAUDE.md'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select work from the complete changed-file inventory
+        id: impact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CI_PR_DRAFT: ${{ github.event.pull_request.draft }}
+        run: node scripts/ci/ci-impact.mjs
 
   # -------------------------------------------------------------------------
   # render-smoke-e2e — every static route renders without a 500 / error
@@ -371,7 +368,7 @@ jobs:
     # — see the TRIGGER SCOPE note in the header. NON-REQUIRED by design (see the
     # NON-REQUIRED note): promoting it to required additionally needs the
     # build-image docs-only green-STUB so a docs-only PR reports green.
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    if: ${{ needs.detect.outputs.skip_notifications != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 45
     services:
@@ -586,7 +583,7 @@ jobs:
   agents-run-invariants:
     name: Agents-run static invariants (tunnel-wiring)
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    if: ${{ needs.detect.outputs.skip_agents != 'true' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:

@@ -91,6 +91,22 @@ export type AgentRunRowModel = {
   } | null;
 };
 
+/**
+ * The /agents "All Agents" card row.
+ *
+ * The shared card understands `version` and `status` BY NAME since the
+ * per-scope Agents tabs supply them (cinatra#2808). This row model carries a
+ * `version` of its own, so handing the whole row to the card would render a
+ * version on the ratified surface the drawing draws "without the version and
+ * the Active / Archived indicator". The two fields are therefore DROPPED here,
+ * at the renderer that decides what /agents draws — the version stays in the
+ * row model for the search/meta uses that own it.
+ */
+function toAllAgentsCardRow(row: AgentRunRowModel) {
+  const { version: _version, skills: _skills, ...rest } = row;
+  return { ...rest, version: null, status: null, settingsHref: null };
+}
+
 export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
@@ -124,7 +140,7 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
             detail-modal open state so the card's coloured accent panel and its
             "More details" link open the SAME modal. */}
         {filtered.map((row) => (
-          <AgentAllCard key={row.key} row={row} />
+          <AgentAllCard key={row.key} row={toAllAgentsCardRow(row)} />
         ))}
         {filtered.length === 0 && q.length > 0 && (
           <p className="col-span-full py-8 text-center text-sm text-muted-foreground">

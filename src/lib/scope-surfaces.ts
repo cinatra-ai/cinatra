@@ -102,6 +102,21 @@ export const SCOPE_SURFACE_LAUNCH_SEGMENT = "new";
 /** The settings segment below the vendor/package pair. */
 export const SCOPE_SURFACE_SETTINGS_SEGMENT = "settings";
 
+/** The PANE the assignment page of design#156 §VII opens on, as a
+ *  Settings link carries it.
+ *
+ *  §VII: "An agent's page is `<scope-base>/agents/<vendor>/<slug>/settings?tab=skills|artifacts`;
+ *  an assistant's is `<scope-base>/assistants/<vendor>/<slug>/settings?tab=skills`",
+ *  and "Assistants take skills only, so an assistant's page renders the Skills
+ *  pane alone". §IV repeats it for the card: "the Settings link carries the
+ *  address §VII gives it".
+ *
+ *  For the AGENT card's link §VII names the two panes without naming which one
+ *  that link opens, so the link carries the FIRST-named pane; the reading is
+ *  recorded as a drawing question for a design follow-up rather than settled
+ *  here. For the assistant row there is only one pane to carry. */
+export const SCOPE_SURFACE_SETTINGS_PANE_QUERY = "?tab=skills";
+
 /** The segment the scoped assistants mount answers on. */
 export const SCOPE_SURFACE_ASSISTANTS_SEGMENT = "assistants";
 
@@ -151,7 +166,10 @@ export function scopeSurfaceAgentSettingsHref(
   scope: ScopeSurfaceRef,
   agentPackageName: string,
 ): string {
-  return `${scopeSurfaceAgentBaseHref(scope, agentPackageName)}/${SCOPE_SURFACE_SETTINGS_SEGMENT}`;
+  return `${scopeSurfaceAgentBaseHref(
+    scope,
+    agentPackageName,
+  )}/${SCOPE_SURFACE_SETTINGS_SEGMENT}${SCOPE_SURFACE_SETTINGS_PANE_QUERY}`;
 }
 
 /** A PERSISTED run's address at this scope.
@@ -200,7 +218,10 @@ export function scopeSurfaceAssistantSettingsHref(
   scope: ScopeSurfaceRef,
   assistant: { vendor: string; slug: string },
 ): string {
-  return `${scopeSurfaceAssistantBaseHref(scope, assistant)}/${SCOPE_SURFACE_SETTINGS_SEGMENT}`;
+  return `${scopeSurfaceAssistantBaseHref(
+    scope,
+    assistant,
+  )}/${SCOPE_SURFACE_SETTINGS_SEGMENT}${SCOPE_SURFACE_SETTINGS_PANE_QUERY}`;
 }
 
 /** The kicker above the page title — the scope KIND, never the entity name. */

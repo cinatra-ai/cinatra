@@ -1141,7 +1141,13 @@ async function resolveWayflowXRenderer(
 // reaches this helper. Each call site passes the literal status it KNOWS the
 // DB row is in:
 //   - initial dispatch (this file) → "running"
-//   - review-task-actions resume   → "pending_approval"
+//   - review-task-actions resume   → "running" — cinatra#3423: that road CLAIMS
+//     the gate with ONE conditional `pending_approval -> running` transition
+//     before it records or dispatches anything, so the row has already left
+//     `pending_approval` by the time the task comes back. The handler is told
+//     where the run ACTUALLY is, and every edge it needs out of `running` — to
+//     `pending_approval` for the next gate, to `completed`, `failed` or
+//     `waiting_trigger` — the state machine already carries.
 //   - mcp/handlers resume          → "pending_approval"
 //
 // Same-status short-circuit: when fromStatus === target, return without

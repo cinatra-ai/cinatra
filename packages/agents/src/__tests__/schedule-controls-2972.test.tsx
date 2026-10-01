@@ -239,19 +239,13 @@ describe("point 1 — a fired one-off or immediate run freezes", () => {
     // exactly that. The value stands where the field stood.
     expect(container.querySelector('[data-field="schedule-run-at"]')).toBeNull();
     expect(container.querySelectorAll("input")).toHaveLength(0);
-    // The MOMENT, in the reader's own locale — the same reading the picker drew
-    // a moment earlier, never the wire's naive wall clock (cinatra#3174 fix leg
-    // 1). Asserted on the parts, because the locale is the reader's.
+    // The MOMENT, in the DRAWING's fixed format — the armed wall clock written
+    // out as DD.MM.YYYY, HH:mm, never the wire's naive string and never the
+    // user agent's own clock (cinatra#3282; the reading itself is cinatra#3174
+    // fix leg 1). The whole clock is pinned: the year and the hour alone would
+    // pass a formatter that moved the day.
     const readAt = rows(container)?.textContent ?? "";
-    expect(readAt).toContain(
-      // The whole wall clock, in the reader's locale — see the note in
-      // schedule-card-readings-per-drawing-3193-fix1: the year and the hour
-      // alone would pass a formatter that moved the day (converge round).
-      new Date(2020, 2, 4, 9, 0).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }),
-    );
+    expect(readAt).toContain("04.03.2020, 09:00");
   });
 });
 

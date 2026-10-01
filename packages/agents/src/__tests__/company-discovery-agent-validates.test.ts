@@ -85,19 +85,21 @@ describe("company-discovery-agent OAS validates against L1, LLM metadata, and St
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=[] AND hidden covers companyName/domain/apolloLookup/cinatra_run_id (ApiNode loader invariant)", () => {
+  it("StartNode required=['companyName','domain'] AND hidden=['apolloLookup','cinatra_run_id'] — covers all 4 inputs", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
     const meta = (start!.metadata as Record<string, unknown> | undefined)?.cinatra as
       | Record<string, unknown>
       | undefined;
-    expect(meta?.required).toEqual([]);
-    expect(meta?.hidden).toEqual(["companyName", "domain", "apolloLookup", "cinatra_run_id"]);
+    expect(meta?.required).toEqual(["companyName", "domain"]);
+    expect(meta?.hidden).toEqual(["apolloLookup", "cinatra_run_id"]);
     const startInputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(startInputs.map((i) => i.title as string));
+    const requiredSet = new Set(meta?.required as string[]);
     const hiddenSet = new Set(meta?.hidden as string[]);
-    expect(hiddenSet).toEqual(inputTitles);
+    const union = new Set<string>([...requiredSet, ...hiddenSet]);
+    expect(union).toEqual(inputTitles);
   });
 
   it("EndNode declares 3 outputs (accountId/wasMerged/apolloOrganizationId) AND data_flow_connections.length === 7 (incl. cinatra_run_id DFE) AND control_flow_connections.length === 2", () => {

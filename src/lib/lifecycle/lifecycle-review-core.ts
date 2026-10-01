@@ -72,6 +72,43 @@ export type ProducedOutputDeclaration = {
   readonly hasArtifactBindings: boolean | null;
 };
 
+/**
+ * How the write this event reports was PRODUCED, as the materialization ledger
+ * recorded it (cinatra#3476).
+ *
+ * `null` is UNKNOWN and is never a refusal, for the same reason the declaration
+ * above is three-valued: a write no ledger row names (another emitter's, a
+ * revision appended outside a run) has not been proved anything about.
+ */
+export type ProducedWriteProvenance = {
+  /** The ledger `path` of the write, or null when nothing recorded one. */
+  readonly materializationPath: string | null;
+};
+
+/** The ledger path of THE DEFAULT ROAD — the pickup that files, at terminal
+ *  success, an end-node output NO binding named. Restated here as a bare string
+ *  because this core is pure and the ledger module is server-only. */
+export const DEFAULT_ROAD_MATERIALIZATION_PATH = "default_road";
+
+/**
+ * The provenance of ONE recorded write, read off the ledger paths that name it.
+ *
+ * The identity a write is read back by — (org, run, artifact, revision) — is NOT
+ * the ledger's unique key, so more than one row may name one write. The question
+ * asked of the answer is a single one — did this write take the default road —
+ * so ONE row recording it settles the answer whatever order the rows come back
+ * in, and the reading is deterministic by construction rather than by an ORDER BY.
+ */
+export function writeProvenanceFromLedgerPaths(
+  paths: readonly string[],
+): ProducedWriteProvenance {
+  if (paths.length === 0) return { materializationPath: null };
+  if (paths.includes(DEFAULT_ROAD_MATERIALIZATION_PATH)) {
+    return { materializationPath: DEFAULT_ROAD_MATERIALIZATION_PATH };
+  }
+  return { materializationPath: paths[0] };
+}
+
 export type ReviewCoreInput =
   | {
       readonly kind: "declared-targets";
@@ -83,6 +120,9 @@ export type ReviewCoreInput =
       readonly produces: ProducedOutputDeclaration;
       /** The RECORDED write. Its existence is the second half of the binding. */
       readonly writeEvent: ProducedEventAxes;
+      /** How that write was produced, when the ledger recorded it (cinatra#3476).
+       *  Absent or unknown leaves the declaration to answer alone. */
+      readonly writeProvenance?: ProducedWriteProvenance;
     };
 
 // ---------------------------------------------------------------------------
@@ -142,6 +182,25 @@ export function proveReviewBinding(input: ReviewCoreInput): ReviewBinding {
     return {
       bound: false,
       why: "the producing agent declares no artifact-bound output — a review exists only for artifact-bound work",
+    };
+  }
+  // PER ARTIFACT, not per template (cinatra#3476). `hasArtifactBindings` is the
+  // AGENT's declaration — the flow declares an artifact-bound output somewhere —
+  // and it says nothing about WHICH write this event reports. The default road
+  // files precisely what no binding named, so a write that took it is bound to no
+  // declared output: it is not the work the agent said it produces, and a review
+  // exists only for artifact-bound work. A list whose members were each filed
+  // through a declared binding reaches a reviewer as those members; the list the
+  // road would file beside them is not a target.
+  if (
+    input.writeProvenance?.materializationPath ===
+    DEFAULT_ROAD_MATERIALIZATION_PATH
+  ) {
+    return {
+      bound: false,
+      why:
+        "the recorded write took the default road — no declared binding names it, " +
+        "so it is not artifact-bound work a review exists for",
     };
   }
   const target: ArtifactReviewTarget = {

@@ -348,7 +348,9 @@ export function recordRepairedCaptureOutcome(
  * Best-effort + per-row isolated (mirrors `dispatchPendingProducerRepairs`):
  * a single row's failure never blocks the rest, and a row this drain does not
  * own (a non-CMS base target) is left untouched for its own producer's
- * completion path (e.g. the blog pipeline's inline `repairBlogPostDraft`).
+ * completion path — the NEW-RUN road (cinatra#2951): that producer's own graph
+ * does the repairing work on the dispatched `producer_repair` run and answers
+ * through `submitRepairResponse`.
  */
 export async function completeDispatchedProducerCmsRepairs(opts?: {
   limit?: number;

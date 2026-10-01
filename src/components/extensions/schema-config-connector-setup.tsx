@@ -86,8 +86,20 @@ export type SchemaConfigConnectorSetupProps = {
   connectedLabel?: string;
   /** The host readiness road Check re-runs for a connector with no declared probe. */
   recheck?: () => Promise<ConnectorReadinessReading>;
-  /** Host content belonging to the SETUP surface only (the sharing section). */
-  footer?: ReactNode;
+  /**
+   * Host content of the fixed SHARING tab (design §II: "The second tab is
+   * Sharing, and every connector carries it … sharing is decided on its own
+   * tab, never inside Setup"). The route composes it; this shape only routes it
+   * to the form's Sharing panel.
+   */
+  sharing?: ReactNode;
+  /**
+   * The SAME section for the Install / Activate state, which draws no form and
+   * therefore no tab strip. That state kept the standalone mount it already
+   * had before this issue — the tab-variant node is the tab's, and mounting it
+   * where there is no tab would restyle a page this issue does not change.
+   */
+  sharingStandalone?: ReactNode;
   /**
    * The route's crumb-publisher island (cinatra#3215). The dispatch route
    * resolves the vendor / connector display names in ITS server render, after
@@ -114,7 +126,8 @@ export function SchemaConfigConnectorSetup({
   connected,
   connectedLabel,
   recheck,
-  footer,
+  sharing,
+  sharingStandalone,
   crumbTrail,
 }: SchemaConfigConnectorSetupProps) {
   return (
@@ -149,12 +162,18 @@ export function SchemaConfigConnectorSetup({
               recheck={recheck}
             />
           }
-          setupFooter={footer}
+          sharingTab={sharing}
         />
       ) : (
         <>
+          {/* Not installed / not active for this actor: there is no setup form
+              here and so no tab strip. The sharing section still mounts, because
+              a connection saved before the install was deactivated is still the
+              owner's to hand on — and this is not the Setup tab. It mounts in
+              the STANDALONE shape it already had: this issue moves the section
+              onto a tab, it does not restyle the states that carry no tab. */}
           <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
-          {footer}
+          {sharingStandalone}
         </>
       )}
     </ConnectorSetupPage>

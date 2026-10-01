@@ -17,6 +17,7 @@ import {
   type SerializedRuntimeRendererDescriptor,
 } from "@/lib/artifacts/runtime-renderer-descriptor";
 import {
+  assertDesignPrimitivesBundleConformance,
   assertSingleReactIdentity,
   isHostModuleRegistryInitialized,
 } from "@/lib/artifacts/host-module-registry";
@@ -137,6 +138,13 @@ export function DynamicRendererLoader({
         // 3. Single-React-identity conformance (AC-10). A second React copy throws.
         const observedReact = (mod as { __cinatraReact?: unknown }).__cinatraReact;
         if (observedReact !== undefined) assertSingleReactIdentity(observedReact);
+        // 3b. The host-shared design-primitives conformance (cinatra#3471 slice 2):
+        // a bundle that declares the primitives contract it was built against is
+        // refused fail-closed when this host serves a different MAJOR, and a
+        // SECOND copy of the primitives is refused the way a second React copy is.
+        // Both run on the same road React takes — the bundle preamble — so no
+        // publish record or signature changes.
+        assertDesignPrimitivesBundleConformance(mod);
 
         clearTimeout(timer);
         setState({ phase: "mounted", Component: candidate as ComponentType<ArtifactRendererProps> });

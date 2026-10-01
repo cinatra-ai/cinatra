@@ -22,6 +22,10 @@ name: toast-banner-gate
 
 on:
   pull_request:
+  # The merge queue runs this required check on the candidate commit it built
+  # (engineering#658 item 1). Without the trigger the context never reports on a
+  # queue entry and the entry waits for it forever.
+  merge_group:
   push:
     branches: [main]
 

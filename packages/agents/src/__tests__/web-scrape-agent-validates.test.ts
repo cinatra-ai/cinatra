@@ -99,6 +99,28 @@ describe("web-scrape-agent OAS validates against L1, LLM-metadata, and StartNode
     expect(meta?.hidden).toEqual(["maxUrls", "followLinks", "maxDepth"]);
   });
 
+  it("every array-typed field in the OAS carries an item schema (json_schema.items with a type)", () => {
+    const offenders: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) {
+        node.forEach((entry, index) => walk(entry, path + "[" + index + "]"));
+        return;
+      }
+      if (node === null || typeof node !== "object") return;
+      const record = node as Record<string, unknown>;
+      if (record.type === "array") {
+        const jsonSchema = record.json_schema as Record<string, unknown> | undefined;
+        const items = jsonSchema?.items as Record<string, unknown> | undefined;
+        if (!items || typeof items.type !== "string") {
+          offenders.push(path + " (" + String(record.title ?? "untitled") + ")");
+        }
+      }
+      for (const key of Object.keys(record)) walk(record[key], path + "." + key);
+    };
+    walk(oas, "");
+    expect(offenders).toEqual([]);
+  });
+
   it("EndNode declares the 4 expected outputs (items, sourceUrls, extractionNotes, failures) with correct types", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;

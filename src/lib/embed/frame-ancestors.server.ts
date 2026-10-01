@@ -4,6 +4,8 @@ import { isConcreteOrigin, normalizeConcreteOrigin } from "@cinatra-ai/streams/o
 
 import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
+import { listActiveConnectSiteOrigins } from "@/lib/connect-sites-store";
+import { readInstanceIdentityRequiringInstanceId } from "@/lib/instance-identity-store";
 
 // ---------------------------------------------------------------------------
 // S5 (cinatra#1221) Lane B §7 — the `/embed/assistant` frame-ancestors resolver.
@@ -49,16 +51,83 @@ function sealPolicyOrigin(origin: string): string | null {
 
 type StoredInstanceRow = { id?: unknown; siteUrl?: unknown };
 
+// ---------------------------------------------------------------------------
+// cinatra#3328 — THE SITE'S OWN STORED IDENTITY IS ALSO AN ANSWER.
+//
+// A site is connected in two steps that mint two different ids. The handshake
+// (`provisionFromGrant`) writes the site's row in `connect_sites` and hands the
+// site THIS APPLICATION'S OWN instance identity, which the site stores and puts
+// into the widget's embed address. "Connect site" later writes a row in the
+// connector's instances table under an id the connector mints for itself.
+// Nothing copies the second id back to the site, so the gate — which only ever
+// read the connector's instances — answered 'none' for the identity the site
+// actually holds, and the widget framed nowhere until someone edited the site's
+// stored value by hand.
+//
+// So when the connector's instances table has NO row for the presented id, the
+// gate reads the row the handshake itself wrote. Two narrow conditions, both
+// required, both fail-closed:
+//
+//   1. THE PRESENTED ID IS OUR OWN. The id must equal this application's single
+//      instance identity — the value the handshake hands out and nothing else.
+//      An arbitrary or forged selector never reaches the site table at all.
+//   2. EXACTLY ONE ACTIVE SITE ORIGIN for that connect client. Zero means no
+//      site is connected; several distinct origins mean the server cannot say
+//      which site this page belongs to. Both refuse — the SAME ambiguity
+//      discipline the instances road above already keeps, and the reason an
+//      ambiguous DUPLICATE instance match is never rescued by this road.
+//
+// The host reads its OWN tables by the connect client NAME it already holds in
+// the closed binding table; it learns nothing about, and special-cases nothing
+// in, any particular connector package.
+// ---------------------------------------------------------------------------
+function resolveConnectSiteFrameAncestor(input: {
+  connectClient: string;
+  instanceId: string;
+}): string | null {
+  const connectClient = input.connectClient.trim();
+  if (!connectClient || !input.instanceId) return null;
+
+  // Condition 1 — the presented id is this application's own instance identity.
+  const identity = readInstanceIdentityRequiringInstanceId();
+  const ownInstanceId =
+    identity && typeof identity.instanceId === "string" ? identity.instanceId.trim() : "";
+  if (!ownInstanceId || ownInstanceId !== input.instanceId) return null;
+
+  // Condition 2 — exactly one active site origin for this connect client, read
+  // through the same fail-closed accessor the widget-stream allowlist uses.
+  const origins = listActiveConnectSiteOrigins(connectClient);
+  const distinct = Array.from(
+    new Set(
+      (Array.isArray(origins) ? origins : [])
+        .map((value) => normalizeConcreteOrigin(typeof value === "string" ? value : ""))
+        .filter((value): value is string => typeof value === "string" && value.length > 0),
+    ),
+  );
+  if (distinct.length !== 1) return null;
+
+  // The seal re-asserts the verdict at the boundary that produces a policy
+  // value, exactly as the instances road does.
+  return sealPolicyOrigin(distinct[0]);
+}
+
 /**
  * Read-only: resolve the single registered origin for `{instancesConfigKey,
  * instanceId}`, or `null` on ANY failure (missing / duplicate / non-normalizable
  * / thrown). Exception-wrapped: a DB/read/normalize throw becomes `null`, never
  * an escape. This is the authorization-UNUSABLE narrower — do NOT call it to
  * choose a write target.
+ *
+ * `connectSiteFallbackClient` (cinatra#3328) OPTS THE CALLER IN to the second
+ * road described above: when the connector's instances table has no row for the
+ * presented id, the site's own `connect_sites` row answers instead — but only
+ * for the id the handshake hands out, and only when that client has exactly one
+ * active site origin. A caller that omits the field behaves exactly as before.
  */
 export function resolveInstanceFrameAncestor(input: {
   instancesConfigKey: string;
   instanceId: string;
+  connectSiteFallbackClient?: string | null;
 }): string | null {
   try {
     const instancesConfigKey = String(input.instancesConfigKey ?? "").trim();
@@ -76,9 +145,18 @@ export function resolveInstanceFrameAncestor(input: {
     const matches = instances.filter(
       (r) => typeof r.id === "string" && r.id.trim() === instanceId,
     );
-    // Zero matches → no binding; DUPLICATE matches → ambiguous. Both fail closed;
-    // NEVER select the first of several rows.
-    if (matches.length !== 1) return null;
+    // DUPLICATE matches → ambiguous: fail closed, NEVER select the first of
+    // several rows, and NEVER let the second road rescue the ambiguity.
+    if (matches.length > 1) return null;
+    // Zero matches → the connector holds no row for this id. That is the filed
+    // state of cinatra#3328 for a site that was connected through the handshake
+    // and then added under the connector: ask the site's own row (opt-in, and
+    // fail-closed inside the helper).
+    if (matches.length === 0) {
+      const connectClient = String(input.connectSiteFallbackClient ?? "").trim();
+      if (!connectClient) return null;
+      return resolveConnectSiteFrameAncestor({ connectClient, instanceId });
+    }
 
     const siteUrl = typeof matches[0].siteUrl === "string" ? matches[0].siteUrl : "";
     // The shared resolver returns "" for a missing / non-http(s) /
@@ -160,6 +238,10 @@ export function frameAncestorsDirectiveFor(input: {
   const origin = resolveInstanceFrameAncestor({
     instancesConfigKey: binding.instancesConfigKey,
     instanceId: String(input.instanceId ?? ""),
+    // The connect client name is the binding's OWN instances-config key — the
+    // same value `widget-frame-auth` already looks `connect_sites` up by. It
+    // comes from the CLOSED host-side table, never from the caller.
+    connectSiteFallbackClient: binding.instancesConfigKey,
   });
   return origin ?? FRAME_ANCESTORS_NONE;
 }

@@ -198,19 +198,23 @@ export function buildRunAwaitingHumanNotificationInput(input: {
     // Two different destinations share this title, so they must not share a body.
     // A derived input wait (`interrupt` classified `"input"`) really does land on a
     // form with fields. The run-start recommendation HOLD (`waitKind: "input"`, whose
-    // one caller is `onEnterRecommendationHold`) does NOT: it lands on the skills
-    // chip row, whose own copy reads "Confirm the skills for this run … Adjust the
-    // selection, then confirm — or skip". Telling that reader to "fill in the
-    // requested fields" names fields the card does not have.
+    // one caller is `onEnterRecommendationHold`) does NOT: it lands on the SKILLS
+    // STEP, whose ratified reading is a checkbox in front of each recommended skill
+    // and one Continue beneath the list — "The reader sets the boxes and presses
+    // Continue beneath the list … and the whole row is answered at once, every box
+    // together" (§V of the lifecycle-cards drawing). Telling that reader to "fill in
+    // the requested fields" names fields the step has not got.
     //
-    // INTERIM WORDING (cinatra#2838). The hold's final bell copy is the epic's ONE
-    // reserved decision and is NOT settled here; this line only stops the shipped
-    // row from describing a destination that does not exist. Whoever settles the
-    // reserved decision replaces this string — the branch, not the words, is the
-    // durable part.
+    // THE WORDING IS SETTLED (cinatra#3138, closing the decision cinatra#2838
+    // reserved): "Open the run to choose the recommended skills." It keeps this
+    // file's one-sentence "Open the run to …" shape, it names the act the boxes
+    // carry, and it names none of the three controls §V retired — "a pill carries
+    // nothing to press — no Confirm, no Adjust, no Skip" — so the bell cannot send
+    // its reader after an affordance the card does not draw. Its pinned test bans
+    // those three words from this body rather than only pinning the sentence.
     body =
       input.waitKind === "input"
-        ? "Open the run to confirm or skip the recommended skills."
+        ? "Open the run to choose the recommended skills."
         : "Open the run to fill in the requested fields.";
   } else if (input.reason === "pending_approval") {
     title = `${subject} is awaiting your approval`;

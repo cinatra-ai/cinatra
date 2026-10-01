@@ -10,7 +10,7 @@
 // Assistants/Agents tabs (#2808) and of the Artifacts/Skills tabs (#2810) are
 // their own slices, so what these shells render is an honest placeholder.
 import { createElement, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("next/link", () => ({
@@ -50,6 +50,29 @@ const names = vi.hoisted(() => {
   };
 });
 vi.mock("@/lib/scope-surface-entity-name", () => names);
+
+// The per-scope eligibility read the Agents/Assistants tabs perform for their
+// contents (cinatra#2808). This suite is about the SHELL: the strip, the active
+// tab, the scope hrefs and the honest empty state a scope with nothing to list
+// shows, so the read answers with no rows and every shell renders exactly the
+// placeholder S1 specified. What the read itself decides is proven in its own
+// suite, against fixtures, never against a live store.
+const eligibility = vi.hoisted(() => ({
+  readScopeSurfaceAgentRows: vi.fn(async () => []),
+  readScopeSurfaceAssistantRows: vi.fn(async () => []),
+}));
+vi.mock("@/lib/scope-surface-eligibility.server", () => eligibility);
+
+// The generated extension manifest is a SERVER registry whose entries import the
+// connector packages themselves; the tab bodies reach it through the shared
+// marketplace detail modal. A jsdom render of these shells needs none of it, and
+// the repository's other jsdom suites stand it in exactly this way.
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: {},
+  GENERATED_CONNECTOR_ENTRY_MODULES: {},
+  GENERATED_CONNECTOR_MCP_MODULES: {},
+  GENERATED_WIDGET_STREAM_AGENTS: {},
+}));
 
 const FIVE_TABS = ["Dashboards", "Assistants", "Agents", "Artifacts", "Skills"] as const;
 const NEW_TABS = ["assistants", "agents", "artifacts", "skills"] as const;
@@ -150,6 +173,23 @@ async function renderRoute(load: Loader, props: unknown) {
   const tree = await mod.default((props ?? {}) as never);
   render(tree as ReactNode);
 }
+
+// Whichever case runs first would otherwise pay the cold transform of this
+// file's whole page-module tree inside its own per-case hook, which trips the
+// run's hook budget on a loaded runner (cinatra#3550). Resolve every one of the
+// matrix's route modules and the landing page once here, so each per-case hook
+// is a module-cache hit. This hook carries its own budget for that one cold
+// cost; the per-case hooks keep the run's, tight enough to still fail a
+// genuinely hung render. The mock registry is hoisted above every import of
+// this graph, so these resolve exactly what the per-case hooks resolve today.
+beforeAll(async () => {
+  for (const entry of MATRIX) {
+    for (const load of Object.values(entry[5])) {
+      await load();
+    }
+  }
+  await import("../workspace/page");
+}, 180_000);
 
 beforeEach(() => {
   auth.requireAuthSession.mockClear();

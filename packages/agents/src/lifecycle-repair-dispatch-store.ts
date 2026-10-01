@@ -19,9 +19,11 @@ import "server-only";
 //   • an ASYNC-EFFECTS-GATED `producer_repair` repair gets a DETERMINISTIC repair
 //     run (`lifecycle-repair-run:<repairId>`) on the PRODUCING template, whose
 //     `input_params` carry the typed `ChangesRequestedRequest` — that row IS the
-//     delivered request; the producer reads it and answers through its own typed
-//     entry point (for the blog pipeline: `repairBlogPostDraft`), which pins the
-//     successor gate and fires the post-change verification;
+//     delivered request; the producing agent's own graph reads it on that run and
+//     answers through `submitRepairResponse`, which pins the successor gate and
+//     fires the post-change verification. There is no direct-call repair entry
+//     point: the NEW-RUN road IS the repair road (cinatra#2951, the product
+//     decision recorded there on 2026-09-11);
 //   • the repair is then CAS'd `requested` → `dispatched` (idempotent);
 //   • a repair whose producing run/template cannot be resolved — i.e. there is no
 //     producer to deliver to — is ESCALATED rather than left silently pending

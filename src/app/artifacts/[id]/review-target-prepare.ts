@@ -49,12 +49,30 @@ import {
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
+// THE CHANNEL'S OWN READ STAYS THE DEFAULT OF THIS BINDER (enabler 0.3,
+// cinatra#3027 / cinatra#3047). Wave 3 adds a road a surface MAY hand in, and
+// a road that is handed in wins; but a caller that names none must still get
+// the pinned revision's substance, because that is the whole of the defect
+// cinatra#3047 closed: two of this module's own callers (`review-gate-ports`)
+// name no road, and defaulting to the named absence would draw a "nothing is
+// pinned" floor over a revision holding the run's real work.
+//
+// So the channel's builder and its pinned-substance reader are named here as
+// VALUES, the way main wires them, and the route-graph ratchet records what
+// that costs the four locked routes.
 import {
   buildArtifactContentProjection,
   type ArtifactContentChannelPorts,
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
+// The ROADS themselves stay type-only: they are CONSTRUCTED on the surfaces
+// that choose them (`./review-surface-roads`), none of which is a locked
+// route, and named here by type alone, which the compiler erases.
+import type {
+  ArtifactContentBuilder,
+  ArtifactByteUrlMinter,
+} from "./review-surface-roads";
 import {
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
@@ -84,6 +102,33 @@ export type ReviewRunGatePorts = Pick<
 export function bindArtifactReviewPorts(ctx: {
   orgId: string;
   actor: ActorContext;
+  /**
+   * HOW THIS SURFACE ADDRESSES BYTES (wave 3 of
+   * `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091).
+   *
+   * Absent — every first-party, cookie-authenticated surface — and the snapshot
+   * carries the session byte routes it always carried, named as the `session`
+   * road. Present — the island, whose reader holds a broker bearer and no
+   * cookie — and the snapshot carries the island-scoped capability address
+   * instead, which is the whole of "the byte capability and its serving route
+   * ... for the six media displays and the CMS picture pair".
+   *
+   * A FUNCTION, NOT A FLAG, and it is the surface's: this binder cannot
+   * construct an island address by itself, so no first-party path can acquire
+   * one by accident.
+   */
+  byteMinter?: ArtifactByteUrlMinter;
+  /**
+   * HOW THIS SURFACE READS CONTENT (wave 3).
+   *
+   * Absent and the snapshot carries the channel's own NAMED ABSENCE, which is
+   * what this consumer said about itself before this wave: "each a contract
+   * defined here and wired for its consumers in the sibling plan". Present and
+   * the pinned revision is read ON THE SERVER and carried on the props — which
+   * is what takes "the three browser fetchers — json, cms-snapshot, text" off
+   * the browser fetch that dies inside a third-party application.
+   */
+  buildContent?: ArtifactContentBuilder;
 }): Pick<
   PrepareReviewPorts,
   | "readArtifact"
@@ -94,6 +139,8 @@ export function bindArtifactReviewPorts(ctx: {
   | "buildProps"
 > {
   const { orgId, actor } = ctx;
+  const byteMinter = ctx.byteMinter ?? null;
+  const buildContent = ctx.buildContent ?? null;
 
   const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
@@ -346,6 +393,77 @@ export function bindArtifactReviewPorts(ctx: {
     const downloadHref = fileBacked
       ? `/api/artifacts/${artifact.artifactId}/versions/${representationRevisionId}/content`
       : null;
+    // THE BYTE REFERENCE (wave 3, cinatra#3091). A non-file revision has no
+    // bytes at all and therefore no road: enabler 0.10's rule that "non-file
+    // props carry no preview or download address" governs this field exactly as
+    // it governs the two above, and minting an island address for a dashboard
+    // would be a sealed capability over nothing.
+    //
+    // AND THE ISLAND ROAD ONLY WHERE THE ROAD RUNS. The minter answers `null`
+    // for a form that is not one of the six media kinds — the three browser
+    // fetchers' forms among them — and such a revision keeps the session
+    // addresses it always had rather than gaining a sealed capability to its
+    // full bytes beside its capped content projection.
+    const minted =
+      fileBacked && byteMinter
+        ? byteMinter({
+            artifactId: artifact.artifactId,
+            representationRevisionId,
+            mime,
+          })
+        : null;
+    const bytes = minted
+      ? { road: "island" as const, ...minted }
+      : fileBacked
+        ? { road: "session" as const, preview: previewHref, download: downloadHref }
+        : undefined;
+
+    // THE READ ITSELF, and the two inputs only this caller knows.
+    //
+    // THE BOUND THE MEMBERSHIP ANSWER WAS MADE UNDER travels with it: a LIVE
+    // reading must not replay a tombstoned pin, while the gate-authorized
+    // historical reading (enabler 0.9) may, inside the frozen set the gate
+    // pinned. And the non-file membership answer already carried the pinned
+    // configuration record and its digest (enabler 0.10), so the channel takes
+    // THAT rather than resolving the same row a second time.
+    const contentInput = {
+      orgId,
+      artifactId: artifact.artifactId,
+      representationRevisionId,
+      form: memberForm(input.member),
+      mime,
+      liveOnly: input.member.historical !== true,
+      carriedConfiguration: fileBacked
+        ? null
+        : {
+            configuration: input.member.configuration ?? null,
+            digest: input.member.configurationDigest ?? null,
+          },
+    };
+
+    // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027). A surface that named a
+    // road reads through ITS builder — that is what takes "the three browser
+    // fetchers — json, cms-snapshot, text" off a browser fetch that dies inside
+    // a third-party application. A surface that named none reads through the
+    // channel bound to this binder's own pinned read, which is the wiring
+    // cinatra#3047 shipped and which no road may quietly remove. Either way a
+    // form the channel projects no class for — the six media forms among them —
+    // comes back as the channel's own NAMED absence, because those bytes are
+    // the byte road's.
+    const content = buildContent
+      ? await buildContent(contentInput)
+      : // THROUGH THE STORE-FAULT GUARD, which main added on this same arm: a
+        // read that throws is logged against its revision and comes back as the
+        // channel's named absence, so a store fault draws the floor instead of
+        // failing the whole card.
+        await readPinnedContentOrAbsence(
+          contentInput,
+          createPinnedSubstanceReader({
+            liveOnly: contentInput.liveOnly,
+            carriedConfiguration: contentInput.carriedConfiguration,
+          }),
+        );
+
     return buildArtifactRendererProps({
       artifact,
       // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
@@ -360,48 +478,8 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS
-      // CONSUMER. The review card is the second surface the display is drawn on,
-      // and a display draws from its props and never fetches — so the card has
-      // to read the revision on the server exactly as the artifact page does, or
-      // it draws a named floor over a document whose text was in the store all
-      // along. That is precisely what a reviewer saw: correct chrome, correct
-      // pinned revision, and "no markdown is available to show".
-      //
-      // READ AT THE PINNED REVISION, never at a latest. `representationRevisionId`
-      // here is the revision the gate froze, which is what makes the card show
-      // what was approved rather than what the artifact has since become.
-      //
-      // THE FORM COMES FROM THE SUBSTRATES OWN RECORD on the member — never
-      // from a guess about the mime — and an absent form reads as `file`, which
-      // is what every caller written before enabler 0.10 meant. The builder
-      // resolves the class itself and names its own absence
-      // (`unsupported-form` for a class this port does not carry), so an
-      // unwired class still cannot read as a wired one that found nothing.
-      //
-      // The read is made under the SAME bound the membership answer was made
-      // under, so a settled card keeps its work and a live reading never
-      // replays a tombstoned pin; and the non-file membership answer already
-      // carried the pinned configuration record and its digest, so the channel
-      // takes THAT rather than resolving the same row a second time.
-      content: await readPinnedContentOrAbsence(
-        {
-          orgId,
-          artifactId: artifact.artifactId,
-          representationRevisionId,
-          form: memberForm(input.member),
-          mime,
-        },
-        createPinnedSubstanceReader({
-          liveOnly: input.member.historical !== true,
-          carriedConfiguration: fileBacked
-            ? null
-            : {
-                configuration: input.member.configuration ?? null,
-                digest: input.member.configurationDigest ?? null,
-              },
-        }),
-      ),
+      content,
+      bytes,
     });
   };
 
@@ -440,7 +518,18 @@ export async function prepareArtifactReviewTargets(args: {
   orgId: string;
   actor: ActorContext;
   runGatePorts: ReviewRunGatePorts;
+  /** The island's byte minter, when this preparation is for an island reader
+   *  (wave 3). Absent on every cookie surface. */
+  byteMinter?: ArtifactByteUrlMinter;
+  /** How this surface reads content (wave 3). Absent on a surface that has not
+   *  named a road. */
+  buildContent?: ArtifactContentBuilder;
 }): Promise<PrepareReviewResult> {
-  const artifactPorts = bindArtifactReviewPorts({ orgId: args.orgId, actor: args.actor });
+  const artifactPorts = bindArtifactReviewPorts({
+    orgId: args.orgId,
+    actor: args.actor,
+    byteMinter: args.byteMinter,
+    buildContent: args.buildContent,
+  });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }

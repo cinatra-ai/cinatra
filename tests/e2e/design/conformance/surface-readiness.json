@@ -97,10 +97,9 @@
           "aspect": "field",
           "field": "source",
           "source": "representation.captured-url",
-          "reason": "display-not-registered",
-          "package": "@cinatra-ai/screenshot-artifact",
-          "awaits": 3143,
-          "why": "The screenshot kind ships no artifact display block on the default branch. Pull request 3143 registers its display for the first time, and says so in its own words."
+          "reason": "island-rendered",
+          "awaits": null,
+          "why": "The screenshot kind now ships an artifact display of its own, so the reason this reading is out of a harness's reach has changed rather than gone away: like every other per-kind reading of a review target, it is drawn by a SERVER component inside the review card's own credentialed island frame, which the card addresses through a single-use, authorised URL. A props-only harness mount cannot reach it, and this harness substitutes no transport of any kind."
         },
         {
           "surface": "review-card-screenshot",

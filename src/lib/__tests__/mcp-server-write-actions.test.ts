@@ -22,6 +22,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // --- mocks ----------------------------------------------------------------
 let sessionUserId = "u1";
 let platformAdmin = false;
+// The organization the signed-in actor is acting in (better-auth's active
+// organization on the session). Null models a person who belongs to none.
+let sessionActiveOrganizationId: string | null = null;
 type Row = {
   id: string;
   scope: string;
@@ -78,7 +81,10 @@ function guardMatches(
 }
 
 vi.mock("@/lib/auth-session", () => ({
-  requireAuthSession: async () => ({ user: { id: sessionUserId } }),
+  requireAuthSession: async () => ({
+    user: { id: sessionUserId },
+    session: { activeOrganizationId: sessionActiveOrganizationId },
+  }),
   isPlatformAdmin: () => platformAdmin,
 }));
 
@@ -137,6 +143,7 @@ const { createServerHandler, deleteServerHandler } = await import("@/lib/mcp-ser
 beforeEach(() => {
   sessionUserId = "u1";
   platformAdmin = false;
+  sessionActiveOrganizationId = null;
   servers.clear();
   authzOverride.clear();
   importedApiKeys.length = 0;
@@ -267,8 +274,10 @@ describe("createServerHandler API key persistence (cinatra#1407 defect 1)", () =
     expect(importedApiKeys).toHaveLength(1);
     expect(importedApiKeys[0].connectionId).toBe(created.nangoConnectionId);
     expect(importedApiKeys[0].apiKey).toBe("sk-secret");
-    // A user row's credential is personal: owner-seeded, bound to NO org (never
-    // the acting admin's org).
+    // A user row's credential is personal and owner-seeded. THIS session's
+    // person belongs to no organization, so the identity carries none
+    // (cinatra#3397: a person of no organization still creates the
+    // connection, without one).
     expect(importedApiKeys[0].identity).toMatchObject({
       ownerUserId: "u1",
       organizationId: null,
@@ -350,6 +359,58 @@ describe("createServerHandler API key persistence (cinatra#1407 defect 1)", () =
     expect(revokedConnections).toContain(importedApiKeys[0].connectionId);
     expect(servers.get("row1")?.scope).toBe("global");
     expect(servers.get("row1")?.label).toBe("G");
+  });
+
+  // cinatra#3397 — the identity's ORGANIZATION. A connection created by
+  // registering a server on the MCP Servers page carries the creating person's
+  // own organization, read from the signed-in actor; without it the Sharing
+  // tab's workspace share is refused by the ratified write-time veto (a
+  // workspace locus on a null-org identity row is `invalid_locus`).
+  it("a SELF-registered user row stores the CREATING person's OWN organization on the identity", async () => {
+    sessionActiveOrganizationId = "org-1";
+    await createServerHandler({
+      label: "Mine",
+      serverUrl: "https://m",
+      scope: "user",
+      apiKey: "sk-mine",
+    });
+    expect(importedApiKeys).toHaveLength(1);
+    expect(importedApiKeys[0].identity).toMatchObject({
+      ownerUserId: "u1",
+      organizationId: "org-1",
+      seed: "owner",
+    });
+  });
+
+  it("an admin RE-KEYING ANOTHER person's user row never re-homes the identity to the ADMIN's organization", async () => {
+    // Cross-org safety stands: the row's owner is preserved, and the credential
+    // it points at stays org-less — it is not the acting admin's connection.
+    servers.set("k1", {
+      id: "k1",
+      scope: "user",
+      userId: "other",
+      label: "K",
+      serverUrl: "https://k",
+      nangoConnectionId: "external-mcp-old",
+    });
+    sessionUserId = "admin";
+    platformAdmin = true;
+    sessionActiveOrganizationId = "org-admin";
+    const r = await createServerHandler({
+      id: "k1",
+      label: "K",
+      serverUrl: "https://k",
+      scope: "user",
+      apiKey: "sk-new",
+    });
+    expect(r.banner).toBe("saved");
+    expect(servers.get("k1")?.userId).toBe("other");
+    expect(importedApiKeys).toHaveLength(1);
+    expect(importedApiKeys[0].identity).toMatchObject({
+      ownerUserId: "other",
+      organizationId: null,
+      seed: "owner",
+    });
   });
 
   it("RESURRECTION guard: a keyless edit CONFLICTS when the connection moved under it", async () => {

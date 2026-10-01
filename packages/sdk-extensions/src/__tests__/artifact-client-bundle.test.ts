@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   CLIENT_BUNDLE_EXTERNAL_ALLOWLIST,
   CLIENT_BUNDLE_SIGNATURE_SCHEME,
+  HOST_DESIGN_PRIMITIVES_MODULE,
   HOST_DESIGN_TOKEN_MODULE,
   basePackageOf,
   buildClientBundleSignaturePayload,
@@ -45,6 +46,11 @@ describe("externals allowlist", () => {
     expect(CLIENT_BUNDLE_EXTERNAL_ALLOWLIST).toContain("react-dom");
     expect(CLIENT_BUNDLE_EXTERNAL_ALLOWLIST).toContain("react-dom/client");
     expect(CLIENT_BUNDLE_EXTERNAL_ALLOWLIST).toContain(HOST_DESIGN_TOKEN_MODULE);
+    // cinatra#3471 slice 2: the host-shared design PRIMITIVES module is
+    // sanctioned with the SAME exact-tuple discipline React has.
+    expect(CLIENT_BUNDLE_EXTERNAL_ALLOWLIST).toContain(HOST_DESIGN_PRIMITIVES_MODULE);
+    expect(isAllowedClientBundleExternal(HOST_DESIGN_PRIMITIVES_MODULE)).toBe(true);
+    expect(isAllowedClientBundleExternal("@cinatra-ai/design-primitives/button")).toBe(false);
     expect(isAllowedClientBundleExternal("react")).toBe(true);
     expect(isAllowedClientBundleExternal("lodash")).toBe(false);
   });
@@ -52,7 +58,13 @@ describe("externals allowlist", () => {
   it("passes a conforming bundle (only host peers external, no bundled React)", () => {
     expect(
       checkClientBundleExternals({
-        externals: ["react", "react/jsx-runtime", "react-dom", HOST_DESIGN_TOKEN_MODULE],
+        externals: [
+          "react",
+          "react/jsx-runtime",
+          "react-dom",
+          HOST_DESIGN_TOKEN_MODULE,
+          HOST_DESIGN_PRIMITIVES_MODULE,
+        ],
         inputBasePackages: ["@cinatra-ai/json-artifact"],
       }),
     ).toBeNull();

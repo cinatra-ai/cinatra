@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   Empty,
@@ -39,9 +40,10 @@ import {
  * The route resolves that name through its own gated read and hands it in; where
  * a reader may not be told it, the header falls back to the scope's kind noun.
  *
- * The tabs' CONTENTS still arrive with the slices that own them: the Assistants
- * and Agents lists with #2808, Artifacts and Skills with #2810, and the
- * workspace dashboards with #2811.
+ * The tabs' CONTENTS arrive with the slices that own them: the Assistants and
+ * Agents lists with #2808 (which passes them in through `body`), Artifacts and
+ * Skills with #2810, and the workspace dashboards with #2811. A tab whose slice
+ * has not landed passes no body and keeps the honest placeholder below.
  */
 
 /**
@@ -91,6 +93,7 @@ export function ScopeSurfacePage({
   tab,
   title,
   description,
+  body,
 }: {
   scope: ScopeSurfaceRef;
   tab: ScopeSurfaceTab | "dashboards";
@@ -101,6 +104,12 @@ export function ScopeSurfacePage({
    */
   title?: string;
   description?: string;
+  /**
+   * The tab's own body (cinatra#2808). Passed by a route whose slice has filled
+   * this tab; omitted everywhere else, where the shell keeps stating its OWN
+   * condition rather than claiming the scope holds nothing.
+   */
+  body?: ReactNode;
 }) {
   const hrefs = scopeSurfaceTabHrefs(scope);
   const settingsHref = scopeSurfaceSettingsHref(scope);
@@ -120,6 +129,8 @@ export function ScopeSurfacePage({
         <EntityScopeTabs {...hrefs} settingsHref={settingsHref} active={tab} />
         {tab === "dashboards" ? (
           <DashboardsTabBody scope={scope} title={title} />
+        ) : body != null ? (
+          body
         ) : (
           <ScopedTabEmpty tab={tab} />
         )}

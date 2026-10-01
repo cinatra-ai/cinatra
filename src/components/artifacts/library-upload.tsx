@@ -66,6 +66,7 @@ import {
   requestTypeInstall,
   type ArtifactMarketplacePack,
 } from "@/app/artifacts/upload-typing-actions";
+import { promotionRefusalNotice } from "@/lib/artifacts/promotion-notice";
 import type { InstalledMeaningType } from "@/lib/artifacts/installed-type-picker";
 
 // ---------------------------------------------------------------------------
@@ -537,6 +538,14 @@ function TypePickerPanel() {
     setBusy(false);
     if (r.ok) {
       toast.success("Meaning set.");
+      // THE ROAD'S REFUSAL IS OWED TO THE PERSON, not only to the caller
+      // (cinatra#3091). The typed promotion road answers a confirmation it
+      // could not run with a NAMED reason; reading only `ok` here turned that
+      // answer back into the silence the wave-3 proof leg measured. The meaning
+      // itself IS set — the note rides on top of the success, it does not
+      // replace it.
+      const notice = promotionRefusalNotice(r.promotion);
+      if (notice) toast.warning(notice);
       closeDialog();
       router.refresh();
     } else {
@@ -592,7 +601,11 @@ function TypePickerPanel() {
             No installed type accepts this file. Find one in the marketplace.
           </p>
         ) : (
-          <ul className="overflow-hidden rounded-lg border border-line">
+          // The list carries every installed type that accepts the file, so on
+          // an instance with many of them it is the picker's tallest region. It
+          // scrolls inside its own box so the action row below it stays inside
+          // the window and the admin can always confirm the meaning.
+          <ul className="max-h-[45vh] overflow-y-auto rounded-lg border border-line">
             {types.map((t, i) => (
               <li
                 key={t.objectTypeId ?? t.extension}

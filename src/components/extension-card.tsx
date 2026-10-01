@@ -277,6 +277,7 @@ export function ExtensionCardListingBanner({
   iconRender,
   byline,
   badges,
+  nameTrailingReserve,
   className,
   muted = false,
   detailHref,
@@ -308,6 +309,16 @@ export function ExtensionCardListingBanner({
    */
   byline?: React.ReactNode;
   badges?: React.ReactNode;
+  /**
+   * Trailing space, in px, reserved on the name + byline column for a control
+   * the CALLER overlays on the band's top-right corner (cinatra#2737: the §I.1
+   * install face's close X). The `badges` slot reserves its own room through
+   * `pr-20` on the name; an overlaid control is not a badge — it is not in the
+   * banner's flow at all — so the caller states the footprint it occupies and
+   * the column keeps the title's box out of it. Omitted by every other caller,
+   * whose banner stays byte-identical.
+   */
+  nameTrailingReserve?: number;
   className?: string;
   /**
    * Archived / fully-greyed variant (design system SVI, cinatra#957): the
@@ -408,6 +419,15 @@ export function ExtensionCardListingBanner({
           "flex min-w-0 flex-col gap-[5px]",
           interactive && "relative",
         )}
+        // The reserve rides the COLUMN, not the name itself: the name carries
+        // `italic-overhang-safe`, whose negative margin hands its own padding
+        // back to the layout, so a reserve added there would be given straight
+        // back and the title would keep its collision.
+        style={
+          nameTrailingReserve != null
+            ? { paddingInlineEnd: `${nameTrailingReserve}px` }
+            : undefined
+        }
       >
         <div
           data-slot="extension-card-name"

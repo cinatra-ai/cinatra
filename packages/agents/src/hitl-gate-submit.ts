@@ -165,7 +165,19 @@ export function wrapPrimitiveSetupPayload(
     typeof next === "boolean" ||
     Array.isArray(next);
   if (fieldName && isPrimitive) {
-    return { payload: { [fieldName]: next }, payloadFieldName: fieldName };
+    // cinatra#3452 — THE EMPTY BOX HAS TO SURVIVE THE BOUNDARY.
+    //
+    // A field left empty emits `undefined`, and `{ [fieldName]: undefined }`
+    // loses its key on the way across the Server Action boundary: the approval
+    // road then received a submission that never named the field, and could not
+    // tell an optional box left blank from a field it was never handed — so it
+    // refused Continue, naming the field, for optional and required alike.
+    // Submitting the empty box as an explicit `null` keeps "answered, with
+    // nothing" legible on the far side, where the required/optional split is
+    // made. Every other primitive (including a real `null`, `0` and `false`) is
+    // wrapped exactly as before.
+    const wrappedValue = next === undefined ? null : next;
+    return { payload: { [fieldName]: wrappedValue }, payloadFieldName: fieldName };
   }
   if (
     fieldName &&

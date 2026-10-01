@@ -546,6 +546,8 @@ export default defineConfig({
       "scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs",
       "scripts/audit/__tests__/wp-gateway-capture-freshness.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
+      // Dependency-free detector/fan-in feedback is run by the same dedicated node:test CI step.
+      "scripts/ci/__tests__/ci-impact.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
       "scripts/audit/__tests__/workspace-deps-resolve.test.mjs",

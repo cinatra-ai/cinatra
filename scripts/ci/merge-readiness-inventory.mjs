@@ -44,7 +44,7 @@
 //          - "self": the merge-readiness context itself — the job must never
 //            wait on itself.
 //
-//     4. A job that declares an `if:` guard other than `always()` is marked
+//     4. A job with a selection guard beyond always() or sole !cancelled() is marked
 //        `skippable: true`: GitHub reports it on the candidate with the
 //        `skipped` conclusion when the guard is false, and branch protection
 //        counts a skipped required check as satisfied — so the readiness job
@@ -52,6 +52,12 @@
 //
 //     5. Path applicability comes from the workflow's own `pull_request.paths`
 //        (else ["**"] for always-on).
+//
+//     6. Each entry carries `timeoutMinutes`: the `timeout-minutes` of the job
+//        that reports the context (the CALLED job's own budget for a local
+//        reusable call), or null when the job declares none or names it with a
+//        `${{ }}` expression. The evaluator's wait follows the longest of them
+//        (cinatra#3391) instead of a fixed deadline.
 //
 //   The trusted GitHub App is `github-actions` for every workflow-produced
 //   check run in this repository.
@@ -167,8 +173,9 @@ export function parseEventConfig(text, event) {
 }
 
 /**
- * Per-job attributes this generator needs beyond parseJobs: the `uses:` target
- * and `continue-on-error:`, read at the job's own indent + 2.
+ * Per-job attributes this generator needs beyond parseJobs: the `uses:` target,
+ * `continue-on-error:`, `if:` and the job's `timeout-minutes:` budget, read at
+ * the job's own indent + 2.
  */
 export function parseJobAttrs(text) {
   const lines = text.split(/\r?\n/);
@@ -185,7 +192,7 @@ export function parseJobAttrs(text) {
     if (!m) continue;
     if ((jobIndent === null || m[1].length === jobIndent) && m[4] === "") {
       if (jobIndent === null) jobIndent = m[1].length;
-      cur = { uses: null, continueOnError: false, if: null };
+      cur = { uses: null, continueOnError: false, if: null, timeoutMinutes: null };
       attrs.set(m[3], cur);
       continue;
     }
@@ -193,6 +200,11 @@ export function parseJobAttrs(text) {
       if (m[3] === "uses") cur.uses = m[4].replace(/\s+#.*$/, "").replace(/^['"]|['"]$/g, "");
       if (m[3] === "continue-on-error") cur.continueOnError = m[4].replace(/\s+#.*$/, "") === "true";
       if (m[3] === "if") cur.if = m[4].replace(/\s+#.*$/, "");
+      if (m[3] === "timeout-minutes") {
+        const raw = m[4].replace(/\s+#.*$/, "").trim();
+        const n = Number(raw);
+        cur.timeoutMinutes = Number.isInteger(n) && n > 0 ? n : null; // a ${{ }} matrix leg has no static budget
+      }
     }
   }
   return attrs;
@@ -205,8 +217,19 @@ export function parseJobAttrs(text) {
  */
 export const ALWAYS_IF = new Set(["always()", "${{ always() }}"]);
 
-/** A job-level `if:` other than always() means the job may not report. */
-export const isConditional = (ifExpr) => ifExpr != null && !ALWAYS_IF.has(ifExpr.trim());
+/** Cancellation alone never authorizes missing required validation. */
+export const isConditional = (ifExpr) => {
+  if (ifExpr == null) return false;
+  const expression = ifExpr.trim();
+  if (ALWAYS_IF.has(expression)) return false;
+  const inner = expression.startsWith("${{") && expression.endsWith("}}")
+    ? expression.slice(3, -2)
+    : expression;
+  // A sole status guard still runs on every uncancelled candidate. A queued
+  // job may become skipped after cancellation, but that is not an intentional
+  // path/draft skip. Compound selection guards retain the existing policy.
+  return inner.replace(/\s/g, "") !== "!cancelled()";
+};
 
 /** A `${{ ... }}` job name (a matrix leg) has no statically knowable context. */
 export const isDynamicName = (name) => typeof name === "string" && name.includes("${{");
@@ -217,20 +240,30 @@ export function contextsOf({ file, text, readWorkflow }) {
   const out = [];
   for (const job of jobs) {
     const caller = displayNameOf(job);
-    const a = attrs.get(job.key) ?? { uses: null, continueOnError: false, if: null };
+    const a = attrs.get(job.key) ?? { uses: null, continueOnError: false, if: null, timeoutMinutes: null };
     const flags = { reportOnly: a.continueOnError, conditional: isConditional(a.if) };
     if (a.uses && a.uses.startsWith("./")) {
       const inner = readWorkflow(a.uses.replace(/^\.\//, ""));
       const innerJobs = inner === null ? [] : parseJobs(inner);
+      const innerAttrs = inner === null ? new Map() : parseJobAttrs(inner);
       if (innerJobs.length === 0) {
-        out.push({ context: `${caller} / ${caller}`, ...flags, unresolved: true });
+        out.push({ context: `${caller} / ${caller}`, ...flags, timeoutMinutes: null, unresolved: true });
       } else {
-        for (const ij of innerJobs) out.push({ context: `${caller} / ${displayNameOf(ij)}`, ...flags });
+        // A reusable-call job carries no budget of its own; the CALLED job's
+        // `timeout-minutes` is the budget the reported context runs under.
+        for (const ij of innerJobs) {
+          out.push({
+            context: `${caller} / ${displayNameOf(ij)}`,
+            ...flags,
+            timeoutMinutes: innerAttrs.get(ij.key)?.timeoutMinutes ?? null,
+          });
+        }
       }
     } else if (a.uses) {
-      out.push({ context: `${caller} / ${caller}`, ...flags });
+      // A REMOTE reusable's job budget cannot be read from this checkout.
+      out.push({ context: `${caller} / ${caller}`, ...flags, timeoutMinutes: null });
     } else {
-      out.push({ context: caller, ...flags });
+      out.push({ context: caller, ...flags, timeoutMinutes: a.timeoutMinutes });
     }
   }
   return out;
@@ -263,6 +296,7 @@ export function deriveInventory(workflows) {
           workflow,
           paths: paths.length > 0 ? paths : ["**"],
           skippable: c.conditional,
+          timeoutMinutes: c.timeoutMinutes ?? null,
         });
     }
   }
@@ -277,7 +311,7 @@ export function deriveInventory(workflows) {
       write: "node scripts/ci/merge-readiness-inventory.mjs --write",
       check: "node scripts/ci/merge-readiness-inventory.mjs --check",
       derivedFrom:
-        "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under an if: guard other than always() carries skippable:true",
+        "every .github/workflows/*.yml triggering on BOTH pull_request and merge_group (the checks a candidate produces on either event), minus report-only and dynamically-named jobs — each exclusion recorded in 'excluded' with its reason; a job under a selection guard other than always() or sole !cancelled() carries skippable:true, and each entry carries the reporting job's own timeout-minutes budget (null when it declares none) the evaluator's wait follows",
       generator: "scripts/ci/merge-readiness-inventory.mjs",
     },
     excluded,

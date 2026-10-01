@@ -17,6 +17,7 @@ import {
   buildExtensionDataStatement,
   EXTENSION_DATA_MAX_LIMIT,
   ExtensionDataRefusal,
+  runExtensionDataOperation,
 } from "@/lib/extension-data-tool";
 import { parseDeclaredTables } from "@cinatra-ai/sdk-extensions/manifest";
 
@@ -166,5 +167,304 @@ describe("what the tool refuses", () => {
       build({ operation: "truncate" as never, table: "idea_reservations" }),
     );
     expect(e.reason).toBe("unknown-operation");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE TWO CONDITIONAL OPERATIONS (cinatra#3525).
+//
+// The step of an extension's run that reserves one row of its own table needs
+// the decision to be the database's: a conditional insert whose conflict is
+// reported as a conflict, and a conditional update that moves rows only while
+// the columns the caller names still carry what it expects. Both are scoped to
+// the calling extension's own declared table and its own declared columns.
+// ---------------------------------------------------------------------------
+
+const ROW = { id: "r1", idea_artifact_id: "a1", state: "reserved" };
+
+/** The same reader the refusal cases above use, at this file's own scope. */
+const refusal = (fn: () => unknown) => {
+  try {
+    fn();
+  } catch (e) {
+    return e as ExtensionDataRefusal;
+  }
+  throw new Error("expected a refusal");
+};
+
+describe("the conditional insert the tool compiles", () => {
+  it("is ONE statement: it inserts, or it hands back the row that won", () => {
+    const c = build({
+      operation: "insertIfAbsent",
+      table: "idea_reservations",
+      row: ROW,
+      conflictKeys: ["idea_artifact_id"],
+    });
+    expect(c.resultShape).toBe("insertIfAbsent");
+    // One round trip: one statement, no separator, no second read.
+    expect(c.text.split(";")).toHaveLength(1);
+    expect(c.text).toContain(
+      'INSERT INTO "cinatra"."ext_cinatra_ai_w7_fixture_idea_reservations" ' +
+        '("org_id", "id", "idea_artifact_id", "state") VALUES ($1, $2, $3, $4)',
+    );
+    expect(c.text).toContain("ON CONFLICT DO NOTHING");
+    expect(c.text).toContain("UNION ALL");
+    // The fallback read is the caller's own row, inside the run's organisation.
+    expect(c.text).toContain('WHERE "org_id" = $5 AND "idea_artifact_id" = $6');
+    // The projection is named three times and each naming is the same list.
+    expect(c.text.split('"id", "org_id", "idea_artifact_id", "state"')).toHaveLength(4);
+    expect(c.values).toEqual(["org-w7", "r1", "a1", "reserved", "org-w7", "a1"]);
+    expect(c.physicalTable).toBe("ext_cinatra_ai_w7_fixture_idea_reservations");
+    expect(c.rowKeys).toEqual(ROW);
+  });
+
+  it("refuses a conflict key the row does not carry", () => {
+    const e = refusal(() =>
+      build({
+        operation: "insertIfAbsent",
+        table: "idea_reservations",
+        row: ROW,
+        conflictKeys: ["id", "state", "missing_here"],
+      }),
+    );
+    expect(e.reason).toBe("column-not-declared");
+  });
+
+  it("refuses a conflict key that names the organisation the host injects", () => {
+    const e = refusal(() =>
+      build({
+        operation: "insertIfAbsent",
+        table: "idea_reservations",
+        row: ROW,
+        conflictKeys: ["org_id"],
+      }),
+    );
+    expect(e.reason).toBe("organisation-is-the-hosts");
+  });
+
+  it("refuses a conditional insert that names no conflict at all", () => {
+    const e = refusal(() =>
+      build({ operation: "insertIfAbsent", table: "idea_reservations", row: ROW }),
+    );
+    expect(e.reason).toBe("no-conflict-keys");
+  });
+
+  it("refuses a conflict key the row leaves out", () => {
+    const e = refusal(() =>
+      build({
+        operation: "insertIfAbsent",
+        table: "idea_reservations",
+        row: { idea_artifact_id: "a1" },
+        conflictKeys: ["id"],
+      }),
+    );
+    expect(e.reason).toBe("conflict-key-not-in-row");
+  });
+
+  it("names a repeated projection column once, so the common table stays unambiguous", () => {
+    const c = build({
+      operation: "insertIfAbsent",
+      table: "idea_reservations",
+      columns: ["id", "state", "id"],
+      row: ROW,
+      conflictKeys: ["idea_artifact_id"],
+    });
+    expect(c.text).toContain('RETURNING "id", "state")');
+    expect(c.text).not.toContain('"id", "state", "id"');
+    // The plain operations keep the projection the caller wrote.
+    expect(
+      build({
+        operation: "select",
+        table: "idea_reservations",
+        columns: ["id", "state", "id"],
+      }).text,
+    ).toContain('SELECT "id", "state", "id" FROM');
+  });
+
+  it("matches a null conflict key with IS NOT DISTINCT FROM, since = NULL never matches", () => {
+    const c = build({
+      operation: "insertIfAbsent",
+      table: "idea_reservations",
+      row: { id: "r1", idea_artifact_id: null, state: "reserved" },
+      conflictKeys: ["idea_artifact_id"],
+    });
+    expect(c.text).toContain('"idea_artifact_id" IS NOT DISTINCT FROM $6');
+    expect(c.values[5]).toBeNull();
+  });
+
+  it("refuses a conditional insert with no row to write", () => {
+    const e = refusal(() =>
+      build({ operation: "insertIfAbsent", table: "idea_reservations", conflictKeys: ["id"] }),
+    );
+    expect(e.reason).toBe("no-values");
+  });
+});
+
+describe("the conditional update the tool compiles", () => {
+  it("moves the rows the caller names only while its columns still hold what it expects", () => {
+    const c = build({
+      operation: "updateWhere",
+      table: "idea_reservations",
+      set: { state: "drafted" },
+      where: { id: "r1" },
+      expect: { state: "reserved" },
+    });
+    expect(c.text).toBe(
+      'UPDATE "cinatra"."ext_cinatra_ai_w7_fixture_idea_reservations" SET "state" = $1 ' +
+        'WHERE "org_id" = $2 AND "id" = $3 AND "state" = $4',
+    );
+    expect(c.values).toEqual(["drafted", "org-w7", "r1", "reserved"]);
+    expect(c.resultShape).toBe("updated");
+  });
+
+  it("is an ordinary scoped update when the caller expects nothing in particular", () => {
+    const c = build({
+      operation: "updateWhere",
+      table: "idea_reservations",
+      set: { state: "drafted" },
+      where: { id: "r1" },
+    });
+    expect(c.values).toEqual(["drafted", "org-w7", "r1"]);
+  });
+
+  it("refuses a set, a filter or an expectation the table does not declare", () => {
+    expect(
+      refusal(() =>
+        build({ operation: "updateWhere", table: "idea_reservations", set: { nope: 1 } }),
+      ).reason,
+    ).toBe("column-not-declared");
+    expect(
+      refusal(() =>
+        build({
+          operation: "updateWhere",
+          table: "idea_reservations",
+          set: { state: "drafted" },
+          expect: { nope: 1 },
+        }),
+      ).reason,
+    ).toBe("column-not-declared");
+  });
+
+  it("matches a null expectation and a null filter with IS NOT DISTINCT FROM", () => {
+    const c = build({
+      operation: "updateWhere",
+      table: "idea_reservations",
+      set: { state: "drafted" },
+      where: { idea_artifact_id: null },
+      expect: { state: null },
+    });
+    expect(c.text).toBe(
+      'UPDATE "cinatra"."ext_cinatra_ai_w7_fixture_idea_reservations" SET "state" = $1 ' +
+        'WHERE "org_id" = $2 AND "idea_artifact_id" IS NOT DISTINCT FROM $3 ' +
+        'AND "state" IS NOT DISTINCT FROM $4',
+    );
+    expect(c.values).toEqual(["drafted", "org-w7", null, null]);
+  });
+
+  it("refuses a conditional update that sets nothing", () => {
+    const e = refusal(() => build({ operation: "updateWhere", table: "idea_reservations" }));
+    expect(e.reason).toBe("no-values");
+  });
+});
+
+describe("what the tool hands the calling extension back", () => {
+  const fakeClient = (payload: { rows: unknown[]; rowCount: number }) => {
+    const statements: string[] = [];
+    return {
+      statements,
+      query: async (text: string) => {
+        statements.push(text);
+        if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL ROLE)/.test(text)) return { rows: [], rowCount: 0 };
+        return payload;
+      },
+    };
+  };
+
+  const run = async (
+    request: Parameters<typeof buildExtensionDataStatement>[0]["request"],
+    payload: { rows: unknown[]; rowCount: number },
+  ) => {
+    const client = fakeClient(payload);
+    const result = await runExtensionDataOperation({
+      client: client as never,
+      schemaName: SCHEMA,
+      packageName: PACKAGE,
+      tables: TABLES,
+      orgId: "org-w7",
+      runId: "run-3525",
+      request,
+      audit: async () => {},
+    });
+    return { result, client };
+  };
+
+  const STORED = { id: "r1", org_id: "org-w7", idea_artifact_id: "a1", state: "reserved" };
+
+  it("reports a write that landed as inserted, in one round trip", async () => {
+    const { result, client } = await run(
+      {
+        operation: "insertIfAbsent",
+        table: "idea_reservations",
+        row: ROW,
+        conflictKeys: ["idea_artifact_id"],
+      },
+      { rows: [{ __inserted: true, ...STORED }], rowCount: 1 },
+    );
+    expect(result).toEqual({ inserted: true, row: STORED });
+    expect(client.statements.filter((s) => !/^(BEGIN|COMMIT|SET LOCAL ROLE)/.test(s))).toHaveLength(
+      1,
+    );
+  });
+
+  it("reports the losing write as a conflict, with the row that won", async () => {
+    const { result } = await run(
+      {
+        operation: "insertIfAbsent",
+        table: "idea_reservations",
+        row: ROW,
+        conflictKeys: ["idea_artifact_id"],
+      },
+      { rows: [{ __inserted: false, ...STORED }], rowCount: 1 },
+    );
+    expect(result).toEqual({ inserted: false, conflict: true, existing: STORED });
+  });
+
+  it("reports a conflict with no row under the caller's key as existing null", async () => {
+    const { result } = await run(
+      {
+        operation: "insertIfAbsent",
+        table: "idea_reservations",
+        row: ROW,
+        conflictKeys: ["idea_artifact_id"],
+      },
+      { rows: [], rowCount: 0 },
+    );
+    expect(result).toEqual({ inserted: false, conflict: true, existing: null });
+  });
+
+  it("counts the rows a conditional update actually moved", async () => {
+    const { result } = await run(
+      {
+        operation: "updateWhere",
+        table: "idea_reservations",
+        set: { state: "drafted" },
+        where: { id: "r1" },
+        expect: { state: "reserved" },
+      },
+      { rows: [], rowCount: 2 },
+    );
+    expect(result).toEqual({ updated: 2 });
+  });
+
+  it("leaves the rows the older operations hand back exactly as they were", async () => {
+    const { result } = await run(
+      { operation: "select", table: "idea_reservations" },
+      { rows: [STORED], rowCount: 1 },
+    );
+    expect(result).toEqual({
+      rows: [STORED],
+      rowCount: 1,
+      table: "ext_cinatra_ai_w7_fixture_idea_reservations",
+    });
   });
 });

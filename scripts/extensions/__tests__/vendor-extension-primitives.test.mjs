@@ -13,6 +13,12 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
+/** The declared extension kind of a vendored entry, read from its own package.json. */
+function kindOf(extensionDir) {
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, extensionDir, "package.json"), "utf8"));
+  return pkg?.cinatra?.kind ?? null;
+}
+
 describe("rewriteUiImports", () => {
   it("rewrites double-quoted @/lib/utils to a relative path", () => {
     expect(rewriteUiImports('import { cn } from "@/lib/utils"', "x.tsx")).toContain(
@@ -119,15 +125,20 @@ describe("provenance — vendored files match registry source modulo rewrite", (
     }
   });
 
-  // The appointment-schedule extraction (cinatra#2367) took the connector's
-  // form with it, so google-calendar-connector's DIRECT registry imports shrank
-  // to `button` alone (the retained Connect/Disconnect UI). Pinned exactly —
-  // `arrayContaining` would not catch a silent re-widening, and the form's old
-  // primitives must NOT come back with it.
-  it("vendors exactly the google-calendar connection-UI closure (button only)", () => {
-    expect(VENDOR_MANIFEST[0].extensionDir).toContain("google-calendar-connector");
-    expect(VENDOR_MANIFEST[0].uiItems).toEqual(["button"]);
-    expect(resolveUiClosure(VENDOR_MANIFEST[0].uiItems)).toEqual(["button"]);
+  // DECISION 407 A (2026-09-13, cinatra-ai/cinatra#3471, epic #2926): connectors
+  // render the setup page themselves and artifacts render the artifact view
+  // themselves, and the host shares its primitives with extension bundles at run
+  // time — so the COPY CHANNEL IS RETIRED for those two kinds. Their remaining
+  // copies are recorded from now on by the shrink-only border-gate baseline
+  // (scripts/extensions/self-rendering-extensions-border.baseline.json), the ONLY
+  // record of them, so a primitive change no longer forces a release of every
+  // copying package. The kind is read from each entry's OWN package.json, so a
+  // re-added connector/artifact entry fails here whatever it is called.
+  it("vendors no kind:connector and no kind:artifact package (decision 407 A)", () => {
+    const retired = VENDOR_MANIFEST.filter((entry) =>
+      ["connector", "artifact"].includes(kindOf(entry.extensionDir)),
+    ).map((entry) => entry.extensionDir);
+    expect(retired).toEqual([]);
   });
 });
 

@@ -310,18 +310,278 @@ function effectiveIdentity(identity: ExtensionRecordIdentityInput | undefined): 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Connector-save identity registration (cinatra#3460) — the HOST half of the
+// ONE connection-identity road.
+//
+// The Sharing tab lists connection IDENTITY rows (`cinatra.nango_connection`,
+// read by `listNangoConnectionsByOwner`). Until now an identity row was
+// written ONLY by the host's own save roads (the Nango user-connect save
+// route, the managed-api/WordPress cards, the instance-connection actor),
+// each calling `registerSavedConnectionIdentity` explicitly. A schema-config
+// connector's OWN Setup form saves through its own deps instead — it persists
+// the verified pointer with the `nango-system` capability's
+// `saveNangoConnectionRecord` — so its connections were born identity-less
+// and its Sharing tab listed nothing to share.
+//
+// The fix is ONE road, not a per-connector special case: the host DECORATES
+// the `nango-system` surface it hands to an extension through
+// `ctx.capabilities.resolveProviders` so that a successful
+// `saveNangoConnectionRecord` registers the connection's identity row with the
+// SAME seam call the user-connect save route makes. Every connector that
+// persists a connection pointer — today's six ceiling-declaring connectors and
+// every future one — travels it, and no connector package changes.
+//
+// WHY THE EXTENSION PORT AND NOT THE REGISTRY: the host's own consumers reach
+// the surface through `@/lib/nango-system` (`resolveCapabilityProviders`
+// directly), which does NOT pass this port — so the save route's existing
+// explicit `registerSavedConnectionIdentity` call is neither duplicated nor
+// re-ordered, and its APP-scope `workspace` seed keeps winning on its own
+// road. The connector road is the only road decorated here.
+//
+// The registration is a NO-OP (never a save failure) where it cannot be
+// truthful:
+//   • no string connection id on the record — nothing to address;
+//   • a connector key the identity table has no connector package for
+//     (`HOST_CONNECTOR_KEY_TO_PACKAGE`) — the seam would hard-fail a save that
+//     worked before this decoration existed;
+//   • no validated session (a boot/background save such as the dev
+//     auto-connect) — an identity row's owner must come from a VALIDATED
+//     session, never from caller input.
+// A registration that CANNOT be completed — a foreign-identity conflict, an
+// identity-store failure — is reported and left unwritten rather than thrown:
+// it runs inside the connector's own save, after the credential import and the
+// pointer write, where a throw is caught by the connector's sync-failure road
+// and turned into a pointer clear plus a best-effort REMOTE DELETE of the
+// connection (converge round 1, finding 2). The route's 409 has no equivalent
+// here because the route rejects BEFORE it mutates anything.
+//
+// The seed follows the SAVED SCOPE, the same choice the save route makes: an
+// app-scope connection (the default, and what every schema-config Setup form
+// saves) is org-shared by construction and seeded `workspace`; a user-scope
+// connection keeps the never-auto-share OWNER default. The connector's declared
+// ceiling is a read-side treatment of that row
+// (`decideConnectionShareSurface`), not a wider grant.
+//
+// The registration lives in THIS host module rather than a module of its own:
+// `extension-host-context` is already on the instrumentation boot path and on
+// every tracked route graph, so a separate leaf would add a module to each of
+// them for nothing. Its imports of the seam and the session stay DYNAMIC —
+// the seam/session graphs (identity store, permissions store, better-auth)
+// must not be dragged onto the boot path at module eval.
+// ---------------------------------------------------------------------------
+
+/** The `nango-system` member whose success writes a connection pointer. */
+const SAVE_CONNECTION_RECORD = "saveNangoConnectionRecord";
+
+/**
+ * The scope the gateway ACTUALLY persisted the pointer under, read the way the
+ * gateway itself normalizes it (converge round 2, finding 2). The pinned writer
+ * builds its stored record as
+ *   `{ scope: options?.scope ?? record.scope ?? "app", ...record }`
+ * — the record is spread LAST, so a `scope` carried on the RECORD overrides the
+ * one passed in the options, and the options' scope only decides the case where
+ * the record carries none. An omitted scope on both is `"app"` (a connector that
+ * saves without a scope — every schema-config Setup form today — saves an
+ * APP-scope connection).
+ *
+ * This mirror must follow the writer and not the other way round: the seed this
+ * scope chooses is insert-if-absent, so reading a pointer as APP-scope that the
+ * gateway stored as USER-scope would seed a workspace grant on a connection the
+ * person saved for themselves — an over-share that no later save could correct.
+ */
+function effectiveSavedScope(record: unknown, options: unknown): "app" | "user" {
+  const fromRecord =
+    typeof record === "object" && record !== null
+      ? (record as { scope?: unknown }).scope
+      : undefined;
+  if (fromRecord === "user" || fromRecord === "app") return fromRecord;
+  const fromOptions =
+    typeof options === "object" && options !== null
+      ? (options as { scope?: unknown }).scope
+      : undefined;
+  if (fromOptions === "user" || fromOptions === "app") return fromOptions;
+  return "app";
+}
+
+type CapabilityProviderLike = { packageName: string; impl: unknown };
+
+/**
+ * Register the identity row for a connection a connector's own save road just
+ * persisted — the same `registerSavedConnectionIdentity` call the user-connect
+ * save route makes, with the acting user/org taken from the VALIDATED session.
+ */
+async function registerConnectorSavedConnectionIdentity(input: {
+  connectorKey: unknown;
+  connectionId: unknown;
+  /** The EFFECTIVE scope the gateway persisted the pointer under. */
+  scope: "app" | "user";
+}): Promise<void> {
+  const connectorKey = typeof input.connectorKey === "string" ? input.connectorKey : null;
+  const connectionId = typeof input.connectionId === "string" ? input.connectionId : null;
+  if (!connectorKey || !connectionId) return;
+
+  const { HOST_CONNECTOR_KEY_TO_PACKAGE, registerSavedConnectionIdentity } = await import(
+    "@/lib/connection-identity-seam"
+  );
+  if (!HOST_CONNECTOR_KEY_TO_PACKAGE[connectorKey]) {
+    // No connector package is known for this key, so no identity row can name
+    // its owner package. Never fail the connector's save over it — warn and
+    // leave the pointer as it was before this decoration existed.
+    console.warn(
+      `[connection-identity] a connector saved a "${connectorKey}" connection record, but no ` +
+        `connector package is known for that key — the connection has NO identity row and will ` +
+        `not be listed on the connector's Sharing tab.`,
+    );
+    return;
+  }
+
+  const { getAuthSession } = await import("@/lib/auth-session");
+  // A save can also come from a BOOT/background road with no request context
+  // at all (the dev A2A peer auto-connect imports its peers at activation),
+  // where reading the session throws rather than returning null. Both shapes
+  // mean the same thing here — no validated actor, so no identity row can be
+  // written truthfully — and neither may fail a save that worked before this
+  // decoration existed.
+  let session: Awaited<ReturnType<typeof getAuthSession>> | null = null;
+  try {
+    session = await getAuthSession();
+  } catch {
+    return;
+  }
+  const ownerUserId = session?.user?.id ?? null;
+  if (!ownerUserId) return;
+
+  await registerSavedConnectionIdentity({
+    connectorKey,
+    connectionId,
+    ownerUserId,
+    organizationId: session?.session?.activeOrganizationId ?? null,
+    // SCOPE-AWARE SEED (converge round 1, finding 1) — the same choice the
+    // user-connect save route makes for the same connection kind. An APP-scope
+    // connection is org-shared BY CONSTRUCTION (the connector's own Setup form
+    // is admin-gated by its declared ceiling exactly as the route admin-gates
+    // an app-scope save), and the seam's docs are explicit that such a row is
+    // minted for org-bound principals an owner-only grant would DENY. Seeding
+    // is insert-if-absent, so an owner-only seed written here could never be
+    // corrected by a later save through the route. A USER-scope save keeps the
+    // never-auto-share OWNER default. (A null-org row is force-narrowed to
+    // owner-only inside the seam regardless of what is asked for here.)
+    seed: input.scope === "user" ? "owner" : "workspace",
+  });
+}
+
+/**
+ * Decorate the resolved `nango-system` providers so a connector's own
+ * successful `saveNangoConnectionRecord` also registers the connection's
+ * identity row. Every other member is passed through to the real surface with a
+ * STABLE identity (bound once, cached), so `this`-using impls and the live
+ * key-map Proxies behave identically and reference comparisons still hold.
+ */
+function withConnectorSaveIdentityRegistration<P extends CapabilityProviderLike>(
+  providers: readonly P[],
+): P[] {
+  return providers.map((provider) => {
+    const impl = provider.impl;
+    if (typeof impl !== "object" || impl === null) return provider;
+    const target = impl as Record<string | symbol, unknown>;
+    const save = target[SAVE_CONNECTION_RECORD];
+    if (typeof save !== "function") return provider;
+
+    const wrappedSave = async (
+      connectorKey: unknown,
+      record: unknown,
+      options?: unknown,
+    ): Promise<unknown> => {
+      const result = await (save as (...a: unknown[]) => unknown).call(
+        target,
+        connectorKey,
+        record,
+        options,
+      );
+      // NEVER THROW OUT OF THE DECORATION (converge round 1, finding 2). The
+      // registration runs INSIDE the connector's own save, AFTER the credential
+      // import and the pointer write. A throw here does not undo either — it is
+      // caught by the connector's own sync-failure road, which clears the local
+      // pointer and BEST-EFFORT DELETES THE REMOTE CONNECTION. On a foreign
+      // identity conflict that road would destroy the very connection the
+      // conflict exists to protect, and a transient identity-store failure would
+      // destroy a healthy one. So a registration that cannot be completed leaves
+      // the connection exactly as it was born before this decoration existed:
+      // pointer saved, no identity row, not listed on the Sharing tab, and the
+      // save itself unharmed. It is reported loudly instead.
+      try {
+        await registerConnectorSavedConnectionIdentity({
+          connectorKey,
+          connectionId:
+            typeof record === "object" && record !== null
+              ? (record as { connectionId?: unknown }).connectionId
+              : undefined,
+          scope: effectiveSavedScope(record, options),
+        });
+      } catch (error) {
+        console.error(
+          `[connection-identity] a connector saved a connection record but its identity row ` +
+            `could not be registered — the connection is NOT listed on the connector's ` +
+            `Sharing tab. The save itself was left intact.`,
+          error,
+        );
+      }
+      return result;
+    };
+
+    // STABLE MEMBER IDENTITY (converge round 1, finding 3): the bound
+    // forwarder for a member is minted ONCE, so reading the same member twice
+    // returns the SAME function object. A fresh `bind` per read would make
+    // `surface.getNangoStatus !== surface.getNangoStatus`, which breaks every
+    // caller that memoizes, compares or de-duplicates a member by reference.
+    // The binding itself stays: without it a member invoked as
+    // `surface.member()` would run with the PROXY as `this` (private class
+    // fields on a real impl throw on a proxy receiver, and a member reaching a
+    // sibling through `this` would re-enter this trap).
+    const boundMembers = new Map<string | symbol, unknown>();
+    const decorated = new Proxy(impl as object, {
+      get: (raw, prop) => {
+        if (prop === SAVE_CONNECTION_RECORD) return wrappedSave;
+        if (boundMembers.has(prop)) return boundMembers.get(prop);
+        // `raw` (never the proxy) is the receiver, so a getter reaches the REAL
+        // surface and can never recurse back through this trap.
+        const value = Reflect.get(raw, prop, raw);
+        if (typeof value !== "function") return value;
+        const bound = value.bind(raw);
+        boundMembers.set(prop, bound);
+        return bound;
+      },
+    });
+
+    return { ...provider, impl: decorated };
+  });
+}
+
 /** The SYNC edge-bound substitution over the global registry's resolution. */
 function resolveProvidersEdgeBound(
   packageName: string,
   identity: ExtensionRecordIdentityInput | undefined,
   capability: string,
 ) {
-  return substituteEdgeBoundCapabilityProviders(
+  const providers = substituteEdgeBoundCapabilityProviders(
     packageName,
     effectiveIdentity(identity),
     capability,
     resolveCapabilityProviders(capability),
   );
+  // cinatra#3460 — the connection-identity road for a connector's OWN save.
+  // A schema-config connector's Setup form persists its verified connection
+  // pointer through this surface (`saveNangoConnectionRecord`), so the host
+  // registers the connection's identity row on a successful save exactly as
+  // the user-connect save route does — one road, no per-connector special
+  // case, and no connector package changes. Host-internal consumers resolve
+  // through `resolveCapabilityProviders` directly and are untouched (their own
+  // explicit seam call keeps its scope-aware seed).
+  if (capability === NANGO_SYSTEM_CAPABILITY) {
+    return withConnectorSaveIdentityRegistration(providers);
+  }
+  return providers;
 }
 
 function makeCapabilities(

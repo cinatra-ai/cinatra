@@ -96,6 +96,13 @@ const RENDERER_KIND_TABLE: Record<
      */
     credentialSafe?: true;
     /**
+     * This kind's component draws its OWN submit control — see
+     * `FieldRendererEntry.drawsOwnSubmit` (cinatra#3532). Declared only where
+     * the component's own source draws one; ABSENT means it draws none, and a
+     * setup surface then draws the product's Continue beside the field.
+     */
+    drawsOwnSubmit?: true;
+    /**
      * Optional custom condition factory for kinds whose match logic goes
      * beyond strict ID equality (e.g. gmail-sender's context gating +
      * field-name whitelist heuristic). Receives the full match-ID set
@@ -122,6 +129,9 @@ const RENDERER_KIND_TABLE: Record<
     bareAliases: ["context-selector"],
     credentialSafe: true,
   },
+  // cinatra#3532: CtaRenderer draws a Select or a Textarea and NO submit
+  // control, so this kind declares none (`drawsOwnSubmit` absent) and the setup
+  // surfaces draw the product's own Continue beside the field.
   cta: { renderer: CtaRenderer, bareAliases: ["cta"] },
   "email-drafts-review": {
     renderer: EmailDraftsReviewRenderer,
@@ -135,7 +145,7 @@ const RENDERER_KIND_TABLE: Record<
   // (hasFieldRendererComponent → makeExtensionFieldRenderer), and a NOT-in-build
   // binding of this kind (runtime-installed absent from the map) degrades to the
   // SchemaFieldRenderer floor here (AC4 never-blank), which is exactly this entry.
-  "final-list-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
+  "final-list-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   // MIGRATED (cinatra#1625): the follow-up-cadence component moved into
   // @cinatra-ai/email-artifacts (the pack now declares BOTH cadence bindings —
   // email-drafting-agent + email-follow-up-agent — with declaredBy=email-artifacts).
@@ -152,6 +162,7 @@ const RENDERER_KIND_TABLE: Record<
   "follow-up-cadence": {
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
+    drawsOwnSubmit: true,
     bareAliases: ["follow-up-cadence"],
   },
   // MIGRATED (cinatra#1625): the gmail-sender COMPONENT moved into
@@ -163,6 +174,7 @@ const RENDERER_KIND_TABLE: Record<
   "gmail-sender": {
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
+    drawsOwnSubmit: true,
     bareAliases: ["gmail-sender"],
     makeCondition: makeGmailSenderCondition,
   },
@@ -173,11 +185,11 @@ const RENDERER_KIND_TABLE: Record<
   // resolves map-first to the extension wrapper, and a not-in-build binding of
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review above.
-  "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
+  "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
-  "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
+  "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   // MIGRATED (cinatra#1961, S8 successor of #1625): the send-confirmation SHELL
   // COMPONENT moved into @cinatra-ai/email-artifacts (src/renderers/send-confirmation.tsx),
   // which cross-declares BOTH email-delivery-agent bindings (:output +
@@ -197,6 +209,7 @@ const RENDERER_KIND_TABLE: Record<
   "send-confirmation": {
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
+    drawsOwnSubmit: true,
     bareAliases: ["send-confirmation"],
   },
   // MIGRATED (cinatra#1958, S8 successor of #1625): the pure snapshot->onChange
@@ -208,8 +221,8 @@ const RENDERER_KIND_TABLE: Record<
   // -> makeExtensionFieldRenderer), and a not-in-build binding of this kind
   // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same shape
   // as final-list-review above.
-  "test-delivery-input": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
-  "wayflow-setup-form": { renderer: GroupedSetupFormRenderer },
+  "test-delivery-input": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
+  "wayflow-setup-form": { renderer: GroupedSetupFormRenderer, drawsOwnSubmit: true },
   // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
   // moved into @cinatra-ai/blog-wordpress-publish-agent. The KIND stays (the
   // manifest still declares it — kind-vocabulary set-equality; conditionFor()
@@ -217,7 +230,7 @@ const RENDERER_KIND_TABLE: Record<
   // resolves map-first to the extension wrapper, and a not-in-build binding of
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review / linkedin-draft-review above.
-  "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true },
+  "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
 };
 
 /** Pinned by the kind-vocabulary set-equality test. */
@@ -293,6 +306,18 @@ export function registerFieldRendererBindings(
         priority: b.priority,
         condition: conditionFor(b.id, b.kind),
         renderer: withBindingParams(makeExtensionFieldRenderer(b.id), b.params),
+        // cinatra#3532, convergence finding 4 — AN UNREAD COMPONENT KEEPS ITS
+        // OWN SEND. This branch mounts a component shipped by an extension
+        // package, and "this repository has not read it" is not a licence to
+        // assume it draws nothing: two bindings in today's build draw their own
+        // controls (`@cinatra-ai/email-test-delivery-agent:input` draws a Send
+        // test email AND a Continue, and does not read `hideSubmit`), so the
+        // blanket "declares none" would have put a second Continue beside a
+        // working one and left that renderer's own button staging into a value
+        // nothing submits. The declaration therefore keeps the pre-#3532 answer
+        // here, and a control-less extension-shipped setup renderer is the next
+        // slice's work, not a guess made on this one.
+        drawsOwnSubmit: true,
         midRunHitl: b.midRunHitl === true,
       });
       continue;
@@ -315,6 +340,11 @@ export function registerFieldRendererBindings(
       // declares nothing and is therefore unsafe, which is right — its
       // component is loaded from a package this repository has not read.
       credentialSafe: kindEntry.credentialSafe === true,
+      // The KIND's answer again (cinatra#3532): whether the component draws its
+      // own submit control is a fact about the component, so every binding of a
+      // kind inherits its kind's declaration. The extension branch above
+      // declares its own (true) — see the note there.
+      drawsOwnSubmit: kindEntry.drawsOwnSubmit === true,
       midRunHitl: b.midRunHitl === true,
     });
   }
@@ -339,6 +369,8 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     priority: 50,
     condition: isGroupedSetupFormField,
     renderer: GroupedSetupFormRenderer,
+    // The form owns ONE submit for the whole form (cinatra#3532).
+    drawsOwnSubmit: true,
   });
 
   // NOTE (cinatra#1796): the artifact-review REDIRECT card is NOT registered as a
@@ -379,6 +411,11 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     // …and the same bypass is what makes it safe without a session: it reaches
     // no server action of its own and re-enters no registry.
     credentialSafe: true,
+    // THE FALLBACK FIELD DRAWS ITS OWN CONTINUE (cinatra#3532) — the control
+    // #3532's first setup field passes with, unchanged by that fix. Declared
+    // here so the setup surfaces leave the send to it rather than drawing a
+    // second one beside it.
+    drawsOwnSubmit: true,
   });
 
   // -------------------------------------------------------------------------

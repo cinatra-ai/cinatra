@@ -40,8 +40,14 @@ export type AgentDetailModalProps = {
   /**
    * /configuration/marketplace/<scope>/<name> — the linkTrigger's no-JS
    * fallback href (JS opens the modal in place instead of navigating).
+   *
+   * `null` is the MEMBER arm (cinatra#2808): the full-page detail lives under
+   * the admin-only `/configuration` segment, so a scope tab mints none for a
+   * reader who could not follow it. The modal then opens from its own trigger —
+   * the ratified detail modal, reached in place, with no link that bounces and
+   * no new `/configuration` producer for the CI inventory to disposition.
    */
-  detailHref: string;
+  detailHref: string | null;
   /**
    * Controlled open state (cinatra#1121). The /agents All-Agents card lifts the
    * modal's open state so the SAME modal is opened by both the "More details"
@@ -83,7 +89,7 @@ export function AgentDetailModal({
     badge: null,
     freshnessAt: null,
     rating: null,
-    detailHref,
+    detailHref: detailHref ?? "",
     installCount: null,
     manifestLogoUrl: null,
     iconSlug: null,
@@ -96,7 +102,10 @@ export function AgentDetailModal({
     <MarketplaceDetailModal
       card={card}
       loadDetail={loadDetail}
-      linkTrigger={{ variant: "link", href: detailHref }}
+      // The admin arm keeps the §VI anchor whose href is the full-page detail
+      // (a no-JS fallback). The member arm passes none, so the modal falls back
+      // to its own link-styled DialogTrigger — same words, same modal, no href.
+      linkTrigger={detailHref ? { variant: "link", href: detailHref } : undefined}
       open={open}
       onOpenChange={onOpenChange}
     />

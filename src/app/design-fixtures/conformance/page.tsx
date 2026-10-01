@@ -18,6 +18,7 @@ import {
   ConnectorConnectionsFixture,
   ConnectorMultiConnectionFixture,
 } from "./connector-multi-connection-fixture";
+import { ConnectorSharingFixture } from "./connector-sharing-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
@@ -37,6 +38,7 @@ import {
   PrimitiveWaveConformanceFixtures,
   PrimitiveWaveOverlayFixtures,
 } from "./primitive-wave-fixtures";
+import { PrimitiveWaveLeg2ConformanceFixtures } from "./primitive-wave-leg2-fixtures";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -198,6 +200,24 @@ export default function ConformanceHarnessPage() {
             <ConnectorConnectionsFixture variant="populated" />
             <ConnectorConnectionsFixture variant="empty" />
             <ConnectorConnectionsFixture variant="loading" />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Connector setup — the Sharing tab (surfaces: connector-sharing,
+              connector-sharing-rollup, connector-sharing-locked)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-8">
+            <ConnectorSharingFixture variant="populated" />
+            {/* A connector that declares a ceiling, and one that only
+                recommends a scope — the two halves of the drawing's paragraph. */}
+            <ConnectorSharingFixture variant="locked" />
+            <ConnectorSharingFixture variant="recommended" />
+            {/* The `loading` state the surface declares. */}
+            <ConnectorSharingFixture variant="loading" />
           </CardContent>
         </Card>
 
@@ -402,6 +422,22 @@ export default function ConformanceHarnessPage() {
                 method note: a value carried by a token or a scale step cannot
                 be graded outside the palette the surface renders in. */}
             <PrimitiveWaveConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Shared primitives graded against the components drawing (cinatra#3189
+              leg 2: input OTP, scroll area, sidebar, switch, table, toggle)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* The REAL primitives, no substitution — the same method as the
+                leg 1 row above. Every clause of their drawing sections that
+                names a rendered value is read here, in the browser, under the
+                app's own palette, and in both palettes the product ships. */}
+            <PrimitiveWaveLeg2ConformanceFixtures />
           </CardContent>
         </Card>
 

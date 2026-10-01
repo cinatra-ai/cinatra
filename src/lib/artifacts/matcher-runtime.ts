@@ -753,20 +753,49 @@ async function runArtifactMatchImpl(
   for (const cand of candidates) {
     if (declaredMatcherEdge.has(cand.extPackageName)) continue;
     let resolved: { skillId: string; packageName: string } | null = null;
+    let emptyReason: string | null = null;
     try {
-      const { resolveDeclaredSkillEdgeForPackage } = await import("@cinatra-ai/skills");
-      resolved = await resolveDeclaredSkillEdgeForPackage(cand.extPackageName, "matcher");
+      const { resolveDeclaredSkillEdgeForPackageWithReason } = await import("@cinatra-ai/skills");
+      const outcome = await resolveDeclaredSkillEdgeForPackageWithReason(
+        cand.extPackageName,
+        "matcher",
+      );
+      resolved = outcome.resolution;
+      emptyReason = outcome.reason;
     } catch (err) {
       // Never fail the job on a resolution hiccup — an unresolved edge simply
       // is not trust, and the package-owned anchor still applies. The import
       // lives INSIDE the try on purpose: this must degrade, never abort the
       // classification run.
+      // NOT `extension-scan-failed`: this catch also covers the dynamic import
+      // and any programming error inside the resolver, so a closed token naming
+      // a cause the runtime cannot know would be a diagnostic that LIES - the
+      // one thing this line exists to stop. The resolver owns
+      // `extension-scan-failed`; the runtime records only what it can honestly
+      // say, that the resolution did not complete.
+      emptyReason = "declared-edge-resolution-failed";
       console.warn(
         `[artifact-matcher] declared matcher-edge resolution failed for ${cand.extPackageName}:`,
         err instanceof Error ? err.message : err,
       );
     }
     declaredMatcherEdge.set(cand.extPackageName, resolved);
+    // WHICH ARM, AND WHY THE RESOLUTION WAS EMPTY (cinatra#3091, wave 3 of
+    // #3087). A proof leg read this runtime's refusal line on a booted instance
+    // and could not close the question it raised: the refusal names the anchor
+    // that did not hold, but nothing said which anchor was even consulted, and
+    // an empty resolution said nothing about WHY it was empty. The two anchors
+    // are exclusive, so that one fact decides everything downstream — and it
+    // was the one fact the log did not carry. It does now, on the ordinary
+    // info channel beside the refusal warnings that already live here, one line
+    // per candidate package, printed whether the trust decision later holds or
+    // not (a line that only appeared on failure would still leave a successful
+    // boot unable to say which road it took).
+    console.info(
+      resolved
+        ? `[artifact-matcher] trust arm for ${cand.extPackageName}: declared-edge — the pack's declared matcher edge resolved to ${resolved.skillId} (owned by ${resolved.packageName}); the manifest names ${cand.matcherSkillId}`
+        : `[artifact-matcher] trust arm for ${cand.extPackageName}: package-owned — no declared matcher edge resolved (reason: ${emptyReason ?? "unknown"}); the manifest names ${cand.matcherSkillId}`,
+    );
   }
 
   // 4) ONE batched classification for the whole candidate set (cinatra#3118).

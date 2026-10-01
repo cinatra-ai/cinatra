@@ -12,10 +12,16 @@ import {
   dependencyRoleProblem,
   scanSdkOnlyImportsInText,
   sdkOnlyManifestDeps,
+  scanHostServedImportsInText,
+  hostServedManifestDeps,
   isSdkOnlyViolation,
   basePackageOf,
   SDK_PACKAGES,
+  HOST_SERVED_PACKAGES,
 } from "../inventory.mjs";
+// The host-SERVED design-primitives module id comes from its ONE definition (the
+// bundle builder's `HOST_DESIGN_PRIMITIVES_MODULE`) — the test never re-types it.
+import { HOST_DESIGN_PRIMITIVES_MODULE } from "../build-client-renderer-bundle.mjs";
 // These live `buildInventory()` calls scan the SHARED `extensions/` tree. The
 // import-ban gate tests that prove the gate detects a scratch `@/` edge now write
 // that fixture into a PRIVATE per-test clone (CINATRA_INVENTORY_EXT_ROOT) instead
@@ -367,6 +373,19 @@ describe("scanSdkOnlyImportsInText (source-import detection)", () => {
     expect([...scanSdkOnlyImportsInText(`import { MarketplaceCard } from "@cinatra-ai/sdk-ui/marketplace";`, SELF)]).toEqual([]);
   });
 
+  it("(f) does NOT flag the HOST-SERVED design-primitives module — value, type, or subpath", () => {
+    expect([...scanSdkOnlyImportsInText(`import { Button } from "${HOST_DESIGN_PRIMITIVES_MODULE}";`, SELF)]).toEqual([]);
+    expect([...scanSdkOnlyImportsInText(`import type { ButtonProps } from "${HOST_DESIGN_PRIMITIVES_MODULE}";`, SELF)]).toEqual([]);
+    expect([...scanSdkOnlyImportsInText(`import { Button } from "${HOST_DESIGN_PRIMITIVES_MODULE}/button";`, SELF)]).toEqual([]);
+    // a non-SDK first-party sibling in the same file is STILL a hit
+    expect([
+      ...scanSdkOnlyImportsInText(
+        `import { Button } from "${HOST_DESIGN_PRIMITIVES_MODULE}";\nimport { creds } from "@cinatra-ai/mcp-server";`,
+        SELF,
+      ),
+    ]).toEqual(["@cinatra-ai/mcp-server"]);
+  });
+
   it("collapses a non-SDK SUBPATH import to its base package (the ratchet unit)", () => {
     const hits = scanSdkOnlyImportsInText(
       `import { creds } from "@cinatra-ai/mcp-server/credentials";\n` +
@@ -413,6 +432,11 @@ describe("sdkOnlyManifestDeps (package.json detection)", () => {
     expect([...hits]).toEqual(["@example-vendor/blog-connector"]);
   });
 
+  it("(f) does NOT flag the HOST-SERVED design-primitives module in deps or peerDeps", () => {
+    expect([...sdkOnlyManifestDeps({ dependencies: { [HOST_DESIGN_PRIMITIVES_MODULE]: "workspace:*" } }, SELF)]).toEqual([]);
+    expect([...sdkOnlyManifestDeps({ peerDependencies: { [HOST_DESIGN_PRIMITIVES_MODULE]: "*" } }, SELF)]).toEqual([]);
+  });
+
   it("(e) does NOT flag SDK packages and ignores third-party deps + self", () => {
     const hits = sdkOnlyManifestDeps(
       {
@@ -430,14 +454,28 @@ describe("sdkOnlyManifestDeps (package.json detection)", () => {
 });
 
 describe("isSdkOnlyViolation / basePackageOf (predicate edges)", () => {
-  it("the two SDK packages are the only allowed first-party code deps", () => {
+  it("the SDK packages and the HOST-SERVED module are the allowed first-party code deps", () => {
     expect([...SDK_PACKAGES].sort()).toEqual(["@cinatra-ai/sdk-extensions", "@cinatra-ai/sdk-ui"]);
     expect(isSdkOnlyViolation("@cinatra-ai/sdk-extensions")).toBe(false);
     expect(isSdkOnlyViolation("@cinatra-ai/sdk-ui")).toBe(false);
     expect(isSdkOnlyViolation("@cinatra-ai/sdk-ui/marketplace")).toBe(false);
+    // the host SERVES this module to a loaded bundle at run time, so importing it
+    // is an allowed first-party dep, not extraction-blocking coupling.
+    expect(isSdkOnlyViolation(HOST_DESIGN_PRIMITIVES_MODULE)).toBe(false);
+    expect(isSdkOnlyViolation(`${HOST_DESIGN_PRIMITIVES_MODULE}/button`)).toBe(false);
+  });
+  it("the host-served class is DISTINCT from the SDK class and holds exactly the host-served module", () => {
+    expect([...HOST_SERVED_PACKAGES]).toEqual([HOST_DESIGN_PRIMITIVES_MODULE]);
+    expect(SDK_PACKAGES.has(HOST_DESIGN_PRIMITIVES_MODULE)).toBe(false);
+    for (const sdk of SDK_PACKAGES) expect(HOST_SERVED_PACKAGES.has(sdk)).toBe(false);
+  });
+  it("reads the host-served module id from the bundle builder — inventory.mjs holds no second literal", () => {
+    const src = readFileSync(resolve(TEST_REPO_ROOT, "scripts/extensions/inventory.mjs"), "utf8");
+    expect(src.includes(HOST_DESIGN_PRIMITIVES_MODULE)).toBe(false);
   });
   it("non-SDK first-party + sibling scope violate; third-party + relative do not", () => {
     expect(isSdkOnlyViolation("@cinatra-ai/mcp-server")).toBe(true);
+    expect(isSdkOnlyViolation("@cinatra-ai/objects")).toBe(true);
     // a sibling extension scope: injected (the default scope set is derived from
     // the on-disk extensions/ dirs, which a unit test must not depend on).
     expect(isSdkOnlyViolation("@example-vendor/blog-connector", new Set(["@cinatra-ai", "@example-vendor"]))).toBe(true);
@@ -469,6 +507,81 @@ describe("buildInventory — sdkOnlyViolations per extension (live, real repo)",
       for (const v of x.sdkOnlyViolations ?? []) {
         expect(SDK_PACKAGES.has(v), `${x.name} flagged SDK pkg ${v}`).toBe(false);
       }
+    }
+  });
+});
+
+describe("host-served dependency classification (a class distinct from the SDK packages)", () => {
+  it("scanHostServedImportsInText collects the module (incl. a subpath) and nothing else", () => {
+    const hits = scanHostServedImportsInText(
+      `import { Button } from "${HOST_DESIGN_PRIMITIVES_MODULE}/button";\n` +
+        `import { creds } from "@cinatra-ai/mcp-server";\n` +
+        `import { register } from "@cinatra-ai/sdk-extensions";\n` +
+        `import { z } from "zod";`,
+      SELF,
+    );
+    expect([...hits]).toEqual([HOST_DESIGN_PRIMITIVES_MODULE]);
+  });
+
+  it("hostServedManifestDeps collects a declared dep and ignores SDK + third-party + self", () => {
+    const hits = hostServedManifestDeps(
+      {
+        dependencies: {
+          [HOST_DESIGN_PRIMITIVES_MODULE]: "workspace:*",
+          "@cinatra-ai/sdk-ui": "workspace:*",
+          "@radix-ui/react-dialog": "^1",
+          [SELF]: "workspace:*",
+        },
+      },
+      SELF,
+    );
+    expect([...hits]).toEqual([HOST_DESIGN_PRIMITIVES_MODULE]);
+  });
+
+  it("hostServedManifestDeps detects a peerDependencies-ONLY and an optionalDependencies-ONLY declaration", () => {
+    expect([...hostServedManifestDeps({ peerDependencies: { [HOST_DESIGN_PRIMITIVES_MODULE]: "*" } }, SELF)]).toEqual([
+      HOST_DESIGN_PRIMITIVES_MODULE,
+    ]);
+    expect([
+      ...hostServedManifestDeps({ optionalDependencies: { [HOST_DESIGN_PRIMITIVES_MODULE]: "*" } }, SELF),
+    ]).toEqual([HOST_DESIGN_PRIMITIVES_MODULE]);
+    // devDependencies are NOT a code dep in either class (same as the violation path)
+    expect([...hostServedManifestDeps({ devDependencies: { [HOST_DESIGN_PRIMITIVES_MODULE]: "*" } }, SELF)]).toEqual([]);
+  });
+
+  it("hostServedManifestDeps excludes SELF even when self IS the host-served module", () => {
+    expect([
+      ...hostServedManifestDeps(
+        { dependencies: { [HOST_DESIGN_PRIMITIVES_MODULE]: "workspace:*" } },
+        HOST_DESIGN_PRIMITIVES_MODULE,
+      ),
+    ]).toEqual([]);
+  });
+
+  it("a host-served SUBPATH manifest key is exempted by the predicate AND reported by the host-served class", () => {
+    const key = `${HOST_DESIGN_PRIMITIVES_MODULE}/button`;
+    // exempt on the violation side ...
+    expect([...sdkOnlyManifestDeps({ dependencies: { [key]: "workspace:*" } }, SELF)]).toEqual([]);
+    // ... and visible on the host-served side, collapsed to the base package.
+    expect([...hostServedManifestDeps({ dependencies: { [key]: "workspace:*" } }, SELF)]).toEqual([
+      HOST_DESIGN_PRIMITIVES_MODULE,
+    ]);
+  });
+});
+
+describe("buildInventory — hostServedDeps per extension (live, real repo)", () => {
+  it("reports the host-served class on every extension, never as an SDK-only violation", async () => {
+    const inv = await buildInventory();
+    expect(inv.extensions.length).toBeGreaterThan(0);
+    for (const x of inv.extensions) {
+      expect(Array.isArray(x.hostServedDeps), `${x.name} has no hostServedDeps array`).toBe(true);
+      for (const d of x.hostServedDeps) {
+        expect(HOST_SERVED_PACKAGES.has(d), `${x.name} reports non-host-served ${d}`).toBe(true);
+      }
+      // the two classes never overlap: a host-served dep is not coupling.
+      expect(x.sdkOnlyViolations ?? []).not.toContain(HOST_DESIGN_PRIMITIVES_MODULE);
+      // the ratchet unit is unchanged: still (extension, base-package) arrays.
+      expect(Array.isArray(x.sdkOnlyViolations)).toBe(true);
     }
   });
 });

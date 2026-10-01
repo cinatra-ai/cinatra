@@ -219,24 +219,47 @@ describe("ExtensionRendererSlot — the snapshot the display negotiated, or none
     expect(el.type).not.toBe(RendererDegradedNotice);
   });
 
-  it("DEGRADES rather than handing an admitted older display a newer snapshot", async () => {
+  it("HANDS an admitted older display the older snapshot, and still mounts it", async () => {
     // PER-DISPLAY VERSION NEGOTIATION (enabler 0.4 of `PLAN: Agents Lifecycle
     // (C)`, cinatra#3027) has two halves: admit the display at its own version,
     // AND build the snapshot at that version. This seam receives a snapshot
-    // already built, so it can only honour the first half. The gap that leaves:
-    // the build entry declares v1, the host ceiling here is v2, negotiation
-    // admits v1, and the v1 component would be mounted with the v2 snapshot the
-    // caller built.
+    // already built, and until the host ceiling moved it could only honour the
+    // first half — so it degraded, which was a no-op while the window held a
+    // single version.
     //
-    // Until the sibling plan wires a per-version snapshot builder into this
-    // seam, the fail-closed half of the ratchet stands: the same
-    // `abi-incompatible` degrade the strict equality used to produce, never a
-    // shape the display did not agree to.
+    // WAVE 3 OF `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091) MOVES THE
+    // CEILING, and the degrade stops being a no-op the moment it does: every
+    // build-map display in the fleet declares v1, so a bare inequality here
+    // would floor ALL of them on the deploy that shipped v2 — precisely the
+    // flag day the window exists to prevent, arriving through the seam instead
+    // of through the loader.
+    //
+    // So the pin moves from "refuse" to the stronger statement the enabler
+    // actually asks for: the seam NARROWS the snapshot to the negotiated
+    // version and mounts. Nothing is loosened — the old assertion allowed the
+    // display to receive nothing, and this one requires it to receive exactly
+    // the v1 shape, with the v2 field absent rather than merely unread.
     const el = (await ExtensionRendererSlot({
       generatedKey: BUILD_MAP_KEY,
       packageName: "@fixture/built-ext",
       slot: "detail",
       props: props(2),
+      fallback: "FLOOR",
+    })) as ReactElement;
+    expect(el.type).not.toBe(RendererDegradedNotice);
+    const mounted = el.props as ArtifactRendererProps;
+    expect(mounted.propsApiVersion).toBe(1);
+    expect(Object.prototype.hasOwnProperty.call(mounted, "bytes")).toBe(false);
+  });
+
+  it("still DEGRADES when the negotiated version is above the snapshot's own", async () => {
+    // Narrowing is safe; widening would be a guess at a field the host never
+    // built. This arm is the fail-closed half and it stays.
+    const el = (await ExtensionRendererSlot({
+      generatedKey: BUILD_MAP_KEY,
+      packageName: "@fixture/built-ext",
+      slot: "detail",
+      props: { ...props(1), propsApiVersion: 0 } as ArtifactRendererProps,
       fallback: "FLOOR",
     })) as ReactElement;
     const kids = (el.props as { children: ReactElement[] }).children;

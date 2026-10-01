@@ -26,9 +26,58 @@ permissions:
   contents: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # changes — does this pull request touch anything the jobs below read?
+  # (cinatra#3508)
+  #
+  # On `pull_request` dorny/paths-filter reads the PR's changed files from the
+  # REST API (needs `pull-requests: read`) — no checkout, ~5s, no services. On
+  # every other event (push to main, merge_group, schedule, dispatch) there is
+  # no changed-file set to read, so the output is forced true and the jobs below
+  # run for real.
+  #
+  # The guard is JOB-level, never a `paths:` trigger filter: a guarded job that
+  # does not run still reports `skipped`, which branch protection counts as
+  # passing, while a filtered-out WORKFLOW never reports at all and leaves a
+  # required context waiting forever.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths (doc-code-value-gate)
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      abi: ${{ github.event_name != 'pull_request' || steps.filter.outputs.abi == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            abi:
+              # Derived from the gate's config (.github/doc-code-value-gate.config.json,
+              # passed to the reusable workflow below): the SDK ABI statement in the
+              # sdk-extensions README and the two code values it must equal.
+              - '.github/workflows/**'
+              - '.github/doc-code-value-gate.config.json'
+              - 'packages/sdk-extensions/README.md'
+              - 'packages/sdk-extensions/src/register.ts'
+              - 'packages/sdk-extensions/package.json'
+
   # KEEP this job name stable as `doc-code-value-gate` — it is the required-check
   # context prefix.
   doc-code-value-gate:
+    # cinatra#3508. A SKIPPED reusable-workflow caller posts no
+    # "<caller> / <called>" check at all — unlike a skipped normal job, which
+    # posts a skipped one that branch protection counts as a pass. So this
+    # guard is correct only while `doc-code-value-gate / doc-code-value-gate`
+    # is NOT in the branch-protection required set; it is not (read from the
+    # live protection, 2026-09-15). Requiring that context means dropping this
+    # guard again, or moving the path condition inside the reusable gate.
+    needs: [changes]
+    if: ${{ needs.changes.outputs.abi == 'true' }}
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit, so the gate
     # engine is never pulled from mutable main.
