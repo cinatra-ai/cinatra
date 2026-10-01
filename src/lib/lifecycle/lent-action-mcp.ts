@@ -216,6 +216,45 @@ type McpToolResult = {
   structuredContent: Record<string, unknown>;
 };
 
+/**
+ * The sentence a person reads for the outcome of the review card's own decision
+ * path. PURE. The words are the ones the review already draws: the decision
+ * bar's notices and the composer's sentences, with the review window's own cut
+ * of the changes-requested notice (it omits "The gate is resolved and").
+ * The escalated changes-requested sentence has no drawn window reply; it is new
+ * copy made from the decision bar's escalated notice by the same cut.
+ */
+export function reviewOutcomeSentence(
+  outcome: Awaited<ReturnType<SubmitReviewDecisionAction>>,
+): string {
+  switch (outcome.kind) {
+    case "changes-requested": {
+      const head =
+        outcome.status === "requested"
+          ? "Changes requested. The reviewed work has been turned back for repair — a repair is now in flight."
+          : "Changes requested. The reviewed work has been turned back — escalated because no automatic repair is available; the effect stays held.";
+      return outcome.idempotent ? `${head} (This had already been recorded.)` : head;
+    }
+    case "annotated":
+      return "Comment recorded. The gate stays open — nothing has resumed.";
+    case "decided": {
+      const head =
+        outcome.disposition === "approve"
+          ? "Approved. The gate is resolved and the run has been released to continue."
+          : outcome.disposition === "reject"
+            ? "Rejected. The gate is resolved and the reviewed work has been turned back."
+            : "Your comment was recorded with the decision.";
+      return outcome.idempotent ? `${head} (This decision had already been recorded.)` : head;
+    }
+    case "blocked":
+      return "This review is no longer open, so the comment was not added.";
+    case "not-permitted":
+      return outcome.message;
+    case "error":
+      return `${outcome.message} The decision did not commit — you can retry.`;
+  }
+}
+
 function say(payload: Record<string, unknown>): McpToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
@@ -484,7 +523,11 @@ export async function handleLentAction(
       actorCtx,
       null,
     );
-    return say({ ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested", outcome });
+    return say({
+      ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested",
+      outcome,
+      message: reviewOutcomeSentence(outcome),
+    });
   }
 
   // THE ARMED SCHEDULE'S **Save changes** (cinatra#2934, the armed-trigger tab).

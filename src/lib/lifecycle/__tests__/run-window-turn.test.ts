@@ -793,6 +793,94 @@ describe("the files travel with the message, and the screen learns what the turn
     expect(out.acted).toBe(true);
   });
 
+  it("a review turn whose lent action answered stores the platform's sentence, never the record", async () => {
+    const SENTENCE =
+      "Changes requested. The reviewed work has been turned back for repair — a repair is now in flight.";
+    turnBehaviour = (send) => {
+      send("tool_result", {
+        name: "lifecycle_bound_card_decide",
+        result: JSON.stringify({
+          ok: true,
+          outcome: { kind: "changes-requested", status: "requested", idempotent: false },
+          message: SENTENCE,
+        }),
+      });
+      send("text", {
+        content:
+          '{"ok": true, "outcome": {"kind": "changes-requested", "status": "requested", "idempotent": false}}',
+      });
+    };
+    const out = await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "review",
+      prompt: "Please tighten the opening paragraph.",
+    });
+    expect(appended.at(-1)?.text).toBe(SENTENCE);
+    expect(out.entries.at(-1)?.text).toBe(SENTENCE);
+    expect(SENTENCE).not.toMatch(/[{}]|"ok"/);
+    expect(out.acted).toBe(true);
+  });
+
+  it("a refusal on the review window answers in the platform's own sentence", async () => {
+    const SENTENCE = "This review is no longer open, so the comment was not added.";
+    turnBehaviour = (send) => {
+      send("tool_result", {
+        name: "lifecycle_bound_card_decide",
+        result: JSON.stringify({
+          ok: false,
+          outcome: { kind: "blocked", reason: "no-longer-pending" },
+          message: SENTENCE,
+        }),
+      });
+      send("text", { content: "I tried, but here is the raw result." });
+    };
+    const out = await mod.runWindowTurn({
+      runId: "run-1",
+      surface: "review",
+      prompt: "Please tighten the opening paragraph.",
+    });
+    expect(appended.at(-1)?.text).toBe(SENTENCE);
+    expect(out.entries.at(-1)?.text).toBe(SENTENCE);
+    expect(out.acted).toBe(false);
+  });
+
+  it("only the review window takes the platform's sentence: every other road answers as before", async () => {
+    const turns: Array<{
+      surface: Parameters<typeof mod.runWindowTurn>[0]["surface"];
+      tool: string;
+      result: Record<string, unknown> | null;
+      text: string;
+    }> = [
+      {
+        surface: "run-page",
+        tool: "lifecycle_bound_screen_fill",
+        result: { ok: true, placed: ["subject"], message: "I have placed the subject." },
+        text: "I put a subject in for you.",
+      },
+      {
+        surface: "armed-trigger",
+        tool: "lifecycle_bound_card_decide",
+        result: { ok: true, outcome: { kind: "saved", rows: null } },
+        text: "Saved the new time.",
+      },
+      {
+        surface: "run-page",
+        tool: "lifecycle_bound_card_decide",
+        result: { ok: false, outcome: { kind: "nothing-placed" }, message: "Nothing has been filled in yet." },
+        text: "Nothing was sent yet.",
+      },
+      { surface: "review", tool: "", result: null, text: "It is a draft about upgrades." },
+    ];
+    for (const t of turns) {
+      turnBehaviour = (send) => {
+        if (t.result) send("tool_result", { name: t.tool, result: JSON.stringify(t.result) });
+        send("text", { content: t.text });
+      };
+      await mod.runWindowTurn({ runId: "run-1", surface: t.surface, prompt: "go" });
+      expect(appended.at(-1)?.text).toBe(t.text);
+    }
+  });
+
   it("reports NO press for a turn that only answered, or whose press did nothing", async () => {
     turnBehaviour = (send) => send("text", { content: "It is waiting for a subject." });
     expect((await mod.runWindowTurn({ runId: "run-1", surface: "review", prompt: "what is this?" })).acted)
