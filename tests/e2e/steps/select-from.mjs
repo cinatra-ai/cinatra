@@ -31,6 +31,13 @@
 // shared select hides everything outside it from assistive technology, the
 // combobox included, so no name finds the combobox then.
 //
+// CLOSED. A combobox the step opened is waited for until its list has closed,
+// when the list still hides the combobox from assistive technology once the
+// choice shows: the shared select shows the choice while its list is still
+// closing, and while it is open it hides the rest of the page, so the next pick
+// on the page would find no picker. The wait reads the combobox by its mark, as
+// the open wait does, with the same bound, and refuses a list that stays open.
+//
 // SEARCHED. A search field lists its entries only once text is typed into it.
 // The step types the entry's text, reads the field again by its mark (the
 // typed text has hidden its placeholder and changed its value), and waits,
@@ -80,7 +87,8 @@ const SHOWN_BY = Object.freeze({ page: "the page draws it", field: "the field sh
 
 /**
  * From the selection to the page reflecting it; from opening a combobox to its
- * entries showing; from typing into a search field to its entry in the list.
+ * entries showing; from the selection to its list's close; from typing into a
+ * search field to its entry in the list.
  */
 export const SELECT_REFLECT_BOUND_MS = 5_000;
 
@@ -106,7 +114,9 @@ export const SELECT_BOUNDS = Object.freeze({
  * does not list (`no-entry`, naming its entries), a disabled picker or entry
  * (`disabled`), a selection that could not be made (`driver-failure`), a search
  * field's choice the page takes as another entry (`other-entry`) and a
- * selection the page does not reflect within the bound (`not-reflected`).
+ * selection the page does not reflect within the bound (`not-reflected`) and a
+ * list that still hides the page once the bound has run out after the choice
+ * (`not-closed`).
  *
  * @param {import("@playwright/test").Page} page
  * @param {{
@@ -134,6 +144,31 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
   const read = () => within(page.evaluate(readControls, query), READING_BOUND_MS);
   // The picker the step has opened, read again by its mark (see OPENED).
   const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  let openedHere = false;
+  // The combobox hidden from assistive technology still: its list has not closed (see CLOSED).
+  const hidesCombobox = () =>
+    within(
+      page.evaluate((selector) => {
+        const combobox = document.querySelector(selector);
+        return Boolean(combobox && combobox.closest("[aria-hidden='true']"));
+      }, markedBy(`${mark}p`)),
+      READING_BOUND_MS,
+    );
+  // Waits until the list the step opened has closed; answers what the log line adds.
+  const waitForListToClose = async (entryNamed) => {
+    const closingAt = performance.now();
+    if (!(await hidesCombobox())) return "";
+    for (;;) {
+      const closed = await readMarked();
+      if (closed && closed.found === 1 && !closed.open && !(await hidesCombobox())) break;
+      const remaining = bound.reflectMs - (performance.now() - closingAt);
+      if (remaining <= 0) {
+        throw refuse(STEP, record, "not-closed", `the list of the picker ${pickerNamed} on ${from} did not close within ${bound.reflectMs} ms of the selection of ${entryNamed}`);
+      }
+      await pause(Math.min(bound.pollMs, remaining));
+    }
+    return `; its list closed after ${elapsedSince(closingAt)} ms`;
+  };
   try {
     let reading = await read();
     if (!reading) throw refuse(STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
@@ -203,6 +238,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       } catch (error) {
         throw refuse(STEP, record, "driver-failure", `the picker ${pickerNamed} on ${from} could not be opened (${errorClass(error)}) — ${nothing}`);
       }
+      openedHere = true;
       const openedAt = performance.now();
       for (;;) {
         const opened = await readMarked();
@@ -267,7 +303,8 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
         const how = shown.state
           ? `${SHOWN_BY[shown.shows] ?? "its selected state shows it"} after ${elapsedMs} ms`
           : `the page confirms it after ${elapsedMs} ms: ${quotedName(shown.confirmation)}`;
-        record(`${STEP}: selected ${entryNamed} in the picker ${pickerNamed} on ${from} — ${how}`);
+        const closedNote = openedHere ? await waitForListToClose(entryNamed) : "";
+        record(`${STEP}: selected ${entryNamed} in the picker ${pickerNamed} on ${from} — ${how}${closedNote}`);
         return { picker: pickerName, entry: entryText, kind, via, path: shown.path, elapsedMs };
       }
       if (elapsedMs >= bound.reflectMs) break;
