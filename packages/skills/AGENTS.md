@@ -91,6 +91,8 @@ The path is validated to be within the configured skills data directory before r
 
 The catalog lookup (in `personal-skills.ts`) performs a two-pass find: it first tries an exact match against `entry.id`, then falls back to matching the npm suffix (the part after `/`). This means you do **not** need to slugify the package name before passing it to the function — either format resolves correctly. The same two-pass fallback is used by `getAssignedSkillIdsForAgent`.
 
+The per-scope assignment page (agent settings, **Skills**) writes picks through `assignScopeSkill` to `agent_assigned_skills` for the selected scope. On the next dispatch, `resolveRecommendationCandidateSkillIds` calls `getAssignedSkillIdsForAgent` with the run actor and frozen assignment-scope snapshot, so an assigned skill that remains assignable and deliverable becomes a recommendation candidate for that run. `maybeHoldRunForRecommendation` then applies the hold policy and request-aware scoring; assigning a skill does not guarantee that every run will be held.
+
 ## Skill matcher — canonical agent reader
 
 The matcher's "agents" axis is the UNION of:
