@@ -416,6 +416,68 @@ for (const backend of BACKENDS) {
         expect(unrecorded.message).toBe("selectFrom refused (input): hand the step a record callback — nothing was done");
       });
     });
+
+    it("reads a combobox's entries in order and what it shows, and closes the list it opened without choosing", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const result = await readOptions(page, { picker: "State", record, bounds: BOUNDS });
+        expect(result).toEqual({ picker: "State", kind: "combobox", entries: ["All", "Active", "Locked", "Archived"], more: 0, shows: "Active", path: "/pick/options" });
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^readOptions: the picker "State" on \/pick\/options lists "All", "Active", "Locked", "Archived" in this order and shows "Active"; its list closed after \d+ ms$/);
+        const after = await page.evaluate(() => {
+          const state = document.querySelector("[aria-label='State']");
+          return {
+            shows: state.textContent,
+            expanded: state.getAttribute("aria-expanded"),
+            hidden: document.querySelectorAll("[aria-hidden]").length,
+            marked: document.querySelectorAll("[data-step-control]").length,
+          };
+        });
+        expect(after).toEqual({ shows: "Active", expanded: "false", hidden: 0, marked: 0 });
+        const chosen = await selectFrom(page, { picker: "State", entry: "Locked", record, bounds: BOUNDS });
+        expect(chosen).toMatchObject({ kind: "combobox" });
+      });
+    });
+
+    it("reads a select's options in order without opening anything", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app);
+        const { readOptions } = theSteps("readOptions");
+        const result = await readOptions(page, { picker: "Size", record, bounds: BOUNDS });
+        expect(result).toEqual({ picker: "Size", kind: "select", entries: ["Small", "Medium", "Large", "Huge"], more: 0, shows: "Small", path: "/pick/start" });
+        expect(lines).toEqual(['readOptions: the picker "Size" on /pick/start lists "Small", "Medium", "Large", "Huge" in this order and shows "Small"']);
+      });
+    });
+
+    it("refuses by name a list that does not close on the Escape key", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const error = await refusal(readOptions(page, { picker: "Stuck", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("not-closed");
+        expect(error.message).toBe('readOptions refused (not-closed): the list of the picker "Stuck" on /pick/options did not close within 800 ms of the Escape key');
+        expect(lines).toEqual([error.message]);
+        expect(await page.evaluate(() => document.querySelector("[aria-label='Stuck']").textContent), "the step chose an entry").toBe("Choose");
+      });
+    });
+
+    it("refuses a picker it cannot read, and reads nothing", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const missing = await refusal(readOptions(page, { picker: "Nothing", record, bounds: BOUNDS }));
+        expect(missing.kind).toBe("no-picker");
+        expect(missing.reason.endsWith("— nothing was read"), missing.reason).toBe(true);
+        expect(lines.at(-1)).toBe(missing.message);
+        await page.goto(`${app.origin}/pick/search`);
+        const search = await refusal(readOptions(page, { picker: "Skills", record, bounds: BOUNDS }));
+        expect(search.kind).toBe("no-list");
+        expect(search.message).toBe('readOptions refused (no-list): the picker "Skills" on /pick/search is a search field, which lists entries only for typed text — nothing was read');
+        expect(lines.at(-1)).toBe(search.message);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
+      });
+    });
   });
 }
 
