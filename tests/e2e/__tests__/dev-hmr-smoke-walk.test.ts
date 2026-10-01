@@ -37,6 +37,13 @@ describe("the bounded warm-session smoke", () => {
     expect(SMOKE_WALK_BUDGET_MS).toBeLessThan(600_000);
   });
 
+  it("bounds cold precompilation separately while charging the same total deadline", async () => {
+    let now = 0;
+    const check = vi.fn(async () => { now += 100_000; return null; });
+    await walkSmokeSurfaces({ phase: "precompile", routes: ["/agents", "/connectors/example/a/setup"], deadline: 150_000, now: () => now, check, report: () => undefined });
+    expect(check.mock.calls).toEqual([["/agents", 120_000], ["/connectors/example/a/setup", 50_000]]);
+  });
+
   it.each(["HTTP 500", "rendered error surface: Build Error"])("stops on %s and keeps its elapsed timing", async (problem) => {
     let now = 0;
     const visits: SmokeVisit[] = [];

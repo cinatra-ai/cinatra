@@ -1,5 +1,5 @@
 export type ConnectorDescriptor = { packageId: string; slug: string; setupSubroute: string };
-export type SmokePhase = "warm" | "post-recompile";
+export type SmokePhase = "precompile" | "warm" | "post-recompile";
 
 export const SMOKE_WALK_BUDGET_MS = 540_000;
 
@@ -40,7 +40,7 @@ export async function walkSmokeSurfaces(options: {
       break;
     }
     const coldFirstVisit = options.phase === "warm" && index === 0 && route === "/connectors";
-    const budgetMs = Math.min(remainingMs, coldFirstVisit ? 120_000 : 90_000);
+    const budgetMs = Math.min(remainingMs, coldFirstVisit || options.phase === "precompile" ? 120_000 : 90_000);
     options.report({ phase: options.phase, route, state: "start", budgetMs });
     let problem: string | null;
     try {

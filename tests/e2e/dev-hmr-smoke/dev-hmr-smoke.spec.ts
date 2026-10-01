@@ -124,7 +124,17 @@ async function walk(page: Page, phase: SmokePhase, routes: readonly string[], de
     now: () => performance.now(),
     // Bound the entire visit, including body/shadow-root inspection. A stuck
     // evaluate must fail the smoke while there is still time to retain a trace.
-    check: (route, timeoutMs) => test.step(`${phase}: ${route}`, () => checkSurface(page, route, timeoutMs), { timeout: timeoutMs }),
+    check: (route, timeoutMs) => test.step(`${phase}: ${route}`, async () => {
+      if (phase !== "precompile") return checkSurface(page, route, timeoutMs);
+      // Use the authenticated browser context to compile cold routes before
+      // measuring their warm browser visit. This still spends the shared budget.
+      const response = await page.request.get(route, { timeout: timeoutMs });
+      try {
+        return response.ok() ? null : `precompile HTTP ${response.status()}`;
+      } finally {
+        await response.dispose();
+      }
+    }, { timeout: timeoutMs }),
     report: (visit) => process.stdout.write(`[hmr-smoke] ${JSON.stringify(visit)}\n`),
   });
 }
@@ -144,11 +154,18 @@ test.describe("warm dev-session HMR smoke", () => {
     // The first visit compiles the route and activates its extensions. The
     // failing baseline returned /connectors 200 in 94 s (70 s compiling,
     // 24 s in application code), exceeding the usual 90 s navigation budget.
-    // Only the first /connectors visit gets two minutes; all other visits keep
-    // a 90s ceiling. Both walks share 540s, leaving 60s of the 600s test budget
+    // Only the first /connectors browser visit gets two minutes; all other
+    // browser visits keep a 90s ceiling. Cold route precompilation is measured
+    // separately and bounded to 120s per route: the hosted setup route returned
+    // HTTP 200 after 100s (52s compiling, 48s in application code).
+    // Precompilation and both walks share 540s, leaving 60s of the test budget
     // for failure reporting and cleanup rather than losing the trace to the job
     // limit. Two sampled setup routes avoid compiling four separate setup pages.
-    const warmFailures = await walk(page, "warm", SURFACES, deadline);
+    const entryFailures = await walk(page, "warm", SURFACES.slice(0, 1), deadline);
+    expect(entryFailures, `cold-entry floor failures:\n${entryFailures.join("\n")}`).toEqual([]);
+    const precompileFailures = await walk(page, "precompile", SURFACES.slice(1), deadline);
+    expect(precompileFailures, `bounded precompile failures:\n${precompileFailures.join("\n")}`).toEqual([]);
+    const warmFailures = await walk(page, "warm", SURFACES.slice(1), deadline);
     expect(warmFailures, `warm-walk floor failures (baseline broken, independent of HMR):\n${warmFailures.join("\n")}`).toEqual([]);
 
     // 2. RECOMPILE — benign, restored touch of the bridge module.
