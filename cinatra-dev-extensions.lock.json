@@ -435,7 +435,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
       "repo": "cinatra-ai/wordpress-assistant-connector",
-      "resolvedSha": "99c9b7bd18842be2b6fb3eae5b35b1fd2ec62af0"
+      "resolvedSha": "bd91ff6b7d140fc57f995d686a025ba8fc407be7"
     },
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",

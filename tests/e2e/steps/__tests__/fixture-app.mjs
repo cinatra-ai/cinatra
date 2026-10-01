@@ -169,7 +169,10 @@ export const STREAM_SCENARIOS = Object.freeze({
 // it shows the entry, and every element the list hid is shown again. A list
 // that carries `data-fixture-closes-after` closes that many milliseconds after
 // the choice, or never (`never`), as a list that is still closing does; the
-// combobox shows the entry and the entry reads as selected at once. page-double.mjs plays the same.
+// combobox shows the entry and the entry reads as selected at once. The Escape
+// key closes every shown list a combobox opened the same way and takes no entry,
+// the combobox reading collapsed again, unless the list carries
+// `data-fixture-escape="ignored"`. page-double.mjs plays the same.
 const TIMELINE_RUNNER = `<script>
 (function () {
   var ops = JSON.parse(document.getElementById("fixture-timeline").textContent);
@@ -222,6 +225,20 @@ const TIMELINE_RUNNER = `<script>
         entry.setAttribute("aria-selected", "true");
         if (closesAfter !== "never") setTimeout(close, Number(closesAfter));
       }
+    });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll("[role='listbox']").forEach(function (list) {
+      if (!list.id || list.hasAttribute("hidden") || list.getAttribute("data-fixture-escape") === "ignored") return;
+      var picker = document.querySelector("[data-fixture-opens='" + list.id + "'][aria-controls='" + list.id + "']");
+      if (!picker) return;
+      list.setAttribute("hidden", "");
+      document.querySelectorAll("[data-aria-hidden]").forEach(function (node) {
+        node.removeAttribute("aria-hidden");
+        node.removeAttribute("data-aria-hidden");
+      });
+      picker.setAttribute("aria-expanded", "false");
     });
   });
   // A search field's own handlers (see PICK_SEARCH_PAGE): the page double runs the same two functions.
@@ -568,6 +585,21 @@ export const PICK_CLOSING_PAGE = [
   '<div role="listbox" id="closing-minute" hidden data-fixture-hides-others data-fixture-closes-after="30"><a href="#m00" role="option" data-fixture-chooses>00</a> <a href="#m30" role="option" data-fixture-chooses>30</a></div>',
   '<a href="#zone" role="combobox" aria-label="Zone" aria-controls="closing-zone" aria-expanded="false" data-fixture-opens="closing-zone"><span>Choose</span></a>',
   '<div role="listbox" id="closing-zone" hidden data-fixture-hides-others data-fixture-closes-after="never"><a href="#utc" role="option" data-fixture-chooses>UTC</a> <a href="#cet" role="option" data-fixture-chooses>CET</a></div>',
+].join("");
+
+/**
+ * Two comboboxes whose list hides the rest of the page while it is open, for
+ * the reading of a picker's entries (see TIMELINE_RUNNER): "State" shows the
+ * entry it holds, "Active", and lists All, Active, Locked and Archived, as the
+ * installed-extensions page offers its views; the list of "Stuck" does not close
+ * on the Escape key (`data-fixture-escape="ignored"`). Neither list has an
+ * accessible name, as the shared select's list has none.
+ */
+export const PICK_OPTIONS_PAGE = [
+  '<a href="#state" role="combobox" aria-label="State" aria-controls="options-state" aria-expanded="false" data-fixture-opens="options-state"><span>Active</span></a>',
+  '<div role="listbox" id="options-state" hidden data-fixture-hides-others><a href="#all" role="option" data-fixture-chooses>All</a> <a href="#active" role="option" data-fixture-chooses>Active</a> <a href="#locked" role="option" data-fixture-chooses>Locked</a> <a href="#archived" role="option" data-fixture-chooses>Archived</a></div>',
+  '<a href="#stuck" role="combobox" aria-label="Stuck" aria-controls="options-stuck" aria-expanded="false" data-fixture-opens="options-stuck"><span>Choose</span></a>',
+  '<div role="listbox" id="options-stuck" hidden data-fixture-hides-others data-fixture-escape="ignored"><a href="#one" role="option" data-fixture-chooses>One</a> <a href="#two" role="option" data-fixture-chooses>Two</a></div>',
 ].join("");
 
 /**
@@ -1036,6 +1068,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/pick/hiding": PICK_HIDING_PAGE,
         "/pick/closing": PICK_CLOSING_PAGE,
+        "/pick/options": PICK_OPTIONS_PAGE,
         "/pick/search": PICK_SEARCH_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,

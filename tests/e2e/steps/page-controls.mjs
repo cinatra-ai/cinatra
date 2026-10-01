@@ -127,7 +127,11 @@ export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space 
  *     before it in its form group. With `marked`, the picker is the one that
  *     carries the mark, by no name (`by` is `mark`). For a search field whose
  *     list is shown, `drawn` counts the texts the page draws for each entry of
- *     the list, for the reading after the choice;
+ *     the list, for the reading after the choice. `shows` is the entry the
+ *     picker shows as chosen (a select's selected option, a radio group's
+ *     checked radio, a listbox's first option marked selected or checked, a
+ *     combobox's own text, empty while it shows its placeholder, and a search
+ *     field's value), or the empty string when it shows none;
  *   - `reflected`: whether the marked entry reads as selected, and the text of
  *     a live region that names `entry` and was not there before (`before`); for
  *     a search field, whether the field (its list closed) or a text the page
@@ -573,6 +577,22 @@ export function readControls(query) {
     }
     // What the page draws for each entry of a search field's list, before the choice.
     const names = Array.from(new Set(entries.map((entry) => entry.name)));
+    // The entry the picker shows as chosen: a select's selected option, a radio
+    // group's checked radio, a listbox's first option marked selected or checked,
+    // a combobox's or a search field's own text.
+    let shows = "";
+    if (kind === "select") {
+      const option = picker.selectedOptions && picker.selectedOptions[0];
+      shows = option ? text(option.label || option.text) : "";
+    } else if (kind === "radiogroup") {
+      const radio = entries.find((entry) => checkedOf(entry.element) === true);
+      shows = radio ? radio.name : "";
+    } else if (kind === "listbox") {
+      const option = entries.find((entry) => entry.element.getAttribute("aria-selected") === "true" || entry.element.getAttribute("aria-checked") === "true");
+      shows = option ? option.name : "";
+    } else {
+      shows = valueOf(picker);
+    }
     return {
       ...read,
       kind,
@@ -589,6 +609,7 @@ export function readControls(query) {
       native: Boolean(chosen && chosen.element.localName === "input"),
       live: liveTexts(),
       drawn: kind === "search" && open ? { names, counts: drawnCounts(names, picker) } : null,
+      shows,
     };
   }
 
