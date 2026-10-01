@@ -29,6 +29,9 @@ defect of a step, with a test, fixed once for every run.
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
 | `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
+| `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
+| `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
+| `openPageInOwnContext` | A further page opened from a visible link in a browser context of its own, with connections of its own, signed in by the session the first page carries and never through the sign-in page. |
 <!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
@@ -169,6 +172,8 @@ client-side router sends, and no other path in the address), for example because
 the link's own handler opens a dialog in place, is refused at once
 (`no-navigation`), naming the link it pressed and the dialog or panel the page
 shows instead.
+
+The same start signals and short bound apply with `furtherPage: true`: no start is refused as `no-further-page`, naming what the current page shows instead, while a started open keeps its full landing wait.
 
 With `furtherPage: true` it opens the page in a further page instead, and first
 reads the requests that stand open on the origin (`readStandingRequests`): a
@@ -347,14 +352,24 @@ alert, a toast) names the entry that did not name it before. The step answers
 `{ picker, entry, kind, via, path, elapsedMs }`, where `via` is `state` or
 `confirmation`.
 
+A combobox the step opened is also waited for until its list has closed, when
+the list still hides the combobox from assistive technology once the choice
+shows: the shared select shows the choice while its list is still closing, and
+while the list is open it hides the rest of the page, so a second pick on the
+page would find no picker. The wait reads the combobox as the open wait does,
+within the same bound, measured from the choice, and the log line then ends
+`; its list closed after <n> ms`. A list that is closed at once, or a list the
+step found already open, takes no wait and adds nothing to the line.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
-| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, and from typing into a search field to its entry in the list |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, from the selection to the close of a list that hides the page, and from typing into a search field to its entry in the list |
 
 Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
 shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
 (nothing was selected), `driver-failure`, `other-entry` (a search field's page
-took another entry than the one pressed) and `not-reflected`.
+took another entry than the one pressed), `not-reflected` and `not-closed` (a list
+that still hides the page once the bound has run out).
 
 ## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
 
@@ -732,6 +747,127 @@ anything that is no page path. Its line says that an address was typed.
 
 Refusal kinds: `input`, `other-origin`, `unreadable` and `has-link` (no address
 was typed), and `no-load`.
+
+<!-- pressByTestId and readTitle: an element without a role pressed by its test id and its text, and the page's title. -->
+
+## `pressByTestId(page, { testId, text, record, within?, bounds? })`
+
+Presses the one shown element that carries the test id `testId` (in
+`data-testid`, `TEST_ID_ATTRIBUTE`, the attribute the product's browser tests
+read) and whose own text is `text`, for an element the product draws to be
+pressed without a role, such as a row of the type picker in the upload dialog: a
+list item with a click handler and a test id. `press` finds a control by its
+role and its name, so it has nothing to name there.
+
+- **Its own text.** The text the element draws: its text nodes, without a hidden
+  part, a script or a style, each run of white space made one space and trimmed,
+  and compared whole with `text`, folded the same way. A text that holds `text`
+  as a part is no match. Only a shown element counts: drawn, and inside nothing
+  hidden.
+- **Never a guess.** It presses only when exactly one element matches. No match
+  is refused (`no-control`), naming how many shown elements carry the test id
+  and their texts, at most `CONTROL_NAMES_LISTED` of them, each cut as a name
+  is; several are refused (`ambiguous`), naming the part of the page each sits
+  in. With `within`, it looks only inside the one shown part of the page of that
+  name, found as `press` finds it.
+- **The accessible road first.** An element that carries a role `press` presses
+  (its own, or one its tag gives it) and an accessible name is `press`'s: the
+  step refuses it (`has-role`), naming the role and the name, and presses
+  nothing.
+- **The fault said.** Before the press it writes one line: the page's path, the
+  test id, the text, and that the element carries no role and was found by its
+  test id, such as `pressByTestId: on /artifacts, the element of the test id
+  "artifacts-picker-type" with the text "Note pack:note Pack" carries no role;
+  it was found by its test id`. A person who uses the keyboard or a screen
+  reader finds such an element by no name, and every record of a run that needs
+  the step says so.
+
+It reads the page's next settled state with the reading `press` uses
+(press-settle.mjs), within the same bounds (`PRESS_BY_TEST_ID_BOUNDS`, the
+bounds of `press`), and answers the fields `press` answers, with the test id:
+`{ name, role, testId, from, path, navigated, elapsedMs }`, where `name` is the
+text and `role` is empty for an element without one.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press (`actionMs`) |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation (`startMs`) |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation (`settleMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-scope`,
+`no-control`, `ambiguous` and `has-role` (nothing was pressed),
+`driver-failure` and `unsettled`.
+
+## `readTitle(page, { record, settleMs?, pollMs?, bound? })`
+
+Reads the document's title through the browser's own reading of it
+(`document.title`), never by a selector: a count with a selector on the head's
+title element reads 0, since the engine that reads text reads only what the page
+draws. As `readCount` does for a count, it answers only once two readings that
+lie `settleMs` apart are equal and every reading between them agreed, so a title
+the page sets a moment after it loads is never read as the one before; a
+reading that could not be taken agrees with nothing. It answers
+`{ title, path }` and writes one line that names the page by its path and
+carries the title, cut as a name is, such as
+`readTitle: the title of the page on /agents reads "Agents"`. An empty title is
+a title: it is answered as the empty string, and the line says the page has an
+empty title. A title that never holds still within `bound` is refused
+(`unsteady`), naming the last two titles it read. An unknown option, or a bound
+that is not a positive number of milliseconds, is refused before anything is
+read (`input`).
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `TITLE_SETTLE_MS` | 1_000 | how long the title must hold still (`settleMs`) |
+| `TITLE_POLL_MS` | 100 | how often it is read (`pollMs`) |
+| `TITLE_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+## `openPageInOwnContext(page, { path, record, bounds? })`
+
+Opens `path` in a page of a browser context of its own, for a state that needs
+two people at once, such as one person on a run's pending gate while another
+settles it. A run page holds several requests open on its origin, and over
+plain HTTP a browser opens at most six connections to one origin in one
+context, so a further page in the same context (`navigateTo` with
+`furtherPage`) can starve the first page's own send. A second context has
+connections of its own.
+
+1. Refuses, before the page is touched, a path that is no page path or carries
+   a query string or a fragment, the sign-in page (`SIGN_IN_PAGE_PATH`, which
+   is `signInThroughPage`'s), and an unknown or non-positive bound.
+2. Reads the visible links on the current page that lead to `path`, as
+   `navigateTo` reads them. With none, it opens nothing and refuses, naming how
+   many visible links the page shows: it opens only what a person could open
+   from there, and never invents an address.
+3. Opens a new context on the page's browser from the storage state of the
+   page's context (its cookies and its storage) and the page's viewport. The
+   state goes from one call straight into the other: it is never written to a
+   file, recorded or logged. No sign-in is made, so the sign-in budget is not
+   touched, and no credential is typed.
+4. Starts the reading of standing requests (`readStandingRequests`) on the new
+   context before its page opens, so that page is never unknown to it.
+5. Loads the address the first such link leads to (its query string included)
+   in a new page of that context, and waits for the landing as `navigateTo`
+   does. A landing on the sign-in page (`session-lost`), or on another path
+   within the bound (`landed-elsewhere`), is refused, and the new context is
+   closed first.
+
+It answers `{ path, from, elapsedMs, furtherPage, standing }`: the landed path,
+the path it came from, the elapsed time, the page it opened, and the new
+context's own reading of standing requests. Its line names the two paths and
+says that the page stands in a browser context of its own; it never carries a
+cookie, a storage value, an address or a query string. The caller closes
+`furtherPage.context()` when it is done with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OWN_CONTEXT_LANDING_BOUND_MS` | 120_000 | from opening the new context to the landing of its page (`landingMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the link, and of the standing requests (`readingMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
+`no-browser` (no context was opened), `driver-failure`, and `session-lost` and
+`landed-elsewhere` (the new context was closed).
 
 ## Shared bounds
 

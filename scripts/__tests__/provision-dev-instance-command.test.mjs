@@ -79,6 +79,23 @@ function ports(overrides = {}) {
   };
 }
 
+describe("the command refuses unsupported providers before it reads stdin", () => {
+  it("does not read secrets or write any setup leg for Anthropic", async () => {
+    declareRuntime("development");
+    const stdin = untouchableStdin();
+    const p = ports({
+      argv: ["--namespace", "acme-dev", "--provider", "anthropic"],
+      stdin: stdin.stream,
+    });
+
+    assert.equal(await runProvisionDevInstance(p.options), 1);
+    assert.deepEqual(stdin.touched, []);
+    assert.deepEqual(p.lines, []);
+    assert.deepEqual(p.provisioned, []);
+    assert.match(p.failures.join("\n"), /Anthropic.*setup wizard.*--provider openai/);
+  });
+});
+
 describe("the command refuses an administrator BEFORE it reads stdin", () => {
   for (const declared of [undefined, "staging", "developement"]) {
     it(`does not touch stdin when the runtime is ${declared ?? "undeclared"}`, async () => {

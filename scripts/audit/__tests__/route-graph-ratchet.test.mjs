@@ -154,10 +154,8 @@ test("classifyRaises: a raise WITHOUT an absorb record FAILS (silent raise)", ()
   assert.match(violations[0].reason, /NO absorb record/);
 });
 
-test("classifyRaises: a raise with an EXACTLY-matching record the BASE already holds is ABSORBED (passes, reported loud)", () => {
-  // cinatra#3832: the record landed first (a permit, its ceiling unchanged);
-  // the raise comes in a later pull request.
-  const base = { routes: { "/a": 100 }, absorbs: { "/a": rec(100, 120) } };
+test("classifyRaises: a raise with an EXACTLY-matching record is ABSORBED (passes, reported loud)", () => {
+  const base = { routes: { "/a": 100 } };
   const committed = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
   const { violations, absorbed } = classifyRaises(base, committed);
   assert.deepEqual(violations, []);
@@ -220,20 +218,13 @@ test("classifyRaises: LOWERING an absorbed ceiling retires the record (record re
   assert.deepEqual(absorbed, []);
 });
 
-test("classifyRaises: a NEW raise on an already-absorbed route: a permit replaces the old record, then the raise", () => {
-  // Pull request 1: the used record is replaced by a permit from the current ceiling.
-  const main0 = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
-  const permit = { routes: { "/a": 120 }, absorbs: { "/a": rec(120, 130) } };
-  let out = classifyRaises(main0, permit);
-  assert.deepEqual(out.violations, []);
-  assert.deepEqual(out.absorbed, []);
-  assert.deepEqual(out.permits.map((p) => [p.route, p.from, p.to]), [["/a", 120, 130]]);
-  // Pull request 2: the base holds the permit; the raise is absorbed.
+test("classifyRaises: a NEW annotated raise on an already-absorbed route replaces the old record", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
   const committed = { routes: { "/a": 130 }, absorbs: { "/a": rec(120, 130) } };
-  out = classifyRaises(permit, committed);
-  assert.deepEqual(out.violations, []);
-  assert.equal(out.absorbed.length, 1);
-  assert.deepEqual([out.absorbed[0].from, out.absorbed[0].to], [120, 130]);
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(violations, []);
+  assert.equal(absorbed.length, 1);
+  assert.deepEqual([absorbed[0].from, absorbed[0].to], [120, 130]);
 });
 
 test("classifyRaises: dropping a tracked route retires its record (no violation)", () => {
@@ -390,16 +381,14 @@ test("the committed baseline's absorb records validate strictly against the base
 const fields = (errors) => errors.map((e) => [e.route, e.field]);
 
 test("a committed baseline with a valid absorb record passes the strict check, raised and carried forward", () => {
-  // The base already holds the record (landed as a permit by an earlier pull request).
-  const base = { routes: { "/a": 100, "/b": 50 }, absorbs: { "/a": rec(100, 110) } };
+  const base = { routes: { "/a": 100, "/b": 50 } };
   const committed = { routes: { "/a": 110, "/b": 50 }, absorbs: { "/a": rec(100, 110) } };
   assert.deepEqual(gate.validateCommittedAbsorbs(base, committed), []);
   // After the merge the base carries the same record: carried forward, still valid.
   assert.deepEqual(gate.validateCommittedAbsorbs(committed, committed), []);
-  // Own growth on several routes at once: one record per raised route, each on the base.
-  const wideBase = { routes: { "/a": 100, "/b": 50 }, absorbs: { "/a": rec(100, 110), "/b": rec(50, 60) } };
+  // Own growth on several routes at once: one record per raised route.
   const wide = { routes: { "/a": 110, "/b": 60 }, absorbs: { "/a": rec(100, 110), "/b": rec(50, 60) } };
-  assert.deepEqual(gate.validateCommittedAbsorbs(wideBase, wide), []);
+  assert.deepEqual(gate.validateCommittedAbsorbs(base, wide), []);
 });
 
 test("the existing baseline without records still passes the strict check", () => {
@@ -596,7 +585,7 @@ test("pack reach (3): a pin advance that adds a pack-only-reached core module pa
   const after = measure(G1);
   const committed = { routes: { "/r": after.moduleCount } };
   assert.deepEqual(committed, base);
-  assert.deepEqual(classifyRaises(base, committed), { violations: [], absorbed: [], permits: [] });
+  assert.deepEqual(classifyRaises(base, committed), { violations: [], absorbed: [] });
   assert.deepEqual(gate.validateCommittedAbsorbs(base, committed), []);
   assert.deepEqual(diffAgainstBaseline(new Map([["/r", after]]), committed), { over: [], broken: [] });
 });
@@ -613,14 +602,12 @@ test("pack reach (4): a route that imports a new core module directly still need
   assert.equal(silent.violations.length, 1);
   assert.match(silent.violations[0].reason, /NO absorb record/);
   assert.deepEqual(fields(gate.validateCommittedAbsorbs(base, { routes: { "/r": 4 } })), [["/r", "absorbs"]]);
-  // With its record on the base (landed first as a permit) the raise is
-  // absorbed and the committed baseline validates.
-  const permitted = { routes: { "/r": 3 }, absorbs: { "/r": rec(3, 4) } };
+  // With its record the raise is absorbed and the committed baseline validates.
   const committed = { routes: { "/r": 4 }, absorbs: { "/r": rec(3, 4) } };
-  const annotated = classifyRaises(permitted, committed);
+  const annotated = classifyRaises(base, committed);
   assert.deepEqual(annotated.violations, []);
   assert.equal(annotated.absorbed.length, 1);
-  assert.deepEqual(gate.validateCommittedAbsorbs(permitted, committed), []);
+  assert.deepEqual(gate.validateCommittedAbsorbs(base, committed), []);
   assert.deepEqual(diffAgainstBaseline(new Map([["/r", m]]), committed), { over: [], broken: [] });
 });
 
@@ -684,49 +671,158 @@ test("pack reach: the gate prints each distinct per-pack reading once, beside th
   assert.deepEqual(gate.packReachLines(new Map([["/b", measure(G0)]]), ["/b"]), []);
 });
 
-// --- cinatra#3832: a record that permits a raise counts only when the base
-// branch already holds it, so a raise takes two pull requests: the first lands
-// the record with the ceiling unchanged (a permit), the second raises the
-// ceiling. A raise and its record in one pull request fails. ---
+// --- cinatra#3848: an annotated raise passes in the pull request that carries
+// it. A ceiling measures the graph a route reaches, and real growth raises it:
+// the record that matches the raise exactly, and the notice the gate prints for
+// it, make the raise visible. Every other refusal stays. Each case runs the
+// gate's base comparison against a git fixture (a base commit published as
+// origin/main and a head commit on top), as a pull request's run reads it. ---
 
-test("two pull requests: a raise and its record in ONE pull request FAILS (the base does not hold the record)", () => {
+const RATCHET_FLOOR = "scripts/audit/route-graph-ratchet.baseline.json";
+
+// The comparison of `head` with `base` through the shared guard, on a fresh fixture.
+function guardOn(base, head, env = PULL_REQUEST_RUN) {
+  const f = makeFloorRepo({ base: { [RATCHET_FLOOR]: base }, head: { [RATCHET_FLOOR]: head } });
+  try {
+    return gate.checkFloorAgainstBase({ repoRoot: f.root, env });
+  } finally {
+    f.cleanup();
+  }
+}
+
+const growthOf = (r) => (r.growth ?? r.lines).join("\n");
+
+// The real shape: four routes raised by ten each, with their four records in
+// the same change; /sign-in is unchanged.
+const REAL_BASE = { routes: { "/sign-in": 164, "/api/mcp": 1295, "/chat": 1394, "/api/a2a": 1303, "/api/llm-bridge": 1313 } };
+const REAL_HEAD = {
+  routes: { "/sign-in": 164, "/api/mcp": 1305, "/chat": 1404, "/api/a2a": 1313, "/api/llm-bridge": 1323 },
+  absorbs: {
+    "/api/a2a": rec(1303, 1313),
+    "/api/llm-bridge": rec(1313, 1323),
+    "/api/mcp": rec(1295, 1305),
+    "/chat": rec(1394, 1404),
+  },
+};
+
+test("annotated raise (a): four ceilings raised by ten with their four records in the same change are absorbed, and the gate prints four notices", () => {
+  const f = makeFloorRepo({ base: { [RATCHET_FLOOR]: REAL_BASE }, head: { [RATCHET_FLOOR]: REAL_HEAD } });
+  try {
+    const r = gate.checkFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+    assert.equal(r.ok, true, growthOf(r));
+    assert.equal(r.status, "held");
+    const { violations, absorbed } = classifyRaises(r.baseFloor, REAL_HEAD);
+    assert.deepEqual(violations, []);
+    assert.deepEqual(absorbed.map((a) => [a.route, a.from, a.to]), [
+      ["/api/a2a", 1303, 1313],
+      ["/api/llm-bridge", 1313, 1323],
+      ["/api/mcp", 1295, 1305],
+      ["/chat", 1394, 1404],
+    ]);
+    assert.deepEqual(gate.validateCommittedAbsorbs(r.baseFloor, REAL_HEAD), []);
+
+    // The gate itself, run on the fixture as a pull request's run: the base
+    // comparison passes and prints one notice per absorbed raise. (The route
+    // measurement that follows reads this checkout's routes against the
+    // fixture's ceilings; its answer is not what this case pins.)
+    const run = spawnSync(process.execPath, [join(HERE, "..", "route-graph-ratchet.mjs")], {
+      cwd: f.root,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...PULL_REQUEST_RUN },
+    });
+    const notices = run.stdout.split("\n").filter((l) => l.includes("NOTICE — ABSORBED ceiling raise"));
+    assert.deepEqual(
+      notices,
+      [
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /api/a2a: 1303 -> 1313 (sanctioned growth (#999): test; PR #999)",
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /api/llm-bridge: 1313 -> 1323 (sanctioned growth (#999): test; PR #999)",
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /api/mcp: 1295 -> 1305 (sanctioned growth (#999): test; PR #999)",
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /chat: 1394 -> 1404 (sanctioned growth (#999): test; PR #999)",
+      ],
+      `stdout: ${run.stdout}\nstderr: ${run.stderr}`,
+    );
+    assert.match(run.stdout, /floor base guard: scripts\/audit\/route-graph-ratchet\.baseline\.json does not grow against the base "origin\/main"/);
+    assert.doesNotMatch(run.stderr, /GREW against the base|cannot be compared with the base|invalid absorb record/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("annotated raise (b): a raise without a record fails", () => {
+  const r = guardOn(REAL_BASE, { routes: { ...REAL_HEAD.routes } });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, "grew");
+  assert.equal(r.growth.length, 4, growthOf(r));
+  assert.match(growthOf(r), /\/api\/mcp \[absorbs\]: ceiling RAISED 1295 -> 1305 with NO absorb record/);
+  // One record missing among four: that route alone fails.
+  const { "/chat": _dropped, ...three } = REAL_HEAD.absorbs;
+  const one = guardOn(REAL_BASE, { routes: REAL_HEAD.routes, absorbs: three });
+  assert.equal(one.ok, false);
+  assert.deepEqual(one.growth.map((g) => g.split(":")[0]), ["/chat [absorbs]"]);
+});
+
+test("annotated raise (c): a raise whose record names another from or another to fails", () => {
+  let r = guardOn({ routes: { "/a": 100 } }, { routes: { "/a": 120 }, absorbs: { "/a": rec(90, 120) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[from\]: ceiling raised 100 -> 120 but the absorb record does not exactly match the raise delta/);
+  r = guardOn({ routes: { "/a": 100 } }, { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 130) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[to\]: ceiling raised 100 -> 120 but the absorb record does not exactly match the raise delta/);
+  // The committed check names the stale "to" as well.
+  assert.deepEqual(fields(validateAbsorbRecords({ routes: { "/a": 120 }, absorbs: { "/a": rec(100, 130) } })), [["/a", "to"]]);
+});
+
+test("annotated raise (d): a record carried forward unchanged at its ceiling passes; altered or deleted it fails", () => {
+  const base = { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120) } };
+  let r = guardOn(base, { routes: { "/a": 120, "/b": 40 }, absorbs: { "/a": rec(100, 120) } });
+  assert.equal(r.ok, true, growthOf(r));
+  assert.equal(r.status, "held");
+  assert.deepEqual(classifyRaises(r.baseFloor, { routes: { "/a": 120, "/b": 40 }, absorbs: { "/a": rec(100, 120) } }).absorbed, []);
+  r = guardOn(base, { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120, { reason: "rewritten history" }) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[reason\]: absorb record deleted\/altered while its raised ceiling \(120\) is kept/);
+  r = guardOn(base, { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120, { pr: 1000 }) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[pr\]: /);
+  r = guardOn(base, { routes: { "/a": 120, "/b": 50 } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[absorbs\]: absorb record deleted\/altered while its raised ceiling \(120\) is kept/);
+});
+
+test("annotated raise (e): a record for a ceiling the change does not raise, which the base does not hold, fails as an orphan", () => {
   const base = { routes: { "/a": 100 } };
-  const committed = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
-  const { violations, absorbed } = classifyRaises(base, committed);
-  assert.deepEqual(absorbed, []);
-  assert.deepEqual(violations.map((v) => [v.route, v.field]), [["/a", "absorbs"]]);
-  assert.match(violations[0].reason, /not on the base branch/);
-  assert.deepEqual(fields(gate.validateCommittedAbsorbs(base, committed)), [["/a", "absorbs"]]);
+  const head = { routes: { "/a": 100 }, absorbs: { "/a": rec(100, 120) } };
+  const r = guardOn(base, head);
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[from\]: orphan\/stale absorb record/);
+  // The committed baseline itself is refused: its "to" is not the ceiling.
+  assert.deepEqual(fields(validateAbsorbRecords(head)), [["/a", "to"]]);
+  assert.deepEqual(fields(gate.validateCommittedAbsorbs(base, head)), [["/a", "to"]]);
+  // A record below the unchanged ceiling is an orphan as well.
+  const below = guardOn(base, { routes: { "/a": 100 }, absorbs: { "/a": rec(90, 100) } });
+  assert.equal(below.ok, false);
+  assert.match(growthOf(below), /\/a \[from\]: orphan\/stale absorb record/);
 });
 
-test("two pull requests: the first lands a permit (ceiling unchanged) and passes, reported as a permit", () => {
-  const base = { routes: { "/a": 100 } };
-  const permit = { routes: { "/a": 100 }, absorbs: { "/a": rec(100, 120) } };
-  assert.deepEqual(validateAbsorbRecords(permit), []);
-  const out = classifyRaises(base, permit);
-  assert.deepEqual(out.violations, []);
-  assert.deepEqual(out.absorbed, []);
-  assert.deepEqual(out.permits, [{ route: "/a", from: 100, to: 120, reason: "sanctioned growth (#999): test", pr: 999 }]);
-  assert.deepEqual(gate.validateCommittedAbsorbs(base, permit), []);
+test("annotated raise (f): a lowered ceiling retires its record", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const r = guardOn(base, { routes: { "/a": 105 } });
+  assert.equal(r.ok, true, growthOf(r));
+  assert.equal(r.status, "held");
+  // A record kept beside the lowered ceiling is stale.
+  assert.deepEqual(fields(validateAbsorbRecords({ routes: { "/a": 105 }, absorbs: { "/a": rec(100, 120) } })), [["/a", "to"]]);
 });
 
-test("two pull requests: the second raises the ceiling on the permit the base holds and is absorbed", () => {
-  const base = { routes: { "/a": 100 }, absorbs: { "/a": rec(100, 120) } };
-  const committed = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
-  const out = classifyRaises(base, committed);
-  assert.deepEqual(out.violations, []);
-  assert.deepEqual(out.absorbed.map((a) => [a.route, a.from, a.to]), [["/a", 100, 120]]);
-  // An altered record at the raise is not the one the base holds.
-  const altered = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120, { reason: "another reason" }) } };
-  assert.ok(classifyRaises(base, altered).violations.length >= 1);
-});
-
-test("two pull requests: a pending permit carried forward unchanged by an unrelated pull request passes; a withdrawn one too", () => {
-  const base = { routes: { "/a": 100, "/b": 50 }, absorbs: { "/a": rec(100, 120) } };
-  assert.deepEqual(classifyRaises(base, { routes: { "/a": 100, "/b": 40 }, absorbs: { "/a": rec(100, 120) } }).violations, []);
-  assert.deepEqual(classifyRaises(base, { routes: { "/a": 100, "/b": 50 } }).violations, []);
-  // A lowered ceiling leaves the permit stale: it must go with the lowering.
-  assert.deepEqual(fields(validateAbsorbRecords({ routes: { "/a": 90 }, absorbs: { "/a": rec(100, 120) } })), [["/a", "to"]]);
+test("annotated raise (g): a base that cannot be read on a pull request's run fails with its reason; a run that is no pull request passes with its line", () => {
+  let r = guardOn(REAL_BASE, REAL_HEAD, UNREADABLE_BASE_RUN);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, "unreadable");
+  assert.match(r.lines[0], /cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  r = guardOn(REAL_BASE, REAL_HEAD, NO_PULL_REQUEST_RUN);
+  assert.equal(r.ok, true);
+  assert.equal(r.status, "no-base");
+  assert.equal(r.lines.length, 1);
+  assert.match(r.lines[0], /no pull request and no base named \(ROUTE_GRAPH_RATCHET_BASE unset\)/);
 });
 
 // The committed floor is compared with the base through the shared guard: the

@@ -1,0 +1,4 @@
+{
+  "note": "Records of the rows added to scripts/audit/system-writer-manifest.json (cinatra#3832). A new or raised row passes in the pull request that carries it, with its record here in the same change: { list: \"system-writer-manifest\", row: { file, ref } (the manifest row's file and reference), reason (a sentence of at least six words of three letters or more, at least four of them different), pr (the pull request's number) }. A record is carried forward unchanged while its row stands and goes when its row goes; a record without its row fails the gate.",
+  "permits": []
+}

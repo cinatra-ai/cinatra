@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   gitignore-gate:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     uses: cinatra-ai/ci/.github/workflows/gitignore-gate.yml@696c647dbbd8eb605e6e71a2243605b0a50c7dd1 # v0.1.0
     with:
       ref: 4c903fe9ca71ad47752a2bc92b72893e5f7c9814
