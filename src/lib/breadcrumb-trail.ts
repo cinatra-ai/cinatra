@@ -653,3 +653,52 @@ export function agentInstanceTabLabel(
   if (!leaf || leaf.ellipsis) return null;
   return leaf.label || null;
 }
+
+// THE MIRROR ADMITS THE CONNECTOR DISPATCH ROUTE (cinatra#3235). The ratified
+// drawing's rule is the trail's rule for EVERY route, but the mirror above
+// recognises one surface only, so a connector setup page fell through to the
+// humanized last path segment — the page's own tab strip, "Setup | Cinatra" on
+// every connector at once, never a distinguishing name.
+//
+// The connector route publishes the authorized connector display name as a
+// REPLACEMENT contribution for its own four-segment path (the page's server
+// render, strictly after its gates — see the route's crumb publisher), and that
+// is the label this returns: the SAME server-authorized string the trail's leaf
+// crumb reads, so the tab and the trail beside it cannot disagree. Read through
+// the crumb-contributions bus the agents mirror reads — there is no second,
+// connector-only title source.
+//
+// The selection is by crumb IDENTITY: the POSITION-targeted entries (the ones
+// carrying `insertBefore` or `appendAfter`) name a position beside this route's
+// crumb rather than the route itself, and are skipped, exactly as the trail
+// composer keeps them out of its per-prefix replacement lookup. Among the
+// replacement entries the LAST for the prefix wins, as it does at publish.
+//
+// Returns null off a connector dispatch address, and null while the route has
+// published nothing — never a humanized path segment, so a caller that gets
+// null leaves the tab title alone.
+// The one gate for "is this the connector dispatch route", so the shell's
+// mirror branch and the label lookup below cannot drift apart: the route
+// resolves ONLY at `/connectors/[vendor]/[slug]/[subroute]` — four segments, no
+// deeper. The shell needs the question on its own to know that a null label
+// means "not published YET" on this route rather than "not this route".
+export function isConnectorDispatchPathname(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments[0] === "connectors" && segments.length === 4;
+}
+
+export function connectorRouteTabLabel(
+  pathname: string,
+  contributions: readonly CrumbContribution[],
+): string | null {
+  if (!isConnectorDispatchPathname(pathname)) return null;
+  const segments = pathname.split("/").filter(Boolean);
+  const routePath = "/" + segments.join("/");
+  let label: string | null = null;
+  for (const entry of contributions) {
+    if (entry.insertBefore || entry.appendAfter) continue;
+    if (entry.prefix !== routePath) continue;
+    label = entry.label || null;
+  }
+  return label;
+}
