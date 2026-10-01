@@ -17,13 +17,15 @@ describe("the bounded warm-session smoke", () => {
     expect(selectConnectorSetupRoutes([])).toEqual([]);
   });
 
-  it("grants the cold allowance only to the first /connectors visit", async () => {
+  it("grants 180s to each route only on its first visit, then 90s across phases", async () => {
     const check = vi.fn(async () => null);
-    const options = { routes: ["/connectors", "/agents", "/connectors/example/a/setup"], deadline: SMOKE_WALK_BUDGET_MS, now: () => 0, check, report: () => undefined };
+    const options = { routes: ["/connectors", "/agents", "/connectors/example/a/setup"], visitedRoutes: new Set<string>(), deadline: SMOKE_WALK_BUDGET_MS, now: () => 0, check, report: () => undefined };
+    await walkSmokeSurfaces({ ...options, phase: "warm" });
     await walkSmokeSurfaces({ ...options, phase: "warm" });
     await walkSmokeSurfaces({ ...options, phase: "post-recompile" });
     expect(check.mock.calls).toEqual([
-      ["/connectors", 120_000], ["/agents", 90_000], ["/connectors/example/a/setup", 90_000],
+      ["/connectors", 180_000], ["/agents", 180_000], ["/connectors/example/a/setup", 180_000],
+      ["/connectors", 90_000], ["/agents", 90_000], ["/connectors/example/a/setup", 90_000],
       ["/connectors", 90_000], ["/agents", 90_000], ["/connectors/example/a/setup", 90_000],
     ]);
   });
@@ -31,7 +33,7 @@ describe("the bounded warm-session smoke", () => {
   it("uses the remaining total budget and stops before starting another route", async () => {
     let now = SMOKE_WALK_BUDGET_MS - 25_000;
     const check = vi.fn(async () => { now += 25_000; return null; });
-    const failures = await walkSmokeSurfaces({ phase: "post-recompile", routes: ["/agents", "/connectors"], deadline: SMOKE_WALK_BUDGET_MS, now: () => now, check, report: () => undefined });
+    const failures = await walkSmokeSurfaces({ phase: "post-recompile", routes: ["/agents", "/connectors"], visitedRoutes: new Set<string>(), deadline: SMOKE_WALK_BUDGET_MS, now: () => now, check, report: () => undefined });
     expect(check.mock.calls).toEqual([["/agents", 25_000]]);
     expect(failures).toEqual([expect.stringContaining("[post-recompile] /connectors: total smoke budget exhausted")]);
     expect(SMOKE_WALK_BUDGET_MS).toBeLessThan(600_000);
@@ -40,15 +42,15 @@ describe("the bounded warm-session smoke", () => {
   it("bounds cold precompilation separately while charging the same total deadline", async () => {
     let now = 0;
     const check = vi.fn(async () => { now += 100_000; return null; });
-    await walkSmokeSurfaces({ phase: "precompile", routes: ["/agents", "/connectors/example/a/setup"], deadline: 150_000, now: () => now, check, report: () => undefined });
-    expect(check.mock.calls).toEqual([["/agents", 120_000], ["/connectors/example/a/setup", 50_000]]);
+    await walkSmokeSurfaces({ phase: "precompile", routes: ["/agents", "/connectors/example/a/setup"], visitedRoutes: new Set<string>(), deadline: 150_000, now: () => now, check, report: () => undefined });
+    expect(check.mock.calls).toEqual([["/agents", 150_000], ["/connectors/example/a/setup", 50_000]]);
   });
 
   it.each(["HTTP 500", "rendered error surface: Build Error"])("stops on %s and keeps its elapsed timing", async (problem) => {
     let now = 0;
     const visits: SmokeVisit[] = [];
     const check = vi.fn(async () => { now += 740; return problem; });
-    const failures = await walkSmokeSurfaces({ phase: "post-recompile", routes: ["/connectors/example/a/setup", "/agents"], deadline: SMOKE_WALK_BUDGET_MS, now: () => now, check, report: (visit) => visits.push(visit) });
+    const failures = await walkSmokeSurfaces({ phase: "post-recompile", routes: ["/connectors/example/a/setup", "/agents"], visitedRoutes: new Set<string>(), deadline: SMOKE_WALK_BUDGET_MS, now: () => now, check, report: (visit) => visits.push(visit) });
     expect(check).toHaveBeenCalledTimes(1);
     expect(failures).toEqual([`[post-recompile] /connectors/example/a/setup after 740ms: ${problem}`]);
     expect(visits).toEqual([
@@ -59,7 +61,7 @@ describe("the bounded warm-session smoke", () => {
 
   it("preserves a thrown recompile navigation error instead of trying the next surface", async () => {
     const check = vi.fn(async () => { throw new Error("navigation timed out"); });
-    const failures = await walkSmokeSurfaces({ phase: "post-recompile", routes: ["/connectors/example/a/setup", "/agents"], deadline: SMOKE_WALK_BUDGET_MS, now: () => 0, check, report: () => undefined });
+    const failures = await walkSmokeSurfaces({ phase: "post-recompile", routes: ["/connectors/example/a/setup", "/agents"], visitedRoutes: new Set<string>(), deadline: SMOKE_WALK_BUDGET_MS, now: () => 0, check, report: () => undefined });
     expect(check).toHaveBeenCalledTimes(1);
     expect(failures).toEqual(["[post-recompile] /connectors/example/a/setup after 0ms: navigation timed out"]);
   });
@@ -67,7 +69,7 @@ describe("the bounded warm-session smoke", () => {
   it("reports successful elapsed time for every visited surface", async () => {
     let now = 0;
     const visits: SmokeVisit[] = [];
-    const failures = await walkSmokeSurfaces({ phase: "warm", routes: ["/connectors", "/agents"], deadline: SMOKE_WALK_BUDGET_MS, now: () => now, check: async () => { now += 30; return null; }, report: (visit) => visits.push(visit) });
+    const failures = await walkSmokeSurfaces({ phase: "warm", routes: ["/connectors", "/agents"], visitedRoutes: new Set<string>(), deadline: SMOKE_WALK_BUDGET_MS, now: () => now, check: async () => { now += 30; return null; }, report: (visit) => visits.push(visit) });
     expect(failures).toEqual([]);
     expect(visits.filter((visit) => visit.state === "passed").map((visit) => [visit.route, visit.elapsedMs])).toEqual([["/connectors", 30], ["/agents", 30]]);
   });

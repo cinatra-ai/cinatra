@@ -111,11 +111,7 @@ jobs:
       # The workflow boots the dev server; Playwright attaches instead of
       # managing (and cold-booting) its own.
       E2E_REUSE_SERVER: "1"
-      # Bound the cold-compile cost of a warm `pnpm dev` route walk. 4 setup
-      # routes (+ /connectors, /agents) is enough to lock the server-reference
-      # objects and force the bridge recompile #1068 needs, while keeping the
-      # twice-walked cold-compile budget comfortably inside the test timeout.
-      HMR_SMOKE_MAX_CONNECTORS: "4"
+      # The smoke selects two deterministic setup routes in its test helper.
       DEV_SERVER_LOG: /tmp/dev-hmr-server.log
     steps:
       # SUPABASE_DB_URL / REDIS_URL, resolved against the RANDOM host ports
@@ -169,12 +165,10 @@ jobs:
         run: node scripts/apply-public-schema.mjs
 
       - name: Boot dev server (pnpm dev / Turbopack)
-        run: |
-          set -euo pipefail
-          rm -f "$DEV_SERVER_LOG"
-          (pnpm dev > "$DEV_SERVER_LOG" 2>&1) &
-          echo "$!" > /tmp/dev-hmr.pid
-          echo "dev server launched as PID $(cat /tmp/dev-hmr.pid)"
+        env:
+          CINATRA_TURBOPACK_DEV_FS_CACHE: "0"
+          CINATRA_DEV_SOURCE_MAPS: "0"
+        run: node tests/e2e/dev-hmr-smoke/server-monitor.mjs start
 
       - name: Wait for dev server ready
         run: |
@@ -190,7 +184,10 @@ jobs:
           wait_for_dev_server_ready "http://localhost:3000/api/auth/get-session" 300 2 10 "$DEV_SERVER_LOG"
 
       - name: Run warm dev-session HMR smoke (Playwright)
-        run: pnpm test:e2e:dev-hmr-smoke
+        # Includes auth setup; the smoke itself retains its 540s shared budget
+        # and 600s test limit. TERM then KILL avoids waiting for the 30m job.
+        timeout-minutes: 13
+        run: timeout --signal=TERM --kill-after=15s 12m pnpm test:e2e:dev-hmr-smoke
 
       - name: Scan dev-server log for HMR-regression stacks
         if: always()
@@ -199,10 +196,10 @@ jobs:
         # (non-required) job even if a surface recovered a renderable payload.
         run: node scripts/ci/hmr-smoke-scan.mjs "$DEV_SERVER_LOG" --fail-on-hit
 
-      - name: Stop dev server
+      - name: Stop dev server and print resource readings
         if: always()
-        run: |
-          if [ -f /tmp/dev-hmr.pid ]; then kill "$(cat /tmp/dev-hmr.pid)" 2>/dev/null || true; fi
+        timeout-minutes: 1
+        run: node tests/e2e/dev-hmr-smoke/server-monitor.mjs stop
 
       - name: Upload artifacts (dev log + Playwright report)
         if: always()

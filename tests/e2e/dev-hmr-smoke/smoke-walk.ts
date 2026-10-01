@@ -25,12 +25,13 @@ export async function walkSmokeSurfaces(options: {
   phase: SmokePhase;
   routes: readonly string[];
   deadline: number;
+  visitedRoutes: Set<string>;
   now: () => number;
   check: (route: string, timeoutMs: number) => Promise<string | null>;
   report: (visit: SmokeVisit) => void;
 }): Promise<string[]> {
   const failures: string[] = [];
-  for (const [index, route] of options.routes.entries()) {
+  for (const route of options.routes) {
     const started = options.now();
     const remainingMs = options.deadline - started;
     if (remainingMs <= 0) {
@@ -39,8 +40,9 @@ export async function walkSmokeSurfaces(options: {
       failures.push(`[${options.phase}] ${route}: ${failure}`);
       break;
     }
-    const coldFirstVisit = options.phase === "warm" && index === 0 && route === "/connectors";
-    const budgetMs = Math.min(remainingMs, coldFirstVisit || options.phase === "precompile" ? 120_000 : 90_000);
+    const coldFirstVisit = options.phase !== "post-recompile" && !options.visitedRoutes.has(route);
+    const budgetMs = Math.min(remainingMs, coldFirstVisit ? 180_000 : 90_000);
+    options.visitedRoutes.add(route);
     options.report({ phase: options.phase, route, state: "start", budgetMs });
     let problem: string | null;
     try {

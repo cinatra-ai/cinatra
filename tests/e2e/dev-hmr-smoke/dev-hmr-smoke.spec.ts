@@ -117,11 +117,12 @@ async function checkSurface(page: Page, route: string, navigationTimeout: number
   return null;
 }
 
-async function walk(page: Page, phase: SmokePhase, routes: readonly string[], deadline: number): Promise<string[]> {
+async function walk(page: Page, phase: SmokePhase, routes: readonly string[], deadline: number, visitedRoutes: Set<string>): Promise<string[]> {
   return withSmokeResourcePhase(phase, () => walkSmokeSurfaces({
     phase,
     routes,
     deadline,
+    visitedRoutes,
     now: () => performance.now(),
     // Bound the entire visit, including body/shadow-root inspection. A stuck
     // evaluate must fail the smoke while there is still time to retain a trace.
@@ -145,6 +146,7 @@ async function walk(page: Page, phase: SmokePhase, routes: readonly string[], de
 test.describe("warm dev-session HMR smoke", () => {
   test("server-action surfaces survive a true HMR recompile of the reference bridge", async ({ page }) => {
     const deadline = performance.now() + SMOKE_WALK_BUDGET_MS;
+    const visitedRoutes = new Set<string>();
     expect(CONNECTOR_SETUP_ROUTES.length, "the smoke needs a setup route to exercise the reference bridge").toBeGreaterThan(0);
     test.info().annotations.push({
       type: "surfaces",
@@ -152,21 +154,18 @@ test.describe("warm dev-session HMR smoke", () => {
     });
 
     // 1. WARM — baseline floor + register the server-reference objects.
-    // The first visit compiles the route and activates its extensions. The
-    // failing baseline returned /connectors 200 in 94 s (70 s compiling,
-    // 24 s in application code), exceeding the usual 90 s navigation budget.
-    // Only the first /connectors browser visit gets two minutes; all other
-    // browser visits keep a 90s ceiling. Cold route precompilation is measured
-    // separately and bounded to 120s per route: the hosted setup route returned
-    // HTTP 200 after 100s (52s compiling, 48s in application code).
+    // Every first visit compiles its route and activates extensions. The
+    // failing baseline returned /connectors 200 after 133 s. Each route gets
+    // at most 180s on first use, then 90s, always capped by the shared deadline.
+    // Precompilation remains sequential and spends that same budget.
     // Precompilation and both walks share 540s, leaving 60s of the test budget
     // for failure reporting and cleanup rather than losing the trace to the job
     // limit. Two sampled setup routes avoid compiling four separate setup pages.
-    const entryFailures = await walk(page, "warm", SURFACES.slice(0, 1), deadline);
+    const entryFailures = await walk(page, "warm", SURFACES.slice(0, 1), deadline, visitedRoutes);
     expect(entryFailures, `cold-entry floor failures:\n${entryFailures.join("\n")}`).toEqual([]);
-    const precompileFailures = await walk(page, "precompile", SURFACES.slice(1), deadline);
+    const precompileFailures = await walk(page, "precompile", SURFACES.slice(1), deadline, visitedRoutes);
     expect(precompileFailures, `bounded precompile failures:\n${precompileFailures.join("\n")}`).toEqual([]);
-    const warmFailures = await walk(page, "warm", SURFACES.slice(1), deadline);
+    const warmFailures = await walk(page, "warm", SURFACES.slice(1), deadline, visitedRoutes);
     expect(warmFailures, `warm-walk floor failures (baseline broken, independent of HMR):\n${warmFailures.join("\n")}`).toEqual([]);
 
     // 2. RECOMPILE — benign, restored touch of the bridge module.
@@ -185,7 +184,7 @@ test.describe("warm dev-session HMR smoke", () => {
       // 3. RE-WALK — request a bridge-bound setup route FIRST to drive the
       // recompile, and assert that response itself. There is no unchecked probe
       // that can swallow a recompile error before a later request succeeds.
-      reWalkFailures = await walk(page, "post-recompile", [...CONNECTOR_SETUP_ROUTES, "/connectors", "/agents"], deadline);
+      reWalkFailures = await walk(page, "post-recompile", [...CONNECTOR_SETUP_ROUTES, "/connectors", "/agents"], deadline, visitedRoutes);
     } finally {
       writeFileSync(BRIDGE_FILE, original, "utf8");
     }
