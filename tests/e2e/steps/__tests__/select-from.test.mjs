@@ -210,6 +210,54 @@ for (const backend of BACKENDS) {
       });
     });
 
+    it("waits for a list that closes after the choice, so a second pick on the same page finds its picker, and says how long the list took to close", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/closing");
+        const hour = await selectFrom(page, { picker: "Hour", entry: "09", record, bounds: BOUNDS });
+        const minute = await selectFrom(page, { picker: "Minute", entry: "30", record, bounds: BOUNDS });
+        expect(hour).toMatchObject({ kind: "combobox", via: "state", path: "/pick/closing" });
+        expect(minute).toMatchObject({ kind: "combobox", via: "state", path: "/pick/closing" });
+        expect(lines).toHaveLength(2);
+        const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const closed = [];
+        for (const [index, [pickerName, entryName]] of [["Hour", "09"], ["Minute", "30"]].entries()) {
+          const shape = new RegExp(
+            `^${escape(`selectFrom: selected "${entryName}" in the picker "${pickerName}" on /pick/closing — its selected state shows it after `)}\\d+ ms${escape("; its list closed after ")}(\\d+) ms$`,
+          );
+          const found = shape.exec(lines[index]);
+          expect(found, lines[index]).not.toBeNull();
+          closed.push(Number(found[1]));
+        }
+        for (const ms of closed) expect(ms).toBeGreaterThan(0);
+        const after = await page.evaluate(() => {
+          const text = (name) => document.querySelector(`[role='combobox'][aria-label='${name}']`).textContent;
+          return {
+            hour: text("Hour"),
+            minute: text("Minute"),
+            hidden: document.querySelectorAll("[aria-hidden]").length,
+            marked: document.querySelectorAll("[data-step-control]").length,
+          };
+        });
+        expect(after).toEqual({ hour: "09", minute: "30", hidden: 0, marked: 0 });
+      });
+    });
+
+    it("refuses by name a list that does not close within the bound, once the selection shows", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/closing");
+        const before = performance.now();
+        const error = await refusal(selectFrom(page, { picker: "Zone", entry: "UTC", record, bounds: BOUNDS }));
+        const tookMs = performance.now() - before;
+        expect(error.kind).toBe("not-closed");
+        expect(error.message).toBe('selectFrom refused (not-closed): the list of the picker "Zone" on /pick/closing did not close within 800 ms of the selection of "UTC"');
+        expect(lines).toEqual([error.message]);
+        expect(tookMs).toBeGreaterThanOrEqual(800 - 2);
+        expect(tookMs).toBeLessThan(2900);
+        const zone = await page.evaluate(() => document.querySelector("[role='combobox'][aria-label='Zone']").textContent);
+        expect(zone).toBe("UTC");
+      });
+    });
+
     it("refuses an entry the open list does not have, naming its entries, and leaves no mark", async () => {
       await scene(backend, {}, async ({ app, page, record, lines }) => {
         const selectFrom = await start(page, app, "/pick/hiding");
@@ -366,6 +414,68 @@ for (const backend of BACKENDS) {
         }
         const unrecorded = await refusal(selectFrom(page, { picker: "Size", entry: "Medium" }));
         expect(unrecorded.message).toBe("selectFrom refused (input): hand the step a record callback — nothing was done");
+      });
+    });
+
+    it("reads a combobox's entries in order and what it shows, and closes the list it opened without choosing", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const result = await readOptions(page, { picker: "State", record, bounds: BOUNDS });
+        expect(result).toEqual({ picker: "State", kind: "combobox", entries: ["All", "Active", "Locked", "Archived"], more: 0, shows: "Active", path: "/pick/options" });
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^readOptions: the picker "State" on \/pick\/options lists "All", "Active", "Locked", "Archived" in this order and shows "Active"; its list closed after \d+ ms$/);
+        const after = await page.evaluate(() => {
+          const state = document.querySelector("[aria-label='State']");
+          return {
+            shows: state.textContent,
+            expanded: state.getAttribute("aria-expanded"),
+            hidden: document.querySelectorAll("[aria-hidden]").length,
+            marked: document.querySelectorAll("[data-step-control]").length,
+          };
+        });
+        expect(after).toEqual({ shows: "Active", expanded: "false", hidden: 0, marked: 0 });
+        const chosen = await selectFrom(page, { picker: "State", entry: "Locked", record, bounds: BOUNDS });
+        expect(chosen).toMatchObject({ kind: "combobox" });
+      });
+    });
+
+    it("reads a select's options in order without opening anything", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app);
+        const { readOptions } = theSteps("readOptions");
+        const result = await readOptions(page, { picker: "Size", record, bounds: BOUNDS });
+        expect(result).toEqual({ picker: "Size", kind: "select", entries: ["Small", "Medium", "Large", "Huge"], more: 0, shows: "Small", path: "/pick/start" });
+        expect(lines).toEqual(['readOptions: the picker "Size" on /pick/start lists "Small", "Medium", "Large", "Huge" in this order and shows "Small"']);
+      });
+    });
+
+    it("refuses by name a list that does not close on the Escape key", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const error = await refusal(readOptions(page, { picker: "Stuck", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("not-closed");
+        expect(error.message).toBe('readOptions refused (not-closed): the list of the picker "Stuck" on /pick/options did not close within 800 ms of the Escape key');
+        expect(lines).toEqual([error.message]);
+        expect(await page.evaluate(() => document.querySelector("[aria-label='Stuck']").textContent), "the step chose an entry").toBe("Choose");
+      });
+    });
+
+    it("refuses a picker it cannot read, and reads nothing", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const missing = await refusal(readOptions(page, { picker: "Nothing", record, bounds: BOUNDS }));
+        expect(missing.kind).toBe("no-picker");
+        expect(missing.reason.endsWith("— nothing was read"), missing.reason).toBe(true);
+        expect(lines.at(-1)).toBe(missing.message);
+        await page.goto(`${app.origin}/pick/search`);
+        const search = await refusal(readOptions(page, { picker: "Skills", record, bounds: BOUNDS }));
+        expect(search.kind).toBe("no-list");
+        expect(search.message).toBe('readOptions refused (no-list): the picker "Skills" on /pick/search is a search field, which lists entries only for typed text — nothing was read');
+        expect(lines.at(-1)).toBe(search.message);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
       });
     });
   });
