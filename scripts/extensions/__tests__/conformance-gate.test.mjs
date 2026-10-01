@@ -1995,6 +1995,8 @@ const EXPECTED_KNOWN_FINDINGS_FLOOR = {
     "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/plane-connector:src/plane-provision.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/resend-connector:src/config.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/tailscale-connector:src/register.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
 };

@@ -360,7 +360,7 @@
     {
       "packageName": "@cinatra-ai/resend-connector",
       "repo": "cinatra-ai/resend-connector",
-      "resolvedSha": "40d2627c3fed72c3c83c5985f2435c798433c049"
+      "resolvedSha": "986ea945157934a3a0634a10b2ff2c1134dcd950"
     },
     {
       "packageName": "@cinatra-ai/sales-playbook-artifact",
