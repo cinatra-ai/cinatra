@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 18 workflow files carry a test-runner step;
-11 of them are governed. 137 invocations:
-95 governed, 13 hosted-pinned,
+11 of them are governed. 138 invocations:
+95 governed, 14 hosted-pinned,
 20 node:test, 8 playwright,
 1 extension-suite-gate.
 
@@ -223,6 +223,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | chat-hitl-held-turn-e2e | name%3ARun%20folder%20pickup%20%2B%20file%20bindings%20%2B%20mid-run%20revision%20%E2%80%94%20real-DB%20tier%20(cinatra%233030%2C%20lifecycle-c%20W6) | 3804 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20image%20tool%20%E2%80%94%20real-DB%20tier%20(cinatra%233032%2C%20lifecycle-c%20W8) | 3820 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | name%3AWidget%20schedule%20grant%20%E2%80%94%20real-DB%20tier%20(cinatra%233052) | 3834 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ATyped%20schedule%20adjust%20%E2%80%94%20real-DB%20tier%20(cinatra%232853) | 3851 | ubuntu-latest | vitest | hosted-pinned | 1 |
 | build-image.yml | presence-degraded-build | name%3ADegradation%20suites%20(guard%20%2B%20consumers%20%2B%20generated%20classification%20%2B%20readiness%20fail-soft) | 4753 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3AOAS%20banned-primitives%20gate%20tests | 152 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3ACRM%20pointer-row%20gate%20tests | 155 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
