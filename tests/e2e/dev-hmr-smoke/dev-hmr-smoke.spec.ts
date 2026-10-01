@@ -103,10 +103,10 @@ async function pageProblem(page: Page): Promise<string | null> {
 }
 
 /** Visit one surface and assert the floor. Returns a failure string or null. */
-async function checkSurface(page: Page, route: string): Promise<string | null> {
+async function checkSurface(page: Page, route: string, navigationTimeout?: number): Promise<string | null> {
   let response: Response | null = null;
   try {
-    response = await page.goto(route, { waitUntil: "domcontentloaded" });
+    response = await page.goto(route, { waitUntil: "domcontentloaded", timeout: navigationTimeout });
   } catch (err) {
     return `${route}: navigation threw (${(err as Error).message})`;
   }
@@ -117,10 +117,10 @@ async function checkSurface(page: Page, route: string): Promise<string | null> {
   return null;
 }
 
-async function walk(page: Page, phase: string): Promise<string[]> {
+async function walk(page: Page, phase: string, navigationTimeout?: number): Promise<string[]> {
   const failures: string[] = [];
   for (const route of SURFACES) {
-    const failure = await checkSurface(page, route);
+    const failure = await checkSurface(page, route, navigationTimeout);
     if (failure) failures.push(`[${phase}] ${failure}`);
   }
   return failures;
@@ -136,7 +136,12 @@ test.describe("warm dev-session HMR smoke", () => {
     });
 
     // 1. WARM — baseline floor + register the server-reference objects.
-    const warmFailures = await walk(page, "warm");
+    // The first visit compiles the route and activates its extensions. The
+    // failing baseline returned /connectors 200 in 94 s (70 s compiling,
+    // 24 s in application code), exceeding the usual 90 s navigation budget.
+    // Give only this cold pass a bounded two minutes. The post-recompile
+    // walk retains the default budget, and neither pass retries failures.
+    const warmFailures = await walk(page, "warm", 120_000);
     expect(warmFailures, `warm-walk floor failures (baseline broken, independent of HMR):\n${warmFailures.join("\n")}`).toEqual([]);
 
     // 2. RECOMPILE — benign, restored touch of the bridge module.
