@@ -1,8 +1,15 @@
 /**
  * Hermetic regression gate for blog-wordpress-publish-agent.
  *
- * OAS validator gates + 7 structural pins + SKILL contract assertions
- * including deleteInWordPress: true on reject path.
+ * OAS validator gates + 7 structural pins + instruction-contract assertions.
+ *
+ * At this pin the flow is the ARTIFACT-REFERENCE road: it is handed one pinned
+ * artifact revision (postArtifactId + postRepresentationRevisionId), the steps
+ * around it read and write the artifact through the host's own primitives, and
+ * it reaches no blog record at all. Nothing is created before the person
+ * confirms, so the blog-record road's facts (a generation poll, the
+ * post.wordpressDrafts[] extraction, the delete-on-reject call) are
+ * negative-asserted rather than required — they are what this pin removed.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -89,8 +96,12 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = components.start as Record<string, unknown>;
     const meta = (start.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
-    expect(meta.required).toEqual(["projectId", "postId", "wordpressInstanceId"]);
-    expect(meta.hidden).toEqual([]);
+    expect(meta.required).toEqual([
+      "postArtifactId",
+      "postRepresentationRevisionId",
+      "wordpressInstanceId",
+    ]);
+    expect(meta.hidden).toEqual(["cinatra_run_id"]);
   });
 
   it("Pin 7: EndNode outputs", () => {
@@ -99,46 +110,118 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const outputs = end.outputs as Array<{ title: string }>;
     const titles = outputs.map((o) => o.title).sort();
     expect(titles).toEqual([
+      "addressWritten",
       "approved",
-      "postId",
-      "projectId",
+      "postArtifactId",
+      "postRepresentationRevisionId",
+      "publishedExternalId",
+      "publishedUrl",
       "summary",
-      "wordpressAdminUrl",
-      "wordpressDraftId",
     ]);
   });
 });
 
 describe("blog-wordpress-publish-agent — inline instruction contract", () => {
-  it("uses status string 'succeeded' (NOT 'completed')", () => {
-    // Quote style differs between the OAS description and the inline prompt
-    // (cinatra#2090 folded the bundle in), so pin the STATEMENT, not the quoting.
-    expect(skill).toMatch(/status\b[^\n]*["']succeeded["']/);
+  it("takes an artifact reference, never raw text and never a blog record", () => {
+    expect(skill).toContain("never raw text and never a blog record");
+    expect(skill).toContain("artifacts_get + artifact_content_read");
+    // Defensive: the blog-record road's obsolete BackgroundProcessRunStatus
+    // string must not come back with it.
     const wrongMatches = skill.match(/status === ["']completed["']/g);
     expect(wrongMatches ?? []).toEqual([]);
   });
 
-  it("polls blog_project_get (NOT blog_post_publish_wordpress_status)", () => {
-    expect(skill).toContain("blog_project_get");
-    // The status primitive needs a draftId we don't have yet; SKILL must
-    // explicitly avoid recommending it for polling.
-    expect(skill).toMatch(
-      /Do not call.*blog_post_publish_wordpress_status|do not.*blog_post_publish_wordpress_status/i,
-    );
+  it("reaches no blog record and polls no generation", () => {
+    expect(skill).toContain("you never reach a blog record");
+    expect(skill).not.toContain("blog_project_get");
+    expect(skill).not.toContain("blog_post_publish_wordpress_status");
   });
 
-  it("extracts adminUrl from wordpressDraftGeneration + wordpressDraftId from post.wordpressDrafts[]", () => {
-    expect(skill).toContain("wordpressDraftGeneration");
-    expect(skill).toContain("adminUrl");
-    expect(skill).toMatch(/post\.wordpressDrafts/);
+  it("publishes the pinned revision's words, not a draft row's", () => {
+    expect(skill).toContain("THE REVISION THE PERSON CONTINUED WITH");
+    expect(skill).toContain("postRepresentationRevisionId");
+    expect(skill).not.toContain("wordpressDraftGeneration");
+    expect(skill).not.toMatch(/post\.wordpressDrafts/);
   });
 
-  it("calls blog_post_publish_wordpress_delete with deleteInWordPress: true on reject", () => {
-    expect(skill).toContain("blog_post_publish_wordpress_delete");
-    expect(skill).toContain("deleteInWordPress: true");
+  it("publishes through the site's own catalogue, and only a publicly published page", () => {
+    expect(skill).toContain("wordpress_site_tools_list");
+    expect(skill).toContain("wordpress_site_tool_call");
+    expect(skill).toContain("PUBLICLY VISIBLE");
+    // Nothing reaches the site before the confirmation, so a decline has
+    // nothing to remove and the delete-on-reject call is gone.
+    expect(skill).toContain("Nothing was created, so there is nothing to remove.");
+    expect(skill).not.toContain("blog_post_publish_wordpress_delete");
   });
 
   it("declares the HITL renderer key explicitly", () => {
     expect(skill).toContain("@cinatra-ai/blog-wordpress-publish-agent:draft-confirm");
+  });
+});
+
+// cinatra#3564 — THE POINT OF THIS PIN, pinned positively so it cannot quietly
+// go away: after the post is published the run writes the published address
+// BACK onto the post's artifact. The declaration is what makes it reach the
+// artifact at all — an object level with no declared members is asked for
+// closed and empty — so the declaration AND the write-back road it feeds are
+// both pinned here. Without these three cases the write_address node could be
+// deleted and every other case in this file would still pass.
+describe("blog-wordpress-publish-agent — the published address reaches the artifact (#3564)", () => {
+  type Ref = { $component_ref: string };
+  const components = () => oas.$referenced_components as Record<string, Record<string, unknown>>;
+  const MEMBERS = [
+    "wordpressPublishedExternalId",
+    "wordpressPublishedRevisionId",
+    "wordpressPublishedUrl",
+  ];
+
+  it("the publish step declares its address patch with exactly its three members, all required", () => {
+    const outputs = components().publish.outputs as Array<Record<string, unknown>>;
+    const patch = outputs.find((o) => o.title === "addressPatch");
+    expect(patch, "the publish step declares an addressPatch output").toBeTruthy();
+    expect(patch?.type).toBe("object");
+    const schema = (patch?.json_schema ?? {}) as {
+      type?: string;
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(schema.type).toBe("object");
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(MEMBERS);
+    expect([...(schema.required ?? [])].sort()).toEqual(MEMBERS);
+  });
+
+  it("a write-back node merges that patch onto the SAME artifact through objects_update", () => {
+    const write = components().write_address;
+    expect(write, "the flow carries a write_address node").toBeTruthy();
+    expect(write.component_type).toBe("ApiNode");
+    expect(write.url).toBe("{{CINATRA_BASE_URL}}/api/agents/passthrough");
+    expect(write.http_method).toBe("POST");
+    const data = write.data as { tool?: string; input?: Record<string, unknown> };
+    expect(data.tool).toBe("objects_update");
+    // The artifact written to is the one this run was handed — never a new one.
+    expect(data.input?.objectId).toBe("{{ postArtifactId }}");
+    expect(data.input?.data).toBe("{{ addressPatch }}");
+  });
+
+  it("the write-back runs after the publish step, before the end, on the publish step's patch", () => {
+    const control = (
+      oas.control_flow_connections as Array<{ from_node: Ref; to_node: Ref }>
+    ).map((e) => `${e.from_node.$component_ref}->${e.to_node.$component_ref}`);
+    expect(control).toContain("publish->write_address");
+    expect(control).toContain("write_address->end");
+    const flows = oas.data_flow_connections as Array<{
+      source_node: Ref;
+      source_output: string;
+      destination_node: Ref;
+      destination_input: string;
+    }>;
+    const patchEdge = flows.find(
+      (e) =>
+        e.source_node.$component_ref === "publish" &&
+        e.source_output === "addressPatch" &&
+        e.destination_node.$component_ref === "write_address" &&
+        e.destination_input === "addressPatch",
+    );
+    expect(patchEdge, "the publish step's addressPatch feeds the write-back").toBeTruthy();
   });
 });

@@ -11,7 +11,7 @@
 // hand map at main 7074205); a regression here means stored/in-flight runs
 // would resolve differently.
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { ComponentType } from "react";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import {
@@ -34,6 +34,10 @@ import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
+import {
+  __resetFieldRendererComponentMapForTests,
+  __setFieldRendererComponentMapForTests,
+} from "../field-renderer-components";
 
 // Gmail context: the gmail-sender condition is context-gated (gmail
 // connected + aliases present) — the gating itself is pinned separately
@@ -358,6 +362,59 @@ describe("resolution parity with the retired hand map", () => {
   });
 });
 
+describe("the idea step's binding is drawn by its extension", () => {
+  const IDEA_BINDING_ID = "@cinatra-ai/blog-pipeline-agent:idea-selection";
+
+  it("the binding resolves to the extension wrapper at priority 80", () => {
+    const entry = resolveWith(IDEA_BINDING_ID);
+    expect(entry).toBeTruthy();
+    expect(entry!.priority).toBe(80);
+    const resolved = entry!.renderer as ComponentType & { displayName?: string };
+    expect(resolved.displayName).toBe(`WithBindingParams(ExtensionFieldRenderer(${IDEA_BINDING_ID}))`);
+  });
+
+  it("the extension's renderer keeps the step's Continue held until a pick (cinatra#3035)", () => {
+    const entry = resolveWith(IDEA_BINDING_ID);
+    expect(entry).toBeTruthy();
+    expect(entry!.holdsContinueUntilPicked).toBe(true);
+  });
+
+  it("the binding classifies as a mid-run gate", () => {
+    const entry = resolveWith(IDEA_BINDING_ID);
+    expect(entry).toBeTruthy();
+    expect(entry!.midRunHitl).toBe(true);
+  });
+
+  describe("a binding of the kind that is not in the build's component map", () => {
+    beforeAll(() => {
+      __setFieldRendererComponentMapForTests({});
+      registerFieldRendererBindings([
+        {
+          id: IDEA_BINDING_ID,
+          kind: "blog-idea-selection",
+          priority: 80,
+          midRunHitl: true,
+          params: { question: "Which stored blog idea should this run draft?" },
+        },
+      ]);
+    });
+
+    afterAll(() => {
+      __resetFieldRendererComponentMapForTests();
+      ensureDefaultFieldRenderersRegistered();
+    });
+
+    it("draws the schema floor, never an application chooser, and keeps the hold", () => {
+      const entry = resolveWith(IDEA_BINDING_ID);
+      expect(entry).toBeTruthy();
+      const resolved = entry!.renderer as ComponentType & { displayName?: string };
+      const floor = SchemaOnlyFloorRenderer as ComponentType & { displayName?: string; name?: string };
+      expect(resolved.displayName).toBe(`WithBindingParams(${floor.displayName ?? floor.name})`);
+      expect(entry!.holdsContinueUntilPicked).toBe(true);
+    });
+  });
+});
+
 describe("mid-run HITL classification parity", () => {
   it.each([
     "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
@@ -378,6 +435,8 @@ describe("mid-run HITL classification parity", () => {
     // performGateSubmit, auto-approving the send with no operator click — the
     // owner ruling 2026-07-22 requires an explicit confirmation.
     "@cinatra-ai/email-delivery-agent:send-confirmation",
+    // cinatra#3035: the idea step's gate, drawn by its extension.
+    "@cinatra-ai/blog-pipeline-agent:idea-selection",
   ])("manifest-flagged strict id %s classifies as mid-run", (id) => {
     expect(hasMidRunHitlBinding(id)).toBe(true);
     expect(classifyMidRunHitl(id)).toBe(true);

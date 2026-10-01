@@ -151,7 +151,7 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
   it("every shaper on the passthrough declares the types it saves", () => {
     const ids = PASSTHROUGH_SHAPER_DECLARATIONS.map((d) => d.shaperId);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toContain("blog-pipeline-seam:blog_pipeline_selected_idea");
+    expect(ids).not.toContain("blog-pipeline-seam:blog_pipeline_selected_idea");
     expect(ids).toContain("blog-pipeline-seam:blog_pipeline_draft_projection");
     expect(ids).toContain("route:campaigns_context_setup");
     for (const d of PASSTHROUGH_SHAPER_DECLARATIONS) {
@@ -159,19 +159,36 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
     }
   });
 
-  it("the audit names the two blog-pipeline writes as unowned, with the reason", () => {
-    // The campaigns context type IS owned by an installed extension, so the only
-    // unowned shaper saves left are the two the plan names on the blog
-    // pipeline's road.
+  it("the audit names a still-tombstoned blog-pipeline write as unowned, with the reason", () => {
+    // The campaigns context type IS owned by an installed extension, and the
+    // selected-idea save is retired (cinatra#3035), so the only unowned shaper
+    // save left is the draft projection — still on the tombstoned
+    // `@dynamic/types:*` namespace, still named with its reason.
     const findings = auditPassthroughShaperDeclarations(
-      ports({ writable: ["@cinatra-ai/campaigns:context"] }),
+      ports({
+        writable: [
+          "@cinatra-ai/campaigns:context",
+        ],
+      }),
     );
     const unowned = findings.filter((f) => f.kind === "unowned-type");
     expect(unowned.map((f) => f.shaperId).sort()).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
     for (const f of unowned) expect(f.reason).toBe("dynamic-namespace");
+  });
+
+  it("the retired selected-idea save is declared by no shaper, and no shaper saves under the blog pipeline's namespace (cinatra#3035)", () => {
+    expect(
+      PASSTHROUGH_SHAPER_DECLARATIONS.some(
+        (d) => d.shaperId === "blog-pipeline-seam:blog_pipeline_selected_idea",
+      ),
+    ).toBe(false);
+    for (const d of PASSTHROUGH_SHAPER_DECLARATIONS) {
+      for (const type of d.savesTypes) {
+        expect(type.startsWith("@cinatra-ai/blog-pipeline:")).toBe(false);
+      }
+    }
   });
 
   it("the audit names a shaper that persists a transform of a run value", () => {
@@ -187,7 +204,6 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
     // plan names on the blog pipeline's road.
     expect(persisting).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
   });
 
@@ -203,7 +219,6 @@ describe("0.16 — the passthrough shapers are inside the rule", () => {
     );
     expect(blogWrites.map((d) => d.shaperId).sort()).toEqual([
       "blog-pipeline-seam:blog_pipeline_draft_projection",
-      "blog-pipeline-seam:blog_pipeline_selected_idea",
     ]);
     // Never the wave that closed without doing the retirement.
     for (const d of blogWrites) {

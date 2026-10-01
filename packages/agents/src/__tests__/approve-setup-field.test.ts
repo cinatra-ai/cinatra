@@ -209,6 +209,75 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     );
   });
 
+  // cinatra#3035 REGRESSION — THE RESUME JOB ID NAMES THE DECISION, NOT THE
+  // ROAD. The setup gate mints ONE review-task identity for the whole road
+  // (`setup-<runId>`), so a job id derived from it alone was the same string for
+  // every declared field. The queue keeps its finished jobs and an id-carrying
+  // add is a no-op against an existing twin, so the SECOND field's resume was
+  // handed the FIRST field's completed job and queued no work: the run stalled
+  // `queued` at the `hitl` moment, never reached the Schedule step and never
+  // wrote a trigger row. Two fields of ONE run must ask for two job ids.
+  it("cinatra#3035: two decided fields of the SAME run enqueue under DIFFERENT job ids", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-s3035",
+      templateId: "tpl-s3035",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-s3035", "actor-1", { brief: "b" }, "brief");
+    await approveReviewTaskInternal("setup-run-s3035", "actor-1", { ideaCount: 3 }, "ideaCount");
+
+    const jobIds = vi
+      .mocked(bgJobs.enqueueBackgroundJob)
+      .mock.calls.map((call) => (call[2] as { jobId?: string } | undefined)?.jobId);
+    // MERGED (bring-up-to-date): the run-setup fix cinatra#3585 landed main's own
+    // answer to this defect — an id minted PER CONFIRMATION — and it supersedes
+    // the decision-derived id this branch carried. The SENTENCE this case states
+    // is unchanged and still proved here: two decided fields of one run ask the
+    // queue for two ids, and neither is one the run can repeat.
+    for (const jobId of jobIds) {
+      expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
+    }
+    // TWO asks, not two DISTINCT strings among any number of asks: the count is
+    // half the sentence and the merge's id-shape reading must not drop it
+    // (convergence round).
+    expect(jobIds).toHaveLength(2);
+    expect(new Set(jobIds).size).toBe(2);
+  });
+
+  // cinatra#3035, convergence round — THE SAME DEFECT ONE LEVEL DOWN. A key that
+  // only sanitized the field name mapped `a.b`, `a:b` and `a_b` onto ONE string,
+  // so a template declaring two such fields reproduced the stall the per-decision
+  // id was introduced to end. The digest is over the WHOLE raw name, so the three
+  // names are three ids.
+  it("cinatra#3035: field names that sanitize to the SAME string still enqueue under different job ids", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-s3035c",
+      templateId: "tpl-s3035c",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    for (const fieldName of ["a.b", "a:b", "a_b"]) {
+      await approveReviewTaskInternal("setup-run-s3035c", "actor-1", { [fieldName]: 1 }, fieldName);
+    }
+
+    const jobIds = vi
+      .mocked(bgJobs.enqueueBackgroundJob)
+      .mock.calls.map((call) => (call[2] as { jobId?: string } | undefined)?.jobId);
+    // MERGED (bring-up-to-date), as above: main's per-confirmation id retires the
+    // name-derived key entirely, so three field names that sanitize onto ONE
+    // string are three ids for the stronger reason — no id is derived from the
+    // name at all. The sentence this case states is unchanged.
+    for (const jobId of jobIds) {
+      expect(jobId).toMatch(/^resume-[0-9a-f-]{36}$/);
+    }
+    // Three names, three asks AND three ids (convergence round: the count).
+    expect(jobIds).toHaveLength(3);
+    expect(new Set(jobIds).size).toBe(3);
+  });
+
   // Regression: assert the SQL fragment serializes only values[fieldName],
   // NOT the whole values object. The single-field path must not serialize the
   // whole `{ url: "..." }` object and then wrap it again via

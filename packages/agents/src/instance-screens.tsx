@@ -1856,6 +1856,16 @@ export async function SetupScreen({
     index: h.index,
     stepNumber: h.stepNumber,
     label: h.label,
+    // The step the policy marks as the one that opens its review (cinatra#3035):
+    // its review gate is drawn in this step's place on the rail.
+    marksReview: policySteps.some((p) => {
+      const step = p as { stepNumber?: unknown; artifactReviewTargetsInput?: unknown };
+      return (
+        step.stepNumber === h.stepNumber &&
+        typeof step.artifactReviewTargetsInput === "string" &&
+        step.artifactReviewTargetsInput.length > 0
+      );
+    }),
   }));
   const railStepResults = (run?.stepResults ?? []) as unknown[];
   // Transcript only forms the rail spine for a single-agent/leaf run — no policy

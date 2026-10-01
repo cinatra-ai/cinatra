@@ -57,9 +57,14 @@ import {
 } from "./wayflow-url";
 import {
   claimPendingResumeIntents,
+  listReviewGatesForRun,
   markResumeIntentDelivered,
   type ResumeIntentRow,
 } from "./artifact-review-gate-store";
+import {
+  baseReviewTaskId,
+  hasPendingSiblingLeg,
+} from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 /** The per-intent delivery outcome. */
@@ -131,7 +136,10 @@ export async function deliverArtifactReviewResumeIntent(
     );
     return "retryable";
   }
-  const taskId = reviewTaskId.slice("wayflow-".length);
+  // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT, ONE PAUSE. A gate
+  // that opens one review per artifact carries a leg id (`…#2`, `…#3`) on every
+  // artifact after the first; the WayFlow pause they all belong to is the base.
+  const taskId = baseReviewTaskId(reviewTaskId.slice("wayflow-".length));
 
   // Resolve the paused run: the per-gate a2a_task_id column first, then the
   // Redis reverse-map written at interrupt-emit (authoritative when the column
@@ -168,6 +176,25 @@ export async function deliverArtifactReviewResumeIntent(
       `[artifact-review-resume] gate=${gateId} run=${run.id} has no a2aContextId yet — leaving pending`,
     );
     return "retryable";
+  }
+
+  // cinatra#3035 (epic #3023 W11) — THE RUN PARKS AT EACH. One WayFlow pause can
+  // carry one review per artifact — the post's, then each picture's — and the run
+  // may only go on when the LAST of them is decided. A decision on an earlier leg
+  // is complete in itself: its intent is closed here WITHOUT a resume, the run
+  // stays exactly where it is, and the person reads the next artifact on its own
+  // gate. A read that fails leaves the sibling question unanswered, so it falls
+  // through and delivers rather than stranding a run that has nothing left to
+  // read.
+  const siblingLegs = await listReviewGatesForRun(run.id).catch(() => null);
+  if (siblingLegs && hasPendingSiblingLeg({ reviewTaskId, gates: siblingLegs })) {
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} decided one artifact of a ` +
+        `per-artifact review; another artifact of the same pause is still open — the run stays ` +
+        `parked, marked ${ok ? "done" : "LEASE-LOST"}`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
   }
 
   // Idempotency #2 (which gate is the run CURRENTLY paused at): a crash after send

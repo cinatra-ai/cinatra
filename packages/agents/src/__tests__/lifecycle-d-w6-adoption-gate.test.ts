@@ -222,10 +222,18 @@ describe("lifecycle D W6 — the fleet as pinned passes the blocking gate", () =
   // a tree that was never synced, would silently drop out of the read and leave
   // the assertion below true over an empty set. The known pinned producers are
   // named, so a hollowed read fails instead of passing.
+  // The LinkedIn PUBLISHER left this list at its own pin: it declares
+  // `produces: []` now, because it writes the published address onto the
+  // artifact the LinkedIn writer authored (through `objects_update`) instead of
+  // producing an artifact of its own. It is therefore not a producer to read
+  // here, and naming it would make this guard fail on a truthful tree.
+  // The LinkedIn WRITER takes its place, so the guard keeps naming a LinkedIn
+  // producer: it is what authors the post-draft artifact, and its own pin (which
+  // this leg does not move) declares that produces entry.
   const EXPECTED_PINNED_PRODUCERS = [
     "@cinatra-ai/blog-draft-writer-agent",
     "@cinatra-ai/blog-idea-generator-agent",
-    "@cinatra-ai/blog-linkedin-publish-agent",
+    "@cinatra-ai/blog-linkedin-writer-agent",
     "@cinatra-ai/blog-pipeline-agent",
     "@cinatra-ai/email-drafting-agent",
     "@cinatra-ai/email-follow-up-agent",
@@ -240,6 +248,31 @@ describe("lifecycle D W6 — the fleet as pinned passes the blocking gate", () =
   it("every known pinned producer is actually read (the read is not hollow)", () => {
     const read = new Set(producers.map((p) => p.packageName));
     expect(EXPECTED_PINNED_PRODUCERS.filter((n) => !read.has(n))).toEqual([]);
+  });
+
+  // The publish agent is a KNOWN NON-producer, and its name is absent from the
+  // list above for that reason alone: its flow writes the published address back
+  // onto the artifact it was handed and persists no revision, so its pinned head
+  // declares an EXPLICITLY EMPTY produces set in both its manifest and its flow
+  // document. Merely dropping a name would let an unsynced tree or a silently
+  // deleted declaration look exactly like an honest empty one, so the emptiness
+  // is read here directly, in both files, and the hollow-read guard keeps its
+  // teeth over the producing set.
+  const EXPECTED_EXPLICIT_NON_PRODUCERS = ["@cinatra-ai/blog-linkedin-publish-agent"];
+
+  it("a known non-producer declares its emptiness explicitly, in both files", () => {
+    for (const packageName of EXPECTED_EXPLICIT_NON_PRODUCERS) {
+      const slug = packageName.replace(/^@cinatra-ai\//, "");
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(extensionsRoot, slug, "package.json"), "utf8"),
+      ) as { name?: string; cinatra?: { produces?: unknown } };
+      const oas = JSON.parse(
+        fs.readFileSync(path.join(extensionsRoot, slug, "cinatra", "oas.json"), "utf8"),
+      ) as { metadata?: { cinatra?: { produces?: unknown } } };
+      expect(pkg.name).toBe(packageName);
+      expect(pkg.cinatra?.produces).toEqual([]);
+      expect(oas.metadata?.cinatra?.produces).toEqual([]);
+    }
   });
 
   it("no pinned producer carries a declaration the gate refuses", () => {

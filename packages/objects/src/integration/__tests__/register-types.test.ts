@@ -18,6 +18,7 @@ vi.mock("server-only", () => ({}));
 
 import { objectTypeRegistry } from "../../registry";
 import { registerAllObjectTypes } from "../register-types";
+import { classifyArtifactTypeOwnership } from "../../namespace";
 
 describe("register-types — @cinatra-ai/campaigns:context", () => {
   beforeEach(() => {
@@ -54,5 +55,44 @@ describe("register-types — @cinatra-ai/campaigns:context", () => {
     expect(entry?.lifecycle.sources).toContain("agent");
     expect(entry?.lifecycle.mutableBy).toContain("agent");
     expect(entry?.lifecycle.mutableBy).toContain("user");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3035 — the blog pipeline's selected-idea type is retired from the host.
+//
+// The passthrough's selected-idea save used to name
+// `@dynamic/types:blog-pipeline-selected-idea`, a PERMANENTLY tombstoned id that
+// classifies `owned:false` / `dynamic-namespace` before the registry is ever
+// consulted. cinatra#2960 moved it onto a host-registered type; the pipeline now
+// keeps the pick in its own table, so the save is retired and the host
+// registers nothing under the pack's namespace. The tombstone still holds.
+// ---------------------------------------------------------------------------
+describe("register-types — no @cinatra-ai/blog-pipeline type in the host (cinatra#3035)", () => {
+  beforeEach(() => {
+    objectTypeRegistry._clearForTests();
+    registerAllObjectTypes();
+  });
+
+  it("registers no type for the package @cinatra-ai/blog-pipeline and resolves no selected-idea type", () => {
+    expect(objectTypeRegistry.resolve("@cinatra-ai/blog-pipeline:selected-idea")).toBeNull();
+    expect(
+      objectTypeRegistry
+        .list()
+        .map((d) => d.type)
+        .filter((t) => t.startsWith("@cinatra-ai/blog-pipeline:")),
+    ).toEqual([]);
+  });
+
+  it("the tombstoned selected-idea id stays unowned with reason dynamic-namespace", () => {
+    const tombstoned = classifyArtifactTypeOwnership(
+      "@dynamic/types:blog-pipeline-selected-idea",
+      {
+        isArtifactWritable: (typeId) => (objectTypeRegistry.resolve(typeId) ? true : null),
+        packageHasRegisteredTypes: () => true,
+      },
+    );
+    expect(tombstoned.owned).toBe(false);
+    expect(tombstoned.owned === false && tombstoned.reason).toBe("dynamic-namespace");
   });
 });

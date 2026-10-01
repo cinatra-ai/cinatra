@@ -287,7 +287,10 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(decideSpy.mock.invocationCallOrder[0]!).toBeLessThan(
       emitSpy.mock.invocationCallOrder[0]!,
     );
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
   });
 
   it("pins the set the CORE decided for, never the marker's raw value", async () => {
@@ -334,7 +337,20 @@ describe("the declared review asks the one core before it pins anything", () => 
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ targets: TARGETS }));
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    // A core that could not answer still narrows NOTHING: both named artifacts
+    // are reviewed, each on its own gate.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ targets: [TARGETS[0]] }),
+    );
+    expect(emitSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ targets: [TARGETS[1]] }),
+    );
   });
 
   it("a firing decision keeps the surface it always had", async () => {
@@ -352,7 +368,11 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer, values] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
-    expect((values as Record<string, unknown>).targetCount).toBe(2);
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    // The surface a person lands on shows ONE artifact — the first of the two.
+    expect((values as Record<string, unknown>).targetCount).toBe(1);
   });
 
   it("an organization that FORBIDS this review pins NOTHING and falls through to the ordinary human gate", async () => {
@@ -444,7 +464,9 @@ describe("the declared review asks the one core before it pins anything", () => 
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // cinatra#3035 (epic #3023 W11): one review per artifact — two named
+    // artifacts, two gates — and the person still lands on the review surface.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
     const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
   });
