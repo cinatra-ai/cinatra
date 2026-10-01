@@ -120,6 +120,27 @@ describe("the default road — the pickup over end-node outputs", () => {
     expect(id).toContain(":");
   });
 
+  it.each([
+    ["The fixture agent", "The fixture agent"],
+    [null, "Agent"],
+  ])("names untitled outputs by their producing agent (%s) and output name", async (agentName, titlePrefix) => {
+    const d = deps({ readRunTitleParts: async () => ({ agentName }) });
+    await pickUpDefaultRoadOutputs(
+      { ...base, endNodeOutputs: { report: MARKDOWN, cohort: STRUCTURED } },
+      d,
+    );
+
+    expect(d.write).toHaveBeenCalledTimes(2);
+    expect(d.write).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      outputId: defaultRoadLedgerOutputId("report"),
+      title: `${titlePrefix} — report`,
+    }));
+    expect(d.write).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      outputId: defaultRoadLedgerOutputId("cohort"),
+      title: `${titlePrefix} — cohort`,
+    }));
+  });
+
   it("acceptance item 2: a datum below the floor takes no road", async () => {
     const d = deps();
     const outcomes = await pickUpDefaultRoadOutputs(
