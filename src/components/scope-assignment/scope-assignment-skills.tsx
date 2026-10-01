@@ -178,13 +178,13 @@ export function ScopeAssignmentSkills({
           <Label
             id={`${fieldId}-label`}
             htmlFor={fieldId}
-            aria-labelledby={scopeLabelId ? `${scopeLabelId} ${fieldId}-label` : undefined}
             className="text-sm font-normal text-foreground"
           >
             {`Which skills should this ${noun} always use?`}
           </Label>
           <EntitySearchCombobox<SkillPickerItem>
             id={fieldId}
+            aria-labelledby={scopeLabelId ? `${scopeLabelId} ${fieldId}-label` : undefined}
             placeholder="Search installed skills…"
             emptyText="No matches."
             disabled={atCap}

@@ -218,9 +218,12 @@ describe("the Skills pane", () => {
     })} />);
     for (const name of ["Workspace", "Personal"]) {
       const group = screen.getByRole("group", { name });
-      expect(within(group).getByRole("combobox", {
+      const picker = within(group).getByRole("combobox", {
         name: `${name} Which skills should this agent always use?`,
-      })).toBeTruthy();
+      });
+      const prompt = document.getElementById(`${picker.id}-label`)!;
+      expect(picker.getAttribute("aria-labelledby")).toBe(`${group.getAttribute("aria-labelledby")} ${prompt.id}`);
+      expect(prompt.getAttribute("aria-labelledby")).toBeNull();
       expect(within(group).getByRole("button", { name: "Remove Blog Writing" })).toBeTruthy();
     }
   });
@@ -228,9 +231,10 @@ describe("the Skills pane", () => {
   it("names the single-scope group and picker from the page scope", () => {
     render(<ScopeAssignmentPage model={model()} />);
     const group = screen.getByRole("group", { name: "Team · Growth" });
-    expect(within(group).getByRole("combobox", {
+    const picker = within(group).getByRole("combobox", {
       name: "Team · Growth Which skills should this agent always use?",
-    })).toBeTruthy();
+    });
+    expect(picker.getAttribute("aria-labelledby")).toBe(`${group.getAttribute("aria-labelledby")} ${picker.id}-label`);
   });
 
   it("keeps a read-only scope named without exposing a picker", () => {
