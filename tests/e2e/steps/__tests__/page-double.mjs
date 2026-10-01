@@ -32,7 +32,8 @@
 //   - a list drawn as the shared select draws it hides everything outside it
 //     from assistive technology while it is open, as the select's library does,
 //     and a press on one of its entries takes the entry, closes the list and
-//     shows the page again (see hideOthers);
+//     shows the page again (see hideOthers); the list may close after a delay
+//     the page names, or never;
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
 //   - a press on a row drawn without a role plays the page's handlers for it: it
@@ -438,23 +439,35 @@ function hideOthers(list) {
 }
 
 /**
- * An entry pressed in such a list is taken: the list closes, the combobox that
- * controls it shows the entry, and every element the list hid is shown again.
+ * An entry pressed in such a list is taken: the combobox that controls it shows
+ * the entry, and the list closes and every element it hid is shown again, at
+ * once or, when the list carries `data-fixture-closes-after`, after that many
+ * milliseconds (`later` is the page's timer road) or never.
  */
-function chooseEntry(entry) {
+function chooseEntry(entry, later) {
   const document = entry.ownerDocument;
   const list = entry.closest("[role='listbox']");
   if (!list) return;
-  list.setAttribute("hidden", "");
-  for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
-    node.removeAttribute("aria-hidden");
-    node.removeAttribute(HIDDEN_MARKER);
-  }
+  const close = () => {
+    list.setAttribute("hidden", "");
+    for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
+      node.removeAttribute("aria-hidden");
+      node.removeAttribute(HIDDEN_MARKER);
+    }
+  };
   const picker = document.querySelector(`[aria-controls="${list.id}"]`);
-  if (!picker) return;
-  picker.textContent = entry.textContent;
-  picker.removeAttribute("data-placeholder");
-  picker.setAttribute("aria-expanded", "false");
+  if (picker) {
+    picker.textContent = entry.textContent;
+    picker.removeAttribute("data-placeholder");
+    picker.setAttribute("aria-expanded", "false");
+  }
+  // A list that carries `data-fixture-closes-after` closes that many milliseconds later, or never.
+  const closesAfter = list.getAttribute("data-fixture-closes-after");
+  if (closesAfter === null) close();
+  else {
+    entry.setAttribute("aria-selected", "true");
+    if (closesAfter !== "never") later(close, Number(closesAfter));
+  }
 }
 
 export class PageDouble {
@@ -817,7 +830,12 @@ export class PageDouble {
       if (element.hasAttribute("data-fixture-inert")) return;
       // The page's handler takes an entry of a list drawn as the shared select draws it.
       if (element.hasAttribute("data-fixture-chooses")) {
-        chooseEntry(element);
+        const document = element.ownerDocument;
+        chooseEntry(element, (run, ms) =>
+          this.#later(() => {
+            if (this.#dom.window.document === document) run();
+          }, ms),
+        );
         return;
       }
       // The page's handler cancels the press and opens the dialog or the panel it names, in place.

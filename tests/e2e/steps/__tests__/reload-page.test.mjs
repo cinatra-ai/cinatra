@@ -10,6 +10,9 @@ import { BACKENDS, closeBrowser, labelOf, refusal, scene, theSteps } from "./bac
 
 afterAll(closeBrowser);
 
+/** How far short of its delay a Node timer can end, read on performance.now(): the event loop counts whole milliseconds and may read the coarse monotonic clock, one tick behind. */
+const TIMER_CLOCK_SLACK_MS = 2;
+
 for (const backend of BACKENDS) {
   describe.skipIf(Boolean(backend.skip))(`reloadPage [${labelOf(backend)}]`, () => {
     const open = async (page, app, path) => {
@@ -54,7 +57,7 @@ for (const backend of BACKENDS) {
         expect(error.kind).toBe("no-load");
         expect(error.message).toBe("reloadPage refused (no-load): the reload of /reload/slow did not end within 800 ms (TimeoutError; the page is on /reload/slow)");
         expect(lines).toEqual([error.message]);
-        expect(tookMs).toBeGreaterThanOrEqual(800);
+        expect(tookMs, "the step refused before its bound").toBeGreaterThanOrEqual(800 - TIMER_CLOCK_SLACK_MS);
         expect(tookMs, "the step waited past its bound").toBeLessThan(2900);
       });
     });

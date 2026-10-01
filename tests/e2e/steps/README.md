@@ -352,14 +352,24 @@ alert, a toast) names the entry that did not name it before. The step answers
 `{ picker, entry, kind, via, path, elapsedMs }`, where `via` is `state` or
 `confirmation`.
 
+A combobox the step opened is also waited for until its list has closed, when
+the list still hides the combobox from assistive technology once the choice
+shows: the shared select shows the choice while its list is still closing, and
+while the list is open it hides the rest of the page, so a second pick on the
+page would find no picker. The wait reads the combobox as the open wait does,
+within the same bound, measured from the choice, and the log line then ends
+`; its list closed after <n> ms`. A list that is closed at once, or a list the
+step found already open, takes no wait and adds nothing to the line.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
-| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, and from typing into a search field to its entry in the list |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, from the selection to the close of a list that hides the page, and from typing into a search field to its entry in the list |
 
 Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
 shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
 (nothing was selected), `driver-failure`, `other-entry` (a search field's page
-took another entry than the one pressed) and `not-reflected`.
+took another entry than the one pressed), `not-reflected` and `not-closed` (a list
+that still hides the page once the bound has run out).
 
 ## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
 

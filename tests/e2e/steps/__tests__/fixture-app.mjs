@@ -166,8 +166,10 @@ export const STREAM_SCENARIOS = Object.freeze({
 // `aria-hidden="true"` and its marker (`data-aria-hidden`); an element hidden
 // already keeps its own value. An entry pressed in such a list
 // (`data-fixture-chooses`) is taken: the list closes, the combobox that controls
-// it shows the entry, and every element the list hid is shown again.
-// page-double.mjs plays the same.
+// it shows the entry, and every element the list hid is shown again. A list
+// that carries `data-fixture-closes-after` closes that many milliseconds after
+// the choice, or never (`never`), as a list that is still closing does; the
+// combobox shows the entry and the entry reads as selected at once. page-double.mjs plays the same.
 const TIMELINE_RUNNER = `<script>
 (function () {
   var ops = JSON.parse(document.getElementById("fixture-timeline").textContent);
@@ -201,16 +203,25 @@ const TIMELINE_RUNNER = `<script>
       event.preventDefault();
       var list = entry.closest("[role='listbox']");
       if (!list) return;
-      list.setAttribute("hidden", "");
-      document.querySelectorAll("[data-aria-hidden]").forEach(function (node) {
-        node.removeAttribute("aria-hidden");
-        node.removeAttribute("data-aria-hidden");
-      });
+      function close() {
+        list.setAttribute("hidden", "");
+        document.querySelectorAll("[data-aria-hidden]").forEach(function (node) {
+          node.removeAttribute("aria-hidden");
+          node.removeAttribute("data-aria-hidden");
+        });
+      }
       var picker = document.querySelector("[aria-controls='" + list.id + "']");
-      if (!picker) return;
-      picker.textContent = entry.textContent;
-      picker.removeAttribute("data-placeholder");
-      picker.setAttribute("aria-expanded", "false");
+      if (picker) {
+        picker.textContent = entry.textContent;
+        picker.removeAttribute("data-placeholder");
+        picker.setAttribute("aria-expanded", "false");
+      }
+      var closesAfter = list.getAttribute("data-fixture-closes-after");
+      if (closesAfter === null) close();
+      else {
+        entry.setAttribute("aria-selected", "true");
+        if (closesAfter !== "never") setTimeout(close, Number(closesAfter));
+      }
     });
   });
   // A search field's own handlers (see PICK_SEARCH_PAGE): the page double runs the same two functions.
@@ -540,6 +551,23 @@ export const PICK_HIDING_PAGE = [
   '<div role="listbox" id="hiding-plans" aria-label="Plans" hidden data-fixture-hides-others><a href="#free" role="option" data-fixture-chooses>Free</a> <a href="#team" role="option" data-fixture-chooses>Team</a></div>',
   '<div><a href="#skills" role="combobox" aria-controls="hiding-skills" aria-expanded="false" data-placeholder="" data-fixture-opens="hiding-skills"><span>Pick a skill</span></a></div>',
   '<div role="listbox" id="hiding-skills" aria-label="Skills" hidden data-fixture-hides-others><a href="#web-search" role="option" data-fixture-chooses>Web search</a> <a href="#summary" role="option" data-fixture-chooses>Summary</a></div>',
+].join("");
+
+/**
+ * Three comboboxes whose list hides the rest of the page while it is open and
+ * still hides it for a while after an entry is chosen (see TIMELINE_RUNNER): the
+ * list of "Hour" and of "Minute" closes 30 ms after the choice, the list of
+ * "Zone" never closes. Each list has no accessible name, as the shared select's
+ * list has none, so a second pick on the page finds its combobox only once the
+ * first list has closed.
+ */
+export const PICK_CLOSING_PAGE = [
+  '<a href="#hour" role="combobox" aria-label="Hour" aria-controls="closing-hour" aria-expanded="false" data-fixture-opens="closing-hour"><span>Choose</span></a>',
+  '<div role="listbox" id="closing-hour" hidden data-fixture-hides-others data-fixture-closes-after="30"><a href="#h08" role="option" data-fixture-chooses>08</a> <a href="#h09" role="option" data-fixture-chooses>09</a></div>',
+  '<a href="#minute" role="combobox" aria-label="Minute" aria-controls="closing-minute" aria-expanded="false" data-fixture-opens="closing-minute"><span>Choose</span></a>',
+  '<div role="listbox" id="closing-minute" hidden data-fixture-hides-others data-fixture-closes-after="30"><a href="#m00" role="option" data-fixture-chooses>00</a> <a href="#m30" role="option" data-fixture-chooses>30</a></div>',
+  '<a href="#zone" role="combobox" aria-label="Zone" aria-controls="closing-zone" aria-expanded="false" data-fixture-opens="closing-zone"><span>Choose</span></a>',
+  '<div role="listbox" id="closing-zone" hidden data-fixture-hides-others data-fixture-closes-after="never"><a href="#utc" role="option" data-fixture-chooses>UTC</a> <a href="#cet" role="option" data-fixture-chooses>CET</a></div>',
 ].join("");
 
 /**
@@ -1007,6 +1035,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/pick/start": PICK_PAGE,
         "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/pick/hiding": PICK_HIDING_PAGE,
+        "/pick/closing": PICK_CLOSING_PAGE,
         "/pick/search": PICK_SEARCH_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,
