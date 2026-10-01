@@ -452,6 +452,12 @@ export async function saveArtifactEdit(
   return postArtifactEditRequest(capability, buildArtifactEditRequest(capability, text), deps);
 }
 
+/** The window event the one title-save road announces once a title is saved. */
+export const ARTIFACT_TITLE_SAVED_EVENT = "cinatra:artifact:title-saved";
+
+/** What that event carries: the artifact whose title was saved and the revision that holds it. */
+export type ArtifactTitleSavedDetail = { artifactId: string; revisionId: string };
+
 /**
  * SEND one TITLE change, and answer with exactly one outcome (cinatra#3814).
  *
@@ -476,7 +482,28 @@ export async function saveArtifactTitleEdit(
   if (artifactEditByteLength(title) > capability.capBytes) {
     return { outcome: "refused", reason: "over-cap" };
   }
-  return postArtifactEditRequest(capability, buildArtifactTitleEditRequest(capability, title), deps);
+  const outcome = await postArtifactEditRequest(
+    capability,
+    buildArtifactTitleEditRequest(capability, title),
+    deps,
+  );
+  // THE OPEN PAGE RE-READS THE TITLE THE ROW NOW HOLDS (cinatra#3886): a saved
+  // title is announced once, for every display alike. A text save announces
+  // nothing, because an idle-pause save must never reload the page under a
+  // reader's typing. A runtime without events (a server render, a node test)
+  // does nothing and never throws.
+  if (
+    outcome.outcome === "saved" &&
+    typeof globalThis.dispatchEvent === "function" &&
+    typeof globalThis.CustomEvent === "function"
+  ) {
+    const detail: ArtifactTitleSavedDetail = {
+      artifactId: capability.artifactId,
+      revisionId: outcome.revisionId,
+    };
+    globalThis.dispatchEvent(new CustomEvent(ARTIFACT_TITLE_SAVED_EVENT, { detail }));
+  }
+  return outcome;
 }
 
 /** The one transport both saves share: post, read the status, then the body. */
