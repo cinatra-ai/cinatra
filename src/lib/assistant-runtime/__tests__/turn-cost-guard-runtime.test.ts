@@ -30,6 +30,50 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
+import type { RunWindowMessage } from "@cinatra-ai/agents/run-window-conversation-store";
+
+// Keep the runtime and window real; replace authorization/storage ports for the
+// stored-exchange boundary case. This suite never contacts a running instance.
+const windowRows: RunWindowMessage[] = [];
+vi.mock("@cinatra-ai/agents/auth-policy", () => ({
+  enforceRunAccess: vi.fn(async () => undefined),
+  resolveEffectivePolicy: () => ({ runDataVisibility: "owner" }),
+}));
+vi.mock("@cinatra-ai/agents/store", () => ({
+  readAgentRunById: async () => ({ id: "run-claim", templateId: "template-claim", orgId: "org-claim" }),
+  readAgentTemplateById: async () => ({ id: "template-claim", packageName: "@example/agent" }),
+  readRunCoOwners: async () => [],
+  readLatestDurableHitlGateArtifact: async () => null,
+}));
+vi.mock("@/lib/auth-session", () => ({
+  getAuthSession: async () => ({ user: { id: "u1" }, session: { activeOrganizationId: "org-claim" } }),
+  resolveUserContextForUserId: async () => ({
+    actorContext: { actorType: "user", userId: "u1" }, platformRole: "member", sessionOrgId: null,
+  }),
+}));
+vi.mock("@/lib/authz/build-actor-context", () => ({
+  actorFromSession: () => ({ actorType: "user", userId: "u1" }),
+  buildActorContextFromPrimitive: () => ({ actorType: "user", userId: "u1" }),
+}));
+vi.mock("@/lib/lifecycle/bound-turn-actor", () => ({
+  resolveBoundTurnActor: async () => ({ roleHints: { platformRole: "member" } }),
+}));
+vi.mock("@/lib/lifecycle/run-window-frame", () => ({
+  buildRunWindowFrame: async () => ({}), renderRunWindowFrame: () => "",
+}));
+vi.mock("@cinatra-ai/agents/run-window-conversation-store", () => ({
+  appendRunWindowMessage: async (input: Pick<RunWindowMessage, "runId" | "role" | "surface" | "text"> & { replyToSequence?: number }) => {
+    const row: RunWindowMessage = {
+      ...input, id: `message-${windowRows.length + 1}`, sequence: windowRows.length + 1,
+      replyToSequence: input.replyToSequence ?? null, createdAt: new Date(),
+      fill: null, attachments: null, savedPlacement: null, messageId: null, placedBy: null,
+    };
+    windowRows.push(row);
+    return row;
+  },
+  readRunWindowMessages: async () => [...windowRows],
+}));
+
 let capturedStreamInput: Record<string, unknown> | null = null;
 /** What the mocked adapter should do on each step of the next turn. */
 let stepScript: (step: number) => {
@@ -174,6 +218,7 @@ function terminalFrames(send: ReturnType<typeof vi.fn>) {
 }
 
 beforeEach(() => {
+  windowRows.length = 0;
   capturedStreamInput = null;
   stepsRun = 0;
   stepScript = () => ({});
@@ -454,5 +499,26 @@ describe("cinatra#2580 — the request envelope is unchanged", () => {
         "tools",
       ].sort(),
     );
+  });
+});
+
+
+describe("cinatra#3728 — model words cannot declare platform tool loss", () => {
+  it("stores and returns the model's missing-tools claim when the adapter keeps its tools", async () => {
+    const answer = "I cannot reach the tools, but I think it is approved.";
+    // This adapter stand-in emits text only; it never calls onToolsReduced.
+    stepScript = () => ({ text: answer });
+    const { runWindowTurn, RUN_WINDOW_TOOL_LESS_NOTICE } = await import("@/lib/lifecycle/run-window-turn");
+    const out = await runWindowTurn({
+      runId: "run-claim", surface: "review", prompt: "approve it for me",
+    });
+    expect(capturedStreamInput!.tools).toContainEqual(expect.objectContaining({ type: "mcp", serverLabel: "cinatra" }));
+    expect(out.toolLess).toBe(false);
+    expect(out.entries.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: "user", text: "approve it for me" },
+      { role: "assistant", text: answer },
+    ]);
+    expect(windowRows.at(-1)?.text).toBe(answer);
+    expect(out.entries.at(-1)?.text).not.toContain(RUN_WINDOW_TOOL_LESS_NOTICE);
   });
 });
