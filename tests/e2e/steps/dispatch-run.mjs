@@ -46,6 +46,7 @@ import {
   quotedName,
   readControls,
   unmarkControls,
+  unspacedNote,
 } from "./page-controls.mjs";
 import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 import { RUN_COMPLETION_SELECTOR, RUN_STATUS_SELECTOR, RUN_SURFACE_SELECTOR } from "./watch-run.mjs";
@@ -82,7 +83,8 @@ export const DISPATCH_RUN_BOUNDS = Object.freeze({
 // Runs IN THE PAGE: nothing of this module may be used inside it. `set` notes
 // the document under `key`; the reading says whether the page still shows it.
 // Runs are counted by their outermost element; the newest is the last of them.
-function readRunSignals({ key, set, run, status, completion, notification, error }) {
+// sendInComposer reads the page with it too, to refuse a send that starts a run.
+export function readRunSignals({ key, set, run, status, completion, notification, error }) {
   if (set) window[key] = true;
   const text = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
   const shown = (element) => {
@@ -110,6 +112,24 @@ function readRunSignals({ key, set, run, status, completion, notification, error
       .filter(shown)
       .map((element) => text(element.textContent));
   return { same: window[key] === true, path: location.pathname, runs: runs.length, state, notes: texts(notification), errors: texts(error) };
+}
+
+/**
+ * What a reading of readRunSignals shows of a run that the reading `before`
+ * did not: the run (`via: "run"`, its state as watchRun reads it) or a
+ * notification of it (`via: "notification"`, its text), or null. A new
+ * document counts every run and notification it shows.
+ * @param {{ runs: number, notes: string[] }} before
+ * @param {{ same: boolean, runs: number, state: string, notes: string[] }} reading
+ * @returns {{ via: "run" | "notification", state: string } | null}
+ */
+export function newRunSignal(before, reading) {
+  const fresh = !reading.same;
+  if (reading.runs > (fresh ? 0 : before.runs)) return { via: "run", state: reading.state };
+  const note = fresh
+    ? reading.notes[0]
+    : (reading.notes.find((line) => !before.notes.includes(line)) ?? (reading.notes.length > before.notes.length ? reading.notes.at(-1) : undefined));
+  return note === undefined ? null : { via: "notification", state: note };
 }
 
 /**
@@ -191,7 +211,12 @@ export async function dispatchRun(
         throw refuse(STEP, record, "no-card", `no shown card on ${from} is named ${cardName} — the cards it shows: ${describeNames(reading.cards)}; ${nothing}`);
       }
       if (reading.found > 1) {
-        throw refuse(STEP, record, "ambiguous", `${reading.found} shown cards on ${from} are named ${cardName} — ${nothing}, since a run is never started from a guess`);
+        throw refuse(
+          STEP,
+          record,
+          "ambiguous",
+          `${reading.found} shown cards on ${from} are named ${cardName}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a run is never started from a guess`,
+        );
       }
       const { matches } = reading;
       if (matches.length === 0) {
@@ -208,7 +233,7 @@ export async function dispatchRun(
           STEP,
           record,
           "ambiguous",
-          `the card ${cardName} on ${from} has ${matches.length} shown controls named ${named}, ${which} — ${nothing}, since a run is never started from a guess`,
+          `the card ${cardName} on ${from} has ${matches.length} shown controls named ${named}${unspacedNote(reading.controlUnspaced, reading.controlNamed)}, ${which} — ${nothing}, since a run is never started from a guess`,
         );
       }
       if (matches[0].disabled) throw refuse(STEP, record, "disabled", `the control ${named} of the card ${cardName} on ${from} is disabled — ${nothing}`);
@@ -246,14 +271,19 @@ export async function dispatchRun(
         );
       }
       if (reading.found > 1) {
-        throw refuse(STEP, record, "ambiguous", `${reading.found} shown text boxes on ${on} are named ${composerNamed} — no prompt was sent, since a run is never started from a guess`);
+        throw refuse(
+          STEP,
+          record,
+          "ambiguous",
+          `${reading.found} shown text boxes on ${on} are named ${composerNamed}${unspacedNote(reading.unspaced, reading.named)} — no prompt was sent, since a run is never started from a guess`,
+        );
       }
       if (reading.sends !== 1) {
         throw refuse(
           STEP,
           record,
           reading.sends === 0 ? "no-control" : "ambiguous",
-          `the composer ${composerNamed} on ${on} has ${reading.sends === 0 ? "no shown send control" : `${reading.sends} shown send controls`}, a button named ${composerNamed} — no prompt was sent`,
+          `the composer ${composerNamed} on ${on} has ${reading.sends === 0 ? "no shown send control" : `${reading.sends} shown send controls`}, a button named ${composerNamed}${unspacedNote(reading.sends > 1 && reading.sendsUnspaced, reading.sendsNamed)} — no prompt was sent`,
         );
       }
       before = await noteBefore(on);
@@ -286,18 +316,14 @@ export async function dispatchRun(
       const elapsedMs = elapsedSince(pressedAt);
       if (reading) {
         last = reading;
-        const fresh = !reading.same;
-        if (reading.runs > (fresh ? 0 : before.runs)) {
-          record(`${STEP}: ${started} shows on ${reading.path} after ${elapsedMs} ms (${reading.state})`);
-          return { card: card === undefined ? null : wanted, via: "run", state: reading.state, path: reading.path, elapsedMs };
+        const signal = newRunSignal(before, reading);
+        if (signal && signal.via === "run") {
+          record(`${STEP}: ${started} shows on ${reading.path} after ${elapsedMs} ms (${signal.state})`);
+          return { card: card === undefined ? null : wanted, via: "run", state: signal.state, path: reading.path, elapsedMs };
         }
-        const note = fresh
-          ? reading.notes[0]
-          : reading.notes.find((/** @type {string} */ line) => !before.notes.includes(line)) ??
-            (reading.notes.length > before.notes.length ? reading.notes.at(-1) : undefined);
-        if (note !== undefined) {
-          record(`${STEP}: the page notifies of ${started} after ${elapsedMs} ms: ${quotedName(note)}`);
-          return { card: card === undefined ? null : wanted, via: "notification", state: note, path: reading.path, elapsedMs };
+        if (signal) {
+          record(`${STEP}: the page notifies of ${started} after ${elapsedMs} ms: ${quotedName(signal.state)}`);
+          return { card: card === undefined ? null : wanted, via: "notification", state: signal.state, path: reading.path, elapsedMs };
         }
       }
       if (elapsedMs >= bound.runMs) break;

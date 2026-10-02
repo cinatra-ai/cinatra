@@ -8,7 +8,9 @@
 /**
  * @typedef {(line: string) => void} StepRecord
  *   Receives one line per event. A step never writes a credential, an address
- *   or a query string through it: pages are named by their path.
+ *   or a query string through it: pages are named by their path. A line may
+ *   carry the value of a query parameter that the caller named to openAddress or
+ *   readAddress, and no other.
  */
 
 /**
@@ -135,6 +137,30 @@ export function pathOf(url) {
   } catch {
     return "an unreadable address";
   }
+}
+
+/**
+ * The query parameters of a web address that the caller names, and a count of
+ * the others: `query` holds one key per name of `names`, in that order, with the
+ * parameter's first value as the address carries it decoded, or null when it
+ * does not carry it; `others` counts the address's parameters of any other name,
+ * whose values are never read. Anything that is no web address carries none.
+ * @param {string} url
+ * @param {readonly string[]} names
+ * @returns {{ query: Record<string, string | null>, others: number }}
+ */
+export function queryOf(url, names) {
+  let params = null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") params = parsed.searchParams;
+  } catch {
+    params = null;
+  }
+  const query = Object.fromEntries(names.map((name) => [name, params ? params.get(name) : null]));
+  let others = 0;
+  if (params) for (const name of params.keys()) if (!names.includes(name)) others += 1;
+  return { query, others };
 }
 
 /**

@@ -315,7 +315,7 @@ function recipientEmailFor(
   recipients: ReadonlyArray<RecipientRow>,
 ): string | null {
   // Priority order: draft.recipientEmail / draft.email > matched recipient
-  // by contactId > first recipient's email.
+  // by contactId; a draft without an address of its own gets none.
   if (draft.recipientEmail) return draft.recipientEmail;
   if (draft.email) return draft.email;
   if (draft.contactId) {
@@ -323,7 +323,7 @@ function recipientEmailFor(
     if (match?.email) return match.email;
     if (match?.recipientEmail) return match.recipientEmail;
   }
-  return recipients[0]?.email ?? recipients[0]?.recipientEmail ?? null;
+  return null;
 }
 
 // ===========================================================================

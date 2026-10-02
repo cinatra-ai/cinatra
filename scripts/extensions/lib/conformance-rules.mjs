@@ -58,6 +58,17 @@ export function extractStringSetConst(sourceText, constName) {
   return new Set(items);
 }
 
+/**
+ * Extract a `export const NAME = "value";` string literal (single or double
+ * quotes, an optional type annotation, no expression). Null when absent or
+ * empty.
+ */
+export function extractStringConst(sourceText, constName) {
+  const re = new RegExp(`export const ${constName}\\s*(?::[^=]+)?=\\s*(["'])([^"'\\n]+)\\1\\s*;`, "m");
+  const m = sourceText.match(re);
+  return m ? m[2] : null;
+}
+
 /** Extract a bare numeric `export const NAME = <int>;` literal. */
 export function extractNumberConst(sourceText, constName) {
   const re = new RegExp(`export const ${constName}\\s*=\\s*(\\d+)`, "m");
@@ -85,6 +96,7 @@ export function loadLiveRules(sdkRepoRoot) {
   const chatViewsContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/chat-views-contract.ts`;
   const llmProviderContractPath = `${sdkRepoRoot}/packages/sdk-extensions/src/llm-provider-contract.ts`;
   const accessConfigPath = `${sdkRepoRoot}/packages/sdk-extensions/src/access-config.ts`;
+  const artifactClientBundlePath = `${sdkRepoRoot}/packages/sdk-extensions/src/artifact-client-bundle.ts`;
   const sdkExtensionsPkgPath = `${sdkRepoRoot}/packages/sdk-extensions/package.json`;
   const sdkUiPkgPath = `${sdkRepoRoot}/packages/sdk-ui/package.json`;
 
@@ -93,6 +105,7 @@ export function loadLiveRules(sdkRepoRoot) {
   const chatViewsContractSrc = readIfExists(chatViewsContractPath);
   const llmProviderContractSrc = readIfExists(llmProviderContractPath);
   const accessConfigSrc = readIfExists(accessConfigPath);
+  const artifactClientBundleSrc = readIfExists(artifactClientBundlePath);
   const sdkExtensionsPkgRaw = readIfExists(sdkExtensionsPkgPath);
   const sdkUiPkgRaw = readIfExists(sdkUiPkgPath);
 
@@ -102,6 +115,7 @@ export function loadLiveRules(sdkRepoRoot) {
   if (!chatViewsContractSrc) missing.push(chatViewsContractPath);
   if (!llmProviderContractSrc) missing.push(llmProviderContractPath);
   if (!accessConfigSrc) missing.push(accessConfigPath);
+  if (!artifactClientBundleSrc) missing.push(artifactClientBundlePath);
   if (!sdkExtensionsPkgRaw) missing.push(sdkExtensionsPkgPath);
   if (!sdkUiPkgRaw) missing.push(sdkUiPkgPath);
   if (missing.length > 0) {
@@ -144,6 +158,25 @@ export function loadLiveRules(sdkRepoRoot) {
   const artifactUiRegistryItemTypes = extractStringArrayConst(
     artifactContractSrc,
     "ARTIFACT_UI_REGISTRY_ITEM_TYPES",
+  );
+  // The roads by which extension code makes the application create an
+  // artifact (cinatra#3821): DERIVED from the SDK's declaration
+  // (artifact-contract.ts ARTIFACT_CREATING_ROADS), never typed here. A
+  // connector whose code names one of them is refused (class 5).
+  const artifactCreatingRoads = extractStringArrayConst(
+    artifactContractSrc,
+    "ARTIFACT_CREATING_ROADS",
+  );
+  // The host-served design-primitives module (cinatra#3867): the ONE
+  // first-party module besides the two SDK packages an extension may import
+  // (the build-time road of host-shared-primitives-contract.md). DERIVED from
+  // the SDK's declaration (artifact-client-bundle.ts HOST_DESIGN_PRIMITIVES_MODULE,
+  // which the reusable workflow checks out), never typed here. The import
+  // rule admits this exact specifier only, never a subpath of it.
+  // The file is read as TEXT, never imported, so its own imports need not be present.
+  const hostDesignPrimitivesModule = extractStringConst(
+    artifactClientBundleSrc,
+    "HOST_DESIGN_PRIMITIVES_MODULE",
   );
   // cinatra.views (cinatra#1626, S9): the chat renderable-view declaration
   // surface's OWN ABI version, DERIVED from the live leaf source
@@ -196,6 +229,12 @@ export function loadLiveRules(sdkRepoRoot) {
   if (!artifactUiRegistryItemTypes || artifactUiRegistryItemTypes.length === 0) {
     return { ok: false, missing: [], derivationFailed: "ARTIFACT_UI_REGISTRY_ITEM_TYPES" };
   }
+  if (!artifactCreatingRoads || artifactCreatingRoads.length === 0) {
+    return { ok: false, missing: [], derivationFailed: "ARTIFACT_CREATING_ROADS" };
+  }
+  if (!hostDesignPrimitivesModule || !hostDesignPrimitivesModule.startsWith("@cinatra-ai/")) {
+    return { ok: false, missing: [], derivationFailed: "HOST_DESIGN_PRIMITIVES_MODULE" };
+  }
   if (chatViewsAbiVersion === null) {
     return { ok: false, missing: [], derivationFailed: "CHAT_VIEWS_ABI_VERSION" };
   }
@@ -233,6 +272,8 @@ export function loadLiveRules(sdkRepoRoot) {
     artifactUiAbiVersion,
     artifactUiRegistryItemTypes: new Set(artifactUiRegistryItemTypes),
     artifactUiSdkAbiRange,
+    artifactCreatingRoads,
+    hostDesignPrimitivesModule,
     chatViewsAbiVersion,
     llmProviderAbiVersion,
     llmProviders: new Set(llmProviders),
@@ -319,7 +360,76 @@ export const PROCESS_ENV_ALLOWLIST = new Set([
 ]);
 
 /**
+ * The connector border floor (cinatra#3821, class 5). Each key is
+ * `"<packageName>:<posix-relative-path>:<road>"` — a connector file that
+ * names a road by which the application creates an artifact TODAY. A finding
+ * whose key is here is reported as `known` (not failing; `--strict` fails it,
+ * as for the baseline). The floor ONLY SHRINKS: for a package of kind
+ * connector, an entry of that package with no matching finding is itself a
+ * failing finding (`border.connector-floor-stale`), so a new road in a floored
+ * file fails, a new file fails, and a fixed connector must drop its entry.
+ * Every value names the rule and the follow-up item that removes the entry.
+ * There is no floor for class 4 (no connector declares a produced type or
+ * claims an artifact type today).
+ */
+export const CONNECTOR_ARTIFACT_BORDER_FLOOR = Object.freeze({
+  "@cinatra-ai/wordpress-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
+  "@cinatra-ai/drupal-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
+  "@cinatra-ai/blog-connector:src/register.ts:@cinatra-ai/host:blog-routing":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:blog-routing)",
+  "@cinatra-ai/email-connector:src/register.ts:@cinatra-ai/host:email-routing":
+    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:email-routing)",
+});
+
+/**
+ * The floor of the KNOWN OLDER FINDINGS of connectors (cinatra#3867): a
+ * connector file whose finding under the node:fs ban or the process.env ban
+ * (cinatra#981, cinatra#982) is true, older than the border rule and known at
+ * the connector rollout of the gate. Each key is the package name, the
+ * package-relative POSIX path and the rule, joined by colons; each value names
+ * the rule and the item that cures it. It is a DEBT, not a road: the allow lists above admit
+ * a road and do not grow; this floor records findings that are still findings.
+ *
+ * WHY A FLOOR AND NOT THE BASELINE: a connector repository runs this checker
+ * through the reusable workflow, whose sparse checkout holds no
+ * `conformance-gate.baseline.json`, so that run reads an empty baseline. This
+ * file is in the checkout, so the floor reaches both enforcement points.
+ *
+ * For a package of kind connector only, a finding whose key is here is
+ * reported as `known` (not failing; `--strict` fails it), as for
+ * CONNECTOR_ARTIFACT_BORDER_FLOOR; a finding of the same rule in another file,
+ * or of another rule in a floored file, still fails. The floor ONLY SHRINKS,
+ * and a line with no matching finding is answered by the run that can act on
+ * it: the single-package run (`--package`, a connector's own repository at a
+ * pinned commit) prints it as a NOTE and passes, so the cure's own pull
+ * request can merge; the fleet run over the materialized tree
+ * (`checkKnownFindingsFloorOverTree`) fails it as
+ * `floor.connector-known-finding-stale`, and the change that drops the line
+ * turns it green. A test of record pins the exact lines.
+ */
+export const CONNECTOR_KNOWN_FINDINGS_FLOOR = Object.freeze({
+  "@cinatra-ai/anthropic-connector:src/telemetry.ts:fs-ban.direct-filesystem-access":
+    "fs-ban.direct-filesystem-access — removed by cinatra#3828",
+  "@cinatra-ai/drupal-assistant-connector:src/settings-page.tsx:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/openai-connector:src/adapter/openai-adapter.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/plane-connector:src/dev-setup.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/plane-connector:src/plane-provision.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/resend-connector:src/config.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/tailscale-connector:src/register.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+});
+
+/**
  * Non-public org repos: a public extension repo may never reference these.
+ * Matched as WHOLE names (cinatra#3867): a longer package or repository name
+ * that merely begins with one of them is no reference (see `checkHygiene`).
  * Verified against live visibility (`gh repo view <slug> --json isPrivate`),
  * not assumed from informal shorthand — `cinatra-ai/ci` and
  * `cinatra-ai/extension-release-tooling` are themselves PUBLIC (they are

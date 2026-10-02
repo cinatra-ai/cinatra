@@ -14,7 +14,7 @@
  *
  *   pnpm vitest run src/lib/__tests__/extension-tool-dispatch.test.ts
  */
-import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,16 +22,22 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  EXTENSION_TOOL_CALL_REFUSAL_NAME,
+  EXTENSION_TOOL_REFUSAL_SENTENCE_MAX,
   EXTENSION_TOOL_REVIEW_TARGETS_KEY,
   ExtensionToolRefusal,
   dispatchExtensionTool,
+  moduleRefusalSentenceIssue,
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
+import { ExtensionDataRefusal, buildExtensionDataStatement } from "@/lib/extension-data-tool";
 import {
   ExtensionToolModuleRefusal,
   loadDeclaredToolModule,
   resolveDeclaredToolModulePath,
 } from "@/lib/extension-tool-module-loader";
+import { parseDeclaredTables } from "@cinatra-ai/sdk-extensions/manifest";
+import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PACK_ROOT = path.join(HERE, "fixtures", "extension-tool-pack");
@@ -92,7 +98,12 @@ describe("extension_tool — a declared name resolves to the declared module", (
       cinatra: CINATRA,
       request: {
         name: "fixture_tool",
-        input: { kind: "one", type: "fixture-scope:thing", artifactId: "artifact-1" },
+        input: {
+          kind: "one",
+          rowId: "row-1",
+          type: "fixture-scope:thing",
+          artifactId: "artifact-1",
+        },
       },
       ports,
       deps: { resolvePackageRoot },
@@ -102,19 +113,27 @@ describe("extension_tool — a declared name resolves to the declared module", (
     expect(result.ok).toBe(true);
     // EVERY PORT REACHED THE MODULE: the caller's own table operations, the two
     // dependency-scoped artifact reads, the review-gate filing and the clock.
-    expect(ports.data.select).toHaveBeenCalledWith({
+    expect(ports.data.select).toHaveBeenNthCalledWith(1, {
       table: "fixture_rows",
-      where: { kind: "one" },
+      where: { kind: "one", run_id: { boundRun: true } },
+    });
+    expect(ports.data.select).toHaveBeenNthCalledWith(2, {
+      table: "fixture_rows",
+      where: {
+        kind: "one",
+        scope_kind: { boundScope: true },
+        scope_id: { boundScope: true },
+      },
     });
     expect(ports.data.insertIfAbsent).toHaveBeenCalledWith({
       table: "fixture_rows",
-      row: { kind: "one" },
+      row: { id: "row-1", kind: "one", step: "first" },
       conflictKeys: ["kind"],
     });
     expect(ports.data.updateWhere).toHaveBeenCalledWith({
       table: "fixture_rows",
       set: { step: "second" },
-      where: { kind: "one" },
+      where: { kind: "one", run_id: { boundRun: true } },
       expect: { step: "first" },
     });
     expect(ports.artifacts.list).toHaveBeenCalledWith({
@@ -157,6 +176,169 @@ describe("extension_tool — a declared name resolves to the declared module", (
         deps: { resolvePackageRoot: rootResolver() },
       }),
     ).rejects.toThrow(/exports no callable `extensionTool`/);
+  });
+});
+
+describe("extension_tool — the run- and scope-bound table a pack declares (cinatra#3249)", () => {
+  /**
+   * The fixture pack declares a table bound to the RUN and to the SCOPE that
+   * run belongs to, and its module never names either: it writes a row without
+   * them and asks for this run's rows, and for this scope's rows, with the two
+   * markers the data contract defines. Here the ports COMPILE each request the
+   * module makes, against the pack's OWN declared tables, so what the host
+   * actually sends the database is read as text.
+   */
+  const SCOPE = { kind: "project", id: "project-fixture" } as const;
+
+  const compilingPorts = async (runId: string, scope = SCOPE) => {
+    const manifest = JSON.parse(
+      await readFile(path.join(FIXTURE_PACK_ROOT, "package.json"), "utf8"),
+    ) as { cinatra: { declaredTables?: unknown } };
+    const tables = parseDeclaredTables(manifest.cinatra.declaredTables, PACK);
+    const compiled: Record<string, { text: string; values: unknown[] }[]> = {};
+    const compile = (operation: "select" | "insertIfAbsent" | "updateWhere") => async (
+      request: Record<string, unknown>,
+    ) => {
+      const c = buildExtensionDataStatement({
+        packageName: PACK,
+        schemaName: "cinatra",
+        tables,
+        orgId: "org-fixture",
+        runId,
+        scope,
+        request: { ...request, operation } as never,
+      });
+      (compiled[operation] ??= []).push({ text: c.text, values: c.values });
+      return { rows: [] };
+    };
+    return {
+      tables,
+      compiled,
+      ports: {
+        data: {
+          select: compile("select"),
+          insertIfAbsent: compile("insertIfAbsent"),
+          updateWhere: compile("updateWhere"),
+        },
+        artifacts: {
+          list: async () => ({ artifacts: [], nextCursor: null }),
+          contentRead: async () => ({ text: "fixture text" }),
+        },
+        clock: { now: () => new Date("2026-09-12T00:00:00.000Z") },
+      } satisfies Omit<ExtensionToolPorts, "review">,
+    };
+  };
+
+  it("declares the run column and the scope columns beside the organisation column", async () => {
+    const { tables } = await compilingPorts("run-fixture");
+    expect(
+      tables.map((t) => [
+        t.name,
+        t.organizationColumn,
+        t.runColumn,
+        t.scopeKindColumn,
+        t.scopeIdColumn,
+      ]),
+    ).toEqual([["fixture_rows", "org_id", "run_id", "scope_kind", "scope_id"]]);
+  });
+
+  it("writes the BOUND run and scope on the insert and substitutes them on the this-run and this-scope reads", async () => {
+    const { compiled, ports } = await compilingPorts("run-fixture");
+    await dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      orgId: ORG,
+      cinatra: CINATRA,
+      request: {
+        name: "fixture_tool",
+        input: {
+          kind: "one",
+          rowId: "row-1",
+          type: "fixture-scope:thing",
+          artifactId: "artifact-1",
+        },
+      },
+      ports,
+      deps: { resolvePackageRoot: rootResolver() },
+    });
+
+    // The insert: the module named none of the organisation, the run and the
+    // scope, and the host wrote all three.
+    expect(compiled.insertIfAbsent?.[0]?.text).toContain(
+      '("org_id", "run_id", "scope_kind", "scope_id", "id", "kind", "step") ' +
+        "VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    );
+    expect(compiled.insertIfAbsent?.[0]?.values.slice(0, 4)).toEqual([
+      "org-fixture",
+      "run-fixture",
+      "project",
+      "project-fixture",
+    ]);
+    // This run's rows: the marker carried the run, never a value the module chose.
+    // The scope floor stands first, with the organisation; the run marker
+    // narrows to this run on top of it.
+    expect(compiled.select?.[0]?.text).toContain(
+      '"scope_kind" = $2 AND "scope_id" = $3 AND "kind" = $4 AND "run_id" = $5',
+    );
+    expect(compiled.select?.[0]?.values).toEqual([
+      "org-fixture",
+      "project",
+      "project-fixture",
+      "one",
+      "run-fixture",
+    ]);
+    // This scope's rows: the second marker carried the kind and the id.
+    expect(compiled.select?.[1]?.text).toContain(
+      '"scope_kind" = $2 AND "scope_id" = $3 AND "kind" = $4',
+    );
+    expect(compiled.select?.[1]?.values).toEqual([
+      "org-fixture",
+      "project",
+      "project-fixture",
+      "one",
+    ]);
+    expect(compiled.updateWhere?.[0]?.text).toContain(
+      '"scope_kind" = $3 AND "scope_id" = $4 AND "kind" = $5 AND "run_id" = $6',
+    );
+    expect(compiled.updateWhere?.[0]?.values).toEqual([
+      "second",
+      "org-fixture",
+      "project",
+      "project-fixture",
+      "one",
+      "run-fixture",
+      "first",
+    ]);
+  });
+
+  it("carries a WORKSPACE-anchored run's scope with the storage sentinel as its id", async () => {
+    const { compiled, ports } = await compilingPorts("run-fixture", {
+      kind: "workspace",
+      id: WORKSPACE_SCOPE_SENTINEL,
+    } as never);
+    await dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      orgId: ORG,
+      cinatra: CINATRA,
+      request: {
+        name: "fixture_tool",
+        input: {
+          kind: "one",
+          rowId: "row-1",
+          type: "fixture-scope:thing",
+          artifactId: "artifact-1",
+        },
+      },
+      ports,
+      deps: { resolvePackageRoot: rootResolver() },
+    });
+    expect(compiled.select?.[1]?.values).toEqual([
+      "org-fixture",
+      "workspace",
+      WORKSPACE_SCOPE_SENTINEL,
+      "one",
+    ]);
   });
 });
 
@@ -349,5 +531,158 @@ describe("extension_tool — the review-gate filing is validated by the host", (
         },
       }),
     ).rejects.toThrow(ExtensionToolRefusal);
+  });
+});
+
+describe("extension_tool — a module refuses a call by name (cinatra#3847)", () => {
+  const SENTENCE = "fixture refusal: this module does not serve the kind the call names";
+
+  /** A declared module that throws `thrown` from its own call. */
+  function dispatchThrowing(thrown: unknown) {
+    return dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      orgId: ORG,
+      cinatra: CINATRA,
+      request: { name: "fixture_silent_tool", input: {} },
+      ports: stubPorts(),
+      deps: {
+        resolvePackageRoot: rootResolver(),
+        importModule: async () => ({
+          extensionTool: async () => {
+            throw thrown;
+          },
+        }),
+      },
+    });
+  }
+
+  it("answers a module's named refusal as the host's own refusal, with the module's sentence", async () => {
+    const rejection = await dispatchThrowing(
+      Object.assign(new Error(SENTENCE), { name: "ExtensionToolCallRefusal" }),
+    ).catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(ExtensionToolRefusal);
+    expect((rejection as Error).message).toBe(
+      "extension_tool: `fixture_silent_tool` refused the call: " + SENTENCE,
+    );
+  });
+
+  it("documents one refusal name and one sentence bound", () => {
+    expect(EXTENSION_TOOL_CALL_REFUSAL_NAME).toBe("ExtensionToolCallRefusal");
+    expect(EXTENSION_TOOL_REFUSAL_SENTENCE_MAX).toBe(400);
+  });
+
+  it("still answers a module that fails without refusing with its own error", async () => {
+    const failure = new Error("fixture failure");
+    const rejection = await dispatchThrowing(failure).catch((e: unknown) => e);
+    expect(rejection).toBe(failure);
+    expect(rejection).not.toBeInstanceOf(ExtensionToolRefusal);
+  });
+
+  it("reads the admissible sentence as within the bounds", () => {
+    expect(moduleRefusalSentenceIssue(SENTENCE)).toBeNull();
+  });
+
+  // Secret-shaped sentences are composed at run time, so no key shape is ever
+  // a literal of this file.
+  const OUTSIDE_THE_BOUNDS: Array<[string, unknown]> = [
+    ["whitespace only", "   \t  "],
+    ["401 characters", "x".repeat(401)],
+    ["a line break", "fixture refusal\nat the second line"],
+    ["a source position", "fixture refusal at module.mjs:12:3"],
+    ["an absolute path", "fixture refusal in /srv/fixture/module.mjs"],
+    ["a file address", "fixture refusal in file:///srv/fixture/module.mjs"],
+    ["a credential header", "fixture refusal with bearer: fixture-value"],
+    ["a key shape", `fixture refusal with ${["sk", "ant", "x".repeat(24)].join("-")}`],
+    ["a long token run", `fixture refusal with ${"q".repeat(48)}`],
+    ["a non-string message", 42],
+    ["a line separator", `fixture refusal${String.fromCharCode(0x2028)}at the second line`],
+    ["a quoted path", 'fixture refusal in "/srv/fixture/module.mjs"'],
+    ["a relative path", "fixture refusal in ./fixture/module.mjs"],
+    ["a spaced credential", "fixture refusal with Bearer abc.def.ghi"],
+  ];
+
+  it("reads the word file followed by a colon in plain prose as within the bounds", () => {
+    expect(moduleRefusalSentenceIssue("fixture refusal: the file: field names no kind")).toBeNull();
+  });
+
+  it("keeps what the module threw when its name cannot be read", async () => {
+    const thrown = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("fixture getter failure");
+      },
+    });
+    const rejection = await dispatchThrowing(thrown).catch((e: unknown) => e);
+    expect(rejection).toBe(thrown);
+  });
+
+  it("answers a named refusal whose sentence cannot be read as a failure that names the bound", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const thrown = Object.defineProperty({ name: "ExtensionToolCallRefusal" }, "message", {
+      get() {
+        throw new Error("fixture getter failure");
+      },
+    });
+    const rejection = await dispatchThrowing(thrown).catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(ExtensionToolRefusal);
+    const message = (rejection as Error).message;
+    expect(message).toContain("the sentence is not a string");
+    expect(message).not.toContain("fixture getter failure");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain("fixture getter failure");
+  });
+
+  it.each(OUTSIDE_THE_BOUNDS)(
+    "answers a named refusal whose sentence holds %s as a failure that names the bound, never the sentence",
+    async (_label, sentence) => {
+      const issue = moduleRefusalSentenceIssue(sentence);
+      expect(typeof issue).toBe("string");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const rejection = await dispatchThrowing({
+        name: "ExtensionToolCallRefusal",
+        message: sentence,
+      }).catch((e: unknown) => e);
+
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).not.toBeInstanceOf(ExtensionToolRefusal);
+      const message = (rejection as Error).message;
+      expect(message).toContain(issue as string);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]?.[0]);
+      expect(line).toContain(PACK);
+      expect(line).toContain("fixture_silent_tool");
+      const shown = String(sentence).trim();
+      if (shown !== "") {
+        expect(message).not.toContain(shown);
+        expect(line).not.toContain(shown);
+      }
+    },
+  );
+
+  it("keeps the host's own refusal raised by a port inside the module's call", async () => {
+    const ports = stubPorts();
+    const refusal = new ExtensionDataRefusal(
+      "invalid-request",
+      "extension_data: fixture refusal of the application",
+    );
+    ports.data.select.mockRejectedValueOnce(refusal);
+    const rejection = await dispatchExtensionTool({
+      packageName: PACK,
+      packageVersion: PINNED,
+      orgId: ORG,
+      cinatra: CINATRA,
+      request: { name: "fixture_silent_tool", input: {} },
+      ports,
+      deps: {
+        resolvePackageRoot: rootResolver(),
+        importModule: async () => ({
+          extensionTool: async ({ ports: given }: { ports: ExtensionToolPorts }) =>
+            given.data.select({ table: "fixture_rows" }),
+        }),
+      },
+    }).catch((e: unknown) => e);
+    expect(rejection).toBe(refusal);
   });
 });

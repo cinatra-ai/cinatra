@@ -404,3 +404,51 @@ describe("the workspace vantage union carries the teams and projects too", () =>
     expect(actorAdmits).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE AUDIENCE AN ORGANIZATION-TARGET INSTALL WRITES (cinatra#3785).
+//
+// The loader's structural arm admits an exact-org row on that organization's
+// tab; the VANTAGE arm then reads the row's stored policy, and that is where an
+// upload installed at the organization target used to be dropped. The two
+// policies below are the before and the after of the same install, measured
+// through the real vantage arm rather than restated.
+//
+// No other case in this file exercises an `org:<id>` token: the fixtures above
+// use `workspace`, `admin`, `team:<id>` and `project:<id>` only.
+// ---------------------------------------------------------------------------
+describe("an org:<id> audience on the organization's own tab (cinatra#3785)", () => {
+  const row = install({ installId: "org-scoped", organizationId: ORG_A, ownerId: ORG_A });
+  const withPolicy = (tokens: string[]) => new Map([[row.installId, policy(tokens)]]);
+
+  it("is eligible on its OWN organization's vantage for an organization member", async () => {
+    const rows = await run(
+      { kind: "organization", id: ORG_A },
+      orgAnchor(ORG_A),
+      [row],
+      withPolicy([`org:${ORG_A}`]),
+    );
+    expect(rows.map((r) => r.packageName)).toEqual([row.packageName]);
+    expect(rows[0]?.executionOrgIds).toEqual([ORG_A]);
+  });
+
+  it("is NOT eligible on another organization's vantage", async () => {
+    const rows = await run(
+      { kind: "organization", id: ORG_B },
+      orgAnchor(ORG_B),
+      [install({ installId: "org-scoped", organizationId: ORG_B, ownerId: ORG_B })],
+      new Map([["org-scoped", policy([`org:${ORG_A}`])]]),
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("the owner-only default it replaces is eligible on NO organization vantage", async () => {
+    const rows = await run(
+      { kind: "organization", id: ORG_A },
+      orgAnchor(ORG_A),
+      [row],
+      withPolicy(["owner"]),
+    );
+    expect(rows).toEqual([]);
+  });
+});

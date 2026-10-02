@@ -458,11 +458,45 @@ export type HostLoggerPort = {
   captureDirectory?(channel: string): string;
 };
 
+/**
+ * A development instance's isolation inputs, as the runtime port answers them.
+ * Every value is credential-free: no user name, password or query string.
+ */
+export type HostDevInstanceIsolation = {
+  /** Whether the host has a database connection configured. */
+  readonly databaseConfigured: boolean;
+  /**
+   * That connection's endpoint as `host:port/database` (lower-case host,
+   * default port 5432 filled in), or null when none is configured or it does
+   * not resolve to exactly one endpoint.
+   */
+  readonly databaseEndpoint: string | null;
+  /** The configured database schema name, or null when none is configured. */
+  readonly schema: string | null;
+  /** Whether the operator declared this instance the development main. */
+  readonly mainDeclared: boolean;
+  /**
+   * That declaration in the same `host:port/database` form, or null when it is
+   * absent or does not resolve to exactly one endpoint.
+   */
+  readonly mainEndpoint: string | null;
+};
+
 /** Runtime mode / environment flags (the `@/lib/runtime-mode` surface). */
 export type HostRuntimePort = {
   readonly mode: "development" | "production";
   flag(name: string): boolean;
   publicBaseUrl(): string | null;
+  /**
+   * This development instance's isolation inputs (database endpoint, schema
+   * and development-main declaration), so an extension can key its own state
+   * on the instance it runs in. Answers null outside a development runtime.
+   * The record never carries a user name, password or query string.
+   *
+   * ADDITIVE, OPTIONAL port method: a host without it is an older host, and a
+   * reader treats its absence as "no development identity".
+   */
+  devInstanceIsolation?(): HostDevInstanceIsolation | null;
 };
 
 /**
