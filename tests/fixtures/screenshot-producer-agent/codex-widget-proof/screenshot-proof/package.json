@@ -1,0 +1,30 @@
+{
+  "name": "@codex-widget-proof/screenshot-proof",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Private development fixture; executes a real no-model run before capture-screenshot files measured browser output. Never release this package.",
+  "cinatra": {
+    "apiVersion": "cinatra.ai/v1",
+    "kind": "agent",
+    "type": "flow",
+    "displayName": "Screenshot proof fixture",
+    "produces": [
+      {
+        "extension": "@cinatra-ai/screenshot-artifact"
+      }
+    ],
+    "dependencies": [
+      {
+        "packageName": "@cinatra-ai/screenshot-artifact",
+        "kind": "artifact",
+        "edgeType": "runtime",
+        "versionConstraint": {
+          "kind": "semver-range",
+          "range": "^0.1.3"
+        },
+        "requirement": "required"
+      }
+    ]
+  }
+}
