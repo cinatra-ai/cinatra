@@ -67,10 +67,55 @@ function CommandDialog({
 
 function CommandInput({
   className,
+  chrome = "field",
   ...props
-}: React.ComponentProps<typeof CommandPrimitive.Input>) {
+}: React.ComponentProps<typeof CommandPrimitive.Input> & {
+  /**
+   * Which chrome the type-to-filter row is drawn in.
+   *
+   * `field` (the default, and every existing caller) — the input inside the
+   * palette's bordered, separately-filled pill. Right where the search IS the
+   * surface, as in the command palette.
+   *
+   * `flush` — the row the Combobox drawing draws INSIDE an open list: a flat
+   * row on the list's own ground, opened by a muted search glyph and closed by
+   * a hairline rule — "display: flex; align-items: center; gap: 8px; padding:
+   * 9px 12px; border-bottom: 1px solid var(--line)", the glyph and the
+   * placeholder both in `var(--muted)`. A pill there would put a second
+   * bordered control inside something that is already one control's popup, and
+   * a second filled surface inside a popover the system allows one surface.
+   */
+  chrome?: "field" | "flush"
+}) {
+  if (chrome === "flush") {
+    return (
+      <div
+        data-slot="command-input-wrapper"
+        data-chrome="flush"
+        className="flex items-center gap-2 border-b border-line px-3 py-[9px]"
+      >
+        <SearchIcon
+          data-slot="command-input-icon"
+          className="size-[13px] shrink-0 text-muted-foreground"
+        />
+        <CommandPrimitive.Input
+          data-slot="command-input"
+          className={cn(
+            "w-full bg-transparent text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+            className
+          )}
+          {...props}
+        />
+      </div>
+    )
+  }
+
   return (
-    <div data-slot="command-input-wrapper" className="p-1 pb-0">
+    <div
+      data-slot="command-input-wrapper"
+      data-chrome="field"
+      className="p-1 pb-0"
+    >
       <InputGroup className="h-8! rounded-lg! border-input/30 bg-input-fill/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
         <CommandPrimitive.Input
           data-slot="command-input"
