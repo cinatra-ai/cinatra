@@ -204,6 +204,51 @@ describe("the pane strip", () => {
 });
 
 describe("the Skills pane", () => {
+  it("names each scope group and its picker from the section label", () => {
+    const ws = { kind: "workspace" as const };
+    render(<ScopeAssignmentPage model={model({
+      routeScope: ws,
+      crossScope: true,
+      scopeLabel: "Workspace",
+      target: { surface: "agent", scope: ws, vendor: AGENT_VENDOR, name: AGENT_NAME },
+      sections: [
+        section({ scope: ws, key: "workspace", label: "Workspace" }),
+        section({ scope: { kind: "personal" }, key: "personal", label: "Personal" }),
+      ],
+    })} />);
+    for (const name of ["Workspace", "Personal"]) {
+      const group = screen.getByRole("group", { name });
+      const picker = within(group).getByRole("combobox", {
+        name: `${name} Which skills should this agent always use?`,
+      });
+      const prompt = document.getElementById(`${picker.id}-label`)!;
+      expect(picker.getAttribute("aria-labelledby")).toBe(`${group.getAttribute("aria-labelledby")} ${prompt.id}`);
+      expect(prompt.getAttribute("aria-labelledby")).toBeNull();
+      expect(within(group).getByRole("button", { name: "Remove Blog Writing" })).toBeTruthy();
+    }
+  });
+
+  it("names the single-scope group and picker from the page scope", () => {
+    render(<ScopeAssignmentPage model={model()} />);
+    const group = screen.getByRole("group", { name: "Team · Growth" });
+    const picker = within(group).getByRole("combobox", {
+      name: "Team · Growth Which skills should this agent always use?",
+    });
+    expect(picker.getAttribute("aria-labelledby")).toBe(`${group.getAttribute("aria-labelledby")} ${picker.id}-label`);
+  });
+
+  it("keeps a read-only scope named without exposing a picker", () => {
+    render(<ScopeAssignmentPage model={model({
+      sections: [section({
+        scope: { kind: "team", id: TEAM }, key: `team:${TEAM}`,
+        write: { allowed: false, message: "Only a team admin can change these assignments." },
+      })],
+    })} />);
+    const group = screen.getByRole("group", { name: "Team · Growth" });
+    expect(within(group).queryByRole("combobox")).toBeNull();
+    expect(within(group).getByText("Blog Writing")).toBeTruthy();
+  });
+
   it("renders the named root with the package, the scope and the Skills tab", () => {
     render(<ScopeAssignmentPage model={model()} />);
     const root = screen.getByTestId("scope-assignment-page");
@@ -229,7 +274,7 @@ describe("the Skills pane", () => {
   it("renders the chooser and remove controls where the S1 decision allows", () => {
     render(<ScopeAssignmentPage model={model()} />);
     expect(screen.getByRole("combobox")).toBeTruthy();
-    expect(screen.getByLabelText("Which skills should this agent always use?")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Team · Growth Which skills should this agent always use?" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Remove Blog Writing" })).toBeTruthy();
   });
 
@@ -335,7 +380,7 @@ describe("the Skills pane", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByText("Artifacts")).toBeNull();
     expect(screen.queryByText("Context artifacts")).toBeNull();
-    expect(screen.getByLabelText("Which skills should this assistant always use?")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Personal Which skills should this assistant always use?" })).toBeTruthy();
     expect(screen.getByText(/0 of 5 skills chosen\. A chosen skill reaches this assistant/)).toBeTruthy();
   });
 });

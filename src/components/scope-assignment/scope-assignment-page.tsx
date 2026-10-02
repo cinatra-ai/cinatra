@@ -68,10 +68,15 @@ function readOnlyMessage(model: ScopeAssignmentPageModel, section: ScopeAssignme
   return section.write.allowed ? null : section.write.message;
 }
 
+function sectionLabelId(model: ScopeAssignmentPageModel, section: ScopeAssignmentSectionModel): string {
+  return model.crossScope ? `scope-section-${encodeURIComponent(section.key)}` : "scope-assignment-current-scope";
+}
+
 function SectionHeading({ model, section }: { model: ScopeAssignmentPageModel; section: ScopeAssignmentSectionModel }) {
   if (!model.crossScope) return null;
   return (
     <div
+      id={sectionLabelId(model, section)}
       data-slot="scope-assignment-section-label"
       className="font-mono text-badge-2xs font-bold uppercase text-muted-foreground"
     >
@@ -93,12 +98,15 @@ function SkillsPane({ model }: { model: ScopeAssignmentPageModel }) {
             key={section.key}
             data-slot="scope-assignment-section"
             data-scope-key={section.key}
+            role="group"
+            aria-labelledby={sectionLabelId(model, section)}
             className="flex flex-col gap-2"
           >
             <SectionHeading model={model} section={section} />
             <ScopeAssignmentSkills
               target={sectionTarget(model, section)}
               fieldId={`scope-skills-${section.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`}
+              scopeLabelId={sectionLabelId(model, section)}
               initialRows={section.skills ?? []}
               canWrite={canWrite(model, section)}
               readOnlyMessage={readOnlyMessage(model, section)}
@@ -209,6 +217,7 @@ export function ScopeAssignmentPage({ model }: { model: ScopeAssignmentPageModel
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
           <div
+            id="scope-assignment-current-scope"
             data-slot="scope-assignment-scope"
             className="font-mono text-badge-2xs font-bold uppercase text-muted-foreground"
           >
