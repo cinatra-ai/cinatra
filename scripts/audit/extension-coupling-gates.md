@@ -36,7 +36,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `vendor-token-core-gate.mjs` | VENDOR tokens in core (`src/` + `packages/`) — vendor-named file/route path segments and import specifiers, independent of any extension package lexeme | `file :: path :: token` / `file :: import :: specifier` occurrences | `vendor-token-core-gate.baseline.json` — **shrink-only residual floor** (cinatra#973, epic cinatra-ai/cinatra#978; see the dedicated section below) |
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
-| `extension-rendering-gate.mjs` | an artifact extension that claims an artifact-writable type and draws no display of its own (no `<package>::detail` entry in the generated display map) | claiming extensions | `extension-rendering-gate.baseline.json` — **shrink-only floor**, WARN mode (cinatra#3871; see the dedicated section below) |
+| `extension-rendering-gate.mjs` | an artifact extension that claims an artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **shrink-only floor**, WARN mode (cinatra#3871; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -518,11 +518,23 @@ root of `extensions/` or one vendor level below it, whose manifest says
 claim in `cinatra.artifact.objectTypes[]`: a claim with a well-formed type id
 that is either self-namespaced (the bridge registers it as an artifact type) or
 declares `dispositions.projection === "artifact-safe"` (a claim-backed host
-type). A claiming extension with no display of its own is a finding. Its own
-display is the build map's entry `<package>::detail` in
-`GENERATED_ARTIFACT_RENDERERS` (`src/lib/generated/artifact-renderers.ts`),
-read with the floor gate's own fail-closed reader; the build map, never a
-manifest's `ui` block, is the authority. The gate names no extension in code.
+type). A claiming extension that is not drawn is a finding. It is drawn in one
+of two ways, read in this order. By its own display: the build map's entry
+`<package>::detail` in `GENERATED_ARTIFACT_RENDERERS`
+(`src/lib/generated/artifact-renderers.ts`), read with the floor gate's own
+fail-closed reader; the build map, never a manifest's `ui` block, is the
+authority. Or by a content-type display (cinatra#3092): the extension's
+`cinatra.artifact.accepts` declares at least one form, names no key the SDK's
+contract does not name (`file`, `connectorRef`, `dashboard`), and every
+declared form is served — the form is in the application's preview-inline MIME
+allowlist (`src/lib/artifacts/artifact-read.ts`) and a build-map entry of
+`resolution: "required"` in the `detail` slot declares a representation that
+matches it exactly or by type wildcard, which is what the runtime binds as a
+system representation provider for every organization. The report prints each
+such extension on a `drawn by a content-type display` line with every form and
+the display that serves it. The gate reads the allowlist, the dashboard MIME
+and the build map through the floor gate's own readers, and names no
+extension and no type in code.
 
 **Outside the gate by construction.** An artifact extension that declares no
 writable claim (no `objectTypes`, or only malformed claims or claims of
@@ -533,10 +545,12 @@ counted: the chart extension claims no type and is shown outside the gate
 **Nothing is counted twice.** `host-display-floor-gate.mjs` counts the
 application's own displays and reads no extension tree.
 `artifact-review-floor-gate.mjs` counts artifact TYPES whose review lands on
-the metadata floor; a type drawn by a host handler or by another extension's
-representation provider is off that floor, and its extension is still in this
-gate's deficit, because it does not draw itself. The two gates report
-different units side by side.
+the metadata floor. An extension whose every declared form is drawn by a
+required content-type display is drawn and off this gate's deficit; a form
+drawn only by the host's handler, a catch-all (`*/*`), an optional
+(`guardedOptional`) display, another slot or the generic fallback is not, and
+its extension stays in this gate's deficit. The two gates report different
+units side by side.
 
 **The mode is warn** (`GATE_MODE = "warn"`). A finding above the floor is
 printed as a warning and passes. A floor entry that no longer applies is
@@ -547,7 +561,8 @@ the base, an unreadable base on a pull request, and a scanner error fail. Exit
 codes: 0 clean or warn only; 1 a grown floor or an unreadable base on a pull
 request's run; 2 a scanner error (no artifact extension, a partial fleet
 against the two clone-back locks, an unreadable manifest, an unparseable build
-map, an absent or unreadable floor file).
+map, an absent or unparseable allowlist or dashboard MIME source, an absent or
+unreadable floor file).
 
 **The flip** is cinatra#3092 (row 1: "every artifact-writable claiming type
 resolves a display its own extension owns and no review can land on the
@@ -566,7 +581,10 @@ was written by the gate's own `node scripts/audit/extension-rendering-gate.mjs
 --write-baseline` on the materialized tree. With a committed floor the writer
 removes the entries that no longer apply and never adds one; an extension that
 gains its own detail display is removed from the floor by the writer in a
-change of its own. A new entry fails against the base branch.
+change of its own, and so is an extension the content-type rule resolves: the
+change that resolves it leaves the floor as it is (its entry reads as a stale
+warning in warn mode), and the writer's own change removes the entry
+afterwards. A new entry fails against the base branch.
 
 ## Floors compared with the base branch (cinatra#3832)
 
