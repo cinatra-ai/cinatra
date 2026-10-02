@@ -81,6 +81,7 @@ type Template = {
   id: string;
   packageName: string | null;
   hitlRequired: boolean;
+  hasArtifactBindings?: boolean | null;
   hitlScreens: string[] | null;
   gatedSteps: unknown[] | null;
   agentDependencies: Record<string, string> | null;
@@ -156,6 +157,20 @@ describe("the agent install points at a listing that actually carries it", () =>
     const result = await installAgent();
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.observable.href).toBe("/agents");
+  });
+
+  it("an agent reviewed only by the application points its install notice to the agents list", async () => {
+    // No agent-authored gate, dependency or external-agent escape hatch. The
+    // real listing filter must recognize the declared output's review alone.
+    templates.rows = [template({ hasArtifactBindings: true })];
+    const result = await installAgent();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.observable).toEqual({
+        label: "See it in the agents list",
+        href: "/agents",
+      });
+    }
   });
 
   it("an agent WITHOUT a human-in-the-loop signal is not promised the agents list", async () => {
