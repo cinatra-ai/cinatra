@@ -445,6 +445,8 @@ describe("cinatra#2580 — the request envelope is unchanged", () => {
         "onTextDelta",
         "onToolCall",
         "onToolResult",
+        // Optional adapter notification; the guard still adds no envelope field.
+        "onToolsReduced",
         "provider",
         "signal",
         "skipMcpInjection",
