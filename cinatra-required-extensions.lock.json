@@ -124,9 +124,9 @@
     {
       "packageName": "@cinatra-ai/markdown-artifact",
       "repo": "cinatra-ai/markdown-artifact",
-      "resolvedSha": "475b888c7fd138e0cd6f89f25bfa2b6f67a2d208",
+      "resolvedSha": "b3d54ae67e878c262473725acbc287ba4927f22c",
       "packageVersion": "0.1.0",
-      "treeSha256": "babc416f0cea93be31f157fcde7c105c55ec41e34b9add0104e9e342294cf1c5"
+      "treeSha256": "6828a54048f7c18f09d4c930c11f0a13d56d0e40e4c4c4877ddb8c46d57422ce"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",
