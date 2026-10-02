@@ -15,13 +15,40 @@
 // excludes only `node_modules`, `**/__tests__/fixtures/**` and
 // `extensions/**/tests/**`), so on a head without the build-time path it fails
 // the host build with TS2307 — exactly the red this slice closes.
-import { Alert, AlertDescription, AlertTitle, Button } from "@cinatra-ai/design-primitives";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+  Button,
+} from "@cinatra-ai/design-primitives";
 
 /** The bindings the fixture imported, for the identity assertion. */
 export const FIXTURE_IMPORTED_PRIMITIVES = {
   Alert,
   AlertDescription,
   AlertTitle,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   Button,
 };
 
@@ -36,5 +63,26 @@ export function FixtureSetupNotice() {
       <AlertTitle>Connected</AlertTitle>
       <AlertDescription>The host serves this primitive.</AlertDescription>
     </Alert>
+  );
+}
+
+/** A connector's destructive confirmation uses the same typed host surface. */
+export function FixtureDisconnectConfirmation() {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button>Disconnect</Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Disconnect this account?</AlertDialogTitle>
+          <AlertDialogDescription>The connector will stop syncing.</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction>Disconnect</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
