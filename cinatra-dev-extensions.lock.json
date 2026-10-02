@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "86c3ad126832613a45e8bc36bcabd90fdc6e5a93"
+      "resolvedSha": "6721f1e83b385be506ad1dab842d900503925444"
     },
     {
       "packageName": "@cinatra-ai/email-body-matcher-skill",
@@ -215,7 +215,7 @@
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "590ae268d4365af88820f3e52d23d605f2e1b77c"
+      "resolvedSha": "9fe3ba698ab8cf754076f1742a352b36ad381dcf"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
