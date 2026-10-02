@@ -144,6 +144,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -1752,7 +1753,7 @@ function StepperColumn({
                       <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                         {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
                       </StepperIndicator>
-                      <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
+                      <StepperTitle className={RUN_PAGE_RAIL_TITLE_COLOUR_CLASS}>
                         {s.label}
                       </StepperTitle>
                     </StepperTrigger>

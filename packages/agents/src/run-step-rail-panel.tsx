@@ -22,6 +22,7 @@ import {
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
   RUN_PAGE_RAIL_TITLE_CLASS,
+  RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
 } from "./run-step-rail-extra-entry";
 
 // The panel's own entry type, re-exported so a caller mounting this component
@@ -158,7 +159,7 @@ export function RunStepRailPanel({
                 className={cn(
                   // The step's own name fits the column (cinatra#3226).
                   RUN_PAGE_RAIL_TITLE_CLASS,
-                  "data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground",
+                  RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
                 )}
               >
                 {entry.label}
