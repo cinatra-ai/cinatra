@@ -109,6 +109,7 @@ import {
   getLiveProgressStatus,
   shouldShowLiveProgressStatus,
   formatToolName,
+  isLifecycleSlotPart,
   lifecycleSlotParts,
   turnCarriesLifecycleItems,
   type AssistantMessagePart,
@@ -1108,6 +1109,7 @@ function ProducedViewsSlot({
 
 function OrderedPartsSection({
   parts,
+  lifecycleOnly = false,
   trimContent,
   theme,
   detectWidgets,
@@ -1119,6 +1121,8 @@ function OrderedPartsSection({
   onFiredRecurringRunsChange,
 }: {
   parts: AssistantMessagePart[];
+  /** Keep mounted lifecycle history when an error suppresses the other parts. */
+  lifecycleOnly?: boolean;
   trimContent?: (content: string) => string;
   theme: ThemeName;
   /** Live widget detector from the chat widget runtime (renderMarkdown needs
@@ -1246,6 +1250,9 @@ function OrderedPartsSection({
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
       {parts.map((part, idx) => {
+        // Filter in place: keeping the original index and component key retains
+        // the last answered lifecycle state across a terminal stream error.
+        if (lifecycleOnly && !isLifecycleSlotPart(part)) return null;
         if (part.kind === "text") {
           // THE TURN'S ONE PROSE LINE IS THE DRAWN SENTENCE (cinatra#3174 fix
           // leg 9) — see the note on `standingLineSlots`. Nothing is read,
@@ -2168,7 +2175,7 @@ function MessageLifecycleSlots({
   const reportFiredRecurringRunIds = scheduleSentences?.reportFiredRecurringRunIds;
   // The ordered-parts branch condition, restated: when it ran, it already drew
   // every slot in the trace and this mount must draw nothing.
-  if (message.parts && message.parts.length > 0 && !message.error) return null;
+  if (message.parts && message.parts.length > 0) return null;
   const slots = lifecycleSlotParts(message.parts ?? message.lifecycleParts);
   if (slots.length === 0) return null;
   return (
@@ -2517,9 +2524,13 @@ export function ChatMessagesView({
                         flat thoughtGroups-above-content layout. Old
                         messages without parts fall through to the
                         legacy path below. */}
-                    {message.parts && message.parts.length > 0 && !message.error ? (
+                    {message.error && message.parts && message.parts.length > 0 ? (
+                      <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                    ) : null}
+                    {message.parts && message.parts.length > 0 ? (
                       <OrderedPartsSection
                         parts={message.parts}
+                        lifecycleOnly={!!message.error}
                         trimContent={isStreaming(message.id) ? trimIncompleteEmbeds : undefined}
                         theme={theme}
                         detectWidgets={widgetRuntime.detectWidgets}
@@ -2549,7 +2560,9 @@ export function ChatMessagesView({
                       // the reader by hiding a card they still owe an answer to,
                       // so both are drawn, the error first.
                       <>
-                        <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                        {(!message.parts || message.parts.length === 0) && (
+                          <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                        )}
                         <MessageLifecycleSlots
                           message={message}
                           theme={theme}
@@ -2692,9 +2705,13 @@ export function ChatMessagesView({
                 {/* Ordered parts — see comment at the first render site
                     above. Same conditional applies here in slack-mode
                     view. */}
-                {message.parts && message.parts.length > 0 && !message.error ? (
+                {message.error && message.parts && message.parts.length > 0 ? (
+                  <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                ) : null}
+                {message.parts && message.parts.length > 0 ? (
                   <OrderedPartsSection
                     parts={message.parts}
+                    lifecycleOnly={!!message.error}
                     trimContent={isStreaming(message.id) ? trimIncompleteEmbeds : undefined}
                     theme={theme}
                     detectWidgets={widgetRuntime.detectWidgets}
@@ -2722,7 +2739,9 @@ export function ChatMessagesView({
                   // error ends the turn, it does not dismiss the decision the
                   // turn is holding.
                   <>
-                    <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                    {(!message.parts || message.parts.length === 0) && (
+                      <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                    )}
                     <MessageLifecycleSlots
                       message={message}
                       theme={theme}
