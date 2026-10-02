@@ -106,6 +106,12 @@ BOUND_NAMES.sort();
 STEP_NAMES.push("openPageInOwnContext");
 BOUND_NAMES.push("OWN_CONTEXT_LANDING_BOUND_MS");
 BOUND_NAMES.sort();
+// readAddress and readOptions: their readings and the bounds of readAddress
+// join the lists in this one place, and the bounds stay in order. readOptions
+// takes the bounds of selectFrom, listed above already.
+STEP_NAMES.push("readAddress", "readOptions");
+BOUND_NAMES.push("ADDRESS_BOUND_MS", "ADDRESS_POLL_MS", "ADDRESS_SETTLE_MS");
+BOUND_NAMES.sort();
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {

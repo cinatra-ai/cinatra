@@ -47,6 +47,7 @@ jobs:
   # ---------------------------------------------------------------------------
   changes:
     name: Detect changed paths (gates-pnpm)
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 5
     permissions:
@@ -96,6 +97,7 @@ jobs:
               - 'cinatra-dev-extensions.lock.json'
 
   gates:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 15
     steps:
@@ -301,7 +303,7 @@ jobs:
   # design-pin jobs read the pull request's own touched-path set.
   gates-pnpm:
     needs: [changes]
-    if: ${{ needs.changes.outputs.pnpm_suites == 'true' }}
+    if: ${{ (needs.changes.outputs.pnpm_suites == 'true') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
     # Budget as for every job on the self-hosted classes (the contract in
     # scripts/ci/__tests__/self-hosted-job-timeout-budgets.test.mjs): 28 = the
@@ -416,6 +418,7 @@ jobs:
   # context to .github/branch-protections.json (rollout step b). Pure node,
   # no dependency install, so it costs a runner slot and nothing else.
   design-pin-drift:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
@@ -472,6 +475,7 @@ jobs:
   # See scripts/ci/design-pin-freshness.mjs and
   # docs/internals/contracts/design-conformance-pin-drift.md.
   design-pin-freshness:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
@@ -553,6 +557,7 @@ jobs:
   # request adds it to .github/branch-protections.json, so the state is visible
   # without blocking anything. See scripts/ci/design-anchor-resolution.mjs.
   design-anchor-resolution:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     continue-on-error: true

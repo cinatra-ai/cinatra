@@ -31,6 +31,13 @@
 // shared select hides everything outside it from assistive technology, the
 // combobox included, so no name finds the combobox then.
 //
+// CLOSED. A combobox the step opened is waited for until its list has closed,
+// when the list still hides the combobox from assistive technology once the
+// choice shows: the shared select shows the choice while its list is still
+// closing, and while it is open it hides the rest of the page, so the next pick
+// on the page would find no picker. The wait reads the combobox by its mark, as
+// the open wait does, with the same bound, and refuses a list that stays open.
+//
 // SEARCHED. A search field lists its entries only once text is typed into it.
 // The step types the entry's text, reads the field again by its mark (the
 // typed text has hidden its placeholder and changed its value), and waits,
@@ -44,6 +51,13 @@
 // The field shows the entry once its list has closed, or the page draws the
 // entry (a row, a chip) more often than before the press. The field or the page
 // showing another entry of the list instead is refused.
+//
+// READ, NOT CHOSEN. readOptions finds the picker as selectFrom finds it and
+// reads its entries in the page's order and the entry it shows, choosing
+// nothing. A combobox whose list is not shown is opened as selectFrom opens it,
+// read by its mark (see OPENED), and closed again with the Escape key, the
+// list's own close; the step then waits for the list itself to close, read as
+// CLOSED reads it, whether or not the list hides the page.
 //
 // REFLECTED. The selection shows when the entry reads as selected (a select's
 // selected option, a checked radio, an option or radio marked selected or
@@ -80,7 +94,8 @@ const SHOWN_BY = Object.freeze({ page: "the page draws it", field: "the field sh
 
 /**
  * From the selection to the page reflecting it; from opening a combobox to its
- * entries showing; from typing into a search field to its entry in the list.
+ * entries showing; from the selection to its list's close; from typing into a
+ * search field to its entry in the list.
  */
 export const SELECT_REFLECT_BOUND_MS = 5_000;
 
@@ -90,6 +105,45 @@ export const SELECT_BOUNDS = Object.freeze({
   reflectMs: SELECT_REFLECT_BOUND_MS,
   pollMs: CONTROL_POLL_MS,
 });
+
+/**
+ * The combobox the step opened, read by its mark, hidden from assistive
+ * technology still: its list has not closed (see CLOSED).
+ * @param {import("@playwright/test").Page} page
+ * @param {string} mark
+ */
+const hidesCombobox = (page, mark) =>
+  within(
+    page.evaluate((selector) => {
+      const combobox = document.querySelector(selector);
+      return Boolean(combobox && combobox.closest("[aria-hidden='true']"));
+    }, markedBy(`${mark}p`)),
+    READING_BOUND_MS,
+  );
+
+/**
+ * Waits until the list of the combobox the step opened has closed: the
+ * combobox, read by its mark, reads closed and is hidden from assistive
+ * technology no longer (see CLOSED), within `bound.reflectMs` of the call. With
+ * `onlyWhileHidden`, a combobox that is not hidden when the wait starts is not
+ * waited for (`waited` false). Answers whether the list closed, and after how
+ * long.
+ * @param {import("@playwright/test").Page} page
+ * @param {{ mark: string, readMarked: () => Promise<any>, bound: { reflectMs: number, pollMs: number }, onlyWhileHidden: boolean }} wait
+ * @returns {Promise<{ closed: boolean, waited: boolean, elapsedMs: number }>}
+ */
+async function waitForClose(page, { mark, readMarked, bound, onlyWhileHidden }) {
+  const closingAt = performance.now();
+  if (onlyWhileHidden && !(await hidesCombobox(page, mark))) return { closed: true, waited: false, elapsedMs: 0 };
+  for (;;) {
+    const closed = await readMarked();
+    if (closed && closed.found === 1 && !closed.open && !(await hidesCombobox(page, mark))) break;
+    const remaining = bound.reflectMs - (performance.now() - closingAt);
+    if (remaining <= 0) return { closed: false, waited: true, elapsedMs: elapsedSince(closingAt) };
+    await pause(Math.min(bound.pollMs, remaining));
+  }
+  return { closed: true, waited: true, elapsedMs: elapsedSince(closingAt) };
+}
 
 /**
  * Select `entry` (by its visible text) in the one shown picker, radio group or
@@ -106,7 +160,9 @@ export const SELECT_BOUNDS = Object.freeze({
  * does not list (`no-entry`, naming its entries), a disabled picker or entry
  * (`disabled`), a selection that could not be made (`driver-failure`), a search
  * field's choice the page takes as another entry (`other-entry`) and a
- * selection the page does not reflect within the bound (`not-reflected`).
+ * selection the page does not reflect within the bound (`not-reflected`) and a
+ * list that still hides the page once the bound has run out after the choice
+ * (`not-closed`).
  *
  * @param {import("@playwright/test").Page} page
  * @param {{
@@ -134,6 +190,15 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
   const read = () => within(page.evaluate(readControls, query), READING_BOUND_MS);
   // The picker the step has opened, read again by its mark (see OPENED).
   const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  let openedHere = false;
+  // Waits until the list the step opened has closed; answers what the log line adds.
+  const waitForListToClose = async (entryNamed) => {
+    const closing = await waitForClose(page, { mark, readMarked, bound, onlyWhileHidden: true });
+    if (!closing.closed) {
+      throw refuse(STEP, record, "not-closed", `the list of the picker ${pickerNamed} on ${from} did not close within ${bound.reflectMs} ms of the selection of ${entryNamed}`);
+    }
+    return closing.waited ? `; its list closed after ${closing.elapsedMs} ms` : "";
+  };
   try {
     let reading = await read();
     if (!reading) throw refuse(STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
@@ -203,6 +268,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       } catch (error) {
         throw refuse(STEP, record, "driver-failure", `the picker ${pickerNamed} on ${from} could not be opened (${errorClass(error)}) — ${nothing}`);
       }
+      openedHere = true;
       const openedAt = performance.now();
       for (;;) {
         const opened = await readMarked();
@@ -267,7 +333,8 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
         const how = shown.state
           ? `${SHOWN_BY[shown.shows] ?? "its selected state shows it"} after ${elapsedMs} ms`
           : `the page confirms it after ${elapsedMs} ms: ${quotedName(shown.confirmation)}`;
-        record(`${STEP}: selected ${entryNamed} in the picker ${pickerNamed} on ${from} — ${how}`);
+        const closedNote = openedHere ? await waitForListToClose(entryNamed) : "";
+        record(`${STEP}: selected ${entryNamed} in the picker ${pickerNamed} on ${from} — ${how}${closedNote}`);
         return { picker: pickerName, entry: entryText, kind, via, path: shown.path, elapsedMs };
       }
       if (elapsedMs >= bound.reflectMs) break;
@@ -283,6 +350,124 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       "not-reflected",
       `the selection of ${entryNamed} in the picker ${pickerNamed} on ${from} was not reflected within ${bound.reflectMs} ms: ${unseen}`,
     );
+  } finally {
+    await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
+  }
+}
+
+const READ_STEP = "readOptions";
+
+/**
+ * Read the entries of the one shown picker, radio group or listbox whose
+ * accessible name is `picker` (found as selectFrom finds it), in the page's
+ * order, and the entry it shows as chosen, choosing nothing; write them on one
+ * line, and resolve `{ picker, kind, entries, more, shows, path }`: `entries`
+ * the names of at most CONTROL_NAMES_LISTED entries, `more` the count of the
+ * rest, and `shows` the entry the picker showed when the step found it (the
+ * empty string when it shows none). A select, a radio group, a listbox, and a
+ * combobox whose list is shown already, are read as they are; a combobox whose
+ * list is not shown is opened as selectFrom opens it, read, and closed again
+ * with the Escape key, and the step waits until the list has closed. Refuses,
+ * as a StepRefusal, arguments it cannot use (`input`), a page it cannot read
+ * (`unreadable`), a name no shown picker carries (`no-picker`), a name several
+ * pickers carry (`ambiguous`), a disabled picker (`disabled`), a search field,
+ * which lists entries only for typed text (`no-list`), a combobox whose list
+ * does not show once it is opened (`no-entry`), a press or a key the page does
+ * not take (`driver-failure`) and a list that does not close within the bound
+ * of the Escape key (`not-closed`).
+ *
+ * @param {import("@playwright/test").Page} page
+ * @param {{
+ *   picker: string,
+ *   record: import("./step-kit.mjs").StepRecord,
+ *   bounds?: Partial<Record<keyof typeof SELECT_BOUNDS, number>>,
+ * }} options
+ * @returns {Promise<{ picker: string, kind: string, entries: string[], more: number, shows: string, path: string }>}
+ */
+export async function readOptions(page, { picker, record, bounds } = /** @type {any} */ ({})) {
+  requireRecord(READ_STEP, record);
+  const nothing = "nothing was read";
+  const pickerName = plainName(picker);
+  if (typeof picker !== "string" || pickerName === "") throw refuse(READ_STEP, record, "input", `name the picker by its accessible name, such as Size — ${nothing}`);
+  const bound = readBounds(READ_STEP, record, SELECT_BOUNDS, bounds, nothing);
+  let pickerNamed = quotedName(pickerName);
+
+  const from = pathOf(page.url());
+  const mark = newMark();
+  const query = { mode: "picker", picker: pickerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
+  // The picker the step has opened, read again by its mark (see OPENED).
+  const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  try {
+    const first = await within(page.evaluate(readControls, query), READING_BOUND_MS);
+    if (!first) throw refuse(READ_STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
+    if (first.found === 0) {
+      throw refuse(
+        READ_STEP,
+        record,
+        "no-picker",
+        `no shown picker, radio group or listbox on ${from} is named ${pickerNamed}; the pickers it shows: ${describeNames(first.pickers)} — ${nothing}`,
+      );
+    }
+    const standIn = STAND_INS[first.by];
+    if (first.found > 1 && standIn) {
+      throw refuse(
+        READ_STEP,
+        record,
+        "ambiguous",
+        `${first.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(first.unspaced, first.named)}, and a reading never guesses — ${nothing}`,
+      );
+    }
+    if (first.found > 1) {
+      throw refuse(
+        READ_STEP,
+        record,
+        "ambiguous",
+        `${first.found} shown pickers on ${from} are named ${pickerNamed}${unspacedNote(first.unspaced, first.named)}, and a reading never guesses — ${nothing}`,
+      );
+    }
+    // A line says what a combobox with no accessible name was found by.
+    if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
+    if (first.disabled) throw refuse(READ_STEP, record, "disabled", `the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
+    if (first.kind === "search") throw refuse(READ_STEP, record, "no-list", `the picker ${pickerNamed} on ${from} is a search field, which lists entries only for typed text — ${nothing}`);
+
+    let reading = first;
+    let closedNote = "";
+    if (!first.open) {
+      // A combobox shows its entries only once it is open: opened as selectFrom opens it.
+      try {
+        await page.locator(markedBy(`${mark}p`)).click({ timeout: bound.actionMs, noWaitAfter: true });
+      } catch (error) {
+        throw refuse(READ_STEP, record, "driver-failure", `the picker ${pickerNamed} on ${from} could not be opened (${errorClass(error)}) — ${nothing}`);
+      }
+      const openedAt = performance.now();
+      for (;;) {
+        const opened = await readMarked();
+        if (opened && opened.found === 1 && opened.open) {
+          reading = opened;
+          break;
+        }
+        const remaining = bound.reflectMs - (performance.now() - openedAt);
+        if (remaining <= 0) {
+          throw refuse(READ_STEP, record, "no-entry", `the picker ${pickerNamed} on ${from} showed no list of entries within ${bound.reflectMs} ms of being opened — ${nothing}`);
+        }
+        await pause(Math.min(bound.pollMs, remaining));
+      }
+      // The list's own close, the Escape key, and nothing chosen; then the wait for the list itself.
+      const pressed = await within(page.keyboard.press("Escape").then(() => true), bound.actionMs);
+      if (!pressed) {
+        throw refuse(READ_STEP, record, "driver-failure", `the Escape key could not be pressed within ${bound.actionMs} ms to close the list of the picker ${pickerNamed} on ${from}`);
+      }
+      const closing = await waitForClose(page, { mark, readMarked, bound, onlyWhileHidden: false });
+      if (!closing.closed) {
+        throw refuse(READ_STEP, record, "not-closed", `the list of the picker ${pickerNamed} on ${from} did not close within ${bound.reflectMs} ms of the Escape key`);
+      }
+      closedNote = `; its list closed after ${closing.elapsedMs} ms`;
+    }
+
+    const { names, more } = reading.entries;
+    const shows = first.shows || "";
+    record(`${READ_STEP}: the picker ${pickerNamed} on ${from} lists ${describeNames(reading.entries)} in this order and ${shows ? `shows ${quotedName(shows)}` : "shows no entry"}${closedNote}`);
+    return { picker: pickerName, kind: reading.kind, entries: names, more, shows, path: from };
   } finally {
     await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
   }

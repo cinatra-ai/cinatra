@@ -108,7 +108,7 @@ describe("NewAgentPage merged discovery table", () => {
   // and empty state copy matches that scope.
   it("ships exact PageHeader copy", () => {
     const source = readSource();
-    expect(source).toMatch(/title="Run agent"/);
+    expect(source).toMatch(/title="Agent run"/);
     expect(source).toMatch(
       /Run an agent with a human-in-the-loop step, one of its sub-agents, or any agent from a connected external A2A server\./,
     );

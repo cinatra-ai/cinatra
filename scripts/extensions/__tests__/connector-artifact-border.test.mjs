@@ -14,10 +14,11 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runConformanceGate } from "../conformance-gate.mjs";
+import { runConformanceGate, checkConnectorArtifactBorder } from "../conformance-gate.mjs";
 import { loadLiveRules } from "../lib/conformance-rules.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -193,6 +194,7 @@ describe("the road list is derived from the SDK's declaration, fail closed", () 
     "packages/sdk-extensions/src/chat-views-contract.ts",
     "packages/sdk-extensions/src/llm-provider-contract.ts",
     "packages/sdk-extensions/src/access-config.ts",
+    "packages/sdk-extensions/src/artifact-client-bundle.ts",
     "packages/sdk-extensions/package.json",
     "packages/sdk-ui/package.json",
   ];
@@ -317,11 +319,60 @@ describe("the floor — the four connectors that name a road today", () => {
     expect(hit.map((f) => f.detail).join("\n")).toContain("artifact_authoring_emit");
   });
 
-  it("U-i: a floored package naming no road fails border.connector-floor-stale", () => {
-    const r = gate(connector({ name: FLOORED }));
+  // A CURE MUST BE ABLE TO PASS: the connector's own repository runs the
+  // single-package run at a pinned commit of the application whose floor still
+  // holds the entry; the fleet reading below still fails it.
+  it("U-i: a floored package naming no road passes its single-package run with a note naming the stale entry", () => {
+    const key = `${FLOORED}:src/register.ts:@cinatra-ai/host:cms-review`;
+    const dir = connector({ name: FLOORED });
+    for (const r of [gate(dir), gate(dir, true)]) {
+      expect(r.infra).toBe(false);
+      expect(r.conform).toBe(true);
+      expect(r.blocking.filter((f) => f.rule === "border.connector-floor-stale")).toEqual([]);
+      expect(r.borderNotes).toHaveLength(1);
+      expect(r.borderNotes[0].rule).toBe("border.connector-floor-stale");
+      expect(r.borderNotes[0].floorKey).toBe(key);
+      expect(r.borderNotes[0].detail).toContain(key);
+    }
+
+    const cli = join(REPO_ROOT, "scripts", "extensions", "conformance-gate.mjs");
+    const run = spawnSync(process.execPath, [cli, "--package", dir, "--sdk-root", REPO_ROOT], { encoding: "utf8" });
+    expect(run.status, run.stdout + run.stderr).toBe(0);
+    expect(run.stdout).toContain("NOTE  [border.connector-floor-stale] src/register.ts:");
+    expect(run.stdout).toContain(key);
+  });
+
+  it("U-i: the fleet reading still returns a stale floor entry and fails on it", () => {
+    const key = `${FLOORED}:src/register.ts:@cinatra-ai/host:cms-review`;
+    const dir = connector({ name: FLOORED });
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    const result = checkConnectorArtifactBorder(dir, pkg, loadLiveRules(REPO_ROOT));
+    expect(result.findings).toEqual([]);
+    expect(result.stale).toHaveLength(1);
+    expect(result.stale[0].rule).toBe("border.connector-floor-stale");
+    expect(result.stale[0].detail).toContain(key);
+    const staleLines = result.stale.map((f) => `${pkg.name}: ${f.detail}`);
+    expect(staleLines).not.toEqual([]);
+    expect(() => expect(staleLines).toEqual([])).toThrow();
+  });
+
+  it("U-i: a use outside the floor still fails while the stale entry is a note", () => {
+    const tool =
+      "export async function publish(client, text) {\n" +
+      '  return client.callTool("artifact_authoring_emit", { declaredMime: "text/markdown", content: text });\n' +
+      "}\n";
+    const dir = connector({ name: FLOORED, extra: { "src/tool.ts": tool } });
+    const r = gate(dir);
+    expect(r.infra).toBe(false);
     expect(r.conform).toBe(false);
-    const stale = r.blocking.filter((f) => f.rule === "border.connector-floor-stale");
-    expect(stale).toHaveLength(1);
-    expect(stale[0].detail).toContain(`${FLOORED}:src/register.ts:@cinatra-ai/host:cms-review`);
+    const hit = r.blocking.filter((f) => f.rule === "border.connector-creates-artifact");
+    expect(hit).toHaveLength(1);
+    expect(hit[0].file).toBe("src/tool.ts");
+    expect(hit[0].detail).toContain("artifact_authoring_emit");
+
+    const cli = join(REPO_ROOT, "scripts", "extensions", "conformance-gate.mjs");
+    const run = spawnSync(process.execPath, [cli, "--package", dir, "--sdk-root", REPO_ROOT], { encoding: "utf8" });
+    expect(run.status, run.stdout + run.stderr).toBe(1);
+    expect(run.stdout).toContain("FAIL  [border.connector-creates-artifact] src/tool.ts:");
   });
 });
