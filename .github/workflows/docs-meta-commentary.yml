@@ -44,6 +44,7 @@ permissions:
 
 jobs:
   meta-commentary-gate:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     uses: cinatra-ai/ci/.github/workflows/meta-commentary-gate.yml@b2335ecbff5a25c15e4f98b2717b0f2c598d8fe5 # v0.1.4
     with:
       paths: |

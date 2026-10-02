@@ -25,7 +25,13 @@
 //   (c) NO DIRECT REACH — a source file of such a package that imports the
 //       product's `@/components/ui/*`, `@/lib/utils` or `src/components/ui`
 //       directly fails. A RELATIVE import of the package's own baselined copy
-//       is the case (a) baseline, not this one.
+//       is the case (a) baseline, not this one;
+//   (d) FLOOR COMPARED WITH THE BASE (cinatra#3832) — the committed baseline
+//       may not record a copy the base branch's baseline does not: a pull
+//       request cannot add its own copy to the floor. The base comes from
+//       SELF_RENDERING_BORDER_BASE when a workflow sets it, else from the pull
+//       request's base branch; a base that cannot be read fails closed (the
+//       shared guard, scripts/audit/lib/floor-base-guard.mjs).
 //
 // kind:agent packages are OUT OF SCOPE here — the agent border has its own gate
 // (cinatra-ai/cinatra#3470).
@@ -38,6 +44,7 @@
 // Usage:
 //   node scripts/extensions/self-rendering-extensions-border-gate.mjs                  # --check (default)
 //   node scripts/extensions/self-rendering-extensions-border-gate.mjs --write-baseline # ratchet the floor down
+//   SELF_RENDERING_BORDER_BASE=origin/main node ...   # compare the floor with that revision (default: the pull request's base branch)
 //
 // Test injection (synthetic trees, the shape scripts/extensions/inventory.mjs
 // gives with CINATRA_INVENTORY_EXT_ROOT):
@@ -54,6 +61,7 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripComments } from "../audit/lib/strip-comments.mjs";
+import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -63,6 +71,12 @@ const EXT_ROOT =
 const BASELINE_PATH =
   process.env.SELF_RENDERING_BORDER_BASELINE ||
   join(__dirname, "self-rendering-extensions-border.baseline.json");
+
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "scripts/extensions/self-rendering-extensions-border.baseline.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "SELF_RENDERING_BORDER_BASE";
 
 /** The extension scope the synced tree materializes under. */
 const SCOPE_DIR = "cinatra-ai";
@@ -274,6 +288,25 @@ function sortCopies(copies) {
   );
 }
 
+/**
+ * The floor base guard (cinatra#3832): growth is a (package, path) pair the
+ * base branch's baseline does not record. `headFloor` defaults to the floor
+ * file in `repoRoot`; the gate passes the floor it actually reads.
+ */
+export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? (JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")).copies ?? {});
+  return compareFloorWithBase({
+    gate: "self-rendering-extensions-border-gate",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: head,
+    parse: (text) => JSON.parse(text).copies ?? {},
+    grown: (base, current) => diffUnlisted(base, current),
+    repoRoot,
+    env,
+  });
+}
+
 function readBaseline() {
   if (!existsSync(BASELINE_PATH)) return null;
   return JSON.parse(readFileSync(BASELINE_PATH, "utf8")).copies ?? {};
@@ -342,6 +375,8 @@ function main() {
     );
     process.exit(1);
   }
+
+  if (!reportFloorGuard(checkFloorAgainstBase({ headFloor: baseline }))) process.exit(1);
 
   const problems = [];
 

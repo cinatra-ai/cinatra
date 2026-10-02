@@ -15,6 +15,12 @@ import "server-only";
  * `generateMetadata` (cinatra#1737) calls it too, so the browser tab and the
  * page heading can never disagree about what the viewer may be told.
  *
+ * EACH GATE READS THE ENTITY'S OWN TENANT (cinatra#3787). The team gate no longer
+ * requires "tenant alignment", which meant the team belonging to the session's
+ * ACTIVE organization. A team surface belongs to the TEAM's organization, whatever the
+ * session has active (the owner's decision on cinatra#3693), and the project gate
+ * never compared the active organization in the first place.
+ *
  * A `null` is not an error state on the page — the header falls back to the
  * scope's kind noun ("Project", "Team", "Organization"), never to a raw or
  * title-cased id, and never to the tab's name.
@@ -26,7 +32,7 @@ import { getActorContext, getAuthSession, isPlatformAdmin, resolveOrgRoleForUser
 import { betterAuthDb, readUserIsOrgMember } from "@/lib/better-auth-db";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
-import { canManageTeamMembers } from "@/app/teams/[teamId]/settings/team-member-authority";
+import { resolveTeamSurfaceAccess } from "@/lib/team-surface-access";
 import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
 
 /**
@@ -49,8 +55,15 @@ async function readProjectName(projectId: string): Promise<string | null> {
 }
 
 /**
- * The team's name, or `null`. Gate: tenant alignment (the team belongs to the
- * caller's ACTIVE organization) AND member-or-manager.
+ * The team's name, or `null`. Gate: membership or management of the team,
+ * resolved against the TEAM's own organization (cinatra#3787).
+ *
+ * The gate used to require tenant alignment first: the team had to belong to the
+ * caller's ACTIVE organization, and it returned `null` whenever it did not. That
+ * left a reader who may open the team's surfaces with a raw identifier in the
+ * trail and the bare word "Team" as the heading, the platform admin among them.
+ * The tenant of a team surface is the team's organization, so the name follows
+ * the same rule the landing and the team's dashboard actions now follow.
  */
 async function readTeamName(teamId: string): Promise<string | null> {
   const session = await getAuthSession();
@@ -73,14 +86,14 @@ async function readTeamName(teamId: string): Promise<string | null> {
   `);
   const team = rows.rows?.[0];
   if (!team) return null;
-  const activeOrgId = session.session?.activeOrganizationId ?? null;
-  if (activeOrgId !== team.organizationId) return null;
   const orgRole = await resolveOrgRoleForUser(team.organizationId, session.user.id);
-  const canManage = canManageTeamMembers({
+  const access = resolveTeamSurfaceAccess({
+    team,
+    isMember: team.is_member,
     platformAdmin: isPlatformAdmin(session),
     orgRole,
   });
-  if (!team.is_member && !canManage) return null;
+  if (access.outcome !== "allowed") return null;
   return team.name || null;
 }
 

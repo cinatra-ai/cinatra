@@ -3,14 +3,14 @@
 //   pnpm provision:dev-instance -- \
 //     --admin-email operator@example.test --admin-name "The Operator" \
 //     --namespace acme-dev --display-name "Acme Development" \
-//     --provider anthropic --public-origin https://acme.example
+//     --provider openai --public-origin https://acme.example
 //
 // with the secrets read from a file only you can read — NOT from an `echo`,
 // which writes every one of them into your shell history:
 //
 //   (umask 077; cat > secrets.json)   # type the document, then Ctrl-D
 //   pnpm provision:dev-instance -- --admin-email operator@example.test \
-//     --namespace acme-dev --provider anthropic < secrets.json
+//     --namespace acme-dev --provider openai < secrets.json
 //
 // THE FIRST ADMINISTRATOR is the step that used to need a browser: the wizard's
 // Account step is a sign-up form, and the first account to register is promoted

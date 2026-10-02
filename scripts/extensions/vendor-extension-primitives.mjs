@@ -57,28 +57,12 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // release of every copying package. Re-adding an entry of either kind fails
 // scripts/extensions/__tests__/vendor-extension-primitives.test.mjs.
 const VENDOR_MANIFEST = [
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): list-curator-agent
-  // relocated its two HITL field-renderer components into its own repo; they
-  // import these design-registry primitives, vendored the same kind-agnostic
-  // way a connector does (relative imports, provenance-gated).
-  {
-    extensionDir: "extensions/cinatra-ai/list-curator-agent",
-    uiItems: ["badge", "button", "card", "input", "input-group", "label", "textarea"],
-  },
   // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-linkedin-publish-agent
   // relocated its draft-review HITL field renderer into its own repo; it imports
   // these design-registry primitives, vendored the same kind-agnostic way.
   {
     extensionDir: "extensions/cinatra-ai/blog-linkedin-publish-agent",
-    uiItems: ["button", "card", "label", "textarea"],
-  },
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-wordpress-publish-agent
-  // relocated its draft-confirm HITL field renderer into its own repo; the pure
-  // confirm/reject card imports only these design-registry primitives (no
-  // editable textarea/label), vendored the same kind-agnostic way.
-  {
-    extensionDir: "extensions/cinatra-ai/blog-wordpress-publish-agent",
-    uiItems: ["button", "card"],
+    uiItems: ["label", "textarea"],
   },
 ];
 

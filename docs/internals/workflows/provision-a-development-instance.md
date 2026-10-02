@@ -12,9 +12,35 @@ set the public origin the model provider calls back to — then restart, because
 that origin is read once, at startup. Each of those steps takes a browser and a
 person; the underlying writes take seconds.
 
-`pnpm provision:dev-instance` performs the same five writes in one call, through
-the **same writers** the five screens use. It writes no row shape of its own and
-seals nothing with a codec of its own.
+`pnpm provision:dev-instance` performs those writes for an OpenAI-backed
+development instance in one call, through the **same writers** the screens use.
+It writes no row shape of its own and seals nothing with a codec of its own.
+Anthropic setup still requires the running application's setup wizard.
+
+## Prepare a fresh database before first boot
+
+Install this checkout's dependencies with its pinned pnpm and use Node.js 24.
+Have `SUPABASE_DB_URL` point to an existing, empty development database and
+provide `BETTER_AUTH_SECRET` through your existing environment or secret
+injection. `SUPABASE_SCHEMA` defaults to `cinatra`. Then run:
+
+```bash
+CINATRA_RUNTIME_MODE=development pnpm prepare:dev-database
+```
+
+This command applies the authentication migration first, then the application's
+`ensurePostgresSchema` base bootstrap, then `db:migrate`. That order matters:
+the base tables reference authentication tables, and versioned migrations assume
+the base tables already exist. Running `auth:migrate` followed directly by
+`db:migrate` on an empty database omits that baseline. The upgrade-only
+`schema-bootstrap.mts` is not a substitute: it deliberately skips a fresh schema.
+
+Preparation exits non-zero if any step fails and does not attempt later steps.
+It requires an explicitly declared development runtime and creates no account or
+provider connection. The application does not need to be running. Once it
+finishes, run the provisioning command below before starting the application.
+Rerunning preparation reuses the existing idempotent bootstrap and migration
+ledger; it does not erase data or reset the database.
 
 ## Running it
 
@@ -25,12 +51,12 @@ Put the secrets in a file only you can read, and hand the command that file:
 {"adminPassword":"…","providerApiKey":"…","connectorServiceSecretKey":"…"}
 ^D
 
-pnpm provision:dev-instance -- \
+CINATRA_RUNTIME_MODE=development pnpm provision:dev-instance -- \
   --admin-email operator@example.test \
   --admin-name "The Operator" \
   --namespace acme-dev \
   --display-name "Acme Development" \
-  --provider anthropic \
+  --provider openai \
   --public-origin https://acme.example < secrets.json
 
 rm secrets.json
@@ -42,7 +68,12 @@ this command's whole argument surface exists to keep them out of. A leading
 space or `HISTCONTROL` is a setting, not a guarantee.
 
 Every argument is optional; a leg you leave out is a leg the command does not
-touch. `--provider` accepts `openai` or `anthropic`.
+touch. The standalone command supports `--provider openai` before first boot.
+It refuses `--provider anthropic` before reading the secrets document or making
+any provisioning writes. For Anthropic, omit the provider argument and its key
+from this command, start the application, and complete `/setup/model` in the
+setup wizard. OpenAI's existing environment bootstrap is also available at boot;
+inject its credentials through your existing secret channel.
 
 ## The first administrator
 
@@ -207,14 +238,13 @@ development instance here like any other.
 | Namespace | `/setup/name` | the action's own deferred persistence path (`persistDeferredInstanceIdentity`) |
 | Connector-service secret | `/setup/secrets` | the host connector-config writer the connector's store is bound to, with the connector's preserve-on-blank merge |
 | Provider connection (`openai`) | `/setup/model` | the boot-time environment bootstrap, as-is — the key is handed to it in memory |
-| Provider connection (`anthropic`) | `/setup/model` | the wizard's full sequence: consent transaction, native-MCP-mode switch, readiness saga, fenced commit |
+| Provider connection (`anthropic`, wizard only) | `/setup/model` | the running application's wizard: consent transaction, native-MCP-mode switch, readiness saga, fenced commit |
 | Public origin | `/configuration/development` | `setMcpPublicBaseUrl` / `buildMcpPublicBaseUrlRow` |
 
-Anthropic is not a smaller version of the OpenAI road. Its arm also records the
-skills-upload consent and switches native MCP mode, and the setup step only
-reads ready once the readiness saga and that opt-in both stand — so the command
-drives all of it, or `deriveSetupAiStepState` reads not-ready no matter how good
-the key is.
+Anthropic also records skills-upload consent and switches native MCP mode. Its
+setup step reads ready only after the readiness saga and that opt-in both stand.
+That writer graph requires the running application; the standalone command does
+not claim to complete it. The wizard performs the full sequence after boot.
 
 ## The restart step
 
@@ -261,6 +291,17 @@ write and makes no additional external call. Each leg reports whether it wrote.
 
 ## Tests
 
+- process tier: `pnpm test:root scripts/__tests__/prepare-dev-database.test.mjs`
+  runs the real Node command with `--conditions=react-server --import tsx` to
+  check runtime refusals, missing configuration, and stopping after a failed
+  authentication migration without exposing credentials. Set
+  `CINATRA_PROVISION_FRESH_DB_URL` through the environment to opt into its
+  database case. This must identify an **empty disposable database**; the test
+  refuses existing tables and never resets them. It prepares that database,
+  creates the first administrator and namespace, saves the public origin, checks
+  that the sign-up session was revoked, and reruns preparation while checking
+  that the migration ledger and provisioned settings survive. No app boot or
+  browser, live provider key, or marketplace account is needed.
 - unit tier (`pnpm test:root`): the runtime gate, the shape claim that every
   wrapper gates itself, the argument surface (no secret-bearing flag), and the
   first-administrator leg — the refusal before any read, the single sign-up

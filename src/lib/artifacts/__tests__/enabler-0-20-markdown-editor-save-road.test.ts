@@ -78,7 +78,7 @@ const save = (text: string, over: Partial<ArtifactEditSavePorts> = {}) =>
 describe("the edit capability a display is handed", () => {
   it("grants an edit only on a capability minted at this channel version", () => {
     expect(isArtifactEditGranted(EDITABLE)).toBe(true);
-    expect(isArtifactEditGranted({ ...EDITABLE, channelVersion: 2 })).toBe(false);
+    expect(isArtifactEditGranted({ ...EDITABLE, channelVersion: ARTIFACT_EDIT_CHANNEL_VERSION + 1 })).toBe(false);
     expect(isArtifactEditGranted({ ...EDITABLE, saveUrl: "" })).toBe(false);
     expect(isArtifactEditGranted({ ...EDITABLE, baseRevisionId: "" })).toBe(false);
   });

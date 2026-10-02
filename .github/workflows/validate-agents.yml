@@ -117,6 +117,7 @@ jobs:
     permissions:
       contents: read
     name: Validate agent.json shape (legacy schema check)
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
 
     steps:
@@ -169,6 +170,7 @@ jobs:
     permissions:
       contents: read
     name: Validate OAS runtime invariants
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
     steps:
@@ -204,6 +206,7 @@ jobs:
     permissions:
       contents: read
     name: WayFlow mount guard (standalone + orchestrated, pinned tree)
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # cinatra#2140. Until now NOTHING in CI mounted the pinned extension tree:
     # the only place `docker/wayflow/tests/test_repo_agents_load.py` ran was the
@@ -291,11 +294,40 @@ jobs:
           # agent is a BOUNDED xfail there — the single source of truth), and
           # `test_gate_mount_both_paths` pins the standalone vs orchestrated
           # gate encodings against the same ruled contract (cinatra#2140).
+          #
+          # `test_context_subflow_injection` joins them (cinatra#3690). The
+          # context subflow the loader injects is only worth anything when the
+          # REAL loader accepts it, and the test that proves that asks
+          # pyagentspec itself. This is the only job that runs the repo's own
+          # test files inside the runtime, so a test can reach the wayflowcore
+          # pin here and nowhere else, and a template edge the loader refuses
+          # stayed green in every other job until a runtime met it. (The
+          # works-after proof also builds this image, but it fires on upgrade
+          # paths only and runs no test file from `tests/`.) The file needs no
+          # extra environment: it drives the injector and the loader in
+          # process, and never seeds a temp agents tree.
+          #
+          # The loader test guards itself with `importorskip("wayflowcore")`,
+          # which SKIPS rather than fails when the pin is missing. A skip here
+          # would be a vacuous green of the one thing this job adds, so the
+          # import is asserted first and the job goes red when the pin is gone.
+          #
+          # The whole file runs, with nothing deselected. Three of its tests
+          # compare the rendered template against the hand-authored fixture,
+          # and they were red for a while because cinatra#3418 renamed the
+          # resolve step's output (`selectedRefs` to `plannedRefs`) and added
+          # the allocation token plumbing in the template without catching the
+          # fixture up. The fixture is the derived artifact and carries the
+          # template's own rendering again, so the three now compare the
+          # template this job builds. A future drift of that kind belongs in
+          # the fixture as well, never in an assertion or a deselection.
+          docker exec -w /app wayflow-mount-guard python -c 'import wayflowcore'
           docker exec -e CINATRA_AGENTS_DIR=/agents wayflow-mount-guard \
             python -m pytest -q \
             tests/test_input_message_gate_reconcile.py \
             tests/test_repo_agents_load.py \
-            tests/test_gate_mount_both_paths.py
+            tests/test_gate_mount_both_paths.py \
+            tests/test_context_subflow_injection.py
 
       - name: Runtime logs
         if: always()

@@ -35,6 +35,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
+import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
 
 import {
@@ -197,6 +198,17 @@ export type StepperStep = { index: number; stepNumber: number; label: string; de
 
 export type OrchestratorStepperPanelProps = {
   runId: string;
+  /**
+   * THE LAUNCHER THE SUCCESSOR OPENS (cinatra#3693, cinatra#3786): the run's
+   * canonical base where it has one, and `/personal` for a user-anchored run,
+   * whose own address stays bare. "Start fresh" and "Start new run" open that
+   * launcher, so the next run is stamped with the same vantage. Absent for an
+   * unanchored run, where both keep today's road.
+   *
+   * NOT this panel's address base: the run page keeps that to itself and
+   * hands this one down separately (`successorLaunchBase`).
+   */
+  launchBase?: string | null;
   initialStatus: string;
   initialError: string | null;
   agUiEnabled?: boolean | null;
@@ -206,7 +218,7 @@ export type OrchestratorStepperPanelProps = {
   agentId: string;
   lgThreadId: string | null;
   // Agent template ID forwarded into FieldRendererContext so HITL
-  // renderers can POST to /api/agents/builder/[templateId]/hitl-assist.
+  // renderers can publish supplemental context for the fill road (cinatra#2934).
   templateId: string;
   /** Human-readable template name used as the base for auto-generated run names. */
   templateName?: string;
@@ -774,7 +786,7 @@ function HitlApprovalCard({
   // the bottom prompt — not on every poll tick.
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, unknown> | undefined>(undefined);
   // Live data the active renderer publishes via onHitlContextChange. Merged
-  // into the hitl-assist fetch body (currentValue) so the LLM sees the current
+  // into the fill road's own reading of the screen so the assistant sees the current
   // array (e.g. recipients) rather than the empty interrupt payload that would
   // otherwise be sent.
   const [rendererHitlContext, setRendererHitlContext] = useState<Record<string, unknown>>({});
@@ -848,7 +860,8 @@ function HitlApprovalCard({
     includeSetupFormSuffix: true,
   });
 
-  // Bottom-of-page prompt handler. Posts to hitl-assist, applies result to the
+  // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
+  // the fill that comes back to the
   // buffer (handleApply), and exposes the suggestion payload to the renderer via
   // aiSuggestions so it can sync local state without using `value` (which
   // re-references on every poll).
@@ -866,40 +879,29 @@ function HitlApprovalCard({
       ];
     }
     if (!templateId || !interruptContext.xRenderer) return;
-    void runWindow.send(prompt);
-    // HitlConversationPanel's internal handleSubmit clears the PromptField and
-    // opens the overlay.
+    // THE FILL ROAD (cinatra#2934, lifecycle-b W5c). The plan: "the assistant
+    // returns the filled values, the screen writes them into its own fields, and
+    // nothing is submitted until you press the button." One road: the message
+    // goes to the run's own conversation with the assistant, and what comes back
+    // is what THIS screen writes into ITS fields. The field-assist route and its
+    // second, hidden model are gone with this block — a message reaches one
+    // model now.
     setPromptPending(true);
     try {
-      const res = await fetch(
-        `/api/agents/builder/${encodeURIComponent(templateId)}/hitl-assist`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            xRenderer: interruptContext.xRenderer,
-            // cinatra#2933 - the run the screen belongs to, so the route asks
-            // the RUN's access instead of the platform tier.
-            runId,
-            currentValue: { ...interruptContext.values, ...bufferedHitlValue, ...rendererHitlContext },
-            schemaProperties: Object.keys(
-              (interruptContext.schema as { properties?: Record<string, unknown> })?.properties ?? {},
-            ),
-            lastAssistantMessage: [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
-          }),
-        },
+      const effect = await runWindow.send(
+        prompt,
+        attachments as readonly Record<string, unknown>[] | undefined,
       );
-      if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-      const json = (await res.json()) as { suggestions?: Record<string, unknown>; message?: string | null };
-      const suggestions = json.suggestions ?? {};
-      handleApply(suggestions);          // updates parent buffer
-      setAiSuggestions(suggestions);     // notifies renderers to sync local state
-      if (Object.keys(suggestions).length === 0) {
-        toast.error("No suggestions generated. Try being more specific, e.g. \"Fill in with sample values\".");
+      // A TURN THAT PRESSED WRITES NO FIELDS (cinatra#2934, convergence round 3).
+      // The fill and the press are two calls, and a fill can land after a press
+      // has already sent the form. Nothing is submitted by it — the press reads
+      // only what landed before it — but writing it into fields the run has
+      // moved past would show values that were never sent. "The card is the
+      // visible truth": a turn that pressed makes the screen re-read instead.
+      if (effect.fill && !effect.acted) {
+        handleApply(effect.fill.values);       // updates parent buffer
+        setAiSuggestions(effect.fill.values);  // renderers sync local state
       }
-    } catch (err) {
-      console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
     } finally {
       setPromptPending(false);
     }
@@ -1474,6 +1476,10 @@ function HitlApprovalCard({
       }
       conversation={runWindow.entries}
       promptPending={promptPending || runWindow.pending}
+      // THE KEY DOES NOT MOVE (cinatra#2934). The field-assist route it was
+      // named for is gone, but this string is where every reader's half-typed
+      // message is kept: renaming it would silently throw away the draft the
+      // plan requires to survive a reload.
       storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
       onSubmit={handlePromptSubmit}
       // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
@@ -1491,12 +1497,22 @@ function HitlApprovalCard({
 // FailedCard — Failed state
 // ---------------------------------------------------------------------------
 
+/** The launcher "Start fresh" opens: the run's own launch base when it has
+ *  one, which is `/personal` for a user-anchored run (cinatra#3786). */
+function startFreshPath(agentId: string, launchBase?: string | null): string {
+  return launchBase
+    ? buildAgentWorkspacePath(agentId, { scopeBase: launchBase })
+    : `/agents/${agentId}/new`;
+}
+
 function FailedCard({
   agentId,
   errorMessage,
+  launchBase,
 }: {
   agentId: string;
   errorMessage: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   return (
@@ -1512,7 +1528,7 @@ function FailedCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push(`/agents/${agentId}/new`)}
+            onClick={() => router.push(startFreshPath(agentId, launchBase))}
           >
             Start fresh
           </Button>
@@ -1530,10 +1546,12 @@ function CancelledCard({
   runId,
   agentId,
   lgThreadId,
+  launchBase,
 }: {
   runId: string;
   agentId: string;
   lgThreadId: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -1562,7 +1580,7 @@ function CancelledCard({
     });
 
   const handleStartFresh = () => {
-    router.push(`/agents/${agentId}/new`);
+    router.push(startFreshPath(agentId, launchBase));
   };
 
   return (
@@ -1996,6 +2014,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
+    launchBase,
   } = props;
 
   // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
@@ -2711,7 +2730,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   let stageCard: ReactNode = null;
 
   if (status === "failed") {
-    stageCard = <FailedCard agentId={agentId} errorMessage={runError} />;
+    stageCard = <FailedCard agentId={agentId} errorMessage={runError} launchBase={launchBase} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.
     stageCard = (
@@ -2729,7 +2748,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else if (status === "stopped") {
     stageCard = (
-      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} />
+      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} launchBase={launchBase} />
     );
   } else if (
     status === "pending_approval" &&
@@ -2900,6 +2919,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <RunCompletionCard
             runId={runId}
             agentId={agentId}
+            launchBase={launchBase}
             outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
           />
         )

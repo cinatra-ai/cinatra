@@ -174,9 +174,13 @@ describe("the instance surface decides the canonical home", () => {
 
   it("decides it AFTER the access door and BEFORE any instance content", () => {
     const door = screens.indexOf("run = await readAgentRunById(instanceId, setupActor, setupRoles);");
-    const redirectAt = screens.indexOf("if (home) redirect(home);");
+    // The redirect carries the step an address named with it (cinatra#3693), so
+    // it is a block rather than a one-liner; what is pinned here is unchanged —
+    // that it stands after the door.
+    const redirectAt = screens.indexOf("if (home) {");
     expect(door).toBeGreaterThan(0);
     expect(redirectAt).toBeGreaterThan(door);
+    expect(screens).toContain("redirect(named ? buildRunStepPath(home, named) : home);");
   });
 
   it("routes the post-create redirect through the path helper, never a hand-written route", () => {
