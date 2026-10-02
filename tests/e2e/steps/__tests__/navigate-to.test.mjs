@@ -301,6 +301,64 @@ for (const backend of BACKENDS) {
       });
     });
 
+    for (const [path, link, instead] of [
+      ["/nav/details", "View details for the target", 'it shows instead: a dialog "Target details"'],
+      ["/nav/filters", "Filters", 'it shows instead: a panel "Filter the list" that the link controls'],
+      ["/nav/inert", "Inert", "it shows no dialog and no panel that the link controls"],
+    ]) {
+      it(`refuses a further page within the short start bound when its press stays in place (${path})`, async () => {
+        await scene(backend, {}, async ({ app, page, record, lines }) => {
+          const { navigateTo } = theSteps("navigateTo", "readStandingRequests");
+          await firstReading(page);
+          await page.goto(`${app.origin}/nav/start`);
+          const before = performance.now();
+          const error = await refusal(navigateTo(page, {
+            path, record, furtherPage: true, bounds: { ...BOUNDS, startMs: 150, landingMs: 10_000 },
+          }));
+          expect(error.kind).toBe("no-further-page");
+          expect(error.message).toBe(
+            `navigateTo refused (no-further-page): the press on the link "${link}" to ${path} started no navigation within 150 ms, ` +
+              `and opened no further page (this page is on /nav/start); ${instead}`,
+          );
+          expect(performance.now() - before, "waited for a landing that never started").toBeLessThan(5000);
+          expect(lines.at(-1)).toBe(error.message);
+          expect(page.context().pages()).toHaveLength(1);
+          expect(visits(app, path)).toEqual([]);
+        });
+      });
+    }
+
+    it("waits past the start bound for a further page whose landing is slow", async () => {
+      await scene(backend, {}, async ({ app, page, record }) => {
+        const { navigateTo } = theSteps("navigateTo", "readStandingRequests");
+        await firstReading(page);
+        await page.goto(`${app.origin}/nav/start`);
+        const result = await navigateTo(page, {
+          path: "/nav/slow", record, furtherPage: true, bounds: { ...BOUNDS, startMs: 150, landingMs: 10_000 },
+        });
+        expect(result.elapsedMs).toBeGreaterThan(150);
+        expect(new URL(result.furtherPage.url()).pathname).toBe("/nav/slow");
+        expect(new URL(page.url()).pathname).toBe("/nav/start");
+        expect(visits(app, "/nav/slow")).toHaveLength(1);
+      });
+    });
+
+    it("keeps the full wait and refusal when the page's own request starts but opens no further page", async () => {
+      await scene(backend, {}, async ({ app, page, record }) => {
+        const { navigateTo } = theSteps("navigateTo", "readStandingRequests");
+        await firstReading(page);
+        await page.goto(`${app.origin}/nav/start`);
+        const before = performance.now();
+        const error = await refusal(navigateTo(page, {
+          path: "/nav/slow-in-place", record, furtherPage: true, bounds: { ...BOUNDS, startMs: 150, landingMs: 800 },
+        }));
+        expect(error.message).toBe("navigateTo refused (no-further-page): the press opened no further page within 800 ms (this page is on /nav/start)");
+        // Far past the 150 ms start bound, with room for timer rounding.
+        expect(performance.now() - before).toBeGreaterThanOrEqual(600);
+        expect(visits(app, "/nav/slow-in-place")).toHaveLength(1);
+      });
+    });
+
     it("closes a further page that lands elsewhere, and refuses by name a press that opens none", async () => {
       await scene(backend, {}, async ({ app, page, record }) => {
         const { navigateTo } = theSteps("navigateTo", "readStandingRequests");
@@ -317,7 +375,10 @@ for (const backend of BACKENDS) {
         // The link's own handler cancels the press: no further page opens.
         const inert = await refusal(navigateTo(page, { path: "/nav/inert", record, bounds: { ...BOUNDS, landingMs: 800 }, furtherPage: true }));
         expect(inert.kind).toBe("no-further-page");
-        expect(inert.message).toBe("navigateTo refused (no-further-page): the press opened no further page within 800 ms (this page is on /nav/start)");
+        expect(inert.message).toBe(
+          'navigateTo refused (no-further-page): the press on the link "Inert" to /nav/inert started no navigation within 800 ms, ' +
+            "and opened no further page (this page is on /nav/start); it shows no dialog and no panel that the link controls",
+        );
         const none = await refusal(navigateTo(page, { path: "/nav/nowhere", record, bounds: BOUNDS, furtherPage: true }));
         expect(none.message).toBe("navigateTo refused (no-link): no visible link on /nav/start leads to /nav/nowhere — no address was typed");
         expect(page.context().pages()).toHaveLength(1);

@@ -125,9 +125,13 @@ describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
     });
   });
 
-  it("a plain-text target resolves to the form rung's text arm", async () => {
+  it("a plain-text target mounts the text BASE — a package renderer, which the rung sits below", async () => {
     const mount = await mountFor(summary(`${PKG}:note`, { kind: "no-primary" }), PLAIN);
-    expect(mount).toEqual({ kind: "form", arm: "first-party", form: "text" });
+    expect(mount).toEqual({
+      kind: "build-map",
+      packageName: "@cinatra-ai/text-artifact",
+      generatedKey: "@cinatra-ai/text-artifact::detail",
+    });
   });
 
   it("the rung is consumed BEFORE the fallback and AFTER every package renderer", async () => {
@@ -147,10 +151,13 @@ describe("cinatra#2931 W4 — the form rung's first-party arm", () => {
     expect(withWinner.kind).toBe("runtime");
 
     // A declared form with no package renderer lands on the rung — never the
-    // floor. Plain text is that form now: the markdown base claims text/markdown
-    // (item 0.19), while text-artifact declares representations=[text/csv] only,
-    // so nothing covers text/plain and the rung is reached.
-    const withoutWinner = await mountFor(summary(`${PKG}:note`, { kind: "no-primary" }), PLAIN);
+    // floor. text/x-markdown is that form now: it is the declared form no package
+    // claims (the markdown base claims text/markdown, item 0.19, and text-artifact
+    // claims text/plain beside text/csv), so the rung's first-party arm keeps its proof.
+    const withoutWinner = await mountFor(
+      summary(`${PKG}:note`, { kind: "no-primary" }),
+      "text/x-markdown",
+    );
     expect(withoutWinner.kind).toBe("form");
   });
 

@@ -35,21 +35,37 @@
 // baselined pack-shaped core module that GROWS — a new file in a baselined
 // directory, or a recorded file above its recorded line count — fails too,
 // because the key of a growth finding can never match a recorded key. An entry
-// whose crossing is gone is reported so the ratchet can be shrunk.
+// whose crossing is gone is STALE and fails, as in the sibling gates, until
+// --write-baseline shrinks the ratchet.
+//
+// THE BASE GUARD (cinatra#3831): the ledger of the checkout is compared with
+// the copy on the base branch, entry by entry and count by count, through the
+// shared guard scripts/audit/lib/floor-base-guard.mjs. A new entry, a new
+// recorded file or a raised count fails. The base is CORE_EXTENSION_BORDER_BASE
+// when set, else the pull request's base branch; a base that cannot be read
+// fails closed with a line that names the reason.
 //
 // Usage:
-//   node scripts/ci/core-extension-border-gate.mjs                  # check (exit 1 on any finding outside the baseline)
+//   node scripts/ci/core-extension-border-gate.mjs                  # check (exit 1 on any finding outside the baseline, a stale entry or a grown ledger)
 //   node scripts/ci/core-extension-border-gate.mjs --report         # print every finding, baselined ones included
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
+//   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
 const DEFAULT_BASELINE = join(DEFAULT_REPO_ROOT, "config", "core-extension-border-baseline.json");
+
+/** The variable a workflow names the base reference in (cinatra#3831). */
+export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
+
+/** The ledger, repo-relative, as the base guard reads it at the base. */
+export const FLOOR_FILE = "config/core-extension-border-baseline.json";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -653,16 +669,34 @@ export function baselineGrowth(previousDoc, currentDoc) {
   return grown.sort();
 }
 
-/** The committed ledger on the default branch, or null when this checkout
- *  cannot produce it (a shallow clone, or the ledger is new on this branch). */
-export function committedBaseline(repoRoot, baselineRelPath, ref = "origin/main") {
-  const res = spawnSync("git", ["show", `${ref}:${baselineRelPath}`], { cwd: repoRoot, encoding: "utf8" });
-  if (res.status !== 0 || !res.stdout.trim()) return null;
-  try {
-    return JSON.parse(res.stdout);
-  } catch {
-    return null;
-  }
+/** The ledger compared with its copy on the base branch (cinatra#3831). Growth
+ *  is baselineGrowth's: a new entry, a new recorded file or a raised count. A
+ *  base that cannot be read fails closed. */
+export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
+  return compareFloorWithBase({
+    gate: "core-extension-border",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
+    parse: (text) => JSON.parse(text),
+    grown: (base, head) => baselineGrowth(base, head),
+    repoRoot,
+    env,
+  });
+}
+
+/** The verdict on the ledger entries whose crossing is gone: a stale entry
+ *  fails, as in the sibling gates, until --write-baseline shrinks the ratchet. */
+export function staleVerdict(stale) {
+  if (stale.length === 0) return { ok: true, lines: [] };
+  return {
+    ok: false,
+    lines: [
+      `[core-extension-border] FAIL — ${stale.length} baseline entr${stale.length === 1 ? "y is" : "ies are"} gone; ` +
+        "run --write-baseline to shrink the ratchet:",
+      ...stale.map((k) => `  - ${k}`),
+    ],
+  };
 }
 
 export function violationsOf(findings, baselineKeys) {
@@ -802,19 +836,11 @@ function main() {
     process.exit(1);
   }
 
-  // The ledger itself is shrink-only. Where this checkout can produce the
-  // committed ledger from the default branch, any key it GAINED — or any raised
-  // allowance — fails, so a crossing cannot be admitted by writing itself in.
-  const rel = relative(repoRoot, DEFAULT_BASELINE).split(sep).join("/");
-  const previousDoc = committedBaseline(repoRoot, rel);
-  const grown = previousDoc ? baselineGrowth(previousDoc, doc) : [];
-  if (grown.length) {
-    console.error(
-      `[core-extension-border] FAIL — the ledger grew against the default branch; it is shrink-only, a crossing is removed rather than admitted:`,
-    );
-    for (const g of grown) console.error(`  + ${g}`);
-    process.exit(1);
-  }
+  // The ledger itself is shrink-only. It is compared with its copy on the base
+  // branch: any key it GAINED — or any raised allowance — fails, so a crossing
+  // cannot be admitted by writing itself in; a base that cannot be read fails
+  // closed.
+  if (!reportFloorGuard(checkFloorAgainstBase({ headFloor: doc }))) process.exit(1);
 
   const { findings, violations, stale } = scanRepository({ repoRoot, baselinePath: DEFAULT_BASELINE });
 
@@ -837,12 +863,10 @@ function main() {
     process.exit(1);
   }
 
-  if (stale.length) {
-    console.log(
-      `[core-extension-border] NOTE — ${stale.length} baseline entr${stale.length === 1 ? "y is" : "ies are"} gone; ` +
-        "run --write-baseline to shrink the ratchet:",
-    );
-    for (const k of stale) console.log(`  - ${k}`);
+  const verdict = staleVerdict(stale);
+  if (!verdict.ok) {
+    for (const line of verdict.lines) console.error(line);
+    process.exit(1);
   }
 
   console.log(

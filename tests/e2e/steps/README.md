@@ -16,6 +16,7 @@ defect of a step, with a test, fixed once for every run.
 | `readRows` | Rows of one table by named columns, every name checked against the database's catalog first. |
 | `press` | One control pressed by its role and accessible name, never a guess, and the page's next settled state. |
 | `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
+| `readOptions` | A picker's entries in their order and the entry it shows, read without choosing; a combobox's list opened and closed again with the Escape key. |
 | `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
 | `readControlNames` | Every shown control of a page, by its role and its accessible name, a control without a name included. |
 | `armPageTape` | The document's time origin noted, and the main frame's navigations counted from then on. |
@@ -29,8 +30,10 @@ defect of a step, with a test, fixed once for every run.
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
 | `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
+| `readAddress` | The page's path and the values of the query parameters the caller names, read once the address has held still; any other parameter counted, never written. |
 | `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
 | `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
+| `openPageInOwnContext` | A further page opened from a visible link in a browser context of its own, with connections of its own, signed in by the session the first page carries and never through the sign-in page. |
 <!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
@@ -45,7 +48,9 @@ imports only Node's builtins and its own files, so both of these work:
 
 - **A record.** Every step takes a `record` callback and writes one line per event
   through it. A line names a page by its path, never by its address or its query
-  string, and never carries a credential. A step without a `record` does nothing.
+  string, and never carries a credential. A line may carry the value of a query
+  parameter that the caller named to `openAddress` or `readAddress`, and no
+  other. A step without a `record` does nothing.
 - **Refusals by name.** A step that cannot keep its guarantee throws a
   `StepRefusal` whose message names the step, the kind of refusal and the reason,
   for example `navigateTo refused (no-link): no visible link on /agents leads to
@@ -171,6 +176,8 @@ client-side router sends, and no other path in the address), for example because
 the link's own handler opens a dialog in place, is refused at once
 (`no-navigation`), naming the link it pressed and the dialog or panel the page
 shows instead.
+
+The same start signals and short bound apply with `furtherPage: true`: no start is refused as `no-further-page`, naming what the current page shows instead, while a started open keeps its full landing wait.
 
 With `furtherPage: true` it opens the page in a further page instead, and first
 reads the requests that stand open on the origin (`readStandingRequests`): a
@@ -349,14 +356,53 @@ alert, a toast) names the entry that did not name it before. The step answers
 `{ picker, entry, kind, via, path, elapsedMs }`, where `via` is `state` or
 `confirmation`.
 
+A combobox the step opened is also waited for until its list has closed, when
+the list still hides the combobox from assistive technology once the choice
+shows: the shared select shows the choice while its list is still closing, and
+while the list is open it hides the rest of the page, so a second pick on the
+page would find no picker. The wait reads the combobox as the open wait does,
+within the same bound, measured from the choice, and the log line then ends
+`; its list closed after <n> ms`. A list that is closed at once, or a list the
+step found already open, takes no wait and adds nothing to the line.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
-| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, and from typing into a search field to its entry in the list |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, from the selection to the close of a list that hides the page, and from typing into a search field to its entry in the list |
 
 Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
 shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
 (nothing was selected), `driver-failure`, `other-entry` (a search field's page
-took another entry than the one pressed) and `not-reflected`.
+took another entry than the one pressed), `not-reflected` and `not-closed` (a list
+that still hides the page once the bound has run out).
+
+## `readOptions(page, { picker, record, bounds? })`
+
+Reads the entries of the one shown picker named `picker`, found as `selectFrom`
+finds it (a combobox with no accessible name included), in the page's order,
+and the entry it shows as chosen, and chooses nothing. A select, a radio group,
+a listbox, and a combobox whose list is shown already, are read as they are. A
+combobox whose list is not shown is opened as `selectFrom` opens it and read
+again by its mark; then the Escape key is pressed once, the list's own close,
+and the step waits until the list has closed: the combobox reads closed and is
+no longer hidden from assistive technology, within the reflect bound measured
+from the key, whether or not the list hid the page. The step presses nothing
+else. It answers `{ picker, kind, entries, more, shows, path }`: `entries` the
+names of at most `CONTROL_NAMES_LISTED` entries, `more` the count of the rest,
+and `shows` the entry the picker showed when the step found it (a select's
+selected option, a radio group's checked radio, a listbox's option marked
+selected or checked, a combobox's own text, empty while it shows its
+placeholder), or the empty string. Its one line reads, for example,
+`readOptions: the picker "Size" on /pick/start lists "Small", "Medium",
+"Large", "Huge" in this order and shows "Small"`, and, for a combobox it opened,
+ends `; its list closed after <n> ms`; a picker that shows no entry is said to
+show no entry. It takes the bounds of `selectFrom` (`SELECT_BOUNDS`).
+
+Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
+shows), `ambiguous`, `disabled` and `no-list` (a search field, which lists
+entries only for typed text), each before anything is read; `no-entry` (an
+opened combobox shows no list), `driver-failure` (the press or the Escape key
+was not taken) and `not-closed` (the list did not close within the bound of the
+Escape key).
 
 ## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
 
@@ -714,7 +760,7 @@ Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
 `no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
 error the page shows, the conversation's error card among them).
 
-## `openAddress(page, { path, record, bounds? })`
+## `openAddress(page, { path, record, params?, bounds? })`
 
 Loads `path`, once, on the current page's own origin and in the caller's page,
 so the session the page is signed in with goes with it, and answers
@@ -727,6 +773,23 @@ page leads to, read as `navigateTo` reads its links (`has-link`: pressing that
 link is `navigateTo`'s act), an address of another origin (`other-origin`), and
 anything that is no page path. Its line says that an address was typed.
 
+A page that keeps its views at their own addresses, such as `?tab=locked`, is
+opened with its query when the caller names the parameters the path may carry
+in `params`, such as `["tab"]`. The path may then carry a query of those names,
+and the step answers `{ path, status, from, elapsedMs, query, others }`: `query`
+holds each named parameter's value where the load landed (null when the address
+does not carry it), and `others` counts the parameters of any other name, whose
+values are never written. It refuses as `input`, before it loads anything,
+`params` that is no list of distinct names (letters, digits, `_`, `.` and `-`),
+a path with a fragment, and a query that names a parameter `params` does not
+name, without writing that parameter. The `has-link` reading then reads the
+path with its query. Its line writes each named parameter as `name="value"`, cut
+as a name is, or `name absent`, and counts the others, such as
+`openAddress: typed the address of /configuration/extensions with the query
+tab="locked" into the page on /chat, where no visible link leads to it; it
+landed on /configuration/extensions with the query tab="locked" with status 200
+after 412 ms`.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `OPEN_ADDRESS_BOUND_MS` | 120_000 | from the typed address to the landing (`loadMs`) |
@@ -734,6 +797,32 @@ anything that is no page path. Its line says that an address was typed.
 
 Refusal kinds: `input`, `other-origin`, `unreadable` and `has-link` (no address
 was typed), and `no-load`.
+
+## `readAddress(page, { params, record, settleMs?, pollMs?, bound? })`
+
+Reads the address of the page, on the driver's side as the page's address is,
+so a view the page chooses in place (a state pushed into its history) is read
+as a load is. It answers `{ path, query, others }` once two readings of the
+path and of the values of the parameters `params` names lie `settleMs` apart
+and are equal, and every reading between them agreed: `query` holds each named
+parameter's value (null when the address does not carry it), and `others`
+counts the parameters of any other name, whose values are never written. Its
+one line is written as `openAddress` writes a query, such as
+`readAddress: the page is on /configuration/extensions with the query
+tab="archived"`, or `... with the query tab="all", and 1 other parameter not
+written`. An address that never holds still within `bound` is refused
+(`unsteady`), naming the last two readings, the path and the named values only.
+An unknown option, `params` that is no list of distinct names, or a bound that
+is not a positive number of milliseconds is refused before anything is read
+(`input`).
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `ADDRESS_SETTLE_MS` | 1_000 | how long the address must hold still (`settleMs`) |
+| `ADDRESS_POLL_MS` | 100 | how often it is read (`pollMs`) |
+| `ADDRESS_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+Refusal kinds: `input` and `unsteady`.
 
 <!-- pressByTestId and readTitle: an element without a role pressed by its test id and its text, and the page's title. -->
 
@@ -809,6 +898,52 @@ read (`input`).
 | `TITLE_SETTLE_MS` | 1_000 | how long the title must hold still (`settleMs`) |
 | `TITLE_POLL_MS` | 100 | how often it is read (`pollMs`) |
 | `TITLE_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+## `openPageInOwnContext(page, { path, record, bounds? })`
+
+Opens `path` in a page of a browser context of its own, for a state that needs
+two people at once, such as one person on a run's pending gate while another
+settles it. A run page holds several requests open on its origin, and over
+plain HTTP a browser opens at most six connections to one origin in one
+context, so a further page in the same context (`navigateTo` with
+`furtherPage`) can starve the first page's own send. A second context has
+connections of its own.
+
+1. Refuses, before the page is touched, a path that is no page path or carries
+   a query string or a fragment, the sign-in page (`SIGN_IN_PAGE_PATH`, which
+   is `signInThroughPage`'s), and an unknown or non-positive bound.
+2. Reads the visible links on the current page that lead to `path`, as
+   `navigateTo` reads them. With none, it opens nothing and refuses, naming how
+   many visible links the page shows: it opens only what a person could open
+   from there, and never invents an address.
+3. Opens a new context on the page's browser from the storage state of the
+   page's context (its cookies and its storage) and the page's viewport. The
+   state goes from one call straight into the other: it is never written to a
+   file, recorded or logged. No sign-in is made, so the sign-in budget is not
+   touched, and no credential is typed.
+4. Starts the reading of standing requests (`readStandingRequests`) on the new
+   context before its page opens, so that page is never unknown to it.
+5. Loads the address the first such link leads to (its query string included)
+   in a new page of that context, and waits for the landing as `navigateTo`
+   does. A landing on the sign-in page (`session-lost`), or on another path
+   within the bound (`landed-elsewhere`), is refused, and the new context is
+   closed first.
+
+It answers `{ path, from, elapsedMs, furtherPage, standing }`: the landed path,
+the path it came from, the elapsed time, the page it opened, and the new
+context's own reading of standing requests. Its line names the two paths and
+says that the page stands in a browser context of its own; it never carries a
+cookie, a storage value, an address or a query string. The caller closes
+`furtherPage.context()` when it is done with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OWN_CONTEXT_LANDING_BOUND_MS` | 120_000 | from opening the new context to the landing of its page (`landingMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the link, and of the standing requests (`readingMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
+`no-browser` (no context was opened), `driver-failure`, and `session-lost` and
+`landed-elsewhere` (the new context was closed).
 
 ## Shared bounds
 

@@ -78,6 +78,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { splitBuildOnlyHeadGuard } from "./build-only-heads.mjs";
 import { parseJobs, parseTriggers, displayNameOf } from "./merge-group-coverage-guard.mjs";
 import { INVENTORY_PATH, DEADLINE_MINUTES, validateInventory } from "./merge-readiness.mjs";
 
@@ -230,6 +231,12 @@ export const ALWAYS_IF = new Set(["always()", "${{ always() }}"]);
 /** Cancellation alone never authorizes missing required validation. */
 export const isConditional = (ifExpr) => {
   if (ifExpr == null) return false;
+  // The build-only head condition (cinatra#3890) is true on every candidate —
+  // a pull request from an ordinary branch and a merge queue group alike — so
+  // it never makes a job skippable: only the job's own condition beside it
+  // is read. A build-only head never merges, and this job skips there too.
+  const split = splitBuildOnlyHeadGuard(ifExpr);
+  if (split.carries) return isConditional(split.existing);
   const expression = ifExpr.trim();
   if (ALWAYS_IF.has(expression)) return false;
   const inner = expression.startsWith("${{") && expression.endsWith("}}")

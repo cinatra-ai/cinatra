@@ -735,3 +735,136 @@ describe.skipIf(!HAS_REAL_DB)("enabler 0.20 — the review card carries the pinn
     ).toMatchObject({ kind: "none" });
   });
 });
+
+/**
+ * cinatra#3814 — A TITLE CHANGE, on the real substrate.
+ *
+ * "The artifact page's save route stores a title change as a new revision under
+ * the same rules as a text change", and, from the tests the issue asks for: "a
+ * title change through the channel stores the title and leaves the text
+ * untouched; a text change leaves the title untouched; … a stale base … [is]
+ * refused". The title is row metadata: only a database can show that it moves in
+ * the append's own transaction, and not at all when the append is refused.
+ *
+ * The seeded row carries the provenance tag the artifact writer stamps (`route`)
+ * and a title in its data, as an artifact the page edits does.
+ */
+describe.skipIf(!HAS_REAL_DB)("cinatra#3814 — a title change is a new revision, with the title in its transaction", () => {
+  const appendWithBase = (artifactId: string) =>
+    ports.artifactEditSavePorts({ actor: {} as never, orgId: ORG, artifactId }).appendWithBase;
+
+  async function seedTitledArtifact() {
+    const seeded = await seedArtifact();
+    await sql(
+      `UPDATE "${S()}"."objects" SET source = 'route', data = jsonb_build_object('title', $3::text)
+       WHERE id = $1 AND org_id = $2`,
+      [seeded.artifactId, ORG, "A draft"],
+    );
+    return seeded;
+  }
+
+  async function rowTitle(artifactId: string): Promise<string | null> {
+    const res = await sql(
+      `SELECT data->>'title' AS title FROM "${S()}"."objects" WHERE id = $1 AND org_id = $2`,
+      [artifactId, ORG],
+    );
+    return ((res.rows[0] as { title?: string | null } | undefined)?.title ?? null) as string | null;
+  }
+
+  it("a title change through the channel stores the title and leaves the text untouched", async () => {
+    const seeded = await seedTitledArtifact();
+
+    const appended = await appendWithBase(seeded.artifactId)({
+      orgId: ORG,
+      artifactId: seeded.artifactId,
+      baseRevisionId: seeded.revisionId,
+      baseRevision: 1,
+      resourceId: seeded.resourceId,
+      actor: "user-1",
+      title: "The subject",
+    });
+
+    expect(appended.kind).toBe("appended");
+    if (appended.kind !== "appended") return;
+    const all = store.listRepresentations(ORG, seeded.artifactId);
+    expect(all.map((r) => r.revision)).toEqual([1, 2]);
+    // The text is untouched: the new revision points at the base's own resource.
+    expect(all[1].resourceId).toBe(seeded.resourceId);
+    expect(await rowTitle(seeded.artifactId)).toBe("The subject");
+
+    const edit = (await auditRows(ORG, seeded.artifactId)).find((r) => r.action === "edit");
+    expect(edit?.representation_revision_id).toBe(appended.revisionId);
+    expect(edit?.detail).toMatchObject({ baseRevision: 1, revision: 2, field: "title" });
+  });
+
+  it("a text change leaves the title untouched", async () => {
+    const seeded = await seedTitledArtifact();
+
+    const appended = await appendWithBase(seeded.artifactId)({
+      orgId: ORG,
+      artifactId: seeded.artifactId,
+      baseRevisionId: seeded.revisionId,
+      baseRevision: 1,
+      resourceId: await seedResource(ORG, "# Two\n"),
+      actor: "user-1",
+    });
+
+    expect(appended.kind).toBe("appended");
+    expect(await rowTitle(seeded.artifactId)).toBe("A draft");
+    const edit = (await auditRows(ORG, seeded.artifactId)).find((r) => r.action === "edit");
+    expect(Object.prototype.hasOwnProperty.call(edit?.detail ?? {}, "field")).toBe(false);
+  });
+
+  it("a title change over a stale base, or over a row deleted after it was read, is refused, and neither a revision nor the title is written", async () => {
+    const seeded = await seedTitledArtifact();
+    const first = await appendWithBase(seeded.artifactId)({
+      orgId: ORG,
+      artifactId: seeded.artifactId,
+      baseRevisionId: seeded.revisionId,
+      baseRevision: 1,
+      resourceId: await seedResource(ORG, "# Two\n"),
+      actor: "user-1",
+    });
+    expect(first.kind).toBe("appended");
+
+    const refused = await appendWithBase(seeded.artifactId)({
+      orgId: ORG,
+      artifactId: seeded.artifactId,
+      baseRevisionId: seeded.revisionId,
+      baseRevision: 1,
+      resourceId: seeded.resourceId,
+      actor: "user-2",
+      title: "The subject",
+    });
+
+    expect(refused.kind).toBe("stale");
+    expect(store.listRepresentations(ORG, seeded.artifactId).map((r) => r.revision)).toEqual([1, 2]);
+    expect(await rowTitle(seeded.artifactId)).toBe("A draft");
+
+    // The row is read before the append's transaction. A row deleted after that
+    // read refuses the whole append: no revision, no title, and no resurrection.
+    if (first.kind !== "appended") return;
+    const ops = ports.buildArtifactTitleWriteOps({ orgId: ORG, artifactId: seeded.artifactId, title: "The subject" });
+    await sql(
+      `UPDATE "${S()}"."objects" SET deleted_at = now(), version = COALESCE(version, 0) + 1
+       WHERE id = $1 AND org_id = $2`,
+      [seeded.artifactId, ORG],
+    );
+    const afterDelete = await store.appendRepresentationWithExpectedBase({
+      orgId: ORG,
+      artifactId: seeded.artifactId,
+      baseRevisionId: first.revisionId,
+      resourceId: seeded.resourceId,
+      form: "file",
+      additionalOps: () => ops,
+    });
+    expect(afterDelete.kind).toBe("unknown-base");
+    expect(store.listRepresentations(ORG, seeded.artifactId).map((r) => r.revision)).toEqual([1, 2]);
+    const tomb = await sql(`SELECT deleted_at FROM "${S()}"."objects" WHERE id = $1 AND org_id = $2`, [
+      seeded.artifactId,
+      ORG,
+    ]);
+    expect((tomb.rows[0] as { deleted_at: unknown }).deleted_at).not.toBeNull();
+    expect(await rowTitle(seeded.artifactId)).toBe("A draft");
+  });
+});
