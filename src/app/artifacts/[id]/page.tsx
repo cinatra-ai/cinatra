@@ -59,6 +59,7 @@ import {
   resolveEditorRevisionId,
 } from "@/lib/artifacts/representation-store";
 import { can } from "@/lib/authz/enforce";
+import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import {
   ARTIFACT_EDIT_IDLE_PAUSE_MS,
   ARTIFACT_EDIT_TEXT_CAP_BYTES,
@@ -226,10 +227,23 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // type, no revision, no owner level or visibility, no kind beside the title,
   // and a size counted out in bytes. The model is pure and tested; this page
   // draws it and decides nothing about it.
+  // THE OWNER, NAMED (cinatra#3475). The drawing writes the owner of a row as
+  // its level word and the owning entity's NAME ("Team: Growth", "Organization:
+  // Acme Corp"), on this page exactly as on the library row. The name is read
+  // through the one owner-name resolver every scope surface reads (#1905),
+  // best-effort: an unresolved name floors the cell to the drawn level word,
+  // never to a stored value.
+  const ownerName = await readOwnerDisplayName(
+    artifact.ownerLevel,
+    (artifact.ownerLevel === "organization"
+      ? artifact.organizationId
+      : artifact.ownerId) ?? "",
+  );
   const header = buildArtifactDetailHeader({
     artifact,
     mime,
     revisionId,
+    ownerName,
   });
   // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
   // one place the Breadcrumb rule against a raw id in a name's place lands.
