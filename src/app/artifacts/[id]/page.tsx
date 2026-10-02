@@ -34,6 +34,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { ArtifactTitleSaveRefresh } from "./artifact-title-save-refresh";
 
 import { getAuthSession, requireActorContext } from "@/lib/auth-session";
 import {
@@ -350,6 +351,7 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
                   way — the border correction main carries, kept whole here. */}
               {artifactKindLabelFor(artifact.objectType)}
             </span>
+            <ArtifactTitleSaveRefresh artifactId={id} />
           </span>
         }
         meta={header.metaCells.join(" · ")}
