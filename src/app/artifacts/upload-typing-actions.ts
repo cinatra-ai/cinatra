@@ -342,11 +342,36 @@ export async function assertUploadMeaning(input: {
  */
 async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    return (await extensionOwnedTypeIds(extension)).includes(objectType);
   } catch {
     return false;
   }
+}
+
+/**
+ * The artifact type ids this extension owns: the ids its package REGISTERED plus
+ * the ids it CLAIMED over a type nothing else has provenance for, read over the
+ * registry and the cross-namespace claim ledger (cinatra#3033).
+ */
+async function extensionOwnedTypeIds(extension: string): Promise<string[]> {
+  const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+  const { crossNamespaceClaimsBy } = await import(
+    "@cinatra-ai/objects/register-artifact-extensions"
+  );
+  const { selectExtensionOwnedTypeIds } = await import(
+    "@/lib/artifacts/extension-owned-types"
+  );
+  const claimedTypeIds = crossNamespaceClaimsBy(extension);
+  return selectExtensionOwnedTypeIds({
+    extension,
+    registeredTypeIds: objectTypeRegistry.getTypesForPackage(extension),
+    claimedTypeIds,
+    candidates: claimedTypeIds.map((typeId) => ({
+      typeId,
+      registeringPackage: objectTypeRegistry.getRegisteringPackage(typeId),
+      resolves: objectTypeRegistry.resolve(typeId) != null,
+    })),
+  });
 }
 
 /**
@@ -395,8 +420,8 @@ async function promoteOnConfirmedMeaning(input: {
     // confirmation that retyped nothing and reported nothing. It is separated
     // from the first by the pack's OWN registration state — a semantic display
     // registered for an object type no package registers.
-    const owned = objectTypeRegistry
-      .getTypesForPackage(input.extension)
+    // Owned = registered, or claimed over a host-registered type (cinatra#3033).
+    const owned = (await extensionOwnedTypeIds(input.extension))
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
     const entryPlan = planPromotionEntry({

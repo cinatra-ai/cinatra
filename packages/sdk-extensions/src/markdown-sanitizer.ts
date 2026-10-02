@@ -86,7 +86,7 @@ function escapeAttribute(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function buildSanitizingMarked(options: { demoteHeadings: boolean }): Marked {
+function buildSanitizingMarked(options: { demoteHeadings: boolean; noMedia: boolean }): Marked {
   const marked = new Marked({ gfm: true, breaks: false, pedantic: false });
   marked.use({
     renderer: {
@@ -121,8 +121,15 @@ function buildSanitizingMarked(options: { demoteHeadings: boolean }): Marked {
           ? `<a href="${escapeAttribute(safeHref)}"${titleAttr}${relAttr}>${inner}</a>`
           : `<span>${inner}</span>`;
       },
+      // NO-MEDIA MODE (the blog text displays, lifecycle-c W9): a surface whose
+      // ruling is "a text view renders text" asks the boundary itself for no
+      // media, instead of stripping the image node out of this module's output
+      // afterwards. Refusing the address here reuses the SAME placeholder an
+      // unsafe address already produces — one code path, one placeholder, and
+      // the picture's name still reads as text. The default mode is untouched.
       image({ href, title, text }: { href: string; title?: string | null; text: string }): string {
-        const safeSrc = isSafeMarkdownUrl(href) && /^https?:/i.test(href) ? href : "";
+        const safeSrc =
+          !options.noMedia && isSafeMarkdownUrl(href) && /^https?:/i.test(href) ? href : "";
         const titleAttr = title ? ` title="${escapeAttribute(title)}"` : "";
         const altAttr = ` alt="${escapeAttribute(text)}"`;
         return safeSrc
@@ -139,8 +146,15 @@ function buildSanitizingMarked(options: { demoteHeadings: boolean }): Marked {
   return marked;
 }
 
-const sanitizingMarked = buildSanitizingMarked({ demoteHeadings: false });
-const demotingSanitizingMarked = buildSanitizingMarked({ demoteHeadings: true });
+// One cached instance per option COMBINATION — the options are independent, so
+// the two axes multiply rather than exclude each other.
+const sanitizingMarked = buildSanitizingMarked({ demoteHeadings: false, noMedia: false });
+const demotingSanitizingMarked = buildSanitizingMarked({ demoteHeadings: true, noMedia: false });
+const noMediaSanitizingMarked = buildSanitizingMarked({ demoteHeadings: false, noMedia: true });
+const demotingNoMediaSanitizingMarked = buildSanitizingMarked({
+  demoteHeadings: true,
+  noMedia: true,
+});
 
 export interface SanitizeMarkdownOptions {
   /**
@@ -151,6 +165,22 @@ export interface SanitizeMarkdownOptions {
    * (raw-HTML stripping, the URL-scheme allowlist) is identical on both paths.
    */
   demoteHeadings?: boolean;
+  /**
+   * Emit NO media at all: every markdown image renders the same readable
+   * `[image] <name>` placeholder an unsafe address already produces, whatever
+   * its address.
+   *
+   * THE RULE THIS CARRIES: a text display renders text. Three blog displays
+   * each wrapped this module's output to strip an image node the boundary had
+   * just drawn from an absolute address; the rule belongs to the boundary, so a
+   * caller declares it here and there is one removal step in the tree instead
+   * of one per display.
+   *
+   * Media removal changes WHICH addresses are emitted, never the sanitization
+   * boundary itself (raw-HTML stripping, the URL-scheme allowlist) — those are
+   * identical on both paths, and no-media is strictly more restrictive.
+   */
+  noMedia?: boolean;
 }
 
 /**
@@ -168,7 +198,13 @@ export function renderSanitizedMarkdown(
   options?: SanitizeMarkdownOptions,
 ): string {
   if (!markdown || markdown.trim().length === 0) return "";
-  const marked = options?.demoteHeadings ? demotingSanitizingMarked : sanitizingMarked;
+  const marked = options?.demoteHeadings
+    ? options?.noMedia
+      ? demotingNoMediaSanitizingMarked
+      : demotingSanitizingMarked
+    : options?.noMedia
+      ? noMediaSanitizingMarked
+      : sanitizingMarked;
   // `parse` is synchronous in marked v18 (it returns a Promise only under
   // `async: true`, which this module never sets).
   return marked.parse(markdown) as string;
