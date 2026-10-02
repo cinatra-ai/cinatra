@@ -64,7 +64,6 @@ vi.mock("@/lib/connector-client-providers", () => ({
     readPostStatus: vi.fn(),
   }),
 }));
-vi.mock("../gemini", () => ({ generateBlogPostImage: vi.fn() }));
 vi.mock("../wordpress", () => ({ publishBlogPostDraftToWordPress: vi.fn() }));
 vi.mock("../mcp/handlers", () => ({ createBlogContentPrimitiveHandlers: vi.fn() }));
 vi.mock("@cinatra-ai/mcp-client", () => ({ createInProcessPrimitiveTransport: vi.fn() }));
