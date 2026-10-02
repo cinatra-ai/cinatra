@@ -10,7 +10,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { discoverArtifactPackNames, readGeneratedRendererEntries } from "../artifact-review-floor-gate.mjs";
+import {
+  discoverArtifactPackNames,
+  readDashboardMime,
+  readGeneratedRendererEntries,
+  readMimeAllowlist,
+} from "../artifact-review-floor-gate.mjs";
 import {
   FLOOR_BASE_VAR,
   FLOOR_FILE,
@@ -69,16 +74,33 @@ function fleet() {
   ];
 }
 
-function artifactManifest(name, objectTypes) {
-  const artifact = objectTypes === undefined ? { accepts: {} } : { objectTypes, accepts: {} };
+function artifactManifest(name, objectTypes, accepts = {}) {
+  const artifact = objectTypes === undefined ? { accepts } : { objectTypes, accepts };
   return { name, cinatra: { kind: "artifact", artifact } };
 }
 
-function mapLine(pkg, slot = "detail", resolution = "required") {
+function mapLine(pkg, slot = "detail", resolution = "required", representations = ["application/json"]) {
   return (
     `  "${pkg}::${slot}": { resolution: "${resolution}", "packageName":"${pkg}","slot":"${slot}",` +
-    `"representations":["application/json"],"propsApiVersion":2, load: () => import("${pkg}/src/renderers/${slot}") },`
+    `"representations":${JSON.stringify(representations)},"propsApiVersion":2, load: () => import("${pkg}/src/renderers/${slot}") },`
   );
+}
+
+// The two application sources the content-type rule reads beside the build
+// map, in the shapes the floor gate's readers parse.
+const ALLOWLIST_FILE = "src/lib/artifacts/artifact-read.ts";
+const DASHBOARD_FILE = "src/lib/dashboards/dashboard-artifact-twin-writer.ts";
+const FIXTURE_ALLOWLIST = ["text/markdown", "text/plain", "application/pdf", "image/png", "application/x-example"];
+const FIXTURE_DASHBOARD_MIME = "application/vnd.example.dashboard+json";
+
+function allowlistSource(mimes) {
+  return [
+    "// fixture allowlist",
+    "const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([",
+    ...mimes.map((m) => `  "${m}",`),
+    "]);",
+    "",
+  ].join("\n");
 }
 
 function buildMap(lines) {
@@ -115,6 +137,8 @@ function makeTree({ packs = fleet(), map = DEFAULT_MAP, floor = TODAY, lockExtra
   mkdirSync(join(root, "extensions"), { recursive: true });
   for (const p of packs) write(root, `extensions/example-org/${p.dir}/package.json`, p.manifest);
   write(root, MAP_FILE, buildMap(map));
+  write(root, ALLOWLIST_FILE, allowlistSource(FIXTURE_ALLOWLIST));
+  write(root, DASHBOARD_FILE, `const DASHBOARD_RESOURCE_MIME = "${FIXTURE_DASHBOARD_MIME}";\n`);
   write(root, "cinatra-required-extensions.lock.json", {
     packages: [...packs.map((p) => ({ packageName: p.manifest.name })), ...lockExtra.map((n) => ({ packageName: n }))],
   });
@@ -139,6 +163,8 @@ function classifyFixture(root) {
   return classifyRendering({
     extensions: readClaimingExtensions(join(root, "extensions")),
     generatedEntries: readGeneratedRendererEntries(readFileSync(join(root, MAP_FILE), "utf8")),
+    mimeAllowlist: readMimeAllowlist(readFileSync(join(root, ALLOWLIST_FILE), "utf8")),
+    dashboardMime: readDashboardMime(readFileSync(join(root, DASHBOARD_FILE), "utf8")),
   });
 }
 
@@ -149,6 +175,7 @@ describe("extension-rendering-gate — the classifier", () => {
     expect(classifyFixture(root)).toEqual({
       deficit: [entry(ALPHA, [`${ALPHA}:item`]), entry(GAMMA, ["@example-org/gamma:note"])],
       ownDisplay: [BETA],
+      drawnByContentType: [],
       outside: [
         { package: DELTA, reason: "declares no artifact-writable claim" },
         { package: EPSILON, reason: "declares no objectTypes" },
@@ -381,5 +408,129 @@ describe("extension-rendering-gate — a pull request that gives an extension it
     expect(warns).toHaveLength(1);
     expect(warns[0]).toContain(ALPHA);
     expect(warns[0]).toContain("--write-baseline");
+  });
+});
+
+// R8 — cinatra#3092: an extension whose every declared form is drawn by a
+// REQUIRED content-type display of the build is drawn, and leaves the deficit.
+describe("extension-rendering-gate — a form drawn by a required content-type display", () => {
+  const ETA = "@example-org/eta-artifact";
+  const MARKDOWN = "@example-org/markdown-artifact";
+  const IMAGE = "@example-org/image-artifact";
+  const PNG = "@example-org/png-artifact";
+  const TEXT = "@example-org/text-artifact";
+  const OPTIONAL = "@example-org/optional-artifact";
+  const CATCH_ALL = "@example-org/catch-all-artifact";
+  const PREVIEW = "@example-org/preview-artifact";
+
+  // The required detail displays of the fixture build, by exact and type-wildcard match.
+  const PROVIDERS = [
+    mapLine(MARKDOWN, "detail", "required", ["text/markdown"]),
+    mapLine(IMAGE, "detail", "required", ["image/*"]),
+    mapLine(PNG, "detail", "required", ["image/png"]),
+    mapLine(TEXT, "detail", "required", ["text/plain"]),
+  ];
+
+  const etaPack = (accepts) => ({ dir: "eta-artifact", manifest: artifactManifest(ETA, [{ type: `${ETA}:item` }], accepts) });
+  const classifyEta = (accepts, map = PROVIDERS) => classifyFixture(makeTree({ packs: [etaPack(accepts)], map }));
+  const deficitPackages = (result) => result.deficit.map((e) => e.package);
+  const drawnPackages = (result) => (result.drawnByContentType ?? []).map((e) => e.package);
+
+  function expectDeficit(result) {
+    expect(deficitPackages(result)).toEqual([ETA]);
+    expect(result.ownDisplay).toEqual([]);
+    expect(drawnPackages(result)).toEqual([]);
+  }
+
+  it("(a) every declared form allowlisted and served by a required detail display: drawn, with each form's provider", () => {
+    const result = classifyEta({
+      file: { mimeTypes: ["text/markdown", "image/png"] },
+      connectorRef: { resolvedMimeTypes: ["text/plain"] },
+    });
+    expect(result.drawnByContentType).toEqual([
+      {
+        package: ETA,
+        forms: [
+          { form: "image/png", by: PNG },
+          { form: "text/markdown", by: MARKDOWN },
+          { form: "text/plain", by: TEXT },
+        ],
+      },
+    ]);
+    expect(deficitPackages(result)).toEqual([]);
+    expect(result.ownDisplay).toEqual([]);
+  });
+
+  it("(b) a declared form no required detail display serves: deficit", () => {
+    expectDeficit(classifyEta({ file: { mimeTypes: ["text/markdown", "application/x-example"] } }));
+  });
+
+  it("(c) a form served only by a guardedOptional detail display: deficit", () => {
+    const map = [...PROVIDERS, mapLine(OPTIONAL, "detail", "guardedOptional", ["application/pdf"])];
+    expectDeficit(classifyEta({ file: { mimeTypes: ["application/pdf"] } }, map));
+  });
+
+  it("(d) a form matched only by a required catch-all detail display: deficit", () => {
+    const map = [...PROVIDERS, mapLine(CATCH_ALL, "detail", "required", ["*/*"])];
+    expectDeficit(classifyEta({ file: { mimeTypes: ["application/x-example"] } }, map));
+  });
+
+  it("(e) no declared form: deficit", () => {
+    expectDeficit(classifyEta({}));
+  });
+
+  it("(f) an own detail display wins over the content-type displays", () => {
+    const map = [...PROVIDERS, mapLine(ETA, "detail", "guardedOptional", ["text/markdown"])];
+    const result = classifyEta({ file: { mimeTypes: ["text/markdown"] } }, map);
+    expect(result.ownDisplay).toEqual([ETA]);
+    expect(deficitPackages(result)).toEqual([]);
+    expect(drawnPackages(result)).toEqual([]);
+  });
+
+  it("(g) a form a required type-wildcard display matches but outside the allowlist: deficit", () => {
+    expectDeficit(classifyEta({ file: { mimeTypes: ["image/bmp"] } }));
+  });
+
+  it("(h) an accepts key the contract does not name: deficit", () => {
+    expectDeficit(classifyEta({ file: { mimeTypes: ["text/markdown"] }, exampleForm: { mimeTypes: ["text/plain"] } }));
+  });
+
+  it("(h2) a form block not shaped as the contract types it: deficit, never a crash", () => {
+    expectDeficit(classifyEta({ file: { mimeTypes: {} } }));
+    expectDeficit(classifyEta({ connectorRef: { resolvedMimeTypes: 42 } }));
+    expectDeficit(classifyEta({ file: { mimeTypes: "text/markdown" } }));
+    expectDeficit(classifyEta({ file: { mimeTypes: ["text/markdown"] }, dashboard: "yes" }));
+  });
+
+  it("(i) a form served only by a required preview display: deficit", () => {
+    const map = [...PROVIDERS, mapLine(PREVIEW, "preview", "required", ["application/x-example"])];
+    expectDeficit(classifyEta({ file: { mimeTypes: ["application/x-example"] } }, map));
+  });
+
+  it("(j) the gate warns about the floor entry the rule resolves, prints the drawn line and passes", () => {
+    const root = makeTree({
+      packs: [...fleet(), etaPack({ file: { mimeTypes: ["text/markdown", "image/png"] } })],
+      map: [...DEFAULT_MAP, ...PROVIDERS],
+      floor: [...TODAY, entry(ETA, [`${ETA}:item`])],
+    });
+    const res = runGate(root);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(REPORT_LINE);
+    expect(res.stdout).toContain("2 of 4 claiming extensions draw no display of their own (warn mode; 7 artifact extensions scanned)");
+    expect(res.stdout).toContain(
+      `    drawn by a content-type display: ${ETA} (image/png by ${PNG}, text/markdown by ${MARKDOWN})`,
+    );
+    const warns = res.stdout.split("\n").filter((l) => l.includes("WARN"));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain(ETA);
+    expect(warns[0]).toContain("--write-baseline");
+  });
+
+  it("(k) a tree without the allowlist source is a scanner error", () => {
+    const root = makeTree();
+    rmSync(join(root, ALLOWLIST_FILE));
+    const res = runGate(root);
+    expect(res.status).toBe(2);
+    expect(res.stderr).toContain("SCANNER ERROR");
   });
 });

@@ -87,12 +87,43 @@ export type ExtensionToolReviewPort = {
 /** The clock — injected, so a module's time-boxed decisions stay testable. */
 export type ExtensionToolClock = { now(): Date };
 
+/**
+ * The objects of the run's own lineage, and the records of the caller's own
+ * declared artifact dependencies (cinatra#3089). Handed only to a module of an
+ * AGENT package, and only while the run carries its actor context; a caller of
+ * any other kind is refused.
+ *
+ * THE READ ADMITS BY PROVENANCE, NEVER BY TYPE. `read({ objectId })` answers
+ * `{ objectId, type, data }` only for an object of the run's own organisation
+ * whose run is the bound run or an ancestor of it through the parent-run link.
+ * A missing object, an object outside that lineage and an object of another
+ * organisation are refused in one and the same sentence, so no answer says
+ * whether an object exists; an object larger than the artifact content cap is
+ * refused too.
+ *
+ * THE SAVE ADMITS BY DECLARATION. `save({ type, data })` saves one record of a
+ * type that a WINNING claim attributes to one of the caller's declared artifact
+ * dependencies, a type this process holds and whose identity key gives the
+ * record an identity of its own. The run is bound here as in the data port: the
+ * host saves under the bound run, a module may not name the run or an external
+ * id anywhere in `data`, and a top-level field whose value is the one marker
+ * `{ boundRun: true }` is given the bound run's id. The save then goes through
+ * the host's own objects save, whose gates refuse as they refuse every other
+ * caller; it answers `{ objectId, type, isNew }`. Every read and every save is
+ * audited with the calling extension.
+ */
+export type ExtensionToolObjectsPort = {
+  read(request: Record<string, unknown>): Promise<unknown>;
+  save(request: Record<string, unknown>): Promise<unknown>;
+};
+
 /** Everything a declared module is given. It reaches nothing else. */
 export type ExtensionToolPorts = {
   data: ExtensionToolDataPort;
   artifacts: ExtensionToolArtifactsPort;
   review: ExtensionToolReviewPort;
   clock: ExtensionToolClock;
+  objects: ExtensionToolObjectsPort;
 };
 
 /** The ONE argument a declared module's callable export takes. */
