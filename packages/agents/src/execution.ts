@@ -496,7 +496,7 @@ import {
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
-import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask } from "@cinatra-ai/a2a";
+import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, rememberWayflowGateNodeClaim } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
 // host-side caller injects the live `email-send` providers so sender-alias
@@ -666,6 +666,72 @@ export function stripCinatraEndNodeOutputMessages(
       }
     }
     return true;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The step that paused a run (cinatra#3745).
+//
+// When a run pauses for a review, the WayFlow loader signs the id of the
+// pausing step (`{ node, attestation: "g1:<hex>" }`, over the context id, the
+// gate task id and the node id, with the runtime's dedicated key) and puts it
+// on the metadata of the last new agent message under this key. The interrupt
+// handler records it beside the gate's task id through the a2a gate store, as
+// signed; a reader verifies it with the key before it relies on the node.
+// ---------------------------------------------------------------------------
+
+export const CINATRA_GATE_NODE_METADATA_KEY = "cinatra_gate_node";
+
+type GateNodeHistoryMessage = HistoryMessage & { metadata?: unknown };
+
+/**
+ * Read the pause claim from the LAST agent message of `history`. Answers
+ * `{ node, attestation }` (both non-empty strings) or null for any other
+ * shape, including a claim on an earlier message.
+ */
+export function extractCinatraGateNodeClaim(
+  history: ReadonlyArray<GateNodeHistoryMessage> | undefined,
+): { node: string; attestation: string } | null {
+  if (!history || history.length === 0) return null;
+  const lastAgent = history
+    .slice()
+    .reverse()
+    .find((m) => m?.role === "agent" || m?.role === "assistant");
+  const metadata = lastAgent?.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const claim = (metadata as Record<string, unknown>)[CINATRA_GATE_NODE_METADATA_KEY];
+  if (!claim || typeof claim !== "object" || Array.isArray(claim)) return null;
+  const { node, attestation } = claim as { node?: unknown; attestation?: unknown };
+  if (typeof node !== "string" || node.length === 0) return null;
+  if (typeof attestation !== "string" || attestation.length === 0) return null;
+  return { node, attestation };
+}
+
+/**
+ * Return `history` with the pause claim removed from every message's metadata;
+ * every message and its other metadata stay. A message without the claim is
+ * returned as the same object. Applied before the run's step history is stored.
+ */
+export function stripCinatraGateNodeClaims<T extends GateNodeHistoryMessage>(
+  history: ReadonlyArray<T> | undefined,
+): ReadonlyArray<T> | undefined {
+  if (!history) return history;
+  return history.map((message) => {
+    const metadata = message?.metadata;
+    if (
+      !metadata ||
+      typeof metadata !== "object" ||
+      Array.isArray(metadata) ||
+      !(CINATRA_GATE_NODE_METADATA_KEY in metadata)
+    ) {
+      return message;
+    }
+    const rest = { ...(metadata as Record<string, unknown>) };
+    delete rest[CINATRA_GATE_NODE_METADATA_KEY];
+    const copy = { ...message } as T & { metadata?: unknown };
+    if (Object.keys(rest).length > 0) copy.metadata = rest;
+    else delete copy.metadata;
+    return copy;
   });
 }
 
@@ -1479,6 +1545,21 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // updated" race). Redis is already load-bearing for gate resume (the
     // reverse-map fallback), so this is no new hard dependency.
     await rememberLatestWayflowGateTask(runId, task.id);
+    // cinatra#3745 — record which step of the flow paused the run, as the flow
+    // runtime signed it. Best-effort: a store fault is logged and the
+    // interrupt proceeds exactly as it does without a claim.
+    const gateNodeClaim = extractCinatraGateNodeClaim(
+      (task as { history?: ReadonlyArray<GateNodeHistoryMessage> }).history,
+    );
+    if (gateNodeClaim) {
+      try {
+        await rememberWayflowGateNodeClaim(runId, task.id, gateNodeClaim);
+      } catch (err) {
+        console.warn(
+          `[wayflow-gate-node] run=${runId} task=${task.id} record failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2084,7 +2165,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // the real last-assistant text message (`lastAgentMessage` below) or
   // leak into the persisted `scrubbedHistory` payload.
   const endNodeOutputs = extractCinatraEndNodeOutputs(rawHistory);
-  const history = stripCinatraEndNodeOutputMessages(rawHistory);
+  // The pause claims (cinatra#3745) are recorded at their interrupts; the
+  // stored history keeps its messages and drops only the claims.
+  const history = stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory));
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
   // Narrow parts at access time — the signature accepts `unknown[]` so all three
