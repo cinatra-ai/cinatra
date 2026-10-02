@@ -26,7 +26,7 @@ describe("connector route title from authorized crumb replacements", () => {
     expect(label([{ prefix: route, label: "OpenAI" }, { prefix: route, label: "" }])).toBeNull();
   });
   it("never borrows another connector's or an ancestor's label", () => {
-    expect(label([{ prefix: "/connectors/cinatra-ai/other/setup", label: "Other" }])).toBeNull();
+    expect(label([{ prefix: "/connectors/cinatra-ai/google-appointment-schedules-connector/setup", label: "Google Appointment Schedules" }])).toBeNull();
     expect(label([{ prefix: "/connectors/cinatra-ai/openai-connector", label: "OpenAI" }])).toBeNull();
     expect(label([])).toBeNull();
   });
