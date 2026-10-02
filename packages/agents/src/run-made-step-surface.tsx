@@ -154,8 +154,20 @@ export function RunMadeStepSurface({
   reading: string;
 }) {
   const empty = rows.length === 0;
+  // THE COMPLETION READING IS TAKEN HERE, on the surface the finished run's
+  // page actually draws. The drawing puts a finished run's outputs on the
+  // rail's last entry and its page -- "A finished run says what it made. The
+  // rail's last entry is the run's own record, and its page lists the run's
+  // work" (artifact review, I.2) -- not on a second card beside it. So the
+  // anchors a walk reads the completion by sit on the nodes already drawn, and
+  // the evidence IS the run's own record.
+  const produced = rows.filter((row) => !row.used);
   return (
-    <div data-run-made={empty ? "empty" : "listed"}>
+    <div
+      data-run-made={empty ? "empty" : "listed"}
+      data-run-completion={produced.length > 0 ? "with-output" : "no-output"}
+      data-run-completion-evidence="outputs"
+    >
       {/* The heading LINE — the step's word and the run's state pill, side by
           side, exactly as the drawing composes them in both specimens. */}
       <div
@@ -186,7 +198,9 @@ export function RunMadeStepSurface({
         </p>
       )}
       {empty ? null : (
-        <ul className="grid gap-[7px]" data-run-made-rows="">
+        // THE ONE OUTPUTS LIST. The rows list the drawing already draws IS the
+        // run's output list; it is never a second list beside it.
+        <ul className="grid gap-[7px]" data-run-made-rows="" data-run-outputs="">
           {rows.map((row) => (
             <li
               key={row.artifactId}
@@ -222,6 +236,10 @@ export function RunMadeStepSurface({
               <Link
                 href={row.href}
                 data-run-made-open=""
+                // ONLY A ROW THE RUN PRODUCED IS AN OUTPUT. A row the run merely
+                // read stays listed and keeps its used mark -- the drawing
+                // requires it -- and is never counted an output.
+                data-run-output-link={row.used ? undefined : row.artifactId}
                 className={OPEN_CONTROL_CLASS}
               >
                 Open

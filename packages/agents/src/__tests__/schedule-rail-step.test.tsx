@@ -223,10 +223,13 @@ describe("the row keeps every anchor its readers address it by", () => {
     )!;
     expect(indicator).not.toBeNull();
     expect(entry.textContent).toBe("1Schedule");
-    // This row states nothing about "reached" — it is the step the surface is
-    // on. An `available` handed down from here would print the mark and change
-    // the tokens, so its ABSENCE is what is pinned, not just the rest.
-    expect(entry.hasAttribute("data-run-surface-rail-reached")).toBe(false);
+    // THE RUN HAS BEEN THROUGH THE SCHEDULE (cinatra#3449). This row carries
+    // the rail's own state marks now, like every other kind of entry the rail
+    // draws, and `-reached` reads "true" on it always: the schedule is how the
+    // run was dispatched. What the absence used to pin — that no `available` is
+    // handed down here to change the row's tokens — stays pinned by the class
+    // assertions below, which are unchanged.
+    expect(entry.getAttribute("data-run-surface-rail-reached")).toBe("true");
     // NOR did the shared row close it. Since cinatra#2970 a row whose step has
     // no surface cannot be opened; this step always has its form, so the row
     // keeps its handler and says nothing about being disabled.
@@ -265,7 +268,10 @@ describe("the row keeps every anchor its readers address it by", () => {
     expect(entry.getAttribute("data-schedule-rail-host")).toBe("page_gate_region");
     expect(entry.getAttribute("data-schedule-step-selected")).toBe("false");
     expect(entry.hasAttribute("aria-current")).toBe(false);
-    expect(entry.hasAttribute("data-run-surface-rail-reached")).toBe(false);
+    // Present and "true" on the unselected reading too (cinatra#3449): the mark
+    // does not depend on which row the reader is standing on, only on the run
+    // having been dispatched through its schedule.
+    expect(entry.getAttribute("data-run-surface-rail-reached")).toBe("true");
     expect(entry.hasAttribute("aria-disabled")).toBe(false);
     // The UNSELECTED tokens, unchanged by the shared row.
     const indicator = entry.querySelector<HTMLElement>(
