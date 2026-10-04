@@ -6,12 +6,16 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { constants } from "node:os";
 
 const INTERVAL_MS = 100;
-const LIMIT_BYTES = 12_000_000_000; // decimal GB, not GiB
+// Matched main's valid sampled tree peak (18_367_098_880 bytes) plus 20%.
+// Keep the exact decimal-byte result; neither GB/GiB rounding nor HWM sums.
+const LIMIT_BYTES = 22_040_518_656;
 const LIFETIME_MS = 18 * 60_000; // readiness (5m) + walk step (12m) + cleanup
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const key = (p) => `${p.pid}:${p.start}`;
+const REASON_CODES = new Set([...Object.keys(constants.errno), "parse-null", "scan-limit", "supervisor-incomplete"]);
 
 export function parseProcStat(text) {
   const end = text.lastIndexOf(") ");
@@ -37,8 +41,21 @@ export function selectOwned(rows, group, known) {
 
 export function createPeak() {
   return { samples: 0, firstSampleAtMs: null, lastSampleAtMs: null, maxSampleGapMs: 0, maxScanDurationMs: 0,
-    readErrors: 0, exitRaces: 0, emptySamples: 0, sampledProcessTreePeakBytes: null, lowestRunnerMemAvailableBytes: null,
+    readErrors: 0, outsideTreeReadErrors: 0, readErrorReasons: [], omittedReadErrorReasons: 0,
+    exitRaces: 0, emptySamples: 0, sampledProcessTreePeakBytes: null, lowestRunnerMemAvailableBytes: null,
     largestObservedProcessHwmBytes: null, observedProcessHwmSumBytes: null, observedProcessCount: 0, highWaters: {} };
+}
+
+function readError(peak, site, code, pid = null, owned = null) {
+  // No exception message, path, command or environment can reach the reading.
+  const safeCode = REASON_CODES.has(code) ? code : "unknown";
+  const reason = { site, code: safeCode, pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, owned };
+  // Only an inventory error with positive exclusion proof is non-invalidating.
+  // Listing, owned reads, meminfo and teardown always stay conservative.
+  if (site === "stat-scan" && owned === false) peak.outsideTreeReadErrors++;
+  else peak.readErrors++;
+  if (peak.readErrorReasons.length < 128) peak.readErrorReasons.push(reason);
+  else peak.omittedReadErrorReasons++;
 }
 
 /** @param {number | null} [availableBytes] */
@@ -85,48 +102,132 @@ export function firstCompile(log) {
   return { firstRouteStatus: Number(match[1]), firstRouteElapsedMs, firstRouteCompileMs };
 }
 
-export function readRows(peak, io = { list: () => readdirSync("/proc"), stat: (name) => readFileSync(`/proc/${name}/stat`, "utf8") }) {
+export function openStatReader(name, io = { open: openSync, read: readSync, close: closeSync }) {
+  const fd = io.open(`/proc/${name}/stat`, "r");
+  return {
+    read: () => {
+      const buffer = Buffer.alloc(4096);
+      const size = io.read(fd, buffer, 0, buffer.length, 0);
+      if (size === buffer.length) throw Object.assign(new Error("stat-exceeds-read-bound"), { code: "EOVERFLOW" });
+      return buffer.subarray(0, size).toString();
+    },
+    close: () => io.close(fd),
+  };
+}
+
+const sampleIo = {
+  list: () => readdirSync("/proc"), stat: (name) => readFileSync(`/proc/${name}/stat`, "utf8"),
+  openStat: openStatReader,
+  status: (name) => readFileSync(`/proc/${name}/status`, "utf8"),
+  meminfo: () => readFileSync("/proc/meminfo", "utf8"), now: Date.now,
+};
+
+function errorOwnership(row, rows, { group, known } = {}) {
+  if (!row || !Number.isSafeInteger(group) || !(known instanceof Set)) return null;
+  const owned = new Set(selectOwned(rows, group, known).map((p) => p.pid));
+  if (owned.has(row.pid)) return true;
+  // A failed read may have belonged to the previous incarnation. Recovered
+  // metadata for a reused, previously owned PID cannot clear that uncertainty.
+  if ([...known].some((identity) => identity.startsWith(`${row.pid}:`))) return null;
+  // A missing identity, lost anchor or missing ancestor cannot prove exclusion.
+  if (!rows.some((p) => known.has(key(p)))) return null;
+  const byPid = new Map(rows.map((p) => [p.pid, p]));
+  const visited = new Set();
+  for (let current = row; current && !visited.has(current.pid); current = byPid.get(current.ppid)) {
+    visited.add(current.pid);
+    if (owned.has(current.pid) || known.has(key(current))) return true;
+    if (current.group === group) return null;
+    if (current.ppid === 0) return false;
+  }
+  return null;
+}
+
+export function readRows(peak, io = sampleIo, ownership = {}) {
   const rows = [];
+  const failures = [];
   let complete = true;
-  const names = io.list().filter((s) => /^\d+$/.test(s));
-  if (names.length > 8192) { peak.readErrors++; complete = false; }
+  let names;
+  try { names = io.list().filter((s) => /^\d+$/.test(s)); }
+  catch (error) { readError(peak, "list", error.code); return { rows, complete: false }; }
+  if (names.length > 8192) { readError(peak, "list", "scan-limit"); complete = false; }
   for (const name of names.slice(0, 8192)) {
+    let reader;
     try {
-      const row = parseProcStat(io.stat(name));
-      if (row) rows.push(row);
-      else { peak.readErrors++; complete = false; }
-    } catch (error) { if (error.code !== "ENOENT" && error.code !== "ESRCH") { peak.readErrors++; complete = false; } }
+      reader = io.openStat ? io.openStat(name) : { read: () => io.stat(name), close: () => {} };
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") { readError(peak, "stat-open", error.code, Number(name)); complete = false; }
+      continue;
+    }
+    try {
+      let code;
+      try {
+        const row = parseProcStat(reader.read());
+        if (row && row.pid === Number(name)) { rows.push(row); continue; }
+        code = "parse-null";
+      } catch (error) {
+        if (error.code === "ENOENT" || error.code === "ESRCH") continue;
+        code = error.code;
+      }
+      // A /proc descriptor stays tied to its task even after numeric PID reuse:
+      // https://docs.kernel.org/filesystems/proc.html (process-specific entries).
+      // Retry this same descriptor, never a replacement process's pathname. A
+      // path-only injected reader cannot establish this identity and stays unknown.
+      let recovered = null;
+      if (io.openStat) {
+        try { recovered = parseProcStat(reader.read()); } catch { /* Unknown remains invalidating. */ }
+      }
+      if (recovered?.pid !== Number(name)) recovered = null;
+      if (recovered) rows.push(recovered);
+      failures.push({ pid: Number(name), code, recovered });
+    } finally {
+      try { reader.close(); }
+      catch (error) { readError(peak, "stat-close", error.code, Number(name)); complete = false; }
+    }
+  }
+  for (const failure of failures) {
+    const owned = errorOwnership(failure.recovered, rows, ownership);
+    readError(peak, "stat-scan", failure.code, failure.pid, owned);
+    if (owned !== false) complete = false;
   }
   return { rows, complete };
 }
 
-function sample(state, known) {
-  const started = Date.now();
+export function sample(state, known, io = sampleIo) {
+  const started = io.now();
   let inventory = { rows: [], complete: false };
   try {
-    inventory = readRows(state.peak);
+    inventory = readRows(state.peak, io, { group: state.group, known });
     const owned = selectOwned(inventory.rows, state.group, known).filter((p) => p.pid !== state.group);
     const readings = [];
     for (const p of owned) {
       known.add(key(p));
+      let site = "owned-status";
       try {
-        const status = readFileSync(`/proc/${p.pid}/status`, "utf8");
-        const current = parseProcStat(readFileSync(`/proc/${p.pid}/stat`, "utf8"));
+        const status = io.status(String(p.pid));
+        site = "owned-stat";
+        const current = parseProcStat(io.stat(String(p.pid)));
         if (!current || key(current) !== key(p)) { state.peak.exitRaces++; continue; }
         const rss = /^VmRSS:\s+(\d+) kB$/m.exec(status);
         const hwm = /^VmHWM:\s+(\d+) kB$/m.exec(status);
         if (!rss || !hwm) { state.peak.exitRaces++; continue; }
-        readings.push({ ...p, rssBytes: Number(rss[1]) * 1024, hwmBytes: Number(hwm[1]) * 1024 });
+        const rssBytes = Number(rss[1]) * 1024;
+        const hwmBytes = Number(hwm[1]) * 1024;
+        if (![rssBytes, hwmBytes].every(Number.isSafeInteger)) { readError(state.peak, "owned-status", "parse-null", p.pid, true); continue; }
+        readings.push({ ...p, rssBytes, hwmBytes });
       } catch (error) {
         if (error.code === "ENOENT" || error.code === "ESRCH") state.peak.exitRaces++;
-        else state.peak.readErrors++;
+        else readError(state.peak, site, error.code, p.pid, true);
       }
     }
-    const available = /^MemAvailable:\s+(\d+) kB$/m.exec(readFileSync("/proc/meminfo", "utf8"));
-    if (!available) state.peak.readErrors++;
-    recordPeak(state.peak, readings, Date.now(), available ? Number(available[1]) * 1024 : null);
-  } catch { state.peak.readErrors++; }
-  state.peak.maxScanDurationMs = Math.max(state.peak.maxScanDurationMs, Date.now() - started);
+    let availableBytes = null;
+    try {
+      const available = /^MemAvailable:\s+(\d+) kB$/m.exec(io.meminfo());
+      if (available && Number.isSafeInteger(Number(available[1]) * 1024)) availableBytes = Number(available[1]) * 1024;
+      else readError(state.peak, "meminfo", "parse-null");
+    } catch (error) { readError(state.peak, "meminfo", error.code); }
+    recordPeak(state.peak, readings, io.now(), availableBytes);
+  } catch (error) { readError(state.peak, "sample", error.code); }
+  state.peak.maxScanDurationMs = Math.max(state.peak.maxScanDurationMs, io.now() - started);
   state.known = [...known];
   return inventory;
 }
@@ -168,11 +269,16 @@ function attribution() {
 }
 const ownStat = (pid) => parseProcStat(readFileSync(`/proc/${pid}/stat`, "utf8"));
 function save(path, state) { writeFileSync(`${path}.new`, JSON.stringify(state)); renameSync(`${path}.new`, path); }
-function cleanupIo(state) {
+export function cleanupIo(state, io = { stat: ownStat, signal: (pid, signal) => process.kill(pid, signal) }) {
   return { now: Date.now, sleep, excludePid: state.group, read: () => sample(state, new Set(state.known)), signal: (pid, signal) => {
     // Re-read starttime immediately before signaling; never use a stale PID.
-    try { const current = ownStat(pid); if (current && state.known.includes(key(current))) process.kill(pid, signal); }
-    catch (error) { if (error.code !== "ESRCH" && error.code !== "ENOENT") state.peak.readErrors++; }
+    let current;
+    try { current = io.stat(pid); }
+    catch (error) { if (error.code !== "ESRCH" && error.code !== "ENOENT") readError(state.peak, "signal-stat", error.code, pid); return; }
+    if (!current) { readError(state.peak, "signal-stat", "parse-null", pid); return; }
+    if (!state.known.includes(key(current))) return;
+    try { io.signal(pid, signal); }
+    catch (error) { if (error.code !== "ESRCH" && error.code !== "ENOENT") readError(state.peak, "signal", error.code, pid, true); }
   } };
 }
 function readCompile(logPath) {
@@ -220,7 +326,7 @@ async function main(command) {
       let server;
       try { server = spawn("pnpm", ["dev"], { stdio: ["ignore", fd, fd] }); }
       finally { closeSync(fd); }
-      server.on("error", () => { state.peak.readErrors++; requested = true; });
+      server.on("error", (error) => { readError(state.peak, "spawn", error.code, state.serverPid, true); requested = true; });
       server.unref();
       state.serverPid = server.pid ?? null;
       if (!state.serverPid) throw new Error("server-spawn-unavailable");
@@ -251,7 +357,7 @@ async function main(command) {
     if (!state.complete) {
       // Supervisor failure still gets bounded teardown using its last recorded
       // identities. Missing final observations remain an explicit invalid read.
-      state.peak.readErrors++;
+      readError(state.peak, "stop-timeout", "supervisor-incomplete");
       state.teardownComplete = await stopOwned(state.group, new Set(state.known), cleanupIo(state));
     }
     let compile = null;

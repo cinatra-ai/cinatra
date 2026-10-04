@@ -199,6 +199,10 @@ jobs:
       - name: Stop dev server and print resource readings
         if: always()
         timeout-minutes: 1
+        # The sampler's cap is 22_040_518_656 decimal bytes: matched main's
+        # valid 18_367_098_880-byte tree reading plus 20%, without GB rounding.
+        # Valid reads, available-memory reporting and owned-tree cleanup remain
+        # required; outside-tree errors do not waive owned or unknown failures.
         run: node tests/e2e/dev-hmr-smoke/server-monitor.mjs stop
 
       - name: Upload artifacts (dev log + Playwright report)
