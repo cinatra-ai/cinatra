@@ -210,7 +210,12 @@ describe("GET /api/agents/runs/[runId]", () => {
     const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      reviewGate: { ref: "ref:run-1:review-task-1", awaiting: false },
+      reviewGate: {
+        ref: "ref:run-1:review-task-1",
+        awaiting: false,
+        // Stable display-refresh identity; the opaque ref remains the action handle.
+        reviewTaskId: "review-task-1",
+      },
     });
     expect(readRunReviewSlot).toHaveBeenCalledWith("run-1");
   });

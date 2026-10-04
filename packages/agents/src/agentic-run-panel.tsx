@@ -44,6 +44,7 @@ import {
   type RunReviewSlot,
   type RunReviewSlotReader,
 } from "./lifecycle-card-runtime";
+import { useRunReviewRailRefresh } from "./use-run-review-rail-refresh";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 // The review screen's PLACEHOLDER (cinatra#2997) and the gate-level BLOCKED
 // state (cinatra#3219) — both are the review screen's own states, so they live
@@ -266,6 +267,8 @@ export type AgenticRunPanelProps = {
    * a resolved one is never pinned.
    */
   initialReviewGate?: RunReviewSlot | null;
+  /** Recompose the run-page rail when the existing reading finds a new gate. */
+  refreshReviewRail?: boolean;
   /**
    * HOW THIS SURFACE READS THE SLOT, when the run finishes while the card is on
    * screen. A first-party, same-origin surface (the run page) passes none and
@@ -488,6 +491,7 @@ export function AgenticRunPanel({
   initialHitlContext,
   recommendationDecided,
   initialReviewGate,
+  refreshReviewRail = false,
   readReviewSlot,
   onReviewReadingChange,
   inputStepInRail = false,
@@ -1920,6 +1924,19 @@ export function AgenticRunPanel({
   // change does not open; so the value is read for what it is, and a host that
   // needs the stronger question asks it of the card.
   const panelDrawsReview = Boolean(inPlaceReviewRef);
+  const reviewTaskId = !panelDrawsReview
+    ? null
+    : markedReviewGate
+      ? typeof effectiveHitlContext?.currentValues?.reviewTaskId === "string"
+        ? effectiveHitlContext.currentValues.reviewTaskId
+        : null
+      : reviewSlot.reviewTaskId;
+  useRunReviewRailRefresh({
+    runId,
+    reviewTaskId,
+    initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    enabled: refreshReviewRail && !widgetHostedPanel,
+  });
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);
   onReviewReadingChangeRef.current = onReviewReadingChange;
   useEffect(() => {

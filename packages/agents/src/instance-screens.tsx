@@ -1980,6 +1980,11 @@ export async function SetupScreen({
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // Stable metadata only; the opaque ref remains the action ticket.
+        reviewTaskId: runReviewSlot?.reviewTaskId ?? null,
+        // The rail's earlier query is authoritative for what it actually drew.
+        // A gate may open before this later slot read in the SAME render.
+        railReviewTaskIds: railGates.map((gate) => gate.reviewTaskId),
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────

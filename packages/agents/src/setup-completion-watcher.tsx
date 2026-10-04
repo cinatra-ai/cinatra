@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AgenticRunPanel } from "./agentic-run-panel";
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import type { HitlGateContext } from "./run-surface-status";
+import type { RunReviewSlot } from "./lifecycle-card-runtime";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 import { buildAgentPackageBasePath } from "@/lib/agent-url";
@@ -105,7 +106,7 @@ type SetupCompletionWatcherProps = {
   /** cinatra#2997 — the run's review slot, read server-side by the screen that
    *  mounts this watcher and threaded straight through to the panel, so the run
    *  page's FIRST paint of a run that already has a review draws that review. */
-  initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
+  initialReviewGate?: RunReviewSlot | null;
   /**
    * WAS THIS RUN'S SKILL SET DECIDED ON THE RECOMMENDATION CARD?
    *
@@ -305,6 +306,8 @@ export function SetupCompletionWatcher({
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
+      // This watcher is the run-page host; conversation panels never enable it.
+      refreshReviewRail
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}

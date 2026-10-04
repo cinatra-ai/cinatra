@@ -69,6 +69,7 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunReviewRailRefresh } from "./use-run-review-rail-refresh";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
@@ -2668,6 +2669,22 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     status,
     initial: initialReviewGate,
     read: slotReader,
+  });
+  const reviewTaskId =
+    status === "pending_approval" &&
+    !awaitingNextStep &&
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
+        ? effectiveInterruptContext.values.reviewTaskId
+        : null
+      : status === "completed"
+        ? reviewSlot.reviewTaskId
+        : null;
+  useRunReviewRailRefresh({
+    runId,
+    reviewTaskId,
+    initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    enabled: !embedMode,
   });
 
   // -------------------------------------------------------------------------

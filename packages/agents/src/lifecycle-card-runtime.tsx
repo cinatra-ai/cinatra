@@ -1452,7 +1452,14 @@ export function useRunMomentCard({
 
 /** The run's review slot: the server-minted ticket for its review screen, and
  *  whether a produced output's review question is still open. */
-export type RunReviewSlot = { ref: string | null; awaiting: boolean };
+export type RunReviewSlot = {
+  ref: string | null;
+  awaiting: boolean;
+  /** Stable refresh identity (#3942), never a decision/action reference. */
+  reviewTaskId?: string | null;
+  /** SSR-only identities actually composed into the run rail (#3942). */
+  railReviewTaskIds?: readonly string[];
+};
 
 /**
  * Reads the slot with the surface's OWN credential, and with the caller's abort
@@ -1502,12 +1509,21 @@ function slotReadDelay(reads: number): number {
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */
 export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
-  const slot = (data as { reviewGate?: { ref?: unknown; awaiting?: unknown } })
+  const slot = (data as {
+    reviewGate?: { ref?: unknown; awaiting?: unknown; reviewTaskId?: unknown };
+  })
     ?.reviewGate;
-  if (!slot) return null;
+  if (!slot || typeof slot !== "object" || Array.isArray(slot)) return null;
   return {
     ref: typeof slot.ref === "string" && slot.ref.length > 0 ? slot.ref : null,
     awaiting: Boolean(slot.awaiting),
+    // Older seeds have only ref/awaiting; preserve their exact parsed shape.
+    ...("reviewTaskId" in slot ? {
+      reviewTaskId:
+        typeof slot.reviewTaskId === "string" && slot.reviewTaskId.trim().length > 0
+          ? slot.reviewTaskId
+          : null,
+    } : {}),
   };
 }
 
