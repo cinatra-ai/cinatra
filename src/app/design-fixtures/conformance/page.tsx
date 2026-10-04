@@ -40,6 +40,7 @@ import {
   PrimitiveWaveOverlayFixtures,
 } from "./primitive-wave-fixtures";
 import { PrimitiveWaveLeg2ConformanceFixtures } from "./primitive-wave-leg2-fixtures";
+import { ScopeAssignmentSkillsConformanceFixture } from "./scope-assignment-skills-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -455,6 +456,14 @@ export default function ConformanceHarnessPage() {
                 before it paints; the suite clicks the trigger, then reads the
                 panel. */}
             <PrimitiveWaveOverlayFixtures />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Agent assignment — Skills</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScopeAssignmentSkillsConformanceFixture />
           </CardContent>
         </Card>
       </PageContent>

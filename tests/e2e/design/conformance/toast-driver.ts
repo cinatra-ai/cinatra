@@ -12,22 +12,30 @@ async function showToast(page: Page, root: Locator) {
   }).toPass({ timeout: 30_000 });
 }
 
-async function ghostControls(root: Locator) {
+async function ghostControls(page: Page, root: Locator) {
   const copy = root.getByRole("button", { name: "Copy", exact: true });
   const close = root.getByRole("button", { name: "Close toast", exact: true });
   for (const control of [copy, close]) {
-    await expect(control).toHaveCSS("opacity", "0.55");
-    for (const interact of [() => control.hover(), () => control.focus()]) {
-      await interact();
+    const assertGhostPaint = async () => {
       await expect(control).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-      await expect(control).toHaveCSS("border-top-width", "0px");
-      await expect(control).toHaveCSS("border-right-width", "0px");
+      for (const edge of ["top", "right", "bottom", "left"]) {
+        await expect(control).toHaveCSS(`border-${edge}-width`, "0px");
+      }
       const colors = await control.evaluate((node) => ({
         control: getComputedStyle(node).color,
         toast: getComputedStyle(node.closest("[data-sonner-toast]")!).color,
       }));
       expect(colors.control).toBe(colors.toast);
-    }
+    };
+    await page.mouse.move(0, 0);
+    await expect(control).toHaveCSS("opacity", "0.55");
+    await assertGhostPaint();
+    await control.hover();
+    await assertGhostPaint();
+    await page.mouse.move(0, 0);
+    await control.focus();
+    await expect(control).toBeFocused();
+    await assertGhostPaint();
   }
   await expect(copy.locator("svg")).toHaveAttribute("stroke-width", "2.2");
   await expect(close.locator("svg")).toHaveCSS("stroke-width", "2.4px");
@@ -42,7 +50,7 @@ export const TOAST_DRIVER: SurfaceDriver = {
   root: toastRoot,
   present: async (page, root) => {
     await showToast(page, root);
-    await ghostControls(root);
+    await ghostControls(page, root);
   },
   fields: {
     message: {

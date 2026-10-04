@@ -1,6 +1,24 @@
 {
   "$comment": "The stable data-testid / stable-attribute contract for design-conformance surfaces (cinatra#985, extended by the seeded data-contract wave cinatra#986). Each covered manifest surface maps to the REAL component file(s) that implement it and the attribute literals that MUST be present in that source (scripts/design/check-conformance-testids.mjs turns a missing id into a CI red). Renaming any of these attributes is a BREAKING change to the functional-acceptance suite by design — update the contract, the drivers (contract.ts), and the harness in the same PR. Selector notes document how the suite locates each surface at runtime; harness instrumentation attributes (data-surface-id, data-variant, data-tab, data-installed-version) live on the conformance fixture routes, everything else on real component code.",
   "surfaces": {
+    "agent-assignment-skills": {
+      "manifest": "app-extensions",
+      "selector": "[data-surface-id=\"agent-assignment-skills\"] mounts the real ScopeAssignmentPage and Skills chooser/rows. Only the data action provider is substituted; source scope, matching options and removal results are read from the product DOM.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/scope-assignment-skills-fixture.tsx",
+          "literals": ["data-surface-id=\"agent-assignment-skills\"", "ScopeAssignmentPage", "ScopeAssignmentSkillActionsProvider"]
+        },
+        {
+          "file": "src/components/scope-assignment/scope-assignment-page.tsx",
+          "literals": ["data-testid={SCOPE_ASSIGNMENT_ROOT_TEST_ID}", "data-slot=\"scope-assignment-scope\""]
+        },
+        {
+          "file": "src/components/scope-assignment/scope-assignment-skills.tsx",
+          "literals": ["data-slot=\"scope-skills-row\"", "data-skill-id={row.skillId}"]
+        }
+      ]
+    },
     "toast": {
       "manifest": "app-components",
       "selector": "[data-sonner-toast] with the conformance message in [data-title]; Copy and Close are the library's own accessible buttons. The fixture invokes the canonical error toast, including the rich-color close rule, and the product's global Toaster renders it.",

@@ -37,7 +37,13 @@
       "src/app/design-fixtures/conformance/seeded/page.tsx",
       "src/app/design-fixtures/conformance/seeded/marketplace-grid-fixture.tsx",
       "src/app/design-fixtures/conformance/seeded/installed-extensions-fixture.tsx",
-      "src/app/design-fixtures/conformance/seeded/detail-modal-fixture.tsx"
+      "src/app/design-fixtures/conformance/seeded/detail-modal-fixture.tsx",
+      "tests/e2e/design/conformance/scope-assignment-skills-driver.ts",
+      "src/app/design-fixtures/conformance/scope-assignment-skills-fixture.tsx",
+      "src/app/design-fixtures/conformance/scope-assignment-skills-fixture-data.ts",
+      "src/app/design-fixtures/conformance/__tests__/scope-assignment-skills-fixture.test.tsx",
+      "src/components/scope-assignment/scope-assignment-skill-actions.tsx",
+      "src/components/scope-assignment/scope-assignment-skills.tsx"
     ],
     "app-connectors": [
       "tests/e2e/design/conformance/manifests/app-connectors.json",
