@@ -29,7 +29,7 @@
 // entry of the assistant stands and the send control is idle, or its bound runs
 // out; it then refuses, and names what was missing. The bound may be raised up
 // to a ceiling, and no further: a turn that takes longer is not coming.
-import { CONTROL_MARK, CONTROL_NAMES_LISTED, describeMatches, describeNames, describePart, plainName, quotedName, readControls, unspacedNote } from "./page-controls.mjs";
+import { CONTROL_MARK, CONTROL_NAMES_LISTED, describeMatches, describeNames, describePart, plainName, quotedName, readPageControls, unspacedNote } from "./page-controls.mjs";
 import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 import { RUN_WINDOW_ENTRY_ATTRIBUTE, RUN_WINDOW_FIELD, WINDOW_TURN_NOTE } from "./type-in-window.mjs";
 
@@ -121,7 +121,7 @@ export async function waitForTurn(page, { record, field = RUN_WINDOW_FIELD, with
     note: "",
   };
   /** @returns {Promise<any>} */
-  const read = (note = "") => within(page.evaluate(readControls, { ...query, note }), READING_BOUND_MS);
+  const read = (note = "") => within(readPageControls(page, { ...query, note }), READING_BOUND_MS);
   const named = quotedName(wanted);
   const start = performance.now();
   const first = await read();

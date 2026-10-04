@@ -20,7 +20,7 @@
 // composer: the one shown text box whose accessible name is `composer` ("Send
 // message"). The product gives its composer that name in an empty conversation
 // and in one with messages alike; only the placeholder differs, and a
-// placeholder is never read as a name. The step waits for it in either state,
+// placeholder contributes only when the browser names the field from it. The step waits for it in either state,
 // types the prompt, and presses the send control, the button of the same name.
 // With both `card` and `prompt`, the card is pressed first.
 //
@@ -44,7 +44,7 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unmarkControls,
   unspacedNote,
 } from "./page-controls.mjs";
@@ -203,7 +203,7 @@ export async function dispatchRun(
   try {
     if (card !== undefined) {
       const reading = await within(
-        page.evaluate(readControls, { mode: "card", card: wanted, control: controlName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED }),
+        readPageControls(page, { mode: "card", card: wanted, control: controlName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED }),
         READING_BOUND_MS,
       );
       if (!reading) throw refuse(STEP, record, "unreadable", `the cards on ${from} could not be read — ${nothing}`);
@@ -254,7 +254,7 @@ export async function dispatchRun(
       let reading = null;
       for (;;) {
         await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
-        reading = (await within(page.evaluate(readControls, { mode: "composer", composer: composerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED }), READING_BOUND_MS)) ?? reading;
+        reading = (await within(readPageControls(page, { mode: "composer", composer: composerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED }), READING_BOUND_MS)) ?? reading;
         if (reading && reading.found > 0) break;
         const remaining = bound.composerMs - (performance.now() - waitedFrom);
         if (remaining <= 0) break;
