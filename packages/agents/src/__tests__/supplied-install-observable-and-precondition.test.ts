@@ -20,6 +20,7 @@
  *     agent observable alone.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { HitlRunFilterTemplate } from "../hitl-run-filter";
 
 const session = vi.hoisted(() => ({
   user: { id: "u1" } as { id: string } | null,
@@ -77,16 +78,7 @@ vi.mock("../materialize-agent-package", () => ({
 // The agents LISTING's own reader. The real `selectHitlRunVisibleTemplates` is
 // deliberately NOT mocked: the point of the fix is that the screen reads the
 // listing's own rule rather than a second copy of it.
-type Template = {
-  id: string;
-  packageName: string | null;
-  hitlRequired: boolean;
-  hasArtifactBindings?: boolean | null;
-  hitlScreens: string[] | null;
-  gatedSteps: unknown[] | null;
-  agentDependencies: Record<string, string> | null;
-  sourceType: string;
-};
+type Template = HitlRunFilterTemplate;
 const templates = vi.hoisted(() => ({ rows: [] as unknown[] }));
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: vi.fn(async () => ({ id: "tpl-1" })),
@@ -107,6 +99,7 @@ vi.mock("@/lib/anthropic-skill-config-service", () => ({
 }));
 
 import { installSuppliedArchiveAction } from "../supplied-install-actions";
+import { selectHitlRunVisibleTemplates } from "../hitl-run-filter";
 
 const ZIP = Buffer.from("zip").toString("base64");
 const AGENT_PACKAGE = "@acme/upload-walk-agent";
@@ -117,7 +110,7 @@ const template = (over: Partial<Template>): Template => ({
   hitlRequired: false,
   hitlScreens: [],
   gatedSteps: null,
-  agentDependencies: null,
+  agentDependencies: undefined,
   sourceType: "internal",
   ...over,
 });
@@ -162,7 +155,9 @@ describe("the agent install points at a listing that actually carries it", () =>
   it("an agent reviewed only by the application points its install notice to the agents list", async () => {
     // No agent-authored gate, dependency or external-agent escape hatch. The
     // real listing filter must recognize the declared output's review alone.
-    templates.rows = [template({ hasArtifactBindings: true })];
+    const reviewedAgent = template({ hasArtifactBindings: true });
+    expect(selectHitlRunVisibleTemplates([reviewedAgent])).toEqual([reviewedAgent]);
+    templates.rows = [reviewedAgent];
     const result = await installAgent();
     expect(result.ok).toBe(true);
     if (result.ok) {
