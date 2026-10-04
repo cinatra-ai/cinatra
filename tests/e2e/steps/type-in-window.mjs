@@ -45,7 +45,7 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unmarkControls,
   unspacedNote,
 } from "./page-controls.mjs";
@@ -137,7 +137,7 @@ export async function typeThrough(page, { step, record, field, text, replace, se
     note: "",
   };
   /** @returns {Promise<any>} */
-  const read = (note = "") => within(page.evaluate(readControls, { ...query, note }), READING_BOUND_MS);
+  const read = (note = "") => within(readPageControls(page, { ...query, note }), READING_BOUND_MS);
   const named = quotedName(field);
   try {
     // The box, shown with its name: a window mounts once its page has loaded.

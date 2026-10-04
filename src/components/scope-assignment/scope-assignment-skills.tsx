@@ -26,11 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import { EntitySearchCombobox } from "@/components/entity-search-combobox";
-import {
-  assignScopeSkillAction,
-  removeScopeSkillAction,
-  searchScopeAssignableSkillsAction,
-} from "@/lib/scope-assignment/scope-assignment-actions";
+import { useScopeAssignmentSkillActions } from "./scope-assignment-skill-actions";
 import {
   SCOPE_ASSIGNMENT_SKILLS_PER_SCOPE,
   scopeAssignmentActionRefusalText,
@@ -101,6 +97,11 @@ export function ScopeAssignmentSkills({
   canWrite: boolean;
   readOnlyMessage?: string | null;
 }) {
+  const {
+    assignScopeSkillAction,
+    removeScopeSkillAction,
+    searchScopeAssignableSkillsAction,
+  } = useScopeAssignmentSkillActions();
   const [rows, setRows] = useState<ScopeAssignmentSkillRow[]>(initialRows);
   const [savingIds, setSavingIds] = useState<readonly string[]>([]);
   // One message per skill: two changes can fail at once, and a single slot

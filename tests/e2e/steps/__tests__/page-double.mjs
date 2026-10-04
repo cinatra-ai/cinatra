@@ -98,6 +98,45 @@ const ORIGIN_CONNECTIONS = 6;
 const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 720 });
 /** How a context asks a page to keep its document's storage. */
 const KEEP_STORAGE = Symbol("keep the storage");
+const ACCESSIBILITY_SESSION = Symbol("fixture accessibility session");
+
+// A fixture-only name/source double for the existing branch tests. It is NOT
+// the platform algorithm: browser-control-names.test.mjs exercises the cases
+// (including SVG descendants and HTML label ARIA) that only Chromium can prove.
+function fixtureName(element) {
+  const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const content = (node, skip) => {
+    if (node === skip) return "";
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1 || node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") return "";
+    if (["script", "style", "template"].includes(node.localName)) return "";
+    if (node.localName === "img") return ` ${node.getAttribute("alt") || ""} `;
+    if (node.localName === "select") return ` ${Array.from(node.selectedOptions || [], (option) => option.text).join(" ")} `;
+    if (node.localName === "textarea") return ` ${node.value} `;
+    if (node.localName === "input") return ["radio", "checkbox", "hidden", "file"].includes(node.type) ? "" : ` ${node.value || ""} `;
+    return Array.from(node.childNodes, (child) => content(child, skip)).join("");
+  };
+  const named = (name, from) => ({ name, from: name ? from : "" });
+  const labelled = text(text(element.getAttribute("aria-labelledby")).split(" ").map((id) => element.ownerDocument.getElementById(id)).filter(Boolean).map((node) => content(node, element)).join(" "));
+  if (labelled) return named(labelled, "aria-labelledby");
+  const aria = text(element.getAttribute("aria-label"));
+  if (aria) return named(aria, "aria-label");
+  const label = text(Array.from(element.labels || [], (node) => content(node, element)).join(" "));
+  if (label) return named(label, "label");
+  if (element.localName === "fieldset") return named(text(content(element.querySelector("legend"), null)), "label");
+  if (element.localName === "input" && ["button", "submit", "reset", "image"].includes(element.type)) {
+    const name = text(element.type === "image" ? element.getAttribute("alt") : element.value);
+    if (name) return named(name, "text");
+  }
+  const role = element.getAttribute("role") || ({ a: "link" }[element.localName] ?? element.localName);
+  if (["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "radio", "checkbox", "switch", "treeitem"].includes(role)) {
+    const name = text(content(element, null));
+    if (name) return named(name, "text");
+  }
+  const title = text(element.getAttribute("title"));
+  if (title) return named(title, "title");
+  return named(text(element.getAttribute("placeholder")), "placeholder");
+}
 
 /**
  * A response body as it arrives: `head` resolves with what has come once its
@@ -238,6 +277,9 @@ export class BrowserDouble {
 
 /** A browser context: its open pages, the request events of all of them, and its own cookies, storage and connections. */
 export class ContextDouble {
+  async newCDPSession(page) {
+    return page[ACCESSIBILITY_SESSION]();
+  }
   #origin;
   #browser;
   #viewport;
@@ -598,6 +640,38 @@ export class PageDouble {
     if (this.#closed) throw new Error(DESTROYED);
     const inPage = this.#dom.window.eval(`(${fn.toString()})`);
     return viaJson(await inPage(viaJson(arg)));
+  }
+
+  [ACCESSIBILITY_SESSION]() {
+    if (this.#closed) throw new Error(DESTROYED);
+    const document = this.#dom.window.document;
+    const objects = [document, ...document.querySelectorAll("*")];
+    let detached = false;
+    return {
+      send: async (command, args = {}) => {
+        await this.evaluate(() => true); // Preserve busy, closed and navigating failures.
+        if (detached || document !== this.#dom.window.document) throw new Error(DESTROYED);
+        if (command === "DOM.getDocument") return { root: { backendNodeId: 1 } };
+        if (command === "DOM.resolveNode") return { object: { objectId: String(args.backendNodeId) } };
+        if (command === "Accessibility.getFullAXTree") return { nodes: objects.slice(1).map((element, index) => {
+          const { name, from } = fixtureName(element);
+          const source = { value: { value: name } };
+          if (from === "label") source.nativeSource = "label";
+          else if (from === "text") source.type = "contents";
+          else if (from === "placeholder") source.type = "placeholder";
+          else source.attribute = from;
+          return { backendDOMNodeId: index + 2, name: { value: name, sources: [source] } };
+        }) };
+        if (command === "Runtime.callFunctionOn") {
+          const fn = this.#dom.window.eval(`(${args.functionDeclaration})`);
+          const values = args.arguments.map((arg) => arg.objectId ? objects[Number(arg.objectId) - 1] : viaJson(arg.value));
+          return { result: { value: viaJson(await fn.apply(objects[Number(args.objectId) - 1], values)) } };
+        }
+        if (command === "Runtime.releaseObjectGroup") return {};
+        throw new Error(`The fixture has no CDP command ${command}`);
+      },
+      detach: async () => { detached = true; },
+    };
   }
 
   async waitForFunction(fn, arg, { timeout = 30_000, polling = 100 } = {}) {
