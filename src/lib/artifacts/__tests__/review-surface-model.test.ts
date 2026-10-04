@@ -374,7 +374,7 @@ describe("the settled copy names the outcome and its decider", () => {
     // cannot re-introduce one by passing it.
     expect(reviewSettledCopy("approved")).toEqual({
       title: "Continued",
-      body: "Decided on the revision above. These are the words that will be sent.",
+      body: "Decided on the revision above.",
     });
     // A LEGACY reject row stays readable — it simply can no longer be produced.
     expect(reviewSettledCopy("rejected").title).toBe("Rejected");

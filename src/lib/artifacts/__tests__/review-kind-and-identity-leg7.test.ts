@@ -94,10 +94,10 @@ describe("the identity line", () => {
 });
 
 describe("the settled marker's sentence", () => {
-  it("is the one the drawing draws for a continued gate", () => {
+  it("states the host's decision without an artifact-specific outcome (#3483)", () => {
     expect(reviewSettledCopy("approved")).toEqual({
       title: "Continued",
-      body: "Decided on the revision above. These are the words that will be sent.",
+      body: "Decided on the revision above.",
     });
   });
 });

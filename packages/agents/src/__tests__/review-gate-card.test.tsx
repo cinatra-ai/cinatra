@@ -1719,7 +1719,7 @@ describe("a settled card that knows its outcome", () => {
     // THE DRAWN SENTENCE (fix leg 7). The marker used to say what happened to
     // the RUN; the drawing's settled marker says what happened to the WORK.
     expect(container.textContent).toContain(
-      "Decided on the revision above. These are the words that will be sent.",
+      "Decided on the revision above.",
     );
     expect(
       container

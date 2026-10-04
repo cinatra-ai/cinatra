@@ -90,9 +90,10 @@ describe("the settled marker", () => {
     expect(markup).toMatch(/data-review-settled-dot/);
   });
 
-  it("reads the drawn sentence", () => {
+  it("reads only the host's decided sentence; the display owns its continuation (#3483)", () => {
     const markup = renderToStaticMarkup(<ReviewGateSettled outcome="approved" />);
-    expect(markup).toContain("Decided on the revision above. These are the words that will be sent.");
+    expect(markup).toContain("Decided on the revision above.</span>");
+    expect(markup).not.toContain("These are the words that will be sent.");
     expect(markup).not.toContain("released to continue");
   });
 

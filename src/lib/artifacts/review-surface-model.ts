@@ -204,14 +204,12 @@ export function reviewSettledCopy(outcome: ReviewSettledOutcome): {
       // decided after it are the same row and read the same way.
       return {
         title: REVIEW_SETTLED_ACT_TITLE[reviewSettledActForOutcome(outcome)],
-        // THE DRAWN SENTENCE, VERBATIM (fix leg 7). The eighth proof round
-        // measured this line as "The gate is resolved and the run has been
-        // released to continue." — a sentence about the RUN. The drawing's
-        // settled marker outside a conversation reads about the WORK:
-        // "Decided on the revision above. These are the words that will be
-        // sent." The comment above this function already quoted it; the copy
-        // had not caught up.
-        body: "Decided on the revision above. These are the words that will be sent.",
+        // ONE OWNER FOR THE HOST SENTENCE (cinatra#3483, #3399). The host
+        // records the decision; the artifact's own display supplies any typed
+        // continuation. The email example's "These are the words that will be
+        // sent." cannot be copied onto a blog idea, list, dashboard or post.
+        // This outcome-only projection has no artifact facts to assert one.
+        body: "Decided on the revision above.",
       };
     case "rejected":
       // LEGACY ONLY (cinatra#3080). No new decision can produce a reject — the

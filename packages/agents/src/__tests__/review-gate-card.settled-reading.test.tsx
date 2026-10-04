@@ -139,6 +139,25 @@ describe("the settled gate keeps its header, minus the request and the ask", () 
 });
 
 describe("the settled marker names the act and never a person", () => {
+  for (const host of HOSTS) {
+    it(`keeps the continued host sentence separate from the artifact display — ${host} (#3483)`, async () => {
+      const container = await settledOn(host, "approved");
+      const marker = container.querySelector('[data-conformance-id="review-gate-settled"]');
+      expect(marker?.textContent).toBe("ContinuedDecided on the revision above.");
+      expect(marker?.textContent).not.toContain("These are the words that will be sent.");
+
+      // The artifact's existing server-rendered display keeps the same gate
+      // reference. The host neither replaces it nor chooses a type's outcome.
+      const island = container.querySelector('[data-conformance-id="review-target-island"]');
+      const frame = island?.querySelector("iframe");
+      expect(frame?.getAttribute("src")).toBe("/lifecycle/review-island?ref=ref-fix6-1");
+      expect(frame?.getAttribute("title")).toBe("Review target");
+      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).toBeNull();
+      expect(marker?.previousElementSibling).toBe(island);
+    });
+  }
+
   const CASES = [
     ["approved", "Continued"],
     ["rejected", "Rejected"],
