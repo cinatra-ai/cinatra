@@ -1722,11 +1722,10 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   //    the repair response; a non-CMS repair (e.g. blog) is left untouched for
   //    its own producer's inline completion path.
   await completeCmsRepairs(summary);
-  // 3b. cinatra#3080 — and the SAME step for every other producer. Before this
-  //     the CMS completer was the only one, so a blog draft's Regenerate settled
-  //     its gate, minted its repair run, and then had nothing to open the
-  //     successor the drawing requires. The two completers never claim the same
-  //     row: the generic one skips a repair whose base target is a CMS snapshot.
+  // 3b. cinatra#3080 — the generic completer, which names no artifact type: it
+  //     claims only what a repair run filed through the host's two generic
+  //     filing roads, runs after the completer above, and leaves alone a repair
+  //     that completer already finalized, so the two never claim one row.
   await completeProducerRepairs(summary);
 
   return summary;
