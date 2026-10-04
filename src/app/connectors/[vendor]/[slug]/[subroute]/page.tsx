@@ -4,7 +4,6 @@ import { notFound, redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { getActorContext } from "@/lib/auth-session";
 import {
-  getConnectorRegistryEntryBySlug,
   resolveConnectorBadgeState,
   hasConnectorReadinessProbe,
 } from "@/lib/connectors-registry.server";
@@ -36,9 +35,7 @@ import "@/lib/connector-setup-action-references.server";
 import "@/lib/extensions";
 import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
 import { resolveSchemaConfigInitialValues } from "@/lib/extension-config-hydration";
-import {
-  enforceConnectorPolicy,
-} from "@/lib/connector-policy";
+import { resolveConnectorRouteIdentity } from "@/lib/connector-route-identity.server";
 import { resolveConnectorSetupRedirect } from "@/lib/connector-setup-redirect";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
@@ -48,7 +45,6 @@ import {
   resolveActiveInstallForActor,
   resolveActiveInstallIdForActor,
   resolveRuntimeConnectorUiRecord,
-  resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
 import { requiresRebuildState } from "@/lib/extension-schema-config";
@@ -96,14 +92,12 @@ type DispatchPageProps = {
 export async function generateMetadata(props: {
   params: Promise<RouteParams>;
 }): Promise<Metadata> {
-  const { vendor, slug } = await props.params;
-  // The vendor segment is validated against the connector's manifest-resolved
-  // identity (installed-extension scope), not a hardcoded vendor literal.
-  const entry = getConnectorRegistryEntryBySlug(slug);
-  if (!entry || entry.vendor !== vendor) {
-    return { title: "Not found" };
-  }
-  return { title: `${entry.displayName} | Connectors` };
+  const params = await props.params;
+  const actor = await getActorContext();
+  const identity = await resolveConnectorRouteIdentity(params, actor);
+  // The root layout supplies " | Cinatra"; metadata and the page use the same
+  // authorized identity, including trusted runtime-only connectors.
+  return { title: identity.kind === "identity" ? identity.displayName : "Not found" };
 }
 
 export default async function ConnectorDispatchPage(props: DispatchPageProps) {
@@ -114,70 +108,23 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
 
   const actor = await getActorContext();
 
-  // Resolve the connector by slug, then require the vendor segment to match
-  // its manifest-resolved identity (installed-extension scope) — no hardcoded
-  // vendor handling. A connector with a build-time CATALOG descriptor takes the
-  // catalog path; a purely RUNTIME-installed connector with NO catalog descriptor
-  // takes the runtime-only fallback (cinatra#658 Track 2 — closing the L62 gap
-  // where `getConnectorRegistryEntryBySlug` returned undefined and the route
-  // notFound()'d before any runtime lookup).
-  const catalogEntry = getConnectorRegistryEntryBySlug(slug);
-
-  // Resolved connector identity for this route, from EITHER source.
-  let packageId: string;
-  let displayName: string;
-  let isCatalog: boolean;
-
-  if (catalogEntry) {
-    if (catalogEntry.vendor !== vendor) notFound();
-    if (subroute !== catalogEntry.setupSubroute) notFound();
-    // Catalog policy gate (unchanged): canonical-first → legacy fallback.
-    const decision = enforceConnectorPolicy(catalogEntry.packageId, actor, "read");
-    if (!decision.allowed) notFound();
-    packageId = catalogEntry.packageId;
-    displayName = catalogEntry.displayName;
-    isCatalog = true;
-  } else {
-    // RUNTIME-ONLY fallback. `enforceConnectorPolicy` denies a no-catalog package
-    // (`unknown_connector`) BEFORE any canonical check (codex finding 1), so we
-    // CANNOT reach the runtime surface through it. Instead, resolve the trusted
-    // runtime card record: it runs the FULL trust gate (actor has an active
-    // canonical install in scope → anchor → integrity → signature → trust). A
-    // non-null result is therefore BOTH proof of trust AND of actor authorization
-    // for this install (the canonical install row is addressable in the actor's
-    // scope) — the exact two facts the catalog policy + bundled manifest provide.
-    // We never loosen the catalog policy; this is a parallel trusted-runtime path.
-    const packageName = `@${vendor}/${slug}`;
-    const cardRecord = await resolveRuntimeConnectorCardRecord(packageName, actor);
-    // Fail closed: no trusted+addressable runtime install → not found (never leak
-    // existence to an unauthorized/cross-org actor).
-    if (!cardRecord || cardRecord.vendor !== vendor || cardRecord.slug !== slug) {
-      // cinatra#1529: before the 404, evaluate the NARROW marketplace-redirect
-      // decision. Only a genuinely-absent install of a connector this actor can
-      // already discover + install in the in-app marketplace redirects there;
-      // every other state (unknown, not-discoverable, inactive/archived install,
-      // withdrawn/incompatible, non-admin) fails closed to the 404. The resolver
-      // wraps its own catalog/store IO and never throws, so `redirect()` (which
-      // throws NEXT_REDIRECT) is called OUTSIDE any try/catch — otherwise this
-      // route would convert the redirect back into a 404.
+  const identity = await resolveConnectorRouteIdentity({ vendor, slug, subroute }, actor);
+  if (identity.kind === "refused") {
+    // Preserve the existing narrow marketplace redirect for an absent runtime
+    // install. Metadata resolves the same refusal but never redirects.
+    if (identity.considerMarketplaceRedirect) {
       const redirectDecision = await resolveConnectorSetupRedirect({
-        packageName,
+        packageName: `@${vendor}/${slug}`,
         subroute,
         actor,
       });
       if (redirectDecision.kind === "redirect") {
         redirect(redirectDecision.target);
       }
-      notFound();
     }
-    // A runtime-only connector reaches its setup route only via the schema-config
-    // surface (it ships no base-image React loader). Reuse the catalog setup
-    // subroute convention ("setup").
-    if (subroute !== "setup") notFound();
-    packageId = packageName;
-    displayName = cardRecord.displayName;
-    isCatalog = false;
+    notFound();
   }
+  const { packageId, displayName, isCatalog, catalogEntry } = identity;
 
   const manifest = isCatalog ? STATIC_EXTENSION_MANIFEST[packageId] : undefined;
 
@@ -268,6 +215,12 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           : []),
         {
           prefix: `/connectors/${encodeURIComponent(vendor)}/${encodeURIComponent(slug)}`,
+          label: displayName,
+        },
+        // The shell reads the route's own authorized replacement entry for the
+        // tab title. The trail still drops the page's selected-tab segment.
+        {
+          prefix: `/connectors/${encodeURIComponent(vendor)}/${encodeURIComponent(slug)}/${encodeURIComponent(subroute)}`,
           label: displayName,
         },
       ]}
