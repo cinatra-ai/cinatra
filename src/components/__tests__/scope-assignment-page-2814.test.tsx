@@ -203,6 +203,37 @@ describe("the pane strip", () => {
   });
 });
 
+describe("the assignment header and tab strip share one rule (cinatra#3935)", () => {
+  const majorRule = '[data-slot="separator"][data-major="true"]';
+
+  it.each(["skills", "artifacts"] as const)("the agent's %s pane draws only the tab strip's rule", (tab) => {
+    render(<ScopeAssignmentPage model={model({ tab, manifest: "ok" })} />);
+    const page = screen.getByTestId("scope-assignment-page");
+    const tabRow = within(page).getByRole("tablist", { name: "Assignment panes" }).parentElement!;
+    const rules = page.querySelectorAll(majorRule);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.parentElement).toBe(tabRow);
+    expect(tabRow.querySelectorAll(majorRule)).toHaveLength(1);
+  });
+
+  it("the assistant keeps its header rule and has no tab strip", () => {
+    const scope = { kind: "personal" as const };
+    render(<ScopeAssignmentPage model={model({
+      surface: "assistant",
+      routeScope: scope,
+      scopeLabel: "Personal",
+      target: { surface: "assistant", scope, vendor: "cinatra-ai", name: "support" },
+      sections: [section({ scope, key: "personal", label: "Personal", skills: [] })],
+    })} />);
+    const page = screen.getByTestId("scope-assignment-page");
+    expect(within(page).queryByRole("tablist")).toBeNull();
+    expect(within(page).queryAllByRole("tab")).toHaveLength(0);
+    const rules = page.querySelectorAll(majorRule);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.parentElement).toBe(page);
+  });
+});
+
 describe("the Skills pane", () => {
   it("names each scope group and its picker from the section label", () => {
     const ws = { kind: "workspace" as const };

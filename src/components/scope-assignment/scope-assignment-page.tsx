@@ -246,8 +246,8 @@ export function ScopeAssignmentPage({ model }: { model: ScopeAssignmentPageModel
         </div>
       </div>
 
-      {/* Double-etched header rule. */}
-      <Separator major decorative className="mt-5 mb-1" />
+      {/* The tab strip owns the rule on an agent page. */}
+      {model.surface !== "agent" ? <Separator major decorative className="mt-5 mb-1" /> : null}
 
       {model.surface === "agent" ? (
         // The §II tab strip, drawn with the application's OWN strip primitive
