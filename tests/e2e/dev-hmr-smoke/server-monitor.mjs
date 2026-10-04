@@ -17,6 +17,41 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const key = (p) => `${p.pid}:${p.start}`;
 const REASON_CODES = new Set([...Object.keys(constants.errno), "parse-null", "scan-limit", "supervisor-incomplete"]);
 
+/**
+ * @typedef {{ pid: number, ppid: number, group: number, start: number, state: string }} ProcStatRow
+ * @typedef {{ site: string, code: string, pid: number | null, owned: boolean | null }} ReadErrorReason
+ * @typedef {{
+ *   samples: number,
+ *   firstSampleAtMs: number | null,
+ *   lastSampleAtMs: number | null,
+ *   maxSampleGapMs: number,
+ *   maxScanDurationMs: number,
+ *   readErrors: number,
+ *   outsideTreeReadErrors: number,
+ *   readErrorReasons: ReadErrorReason[],
+ *   omittedReadErrorReasons: number,
+ *   exitRaces: number,
+ *   emptySamples: number,
+ *   sampledProcessTreePeakBytes: number | null,
+ *   lowestRunnerMemAvailableBytes: number | null,
+ *   largestObservedProcessHwmBytes: number | null,
+ *   observedProcessHwmSumBytes: number | null,
+ *   observedProcessCount: number,
+ *   highWaters: Record<string, number>
+ * }} SamplerPeak
+ * @typedef {{ read: () => string, close: () => void }} StatReader
+ * @typedef {{ list: () => string[], stat: (name: string) => string, openStat?: (name: string) => StatReader }} LegacyInventoryIo
+ * @typedef {{ list: () => string[], openStat: (name: string) => StatReader, stat?: (name: string) => string }} DescriptorInventoryIo
+ * @typedef {LegacyInventoryIo | DescriptorInventoryIo} InventoryIo
+ * @typedef {LegacyInventoryIo & { status: (name: string) => string, meminfo: () => string, now: () => number }} SampleIo
+ * @typedef {{
+ *   open: (path: string, flags: "r") => number,
+ *   read: (fd: number, buffer: import("node:buffer").Buffer, offset: number, length: number, position: number) => number,
+ *   close: (fd: number) => void
+ * }} StatDescriptorIo
+ */
+
+/** @returns {ProcStatRow | null} */
 export function parseProcStat(text) {
   const end = text.lastIndexOf(") ");
   const pid = Number(text.slice(0, text.indexOf(" ")));
@@ -39,6 +74,7 @@ export function selectOwned(rows, group, known) {
   return [...owned.values()].filter((p) => p.state !== "Z");
 }
 
+/** @returns {SamplerPeak} */
 export function createPeak() {
   return { samples: 0, firstSampleAtMs: null, lastSampleAtMs: null, maxSampleGapMs: 0, maxScanDurationMs: 0,
     readErrors: 0, outsideTreeReadErrors: 0, readErrorReasons: [], omittedReadErrorReasons: 0,
@@ -102,6 +138,13 @@ export function firstCompile(log) {
   return { firstRouteStatus: Number(match[1]), firstRouteElapsedMs, firstRouteCompileMs };
 }
 
+/**
+ * This seam calls only the positional, five-argument descriptor read. A fake
+ * does not have to implement Node's separate options-object overload.
+ * @param {string | number} name
+ * @param {StatDescriptorIo} [io]
+ * @returns {StatReader}
+ */
 export function openStatReader(name, io = { open: openSync, read: readSync, close: closeSync }) {
   const fd = io.open(`/proc/${name}/stat`, "r");
   return {
@@ -142,6 +185,15 @@ function errorOwnership(row, rows, { group, known } = {}) {
   return null;
 }
 
+/**
+ * Inventory needs listing plus either a stable descriptor or legacy path read,
+ * not the sampler's status/meminfo/clock functions. The path-only form retains
+ * its conservative ownership treatment; this documents both existing forms.
+ * @param {SamplerPeak} peak
+ * @param {InventoryIo} [io]
+ * @param {{ group?: number, known?: Set<string> }} [ownership]
+ * @returns {{ rows: ProcStatRow[], complete: boolean }}
+ */
 export function readRows(peak, io = sampleIo, ownership = {}) {
   const rows = [];
   const failures = [];
@@ -192,6 +244,13 @@ export function readRows(peak, io = sampleIo, ownership = {}) {
   return { rows, complete };
 }
 
+/**
+ * Sampling also rereads owned stat/status and runner meminfo against its clock.
+ * @param {{ group: number, known: string[], peak: SamplerPeak }} state
+ * @param {Set<string>} known
+ * @param {SampleIo} [io]
+ * @returns {{ rows: ProcStatRow[], complete: boolean }}
+ */
 export function sample(state, known, io = sampleIo) {
   const started = io.now();
   let inventory = { rows: [], complete: false };
