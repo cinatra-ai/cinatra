@@ -30,6 +30,7 @@ import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
 import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
 import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixtures";
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
+import { ToastConformanceFixture } from "./toast-fixture";
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
 import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
@@ -112,6 +113,7 @@ export default function ConformanceHarnessPage() {
         description="Internal — real conformance-surface components mounted with deterministic fixtures for the manifest-driven functional-acceptance gate."
       />
       <PageContent className="flex flex-col gap-8 pb-12">
+        <ToastConformanceFixture />
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>Status pills (surface: status-pills)</CardTitle>
