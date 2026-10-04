@@ -24,6 +24,7 @@ import {
   reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
+import type { ReviewSettledOutcome } from "../review-surface-model";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -288,70 +289,36 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
 // §IV — the SETTLED reading (cinatra#2855; plan §4.2)
 // ---------------------------------------------------------------------------
 
-describe("the settled copy names the outcome and its decider", () => {
-  it("is keyed on the SAME closed set the wire carries", () => {
+// RE-PINNED (cinatra#2934, fix leg 12). Everything below used to hold the
+// three-way reading — "Approved by …" / "Rejected by …" / "Changes requested" —
+// which the ratified drawings have since closed on both axes. Lifecycle cards
+// §XIII.1: "Continued is the only settled reading; there is no second status
+// after it", drawn as the marker "Continued" over "Decided on the revision
+// above." Artifact review §VI: the review "draws no card that names who
+// requested changes". The disposition survives as a RECORD (the run's rows, and
+// the element's own `data-review-outcome`); it is no longer a reading, and the
+// decider is no longer a parameter.
+describe("the settled copy is the drawing's one marker", () => {
+  it("the local settled union is the SAME closed set the wire carries", () => {
     // This model deliberately keeps its own local union rather than importing
-    // the wire type, so the two are pinned together HERE. A value added on one
-    // side and not the other fails this, in front of the switch that would
-    // otherwise fall through to nothing.
-    const covered = [...LIFECYCLE_SETTLED_OUTCOMES].map((outcome) =>
-      reviewSettledCopy(outcome),
-    );
-    expect(covered).toHaveLength(3);
-    for (const copy of covered) {
-      expect(copy.title.length).toBeGreaterThan(0);
-      expect(copy.body.length).toBeGreaterThan(0);
-    }
+    // the wire type, so the two are pinned together HERE. The exhaustive record
+    // fails to compile if a member is added on one side, and the comparison
+    // fails at runtime if one is added on the other.
+    const local: Record<ReviewSettledOutcome, true> = {
+      approved: true,
+      rejected: true,
+      changes_requested: true,
+    };
+    expect(Object.keys(local).sort()).toEqual([...LIFECYCLE_SETTLED_OUTCOMES].sort());
   });
 
-  it("names the decider when there is one to name", () => {
-    // The titles are the DRAWING's three readings and nothing else: an approved
-    // gate is the drawing's "Continued", and both turn-back outcomes read its
-    // "Changes requested". The line's own sentence still says which turn-back
-    // this was, and `data-review-outcome` still carries all three.
-    expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
-      title: "Continued by Dana Okonkwo",
-      body: "Decided on the revision above.",
-    });
-    expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
-      "Changes requested by Dana Okonkwo",
-    );
-    expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
-      "Changes requested by Dana Okonkwo",
-    );
-  });
-
-  it("keeps the three outcomes readable apart — on the reading and on the record", () => {
-    // THE SENTENCE IS ONE SENTENCE NOW (cinatra#3046, fix leg 17; cinatra#3293).
-    // It used to be three, and this case used to require that. The ratified
-    // drawing gives the settled marker ONE sentence — "Decided on the revision
-    // above." — under a pill that carries the reading; the clause a drawn
-    // example adds after it ("These are the words that will be sent") is the
-    // DISPLAY's statement about the artifact reviewed, which the artifact type's
-    // own display owns and the host may not write for it.
-    //
-    // So what must stay readable apart is the OUTCOME, and it does, twice over:
-    // the drawing's own two readings on the title, and all three values on
-    // `data-review-outcome`, which is what routing and the audit trail read.
-    const bodies = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).body);
-    expect(new Set(bodies).size).toBe(1);
-    expect(bodies[0]).toBe("Decided on the revision above.");
-    const titles = [...LIFECYCLE_SETTLED_OUTCOMES].map((o) => reviewSettledCopy(o).title);
-    expect(new Set(titles)).toEqual(new Set(["Continued", "Changes requested"]));
-    expect(reviewSettledCopy("approved").title).toBe("Continued");
-  });
-
-  it("reads as a finished sentence with no decider at all", () => {
-    // The resolver drops a decider it cannot name safely, so the copy must not
-    // depend on one: never "Continued by" and a dangling nothing.
+  it("reads the drawing's marker for every disposition", () => {
     for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
-      const { title } = reviewSettledCopy(outcome);
-      expect(title.endsWith(" by")).toBe(false);
-      expect(title.includes(" by ")).toBe(false);
+      expect(reviewSettledCopy(outcome)).toEqual({
+        title: "Continued",
+        body: "Decided on the revision above.",
+      });
     }
-    expect(reviewSettledCopy("approved").title).toBe("Continued");
-    expect(reviewSettledCopy("rejected").title).toBe("Changes requested");
-    expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
   });
 
   it("does NOT claim a live repair the way the post-press notice does", () => {
@@ -362,6 +329,10 @@ describe("the settled copy names the outcome and its decider", () => {
       "Decided on the revision above.",
     );
     expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
+  });
+
+  it("takes no decider at all — there is nowhere on this surface to put one", () => {
+    expect(reviewSettledCopy.length).toBe(1);
   });
 
   it("is a DIFFERENT reading from the generic blocked copy it replaces", () => {

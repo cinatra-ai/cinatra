@@ -23,6 +23,7 @@ import {
 } from "@/lib/artifacts/host-module-registry";
 
 import { DynamicRendererFloor } from "./dynamic-renderer-floor";
+import { runtimeDisplayProps } from "./runtime-display-props";
 
 // The CLIENT LOADER SEAM (epic #1620 M1 Slice A — cinatra#1630, plan §2.5–§2.6).
 // The ONE sanctioned variable-URL `import()` in the codebase (G4 carve-out; the
@@ -67,6 +68,42 @@ class RendererErrorBoundary extends Component<
   render(): ReactNode {
     return this.state.crashed ? this.props.fallback : this.props.children;
   }
+}
+
+/**
+ * THE HAND-OVER OF A MOUNTED RUNTIME DISPLAY (cinatra#3814). Hook-free: the
+ * loaded display inside the error boundary, with the never-blank floor as its
+ * fallback. The display is handed the snapshot at the props version its
+ * admitted tuple declares.
+ */
+export function MountedRuntimeDisplay({
+  Renderer,
+  descriptor,
+  props,
+  fallback,
+  onError,
+}: {
+  Renderer: ComponentType<ArtifactRendererProps>;
+  descriptor: SerializedRuntimeRendererDescriptor;
+  props: ArtifactRendererProps;
+  fallback: ReactNode;
+  onError: () => void;
+}): ReactNode {
+  return (
+    <RendererErrorBoundary
+      onError={onError}
+      fallback={
+        <DynamicRendererFloor
+          packageName={descriptor.tuple.packageName}
+          slot={descriptor.tuple.slot}
+          reason={classifyImportFailure("render-failure")}
+          fallback={fallback}
+        />
+      }
+    >
+      <Renderer {...runtimeDisplayProps(props, descriptor.tuple.propsApiVersion)} />
+    </RendererErrorBoundary>
+  );
 }
 
 export function DynamicRendererLoader({
@@ -202,20 +239,13 @@ export function DynamicRendererLoader({
     return <div data-dynamic-renderer-skeleton aria-busy="true" className="animate-pulse h-24 rounded-md bg-muted" />;
   }
 
-  const Renderer = state.Component;
   return (
-    <RendererErrorBoundary
+    <MountedRuntimeDisplay
+      Renderer={state.Component}
+      descriptor={descriptor}
+      props={props}
+      fallback={fallback}
       onError={() => setRenderFailed(true)}
-      fallback={
-        <DynamicRendererFloor
-          packageName={descriptor.tuple.packageName}
-          slot={descriptor.tuple.slot}
-          reason={classifyImportFailure("render-failure")}
-          fallback={fallback}
-        />
-      }
-    >
-      <Renderer {...props} />
-    </RendererErrorBoundary>
+    />
   );
 }

@@ -21,8 +21,7 @@
  * words that will be sent", "The dashboard is live from here"), which belongs to
  * the artifact type's display and is never the host's to write.
  *
- * The ACTOR on the pill is a departure of its own, already recorded against this
- * branch and deliberately untouched here.
+ * The pill carries no actor: the settled marker names no person (cinatra#2934).
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/review-settled-marker-row-3293.test.tsx
@@ -41,9 +40,9 @@ const OUTCOMES: ReviewSettledOutcome[] = ["approved", "rejected", "changes_reque
 /** The drawing's sentence, as every drawn settled marker opens it. */
 const THE_DRAWN_SENTENCE = "Decided on the revision above.";
 
-function marker(outcome: ReviewSettledOutcome, decidedByName?: string): HTMLElement {
+function marker(outcome: ReviewSettledOutcome): HTMLElement {
   const { container } = render(
-    <ReviewGateSettled outcome={outcome} decidedByName={decidedByName} />,
+    <ReviewGateSettled outcome={outcome} />,
   );
   const node = container.querySelector<HTMLElement>(
     '[data-conformance-id="review-gate-settled"]',
@@ -54,7 +53,7 @@ function marker(outcome: ReviewSettledOutcome, decidedByName?: string): HTMLElem
 
 describe("the settled marker", () => {
   it.each(OUTCOMES)("%s — its sentence is the drawing's sentence", (outcome) => {
-    const node = marker(outcome, "Dana Okonkwo");
+    const node = marker(outcome);
     const sentence = node.querySelector(
       '[data-conformance-id="review-gate-settled-sentence"]',
     );
@@ -67,7 +66,7 @@ describe("the settled marker", () => {
   it.each(OUTCOMES)(
     "%s — it is the drawn pill-plus-sentence row, left-aligned, not a centred glyph",
     (outcome) => {
-      const node = marker(outcome, "Dana Okonkwo");
+      const node = marker(outcome);
       const cls = node.className;
       // ONE ROW: a flex row that wraps, items centred on the cross axis.
       expect(cls, "the marker is not a row").toMatch(/(?:^|\s)flex(?:\s|$)/);

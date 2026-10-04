@@ -140,15 +140,14 @@ describe("reviewGateHeaderTitle \u2014 the settled reading, in the drawing's own
     expect(reviewGateHeaderTitle(undefined)).toBe("Review requested");
   });
 
-  it("the header and the settled line are one reading of one outcome", () => {
-    // Same vocabulary, one register apart: the line may name the decider, the
-    // heading never does. So the heading IS the line with the decider taken off,
-    // and the two can no longer disagree about which gate this is.
-    for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
-      expect(reviewSettledCopy(outcome).title).toBe(reviewGateHeaderTitle(outcome));
-      expect(reviewSettledCopy(outcome, "Dana Okonkwo").title).toBe(
-        `${reviewGateHeaderTitle(outcome)} by Dana Okonkwo`,
-      );
+  it("the header and the settled marker agree on an approved gate", () => {
+    // Neither names a decider. The marker reads "Continued" for every outcome;
+    // the header matches it on an approved gate.
+    expect(reviewSettledCopy("approved").title).toBe(reviewGateHeaderTitle("approved"));
+    // F-2: the settled marker reads "Continued" for every outcome; the header keeps "Changes requested" for a turn-back.
+    for (const outcome of ["rejected", "changes_requested"] as const) {
+      expect(reviewSettledCopy(outcome).title).toBe("Continued");
+      expect(reviewGateHeaderTitle(outcome)).toBe("Changes requested");
     }
   });
 });

@@ -43,6 +43,12 @@ export const HOST_DESIGN_TOKEN_MODULE = "@cinatra-ai/design";
 // and resolved by the host module-registry shim to the host's ONE instance.
 export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
 
+// The host-served read-only dashboard COMPOSITION module (cinatra#3092): the one
+// module exporting the two promoted read-only views. Left EXTERNAL as that EXACT
+// specifier — never its package root or another subpath — and resolved by the
+// host module-registry shim to the host's ONE instance.
+export const HOST_DASHBOARD_COMPOSITION_MODULE = "@cinatra-ai/sdk-dashboard/components";
+
 export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.0.0";
 
 export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
@@ -55,6 +61,7 @@ export const CLIENT_BUNDLE_EXTERNAL_ALLOWLIST = Object.freeze([
   "react-dom/client",
   HOST_DESIGN_TOKEN_MODULE,
   HOST_DESIGN_PRIMITIVES_MODULE,
+  HOST_DASHBOARD_COMPOSITION_MODULE,
 ]);
 
 export const REACT_FAMILY_BASE_PACKAGES = Object.freeze(["react", "react-dom"]);

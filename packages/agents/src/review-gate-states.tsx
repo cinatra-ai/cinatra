@@ -63,9 +63,31 @@ export function ReviewGateBlocked({
 }
 
 /**
- * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
- * §4.2). The card that knows what happened says so, over the drawn sentence,
- * and with the recorded suggestion chips still drawn above it by the caller.
+ * The gate-level SETTLED state — the drawing's ONE marker (cinatra#2934, fix
+ * leg 12; Lifecycle cards §XIII.1).
+ *
+ * WHAT IT DRAWS. "Continued", and beside it "Decided on the revision above." —
+ * the marker §XIII.1 puts below the whole card once it is decided, in a
+ * conversation and outside one alike ("the frame changes and nothing else
+ * does"). One reading, whatever was decided: "Continued is the only settled
+ * reading; there is no second status after it."
+ *
+ * WHAT IT NO LONGER DRAWS, AND WHY. It used to read the outcome back as a title
+ * with the decider interpolated into it — "Approved by …" / "Rejected by …" —
+ * over a per-outcome status glyph and tone (a green check, a red circled-X, an
+ * amber rotate). The dev-boot proof round of 2026-09-04 measured exactly that:
+ * a red circled-X card reading "Rejected by Proof Admin", on both surfaces and
+ * in both palettes. Two ratified sentences close it. §XIII.1 leaves one settled
+ * reading, so the three-way glyph WAS the second status it forbids; and the
+ * review drawing's §VI says the review "draws no card that names who requested
+ * changes", so no settled card on this surface carries a person's name. There is
+ * no `decidedByName` prop any more — not a name this component declines to use,
+ * but no place on the surface to put one.
+ *
+ * THE DISPOSITION IS STILL RECORDED, and that is the distinction the change
+ * turns on: `data-review-outcome` keeps the outcome as a machine-readable fact
+ * for the conformance suites and the audit trail, exactly as the run's own rows
+ * keep it. A record is not a reading.
  *
  * AND IT IS THE DRAWN ROW, NOT A CENTRED GLYPH (cinatra#3046, fix leg 17;
  * cinatra#3294). This was a 36px tinted tile holding a double-check mark, over
@@ -74,7 +96,8 @@ export function ReviewGateBlocked({
  * `display:flex; flex-wrap:wrap; align-items:center; gap:8px;
  *  border:1px solid var(--line); border-radius:8px; background:var(--surface);
  *  padding:9px 12px`, holding a pill — `border-radius:9999px`, a 7px dot, 12px
- * semibold, tinted to the outcome — and then the sentence at 12px in
+ * semibold, in the one success tint every disposition shares — and then the
+ * sentence at 12px in
  * `var(--muted)`. The thirteenth graded reading measured the centred treatment
  * on both palettes; this is the row it should have been.
  *
@@ -83,15 +106,10 @@ export function ReviewGateBlocked({
  * `--green` on the settled pill is the status palette's `--success`, which is
  * the token this component's tint already took. Nothing new is registered.
  *
- * THE ACTOR ON THE PILL IS NOT THIS CHANGE. The drawing's pill reads
- * "Continued" alone; the name of the decider beside it is a departure already
- * recorded against this branch and is deliberately left exactly where it was —
- * the composition is what moves here, not the words.
- *
  * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
  * copy cannot say which of two things happened, so a fresh pull is the reader's
  * only way to find out. Here the pull has already answered. A Refresh beside a
- * named outcome would offer to resolve an ambiguity that is not there, and
+ * settled marker would offer to resolve an ambiguity that is not there, and
  * invite the reader to press it as though something might still change.
  *
  * A gate this build cannot read an outcome for never reaches this component:
@@ -101,29 +119,12 @@ export function ReviewGateBlocked({
  */
 export function ReviewGateSettled({
   outcome,
-  decidedByName,
 }: {
+  /** The RECORDED disposition. It is stamped on the element and read by nothing
+   *  on screen — the marker beside it is the same for all three. */
   outcome: ReviewSettledOutcome;
-  /** A SURFACE-SAFE display name. Never an id — the resolver drops a decider it
-   *  cannot name safely, and the copy then states the outcome alone. */
-  decidedByName?: string;
 }) {
-  const copy = reviewSettledCopy(outcome, decidedByName);
-  // The status palette's own tokens (`--success` / `--destructive` / `--warning`),
-  // in the tint-over-token shape the shipped status chips already use — now on
-  // the drawn PILL rather than on a tile behind a glyph.
-  const tone =
-    outcome === "approved"
-      ? "border-success/30 bg-success/10 text-success"
-      : outcome === "rejected"
-        ? "border-destructive/30 bg-destructive/10 text-destructive"
-        : "border-warning/30 bg-warning/10 text-warning";
-  const dotTone =
-    outcome === "approved"
-      ? "bg-success"
-      : outcome === "rejected"
-        ? "bg-destructive"
-        : "bg-warning";
+  const copy = reviewSettledCopy(outcome);
   return (
     <div
       data-conformance-id="review-gate-settled"
@@ -133,14 +134,14 @@ export function ReviewGateSettled({
       // sentence outruns a narrow card.
       className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-[9px]"
     >
+      {/* The marker's pill — the drawing's dot and label, one face for every
+          disposition. Not a status glyph: a status glyph per outcome is the
+          "second status" §XIII.1 says there is not. */}
       <span
         data-conformance-id="review-gate-settled-pill"
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-[3px] font-sans text-xs font-semibold ${tone}`}
+        className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-[3px] font-sans text-xs font-semibold text-success"
       >
-        {/* The drawn 7px dot, tinted to the outcome. Decorative: the pill's own
-            words carry the reading, and `data-review-outcome` carries it for a
-            machine. */}
-        <span aria-hidden="true" className={`size-[7px] rounded-full ${dotTone}`} />
+        <span aria-hidden="true" className="size-[7px] rounded-full bg-success" />
         {copy.title}
       </span>
       <span

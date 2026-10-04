@@ -219,10 +219,10 @@ export function CampaignRecipientsReviewRenderer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiSuggestions]);
 
-  // Push live recipients into the parent's hitl-assist context so the LLM sees
+  // Push live recipients into the parent's screen context so the assistant sees
   // the current array (not the empty interrupt
   // payload) and can edit it. The parent's handleHitlContextChange merges
-  // this object into currentValue before sending to /hitl-assist.
+  // this object into the screen's own values, which the fill road reads.
   useEffect(() => {
     if (serverRecipients.length > 0) {
       onHitlContextChange?.({ recipients: serverRecipients });

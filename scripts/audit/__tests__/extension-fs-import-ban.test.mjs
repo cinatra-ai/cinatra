@@ -11,7 +11,18 @@ import {
   staleBaselineEntries,
   FS_IMPORT_ALLOWLIST,
   TEST_RUNNER_CONFIG_RE,
+  FLOOR_BASE_VAR,
+  FLOOR_FILE,
+  checkFloorAgainstBase,
 } from "../extension-fs-import-ban.mjs";
+import { spawnSync } from "node:child_process";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 
 describe("isBannedFsSpecifier", () => {
   it("matches node:fs and node:fs/promises", () => {
@@ -236,5 +247,56 @@ describe("a test-runner config is out of scope (the same class as __tests__ and 
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+// cinatra#3832: the committed baseline of hits is compared with the copy on the
+// base branch, so a pull request cannot add its own hit to the baseline.
+describe("extension-fs-import-ban — floor compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const floor = (hits) => ({ note: "fixture", hits });
+  function repo(baseHits, headHits) {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: floor(baseHits) }, head: { [FLOOR_FILE]: floor(headHits) } });
+    fixtures.push(f);
+    return f.root;
+  }
+
+  it("a raised floor (a new hit in the baseline) FAILS against the base", () => {
+    const root = repo({ "@x/a": ["src/index.ts"] }, { "@x/a": ["src/index.ts"], "@x/b": ["src/log.ts"] });
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["@x/b::src/log.ts"]);
+  });
+
+  it("a lowered floor (a migrated-away hit removed) PASSES", () => {
+    const root = repo({ "@x/a": ["src/index.ts", "src/log.ts"] }, { "@x/a": ["src/index.ts"] });
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo({}, {});
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/did not resolve/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo({}, { "@x/a": ["src/index.ts"] });
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "extension-fs-import-ban.mjs")], {
+      cwd: path.join(import.meta.dirname, "..", "..", ".."),
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
   });
 });

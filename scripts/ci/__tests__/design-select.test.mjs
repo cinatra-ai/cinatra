@@ -48,7 +48,12 @@ import {
   stripJsonc,
   selectFamilies,
   wideningRuleFor,
+  workersLine,
 } from "../design-select.mjs";
+import {
+  FUNCTIONAL_ACCEPTANCE_FAMILY,
+  FUNCTIONAL_ACCEPTANCE_WORKERS,
+} from "../../../tests/e2e/config/design-workers.mjs";
 
 // Every virtual repo carries a tsconfig, because the selector READS its aliases
 // there rather than assuming them — an unreadable tsconfig widens to the whole
@@ -920,5 +925,83 @@ describe("measured component graph coverage", () => {
     expect(selectFamilies({ changedFiles: [path], families }).mode).toBe("all");
     families.get("a.spec.ts").add(path);
     expect(selectFamilies({ changedFiles: [path], families, unresolved: [{ from: path, specifier: "@/unknown" }] }).mode).toBe("all");
+  });
+});
+
+// The workers per family (cinatra#3770). The functional-acceptance family runs
+// with several workers inside the design job and every other family with one;
+// the job says so on the line under its suite summary, with the number the
+// Playwright configuration itself reads (tests/e2e/config/design-workers.mjs).
+describe("12. THE WORKERS LINE — the job names the workers of every family it starts", () => {
+  const others = (specs) => specs.filter((spec) => spec !== FUNCTIONAL_ACCEPTANCE_FAMILY);
+
+  it("names the functional-acceptance family's workers and one for each other family on a whole-suite plan", () => {
+    const specs = discoverSpecFiles();
+    expect(specs).toContain(FUNCTIONAL_ACCEPTANCE_FAMILY);
+    expect(workersLine({ mode: "all", specs }, {})).toBe(
+      `workers per family: ${FUNCTIONAL_ACCEPTANCE_FAMILY} ${FUNCTIONAL_ACCEPTANCE_WORKERS}; ` +
+        `${others(specs).length} other families 1 each`,
+    );
+  });
+
+  it("names only the families a subset starts", () => {
+    const serialOnly = ["tests/e2e/design/alpha.spec.ts", "tests/e2e/design/beta.spec.ts"];
+    expect(workersLine({ mode: "subset", specs: serialOnly }, {})).toBe(
+      "workers per family: 2 families 1 each",
+    );
+    expect(workersLine({ mode: "subset", specs: [serialOnly[0]] }, {})).toBe(
+      "workers per family: 1 family 1 each",
+    );
+    expect(workersLine({ mode: "subset", specs: [FUNCTIONAL_ACCEPTANCE_FAMILY] }, {})).toBe(
+      `workers per family: ${FUNCTIONAL_ACCEPTANCE_FAMILY} ${FUNCTIONAL_ACCEPTANCE_WORKERS}`,
+    );
+    expect(
+      workersLine({ mode: "subset", specs: [FUNCTIONAL_ACCEPTANCE_FAMILY, serialOnly[0]] }, {}),
+    ).toBe(
+      `workers per family: ${FUNCTIONAL_ACCEPTANCE_FAMILY} ${FUNCTIONAL_ACCEPTANCE_WORKERS}; 1 other family 1 each`,
+    );
+  });
+
+  it("prints nothing about workers when the run starts no family", () => {
+    expect(workersLine({ mode: "none", specs: [] }, {})).toBe(null);
+  });
+
+  it("says one worker for every family in an opt-in partition, as the configuration runs it", () => {
+    const specs = [FUNCTIONAL_ACCEPTANCE_FAMILY, "tests/e2e/design/alpha.spec.ts"];
+    expect(workersLine({ mode: "subset", specs }, { CINATRA_DESIGN_PARTITION: "1/2" })).toBe(
+      `workers per family: ${FUNCTIONAL_ACCEPTANCE_FAMILY} 1; 1 other family 1 each`,
+    );
+  });
+
+  it("prints the line right under the plan line of a published plan the job runs", () => {
+    const file = join(tmpdir(), `design-select-plan-${process.pid}-workers.json`);
+    const specs = discoverSpecFiles();
+    writeFileSync(file, `${JSON.stringify({ mode: "all", specs, summary: "design suite: running ALL families" })}\n`);
+    const out = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m) => out.push(String(m)));
+    try {
+      // Without --run: the published plan is read and shown, Playwright is not started.
+      expect(main(["--plan", file], {})).toBe(0);
+    } finally {
+      spy.mockRestore();
+      rmSync(file, { force: true });
+    }
+    const planLine = out.findIndex((line) => line.startsWith("  plan: "));
+    expect(planLine).toBeGreaterThan(-1);
+    expect(out[planLine + 1]).toBe(`  ${workersLine({ mode: "all", specs }, {})}`);
+  });
+
+  it("prints no workers line for a published plan that skips the suite", () => {
+    const file = join(tmpdir(), `design-select-plan-${process.pid}-workers-none.json`);
+    writeFileSync(file, `${JSON.stringify({ mode: "none", specs: [], summary: "skipped" })}\n`);
+    const out = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m) => out.push(String(m)));
+    try {
+      expect(main(["--plan", file], {})).toBe(0);
+    } finally {
+      spy.mockRestore();
+      rmSync(file, { force: true });
+    }
+    expect(out.some((line) => line.includes("workers per family"))).toBe(false);
   });
 });
