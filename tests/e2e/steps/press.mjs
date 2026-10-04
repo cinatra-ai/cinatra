@@ -35,7 +35,7 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unspacedNote,
 } from "./page-controls.mjs";
 import { pressAndSettle } from "./press-settle.mjs";
@@ -120,7 +120,7 @@ export async function press(page, { name, role = "button", within: scope, record
   const from = pathOf(page.url());
   const mark = newMark();
   const query = { mode: "press", role, name: wanted, within: scopeName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
-  const reading = await within(page.evaluate(readControls, query), READING_BOUND_MS);
+  const reading = await within(readPageControls(page, query), READING_BOUND_MS);
   if (!reading) throw refuse(STEP, record, "unreadable", `the controls on ${from} could not be read — ${nothing}`);
   const { scope: part, matches } = reading;
   if (part && part.found === 0) {

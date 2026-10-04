@@ -31,7 +31,7 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unspacedNote,
 } from "./page-controls.mjs";
 import { PRESS_BOUNDS, PRESS_ROLES, ROLE_WORDS } from "./press.mjs";
@@ -112,7 +112,7 @@ export async function pressByTestId(page, { testId, text, within: scope, record,
     mark,
     listed: CONTROL_NAMES_LISTED,
   };
-  const reading = await within(page.evaluate(readControls, query), READING_BOUND_MS);
+  const reading = await within(readPageControls(page, query), READING_BOUND_MS);
   if (!reading) throw refuse(STEP, record, "unreadable", `the elements on ${from} could not be read — ${nothing}`);
   const { scope: part, matches } = reading;
   if (part && part.found === 0) {
