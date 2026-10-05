@@ -6,8 +6,8 @@
       "id": "app",
       "file": "app.json",
       "source": "repo",
-      "manifestSha256": "7bd7505f5cb4b60ec77975718ed7759a62b78179bbcaeee6200373c9a780de8b",
-      "specContentHash": "sha256:5e39a2f6b4360194511415a8bcfdbef45e5abcf3009d09ce0c45357ce327c025"
+      "manifestSha256": "684604141d98074113b2b09374b6cd2092ba50e17b7c47306078c5a9dd87fce6",
+      "specContentHash": "sha256:038c3bc7d90eed15afecbecdbf89127edef17f2483f07cbdec693a6368de01b7"
     },
     {
       "id": "app-components",
@@ -20,8 +20,8 @@
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
-      "manifestSha256": "41a82a320e6498467d91daf7ca25aa70e4027448ddefea9302df8d2c9f70e28f",
-      "specContentHash": "sha256:d71b31a1e85f109627bbeea6fbe8624248bce9301e88ce728046d1b8426c6ff1"
+      "manifestSha256": "14003020b6a4f913ec5b88e51d692cfe72b716dd56c62669941b443f1db036df",
+      "specContentHash": "sha256:3f55268249264c7ac2ae8746603d00957e7485611aea839ab212bdc9fcf14682"
     },
     {
       "id": "app-connectors",

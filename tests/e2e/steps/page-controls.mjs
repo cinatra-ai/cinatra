@@ -1,14 +1,13 @@
-// What the control steps share (press, selectFrom, dispatchRun,
+// What the control steps share (press, pressByTestId, selectFrom, dispatchRun,
 // readControlNames, and the window steps typeInWindow, waitForTurn and
 // sendInComposer): the page's controls, read in the page by their role and
-// their accessible name; the mark a step puts on the one control it acts on;
-// and the reading of the document a press starts from.
+// their browser-computed accessible name (and, for pressByTestId, the elements of a test id);
+// the mark a step puts on the one control it acts on; and the reading of the
+// document a press starts from.
 //
 // A CONTROL IS FOUND AS A PERSON WITH A SCREEN READER FINDS IT: by its role (a
-// button, a link, a tab, a radio, an option) and its accessible name, read in
-// this order: the text of the elements `aria-labelledby` names, `aria-label`,
-// its own labels (a fieldset's legend), and, for a role that takes its name from
-// its content, its text without hidden parts. Only a shown control counts:
+// button, a link, a tab, a radio, an option) and its accessible name, read from
+// Chromium's accessibility tree through Playwright. Only a shown control counts:
 // attached, drawn, inside nothing hidden, and not hidden from assistive
 // technology (`aria-hidden`), as a picker's hidden native twin is. Names are
 // compared whole, after runs of white space are made one space; when no name
@@ -32,6 +31,74 @@ export const CONTROL_POLL_MS = 100;
 export const CONTROL_NAMES_LISTED = 10;
 /** The attribute that marks the one control a step acts on, for that act only. */
 export const CONTROL_MARK = "data-step-control";
+
+/** Read names and their winning sources from Chromium's accessibility tree.
+ * CDP is the platform reading exposed by Playwright; unsupported drivers throw
+ * and the calling step reports its ordinary driver-failure. No DOM-name fallback.
+ * Backend node ids resolve to actual elements, never an index or a name match,
+ * so two identically named controls remain two controls. The remote handles and
+ * the session belong to this reading only and leave no attributes on the page.
+ */
+export async function readPageControls(page, query) {
+  const context = page.context();
+  const browser = context.browser()?.browserType?.().name();
+  if (typeof context.newCDPSession !== "function" || (browser && browser !== "chromium")) {
+    const error = new Error("Control-name readings require Chromium's accessibility tree");
+    error.name = "UnsupportedBrowserError";
+    throw error;
+  }
+  const session = await context.newCDPSession(page);
+  const objectGroup = `step-controls-${randomUUID()}`;
+  try {
+    const { root } = await session.send("DOM.getDocument", { depth: 0 });
+    const { object: document } = await session.send("DOM.resolveNode", { backendNodeId: root.backendNodeId, objectGroup });
+    const { nodes } = await session.send("Accessibility.getFullAXTree");
+    // Text fragments carry backend ids too, but only DOM elements can be the
+    // controls/parts this reader selects. Their names already include fragments.
+    const elements = nodes.filter((node) => !node.ignored && node.backendDOMNodeId && node.name && !["StaticText", "InlineTextBox", "LineBreak"].includes(node.role?.value));
+    const names = elements.map((node) => {
+      const name = plainName(node.name.value);
+      const source = node.name.sources?.find((one) => !one.superseded && !one.invalid && one.value !== undefined);
+      let from = "";
+      if (name) {
+        if (["aria-labelledby", "aria-label", "title"].includes(source?.attribute)) from = source.attribute;
+        else if (["label", "labelfor", "labelwrapped", "legend"].includes(source?.nativeSource)) from = "label";
+        else if (source?.type === "placeholder") from = "placeholder";
+        else from = "text";
+      }
+      return { name, from };
+    });
+    const handles = await Promise.all(elements.map(async (node) => {
+      const { object } = await session.send("DOM.resolveNode", { backendNodeId: node.backendDOMNodeId, objectGroup });
+      if (!object.objectId) throw new Error("The accessibility node no longer resolves");
+      return { objectId: object.objectId };
+    }));
+    const { result, exceptionDetails } = await session.send("Runtime.callFunctionOn", {
+      objectId: document.objectId,
+      functionDeclaration: `function(query, names, ...elements) {
+        if (this !== document) throw new Error("The accessibility document changed");
+        const accessibility = new Map();
+        elements.forEach((element, index) => {
+          if (!element.isConnected || (element !== document && element.ownerDocument !== document))
+            throw new Error("The accessibility document changed");
+          accessibility.set(element, names[index]);
+        });
+        return (${readControls.toString()})(query, accessibility);
+      }`,
+      arguments: [{ value: query }, { value: names }, ...handles],
+      returnByValue: true,
+    });
+    if (exceptionDetails) throw new Error("The browser could not read its controls");
+    return result.value;
+  } finally {
+    // Detach even if a navigation already destroyed the object group.
+    try {
+      await session.send("Runtime.releaseObjectGroup", { objectGroup });
+    } finally {
+      await session.detach();
+    }
+  }
+}
 
 /** The most characters of a name read from the page that a line carries. */
 const NAME_LENGTH = 60;
@@ -126,14 +193,17 @@ export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space 
  *     before it in its form group. With `marked`, the picker is the one that
  *     carries the mark, by no name (`by` is `mark`). For a search field whose
  *     list is shown, `drawn` counts the texts the page draws for each entry of
- *     the list, for the reading after the choice;
+ *     the list, for the reading after the choice. `shows` is the entry the
+ *     picker shows as chosen (a select's selected option, a radio group's
+ *     checked radio, a listbox's first option marked selected or checked, a
+ *     combobox's own text, empty while it shows its placeholder, and a search
+ *     field's value), or the empty string when it shows none;
  *   - `reflected`: whether the marked entry reads as selected, and the text of
  *     a live region that names `entry` and was not there before (`before`); for
  *     a search field, whether the field (its list closed) or a text the page
  *     draws beyond `drawn` shows `entry`, or another entry of the list instead;
  *   - `composer`: the shown text boxes and those named `composer`, and the shown
- *     buttons of that same name, the composer's send control. A text box's
- *     placeholder is never its name;
+ *     buttons of that same name, the composer's send control;
  *   - `names`: every shown control of the page, or of the one shown part of
  *     the page named `within` (found as `press` finds it, and `scope` as it
  *     comes back there), in the page's order: its role, its name, where the
@@ -160,10 +230,18 @@ export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space 
  *     the page. `note` keeps a count in the page's document for the wait that
  *     follows a send, under `noteKey`, by the field and the part: `set` notes
  *     the counts of this reading, `forget` removes the note; `noted` is the
- *     note there is, or null.
+ *     note there is, or null;
+ *   - `testid`: the shown elements that carry the test id `testId` in the
+ *     attribute `testIdAttribute`, within the one shown part of the page named
+ *     `within` when the query names one (found as `press` finds it), and those
+ *     whose own text is `text`: the text the element draws (its text nodes,
+ *     without a hidden part, a script or a style), runs of white space made one
+ *     space, compared whole. Each match comes back with its role, and, for a
+ *     role of `roles`, its accessible name. The one match takes the mark when
+ *     it carries no role of `roles` with a name: such a control is `press`'s.
  * Lists of names come back bounded: `{ names, more }`.
  */
-export function readControls(query) {
+function readControls(query, accessibility) {
   const text = (value) => String(value == null ? "" : value).replace(/\s+/g, " ").trim();
   // THE ONE COMPARISON of a wanted name with the names the page reads, for every
   // step and every scope. A name names a candidate when both read the same, runs
@@ -248,31 +326,9 @@ export function readControls(query) {
       .map((id) => document.getElementById(id))
       .filter(Boolean);
   const legendOf = (element) => Array.from(element.children).find((child) => child.localName === "legend") || null;
-  // An element's name and where it comes from (`from`), read in this order: the
-  // text of the elements `aria-labelledby` names; `aria-label`; its own labels,
-  // or a fieldset's legend (`label`); a button input's value or alternative
-  // text, or, for a role that takes its name from its content, its text without
-  // hidden parts (`text`); and last its title (`title`). `from` is empty when
-  // there is no name. `role` is the element's role, when it has been read.
-  const namedBy = (element, role) => {
-    const named = (name, from) => ({ name, from: name ? from : "" });
-    const labelledBy = text(byIds(element, "aria-labelledby").map((node) => contentOf(node, element)).join(" "));
-    if (labelledBy) return named(labelledBy, "aria-labelledby");
-    const label = text(element.getAttribute("aria-label"));
-    if (label) return named(label, "aria-label");
-    const labels = element.labels ? text(Array.from(element.labels).map((node) => contentOf(node, element)).join(" ")) : "";
-    if (labels) return named(labels, "label");
-    if (element.localName === "fieldset" && legendOf(element)) return named(text(contentOf(legendOf(element), null)), "label");
-    if (element.localName === "input" && BUTTON_TYPES.includes(typeOf(element))) {
-      const shows = text(typeOf(element) === "image" ? element.getAttribute("alt") : element.value);
-      return shows ? named(shows, "text") : named(text(element.getAttribute("title")), "title");
-    }
-    if (FROM_CONTENT.includes(role === undefined ? roleOf(element) : role)) {
-      const content = text(contentOf(element, null));
-      if (content) return named(content, "text");
-    }
-    return named(text(element.getAttribute("title")), "title");
-  };
+  // The browser, not a second implementation of the accessible-name algorithm,
+  // owns this value. Missing AX entries are unnamed, never a DOM-text fallback.
+  const namedBy = (element) => accessibility.get(element) || { name: "", from: "" };
   const nameOf = (element) => namedBy(element).name;
   const disabled = (element) =>
     (typeof element.matches === "function" && element.matches(":disabled")) || element.getAttribute("aria-disabled") === "true";
@@ -304,11 +360,13 @@ export function readControls(query) {
     ["region", "section, aside, main, header, footer, [role='region'], [role='tabpanel']"],
   ];
   const titleOf = (part) => {
+    const computed = namedBy(part);
+    if (computed.name && ["aria-labelledby", "aria-label", "label"].includes(computed.from)) return computed.name;
     const own = text(byIds(part, "aria-labelledby").map((node) => contentOf(node, null)).join(" ")) || text(part.getAttribute("aria-label"));
     if (own) return own;
     if (part.localName === "fieldset" && legendOf(part)) return text(contentOf(legendOf(part), null));
     const title = part.querySelector(TITLE);
-    return title ? text(contentOf(title, null)) : "";
+    return title ? nameOf(title) || text(contentOf(title, null)) : "";
   };
   const partOf = (element) => {
     for (let node = element.parentElement; node && node !== document.documentElement; node = node.parentElement) {
@@ -392,7 +450,7 @@ export function readControls(query) {
     return "";
   };
   const rowNameOf = (element) =>
-    text(byIds(element, "aria-labelledby").map((node) => contentOf(node, element)).join(" ")) || text(element.getAttribute("aria-label")) || firstTextOf(element);
+    ((element.hasAttribute("aria-labelledby") || element.hasAttribute("aria-label")) && nameOf(element)) || firstTextOf(element);
   // How many shown texts of the page read as each of `names`, outside `field`,
   // the list it controls and every option: what a page draws for a choice (a
   // row, a chip), counted before the choice and after it.
@@ -467,7 +525,7 @@ export function readControls(query) {
       .map((element) => ({ element, kind: kindOf(element) }))
       .filter((picker) => picker.kind)
       .map((picker) => ({ ...picker, name: nameOf(picker.element) }));
-    // A combobox with no accessible name shows its placeholder (the shared select
+    // A combobox without an explicit accessible name shows its placeholder (the shared select
     // marks it `data-placeholder`) until it holds a value, and then that value. A
     // search field shows its own placeholder while it is empty, and then its text.
     const placeholderOf = (element) => {
@@ -516,7 +574,9 @@ export function readControls(query) {
       // By its name, then by the text that stands in for one, road by road: a
       // reading that is the same exactly, on any of them, wins over one that is
       // the same only once white space is removed.
-      const unnamed = pickers.filter((picker) => (picker.kind === "combobox" || picker.kind === "search") && picker.name === "");
+      const unnamed = pickers.filter((picker) =>
+        (picker.kind === "combobox" || picker.kind === "search") && (picker.name === "" || namedBy(picker.element).from === "placeholder"),
+      );
       tiers: for (const loose of [false, true]) {
         found = innermost(pickers.filter((picker) => readsAs(picker.name, query.picker, loose)));
         if (found.length > 0) {
@@ -536,7 +596,12 @@ export function readControls(query) {
         }
       }
     }
-    const read = { path: location.pathname, pickers: listOf(pickers.map((picker) => picker.name)), found: found.length, by, unspaced, named };
+    const read = {
+      path: location.pathname, pickers: listOf(pickers.map((picker) => picker.name)), found: found.length, by, unspaced, named,
+      // Placeholder-derived platform names do not remove the established
+      // shown-value / preceding-label road, but its record must tell the truth.
+      fallbackNamed: by !== "name" && by !== "mark" && found.some((picker) => picker.name !== ""),
+    };
     if (found.length !== 1) return read;
     const { element: picker, kind } = found[0];
     mark(picker, `${query.mark}p`);
@@ -564,6 +629,22 @@ export function readControls(query) {
     }
     // What the page draws for each entry of a search field's list, before the choice.
     const names = Array.from(new Set(entries.map((entry) => entry.name)));
+    // The entry the picker shows as chosen: a select's selected option, a radio
+    // group's checked radio, a listbox's first option marked selected or checked,
+    // a combobox's or a search field's own text.
+    let shows = "";
+    if (kind === "select") {
+      const option = picker.selectedOptions && picker.selectedOptions[0];
+      shows = option ? text(option.label || option.text) : "";
+    } else if (kind === "radiogroup") {
+      const radio = entries.find((entry) => checkedOf(entry.element) === true);
+      shows = radio ? radio.name : "";
+    } else if (kind === "listbox") {
+      const option = entries.find((entry) => entry.element.getAttribute("aria-selected") === "true" || entry.element.getAttribute("aria-checked") === "true");
+      shows = option ? option.name : "";
+    } else {
+      shows = valueOf(picker);
+    }
     return {
       ...read,
       kind,
@@ -580,6 +661,7 @@ export function readControls(query) {
       native: Boolean(chosen && chosen.element.localName === "input"),
       live: liveTexts(),
       drawn: kind === "search" && open ? { names, counts: drawnCounts(names, picker) } : null,
+      shows,
     };
   }
 
@@ -750,6 +832,40 @@ export function readControls(query) {
       sends: sends.length,
       beside: listOf((beside || []).map(nameOf)),
     };
+  }
+
+  if (query.mode === "testid") {
+    let root = document;
+    let scope = null;
+    if (query.within) {
+      ({ root, scope } = scopeOf(query.within));
+      if (!root) return { path: location.pathname, scope, carriers: 0, texts: listOf([]), matches: [] };
+    }
+    // The text the element draws: its text nodes, without a hidden part, a script or a style.
+    const drawnText = (element) => {
+      let out = "";
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        let drawn = getComputedStyle(node.parentElement).visibility !== "hidden";
+        for (let at = node.parentElement; drawn && at && at !== element.parentElement; at = at.parentElement) {
+          if (at.hasAttribute("hidden") || ["script", "style", "template"].includes(at.localName) || getComputedStyle(at).display === "none") drawn = false;
+        }
+        if (drawn) out += node.nodeValue;
+      }
+      return text(out);
+    };
+    // The attribute is compared as a value, never written into a selector.
+    const carriers = Array.from(root.querySelectorAll(`[${query.testIdAttribute}]`)).filter(
+      (element) => element.getAttribute(query.testIdAttribute) === query.testId && shown(element),
+    );
+    const texts = carriers.map(drawnText);
+    const found = carriers.filter((element, at) => texts[at] === query.text);
+    const matches = found.map((element) => {
+      const described = describe(element);
+      return { ...described, name: query.roles.includes(described.role) ? nameOf(element) : "" };
+    });
+    if (found.length === 1 && !(query.roles.includes(matches[0].role) && matches[0].name)) mark(found[0], query.mark);
+    return { path: location.pathname, scope, carriers: carriers.length, texts: listOf(texts), matches };
   }
 
   throw new Error("readControls: no such mode");

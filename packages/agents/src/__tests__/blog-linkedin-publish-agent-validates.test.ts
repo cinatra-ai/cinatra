@@ -211,7 +211,7 @@ describe("blog-linkedin-publish-agent — the published address reaches the arti
     expect(data.tool).toBe("objects_update");
     // The artifact written to is the one this run was handed — never a new one.
     expect(data.input?.objectId).toBe("{{ linkedinArtifactId }}");
-    expect(data.input?.data).toBe("{{ addressPatch }}");
+    expect(data.input?.data).toBe("{# pyagentspec-input-hint: {{ addressPatch }} #}{{ addressPatch | tojson }}");
   });
 
   it("the write-back runs after the publish step, before the end, on the publish step's patch", () => {

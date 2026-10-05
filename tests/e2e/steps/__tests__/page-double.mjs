@@ -17,6 +17,14 @@
 //     from that part, and its own request stays open with it, without a
 //     response end in its timing;
 //   - a press that holds the new-tab modifier opens the link in a further page;
+//   - a browser opens contexts, and each context keeps its own cookies, its own
+//     storage and its own connections: at most six to one origin over plain
+//     HTTP, and a request beyond them waits until one of them ends. A new
+//     context starts from a storage state handed to it as an object (a path to a
+//     file is refused). A document's storage is kept for its origin when the
+//     document is left and when the context's storage state is read, and a new
+//     document of that origin starts from it. A response's cookies are not
+//     taken: a test adds the cookies a context starts with;
 //   - a press on a link the page's own handler takes over plays that handler: it
 //     cancels the press, or opens a dialog or a panel in place, or requests the
 //     page from the app and, once the app has answered, moves the address
@@ -24,9 +32,13 @@
 //   - a list drawn as the shared select draws it hides everything outside it
 //     from assistive technology while it is open, as the select's library does,
 //     and a press on one of its entries takes the entry, closes the list and
-//     shows the page again (see hideOthers);
+//     shows the page again (see hideOthers); the list may close after a delay
+//     the page names, or never; the Escape key closes it too, taking no entry,
+//     unless the page has it ignore the key (see pressEscape);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - a press on a row drawn without a role plays the page's handlers for it: it
+//     counts the press, selects the row, or leaves the page;
 //   - text filled into a search field, and a press on an entry of its list, run
 //     the page's own handlers for them: the same two functions the page's inline
 //     script runs in a browser (see typeInSearchField in fixture-app.mjs);
@@ -80,6 +92,51 @@ const NEW_TAB_MODIFIERS = ["ControlOrMeta", "Control", "Meta"];
 const INNER = Symbol("context double");
 /** A page's first part that says the rest of its response is still to come. */
 const STREAMING_MARK = /<meta name="fixture-streaming"/;
+/** How many connections a context opens to one origin over plain HTTP, as a browser does. */
+const ORIGIN_CONNECTIONS = 6;
+/** The viewport a context gives its pages unless it was made with another. */
+const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 720 });
+/** How a context asks a page to keep its document's storage. */
+const KEEP_STORAGE = Symbol("keep the storage");
+const ACCESSIBILITY_SESSION = Symbol("fixture accessibility session");
+
+// A fixture-only name/source double for the existing branch tests. It is NOT
+// the platform algorithm: browser-control-names.test.mjs exercises the cases
+// (including SVG descendants and HTML label ARIA) that only Chromium can prove.
+function fixtureName(element) {
+  const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const content = (node, skip) => {
+    if (node === skip) return "";
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1 || node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") return "";
+    if (["script", "style", "template"].includes(node.localName)) return "";
+    if (node.localName === "img") return ` ${node.getAttribute("alt") || ""} `;
+    if (node.localName === "select") return ` ${Array.from(node.selectedOptions || [], (option) => option.text).join(" ")} `;
+    if (node.localName === "textarea") return ` ${node.value} `;
+    if (node.localName === "input") return ["radio", "checkbox", "hidden", "file"].includes(node.type) ? "" : ` ${node.value || ""} `;
+    return Array.from(node.childNodes, (child) => content(child, skip)).join("");
+  };
+  const named = (name, from) => ({ name, from: name ? from : "" });
+  const labelled = text(text(element.getAttribute("aria-labelledby")).split(" ").map((id) => element.ownerDocument.getElementById(id)).filter(Boolean).map((node) => content(node, element)).join(" "));
+  if (labelled) return named(labelled, "aria-labelledby");
+  const aria = text(element.getAttribute("aria-label"));
+  if (aria) return named(aria, "aria-label");
+  const label = text(Array.from(element.labels || [], (node) => content(node, element)).join(" "));
+  if (label) return named(label, "label");
+  if (element.localName === "fieldset") return named(text(content(element.querySelector("legend"), null)), "label");
+  if (element.localName === "input" && ["button", "submit", "reset", "image"].includes(element.type)) {
+    const name = text(element.type === "image" ? element.getAttribute("alt") : element.value);
+    if (name) return named(name, "text");
+  }
+  const role = element.getAttribute("role") || ({ a: "link" }[element.localName] ?? element.localName);
+  if (["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "radio", "checkbox", "switch", "treeitem"].includes(role)) {
+    const name = text(content(element, null));
+    if (name) return named(name, "text");
+  }
+  const title = text(element.getAttribute("title"));
+  if (title) return named(title, "title");
+  return named(text(element.getAttribute("placeholder")), "placeholder");
+}
 
 /**
  * A response body as it arrives: `head` resolves with what has come once its
@@ -119,16 +176,25 @@ function collect(subscribe) {
  * arrives (`head` and `whole`, see collect) and `cancel`. Plain HTTP goes over
  * HTTP/1.1; an https origin over HTTP/2.
  */
-async function transfer(sessionOf, href, { method, body, headers, follow }) {
+async function transfer(inner, href, { method, body, headers, follow }) {
+  headers = { ...headers, ...inner.cookiesFor(href) };
   if (new URL(href).protocol === "http:") {
+    // One of the context's connections to the origin, held until the body has ended.
+    const release = await inner.connection(new URL(href).origin);
     const controller = new AbortController();
-    const response = await fetch(href, {
-      method,
-      body: body ?? undefined,
-      headers,
-      redirect: follow ? "follow" : "manual",
-      signal: controller.signal,
-    });
+    let response;
+    try {
+      response = await fetch(href, {
+        method,
+        body: body ?? undefined,
+        headers,
+        redirect: follow ? "follow" : "manual",
+        signal: controller.signal,
+      });
+    } catch (error) {
+      release();
+      throw error;
+    }
     const { head, whole } = collect((onPart, onEnd, onFail) => {
       if (!response.body) return onEnd();
       const reader = response.body.getReader();
@@ -145,9 +211,10 @@ async function transfer(sessionOf, href, { method, body, headers, follow }) {
         }, onFail);
       pump();
     });
+    whole.then(release, release);
     return { status: response.status, url: response.url, protocol: "http/1.1", head, whole, cancel: () => controller.abort() };
   }
-  const session = await sessionOf(new URL(href).origin);
+  const session = await inner.session(new URL(href).origin);
   for (let hops = 0; ; hops += 1) {
     const url = new URL(href);
     const stream = session.request({ ":method": method, ":path": `${url.pathname}${url.search}`, ...headers });
@@ -175,15 +242,69 @@ async function transfer(sessionOf, href, { method, body, headers, follow }) {
   }
 }
 
-/** A browser context: its open pages, and the request events of all of them. */
-export class ContextDouble {
+/** Whether a cookie of `domain` goes to `host`: the host itself, or a host under a domain written with a leading dot. */
+const domainMatches = (host, domain) => host === domain || (domain.startsWith(".") && (host === domain.slice(1) || host.endsWith(domain)));
+
+/** A browser: the contexts it has open. */
+export class BrowserDouble {
   #origin;
-  #pages = [];
-  #listeners = new Map();
-  #sessions = new Map();
+  #contexts = [];
 
   constructor(origin) {
     this.#origin = origin;
+    this[INNER] = {
+      forget: (context) => {
+        this.#contexts = this.#contexts.filter((open) => open !== context);
+      },
+    };
+  }
+
+  contexts() {
+    return [...this.#contexts];
+  }
+
+  /** A context of its own: `storageState` (an object), `viewport`. */
+  async newContext(options = {}) {
+    const context = new ContextDouble(this.#origin, { ...options, browser: this });
+    this.#contexts.push(context);
+    return context;
+  }
+
+  async close() {
+    for (const context of this.contexts()) await context.close();
+  }
+}
+
+/** A browser context: its open pages, the request events of all of them, and its own cookies, storage and connections. */
+export class ContextDouble {
+  async newCDPSession(page) {
+    return page[ACCESSIBILITY_SESSION]();
+  }
+  #origin;
+  #browser;
+  #viewport;
+  #pages = [];
+  #listeners = new Map();
+  #sessions = new Map();
+  #cookies = [];
+  /** The storage of each origin: a map of names to values. */
+  #storage = new Map();
+  /** The connections to each origin over plain HTTP: how many are taken, and the requests that wait for one. */
+  #pools = new Map();
+  #closed = false;
+
+  /** Made by a browser (BrowserDouble.newContext), or alone, as a context no browser opened. */
+  constructor(origin, { browser = null, storageState, viewport } = {}) {
+    this.#origin = origin;
+    this.#browser = browser;
+    this.#viewport = viewport === undefined ? { ...DEFAULT_VIEWPORT } : viewport;
+    if (storageState !== undefined) {
+      if (!storageState || typeof storageState !== "object") throw new Error("the page double takes a storage state as an object, never a file");
+      this.#addCookies(storageState.cookies ?? []);
+      for (const { origin: of, localStorage } of storageState.origins ?? []) {
+        this.#storage.set(of, new Map(localStorage.map(({ name, value }) => [name, value])));
+      }
+    }
     this[INNER] = {
       emit: (event, value) => {
         for (const listener of [...(this.#listeners.get(event) ?? [])]) listener(value);
@@ -212,12 +333,85 @@ export class ContextDouble {
         }
         return session;
       },
-      transfer: (href, options) => transfer(this[INNER].session, href, options),
+      transfer: (href, options) => transfer(this[INNER], href, options),
+      /** The cookie header a request to `href` carries. */
+      cookiesFor: (href) => {
+        const url = new URL(href);
+        const sent = this.#cookies.filter((cookie) => domainMatches(url.hostname, cookie.domain) && url.pathname.startsWith(cookie.path));
+        return sent.length > 0 ? { cookie: sent.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ") } : {};
+      },
+      /** One connection to `origin`, once one is free: answers its release. */
+      connection: (origin) => {
+        let pool = this.#pools.get(origin);
+        if (!pool) this.#pools.set(origin, (pool = { taken: 0, waiting: [] }));
+        return new Promise((done, fail) => {
+          if (this.#closed) return fail(new Error("the context was closed"));
+          const take = () => {
+            pool.taken += 1;
+            let released = false;
+            done(() => {
+              if (released) return;
+              released = true;
+              pool.taken -= 1;
+              pool.waiting.shift()?.take();
+            });
+          };
+          if (pool.taken < ORIGIN_CONNECTIONS) take();
+          else pool.waiting.push({ take, fail });
+        });
+      },
+      /** The storage of `origin`, which a new document of that origin starts from. */
+      storage: (origin) => {
+        let kept = this.#storage.get(origin);
+        if (!kept) this.#storage.set(origin, (kept = new Map()));
+        return kept;
+      },
+      viewport: () => this.#viewport,
     };
+  }
+
+  /** The browser that opened the context, or null when none did. */
+  browser() {
+    return this.#browser;
   }
 
   pages() {
     return [...this.#pages];
+  }
+
+  #addCookies(cookies) {
+    for (const given of cookies) {
+      const domain = given.domain ?? new URL(given.url).hostname;
+      const path = given.path ?? "/";
+      this.#cookies = this.#cookies.filter((cookie) => !(cookie.name === given.name && cookie.domain === domain && cookie.path === path));
+      this.#cookies.push({
+        name: given.name,
+        value: given.value,
+        domain,
+        path,
+        expires: given.expires ?? -1,
+        httpOnly: given.httpOnly ?? false,
+        secure: given.secure ?? false,
+        sameSite: given.sameSite ?? "Lax",
+      });
+    }
+  }
+
+  async addCookies(cookies) {
+    this.#addCookies(cookies);
+  }
+
+  async cookies() {
+    return this.#cookies.map((cookie) => ({ ...cookie }));
+  }
+
+  /** The cookies and the storage of each origin, as Playwright answers them. */
+  async storageState() {
+    for (const page of this.#pages) page[KEEP_STORAGE]();
+    const origins = [...this.#storage]
+      .filter(([, kept]) => kept.size > 0)
+      .map(([origin, kept]) => ({ origin, localStorage: [...kept].map(([name, value]) => ({ name, value })) }));
+    return { cookies: await this.cookies(), origins };
   }
 
   async newPage() {
@@ -236,9 +430,14 @@ export class ContextDouble {
   }
 
   async close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    // A request that waits for a connection goes nowhere once its context is gone.
+    for (const pool of this.#pools.values()) for (const waiting of pool.waiting.splice(0)) waiting.fail(new Error("the context was closed"));
     for (const page of this.pages()) await page.close();
     for (const session of this.#sessions.values()) (await session.catch(() => null))?.destroy();
     this.#sessions.clear();
+    this.#browser?.[INNER].forget(this);
   }
 }
 
@@ -282,24 +481,55 @@ function hideOthers(list) {
   walk(document.body);
 }
 
-/**
- * An entry pressed in such a list is taken: the list closes, the combobox that
- * controls it shows the entry, and every element the list hid is shown again.
- */
-function chooseEntry(entry) {
-  const document = entry.ownerDocument;
-  const list = entry.closest("[role='listbox']");
-  if (!list) return;
+/** Such a list closes: it is hidden, and every element it hid is shown again. */
+function closeList(list) {
   list.setAttribute("hidden", "");
-  for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
+  for (const node of list.ownerDocument.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
     node.removeAttribute("aria-hidden");
     node.removeAttribute(HIDDEN_MARKER);
   }
+}
+
+/**
+ * The Escape key closes every shown list a combobox opened, as the select's
+ * library does, and takes no entry: the combobox reads collapsed again. A list
+ * that carries `data-fixture-escape="ignored"` stays open. The inline script of
+ * fixture-app.mjs does the same in a browser.
+ */
+function pressEscape(document) {
+  for (const list of Array.from(document.querySelectorAll("[role='listbox']"))) {
+    if (!list.id || list.hasAttribute("hidden") || list.getAttribute("data-fixture-escape") === "ignored") continue;
+    const picker = document.querySelector(`[data-fixture-opens="${list.id}"][aria-controls="${list.id}"]`);
+    if (!picker) continue;
+    closeList(list);
+    picker.setAttribute("aria-expanded", "false");
+  }
+}
+
+/**
+ * An entry pressed in such a list is taken: the combobox that controls it shows
+ * the entry, and the list closes and every element it hid is shown again, at
+ * once or, when the list carries `data-fixture-closes-after`, after that many
+ * milliseconds (`later` is the page's timer road) or never.
+ */
+function chooseEntry(entry, later) {
+  const document = entry.ownerDocument;
+  const list = entry.closest("[role='listbox']");
+  if (!list) return;
+  const close = () => closeList(list);
   const picker = document.querySelector(`[aria-controls="${list.id}"]`);
-  if (!picker) return;
-  picker.textContent = entry.textContent;
-  picker.removeAttribute("data-placeholder");
-  picker.setAttribute("aria-expanded", "false");
+  if (picker) {
+    picker.textContent = entry.textContent;
+    picker.removeAttribute("data-placeholder");
+    picker.setAttribute("aria-expanded", "false");
+  }
+  // A list that carries `data-fixture-closes-after` closes that many milliseconds later, or never.
+  const closesAfter = list.getAttribute("data-fixture-closes-after");
+  if (closesAfter === null) close();
+  else {
+    entry.setAttribute("aria-selected", "true");
+    if (closesAfter !== "never") later(close, Number(closesAfter));
+  }
 }
 
 export class PageDouble {
@@ -318,12 +548,35 @@ export class PageDouble {
   #streams = new Set();
   #entries = new WeakMap();
   #busyUntil = new WeakMap();
+  #viewport;
 
   /** Opened by its context: `context.newPage()`. */
   constructor(origin, context) {
     this.#origin = origin;
     this.#context = context;
+    this.#viewport = context[INNER].viewport();
     this.#dom = this.#build("about:blank", "<!doctype html><html><body></body></html>", null, 0);
+  }
+
+  viewportSize() {
+    return this.#viewport ? { ...this.#viewport } : null;
+  }
+
+  async setViewportSize(size) {
+    this.#viewport = { width: size.width, height: size.height };
+  }
+
+  /** Keep the storage of `dom` for its origin, in the context. */
+  #keepStorage(dom) {
+    if (!/^https?:/.test(dom.window.location.href)) return;
+    const kept = this.#context[INNER].storage(dom.window.location.origin);
+    const storage = dom.window.localStorage;
+    kept.clear();
+    for (let i = 0; i < storage.length; i += 1) kept.set(storage.key(i), storage.getItem(storage.key(i)));
+  }
+
+  [KEEP_STORAGE]() {
+    if (!this.#closed) this.#keepStorage(this.#dom);
   }
 
   url() {
@@ -389,6 +642,38 @@ export class PageDouble {
     return viaJson(await inPage(viaJson(arg)));
   }
 
+  [ACCESSIBILITY_SESSION]() {
+    if (this.#closed) throw new Error(DESTROYED);
+    const document = this.#dom.window.document;
+    const objects = [document, ...document.querySelectorAll("*")];
+    let detached = false;
+    return {
+      send: async (command, args = {}) => {
+        await this.evaluate(() => true); // Preserve busy, closed and navigating failures.
+        if (detached || document !== this.#dom.window.document) throw new Error(DESTROYED);
+        if (command === "DOM.getDocument") return { root: { backendNodeId: 1 } };
+        if (command === "DOM.resolveNode") return { object: { objectId: String(args.backendNodeId) } };
+        if (command === "Accessibility.getFullAXTree") return { nodes: objects.slice(1).map((element, index) => {
+          const { name, from } = fixtureName(element);
+          const source = { value: { value: name } };
+          if (from === "label") source.nativeSource = "label";
+          else if (from === "text") source.type = "contents";
+          else if (from === "placeholder") source.type = "placeholder";
+          else source.attribute = from;
+          return { backendDOMNodeId: index + 2, name: { value: name, sources: [source] } };
+        }) };
+        if (command === "Runtime.callFunctionOn") {
+          const fn = this.#dom.window.eval(`(${args.functionDeclaration})`);
+          const values = args.arguments.map((arg) => arg.objectId ? objects[Number(arg.objectId) - 1] : viaJson(arg.value));
+          return { result: { value: viaJson(await fn.apply(objects[Number(args.objectId) - 1], values)) } };
+        }
+        if (command === "Runtime.releaseObjectGroup") return {};
+        throw new Error(`The fixture has no CDP command ${command}`);
+      },
+      detach: async () => { detached = true; },
+    };
+  }
+
   async waitForFunction(fn, arg, { timeout = 30_000, polling = 100 } = {}) {
     const until = Date.now() + timeout;
     for (;;) {
@@ -423,6 +708,7 @@ export class PageDouble {
 
   async close() {
     if (this.#closed) return;
+    this.#keepStorage(this.#dom);
     this.#closed = true;
     for (const timer of this.#timers) clearTimeout(timer);
     this.#timers.clear();
@@ -453,6 +739,10 @@ export class PageDouble {
   /** A document for `html`, with its resource timing and the behaviour the page declares scheduled on it. */
   #build(href, html, protocol, responseEnd) {
     const dom = new JSDOM(html, { url: /^https?:/.test(href) ? href : "about:blank", runScripts: "outside-only" });
+    // A new document starts from the storage its context keeps for its origin.
+    if (/^https?:/.test(href)) {
+      for (const [name, value] of this.#context[INNER].storage(new URL(href).origin)) dom.window.localStorage.setItem(name, value);
+    }
     const entries = /^https?:/.test(href)
       ? [{ name: href, entryType: "navigation", nextHopProtocol: protocol ?? "", startTime: 0, responseEnd }]
       : [];
@@ -488,6 +778,7 @@ export class PageDouble {
 
   #commit(href, html, protocol = null, elapsedMs = 0, streaming = null) {
     const previous = this.#dom;
+    this.#keepStorage(previous);
     this.#href = href;
     this.#dom = this.#build(href, html, protocol, streaming ? 0 : Math.max(1, elapsedMs));
     // A new document has the focus on nothing of its own yet.
@@ -592,6 +883,18 @@ export class PageDouble {
   }
 
   #press(element, modifiers) {
+    // The page's handlers of a row drawn without a role (see PRESS_ROWS_PAGE in
+    // fixture-app.mjs): it counts its presses, selects itself, or leaves the page.
+    if (element.hasAttribute("data-fixture-counts")) {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") ?? 0) + 1));
+    }
+    if (element.hasAttribute("data-fixture-selects")) {
+      for (const row of element.ownerDocument.querySelectorAll("[data-fixture-selects]")) row.setAttribute("data-selected", String(row === element));
+    }
+    if (element.hasAttribute("data-fixture-goes")) {
+      this.#navigate("GET", new URL(element.getAttribute("data-fixture-goes"), this.#href).href, null).catch(() => {});
+      return;
+    }
     // The page's handler takes a press on a window's send control.
     const send = element.closest("[data-fixture-window-send]");
     if (send) {
@@ -621,7 +924,12 @@ export class PageDouble {
       if (element.hasAttribute("data-fixture-inert")) return;
       // The page's handler takes an entry of a list drawn as the shared select draws it.
       if (element.hasAttribute("data-fixture-chooses")) {
-        chooseEntry(element);
+        const document = element.ownerDocument;
+        chooseEntry(element, (run, ms) =>
+          this.#later(() => {
+            if (this.#dom.window.document === document) run();
+          }, ms),
+        );
         return;
       }
       // The page's handler cancels the press and opens the dialog or the panel it names, in place.
@@ -1244,7 +1552,8 @@ export class PageDouble {
   //     the element reports `input`. A browser types key by key and reports each
   //     key; the double types the whole text at once and reports it once;
   //   - Backspace deletes what the selection holds, or the last character of
-  //     the text when the caret is at its end; no other key is pressed here;
+  //     the text when the caret is at its end; Escape closes the open lists of
+  //     the shared select (see pressEscape); no other key is pressed here;
   //   - text typed into a window's box, and a press on a window's send control,
   //     run the page's own handlers for them: the same two functions the page's
   //     inline script runs in a browser (see fixture-app-windows.mjs).
@@ -1252,7 +1561,7 @@ export class PageDouble {
 
   #focused = null;
 
-  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus. */
+  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus; Escape pressed on the page. */
   keyboard = {
     type: async (text) => this.#typeText(String(text)),
     press: async (key) => this.#pressKey(String(key)),
@@ -1317,7 +1626,11 @@ export class PageDouble {
   }
 
   #pressKey(key) {
-    if (key !== "Backspace") throw new Error(`the page double presses Backspace only, not ${key}`);
+    if (key === "Escape") {
+      pressEscape(this.#dom.window.document);
+      return;
+    }
+    if (key !== "Backspace") throw new Error(`the page double presses Backspace and Escape only, not ${key}`);
     const element = this.#typingTarget();
     if (!element) return;
     const window = element.ownerDocument.defaultView;
@@ -1343,7 +1656,7 @@ export class PageDouble {
   }
 }
 
-/** The locator calls the steps make: count, the visible filter, first, fill and click (with its modifiers). */
+/** The locator calls the steps make: count, the visible filter, first, an attribute, fill and click (with its modifiers). */
 class LocatorDouble {
   #page;
   #selector;
@@ -1365,6 +1678,17 @@ class LocatorDouble {
 
   async count() {
     return this.#matches().length;
+  }
+
+  async getAttribute(name, { timeout = 30_000 } = {}) {
+    const until = Date.now() + timeout;
+    for (;;) {
+      const found = this.#matches();
+      if (found.length > 1) throw new Error(`strict mode violation: ${this.#selector} resolved to ${found.length} elements`);
+      if (found.length === 1) return found[0].getAttribute(name);
+      if (Date.now() >= until) throw new TimeoutError(`locator.getAttribute: Timeout ${timeout}ms exceeded.`);
+      await pause(20);
+    }
   }
 
   async fill(value, { timeout = 30_000 } = {}) {

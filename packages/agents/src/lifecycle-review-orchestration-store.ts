@@ -106,6 +106,7 @@ import type {
   LifecycleCheckpoint,
   LifecycleOriginKind,
 } from "@/lib/lifecycle/lifecycle-policy";
+import { isExternalEffectClass } from "@/lib/lifecycle/lifecycle-policy";
 import type { ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
 
 // ---------------------------------------------------------------------------
@@ -114,7 +115,11 @@ import type { ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event"
 
 /** The default lifetime an AUTO-created review gate carries. On expiry an
  * optional gate auto-resolves (releasing its held effect) and a required gate
- * keeps blocking + notifies (ops). Flow-authored gates set NO `expires_at`, so
+ * keeps blocking + notifies (ops). The end of the waiting time is not a person's
+ * decision, so a gate over an artifact of an outward destination class
+ * (`isExternalEffectClass`) counts as required here: it stays pending until a
+ * person decides. A gate over an artifact of class `none` lapses as described.
+ * Flow-authored gates set NO `expires_at`, so
  * the expiry drain never touches them (its predicate is `expires_at IS NOT
  * NULL`). Seven days: long enough that a human reviewer is the norm, bounded so a
  * forgotten optional gate cannot pin an effect forever. */
@@ -1824,14 +1829,18 @@ async function resolveExpiredAutoGates(limit: number, summary: GateMaintenanceSu
     const required = await isExpiredGateRequired(gate.reviewTaskId, gate.id);
     if (required) {
       // BLOCK + NOTIFY: keep the gate pending so its external effect stays held;
-      // surface the unactioned required review to ops each cycle.
+      // surface the unactioned required review to ops each cycle. This covers an
+      // org-required review and every review of an artifact of an outward
+      // destination class: the end of the waiting time is not a person's
+      // decision, so that review stays pending until a person decides.
       summary.requiredExpiredBlocked += 1;
       console.warn(
         `[lifecycle-gate-maintenance] required review gate ${gate.id} (task=${gate.reviewTaskId}) EXPIRED unactioned — effect remains blocked pending a human decision`,
       );
       continue;
     }
-    // OPTIONAL: auto-resolve (CAS pending→resolved), releasing the held effect.
+    // OPTIONAL (destination class `none`, not org-required): auto-resolve (CAS
+    // pending→resolved), releasing the held effect.
     // The gate's disposition CHECK admits only the terminal 'approve'/'reject';
     // an expired optional review LAPSES into a release (the effect is permitted to
     // flow), so it resolves as 'approve'. The synthetic `expiry:<gateId>`
@@ -1874,14 +1883,19 @@ async function resolveExpiredAutoGates(limit: number, summary: GateMaintenanceSu
   }
 }
 
-/** Re-derive whether an expired auto-gate's REVIEW is org-REQUIRED, by re-running
- * the pure lattice over the gate's original produced event(s). Fail-CLOSED: if the
+/** Re-derive whether an expired auto-gate's REVIEW is REQUIRED, by re-running
+ * the pure lattice over the gate's original produced event(s). The end of the
+ * waiting time is not a person's decision: an event of an outward destination
+ * class (`isExternalEffectClass`) answers required, so its review stays pending
+ * until a person decides; an event of class `none` answers from the lattice's
+ * org-required outcome. Fail-CLOSED: if the
  * event or its context cannot be resolved, treat the gate as required (keep
  * blocking) rather than risk auto-releasing a required gate.
  *
  * A BATCH partition gate (`lifecycle-review:batch:`) encodes no single event id, so
  * it is re-derived from its PINNED target set: the batch is required iff ANY of its
- * targets' reviews is org-required (fail-closed — any unresolvable target keeps the
+ * targets is of an outward destination class or ANY of its targets' reviews is
+ * org-required (fail-closed — any unresolvable target keeps the
  * whole partition blocking), matching the single-gate posture per target. */
 async function isExpiredGateRequired(reviewTaskId: string, gateId?: string): Promise<boolean> {
   if (isBatchAutoReviewTaskId(reviewTaskId)) {
@@ -1909,6 +1923,7 @@ async function isExpiredGateRequired(reviewTaskId: string, gateId?: string): Pro
     .where(eq(artifactProducedOutbox.eventId, eventId))
     .limit(1);
   if (!row) return true; // fail-closed: unknown provenance → keep blocking.
+  if (isExternalEffectClass(row.destinationClass as DestinationClass)) return true; // outward: a person decides.
   const context = await resolveReviewContext(row);
   if (!context.ok) return true; // fail-closed.
   const plan = planReviewForEvent(toAxes(row), context.ctx);
@@ -1916,7 +1931,9 @@ async function isExpiredGateRequired(reviewTaskId: string, gateId?: string): Pro
 }
 
 /** Re-derive an expired BATCH partition gate's requiredness from its PINNED target
- * set: required iff ANY target's review is org-required. Fail-CLOSED per target (a
+ * set: required iff ANY target is of an outward destination class (the end of the
+ * waiting time is not a person's decision) or ANY target's review is
+ * org-required. Fail-CLOSED per target (a
  * missing event, an unresolvable context, or an un-firing re-eval all keep the
  * whole partition blocking) — an all-optional expired batch lapses into a release,
  * exactly like a single optional gate. */
@@ -1953,6 +1970,7 @@ async function isExpiredBatchGateRequired(gateId: string): Promise<boolean> {
       .where(eq(artifactProducedOutbox.eventId, eventId))
       .limit(1);
     if (!row) return true; // fail-closed: a pinned target with no re-derivable event.
+    if (isExternalEffectClass(row.destinationClass as DestinationClass)) return true; // outward: a person decides.
     const context = await resolveReviewContext(row);
     if (!context.ok) return true; // fail-closed.
     const plan = planReviewForEvent(toAxes(row), context.ctx);

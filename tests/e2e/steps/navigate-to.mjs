@@ -77,6 +77,25 @@ export function linksTo(path) {
 }
 
 /**
+ * The visible links on `page` that lead to `path`, and how many there are: the
+ * reading of the links that navigateTo presses and openPageInOwnContext
+ * follows. A page whose links cannot be read is refused in the name of `step`.
+ * @param {import("@playwright/test").Page} page
+ * @param {string} path
+ * @param {{ step: string, from: string, record: import("./step-kit.mjs").StepRecord }} caller
+ */
+export async function visibleLinksTo(page, path, { step, from, record }) {
+  const links = page.locator(linksTo(path)).filter({ visible: true });
+  let found;
+  try {
+    found = await links.count();
+  } catch (error) {
+    throw refuse(step, record, "unreadable", `the links on ${from} could not be read (${errorClass(error)})`);
+  }
+  return { links, found };
+}
+
+/**
  * The visible links on `page` that lead to `path`, or a refusal when there are none.
  * @param {import("@playwright/test").Page} page
  * @param {string} path
@@ -84,13 +103,7 @@ export function linksTo(path) {
  * @param {import("./step-kit.mjs").StepRecord} record
  */
 async function visibleLinks(page, path, from, record) {
-  const links = page.locator(linksTo(path)).filter({ visible: true });
-  let found;
-  try {
-    found = await links.count();
-  } catch (error) {
-    throw refuse(STEP, record, "unreadable", `the links on ${from} could not be read (${errorClass(error)})`);
-  }
+  const { links, found } = await visibleLinksTo(page, path, { step: STEP, from, record });
   if (found === 0) throw refuse(STEP, record, "no-link", `no visible link on ${from} leads to ${path} — no address was typed`);
   return links;
 }
@@ -334,24 +347,60 @@ async function openFurtherPage(page, { path, record, bound, standingBound = STAN
   const links = await visibleLinks(page, path, from, record);
 
   // The further page is the first page the context opens after the press.
+  const previousPages = new Set(context.pages());
+  let started = false;
   /** @type {(opened: any) => void} */
   let noteOpened = () => {};
   const opened = new Promise((done) => {
-    noteOpened = done;
+    noteOpened = (further) => {
+      started = true;
+      done(further);
+    };
   });
+  const onRequest = (/** @type {import("@playwright/test").Request} */ request) => {
+    if (started) return;
+    started = startsNavigation(page, request, origin, path);
+    if (started) return;
+    try {
+      const requestedPage = request.frame().page();
+      if (!previousPages.has(requestedPage)) started = startsNavigation(requestedPage, request, origin, path);
+    } catch {
+      // A popup's initial navigation can precede both its frame and its page
+      // event. Its matching navigation request still proves the open started.
+      if (request.isNavigationRequest()) {
+        const requested = new URL(request.url());
+        started = requested.origin === origin && requested.pathname === path;
+      }
+    }
+  };
   const start = performance.now();
   /** @type {import("@playwright/test").Page | null} */
   let further = null;
   context.on("page", noteOpened);
+  context.on("request", onRequest);
   try {
     try {
       await links.first().click({ timeout: bound.actionMs, noWaitAfter: true, modifiers: [FURTHER_PAGE_MODIFIER] });
     } catch (error) {
       throw refuse(STEP, record, "driver-failure", `the link to ${path} could not be pressed (${errorClass(error)})`);
     }
-    further = await within(opened, bound.landingMs);
+    const pressed = performance.now();
+    const startBound = Math.min(bound.startMs, bound.landingMs);
+    if (!(await startedWithin(page, from, () => started, startBound))) {
+      const instead = await within(page.evaluate(readInstead, { selector: linksTo(path) }), READING_BOUND_MS);
+      const link = instead?.link ? `the link "${lineName(instead.link)}" to ${path}` : `the link to ${path}`;
+      throw refuse(
+        STEP,
+        record,
+        "no-further-page",
+        `the press on ${link} started no navigation within ${startBound} ms, and opened no further page (this page is on ${pathOf(page.url())}); ${describeInstead(instead)}`,
+      );
+    }
+    const left = Math.max(1, bound.landingMs - (performance.now() - pressed));
+    further = await within(opened, left);
   } finally {
     context.off("page", noteOpened);
+    context.off("request", onRequest);
   }
   if (!further) {
     throw refuse(STEP, record, "no-further-page", `the press opened no further page within ${bound.landingMs} ms (this page is on ${pathOf(page.url())})`);

@@ -95,6 +95,23 @@ BOUND_NAMES.push(
   "WINDOW_SENT_BOUND_MS",
 );
 BOUND_NAMES.sort();
+// pressByTestId and readTitle: their steps and their bounds join the lists in
+// this one place, and the bounds stay in order. pressByTestId takes the bounds
+// of press, listed above already.
+STEP_NAMES.push("pressByTestId", "readTitle");
+BOUND_NAMES.push("TITLE_BOUND_MS", "TITLE_POLL_MS", "TITLE_SETTLE_MS");
+BOUND_NAMES.sort();
+// openPageInOwnContext: its step and its bound join the lists in this one
+// place, and the bounds stay in order.
+STEP_NAMES.push("openPageInOwnContext");
+BOUND_NAMES.push("OWN_CONTEXT_LANDING_BOUND_MS");
+BOUND_NAMES.sort();
+// readAddress and readOptions: their readings and the bounds of readAddress
+// join the lists in this one place, and the bounds stay in order. readOptions
+// takes the bounds of selectFrom, listed above already.
+STEP_NAMES.push("readAddress", "readOptions");
+BOUND_NAMES.push("ADDRESS_BOUND_MS", "ADDRESS_POLL_MS", "ADDRESS_SETTLE_MS");
+BOUND_NAMES.sort();
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {

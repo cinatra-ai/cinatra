@@ -1,0 +1,17 @@
+{
+  "$comment": "Capture receipt for the published conformance manifest beside it, adopted by the hashes-only reconciliation of app for cinatra#3930 after the design source changed one sentence of the application drawing; all six declared surfaces are unchanged and only the embedded contentHash moved. The body in this directory is the VERBATIM response served at the url below on fetchedAt; nothing was reformatted. Re-derive the row with: curl -sS THE-URL | shasum -a 256. ONE body, not five: the other four were fetched in the same round — app-connectors and app-notifications came back byte-identical to their pins, and app-components and app-extensions each came back with one new surface declaration that this round does not adopt, which is why they are not frozen here (a capture is read as the adopted body of every file it carries). A capture freezes FORWARD — an adoption after this one writes its own directory rather than rewriting a row here, so every receipt keeps describing a fetch that really happened.",
+  "fetchedAt": "2026-10-02",
+  "command": "curl -sS URL -o FILE",
+  "publishedBaseUrl": "https://docs.cinatra.ai/references/design/conformance/",
+  "manifests": [
+    {
+      "file": "app.json",
+      "url": "https://docs.cinatra.ai/references/design/conformance/app.json",
+      "httpStatus": 200,
+      "byteLength": 1288,
+      "sha256": "684604141d98074113b2b09374b6cd2092ba50e17b7c47306078c5a9dd87fce6",
+      "schemaVersion": "1.0.0",
+      "contentHash": "sha256:038c3bc7d90eed15afecbecdbf89127edef17f2483f07cbdec693a6368de01b7"
+    }
+  ]
+}

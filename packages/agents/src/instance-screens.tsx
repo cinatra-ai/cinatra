@@ -76,6 +76,10 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { AuthzError } from "@/lib/authz";
+// The standard not-authorized panel every run surface refuses with
+// (cinatra#2934, the fifth graded proof set) — see `runScreenAccessAnswer`
+// below for which refusal reaches it and which one does not.
+import { RunNotAuthorizedPanel } from "./run-not-authorized-panel";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
 // Type re-exports (AvailableScopes, CoOwnerView) originate from their
@@ -1509,7 +1513,12 @@ export async function SetupScreen({
       run = await readAgentRunById(instanceId, setupActor, setupRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Setup" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
     // ONE CANONICAL HOME (cinatra#2809, epic #2806). A run launched from a
@@ -3263,7 +3272,12 @@ export async function PermissionsScreen({
     run = await readAgentRunById(instanceId, permActor, permRoles);
     if (!run) notFound();
   } catch (err) {
-    if (err instanceof AuthzError) notFound();
+    const answer = runScreenAccessAnswer(err);
+    if (answer === "not-found") notFound();
+    if (answer === "not-authorized")
+      return (
+        <RunNotAuthorizedPanel surface="Permissions" conformanceId="run-not-authorized" />
+      );
     throw err;
   }
   // ONE CANONICAL HOME (cinatra#3693), after the access door above.
@@ -3512,6 +3526,26 @@ export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps
   );
 }
 
+/**
+ * HOW A RUN SURFACE ANSWERS A REFUSED READER (cinatra#2934; the refusal answer
+ * of cinatra#3697 stands).
+ *
+ * Every authorization refusal is answered with the flat not-found, exactly as
+ * the scoped run pages answer it: a run stays under its scope, and a reader the
+ * access door refuses learns nothing of it — not even that it exists. The
+ * earlier reading of this mapping, which drew the not-authorized panel for a
+ * 403 refusal, is superseded by cinatra#3697.
+ *
+ * Anything that is not an authorization refusal is handed back to be rethrown: a
+ * store that fell over is not a permission answer and must not be drawn as one.
+ */
+export function runScreenAccessAnswer(
+  err: unknown,
+): "not-found" | "not-authorized" | "rethrow" {
+  if (!(err instanceof AuthzError)) return "rethrow";
+  return "not-found";
+}
+
 export async function TriggerScreen({
   agentId,
   instanceId,
@@ -3554,7 +3588,12 @@ export async function TriggerScreen({
       run = await readAgentRunById(instanceId, triggerActor, triggerRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Schedule" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
     // ONE CANONICAL HOME (cinatra#3693), after the access door above.
@@ -3804,7 +3843,7 @@ export async function TriggerScreen({
       ) : null}
       {/*
         THE SAME FORM, AS A READING (cinatra#2980).
-        design@fe2182547d4a `specs/app-components.html` § "Standard
+        design@c73c68f5e39e `specs/app-components.html` § "Standard
         scheduling step", the "Configured schedule step" reading: "Once a
         *Run right after setup* or *Schedule for later* schedule has fired it
         cannot be changed any more: the form stays as a **read-only** reading

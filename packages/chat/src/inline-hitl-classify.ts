@@ -1,231 +1,29 @@
 /**
- * Chat prompt-window HITL classifier (deterministic ladder).
+ * The chat-side inline HITL gate REGISTRY.
  *
- * When an inline HITL gate is open and the user types into the chat prompt,
- * this decides whether the message is a GATE RESPONSE (and how to turn it
- * into a submit payload) or a NORMAL CHAT message. The LLM fallback lives in a
- * server action; this module is the pure deterministic prelude so the common
- * cases never pay LLM latency and the e2e harness is deterministic.
+ * WHAT USED TO LIVE HERE, AND WHERE IT WENT (cinatra#2934, lifecycle-b W5c).
+ * This module also held the last three pre-model readers on the chat page: the
+ * deterministic ladder that turned a typed sentence into a gate submit
+ * (`classifyPromptForGate`), the required-field policy for the hidden second
+ * model that guessed when the ladder could not (`resolveExtractedGateValues`),
+ * and the routing arm that reached them (`resolveComposerRouting`). All three
+ * are gone, together with the server action and the internal skill package that
+ * served them.
  *
- * Deterministic classifier constraints encoded here:
- *  - exact (not substring) approval-word match, single terminal . or !
- *  - "new task" guard: @cinatra-ai mention / question-shape / continuation
- *    words ("also", "but", "and then", "too") → normal chat UNLESS the
- *    message is pure JSON or a bare single-field value
- *  - setup-loop primitive wraps under the gate's fieldName ONLY
- *  - mid-run single-field wraps under fields[0].name
+ * Their replacement is the plan's own (PLAN: Agents Lifecycle (B), §4, the
+ * replacement table): "The HITL screen lends its own fill and submit controls.
+ * The assistant fills what the form asks for and asks you about what it cannot
+ * work out, in the conversation, where you can answer." The run whose screen is
+ * waiting now travels with the message, the server mints that screen's own
+ * reference under the reader's access, and the conversation's assistant fills
+ * and — when asked in so many words — submits through the card's own paths.
+ *
+ * WHAT REMAINS IS THE REGISTRY, and it is not a reader: it records WHICH run has
+ * a screen open so the composer can name that run. It reads no sentence and
+ * decides nothing about one.
  */
 
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
-
-export type ClassifyGate = {
-  fields: Array<{ name: string; type: string; title?: string; required: boolean }>;
-  fieldName?: string;
-};
-
-export type ClassifyResult =
-  | { kind: "chat" } // not a gate response — send to /api/chat
-  | { kind: "submit"; value: Record<string, unknown> | string | number | boolean }
-  | { kind: "llm" }; // deterministic ladder inconclusive — try the LLM fallback
-
-const APPROVAL_WORDS = new Set([
-  "yes",
-  "y",
-  "approve",
-  "approved",
-  "continue",
-  "confirm",
-  "confirmed",
-  "ok",
-  "okay",
-  "go",
-  "proceed",
-  "lgtm",
-  "looks good",
-]);
-
-const QUESTION_LEAD =
-  /^\s*(what|how|why|can|does|do|is|are|should|could|would|when|where|who|which)\b/i;
-
-const CONTINUATION = /\b(also|but|and then|too|as well|plus)\b/i;
-
-function normalize(s: string): string {
-  return s.trim().replace(/[.!]+$/, "").toLowerCase();
-}
-
-function coercePrimitive(
-  raw: string,
-  type: string,
-): string | number | boolean | undefined {
-  const v = raw.trim();
-  if (v.length === 0) return undefined;
-  if (type === "boolean") {
-    if (/^(true|yes|y|on|enabled?)$/i.test(v)) return true;
-    if (/^(false|no|n|off|disabled?)$/i.test(v)) return false;
-    return undefined;
-  }
-  if (type === "number" || type === "integer") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  // string (incl. uri) — keep verbatim
-  return v;
-}
-
-/**
- * Deterministic ladder. Returns:
- *  - {kind:"chat"}   → message is NOT a gate response; route to /api/chat
- *  - {kind:"submit"} → submit the carried value via the gate's submit()
- *  - {kind:"llm"}    → inconclusive; caller runs the LLM fallback
- */
-export function classifyPromptForGate(
-  message: string,
-  gate: ClassifyGate,
-): ClassifyResult {
-  const trimmed = message.trim();
-  if (trimmed.length === 0) return { kind: "chat" };
-
-  // Only treat the message as a gate JSON response when the WHOLE trimmed
-  // message parses as a JSON object, not when a JSON snippet appears inside
-  // prose (e.g. `can you explain {"url":"x"}?` must NOT submit).
-  const wholeJson = (() => {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return undefined;
-    }
-  })();
-  const isWholeMessageJsonObject =
-    wholeJson !== undefined &&
-    wholeJson !== null &&
-    typeof wholeJson === "object" &&
-    !Array.isArray(wholeJson);
-
-  // ---- New-task guard ------------------------------------------------------
-  // @cinatra-ai mention, question-shape, or continuation words → normal chat,
-  // UNLESS the message is WHOLLY JSON or a bare single-field value (those are
-  // unambiguously gate responses regardless of phrasing).
-  const looksLikeNewTask =
-    /@cinatra-ai\//i.test(trimmed) ||
-    QUESTION_LEAD.test(trimmed) ||
-    trimmed.endsWith("?") ||
-    CONTINUATION.test(trimmed);
-
-  // ---- Single required primitive field + bare value -----------------------
-  // Runs BEFORE approval words: a single-required-primitive gate wants the
-  // VALUE, so a single required boolean gate maps "yes" → { field: true }
-  // rather than the bare approval {}. Pure-approval gates have zero required
-  // fields, so this no-ops for them and approval-word handling applies.
-  // This MUST be evaluated before the new-task guard returns chat, so a bare
-  // value overrides the guard. Guard against submitting a question/continuation
-  // AS a string value: strong-typed fields (boolean/number/integer) only submit
-  // when coercion succeeds; string fields submit only when the message is NOT
-  // itself question-shaped.
-  const requiredFields = gate.fields.filter((f) => f.required);
-  const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
-  if (
-    requiredFields.length === 1 &&
-    primitiveTypes.has(requiredFields[0].type) &&
-    trimmed.length <= 300 &&
-    !/[\n]/.test(trimmed)
-  ) {
-    const f = requiredFields[0];
-    const isStringField = f.type === "string";
-    const questionShaped =
-      QUESTION_LEAD.test(trimmed) || trimmed.endsWith("?");
-    // A single required STRING field would otherwise coerce ANY non-empty text
-    // verbatim, swallowing whole-message JSON / null / array literals before
-    // structured-JSON submit or fallthrough can act. For string fields, only
-    // treat the message as a bare value when it is NOT itself standalone JSON
-    // of any kind (object/array/null/primitive).
-    const messageIsStandaloneJson = wholeJson !== undefined;
-    // String field + question-shaped OR standalone-JSON → not a bare value;
-    // let structured-JSON submit / the guard / LLM handle it. Strong-typed
-    // fields coerce-or-fail so a question/JSON literal simply fails and falls
-    // through.
-    if (
-      !(isStringField && questionShaped) &&
-      !(isStringField && messageIsStandaloneJson)
-    ) {
-      const coerced = coercePrimitive(trimmed, f.type);
-      if (coerced !== undefined) {
-        // setup-loop primitive → wrap under gate.fieldName; mid-run single
-        // field → wrap under the schema property name (fields[0].name).
-        const key = gate.fieldName ?? f.name;
-        return { kind: "submit", value: { [key]: coerced } };
-      }
-    }
-  }
-
-  // ---- Exact approval word ------------------------------------------------
-  if (!looksLikeNewTask && APPROVAL_WORDS.has(normalize(trimmed))) {
-    return { kind: "submit", value: {} };
-  }
-
-  // ---- Whole-message JSON wins over the new-task guard --------------------
-  if (isWholeMessageJsonObject) {
-    return {
-      kind: "submit",
-      value: wholeJson as Record<string, unknown>,
-    };
-  }
-
-  if (looksLikeNewTask) return { kind: "chat" };
-
-  // ---- Defer to LLM fallback for short/medium non-question ----------------
-  if (trimmed.length <= 600) return { kind: "llm" };
-  return { kind: "chat" };
-}
-
-// ---------------------------------------------------------------------------
-// LLM-fallback extraction resolution (cinatra#853 — split out of
-// chat-page.tsx's gate-drive block so the required-field policy is pure and
-// unit-testable).
-// ---------------------------------------------------------------------------
-
-export type ExtractedGateResolution =
-  /** Extraction satisfies the gate — submit `value` via gate.submit(). */
-  | { kind: "submit"; value: Record<string, unknown> }
-  /**
-   * Extraction found SOME fields but required ones are missing — keep the
-   * gate open, tell the user what is missing, do NOT route to the LLM (the
-   * message was a gate attempt).
-   */
-  | { kind: "partial"; presentKeys: string[]; missing: string[] }
-  /** Nothing extracted → fall through to normal chat routing. */
-  | { kind: "none" };
-
-/**
- * Decide what to do with the values the LLM fallback extracted from a chat
- * message for an open gate:
- *  - all required fields present → submit;
- *  - the gate has NO required fields and anything was extracted → submit;
- *  - something extracted but required fields missing → partial;
- *  - nothing extracted → none (normal chat routing).
- * `undefined`/`null` extracted values do not count as present.
- */
-export function resolveExtractedGateValues(
-  extracted: Record<string, unknown>,
-  fields: ReadonlyArray<{ name: string; required: boolean }>,
-): ExtractedGateResolution {
-  const requiredNames = fields.filter((f) => f.required).map((f) => f.name);
-  const hasAllRequired =
-    requiredNames.length > 0 &&
-    requiredNames.every(
-      (n) => extracted[n] !== undefined && extracted[n] !== null,
-    );
-  const hasAny = Object.keys(extracted).length > 0;
-  if (hasAllRequired || (requiredNames.length === 0 && hasAny)) {
-    return { kind: "submit", value: extracted };
-  }
-  if (hasAny) {
-    const missing = requiredNames.filter(
-      (n) => extracted[n] === undefined || extracted[n] === null,
-    );
-    return { kind: "partial", presentKeys: Object.keys(extracted), missing };
-  }
-  return { kind: "none" };
-}
 
 // ---------------------------------------------------------------------------
 // Chat-side inline HITL gate registry (cinatra#853 — the chat/run gate
@@ -278,74 +76,4 @@ export function createChatGateRegistry(): ChatGateRegistry {
       return openGates[openGates.length - 1];
     },
   };
-}
-
-// ---------------------------------------------------------------------------
-// COMPOSER ROUTING (cinatra#2566's composer-focus deliverable; the program
-// Done-definition is cinatra#2573: "multiple concurrent gates require explicit
-// composer focus").
-//
-// One PURE function decides where a typed message goes, because "which review
-// does this comment belong to" is a question a real decision-module call hangs
-// on, and a rule spread across a 1200-line component cannot be shown to be the
-// rule. Everything it needs is passed in: the focus resolution (the card
-// runtime's own reducer), the gate the chat registry currently holds, and a
-// lookup for a bound gate's comment action.
-// ---------------------------------------------------------------------------
-
-export type ComposerRouting =
-  /** No gate takes this message — normal chat routing, unchanged. */
-  | { kind: "chat" }
-  /** A HITL gate the run is blocked on: classify and submit as before. */
-  | { kind: "field-gate"; gate: ChatGateDescriptor };
-
-// ---------------------------------------------------------------------------
-// TWO ARMS ARE GONE (cinatra#2932, lifecycle-b W5a), and the third is NOT.
-//
-// REMOVED — `review-comment` and `refuse-ambiguous`. A sentence typed beside a
-// bound review used to be filed as that review's comment by this page, before
-// the assistant ever saw it, and a page-composed refusal used to answer when
-// several reviews were open. Both are replaced in the SAME change:
-//
-//   · the comment now lands through the card's OWN Comment control, operated by
-//     the conversation's assistant under the person's own credential, with the
-//     person's own words read out of the server-held grant
-//     (src/lib/lifecycle/lent-action-mcp.ts);
-//   · the refusal is now the PLATFORM'S — the open set is re-counted server-side
-//     under the reader's own access and the assistant relays the words back
-//     (src/lib/lifecycle/bound-card-binding.ts).
-//
-// KEPT — `field-gate`, with its classifier and the extraction below it. The plan
-// retires them too, and this slice deliberately does not: their replacement is
-// the screen's own lent fill-and-submit control, which is cinatra#2934's road
-// and is not built yet. Removing the reader here would take away a capability
-// people have — answering a waiting screen by typing in the chat box — and leave
-// nothing in its place until that slice lands. A removal whose replacement has
-// not shipped is a regression, not a cleanup, so this one waits for #2934.
-// ---------------------------------------------------------------------------
-
-/**
- * Where a composer message goes — and since cinatra#2932 the answer is almost
- * always "to the assistant".
- *
- * ONE ARM REMAINS: a run blocked on a FIELD GATE keeps the composer, exactly as
- * it always has, because the assistant has no way to answer that screen yet
- * (cinatra#2934 builds it). Everything else — including every message typed
- * beside a review, bound or not, and every message typed while several reviews
- * are open — is ordinary chat routing now, and what may be done to a card is
- * decided on the server from the bound card the message carries.
- */
-export function resolveComposerRouting(args: {
-  /** What the chat gate registry holds right now. */
-  latestOpenGate: ChatGateDescriptor | undefined;
-}): ComposerRouting {
-  const { latestOpenGate } = args;
-  // A `review_comment` descriptor is NOT a field gate: it carries no fields to
-  // classify and its submit is comment-only. It is never fed to the field
-  // ladder, and since cinatra#2932 nothing on this page reads it at all — a
-  // bound review's message goes to the assistant like every other message.
-  const fieldGate =
-    latestOpenGate && latestOpenGate.kind !== "review_comment" ? latestOpenGate : undefined;
-  if (fieldGate) return { kind: "field-gate", gate: fieldGate };
-  return { kind: "chat" };
 }
