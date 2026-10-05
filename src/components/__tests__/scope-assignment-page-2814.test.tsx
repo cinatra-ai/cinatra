@@ -432,7 +432,7 @@ describe("the Artifacts pane", () => {
     expect(groups.map((g) => g.dataset.slotId)).toEqual(["brand-voice", "reference-posts"]);
     expect(within(groups[0]!).getByText("Takes a brand kit · 1 required, at most 2")).toBeTruthy();
     expect(within(groups[0]!).getByText("2 of 2 artifacts chosen. Remove one to choose another.")).toBeTruthy();
-    expect(within(groups[1]!).getByText("No artifact chosen. The run uses what it finds in its own context.")).toBeTruthy();
+    expect(within(groups[1]!).getByText("No artifact chosen — the run uses what it finds in its own context.")).toBeTruthy();
     expect(document.querySelector('[data-slot="scope-assignment-skill-limits"]')).toBeNull();
     expect(screen.queryByText(/effective per run/)).toBeNull();
     const [tabSkills, tabArtifacts] = screen.getAllByRole("tab");
