@@ -60,7 +60,7 @@ export {
 // readRows, the landing of signInThroughPage, dispatchRun, press and selectFrom.
 export { SIGN_IN_LANDING_BOUND_MS, SIGN_IN_READY_SELECTORS } from "./sign-in-through-page.mjs";
 export { READ_ROWS_BOUNDS, READ_ROWS_BOUND_MS, READ_ROWS_LIMIT, readRows } from "./read-rows.mjs";
-export { CONTROL_ACTION_BOUND_MS, CONTROL_MARK, CONTROL_NAMES_LISTED, CONTROL_POLL_MS } from "./page-controls.mjs";
+export { CONTROL_ACTION_BOUND_MS, CONTROL_HYDRATION_BOUND_MS, CONTROL_MARK, CONTROL_NAMES_LISTED, CONTROL_POLL_MS } from "./page-controls.mjs";
 export { PRESS_BOUNDS, PRESS_ROLES, PRESS_SETTLE_BOUND_MS, PRESS_START_BOUND_MS, press } from "./press.mjs";
 export { SELECT_BOUNDS, SELECT_REFLECT_BOUND_MS, readOptions, selectFrom } from "./select-from.mjs";
 export {

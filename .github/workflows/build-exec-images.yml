@@ -424,7 +424,7 @@ jobs:
   build-and-smoke-worker:
     name: Build + smoke-test the exec worker image
     needs: changes
-    if: ${{ needs.changes.outputs.worker == 'true' }}
+    if: ${{ ((needs.changes.outputs.worker == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     # THE SMOKE CLASS, AND WHY IT IS ITS OWN (cinatra#3267). This job builds an
     # image, LOADS it into the runner's own docker daemon, and has to still find
     # that tag in the NEXT step. On the shared self-hosted pool it did not. At
