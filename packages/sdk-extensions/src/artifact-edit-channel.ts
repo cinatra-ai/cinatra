@@ -455,8 +455,11 @@ export async function saveArtifactEdit(
 /** The window event the one title-save road announces once a title is saved. */
 export const ARTIFACT_TITLE_SAVED_EVENT = "cinatra:artifact:title-saved";
 
-/** What that event carries: the artifact whose title was saved and the revision that holds it. */
-export type ArtifactTitleSavedDetail = { artifactId: string; revisionId: string };
+/**
+ * What that event carries: the artifact whose title was saved, the revision that
+ * holds it, and `title`, the title the save sent and the host answered saved.
+ */
+export type ArtifactTitleSavedDetail = { artifactId: string; revisionId: string; title: string };
 
 /**
  * SEND one TITLE change, and answer with exactly one outcome (cinatra#3814).
@@ -487,11 +490,12 @@ export async function saveArtifactTitleEdit(
     buildArtifactTitleEditRequest(capability, title),
     deps,
   );
-  // THE OPEN PAGE RE-READS THE TITLE THE ROW NOW HOLDS (cinatra#3886): a saved
-  // title is announced once, for every display alike. A text save announces
-  // nothing, because an idle-pause save must never reload the page under a
-  // reader's typing. A runtime without events (a server render, a node test)
-  // does nothing and never throws.
+  // THE OPEN PAGE'S HEADING TAKES THE SAVED TITLE FROM THIS ANNOUNCEMENT
+  // (cinatra#3886): a saved title is announced once, with the title itself, for
+  // every display alike, and nothing re-reads the page, because a re-read would
+  // hand the open display a capability minted on a newer revision in the middle
+  // of its edit. A text save announces nothing. A runtime without events (a
+  // server render, a node test) does nothing and never throws.
   if (
     outcome.outcome === "saved" &&
     typeof globalThis.dispatchEvent === "function" &&
@@ -500,6 +504,7 @@ export async function saveArtifactTitleEdit(
     const detail: ArtifactTitleSavedDetail = {
       artifactId: capability.artifactId,
       revisionId: outcome.revisionId,
+      title,
     };
     globalThis.dispatchEvent(new CustomEvent(ARTIFACT_TITLE_SAVED_EVENT, { detail }));
   }
