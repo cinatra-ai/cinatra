@@ -16,9 +16,12 @@ import {
   readOnlyArtifactEdit,
   ARTIFACT_RENDERER_PROPS_API_VERSION,
   ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
+  ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+  ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
   assertNoInlineBytesInRendererProps,
   assertSerializableRendererProps,
   absentArtifactContent,
+  artifactRendererPropsAtVersion,
   buildArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
 import { ARTIFACT_RENDERER_PROPS_API_VERSION as LEAF_VERSION } from "@cinatra-ai/sdk-extensions/artifact-renderer-props";
@@ -54,9 +57,17 @@ const BASE = {
 };
 
 describe("wave 3 — the new props version", () => {
-  it("is the byte-reference version, and the SDK leaf carries the same integer", () => {
+  it("is the title-edit version, with the byte reference frozen at 2 below it, and the SDK leaf carries the same integer", () => {
+    // (cinatra#3092) The review reading keeps its own version (3); the byte
+    // reference keeps its own frozen version (2), below it, never replaced.
+    // (cinatra#3814) The newest version is the title-edit version (4).
     expect(ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(
-      ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
+      ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
+    );
+    expect(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION).toBe(2);
+    expect(ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION).toBe(3);
+    expect(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION).toBeLessThan(
+      ARTIFACT_RENDERER_PROPS_API_VERSION,
     );
     expect(ARTIFACT_RENDERER_PROPS_API_VERSION).toBeGreaterThan(1);
     expect(LEAF_VERSION).toBe(ARTIFACT_RENDERER_PROPS_API_VERSION);
@@ -68,14 +79,24 @@ describe("wave 3 — the new props version", () => {
     expect(hostSupportedPropsApiVersions()).toEqual([
       1,
       ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
+      ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+      ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
     ]);
     expect(negotiatePropsApiVersion(1)).toEqual({ ok: true, version: 1 });
     expect(negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION)).toEqual({
       ok: true,
       version: ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
     });
+    expect(negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION)).toEqual({
+      ok: true,
+      version: ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION,
+    });
+    expect(negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION)).toEqual({
+      ok: true,
+      version: ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION,
+    });
     expect(
-      negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION + 1),
+      negotiatePropsApiVersion(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION + 1),
     ).toEqual({ ok: false, reason: "too-new" });
   });
 });
@@ -128,6 +149,78 @@ describe("wave 3 — the snapshot carries the byte REFERENCE at the new version 
       preview: BASE.previewHref,
       download: BASE.downloadHref,
     });
+  });
+
+  it("keeps version 2's snapshot as version 2's: the review reading and the data road are not on it", () => {
+    // (cinatra#3092) Version 3 adds two fields. A display that declared version 2
+    // is handed a snapshot without them, even when the surface passes both.
+    const props = buildArtifactRendererProps({
+      edit: readOnlyArtifactEdit("read-only-surface"),
+      ...BASE,
+      propsApiVersion: ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION,
+      bytes: {
+        road: "island",
+        preview: "/api/lifecycle-views/artifact-bytes?bc=sealed-preview",
+        download: "/api/lifecycle-views/artifact-bytes?bc=sealed-download",
+      },
+      review: { reading: "continued", openLive: "/dashboards/dash_1" },
+      data: { road: "session", apiUrl: "/api/dashboards/cubejs-api/v1" },
+    });
+    expect(props.bytes).toEqual({
+      road: "island",
+      preview: "/api/lifecycle-views/artifact-bytes?bc=sealed-preview",
+      download: "/api/lifecycle-views/artifact-bytes?bc=sealed-download",
+    });
+    expect(props.propsApiVersion).toBe(2);
+    expect(Object.prototype.hasOwnProperty.call(props, "review")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(props, "data")).toBe(false);
+  });
+});
+
+describe("the snapshot carries the review reading at version 3 only", () => {
+  // (cinatra#3092) "a dashboard whose review is still pending was not continued
+  // and carries no live link; the continued reading carries it". Built at the
+  // LITERAL 3 — the frozen shape's own number — beside version 2's reference.
+  const ISLAND_BYTES = {
+    road: "island" as const,
+    preview: "/api/lifecycle-views/artifact-bytes?bc=sealed-preview",
+    download: "/api/lifecycle-views/artifact-bytes?bc=sealed-download",
+  };
+  const DATA = { road: "session" as const, apiUrl: "/api/dashboards/cubejs-api/v1" };
+  const at = (propsApiVersion: number, reading: "pending" | "continued") =>
+    buildArtifactRendererProps({
+      edit: readOnlyArtifactEdit("read-only-surface"),
+      ...BASE,
+      propsApiVersion,
+      bytes: ISLAND_BYTES,
+      review: { reading, openLive: "/dashboards/dash_1" },
+      data: DATA,
+    });
+
+  it("a pending review carries no live link, whatever the surface passed", () => {
+    const props = at(3, "pending");
+    expect(props.propsApiVersion).toBe(3);
+    expect(props.bytes).toEqual(ISLAND_BYTES);
+    expect(props.urls.preview).toBe(BASE.previewHref);
+    expect(props.review).toEqual({ reading: "pending", openLive: null });
+    expect(props.data).toEqual(DATA);
+    expect(() => assertNoInlineBytesInRendererProps(props)).not.toThrow();
+    expect(() => assertSerializableRendererProps(props)).not.toThrow();
+  });
+
+  it("the continued reading carries the live link", () => {
+    expect(at(3, "continued").review).toEqual({
+      reading: "continued",
+      openLive: "/dashboards/dash_1",
+    });
+  });
+
+  it("narrowed to the byte reference's version, it is version 2's snapshot of the same inputs", () => {
+    const pending = at(3, "pending");
+    expect(pending.review).toEqual({ reading: "pending", openLive: null });
+    expect(
+      artifactRendererPropsAtVersion(pending, ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION),
+    ).toEqual(at(ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION, "pending"));
   });
 });
 

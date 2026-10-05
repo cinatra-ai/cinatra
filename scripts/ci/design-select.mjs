@@ -54,9 +54,10 @@
 // freshness / drift / testid / ratchet gates are separate steps and separate
 // jobs; narrowing the Playwright invocation cannot bypass one of them.
 //
-// Dependency-free (node builtins only) so a pure-node job runs it without an
-// install. Its IO and its git are injectable so the unit suite can exercise the
-// graph walk over a virtual repo.
+// Dependency-free (node builtins, plus the suite's own dependency-free worker
+// rule in tests/e2e/config/design-workers.mjs) so a pure-node job runs it
+// without an install. Its IO and its git are injectable so the unit suite can
+// exercise the graph walk over a virtual repo.
 //
 // Usage:
 //   node scripts/ci/design-select.mjs             # print the plan (dry run)
@@ -77,6 +78,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { workersSummary } from "../../tests/e2e/config/design-workers.mjs";
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -1219,8 +1222,26 @@ function runPlaywright(result) {
   return run.status ?? 1;
 }
 
+/**
+ * The line under the suite summary that names the workers per family
+ * (cinatra#3770): the functional-acceptance family runs with several workers,
+ * every other family with one. The number comes from the same module the
+ * Playwright configuration reads (tests/e2e/config/design-workers.mjs), and an
+ * opt-in partition (CINATRA_DESIGN_PARTITION, read here the way the
+ * configuration reads it) keeps one worker for every family. Null when the run
+ * starts no family.
+ *
+ * @param {{mode: string, specs: string[]}} plan
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string | null}
+ */
+export function workersLine(plan, env = process.env) {
+  if (plan.mode === "none" || plan.specs.length === 0) return null;
+  return workersSummary(plan.specs, { partitioned: Boolean(env.CINATRA_DESIGN_PARTITION) });
+}
+
 /** Run (or just show) the plan a previous job published. Never re-decides. */
-function runPublishedPlan(planPath, shouldRun) {
+function runPublishedPlan(planPath, shouldRun, env) {
   let source;
   try {
     source = readFileSync(resolve(REPO_ROOT, planPath), "utf8");
@@ -1237,6 +1258,8 @@ function runPublishedPlan(planPath, shouldRun) {
   }
   console.log(plan.summary || `design suite: published plan ${plan.mode}`);
   console.log(`  plan: ${planPath} (${plan.mode}, ${plan.specs.length} families)`);
+  const workers = workersLine(plan, env);
+  if (workers) console.log(`  ${workers}`);
   for (const reason of plan.reasons) {
     if (reason && typeof reason === "object") console.log(`  ${reason.family}  <-  ${reason.because}`);
   }
@@ -1248,9 +1271,11 @@ function runPublishedPlan(planPath, shouldRun) {
   return runPlaywright(plan);
 }
 
-function printPlan(result, diff) {
+function printPlan(result, diff, env) {
   console.log(result.summary);
   console.log(`  diff: ${diff.reason}`);
+  const workers = workersLine(result, env);
+  if (workers) console.log(`  ${workers}`);
   for (const reason of result.reasons) {
     console.log(`  ${reason.family}  <-  ${reason.because}`);
   }
@@ -1285,7 +1310,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
       console.error("design suite: --plan consumes a published decision; --changed invents one");
       return 1;
     }
-    return runPublishedPlan(planPath, shouldRun);
+    return runPublishedPlan(planPath, shouldRun, env);
   }
   // A dry-run aid: classify a hypothetical change list instead of the real
   // diff, so the selection can be shown for a change that is not checked out.
@@ -1310,7 +1335,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
       ? allResult(families, `design suite: running ALL families — ${diff.reason}`)
       : selectFamilies({ changedFiles: diff.files, families, routes, unresolved, lockReading });
 
-  printPlan(result, diff);
+  printPlan(result, diff, env);
 
   if (outPath) {
     mkdirSync(dirname(resolve(REPO_ROOT, outPath)), { recursive: true });

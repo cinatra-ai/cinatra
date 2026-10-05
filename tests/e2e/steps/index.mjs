@@ -60,9 +60,9 @@ export {
 // readRows, the landing of signInThroughPage, dispatchRun, press and selectFrom.
 export { SIGN_IN_LANDING_BOUND_MS, SIGN_IN_READY_SELECTORS } from "./sign-in-through-page.mjs";
 export { READ_ROWS_BOUNDS, READ_ROWS_BOUND_MS, READ_ROWS_LIMIT, readRows } from "./read-rows.mjs";
-export { CONTROL_ACTION_BOUND_MS, CONTROL_MARK, CONTROL_NAMES_LISTED, CONTROL_POLL_MS } from "./page-controls.mjs";
+export { CONTROL_ACTION_BOUND_MS, CONTROL_HYDRATION_BOUND_MS, CONTROL_MARK, CONTROL_NAMES_LISTED, CONTROL_POLL_MS } from "./page-controls.mjs";
 export { PRESS_BOUNDS, PRESS_ROLES, PRESS_SETTLE_BOUND_MS, PRESS_START_BOUND_MS, press } from "./press.mjs";
-export { SELECT_BOUNDS, SELECT_REFLECT_BOUND_MS, selectFrom } from "./select-from.mjs";
+export { SELECT_BOUNDS, SELECT_REFLECT_BOUND_MS, readOptions, selectFrom } from "./select-from.mjs";
 export {
   DISPATCH_RUN_BOUNDS,
   DISPATCH_RUN_BOUND_MS,
@@ -74,6 +74,10 @@ export {
   DISPATCH_RUN_SELECTOR,
   dispatchRun,
 } from "./dispatch-run.mjs";
+// readControlNames: every shown control of a page, by its role and its name.
+export { READ_CONTROL_NAMES_BOUNDS, READ_CONTROL_NAMES_LIMIT, READ_CONTROL_NAME_LENGTH, readControlNames } from "./read-control-names.mjs";
+// armPageTape and readPageTape: the document's time origin and the main frame's navigations.
+export { PAGE_TAPE_BOUNDS, armPageTape, readPageTape } from "./page-tape.mjs";
 // uploadFile, fillForm, switchTheme and decideGate: the steps that drive a
 // page's own controls.
 export {
@@ -120,3 +124,32 @@ export {
   GATE_WAITING_STATUS,
   decideGate,
 } from "./decide-gate.mjs";
+// typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress: a
+// window's text box, a turn of its conversation, a reload, a composer's message
+// answered with a card, and an address no link leads to.
+export {
+  RUN_WINDOW_ENTRY_ATTRIBUTE,
+  RUN_WINDOW_FIELD,
+  TYPE_IN_WINDOW_BOUNDS,
+  WINDOW_FIELD_BOUND_MS,
+  WINDOW_SENT_BOUND_MS,
+  typeInWindow,
+} from "./type-in-window.mjs";
+export { TURN_BOUND_MS, TURN_CEILING_MS, TURN_POLL_MS, WAIT_FOR_TURN_BOUNDS, waitForTurn } from "./wait-for-turn.mjs";
+export { RELOAD_BOUND_MS, RELOAD_PAGE_BOUNDS, reloadPage } from "./reload-page.mjs";
+export {
+  COMPOSER_CARD_BOUND_MS,
+  COMPOSER_CARD_KIND_ATTRIBUTES,
+  COMPOSER_CARD_SELECTOR,
+  COMPOSER_ERROR_SELECTOR,
+  SEND_IN_COMPOSER_BOUNDS,
+  sendInComposer,
+} from "./send-in-composer.mjs";
+export { ADDRESS_BOUND_MS, ADDRESS_POLL_MS, ADDRESS_SETTLE_MS, OPEN_ADDRESS_BOUNDS, OPEN_ADDRESS_BOUND_MS, openAddress, readAddress } from "./open-address.mjs";
+// pressByTestId and readTitle: an element without a role pressed by its test id
+// and its text, and the page's title.
+export { PRESS_BY_TEST_ID_BOUNDS, TEST_ID_ATTRIBUTE, pressByTestId } from "./press-by-test-id.mjs";
+export { TITLE_BOUND_MS, TITLE_POLL_MS, TITLE_SETTLE_MS, readTitle } from "./read-title.mjs";
+// openPageInOwnContext: a further page in a browser context of its own, signed
+// in by the session the first page carries.
+export { OWN_CONTEXT_BOUNDS, OWN_CONTEXT_LANDING_BOUND_MS, openPageInOwnContext } from "./open-page-in-own-context.mjs";

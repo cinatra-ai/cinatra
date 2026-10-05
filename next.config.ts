@@ -228,6 +228,23 @@ const nextConfig: NextConfig = {
     ...(process.env.CINATRA_TURBOPACK_DEV_FS_CACHE === "0"
       ? { turbopackFileSystemCacheForDev: false }
       : {}),
+    // ---------------------------------------------------------------------
+    // Turbopack BUILD filesystem cache — opt-IN, for the design suite
+    // (cinatra#3771).
+    //
+    // The Next release this repository pins keeps
+    // `turbopackFileSystemCacheForBuild` off by default and reads it from this
+    // config alone: no environment variable and no `next build` flag reaches
+    // it. So a CI job that keeps `.next/cache` between builds keeps nothing a
+    // later build can reuse unless the config turns it on. The design suite's
+    // self-hosted build sets CINATRA_TURBOPACK_BUILD_FS_CACHE=1 and keeps the
+    // cache between jobs (scripts/ci/design-build-cache.sh). Every other build
+    // leaves it unset, and only "1" spreads the option in, so an untouched
+    // build resolves the same config as before.
+    // ---------------------------------------------------------------------
+    ...(process.env.CINATRA_TURBOPACK_BUILD_FS_CACHE === "1"
+      ? { turbopackFileSystemCacheForBuild: true }
+      : {}),
     // cinatra#2607 constrained-host build knob — see the block above this
     // config object. Spread in ONLY when set, so an untouched build's resolved
     // config is unchanged.

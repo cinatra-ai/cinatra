@@ -22,7 +22,7 @@ import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
 /**
  * The props-contract version this host builds at its ceiling.
  *
- * IT IS 2 SINCE WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091,
+ * IT BECAME 2 IN WAVE 3 of `PLAN: Agents Lifecycle (D) — Review` (cinatra#3091,
  * epic #3087): "the props version (0.4) on every display; the byte capability
  * and its serving route (0.6) for the six media displays and the CMS picture
  * pair". The version moved because the SNAPSHOT moved — it now carries the
@@ -32,19 +32,71 @@ import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
  * still BUILDS v1 for a display that declares v1, so a fleet that has not moved
  * keeps drawing exactly as it did. What a v1 display does not get is the island
  * road — which is the incentive to move, not a regression.
+ *
+ * IT IS 3 SINCE cinatra#3092: the snapshot gained the REVIEW READING and the
+ * DATA ROAD (see {@link ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION}). The
+ * same window holds: a display that declared version 2 or 1 is handed a
+ * snapshot without them.
+ *
+ * IT IS 4 SINCE cinatra#3814: the edit capability may carry the TITLE road (see
+ * {@link ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION}). A display that declared
+ * version 3, 2 or 1 is handed the capability at edit-channel version 1.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 2;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 4;
 
 /**
  * The version at which the snapshot began carrying the byte reference.
  *
  * A SEPARATE NAME from the ceiling above, so the two can be read apart: the
  * ceiling is "what this host builds", and this is "the version a display must
- * declare to be handed the island road". They are equal today and the code
- * below compares against THIS one, so a later ceiling bump for an unrelated
- * field cannot silently retire the byte reference from v2 displays.
+ * declare to be handed the island road". They were equal until cinatra#3092
+ * moved the ceiling to 3, and the code below compares against THIS one, so that
+ * ceiling bump for an unrelated field cannot silently retire the byte reference
+ * from v2 displays.
  */
 export const ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION = 2;
+
+/**
+ * The version at which the snapshot began carrying the REVIEW READING and the
+ * DATA ROAD (cinatra#3092).
+ *
+ * A SEPARATE NAME for the same reason as the byte reference's above: the builder
+ * and the narrowing compare against THIS one, so a later ceiling bump cannot
+ * silently hand the two fields to a display that declared an older version, and
+ * the byte reference keeps its own version (2) whatever the ceiling reads.
+ */
+export const ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION = 3;
+
+/**
+ * The version at which the snapshot's edit capability began carrying the TITLE
+ * road (cinatra#3814): "The channel version moves, and a display that declared
+ * the older version keeps the contract it has."
+ *
+ * A SEPARATE NAME for the same reason as the two above: the builder and the
+ * narrowing compare against THIS one, so a later ceiling bump cannot hand the
+ * title road to a display that declared an older version.
+ */
+export const ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION = 4;
+
+/**
+ * The REVIEW READING a surface draws a display in (props v3). "A dashboard
+ * whose review is still pending was not continued and carries no live link; the
+ * continued reading carries it."
+ */
+export type ArtifactRendererReviewReading = {
+  reading: "pending" | "continued";
+  openLive: string | null;
+};
+
+/**
+ * The DATA ROAD a display's live series are fetched from (props v3): the
+ * application's own route, reached with the reader's session. An address, never
+ * a credential. (The island's sealed road is a later leg.)
+ */
+export type ArtifactRendererDataRoad = {
+  road: "session";
+  apiUrl: string;
+};
 
 /**
  * The CONTENT-CHANNEL ABI version (enabler 0.3 of `PLAN: Agents Lifecycle (C)`,
@@ -108,8 +160,14 @@ export function absentArtifactContent(
  * cinatra#3026), mirrored here for the same route-budget reason the content
  * channel's version is mirrored above: this module imports NOTHING at value
  * level, and the enabler's suite pins the two integers equal.
+ *
+ * 2 SINCE cinatra#3814 (the title road); version 1 is what a display that
+ * declared an older props version is handed.
  */
-export const ARTIFACT_EDIT_CHANNEL_VERSION = 1;
+export const ARTIFACT_EDIT_CHANNEL_VERSION = 2;
+
+/** The edit-channel version an older display is handed: the text alone. */
+const OLDER_ARTIFACT_EDIT_CHANNEL_VERSION = 1;
 
 /**
  * The NAMED REFUSAL of an edit — what every surface that is not the artifact's
@@ -122,6 +180,37 @@ export const ARTIFACT_EDIT_CHANNEL_VERSION = 1;
  */
 export function readOnlyArtifactEdit(reason: ArtifactEditRefusal): ArtifactEditCapability {
   return { kind: "read-only", channelVersion: ARTIFACT_EDIT_CHANNEL_VERSION, reason };
+}
+
+/**
+ * THE EDIT CAPABILITY AT A DECLARED PROPS VERSION (cinatra#3814). PURE.
+ *
+ * "The channel version moves, and a display that declared the older version
+ * keeps the contract it has." Below {@link ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION}
+ * the capability is handed at edit-channel version 1 with no `fields` key —
+ * today's shape, byte for byte, so a display that tests the version by strict
+ * equality keeps its text road and is handed no title road. At or above it the
+ * capability is handed unchanged. It never raises a version and invents nothing.
+ */
+export function artifactEditCapabilityForPropsVersion(
+  edit: ArtifactEditCapability,
+  propsVersion: number,
+): ArtifactEditCapability {
+  // A snapshot some caller assembled without a capability is passed through as
+  // it came: this narrows a capability and never invents one.
+  if (!edit || propsVersion >= ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION) return edit;
+  if (
+    edit.channelVersion === OLDER_ARTIFACT_EDIT_CHANNEL_VERSION &&
+    !Object.prototype.hasOwnProperty.call(edit, "fields")
+  ) {
+    return edit;
+  }
+  const older: ArtifactEditCapability & { fields?: unknown } = {
+    ...edit,
+    channelVersion: OLDER_ARTIFACT_EDIT_CHANNEL_VERSION,
+  };
+  delete older.fields;
+  return older;
 }
 
 /**
@@ -147,6 +236,8 @@ export function grantArtifactEdit(input: {
     saveUrl: input.saveUrl,
     idlePauseMs: input.idlePauseMs,
     capBytes: input.capBytes,
+    // The title road beside the text (cinatra#3814): one capability, one base.
+    fields: ["text", "title"],
   };
 }
 
@@ -247,6 +338,19 @@ export interface ArtifactRendererProps {
    * name rather than read as one that considered it and found nothing.
    */
   edit: ArtifactEditCapability;
+  /**
+   * THE REVIEW READING (props v3, cinatra#3092). Which reading of a review the
+   * surface draws this display in. `openLive` — the live navigation's address —
+   * is null in the pending reading whatever the surface passed: the builder
+   * forces it. ABSENT outside a review, and ABSENT BELOW v3.
+   */
+  review?: ArtifactRendererReviewReading;
+  /**
+   * THE DATA ROAD (props v3, cinatra#3092). The address a display's live series
+   * are fetched from; a dashboard display hands it to the shared read-only
+   * composition. ABSENT where the surface passes none, and ABSENT BELOW v3.
+   */
+  data?: ArtifactRendererDataRoad;
 }
 
 function identityExtension(identity: EffectiveIdentity): string | null {
@@ -288,6 +392,15 @@ export function buildArtifactRendererProps(input: {
    * rights, and every other surface passes `readOnlyArtifactEdit(reason)`.
    */
   edit: ArtifactEditCapability;
+  /**
+   * The review reading this surface draws (v3). Optional: a surface outside a
+   * review passes none. A `pending` reading is written with `openLive: null`
+   * whatever is passed here — a pending review was not continued and carries no
+   * live link.
+   */
+  review?: ArtifactRendererReviewReading;
+  /** The data road this surface hands the display (v3). Optional. */
+  data?: ArtifactRendererDataRoad;
 }): ArtifactRendererProps {
   const { artifact } = input;
   const propsApiVersion = input.propsApiVersion ?? ARTIFACT_RENDERER_PROPS_API_VERSION;
@@ -315,6 +428,21 @@ export function buildArtifactRendererProps(input: {
     propsApiVersion >= ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION
       ? (input.bytes ?? sessionBytes)
       : null;
+  // THE REVIEW READING AND THE DATA ROAD, AT THE VERSION THAT ASKED FOR THEM —
+  // absent (no key at all) below it, and absent where the surface passed none.
+  // A PENDING reading carries no live link, whatever the caller passed: "a
+  // dashboard whose review is still pending was not continued and carries no
+  // live link".
+  const atReviewReading = propsApiVersion >= ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION;
+  const review: ArtifactRendererReviewReading | null =
+    atReviewReading && input.review
+      ? {
+          reading: input.review.reading,
+          openLive: input.review.reading === "pending" ? null : input.review.openLive,
+        }
+      : null;
+  const data: ArtifactRendererDataRoad | null =
+    atReviewReading && input.data ? { road: input.data.road, apiUrl: input.data.apiUrl } : null;
   const props: ArtifactRendererProps = {
     propsApiVersion,
     artifact: {
@@ -344,7 +472,10 @@ export function buildArtifactRendererProps(input: {
     },
     content: input.content,
     ...(bytes ? { bytes } : {}),
-    edit: input.edit,
+    // THE EDIT CAPABILITY AT THE VERSION THAT ASKED FOR IT (cinatra#3814).
+    edit: artifactEditCapabilityForPropsVersion(input.edit, propsApiVersion),
+    ...(review ? { review } : {}),
+    ...(data ? { data } : {}),
   };
   // THE RULE IS CHECKED WHERE THE SNAPSHOT IS MADE, not only where one is
   // serialized. `assertSerializableRendererProps` is a test-time pin with no
@@ -376,6 +507,14 @@ export function artifactRendererPropsAtVersion(
   const next: ArtifactRendererProps = { ...props, propsApiVersion: version };
   // The byte reference is the one field the v1 shape has no place for.
   if (version < ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION) delete next.bytes;
+  // The review reading and the data road are the fields the v2 and v1 shapes
+  // have no place for.
+  if (version < ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION) {
+    delete next.review;
+    delete next.data;
+  }
+  // The title road is what the v3, v2 and v1 shapes have no place for.
+  if (props.edit) next.edit = artifactEditCapabilityForPropsVersion(props.edit, version);
   return next;
 }
 

@@ -10,6 +10,16 @@
 // One more came from a step-driven run on the skill match tab: the skill select
 // is a combobox with no accessible name, which the step could not find. Such a
 // combobox is found by the text a person reads for it, and never by a guess.
+//
+// And one more: while its list is open, the shared select hides everything
+// outside the list from assistive technology, the combobox included. A step that
+// looks for the combobox by its name again once it has opened it finds none,
+// and refuses a selection a person makes; the step reads it again by its mark.
+//
+// And one more: a picker drawn as a text input with the role combobox (the
+// entity search, on the agent's Skills tab among others: a person types, a list
+// of matching entries opens, and one is pressed) was no picker for the step,
+// which refused every page that assigns by search.
 import { afterAll, describe, expect, it } from "vitest";
 
 import { BACKENDS, closeBrowser, labelOf, refusal, scene, theSteps } from "./backends.mjs";
@@ -178,6 +188,214 @@ for (const backend of BACKENDS) {
       });
     });
 
+    it("reads a combobox it opened again by its mark while the list hides the rest of the page, and says what found it", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/hiding");
+        const plan = await selectFrom(page, { picker: "Plan", entry: "Team", record, bounds: BOUNDS });
+        expect(plan).toMatchObject({ picker: "Plan", entry: "Team", kind: "combobox", via: "state", path: "/pick/hiding" });
+        const skill = await selectFrom(page, { picker: "Pick a skill", entry: "Web search", record, bounds: BOUNDS });
+        expect(skill).toMatchObject({ picker: "Pick a skill", entry: "Web search", kind: "combobox", via: "state", path: "/pick/hiding" });
+        expect(lines).toEqual([
+          `selectFrom: selected "Team" in the picker "Plan" on /pick/hiding — its selected state shows it after ${plan.elapsedMs} ms`,
+          'selectFrom: selected "Web search" in the picker "Pick a skill" (a combobox with no accessible name, found by its placeholder) on /pick/hiding — ' +
+            `its selected state shows it after ${skill.elapsedMs} ms`,
+        ]);
+        // Each list closed on the choice and showed the page again, and no control kept the step's mark.
+        const after = await page.evaluate(() => ({
+          shows: Array.from(document.querySelectorAll("[role='combobox']"), (picker) => picker.textContent),
+          hidden: document.querySelectorAll("[aria-hidden]").length,
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ shows: ["Team", "Web search"], hidden: 0, marked: 0 });
+      });
+    });
+
+    it("waits for a list that closes after the choice, so a second pick on the same page finds its picker, and says how long the list took to close", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/closing");
+        const hour = await selectFrom(page, { picker: "Hour", entry: "09", record, bounds: BOUNDS });
+        const minute = await selectFrom(page, { picker: "Minute", entry: "30", record, bounds: BOUNDS });
+        expect(hour).toMatchObject({ kind: "combobox", via: "state", path: "/pick/closing" });
+        expect(minute).toMatchObject({ kind: "combobox", via: "state", path: "/pick/closing" });
+        expect(lines).toHaveLength(2);
+        const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const closed = [];
+        for (const [index, [pickerName, entryName]] of [["Hour", "09"], ["Minute", "30"]].entries()) {
+          const shape = new RegExp(
+            `^${escape(`selectFrom: selected "${entryName}" in the picker "${pickerName}" on /pick/closing — its selected state shows it after `)}\\d+ ms${escape("; its list closed after ")}(\\d+) ms$`,
+          );
+          const found = shape.exec(lines[index]);
+          expect(found, lines[index]).not.toBeNull();
+          closed.push(Number(found[1]));
+        }
+        for (const ms of closed) expect(ms).toBeGreaterThan(0);
+        const after = await page.evaluate(() => {
+          const text = (name) => document.querySelector(`[role='combobox'][aria-label='${name}']`).textContent;
+          return {
+            hour: text("Hour"),
+            minute: text("Minute"),
+            hidden: document.querySelectorAll("[aria-hidden]").length,
+            marked: document.querySelectorAll("[data-step-control]").length,
+          };
+        });
+        expect(after).toEqual({ hour: "09", minute: "30", hidden: 0, marked: 0 });
+      });
+    });
+
+    it("refuses by name a list that does not close within the bound, once the selection shows", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/closing");
+        const before = performance.now();
+        const error = await refusal(selectFrom(page, { picker: "Zone", entry: "UTC", record, bounds: BOUNDS }));
+        const tookMs = performance.now() - before;
+        expect(error.kind).toBe("not-closed");
+        expect(error.message).toBe('selectFrom refused (not-closed): the list of the picker "Zone" on /pick/closing did not close within 800 ms of the selection of "UTC"');
+        expect(lines).toEqual([error.message]);
+        expect(tookMs).toBeGreaterThanOrEqual(800 - 2);
+        expect(tookMs).toBeLessThan(2900);
+        const zone = await page.evaluate(() => document.querySelector("[role='combobox'][aria-label='Zone']").textContent);
+        expect(zone).toBe("UTC");
+      });
+    });
+
+    it("refuses an entry the open list does not have, naming its entries, and leaves no mark", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/hiding");
+        const error = await refusal(selectFrom(page, { picker: "Plan", entry: "Enterprise", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("no-entry");
+        expect(error.message).toBe('selectFrom refused (no-entry): the picker "Plan" on /pick/hiding has no entry "Enterprise" — its entries: "Free", "Team"; nothing was selected');
+        expect(lines).toEqual([error.message]);
+        // The list is still open, so the combobox still carries aria-hidden; no control kept the step's mark.
+        const after = await page.evaluate(() => ({
+          hidden: document.querySelector("[aria-controls='hiding-plans']").getAttribute("aria-hidden"),
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ hidden: "true", marked: 0 });
+      });
+    });
+
+    it("types into a search field found by its accessible name, waits for its list, and presses the one entry of that name, not the row the list marks active", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const result = await selectFrom(page, { picker: "Skills", entry: "Web search", record, bounds: BOUNDS });
+        expect(result).toMatchObject({ picker: "Skills", entry: "Web search", kind: "search", via: "state", path: "/pick/search" });
+        expect(lines).toEqual([`selectFrom: selected "Web search" in the picker "Skills" on /pick/search — the page draws it after ${result.elapsedMs} ms`]);
+        // The row the page drew is the pressed entry's, not the first one's, and the field was emptied for the next search.
+        const after = await page.evaluate(() => ({
+          rows: Array.from(document.querySelectorAll("#search-skills-rows li"), (row) => row.firstElementChild.textContent),
+          value: document.getElementById("search-skills").value,
+          expanded: document.getElementById("search-skills").getAttribute("aria-expanded"),
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ rows: ["Web search"], value: "", expanded: "false", marked: 0 });
+      });
+    });
+
+    it("finds a search field by its browser-computed placeholder name, and again by its mark once the typed text has hidden the placeholder", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const result = await selectFrom(page, { picker: "Search people…", entry: "Alan Turing", record, bounds: BOUNDS });
+        expect(result).toMatchObject({ picker: "Search people…", entry: "Alan Turing", kind: "search", via: "state", path: "/pick/search" });
+        expect(lines).toEqual([
+          'selectFrom: selected "Alan Turing" in the picker "Search people…" on /pick/search — ' +
+            `the page draws it after ${result.elapsedMs} ms`,
+        ]);
+        // The page drew a chip that names the entry in the field's place.
+        const after = await page.evaluate(() => ({
+          field: document.getElementById("search-people") !== null,
+          chip: Array.from(document.querySelectorAll("[data-fixture-chip] > span"), (part) => part.textContent),
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ field: false, chip: ["Alan Turing", "Research"], marked: 0 });
+      });
+    });
+
+    it("finds a search field with only a placeholder name by the label before it, reads the entry back from the field, and then finds the field by that value", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const first = await selectFrom(page, { picker: "Reviewer", entry: "Grace Hopper", record, bounds: BOUNDS });
+        expect(first).toMatchObject({ picker: "Reviewer", entry: "Grace Hopper", kind: "search", via: "state" });
+        const second = await selectFrom(page, { picker: "Grace Hopper", entry: "Grace Kelly", record, bounds: BOUNDS });
+        expect(second).toMatchObject({ picker: "Grace Hopper", entry: "Grace Kelly", kind: "search", via: "state" });
+        expect(lines).toEqual([
+          'selectFrom: selected "Grace Hopper" in the picker "Reviewer" (a combobox with no explicit accessible name, found by the label before it) on /pick/search — ' +
+            `the field shows it after ${first.elapsedMs} ms`,
+          'selectFrom: selected "Grace Kelly" in the picker "Grace Hopper" (a combobox with no explicit accessible name, found by its value) on /pick/search — ' +
+            `the field shows it after ${second.elapsedMs} ms`,
+        ]);
+        const after = await page.evaluate(() => ({
+          value: document.getElementById("search-reviewers").value,
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ value: "Grace Kelly", marked: 0 });
+      });
+    });
+
+    it("never guesses between two entries of one name in a search field's list, and names the entries it showed when none has the name", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const twin = await refusal(selectFrom(page, { picker: "Skills", entry: "Summary", record, bounds: BOUNDS }));
+        expect(twin.kind).toBe("ambiguous");
+        expect(twin.message).toBe('selectFrom refused (ambiguous): the picker "Skills" on /pick/search has 2 entries "Summary" — nothing was selected, since a selection never guesses');
+        const none = await refusal(selectFrom(page, { picker: "Skills", entry: "Web", record, bounds: BOUNDS }));
+        expect(none.kind).toBe("no-entry");
+        expect(none.message).toBe(
+          'selectFrom refused (no-entry): the list of the picker "Skills" on /pick/search showed no entry "Web" within 800 ms of typing it — ' +
+            'the entries it showed: "Web search pro", "Web search", "Web scraper"; nothing was selected',
+        );
+        expect(lines).toEqual([twin.message, none.message]);
+        const after = await page.evaluate(() => ({
+          rows: document.querySelectorAll("#search-skills-rows li").length,
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ rows: 0, marked: 0 });
+      });
+    });
+
+    it("refuses a choice the page takes as another entry, whether the page draws it or the field shows it", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const drawn = await refusal(selectFrom(page, { picker: "Author", entry: "Dana", record, bounds: BOUNDS }));
+        expect(drawn.kind).toBe("other-entry");
+        expect(drawn.message).toBe('selectFrom refused (other-entry): the press on "Dana" in the list of the picker "Author" on /pick/search took another entry: the page draws "Dana Scully"');
+        const shown = await refusal(selectFrom(page, { picker: "Assignee", entry: "Dana", record, bounds: BOUNDS }));
+        expect(shown.kind).toBe("other-entry");
+        expect(shown.message).toBe('selectFrom refused (other-entry): the press on "Dana" in the list of the picker "Assignee" on /pick/search took another entry: the field shows "Dana Scully"');
+        expect(lines).toEqual([drawn.message, shown.message]);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
+      });
+    });
+
+    it("refuses a choice the page does not take, although the list marks the pressed row as its active one", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const error = await refusal(selectFrom(page, { picker: "Editor", entry: "Eve", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("not-reflected");
+        expect(error.message).toBe(
+          'selectFrom refused (not-reflected): the selection of "Eve" in the picker "Editor" on /pick/search was not reflected within 800 ms: ' +
+            "the field does not show it with its list closed, and no new text on the page names it",
+        );
+        expect(lines).toEqual([error.message]);
+        // The pressed row reads aria-selected in the closed list: the list's active row, never a choice.
+        const after = await page.evaluate(() => ({
+          active: document.querySelector("#search-editor-list [role='option']").getAttribute("aria-selected"),
+          marked: document.querySelectorAll("[data-step-control]").length,
+        }));
+        expect(after).toEqual({ active: "true", marked: 0 });
+      });
+    });
+
+    it("refuses a search field whose list does not open once the entry is typed", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/search");
+        const error = await refusal(selectFrom(page, { picker: "Viewer", entry: "Vic", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("no-entry");
+        expect(error.message).toBe('selectFrom refused (no-entry): the picker "Viewer" on /pick/search showed no list of entries within 800 ms of typing "Vic" — nothing was selected');
+        expect(lines).toEqual([error.message]);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
+      });
+    });
+
     it("selects nothing when it refuses its arguments", async () => {
       await scene(backend, {}, async ({ app, page, record, lines }) => {
         const selectFrom = await start(page, app);
@@ -196,6 +414,68 @@ for (const backend of BACKENDS) {
         }
         const unrecorded = await refusal(selectFrom(page, { picker: "Size", entry: "Medium" }));
         expect(unrecorded.message).toBe("selectFrom refused (input): hand the step a record callback — nothing was done");
+      });
+    });
+
+    it("reads a combobox's entries in order and what it shows, and closes the list it opened without choosing", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const selectFrom = await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const result = await readOptions(page, { picker: "State", record, bounds: BOUNDS });
+        expect(result).toEqual({ picker: "State", kind: "combobox", entries: ["All", "Active", "Locked", "Archived"], more: 0, shows: "Active", path: "/pick/options" });
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^readOptions: the picker "State" on \/pick\/options lists "All", "Active", "Locked", "Archived" in this order and shows "Active"; its list closed after \d+ ms$/);
+        const after = await page.evaluate(() => {
+          const state = document.querySelector("[aria-label='State']");
+          return {
+            shows: state.textContent,
+            expanded: state.getAttribute("aria-expanded"),
+            hidden: document.querySelectorAll("[aria-hidden]").length,
+            marked: document.querySelectorAll("[data-step-control]").length,
+          };
+        });
+        expect(after).toEqual({ shows: "Active", expanded: "false", hidden: 0, marked: 0 });
+        const chosen = await selectFrom(page, { picker: "State", entry: "Locked", record, bounds: BOUNDS });
+        expect(chosen).toMatchObject({ kind: "combobox" });
+      });
+    });
+
+    it("reads a select's options in order without opening anything", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app);
+        const { readOptions } = theSteps("readOptions");
+        const result = await readOptions(page, { picker: "Size", record, bounds: BOUNDS });
+        expect(result).toEqual({ picker: "Size", kind: "select", entries: ["Small", "Medium", "Large", "Huge"], more: 0, shows: "Small", path: "/pick/start" });
+        expect(lines).toEqual(['readOptions: the picker "Size" on /pick/start lists "Small", "Medium", "Large", "Huge" in this order and shows "Small"']);
+      });
+    });
+
+    it("refuses by name a list that does not close on the Escape key", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const error = await refusal(readOptions(page, { picker: "Stuck", record, bounds: BOUNDS }));
+        expect(error.kind).toBe("not-closed");
+        expect(error.message).toBe('readOptions refused (not-closed): the list of the picker "Stuck" on /pick/options did not close within 800 ms of the Escape key');
+        expect(lines).toEqual([error.message]);
+        expect(await page.evaluate(() => document.querySelector("[aria-label='Stuck']").textContent), "the step chose an entry").toBe("Choose");
+      });
+    });
+
+    it("refuses a picker it cannot read, and reads nothing", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        await start(page, app, "/pick/options");
+        const { readOptions } = theSteps("readOptions");
+        const missing = await refusal(readOptions(page, { picker: "Nothing", record, bounds: BOUNDS }));
+        expect(missing.kind).toBe("no-picker");
+        expect(missing.reason.endsWith("— nothing was read"), missing.reason).toBe(true);
+        expect(lines.at(-1)).toBe(missing.message);
+        await page.goto(`${app.origin}/pick/search`);
+        const search = await refusal(readOptions(page, { picker: "Skills", record, bounds: BOUNDS }));
+        expect(search.kind).toBe("no-list");
+        expect(search.message).toBe('readOptions refused (no-list): the picker "Skills" on /pick/search is a search field, which lists entries only for typed text — nothing was read');
+        expect(lines.at(-1)).toBe(search.message);
+        expect(await page.evaluate(() => document.querySelectorAll("[data-step-control]").length), "a control kept the step's mark").toBe(0);
       });
     });
   });

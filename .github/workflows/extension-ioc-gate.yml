@@ -59,6 +59,7 @@ permissions:
 jobs:
   extension-ioc-gate:
     name: Extension IoC gate (reference consumer)
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 20
     # POSTURE: report-only for the FOUNDATION. Set IOC_ENFORCE=1 to block.

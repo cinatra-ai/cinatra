@@ -88,7 +88,13 @@ const TABLE: Array<{
   },
   {
     agent: "blog-linkedin-publish-agent",
-    produces: [{ extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE }],
+    // NOT a producer at this pin. The publisher takes the post-draft artifact
+    // revision the person continued with, posts it, and merges the published
+    // address onto THAT artifact through `objects_update`; the LinkedIn writer
+    // is what authors the artifact. Its manifest declares `produces: []`
+    // accordingly — a receipt, never a new artifact. The EDGE stays: it says
+    // what the run touches, which is true either way.
+    produces: [],
     edges: [LINKEDIN],
   },
   {
@@ -132,12 +138,15 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     expect(total).toBe(14);
   });
 
-  it("declares six of the nine typed produces entries", () => {
+  it("declares five of the nine typed produces entries", () => {
     // Nine after the prototype. Three wait for their write roads, not for their
     // packages: the image agent's own entry and the pipeline's idea and picture
-    // entries. No road an agent can take reaches a picture today.
+    // entries. No road an agent can take reaches a picture today. The fourth
+    // absence is different in kind: the LinkedIn PUBLISHER's entry is RETIRED,
+    // not waiting — at its pin it writes an address onto the writer's artifact
+    // instead of producing one, so it declares no produces entry at all.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
-    expect(total).toBe(6);
+    expect(total).toBe(5);
     for (const row of TABLE) {
       for (const entry of row.produces) {
         expect(entry.objectTypeId).toMatch(/^@[\w-]+\/[\w-]+:[\w-]+$/);

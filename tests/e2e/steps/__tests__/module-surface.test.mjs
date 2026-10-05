@@ -47,6 +47,7 @@ const BOUND_NAMES = [
 STEP_NAMES.push("decideGate", "dispatchRun", "fillForm", "press", "readRows", "selectFrom", "switchTheme", "uploadFile");
 BOUND_NAMES.push(
   "CONTROL_ACTION_BOUND_MS",
+  "CONTROL_HYDRATION_BOUND_MS",
   "CONTROL_POLL_MS",
   "DISPATCH_RUN_BOUND_MS",
   "DISPATCH_RUN_COMPOSER_BOUND_MS",
@@ -73,6 +74,44 @@ BOUND_NAMES.push(
   "UPLOAD_POLL_MS",
   "UPLOAD_ROW_BOUND_MS",
 );
+BOUND_NAMES.sort();
+// readControlNames joins the steps; its one bound of time is the shared reading
+// bound, listed above already.
+STEP_NAMES.push("readControlNames");
+// armPageTape and readPageTape join the steps; their one bound is the shared
+// reading bound too.
+STEP_NAMES.push("armPageTape", "readPageTape");
+// typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress: their
+// steps and their bounds join the lists in this one place, and the bounds stay
+// in order.
+STEP_NAMES.push("openAddress", "reloadPage", "sendInComposer", "typeInWindow", "waitForTurn");
+BOUND_NAMES.push(
+  "COMPOSER_CARD_BOUND_MS",
+  "OPEN_ADDRESS_BOUND_MS",
+  "RELOAD_BOUND_MS",
+  "TURN_BOUND_MS",
+  "TURN_CEILING_MS",
+  "TURN_POLL_MS",
+  "WINDOW_FIELD_BOUND_MS",
+  "WINDOW_SENT_BOUND_MS",
+);
+BOUND_NAMES.sort();
+// pressByTestId and readTitle: their steps and their bounds join the lists in
+// this one place, and the bounds stay in order. pressByTestId takes the bounds
+// of press, listed above already.
+STEP_NAMES.push("pressByTestId", "readTitle");
+BOUND_NAMES.push("TITLE_BOUND_MS", "TITLE_POLL_MS", "TITLE_SETTLE_MS");
+BOUND_NAMES.sort();
+// openPageInOwnContext: its step and its bound join the lists in this one
+// place, and the bounds stay in order.
+STEP_NAMES.push("openPageInOwnContext");
+BOUND_NAMES.push("OWN_CONTEXT_LANDING_BOUND_MS");
+BOUND_NAMES.sort();
+// readAddress and readOptions: their readings and the bounds of readAddress
+// join the lists in this one place, and the bounds stay in order. readOptions
+// takes the bounds of selectFrom, listed above already.
+STEP_NAMES.push("readAddress", "readOptions");
+BOUND_NAMES.push("ADDRESS_BOUND_MS", "ADDRESS_POLL_MS", "ADDRESS_SETTLE_MS");
 BOUND_NAMES.sort();
 
 describe("the steps module", () => {

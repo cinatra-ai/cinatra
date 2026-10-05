@@ -121,6 +121,15 @@ type SetupCompletionWatcherProps = {
    *  unchanged; see `AgenticRunPanel`'s own prop. */
   inputStepInRail?: boolean;
   /**
+   * THE LAUNCHER THE PANEL'S SUCCESSOR CONTROLS OPEN (cinatra#3786), forwarded
+   * unchanged. This watcher carries TWO bases on purpose, and they are not the
+   * same value. `scopeBase` above addresses THIS run, and the push to its
+   * schedule step is built from it. This one names the launcher a fresh run is
+   * started at. They agree for four anchor kinds and part on the personal one,
+   * whose run is addressed bare and whose successor is launched at `/personal`.
+   */
+  launchBase?: string | null;
+  /**
    * Forwarded to the panel unchanged, exactly like `inputStepInRail`: whether
    * the run page's two-column frame is drawn beside this column, so the gate's
    * own card is the whole page and no section plate is stacked around it
@@ -134,6 +143,7 @@ export function SetupCompletionWatcher({
   agentId,
   instanceId,
   scopeBase,
+  launchBase,
   agUiEnabled,
   initialStatus,
   initialError,
@@ -298,7 +308,7 @@ export function SetupCompletionWatcher({
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}
-      scopeBase={scopeBase}
+      launchBase={launchBase}
     />
   );
 }
