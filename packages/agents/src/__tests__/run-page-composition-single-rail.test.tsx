@@ -102,6 +102,7 @@ const row = vi.hoisted(() => ({
     string,
     unknown
   >,
+  producedReviewPark: null as string | null,
 }));
 
 /**
@@ -259,6 +260,7 @@ function makeRun() {
     lifecycleMoment: row.lifecycleMoment,
     lifecycleCardKind: row.lifecycleCardKind,
     lifecycleCardRef: row.lifecycleCardRef,
+    producedReviewPark: row.producedReviewPark,
     executionAttemptId: null,
     launchScopeAnchor: null,
   };
@@ -415,6 +417,7 @@ beforeEach(() => {
     audience: { type: "string", title: "audience" },
   };
   row.inputParams = { idea: "a post about rails", audience: "developers" };
+  row.producedReviewPark = null;
   recommendationPark.row = null;
   recommendationPark.holdState = { state: "none" };
   reviewSlot.awaiting = false;
@@ -654,6 +657,103 @@ describe("the run page draws exactly one step rail (cinatra#3478)", () => {
     expect(made).toBeDefined();
     expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("true");
     expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
+  });
+
+  it("keeps the run's own record, reached, while a decided produced-review park awaits its release (cinatra#3046)", async () => {
+    // THE WINDOW THE PARK OPENS (cinatra#3046). A run whose own output opened a
+    // review stays `pending_approval` under its produced-review park until the
+    // release writes the withheld terminal status. The person's decision turns
+    // the gate row `resolved` BEFORE that release, so the page renders a run
+    // that is not terminal, held by no pending gate and no awaiting slot — and
+    // the rail still has to end on the run's own record, now reached.
+    const { encodeProducedReviewPark } = await vi.importActual<
+      typeof import("../run-produced-review-hold")
+    >("../run-produced-review-hold");
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    row.producedReviewPark = encodeProducedReviewPark({ status: "completed" });
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("resolved")];
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const rows = Array.from(
+      columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    );
+    const made = rows.find(
+      (el) => el.getAttribute("data-run-surface-rail-step-key") === "made",
+    );
+    expect(made).toBeDefined();
+    expect(rows[rows.length - 1]).toBe(made);
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
+  });
+
+  it("keeps the run's own record still to come while a produced-review park waits at an undecided gate (cinatra#3046)", async () => {
+    // THE SAME PARK BEFORE THE DECISION: the gate is still `pending`, so the run
+    // has not reached its record and the rail draws it as a step still to come.
+    const { encodeProducedReviewPark } = await vi.importActual<
+      typeof import("../run-produced-review-hold")
+    >("../run-produced-review-hold");
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    row.producedReviewPark = encodeProducedReviewPark({ status: "completed" });
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("pending")];
+
+    const { container } = await renderRunPage();
+
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const rows = Array.from(
+      columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    );
+    const made = rows.find(
+      (el) => el.getAttribute("data-run-surface-rail-step-key") === "made",
+    );
+    expect(made).toBeDefined();
+    expect(rows[rows.length - 1]).toBe(made);
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("false");
+  });
+
+  it("reads what the run made while a decided produced-review park awaits its release (cinatra#3046)", async () => {
+    // THE RECORD THE RAIL NOW DRAWS REACHED HAS TO HOLD THE RUN'S ROWS. In the
+    // window before the release the run is still `pending_approval`, so a read
+    // kept to terminal runs alone would open the reached record on an empty list.
+    const { encodeProducedReviewPark } = await vi.importActual<
+      typeof import("../run-produced-review-hold")
+    >("../run-produced-review-hold");
+    const { listRunMadeArtifacts } = await import("@/lib/artifacts/run-made-artifacts");
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    row.producedReviewPark = encodeProducedReviewPark({ status: "completed" });
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("resolved")];
+
+    await renderRunPage();
+
+    expect(vi.mocked(listRunMadeArtifacts)).toHaveBeenCalledWith({
+      orgId: "org-1",
+      runId: RUN_ID,
+    });
   });
 
   it("draws the run's own record as reached once the run is over and no gate waits", async () => {
