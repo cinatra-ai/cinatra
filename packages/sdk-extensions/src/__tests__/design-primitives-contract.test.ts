@@ -23,10 +23,11 @@ import {
   missingDesignPrimitiveExports,
 } from "../design-primitives-contract";
 
-/** The sixteen product components the border floor records as byte copies, each
+/** The seventeen product components the border floor records as byte copies, each
  * anchored by an export only that component provides. */
 const PRIMITIVE_ANCHORS: ReadonlyArray<[string, string]> = [
   ["alert", "Alert"],
+  ["alert-dialog", "AlertDialog"],
   ["badge", "Badge"],
   ["button", "Button"],
   ["card", "Card"],
@@ -58,6 +59,12 @@ describe("the shared primitives module id", () => {
       HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR,
     );
   });
+
+  it("adds AlertDialog in minor 1.1 while retaining compatibility with 1.0 bundles", () => {
+    expect(HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION).toBe("1.1.0");
+    expect(HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR).toBe(1);
+    expect(checkDesignPrimitivesContract({ builtAgainst: "1.0.0" })).toBeNull();
+  });
 });
 
 describe("the FROZEN export list", () => {
@@ -76,6 +83,22 @@ describe("the FROZEN export list", () => {
         `the frozen list must carry ${anchor} (src/components/ui/${primitive}.tsx)`,
       ).toBe(true);
     }
+  });
+
+  it("includes the complete product AlertDialog family", () => {
+    expect(HOST_DESIGN_PRIMITIVES_EXPORTS.filter((name) => name.startsWith("AlertDialog"))).toEqual([
+      "AlertDialog",
+      "AlertDialogAction",
+      "AlertDialogCancel",
+      "AlertDialogContent",
+      "AlertDialogDescription",
+      "AlertDialogFooter",
+      "AlertDialogHeader",
+      "AlertDialogOverlay",
+      "AlertDialogPortal",
+      "AlertDialogTitle",
+      "AlertDialogTrigger",
+    ]);
   });
 
   it("names no export of a component the host does not own", () => {
