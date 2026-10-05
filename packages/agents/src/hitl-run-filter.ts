@@ -6,6 +6,7 @@ type RequiredFields =
   | "hitlRequired"
   | "hitlScreens"
   | "gatedSteps"
+  | "hasArtifactBindings"
   | "agentDependencies"
   | "sourceType";
 
@@ -18,15 +19,24 @@ export function templateHasOwnHitl(t: HitlRunFilterTemplate): boolean {
   return false;
 }
 
+function templateHasReview(t: HitlRunFilterTemplate): boolean {
+  // The installed template persists whether its declared outputs bind an
+  // artifact. The application reviews that output even when the agent has
+  // no gate of its own. Unknown legacy declarations are not a review signal.
+  return templateHasOwnHitl(t) || t.hasArtifactBindings === true;
+}
+
 /**
  * Returns the set of installed agent templates that should be rendered on
  * `/agents`:
  *
  *   1. Any internal template with at least one HITL signal of its own
- *      (`hitlRequired`, `hitlScreens.length > 0`, or `gatedSteps.length > 0`).
+ *      (`hitlRequired`, `hitlScreens.length > 0`, or `gatedSteps.length > 0`),
+ *      or a declared artifact output that the application reviews
+ *      (`hasArtifactBindings === true`).
  *   2. Any internal template whose `packageName` is a transitive descendant of
  *      a (1) template via `agentDependencies` — captures sub-agents the user
- *      can still launch directly because their parent flow has a HITL gate.
+ *      can still launch directly because their parent flow has a review.
  *   3. Any external template (`sourceType === "external"`) — Cinatra cannot
  *      pre-classify HITL behavior of remote A2A agents, so we never hide them.
  *
@@ -52,7 +62,7 @@ export function selectHitlRunVisibleTemplates<T extends HitlRunFilterTemplate>(
       visibleIds.add(t.id);
       continue;
     }
-    if (templateHasOwnHitl(t)) {
+    if (templateHasReview(t)) {
       visibleIds.add(t.id);
     }
   }
@@ -62,7 +72,7 @@ export function selectHitlRunVisibleTemplates<T extends HitlRunFilterTemplate>(
     if (
       t.sourceType === "internal" &&
       t.packageName &&
-      templateHasOwnHitl(t) &&
+      templateHasReview(t) &&
       t.agentDependencies
     ) {
       for (const dep of Object.keys(t.agentDependencies)) queue.push(dep);

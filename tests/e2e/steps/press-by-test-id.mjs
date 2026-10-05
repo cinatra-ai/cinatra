@@ -23,6 +23,7 @@
 // screen reader cannot find by a name; the step says so in the record before
 // the press, so every record of a run that needs it carries that fault.
 import {
+  CONTROL_HYDRATION_BOUND_MS,
   CONTROL_MARK,
   CONTROL_NAMES_LISTED,
   describeMatches,
@@ -31,8 +32,9 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unspacedNote,
+  waitForPageHydration,
 } from "./page-controls.mjs";
 import { PRESS_BOUNDS, PRESS_ROLES, ROLE_WORDS } from "./press.mjs";
 import { pressAndSettle } from "./press-settle.mjs";
@@ -100,6 +102,10 @@ export async function pressByTestId(page, { testId, text, within: scope, record,
   const shows = quotedName(wanted);
 
   const from = pathOf(page.url());
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   const mark = newMark();
   const query = {
     mode: "testid",
@@ -112,7 +118,7 @@ export async function pressByTestId(page, { testId, text, within: scope, record,
     mark,
     listed: CONTROL_NAMES_LISTED,
   };
-  const reading = await within(page.evaluate(readControls, query), READING_BOUND_MS);
+  const reading = await within(readPageControls(page, query), READING_BOUND_MS);
   if (!reading) throw refuse(STEP, record, "unreadable", `the elements on ${from} could not be read — ${nothing}`);
   const { scope: part, matches } = reading;
   if (part && part.found === 0) {

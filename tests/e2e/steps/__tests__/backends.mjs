@@ -69,13 +69,13 @@ export const BACKENDS = [
 export const labelOf = (backend) => (backend.skip ? `${backend.name}, skipped: ${backend.skip}` : backend.name);
 
 /**
- * One case on one backend: a fixture app (serving HTTP/2 as well with `secure`),
- * a page, and a record that keeps every line the step wrote. After the case, no
- * line may carry one of `secrets` or an origin of the app: a step writes paths,
- * never addresses or values.
+ * One case on one backend: a fixture app (serving HTTP/2 as well with `secure`,
+ * and pages that hydrate late with `hydrate`), a page, and a record that keeps
+ * every line the step wrote. After the case, no line may carry one of `secrets`
+ * or an origin of the app: a step writes paths, never addresses or values.
  */
-export async function scene(backend, { answer, secure, secrets = [] } = {}, body) {
-  const app = await startFixtureApp({ answer, secure });
+export async function scene(backend, { answer, secure, hydrate, secrets = [] } = {}, body) {
+  const app = await startFixtureApp({ answer, secure, hydrate });
   const page = await backend.open(app.origin);
   const lines = [];
   const record = (line) => lines.push(String(line));

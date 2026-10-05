@@ -63,7 +63,12 @@
 //     Playwright's own call log does, so a step that forwards that message fails
 //     these cases;
 //   - a press moves the focus, and the keyboard types into the element that has
-//     it (see the keyboard, further down).
+//     it (see the keyboard, further down);
+//   - a page that declares a late hydration (`fixture-hydration`, see
+//     withHydration in fixture-app.mjs) carries the App Router's flight data
+//     from the start and hydrates once: at its time, or at the first press,
+//     fill, typed key or focus played on it, whichever comes first; it reports
+//     that moment to the app as its script does in a browser.
 // The page's declared behaviour (the JSON each fixture page carries) is played on
 // its document with timers, as the page's inline script does in a browser: a
 // stream it opens stays open, and while its main thread is declared busy, a
@@ -72,7 +77,15 @@ import { connect, constants } from "node:http2";
 
 import { JSDOM } from "jsdom";
 
-import { EMAIL_ROUTE, USERNAME_ROUTE, pressSearchEntry, typeInSearchField } from "./fixture-app.mjs";
+import {
+  EMAIL_ROUTE,
+  HYDRATION_KEY,
+  HYDRATION_REPORT_PATH,
+  STEP_MARK,
+  USERNAME_ROUTE,
+  pressSearchEntry,
+  typeInSearchField,
+} from "./fixture-app.mjs";
 import { inputInFixtureWindow, sendInFixtureWindow } from "./fixture-app-windows.mjs";
 
 export class TimeoutError extends Error {
@@ -98,6 +111,45 @@ const ORIGIN_CONNECTIONS = 6;
 const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 720 });
 /** How a context asks a page to keep its document's storage. */
 const KEEP_STORAGE = Symbol("keep the storage");
+const ACCESSIBILITY_SESSION = Symbol("fixture accessibility session");
+
+// A fixture-only name/source double for the existing branch tests. It is NOT
+// the platform algorithm: browser-control-names.test.mjs exercises the cases
+// (including SVG descendants and HTML label ARIA) that only Chromium can prove.
+function fixtureName(element) {
+  const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const content = (node, skip) => {
+    if (node === skip) return "";
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1 || node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") return "";
+    if (["script", "style", "template"].includes(node.localName)) return "";
+    if (node.localName === "img") return ` ${node.getAttribute("alt") || ""} `;
+    if (node.localName === "select") return ` ${Array.from(node.selectedOptions || [], (option) => option.text).join(" ")} `;
+    if (node.localName === "textarea") return ` ${node.value} `;
+    if (node.localName === "input") return ["radio", "checkbox", "hidden", "file"].includes(node.type) ? "" : ` ${node.value || ""} `;
+    return Array.from(node.childNodes, (child) => content(child, skip)).join("");
+  };
+  const named = (name, from) => ({ name, from: name ? from : "" });
+  const labelled = text(text(element.getAttribute("aria-labelledby")).split(" ").map((id) => element.ownerDocument.getElementById(id)).filter(Boolean).map((node) => content(node, element)).join(" "));
+  if (labelled) return named(labelled, "aria-labelledby");
+  const aria = text(element.getAttribute("aria-label"));
+  if (aria) return named(aria, "aria-label");
+  const label = text(Array.from(element.labels || [], (node) => content(node, element)).join(" "));
+  if (label) return named(label, "label");
+  if (element.localName === "fieldset") return named(text(content(element.querySelector("legend"), null)), "label");
+  if (element.localName === "input" && ["button", "submit", "reset", "image"].includes(element.type)) {
+    const name = text(element.type === "image" ? element.getAttribute("alt") : element.value);
+    if (name) return named(name, "text");
+  }
+  const role = element.getAttribute("role") || ({ a: "link" }[element.localName] ?? element.localName);
+  if (["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "radio", "checkbox", "switch", "treeitem"].includes(role)) {
+    const name = text(content(element, null));
+    if (name) return named(name, "text");
+  }
+  const title = text(element.getAttribute("title"));
+  if (title) return named(title, "title");
+  return named(text(element.getAttribute("placeholder")), "placeholder");
+}
 
 /**
  * A response body as it arrives: `head` resolves with what has come once its
@@ -238,6 +290,9 @@ export class BrowserDouble {
 
 /** A browser context: its open pages, the request events of all of them, and its own cookies, storage and connections. */
 export class ContextDouble {
+  async newCDPSession(page) {
+    return page[ACCESSIBILITY_SESSION]();
+  }
   #origin;
   #browser;
   #viewport;
@@ -506,6 +561,8 @@ export class PageDouble {
   #streams = new Set();
   #entries = new WeakMap();
   #busyUntil = new WeakMap();
+  /** The documents that declare a late hydration and have not hydrated yet. */
+  #unhydrated = new WeakSet();
   #viewport;
 
   /** Opened by its context: `context.newPage()`. */
@@ -600,6 +657,38 @@ export class PageDouble {
     return viaJson(await inPage(viaJson(arg)));
   }
 
+  [ACCESSIBILITY_SESSION]() {
+    if (this.#closed) throw new Error(DESTROYED);
+    const document = this.#dom.window.document;
+    const objects = [document, ...document.querySelectorAll("*")];
+    let detached = false;
+    return {
+      send: async (command, args = {}) => {
+        await this.evaluate(() => true); // Preserve busy, closed and navigating failures.
+        if (detached || document !== this.#dom.window.document) throw new Error(DESTROYED);
+        if (command === "DOM.getDocument") return { root: { backendNodeId: 1 } };
+        if (command === "DOM.resolveNode") return { object: { objectId: String(args.backendNodeId) } };
+        if (command === "Accessibility.getFullAXTree") return { nodes: objects.slice(1).map((element, index) => {
+          const { name, from } = fixtureName(element);
+          const source = { value: { value: name } };
+          if (from === "label") source.nativeSource = "label";
+          else if (from === "text") source.type = "contents";
+          else if (from === "placeholder") source.type = "placeholder";
+          else source.attribute = from;
+          return { backendDOMNodeId: index + 2, name: { value: name, sources: [source] } };
+        }) };
+        if (command === "Runtime.callFunctionOn") {
+          const fn = this.#dom.window.eval(`(${args.functionDeclaration})`);
+          const values = args.arguments.map((arg) => arg.objectId ? objects[Number(arg.objectId) - 1] : viaJson(arg.value));
+          return { result: { value: viaJson(await fn.apply(objects[Number(args.objectId) - 1], values)) } };
+        }
+        if (command === "Runtime.releaseObjectGroup") return {};
+        throw new Error(`The fixture has no CDP command ${command}`);
+      },
+      detach: async () => { detached = true; },
+    };
+  }
+
   async waitForFunction(fn, arg, { timeout = 30_000, polling = 100 } = {}) {
     const until = Date.now() + timeout;
     for (;;) {
@@ -626,6 +715,7 @@ export class PageDouble {
         press: (element, modifiers) => this.#press(element, modifiers),
         typed: (element) => this.#typed(element),
         focus: (element) => this.#focus(element),
+        acted: () => this.#acted(),
       },
       selector,
       {},
@@ -699,7 +789,34 @@ export class PageDouble {
     if (scenario && scenario.hydrateAfterMs !== null) {
       this.#later(() => this.#hydrate(dom, scenario), scenario.hydrateAfterMs);
     }
+    const hydration = declared("fixture-hydration");
+    if (hydration) {
+      dom.window.__next_f = [];
+      this.#unhydrated.add(dom);
+      if (hydration.afterMs !== null) this.#later(() => this.#hydrateLate(dom, "time"), hydration.afterMs);
+    }
     return dom;
+  }
+
+  /**
+   * A page that declares a late hydration hydrates once, `by` its time or by an
+   * event: every element of its body carries the key React sets on an element
+   * it has hydrated, and the page reports the moment, with the marks it carried.
+   */
+  #hydrateLate(dom, by) {
+    if (this.#closed || this.#dom !== dom || !this.#unhydrated.has(dom)) return;
+    this.#unhydrated.delete(dom);
+    const { document, location } = dom.window;
+    const marked = document.querySelectorAll(`[${STEP_MARK}]`).length;
+    for (const element of document.body?.querySelectorAll("*") ?? []) element[HYDRATION_KEY] = true;
+    const report = new URL(HYDRATION_REPORT_PATH, location.href);
+    report.search = new URLSearchParams({ by, marked: String(marked), path: location.pathname, at: String(Date.now()) }).toString();
+    this.#send("GET", report.href, null, false).catch(() => {});
+  }
+
+  /** A press, a fill, a typed key or a focus is played on the page: a page that has not hydrated yet hydrates at once. */
+  #acted() {
+    this.#hydrateLate(this.#dom, "event");
   }
 
   #commit(href, html, protocol = null, elapsedMs = 0, streaming = null) {
@@ -1231,10 +1348,13 @@ export class PageDouble {
         return viaJson(await inPage(element, viaJson(arg)));
       },
       click: async ({ timeout = 30_000 } = {}) => {
-        this.#pressControl(await one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`, true));
+        const element = await one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`, true);
+        this.#acted();
+        this.#pressControl(element);
       },
       fill: async (value, { timeout = 30_000 } = {}) => {
         const element = await one(timeout, `locator.fill: Timeout ${timeout}ms exceeded.\nCall log:\n  - fill("${value}")`, true);
+        this.#acted();
         const type = (element.getAttribute("type") ?? "text").toLowerCase();
         if (element.localName === "select" || !["input", "textarea"].includes(element.localName)) {
           throw new Error("Error: Element is not an <input>, <textarea> or [contenteditable] element");
@@ -1489,8 +1609,14 @@ export class PageDouble {
 
   /** The keyboard: text typed, and Backspace pressed, into the element that has the focus; Escape pressed on the page. */
   keyboard = {
-    type: async (text) => this.#typeText(String(text)),
-    press: async (key) => this.#pressKey(String(key)),
+    type: async (text) => {
+      this.#acted();
+      this.#typeText(String(text));
+    },
+    press: async (key) => {
+      this.#acted();
+      this.#pressKey(String(key));
+    },
   };
 
   #focus(element) {
@@ -1619,6 +1745,7 @@ class LocatorDouble {
 
   async fill(value, { timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.fill: Timeout ${timeout}ms exceeded.\nCall log:\n  - fill("${value}")`);
+    this.#page.acted();
     element.value = value;
     const window = element.ownerDocument.defaultView;
     element.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -1628,6 +1755,7 @@ class LocatorDouble {
 
   async click({ timeout = 30_000, modifiers = [] } = {}) {
     const element = await this.#one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
     this.#page.focus(element);
     this.#page.press(element, modifiers);
   }
@@ -1656,6 +1784,7 @@ class LocatorDouble {
   // group and announces the change.
   async selectOption(value, { timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.selectOption: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
     if (element.localName !== "select") throw new Error("locator.selectOption: Element is not a <select> element");
     const index = value && typeof value === "object" ? value.index : undefined;
     if (!Number.isInteger(index) || !element.options[index]) throw new Error("locator.selectOption: did not find some options");
@@ -1668,6 +1797,7 @@ class LocatorDouble {
 
   async check({ timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.check: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
     if (element.localName !== "input" || !["radio", "checkbox"].includes(element.type)) throw new Error("locator.check: Not a checkbox or radio button");
     if (!element.checked) element.click();
     if (!element.checked) throw new Error("locator.check: Clicking the checkbox did not change its state");
