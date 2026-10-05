@@ -84,7 +84,7 @@ export const HOST_DASHBOARD_COMPOSITION_MODULE = "@cinatra-ai/sdk-dashboard/comp
  * load, a bundle whose MAJOR it does not serve (see
  * {@link checkDesignPrimitivesContract}).
  */
-export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.0.0";
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.1.0";
 
 /** The MAJOR of {@link HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION} — the single
  * number the load-time fail-closed check compares on. */
@@ -93,19 +93,18 @@ export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
 /**
  * The FROZEN export list of the shared primitives module at contract major
  * {@link HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR} — exactly the exports of the
- * sixteen product components under `src/components/ui/` that the
+ * seventeen product components under `src/components/ui/` that the
  * self-rendering-extensions border floor
  * (`scripts/extensions/self-rendering-extensions-border.baseline.json`) records
- * as byte copies inside connector/artifact packages: alert, badge, button, card,
- * checkbox, dialog, field, input-group, input, label, paginated-table,
- * pagination, select, separator, table, textarea.
+ * as byte copies inside connector/artifact packages: alert, alert-dialog,
+ * badge, button, card, checkbox, dialog, field, input-group, input, label,
+ * paginated-table, pagination, select, separator, table, textarea.
  *
  * The baseline ALSO lists `external-link.tsx`, `link.tsx` and `text-link.tsx`.
- * Those are NOT product primitives — they are the extensions' OWN components
- * (`vendor-extension-primitives.mjs`: "dialog.tsx / link.tsx are the
- * connector's OWN components, not registry items, so they are outside this
- * channel") and no such file exists under `src/components/ui/`, so the host
- * cannot and does not serve them.
+ * Those are NOT product primitives — they are the extensions' OWN components,
+ * and no such file exists under `src/components/ui/`, so the host cannot and
+ * does not serve them. The product's AlertDialog joins the shared contract in
+ * version 1.1.0.
  *
  * Adding a name here is a MINOR bump; removing or renaming one is a MAJOR.
  */
@@ -114,6 +113,18 @@ export const HOST_DESIGN_PRIMITIVES_EXPORTS = Object.freeze([
   "Alert",
   "AlertDescription",
   "AlertTitle",
+  // alert-dialog (added in 1.1.0)
+  "AlertDialog",
+  "AlertDialogAction",
+  "AlertDialogCancel",
+  "AlertDialogContent",
+  "AlertDialogDescription",
+  "AlertDialogFooter",
+  "AlertDialogHeader",
+  "AlertDialogOverlay",
+  "AlertDialogPortal",
+  "AlertDialogTitle",
+  "AlertDialogTrigger",
   // badge
   "Badge",
   "badgeVariants",
