@@ -34,7 +34,7 @@
 // read until the page marks a field, the form is gone, or the error bound runs
 // out.
 import { listed, quoted } from "./control-kit.mjs";
-import { CONTROL_MARK, markedBy, newMark, unmarkControls } from "./page-controls.mjs";
+import { CONTROL_HYDRATION_BOUND_MS, CONTROL_MARK, markedBy, newMark, unmarkControls, waitForPageHydration } from "./page-controls.mjs";
 import { READING_BOUND_MS, errorClass, pathOf, pollUntilSettled, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "fillForm";
@@ -252,6 +252,10 @@ export async function fillForm(page, { fields, record, form = FORM_SCOPE_SELECTO
     throw refuse(STEP, record, "ambiguous", `${each.join("; ")} — ${nothing}, since a fill never guesses`);
   }
 
+  // Marked only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(STEP, record, "driver-failure", `the page on ${at} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   /** @type {string[]} */
   const filled = [];
   for (const [label, value] of wanted) {

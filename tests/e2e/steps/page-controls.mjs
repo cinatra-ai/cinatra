@@ -31,6 +31,8 @@ export const CONTROL_POLL_MS = 100;
 export const CONTROL_NAMES_LISTED = 10;
 /** The attribute that marks the one control a step acts on, for that act only. */
 export const CONTROL_MARK = "data-step-control";
+/** From the start of a step's first reading to the page's hydration (the sign-in step's own hydration bound). */
+export const CONTROL_HYDRATION_BOUND_MS = 60_000;
 
 /** Read names and their winning sources from Chromium's accessibility tree.
  * CDP is the platform reading exposed by Playwright; unsupported drivers throw
@@ -97,6 +99,23 @@ export async function readPageControls(page, query) {
     } finally {
       await session.detach();
     }
+  }
+}
+
+/**
+ * Wait until the page has hydrated (pageHydrated), as the sign-in step waits
+ * for its form's mark: a mark written on an element React has not compared yet
+ * with the server's markup is a hydration mismatch. True once the page has
+ * hydrated; false when the bound ran out first, or the page could not be read.
+ * @param {import("@playwright/test").Page} page
+ * @param {{ hydrationMs?: number, pollMs?: number }} [bounds]
+ */
+export async function waitForPageHydration(page, { hydrationMs = CONTROL_HYDRATION_BOUND_MS, pollMs = CONTROL_POLL_MS } = {}) {
+  try {
+    await page.waitForFunction(pageHydrated, undefined, { timeout: hydrationMs, polling: pollMs });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -170,6 +189,67 @@ export const unspacedNote = (unspaced, named) => (unspaced ? ` once white space 
 
 // These run IN THE PAGE. Playwright sends each one's source text, so none of
 // them may use anything of this module.
+
+/**
+ * Whether the page has hydrated. A page with no server-rendered React state to
+ * hydrate reads true at once: the product's pages are rendered by the Next.js
+ * App Router, whose streamed markup pushes its flight data onto `self.__next_f`
+ * as the page parses. Otherwise the shell must have hydrated, and no boundary
+ * React left dehydrated may remain:
+ * - the shell: where the document carries React's root (`__reactContainer$…`),
+ *   by the root's committed state (`isDehydrated` false once React has hydrated
+ *   and committed it), so an element a library adds to the body later, such as
+ *   a dialog's focus guard, plays no part; else, the body has an element child
+ *   React renders and every such child carries an own key that starts with
+ *   `__reactFiber$`: React sets that key on an element only when hydration has
+ *   completed it (the reading of the suites' own gate,
+ *   tests/e2e/config/hydration.ts). A child React does not render is left out:
+ *   a script, a template, a style, a link, a noscript, a custom element (a tag
+ *   name with a hyphen, such as the development overlay's portal) and a streamed
+ *   holder (a hidden div whose id starts with "S:");
+ * - the boundaries: React hydrates a complete Suspense or Activity boundary
+ *   (`<!--$-->` or `<!--&-->`) after the shell, so the first element of each such
+ *   boundary must carry that key too.
+ */
+export function pageHydrated() {
+  if (typeof self.__next_f === "undefined") return true;
+  const body = document.body;
+  if (!body) return false;
+  const keyed = (node) => Object.keys(node).some((key) => key.startsWith("__reactFiber$"));
+  const container = Object.keys(document).find((key) => key.startsWith("__reactContainer$"));
+  const state = container ? document[container]?.stateNode?.current?.memoizedState : undefined;
+  if (state && typeof state.isDehydrated === "boolean") {
+    if (state.isDehydrated) return false;
+  } else {
+    const OUTSIDE = ["script", "template", "style", "link", "noscript"];
+    const rendered = Array.from(body.children).filter(
+      (child) =>
+        !OUTSIDE.includes(child.localName) &&
+        !child.localName.includes("-") &&
+        !(child.localName === "div" && child.hasAttribute("hidden") && String(child.id).startsWith("S:")),
+    );
+    if (!(rendered.length > 0 && rendered.every(keyed))) return false;
+  }
+  // 128: NodeFilter.SHOW_COMMENT.
+  const walker = document.createTreeWalker(body, 128);
+  for (let marker = walker.nextNode(); marker; marker = walker.nextNode()) {
+    if (marker.data !== "$" && marker.data !== "&") continue;
+    if (marker.parentElement?.closest("div[hidden]")?.id.startsWith("S:")) continue;
+    let depth = 0;
+    for (let next = marker.nextSibling; next; next = next.nextSibling) {
+      if (next.nodeType === 1) {
+        if (!keyed(next)) return false;
+        break;
+      }
+      if (next.nodeType !== 8) continue;
+      if (next.data.startsWith("/")) {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (next.data.startsWith("$") || next.data === "&") depth += 1;
+    }
+  }
+  return true;
+}
 
 /**
  * Reads the page's controls for one query and marks the one control the step
