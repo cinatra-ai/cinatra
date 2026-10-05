@@ -133,7 +133,8 @@ export function vendorFor(
   packageName: string,
 ): string | null {
   return resolveInstalledVendorName({
-    manifestVendorName: STATIC_EXTENSION_MANIFEST[packageName]?.vendor?.name ?? null,
+    manifestVendorName:
+      STATIC_EXTENSION_MANIFEST[packageName]?.vendor?.name ?? summary?.vendorName ?? null,
     author: summary?.author ?? null,
     scopeVendorName: declaredVendorNameForScope(
       Object.values(STATIC_EXTENSION_MANIFEST),
@@ -227,7 +228,14 @@ function collapseKindRows(input: {
       // card; a multi-descriptor package falls back to the registry title so
       // the card is not mislabeled with an arbitrary member's name.
       const summary = availableByName.get(packageName);
-      if (summary?.title) existing.displayName = summary.title;
+      if (summary?.title) {
+        existing.displayName = resolveInstalledDisplayName({
+          nativeName: null,
+          registryTitle: summary.title,
+          manifestDisplayName: STATIC_EXTENSION_MANIFEST[packageName]?.displayName,
+          packageName,
+        });
+      }
       continue;
     }
 

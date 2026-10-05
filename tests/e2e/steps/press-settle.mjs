@@ -18,7 +18,7 @@
 //
 // Plain ESM with JSDoc types and Node's builtins only, like every file in this
 // directory.
-import { CONTROL_MARK, forgetDocument, markedBy, readControls, readDocument, unmarkControls } from "./page-controls.mjs";
+import { CONTROL_MARK, forgetDocument, markedBy, readPageControls, readDocument, unmarkControls } from "./page-controls.mjs";
 import { startsNavigation } from "./navigate-to.mjs";
 import { originOf } from "./read-standing-requests.mjs";
 import { READING_BOUND_MS, elapsedSince, errorClass, pause, refuse, within } from "./step-kit.mjs";
@@ -92,7 +92,7 @@ export async function pressAndSettle(page, { step, record, mark, from, href, bou
     settled = await settle(page, { key, from, hasStarted: () => started, bound, pressedAt });
     // The checked state once the page has settled, read before the mark is taken off.
     if (settled && checks) {
-      const after = await within(page.evaluate(readControls, { mode: "checked", attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
+      const after = await within(readPageControls(page, { mode: "checked", attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
       checked = after ? after.checked : null;
     }
   } finally {
