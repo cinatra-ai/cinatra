@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
 
 /**
  * The review reading is live; the run rail is composed by the server (#3942).
@@ -14,15 +13,14 @@ export function useRunReviewRailRefresh({
   runId,
   reviewTaskId,
   initialReviewTaskIds,
-  enabled,
+  refresh,
 }: {
   runId: string;
   reviewTaskId: string | null | undefined;
   initialReviewTaskIds: readonly string[] | undefined;
-  /** Only the run-page host enables this; chat and widget callers do not. */
-  enabled: boolean;
+  /** Supplied by the actual page owner; this hook needs no router context. */
+  refresh: (() => void) | undefined;
 }): void {
-  const router = useRouter();
   const observed = useRef({ runId, tasks: new Set<string>() });
 
   useEffect(() => {
@@ -35,8 +33,8 @@ export function useRunReviewRailRefresh({
     // that slot's identity as already painted would lose its rail refresh.
     // This also seeds refreshed/remounted trees without a refresh loop.
     for (const taskId of initialReviewTaskIds ?? []) tasks.add(taskId);
-    if (!enabled || !reviewTaskId || tasks.has(reviewTaskId)) return;
+    if (!refresh || !reviewTaskId || tasks.has(reviewTaskId)) return;
     tasks.add(reviewTaskId);
-    router.refresh();
-  }, [enabled, initialReviewTaskIds, reviewTaskId, router, runId]);
+    refresh();
+  }, [initialReviewTaskIds, refresh, reviewTaskId, runId]);
 }

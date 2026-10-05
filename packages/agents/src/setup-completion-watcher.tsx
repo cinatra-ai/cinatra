@@ -306,8 +306,8 @@ export function SetupCompletionWatcher({
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
-      // This watcher is the run-page host; conversation panels never enable it.
-      refreshReviewRail
+      // This page owner already has a router; conversation panels do not need one.
+      refreshReviewRail={router.refresh}
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}

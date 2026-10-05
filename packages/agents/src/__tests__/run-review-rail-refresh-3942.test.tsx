@@ -4,8 +4,6 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refresh = vi.hoisted(() => vi.fn());
-const router = vi.hoisted(() => ({ refresh }));
-vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { parseRunReviewSlot } from "../lifecycle-card-runtime";
 import { useRunReviewRailRefresh } from "../use-run-review-rail-refresh";
@@ -26,7 +24,7 @@ function Probe({
     runId,
     reviewTaskId: slot?.reviewTaskId,
     initialReviewTaskIds: initialTasks,
-    enabled,
+    refresh: enabled ? refresh : undefined,
   });
   return null;
 }

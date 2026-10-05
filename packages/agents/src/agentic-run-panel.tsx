@@ -268,7 +268,7 @@ export type AgenticRunPanelProps = {
    */
   initialReviewGate?: RunReviewSlot | null;
   /** Recompose the run-page rail when the existing reading finds a new gate. */
-  refreshReviewRail?: boolean;
+  refreshReviewRail?: () => void;
   /**
    * HOW THIS SURFACE READS THE SLOT, when the run finishes while the card is on
    * screen. A first-party, same-origin surface (the run page) passes none and
@@ -491,7 +491,7 @@ export function AgenticRunPanel({
   initialHitlContext,
   recommendationDecided,
   initialReviewGate,
-  refreshReviewRail = false,
+  refreshReviewRail,
   readReviewSlot,
   onReviewReadingChange,
   inputStepInRail = false,
@@ -1935,7 +1935,7 @@ export function AgenticRunPanel({
     runId,
     reviewTaskId,
     initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
-    enabled: refreshReviewRail && !widgetHostedPanel,
+    refresh: widgetHostedPanel ? undefined : refreshReviewRail,
   });
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);
   onReviewReadingChangeRef.current = onReviewReadingChange;
