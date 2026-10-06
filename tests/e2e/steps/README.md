@@ -966,7 +966,9 @@ Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
   over the same fixture pages, which keeps the double honest. In the checks, the
   job **Step tests in a real browser** runs them with the switch set for every
   pull request that changes a file here other than Markdown: first on the page
-  double, then with the switch. It fails unless every case passed, so in that
+  double, then with the switch. Both runs receive `E2E_STEPS_UNIT_DATABASE_URL`
+  from a job-scoped PostgreSQL service at its mapped host port, so the real
+  `readRows` database cases run too. It fails unless every case passed, so in that
   job a browser that cannot be launched is a failure, not a skip, and the
   required `build` check fails with it. Any other pull request skips the job;
   the selection line of **Detect CI impact (build-image)** names the reason.

@@ -2973,8 +2973,9 @@ jobs:
   # skip that detect selected. No branch-protection context changes.
   #
   # SHAPE: the E2E class and the cached Chromium install the browser suites use.
-  # No database, server or companion extension repos: the tests import Node's
-  # builtins, their own files, vitest and Playwright. The page double runs
+  # A job-scoped PostgreSQL service supplies the real read-rows cases; its
+  # random host port is exported before both runs. No app server or companion
+  # extension repos are needed. The page double runs
   # first, so a broken double fails before a browser is installed. A browser
   # that cannot be launched does not fail the browser cases, it SKIPS them
   # (tests/e2e/steps/__tests__/backends.mjs), and vitest passes a run with
@@ -2993,7 +2994,27 @@ jobs:
     # cinatra#3364), a few minutes for the Chromium install and the two test
     # runs (not yet measured on CI), and the 5-minute margin.
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          # Container-only port: the runner maps a free host port per job.
+          - "5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
+      # job.services is available here, not in a job-level env block.
+      - name: Export the mapped step-test database port
+        run: |
+          echo "E2E_STEPS_UNIT_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # No authenticated git runs after the checkout.
