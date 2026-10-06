@@ -368,6 +368,33 @@ test("the computed dark section-rule contrast matches the light reading", async 
       }
       throw new Error("section rule has no measurable ancestor ground");
     });
+    // Use the browser's real color conversion for computed modern colors.
+    // Read alpha separately before canvas conversion: 8-bit alpha would admit .999.
+    const normalized = await page.evaluate(({ ink, ground }) => {
+      const normalize = (color: string) => {
+        if (!CSS.supports("color", color)) throw new Error(`unreadable color: ${color}`);
+        const modern = color.trim().match(/^(lab|oklab|oklch)\(([^()]*)\)$/i);
+        if (!modern) return color;
+        const parts = modern[2].split("/");
+        if (parts.length > 2) throw new Error(`unreadable color: ${color}`);
+        const number = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?";
+        const rawAlpha = parts[1]?.trim();
+        if (rawAlpha !== undefined && !new RegExp(`^${number}%?$`, "i").test(rawAlpha)) throw new Error(`unreadable alpha: ${color}`);
+        const alpha = rawAlpha === undefined ? 1 : Number.parseFloat(rawAlpha) / (rawAlpha.endsWith("%") ? 100 : 1);
+        if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) throw new Error(`unreadable alpha: ${color}`);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("color conversion context is unavailable");
+        context.fillStyle = color;
+        context.fillRect(0, 0, 1, 1);
+        const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      };
+      return { ink: normalize(ink), ground: normalize(ground) };
+    }, paint);
+    paint.ink = normalized.ink;
+    paint.ground = normalized.ground;
     expect(parseCssColor(paint.ink), `${theme}: rule ink must parse`).not.toBeNull();
     expect(parseCssColor(paint.ground)?.a, `${theme}: measured ground must be opaque`).toBe(1);
     const ratio = contrastAgainst(paint.ink, paint.ground);

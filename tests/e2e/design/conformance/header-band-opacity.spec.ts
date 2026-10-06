@@ -26,7 +26,26 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 
-import { parseCssColor } from "../../../../src/lib/color-contrast";
+import { parseCssColor as parseLegacyCssColor } from "../../../../src/lib/color-contrast";
+
+/** Read computed modern colors without rounding a nearly opaque alpha to 1. */
+function parseCssColor(input: string) {
+  const modern = input.trim().match(/^(lab|oklab|oklch)\(([^()]*)\)$/i);
+  if (!modern) return parseLegacyCssColor(input);
+  const parts = modern[2].split("/");
+  if (parts.length > 2) return null;
+  const number = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?";
+  const coordinates = parts[0].trim().split(/\s+/);
+  if (coordinates.length !== 3 || coordinates.some((value, index) =>
+    !new RegExp(`^${number}${modern[1].toLowerCase() === "oklch" && index === 2 ? "(?:deg)?" : "%?"}$`, "i").test(value),
+  )) return null;
+  if (coordinates.some(value => !Number.isFinite(Number.parseFloat(value)))) return null;
+  const rawAlpha = parts[1]?.trim();
+  if (rawAlpha !== undefined && !new RegExp(`^${number}%?$`, "i").test(rawAlpha)) return null;
+  const alpha = rawAlpha === undefined ? 1 : Number.parseFloat(rawAlpha) / (rawAlpha.endsWith("%") ? 100 : 1);
+  if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) return null;
+  return { a: alpha };
+}
 
 const FIXTURE = "/design-fixtures/header-rule?controls=header";
 
