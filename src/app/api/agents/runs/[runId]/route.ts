@@ -131,7 +131,8 @@ async function seedResponse(
   // The card is a placeholder for the review screen while the agent works and
   // becomes that screen when the work opens one, so the run's own seed has to
   // carry the answer — the card must not have to ask a model, and a person must
-  // not have to ask for it in a new turn. Two values and nothing else:
+  // not have to ask for it in a new turn. The same read also carries the
+  // stable task identity used to refresh the run page's server-built rail:
   //
   //   `ref`      — the SERVER-MINTED opaque ticket for this run's own review
   //                gate, minted here exactly as the run screen mints it, from
@@ -142,6 +143,10 @@ async function seedResponse(
   //   `awaiting` — the run produced something whose review question is still
   //                open in the outbox. It is what holds the placeholder up
   //                between `completed` and the gate row existing.
+  //
+  //   `reviewTaskId` — stable display-refresh identity (#3942). A ref has a
+  //                    fresh nonce on every read; this id dedupes those reads.
+  //                    It is not an action reference or an authority token.
   //
   // An instance with no app secret cannot mint a ref; the field is then null and
   // the card draws its terminal rendering, which is the same answer this route
@@ -241,6 +246,7 @@ async function seedResponse(
       // a slot read that throws answers `false`, which is the reading this route
       // gave before the field existed.
       producedReviewPark,
+      reviewTaskId: reviewSlot.reviewTaskId,
     },
   });
 }
