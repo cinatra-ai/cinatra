@@ -1,4 +1,7 @@
-import { GENERATED_ARTIFACT_KIND_LABELS } from "@/lib/generated/artifact-kind-labels";
+import {
+  GENERATED_ARTIFACT_KIND_CLAIMS,
+  GENERATED_ARTIFACT_KIND_LABELS,
+} from "@/lib/generated/artifact-kind-labels";
 
 // ---------------------------------------------------------------------------
 // THE ONE artifact-kind label (border correction, epic cinatra#2926 / #3023).
@@ -8,7 +11,9 @@ import { GENERATED_ARTIFACT_KIND_LABELS } from "@/lib/generated/artifact-kind-la
 // declared, not inferred. So the name of an artifact KIND — "Archive", "Slide
 // Deck", "PDF" — is READ from the pack's own `cinatra.displayName`, carried
 // here by the manifest generator as the import-free
-// `GENERATED_ARTIFACT_KIND_LABELS` map.
+// `GENERATED_ARTIFACT_KIND_LABELS` map. The second carried declaration is
+// `GENERATED_ARTIFACT_KIND_CLAIMS`, consulted only for a full type id a pack
+// claims in another package's namespace, which then reads that pack's own name.
 //
 // The host's package-id derivation survives only as the NEVER-BLANK FLOOR for a
 // pack that has declared nothing, and a floored result SAYS SO (`source:
@@ -106,9 +111,31 @@ function derivedKindLabel(id: string): string {
  * declaring repository's own change, never a host rewrite.
  */
 export function resolveArtifactKindLabel(id: string): ResolvedArtifactKindLabel {
-  const declared = GENERATED_ARTIFACT_KIND_LABELS[artifactKindLabelPackageId(id)];
+  return resolveArtifactKindLabelFrom(
+    id,
+    GENERATED_ARTIFACT_KIND_LABELS,
+    GENERATED_ARTIFACT_KIND_CLAIMS,
+  );
+}
+
+/**
+ * The same one-way precedence over injected maps: the id's own package
+ * declaration, then — only for a full type id the claims map names — the
+ * claiming pack's own declaration (cinatra#3033), then the floor.
+ */
+export function resolveArtifactKindLabelFrom(
+  id: string,
+  labels: Readonly<Record<string, string>>,
+  claims: Readonly<Record<string, string>>,
+): ResolvedArtifactKindLabel {
+  const declared = labels[artifactKindLabelPackageId(id)];
   if (typeof declared === "string" && declared.trim().length > 0) {
     return { label: declared.trim(), source: "declared" };
+  }
+  const claimant = claims[id.trim()];
+  const claimed = typeof claimant === "string" ? labels[claimant] : undefined;
+  if (typeof claimed === "string" && claimed.trim().length > 0) {
+    return { label: claimed.trim(), source: "declared" };
   }
   return { label: derivedKindLabel(id), source: "floor" };
 }

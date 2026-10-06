@@ -90,7 +90,7 @@
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
       "repo": "cinatra-ai/blog-post-artifact",
-      "resolvedSha": "3d2094e69a7d2b65815ba67835a1ab5cf0f7580b"
+      "resolvedSha": "846415dae29e14753bbd6f75096f10d3a2a6be36"
     },
     {
       "packageName": "@cinatra-ai/blog-post-matcher-skill",
@@ -260,7 +260,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
       "repo": "cinatra-ai/linkedin-artifacts",
-      "resolvedSha": "9f9874b53c010361b7ae8c7a865df66c65b6f33f"
+      "resolvedSha": "56fb7f6bce61e9415032108a5839c15a9306f41c"
     },
     {
       "packageName": "@cinatra-ai/linkedin-connector",
