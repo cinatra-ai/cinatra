@@ -181,7 +181,7 @@
             "data-conformance-id=\"review-gate-placeholder\"",
             "aria-busy=\"true\"",
             "Agentic Run Progress",
-            "<LoadingSpinner className=\"size-4\" />"
+            "className=\"size-[22px] animate-spin text-primary\""
           ]
         }
       ]

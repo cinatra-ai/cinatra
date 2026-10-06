@@ -88,6 +88,7 @@ const row = vi.hoisted(() => ({
   required: [] as string[],
   templateType: "orchestrator" as "orchestrator" | "agent",
   awaiting: true,
+  producedReviewPark: false,
   openGateDuringSlotRead: false,
 }));
 
@@ -180,6 +181,7 @@ function makeRun() {
     runBy: "user-1",
     status: row.status,
     inputParams: { idea: "a post about rails" },
+    producedReviewPark: row.producedReviewPark ? { status: "completed" } : null,
     stepResults: null,
     startedAt: new Date("2026-01-01"),
     completedAt: null,
@@ -245,7 +247,14 @@ vi.mock("../auth-policy", () => ({
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
 }));
 
-vi.mock("../artifact-review-gate-store", () => ({
+// The merged page reads its run-made artifacts as well; keep that datastore
+// seam inert while asserting the real review rail and panel composition.
+vi.mock("@/lib/artifacts/run-made-artifacts", () => ({
+  listRunMadeArtifacts: vi.fn(async () => []),
+}));
+
+vi.mock("../artifact-review-gate-store", async () => ({
+  isParkedOnProducedReview: (await import("../run-produced-review-hold")).isParkedOnProducedReview,
   listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
   readReviewGate: vi.fn(async () => null),
   readRunReviewSlot: vi.fn(async () => {
@@ -375,6 +384,7 @@ beforeEach(() => {
   row.required = [];
   row.templateType = "orchestrator";
   row.awaiting = true;
+  row.producedReviewPark = false;
   row.openGateDuringSlotRead = false;
   reviewGates.rows = [];
   verifications.rows = [];
@@ -392,6 +402,7 @@ beforeEach(() => {
         ref: reviewGates.rows.length ? `fresh-opaque-ref-${fetches.mock.calls.length}` : null,
         reviewTaskId: reviewGates.rows.at(-1)?.reviewTaskId ?? null,
         awaiting: row.awaiting,
+        producedReviewPark: row.producedReviewPark,
       },
     }),
   }));
@@ -442,6 +453,32 @@ function pendingGate(container: HTMLElement, taskId = REVIEW_TASK_ID) {
 
 for (const host of ["orchestrator", "agent"] as const) {
   describe(`the ${host} run page after first paint`, () => {
+    it.each(["no interrupt", "spent non-review interrupt"])("pending produced-review park with %s adds its later gate to the real rail", async (interrupt) => {
+      row.templateType = host;
+      row.status = "pending_approval";
+      row.producedReviewPark = true;
+      live.snapshot = {
+        ...live.snapshot,
+        status: "pending_approval",
+        interruptContext: interrupt === "no interrupt" ? null : {
+          schema: { type: "object" },
+          xRenderer: "cinatra/approval",
+          values: {},
+        },
+      };
+      const { container } = await mountPage();
+      expect(topRail(container).querySelector("[data-rail-gated-step]")).toBeNull();
+      await waitFor(() => expect(fetches).toHaveBeenCalled());
+      reviewGates.rows = [gateRow("pending")];
+      await waitFor(() => expect(container.querySelector('[data-testid="review-gate-card"]')).not.toBeNull(), { timeout: 4000 });
+      await waitFor(() => expect(pendingGate(container)).not.toBeNull(), { timeout: 4000 });
+      await refreshWork;
+      expect(routerRefresh).toHaveBeenCalledTimes(1);
+      expect(renders).toHaveBeenCalledTimes(2);
+      expect(routerPush).not.toHaveBeenCalled();
+      expect(routerReplace).not.toHaveBeenCalled();
+    }, 11000);
+
     it("adds a later gate to the real pending rail without navigation", async () => {
       row.templateType = host;
       const { container } = await mountPage();
