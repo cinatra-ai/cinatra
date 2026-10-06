@@ -7,8 +7,8 @@ import { cleanup, render } from "@testing-library/react";
 
 // Measure shared component use without replacing its icon or markup.
 const sharedSpinner = vi.hoisted(() => vi.fn());
-vi.mock("@/components/ui/spinner", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/components/ui/spinner")>();
+vi.mock("@/components/ui/button", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/ui/button")>();
   return {
     ...actual,
     Spinner: (props: React.ComponentProps<typeof actual.Spinner>) => {

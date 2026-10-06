@@ -617,9 +617,22 @@ describe("required-extensions-cover-host-imports — the record road for a new s
   }
   const check = (root, env = PULL_REQUEST_RUN) => checkFloorAgainstBase({ repoRoot: root, env });
 
-  it("the permits file of this commit holds no records", () => {
+  it("the permits file of this commit holds exactly the records of the two mail connectors added to the system set", () => {
     const doc = JSON.parse(readFileSync(path.join(import.meta.dirname, "..", "..", "..", PERMIT_FILE), "utf8"));
-    expect(doc.permits).toEqual([]);
+    expect(doc.permits).toEqual([
+      {
+        list: PERMIT_LIST,
+        row: "@cinatra-ai/email-connector",
+        reason: "The mail delivery connector requires this outbound mail road, so it is always installed.",
+        pr: 3908,
+      },
+      {
+        list: PERMIT_LIST,
+        row: "@cinatra-ai/resend-connector",
+        reason: "The application's own account mails go through this connector, so it is always installed.",
+        pr: 3908,
+      },
+    ]);
   });
 
   it("an addition with its record in the same change PASSES, with a NOTICE naming row, reason and pull request", () => {

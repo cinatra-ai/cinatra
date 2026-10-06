@@ -3,8 +3,7 @@
 import { useRouter } from "next/navigation";
 import { CircleX } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
+import { Button, Spinner } from "@/components/ui/button";
 import {
   reviewBlockedCopy,
   reviewSettledCopy,
