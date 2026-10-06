@@ -38,10 +38,9 @@
           "aspect": "field",
           "field": "body",
           "source": "representation.body-markdown",
-          "reason": "display-not-registered",
-          "package": "@cinatra-ai/email-artifacts",
+          "reason": "island-rendered",
           "awaits": null,
-          "why": "The email body kind registers no artifact display on the default branch: its package declares field renderers for the mid-run form and no display block at all, so nothing draws this binding for a reviewer to read."
+          "why": "The email body kind now registers a display through its pinned package, a detail renderer and a list-row renderer, so the reason this reading is out of a harness's reach has changed rather than gone away: like every other per-kind reading of a review target, it is drawn by a SERVER component inside the review card's own credentialed island frame, which the card addresses through a single-use, authorised URL. A props-only harness mount cannot reach it, and this harness substitutes no transport of any kind."
         },
         {
           "surface": "review-card-email-body",
