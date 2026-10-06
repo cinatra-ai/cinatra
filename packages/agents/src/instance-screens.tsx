@@ -26,6 +26,7 @@ import {
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
+import { RunStartedRuns } from "./run-started-runs";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
@@ -1559,6 +1560,9 @@ export async function SetupScreen({
       redirect(named ? buildRunStepPath(home, named) : home);
     }
   }
+
+  const { readVisibleStartedRuns } = await import("./visible-started-runs");
+  const startedRuns = run ? await readVisibleStartedRuns(run, setupActor, setupRoles) : [];
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
   // run: there is nothing to ask, and the screen keeps the box it has today.
@@ -3181,6 +3185,7 @@ export async function SetupScreen({
               );
             })()}
           </div>
+          <RunStartedRuns rows={startedRuns} />
           </AgentPanelBody>
         ) : (
           // An empty-state notice is neither a form nor a control stack, so it

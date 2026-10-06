@@ -72,6 +72,13 @@ vi.mock("sonner", () => ({
 }));
 
 const RUN_ID = "run-3478";
+const startedRuns = vi.hoisted(() => ({
+  rows: [] as Array<{ id: string; agentDisplayName: string; status: string; href: string }>,
+  read: vi.fn(),
+}));
+vi.mock("../visible-started-runs", () => ({
+  readVisibleStartedRuns: async (...args: unknown[]) => { startedRuns.read(...args); return startedRuns.rows; },
+}));
 
 /**
  * THE RUN, AS THE STORE HOLDS IT — one row, mutated per reading, because the
@@ -405,6 +412,8 @@ class StubEventSource {
 }
 
 beforeEach(() => {
+  startedRuns.rows = [];
+  startedRuns.read.mockClear();
   vi.stubGlobal("EventSource", StubEventSource);
   row.status = "pending_approval";
   row.lifecycleMoment = "hitl";
@@ -1185,5 +1194,66 @@ describe("a step the reader selects opens its own card, never a blank run detail
 
     expect(detail.getAttribute("data-run-surface-selected-step")).toBe("recommendation");
     expectTheSkillsCard(detail);
+  });
+});
+
+
+describe("the actual run page's independent started-runs list (#3749)", () => {
+  it("draws exactly the authorized recorded children beneath the unchanged frame", async () => {
+    startedRuns.rows = [
+      { id: "scraper-run", agentDisplayName: "First started agent", status: "running", href: "/teams/child-team/agents/example/first-agent/scraper-run" },
+      { id: "finder-run", agentDisplayName: "Second started agent", status: "failed", href: "/projects/child-project/agents/example/second-agent/finder-run" },
+    ];
+    const { container } = await renderRunPage();
+    const list = container.querySelector('[data-conformance-id="run-started-runs"]');
+    expect(list).not.toBeNull();
+    expect(list!.querySelectorAll("li")).toHaveLength(2);
+    expect(Array.from(list!.querySelectorAll("a")).map(a => [a.textContent, a.getAttribute("href")])).toEqual(startedRuns.rows.map(r => [r.agentDisplayName, r.href]));
+    expect(Array.from(list!.querySelectorAll('[data-field="state"]')).map(n => n.getAttribute("data-run-status"))).toEqual(["running", "failed"]);
+    const frame = container.querySelector('[data-conformance-id="run-surface"]');
+    expect(frame).not.toBeNull();
+    expect(frame!.contains(list)).toBe(false);
+    expect(frame!.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(startedRuns.read).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: RUN_ID, orgId: "org-1" }), expect.objectContaining({ userId: "user-1" }), expect.objectContaining({ actorOrganizationId: "org-1" }));
+  });
+  it.each(["pending", "resolved"] as const)("keeps the produced-review park's record state when the child list is present (%s)", async gateStatus => {
+    const { encodeProducedReviewPark } = await vi.importActual<
+      typeof import("../run-produced-review-hold")
+    >("../run-produced-review-hold");
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    row.producedReviewPark = encodeProducedReviewPark({ status: "completed" });
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow(gateStatus)];
+    startedRuns.rows = [
+      { id: "child-run", agentDisplayName: "Started agent", status: "failed", href: "/projects/child-project/agents/example/child/child-run" },
+    ];
+
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const steps = Array.from(columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"));
+    const made = steps.find(el => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(steps[steps.length - 1]).toBe(made);
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe(String(gateStatus === "resolved"));
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe(String(gateStatus === "resolved"));
+    const list = container.querySelector('[data-conformance-id="run-started-runs"]');
+    expect(list).not.toBeNull();
+    expect(list!.querySelector("a")!.getAttribute("href")).toBe(startedRuns.rows[0].href);
+    const frame = container.querySelector('[data-conformance-id="run-surface"]');
+    expect(frame!.contains(list)).toBe(false);
+    expect(frame!.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("draws no heading, list or empty-state copy when nothing was started", async () => {
+    const { container } = await renderRunPage();
+    expect(container.querySelector('[data-conformance-id="run-started-runs"]')).toBeNull();
+    expect(container.textContent).not.toContain("Runs this run started");
   });
 });

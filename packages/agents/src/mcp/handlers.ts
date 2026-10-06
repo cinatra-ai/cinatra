@@ -1097,10 +1097,11 @@ async function handleAgentBuilderRun(
     // consults the run-start recommendation hold, then dispatches; every other
     // frame creates and enqueues in one act, as before. The launch origin is
     // SERVER-DERIVED from this frame, never from the primitive's input.
+    const { runStartedByFromFrame } = await import("../run-started-by");
     const launched = await createAgentRunForLaunchFrame({
       frame: request.actor,
       create: {
-        id: runId,
+        id: runId, startedByRunId: runStartedByFromFrame(mcpRequestContextStorage.getStore()),
         templateId: resolvedTemplateId,
         versionId: latestVersionId,
         inputParams: inputParamsParsed,

@@ -98,6 +98,7 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     a2aTaskId: row.a2aTaskId ?? null,
     a2aContextId: row.a2aContextId ?? null,
     parentRunId: row.parentRunId ?? null,
+    startedByRunId: row.startedByRunId ?? null,
     agUiEnabled: row.agUiEnabled ?? null,
     lgThreadId: row.lgThreadId ?? null,
     traceId: row.traceId ?? null,
