@@ -81,7 +81,9 @@ for (const palette of PALETTES) {
         expect(reading.columnGap).toBe("8px");
         expect(["normal", "flex-start", "start"]).toContain(reading.justify);
         expect(["start", "left"]).toContain(reading.textAlign);
-        expect(reading.pillDisplay).toBe("inline-flex");
+        // A direct flex item is blockified: inline flex computes to block flex.
+        // CSS Display 3 §2.7: https://www.w3.org/TR/css-display-3/#blockify
+        expect(reading.pillDisplay).toBe("flex");
         expect(reading.row.width).toBeGreaterThan(0);
         expect(reading.pill.height).toBeGreaterThan(0);
         expect(reading.sentence.height).toBeGreaterThan(0);
