@@ -227,7 +227,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | crm-migration-gate.yml | gate | name%3AOAS%20banned-primitives%20gate%20tests | 152 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3ACRM%20pointer-row%20gate%20tests | 155 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
 | dashboard-live-verify.yml | smoke | id%3Ae2e | 440 | CI_RUNNER_E2E | playwright | playwright | none |
-| dev-hmr-smoke.yml | hmr-smoke | name%3ARun%20warm%20dev-session%20HMR%20smoke%20(Playwright) | 192 | CI_RUNNER_E2E | playwright | playwright | none |
+| dev-hmr-smoke.yml | hmr-smoke | name%3ARun%20warm%20dev-session%20HMR%20smoke%20(Playwright) | 190 | %24%7B%7B%2C%20(github.event_name%2C%20!%3D%2C%20pull_request%2C%20%7C%7C%2C%20github.event.pull_request.head.repo.full_name%2C%20%3D%3D%2C%20github.repository)%2C%20%26%26%2C%20fromJSON(vars.CI_RUNNER_DEV_SMOKE%2C%20%7C%7C%2C%20ubuntu-latest)%2C%20%7C%7C%2C%20ubuntu-latest%2C%20%7D%7D | playwright | playwright | none |
 | e2e-app-suites.yml | render-smoke-e2e | id%3Ae2e | 318 | CI_RUNNER_E2E | playwright | playwright | none |
 | e2e-app-suites.yml | notifications-e2e | id%3Ae2e | 541 | CI_RUNNER_E2E | playwright | playwright | none |
 | e2e-app-suites.yml | agents-run-invariants | name%3ARun%20agents-run%20tunnel-wiring%20invariant | 610 | CI_RUNNER_E2E | playwright | playwright | none |

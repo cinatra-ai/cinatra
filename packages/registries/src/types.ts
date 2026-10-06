@@ -150,6 +150,8 @@ export type AgentPackageSummary = {
   deprecated: boolean;
   // Marketplace metadata
   author: string | null;
+  /** Human vendor identity declared by the extension, distinct from npm author. */
+  vendorName?: string | null;
   kind: "agent" | "skill" | "connector" | "artifact" | "workflow" | null;
   /**
    * Marketplace origin metadata (visibility + scope). Null when the

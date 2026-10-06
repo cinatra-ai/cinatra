@@ -291,13 +291,13 @@ for (const backend of BACKENDS) {
       });
     });
 
-    it("finds a search field with no accessible name by its placeholder, and again by its mark once the typed text has hidden the placeholder", async () => {
+    it("finds a search field by its browser-computed placeholder name, and again by its mark once the typed text has hidden the placeholder", async () => {
       await scene(backend, {}, async ({ app, page, record, lines }) => {
         const selectFrom = await start(page, app, "/pick/search");
         const result = await selectFrom(page, { picker: "Search people…", entry: "Alan Turing", record, bounds: BOUNDS });
         expect(result).toMatchObject({ picker: "Search people…", entry: "Alan Turing", kind: "search", via: "state", path: "/pick/search" });
         expect(lines).toEqual([
-          'selectFrom: selected "Alan Turing" in the picker "Search people…" (a combobox with no accessible name, found by its placeholder) on /pick/search — ' +
+          'selectFrom: selected "Alan Turing" in the picker "Search people…" on /pick/search — ' +
             `the page draws it after ${result.elapsedMs} ms`,
         ]);
         // The page drew a chip that names the entry in the field's place.
@@ -310,7 +310,7 @@ for (const backend of BACKENDS) {
       });
     });
 
-    it("finds a search field with no accessible name by the label before it, reads the entry back from the field, and then finds the field by that value", async () => {
+    it("finds a search field with only a placeholder name by the label before it, reads the entry back from the field, and then finds the field by that value", async () => {
       await scene(backend, {}, async ({ app, page, record, lines }) => {
         const selectFrom = await start(page, app, "/pick/search");
         const first = await selectFrom(page, { picker: "Reviewer", entry: "Grace Hopper", record, bounds: BOUNDS });
@@ -318,9 +318,9 @@ for (const backend of BACKENDS) {
         const second = await selectFrom(page, { picker: "Grace Hopper", entry: "Grace Kelly", record, bounds: BOUNDS });
         expect(second).toMatchObject({ picker: "Grace Hopper", entry: "Grace Kelly", kind: "search", via: "state" });
         expect(lines).toEqual([
-          'selectFrom: selected "Grace Hopper" in the picker "Reviewer" (a combobox with no accessible name, found by the label before it) on /pick/search — ' +
+          'selectFrom: selected "Grace Hopper" in the picker "Reviewer" (a combobox with no explicit accessible name, found by the label before it) on /pick/search — ' +
             `the field shows it after ${first.elapsedMs} ms`,
-          'selectFrom: selected "Grace Kelly" in the picker "Grace Hopper" (a combobox with no accessible name, found by its value) on /pick/search — ' +
+          'selectFrom: selected "Grace Kelly" in the picker "Grace Hopper" (a combobox with no explicit accessible name, found by its value) on /pick/search — ' +
             `the field shows it after ${second.elapsedMs} ms`,
         ]);
         const after = await page.evaluate(() => ({

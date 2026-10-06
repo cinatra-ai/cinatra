@@ -95,7 +95,7 @@ for (const backend of BACKENDS) {
         const error = await refusal(sendInComposer(page, { prompt: PROMPT, composer: COMPOSER_NAME, record, bounds: { ...BOUNDS, composerMs: 300 } }));
         expect(error.kind).toBe("no-composer");
         expect(error.message).toBe(
-          `sendInComposer refused (no-composer): no shown text box on /conversation/boxes is named ${NAMED} within 300 ms — the text boxes it shows: "Notes", one without a name; nothing was typed`,
+          `sendInComposer refused (no-composer): no shown text box on /conversation/boxes is named ${NAMED} within 300 ms — the text boxes it shows: "Notes", "Type a message..."; nothing was typed`,
         );
         expect(lines).toEqual([error.message]);
       });

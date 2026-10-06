@@ -35,6 +35,7 @@
 // even when the answer stands before the wait begins.
 import {
   CONTROL_ACTION_BOUND_MS,
+  CONTROL_HYDRATION_BOUND_MS,
   CONTROL_MARK,
   CONTROL_NAMES_LISTED,
   CONTROL_POLL_MS,
@@ -45,9 +46,10 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unmarkControls,
   unspacedNote,
+  waitForPageHydration,
 } from "./page-controls.mjs";
 import { READING_BOUND_MS, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
 
@@ -137,8 +139,12 @@ export async function typeThrough(page, { step, record, field, text, replace, se
     note: "",
   };
   /** @returns {Promise<any>} */
-  const read = (note = "") => within(page.evaluate(readControls, { ...query, note }), READING_BOUND_MS);
+  const read = (note = "") => within(readPageControls(page, { ...query, note }), READING_BOUND_MS);
   const named = quotedName(field);
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(step, record, "unreadable", `the page on ${pathOf(page.url())} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   try {
     // The box, shown with its name: a window mounts once its page has loaded.
     const waitedFrom = performance.now();
