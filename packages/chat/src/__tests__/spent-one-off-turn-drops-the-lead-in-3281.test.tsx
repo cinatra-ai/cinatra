@@ -31,7 +31,7 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, configure, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, waitFor } from "@testing-library/react";
 
 configure({ asyncUtilTimeout: 15_000 });
 
@@ -448,4 +448,52 @@ describe("cinatra#3281 — the sentence leaves when the card does", () => {
     expect(visibleText(result.container)).toContain(MODEL_LEAD_IN);
     expect(visibleText(result.container)).not.toContain(SPENT_ONE_OFF_SENTENCE);
   }, 60_000);
+});
+
+
+it("keeps one flat proposal turn through first-shown, configured and spent readings", async () => {
+  // Only the server answer changes. Focus is the shipped re-read signal;
+  // neither the conversation nor its message is remounted between readings.
+  let envelope: Record<string, unknown> = {
+    kind: "trigger_schedule_proposal",
+    state: { state: "pending", canDecide: true, canComment: true },
+    body: {
+      phase: "proposal", version: 1, agentName: "Q3 cohort sweep",
+      schedule: { kind: "scheduled", runAt: "2026-07-14T09:00", timezone: "Europe/Berlin" },
+      durationCopy: null, canConfirm: true, restrictedReason: null, runPending: true,
+    },
+    firedOnce: false,
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/agents/runs/")) return jsonResponse(RUN_PAST_SCHEDULE);
+    if (url === "/api/lifecycle-views/resolve") return jsonResponse(envelope);
+    return jsonResponse({}, 404);
+  }) as typeof fetch;
+  const { container } = await mountSurface("chat", { messages: flatProposalTurn(), slackMode: true });
+  const cardSelector = '[data-conformance-id="schedule-proposal-card"]';
+  const assertReading = async (reading: string, sentence: string) => {
+    await waitFor(() => expect(container.querySelector(cardSelector)?.getAttribute("data-schedule-reading")).toBe(reading));
+    await waitFor(() => {
+      const blocks = assistantProseBlocks(container);
+      expect(blocks).toHaveLength(1);
+      expect(visibleText(blocks[0])).toBe(sentence);
+    });
+    expect(container.querySelectorAll(cardSelector)).toHaveLength(1);
+    expect(container.textContent).toContain(READER_REQUEST);
+  };
+  await assertReading("first-shown", MODEL_LEAD_IN);
+  envelope = {
+    kind: "trigger_schedule_proposal", state: { state: "settled" },
+    body: { ...ONE_OFF_BODY, released: false }, firedOnce: false,
+  };
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await assertReading("configured", MODEL_LEAD_IN);
+  envelope = {
+    kind: "trigger_schedule_proposal", state: { state: "settled" },
+    body: ONE_OFF_BODY, firedOnce: true,
+  };
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await assertReading("fired-one-off", SPENT_ONE_OFF_SENTENCE);
+  expect(container.textContent).not.toContain(MODEL_LEAD_IN);
 });
