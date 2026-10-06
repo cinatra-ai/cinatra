@@ -1058,13 +1058,34 @@ async function deriveMembers(
             userId: intent.userId,
           })
         : null;
+      // THE ASSISTANT DELIVERY SEAM (cinatra#2815 S3, epic #2812).
+      //
+      // This branch used to derive required + declared-edge + personal-delta
+      // members only, so an assignment made for an assistant on a scope page
+      // reached agent runs and silently missed every conversation. It now
+      // consumes the SAME scoped assignment store through the SAME snapshot
+      // chain and effective-5 cap as an agent run, at `recommendation` rank and
+      // under this contract's unchanged ceiling of 8 — so the required bundle
+      // and a declared edge still outrank an assignment for the last slot,
+      // exactly as they do on the agent-run branch.
+      //
+      // The assistant's scope resolves through the THREAD (the port is handed
+      // the session id, never a mutable column), and this port is the ONLY new
+      // source: assistants take no context artifacts, and this contract has no
+      // context port for one to arrive through.
+      const assigned = ports.resolveAssistantAssignedSkills
+        ? await ports.resolveAssistantAssignedSkills({
+            agentId: intent.agentId,
+            sessionId: intent.sessionId,
+          })
+        : [];
       return {
         delta: toDeltaMember(delta),
         declaredDependencies: [
           ...toMembers(required, "declared_dependency"),
           ...toMembers(declaredEdges, "declared_dependency"),
         ],
-        recommendations: [],
+        recommendations: toMembers(assigned, "recommendation"),
       };
     }
 

@@ -112,7 +112,6 @@ export async function ExtensionSettingsScreen({
   };
 
   const isArchived = row.status === "archived";
-  const isPublic = row.visibility === "public";
 
   // cinatra#2416 — SERVER-DERIVED per-affordance capability.
   //
@@ -336,10 +335,17 @@ export async function ExtensionSettingsScreen({
   // Marketplace vendor status (best-effort — a marketplace read failure must
   // not blank the page; the publish action stays muted behind the register
   // affordance).
+  //
+  // cinatra#3447: the §V Marketplace group draws the publish action in one of
+  // its three drawn states for EVERY installed extension, chosen by the vendor
+  // status and whether this extension can be published. §V draws no "already
+  // published" state, so the row's stored visibility never draws a state of
+  // its own. It enters only `canPublishToMarketplace`, as the promote action's
+  // own refusal of a row its store already records as public.
   const vendorStatus = await readMarketplaceVendorStatus().catch(() => null);
   const isRegisteredVendor = isRegisteredMarketplaceVendor(vendorStatus?.state);
   const canPublish = canPublishToMarketplace({
-    isPublic,
+    isPublic: row.visibility === "public",
     isRegisteredVendor,
     kind: extKind,
     versionKnown,
@@ -445,7 +451,6 @@ export async function ExtensionSettingsScreen({
       lifecycleCapabilityReasons={capabilityReasons}
       recovery={recovery}
       archiveDependents={archiveDependents}
-      isPublic={isPublic}
       isRegisteredVendor={isRegisteredVendor}
       canPublish={canPublish}
       permissions={permissions}

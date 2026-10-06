@@ -1,12 +1,31 @@
+import { builtForProduction } from "./build-target";
+
 export type AppRuntimeMode = "development" | "production";
 
-const APP_RUNTIME_MODE_ENV_KEYS = ["CINATRA_RUNTIME_MODE", "APP_RUNTIME_MODE"] as const;
+/**
+ * The environment keys this app reads its runtime mode from, in precedence
+ * order. EXPORTED because the development-only provisioning gates read the
+ * operator's declaration from exactly these, in exactly this order. Those gates
+ * judge the declaration more strictly than the app does — deliberately, and
+ * only in the closed direction — but they and the app have to be reading the
+ * SAME declaration, and nothing pinned that while each file kept its own copy
+ * of the tuple.
+ */
+export const APP_RUNTIME_MODE_ENV_KEYS = [
+  "CINATRA_RUNTIME_MODE",
+  "APP_RUNTIME_MODE",
+] as const;
 
 export function normalizeAppRuntimeMode(value: string | null | undefined): AppRuntimeMode {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "production" || normalized === "prod" ? "production" : "development";
 }
 
+/**
+ * A key of APP_RUNTIME_MODE_ENV_KEYS that carries a non-blank value decides, the first in order.
+ * When none does, the build decides: an application built for production (NODE_ENV "production")
+ * runs in production mode, and every other process runs in development mode.
+ */
 export function getAppRuntimeMode(): AppRuntimeMode {
   for (const key of APP_RUNTIME_MODE_ENV_KEYS) {
     const value = process.env[key];
@@ -15,7 +34,7 @@ export function getAppRuntimeMode(): AppRuntimeMode {
     }
   }
 
-  return "development";
+  return builtForProduction() ? "production" : "development";
 }
 
 export function isAppDevelopmentMode() {

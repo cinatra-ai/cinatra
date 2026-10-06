@@ -42,7 +42,15 @@ const project: CatalogSurface = {
   userId: USER,
 };
 
-const ALL: CatalogSurface[] = [personal, team, organization, project];
+const workspace: CatalogSurface = {
+  kind: "workspace",
+  orgId: ORG,
+  userId: USER,
+};
+
+// EVERY kind of the union (cinatra#2811 added `workspace`). The suites below
+// sweep this roster, so a new kind that reaches no arm fails here.
+const ALL: CatalogSurface[] = [personal, team, organization, project, workspace];
 
 describe("vantageForSurface", () => {
   it("projects each surface onto its access vantage, carrying only its own axis", () => {

@@ -249,6 +249,8 @@ describe("the setup run page draws the run surface, not a single column", () => 
       // minted is a reading too — it must not offer to arm a schedule the
       // reader cannot currently see.
       "readOnly={scheduleFrozen || scheduleTabSurface}",
+      // cinatra#3693: the form starts a scoped run under the screen's scope base.
+      "scopeBase={scopeBase ?? null}",
     ]);
     // ONE mount in the whole screen: the step owns the form, and no second
     // column draws a copy of it.
@@ -323,6 +325,10 @@ describe("the setup run page draws the run surface, not a single column", () => 
     expect(TRIGGER_SCREEN).toContain(
       "const reviewStepReading = runReviewStepReading(runReviewSlot);",
     );
+    // cinatra#3046 — and the run page hands the panel the slot's THIRD fact with
+    // the other two, so a run parked on the review of what it produced draws that
+    // review on the FIRST paint instead of a frame of the question it answered.
+    expect(SCREEN_SRC).toContain("producedReviewPark: isParkedOnProducedReview(run),");
   });
 
   it("opens the skills step exactly when the run HAS a recommendation to show", () => {

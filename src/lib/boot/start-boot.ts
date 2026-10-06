@@ -21,6 +21,16 @@
  * reported here rather than thrown, because nothing is waiting to catch it —
  * the readiness surface carries the failing phase and `/api/health` answers 503.
  *
+ * THE AUTH CONTEXT COMES FIRST. The authentication module reads its boot-time
+ * Google OAuth settings while Better Auth builds its context, so that context is
+ * what carries a read that cannot be answered. The boot WAITS for it here,
+ * before either rule below applies, and a context that rejects rejects
+ * `startBoot()` in every runtime — the development server included — so a failed
+ * read fails the boot instead of leaving the process serving a context that can
+ * only reject. The context is handed in by the framework entry point rather than
+ * imported here, which keeps the authentication graph off every other caller of
+ * this module.
+ *
  * ONE BOOT PER PROCESS. The development server re-invokes the instrumentation
  * hook (a hot reload does it, and the route-tree repair above deliberately
  * touches a file under `src/app`). While the boot was awaited that was
@@ -35,6 +45,12 @@ import { ensureDevRouteTreeResolves } from "@/lib/boot/dev-route-tree-repair";
 import { shouldAwaitBootInRegister } from "@/lib/boot/register-await-policy";
 
 export type StartBootDeps = {
+  /**
+   * The authentication module's context, awaited before the boot starts.
+   * REQUIRED, so no entry point can hand the boot a process whose auth context
+   * nobody ever waits for.
+   */
+  authContext: Promise<unknown>;
   boot?: () => Promise<void>;
   ensureRouteTree?: () => Promise<unknown>;
   logError?: (message: string, err: unknown) => void;
@@ -54,7 +70,7 @@ export function resetStartBootForTests(): void {
 
 export async function startBoot(
   env: Record<string, string | undefined> = process.env,
-  deps: StartBootDeps = {},
+  deps: StartBootDeps,
 ): Promise<void> {
   const boot = deps.boot ?? runBoot;
   const ensureRouteTree = deps.ensureRouteTree ?? ensureDevRouteTreeResolves;
@@ -70,8 +86,15 @@ export async function startBoot(
   // module exists to remove.
   if (inFlight) return detached ? undefined : inFlight;
 
+  // The auth context comes first, in both runtimes below: each chains its boot
+  // behind it, so a context that rejects never starts one. It is CHAINED rather
+  // than awaited on this line because the two rules below claim the boot
+  // synchronously — a call that suspended here first would let a second one
+  // start a second boot.
+  const authContextReady = deps.authContext.then(() => undefined);
+
   if (shouldAwaitBootInRegister(env)) {
-    inFlight = boot();
+    inFlight = authContextReady.then(() => boot());
     // A fatal phase must still abort startup, so the throw is not caught here —
     // but the remembered promise must not become an unhandled rejection for a
     // later caller that joins it.
@@ -80,16 +103,22 @@ export async function startBoot(
   }
 
   detached = true;
-  inFlight = ensureRouteTree()
-    .catch(() => undefined)
-    .then(() => boot())
-    .catch((err: unknown) => {
-      logError(
-        "[boot] the boot sequence failed. The readiness surface carries the failing phase and " +
-          "/api/health answers 503 until it is fixed.",
-        err,
-      );
-    });
-  // Detached ON PURPOSE: the development server must serve while this runs.
-  return Promise.resolve();
+  inFlight = authContextReady.then(() =>
+    ensureRouteTree()
+      .catch(() => undefined)
+      .then(() => boot())
+      .catch((err: unknown) => {
+        logError(
+          "[boot] the boot sequence failed. The readiness surface carries the failing phase and " +
+            "/api/health answers 503 until it is fixed.",
+          err,
+        );
+      }),
+  );
+  // The auth context is the caller's to carry — it is what this call returns —
+  // so the detached boot behind it must not surface as a second, unhandled one.
+  inFlight.catch(() => undefined);
+  // Detached ON PURPOSE: the development server must serve while the boot runs.
+  // It waits for the auth context, and for nothing after it.
+  return authContextReady;
 }
