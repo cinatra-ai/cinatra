@@ -40,6 +40,7 @@ import {
   type AgentTemplateRecord,
 } from "./store";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
+import { isParkedOnProducedReview } from "./run-produced-review-hold";
 
 export type HitlContext = {
   xRenderer: string;
@@ -66,7 +67,8 @@ const SETUP_FALLBACK_RENDERER = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
 /**
  * Derive the HITL context for a run, or null when the run is not paused on a
- * gate (status !== "pending_approval") .
+ * gate (status !== "pending_approval", or parked on the review of what it
+ * produced).
  *
  * `options.template` lets callers that already loaded the template (the REST
  * route reuses it for response metadata) avoid a second DB read; when
@@ -77,6 +79,14 @@ export async function deriveRunHitlContext(
   options?: { template?: AgentTemplateRecord | null },
 ): Promise<HitlContext | null> {
   if (run.status !== "pending_approval") return null;
+  // A RUN PARKED ON THE REVIEW OF WHAT IT PRODUCED IS ASKING NO QUESTION
+  // (cinatra#3007, fix leg 20). The park is written after the run's work is
+  // done, so its latest stored interrupt is a question the person already
+  // answered. Read as the gate the run is paused on, it was drawn and elected as
+  // the rail's current row while the pending review was not. The run panel and
+  // the HITL screen's reader already refuse it off the same predicate; this
+  // answers the same way at the one source every surface reads.
+  if (isParkedOnProducedReview(run)) return null;
 
   const interrupt = await readLatestAgUiInterrupt(run.id).catch(() => null);
   const runInputParams =

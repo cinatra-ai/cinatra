@@ -262,10 +262,15 @@ When a name matches several controls, the step acts on none of them: it refuses
 (`ambiguous`) and names where each one sits. The one control a step acts on
 carries the mark `data-step-control` for that act only. A refusal lists at most
 `CONTROL_NAMES_LISTED` (ten) names and counts the others.
+A step that marks a control first waits until the page has hydrated, by the
+reading React leaves on the page's rendered elements; a page with nothing to
+hydrate is read at once, and a page that does not hydrate within
+`CONTROL_HYDRATION_BOUND_MS` is refused as `unreadable`.
 
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `CONTROL_ACTION_BOUND_MS` | 10_000 | one press or one selection |
+| `CONTROL_HYDRATION_BOUND_MS` | 60_000 | from a step's first reading to the page's hydration |
 | `CONTROL_POLL_MS` | 100 | how often the page is read while a step waits |
 
 ## `press(page, { name, record, role?, within?, bounds? })`

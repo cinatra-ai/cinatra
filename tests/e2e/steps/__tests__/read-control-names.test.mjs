@@ -31,7 +31,7 @@ const START = [
   control("button", "Refresh", "title"),
   control("textbox", "Title", "label", "Shown on the card."),
   control("textbox", "Owner", "aria-labelledby"),
-  control("textbox", "", ""),
+  control("textbox", "Search plans", "placeholder"),
   control("combobox", "Size", "aria-label"),
   control("option", "Small", "text"),
   control("option", "Large", "text"),

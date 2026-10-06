@@ -1715,6 +1715,7 @@ describe("a settled card that knows its outcome", () => {
       const marker = container.querySelector('[data-conformance-id="review-gate-settled"]')!;
       expect(marker.textContent).toContain("Continued");
       expect(marker.textContent).toContain("Decided on the revision above.");
+      expect(container.textContent).not.toContain("The gate is resolved");
       expect(marker.getAttribute("data-review-outcome")).toBe(outcome);
       cleanup();
     }

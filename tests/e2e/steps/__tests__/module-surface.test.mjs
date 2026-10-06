@@ -47,6 +47,7 @@ const BOUND_NAMES = [
 STEP_NAMES.push("decideGate", "dispatchRun", "fillForm", "press", "readRows", "selectFrom", "switchTheme", "uploadFile");
 BOUND_NAMES.push(
   "CONTROL_ACTION_BOUND_MS",
+  "CONTROL_HYDRATION_BOUND_MS",
   "CONTROL_POLL_MS",
   "DISPATCH_RUN_BOUND_MS",
   "DISPATCH_RUN_COMPOSER_BOUND_MS",
