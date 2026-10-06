@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { CircleX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   reviewBlockedCopy,
   reviewSettledCopy,
@@ -368,37 +369,13 @@ export function ReviewGatePlaceholder({
           fills, and the arc that claims something is still coming does not. */}
       <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
         {settled ? null : (
-          // THE ARC, AND ONLY THE ARC (cinatra#3046, fix leg 12), DRAWN HERE
-          // RATHER THAN MOUNTED (fix leg 17; cinatra#3290). The drawn band holds
-          // one node: `viewBox 0 0 24 24`, `width:22px; height:22px`, a SINGLE
-          // stroked path in the indigo, spinning — the arc of Components
-          // § Skeleton / Spinner, to the path. What stood here before leg 12
-          // drew two things the drawing does not: a 30px `rounded-lg
-          // bg-mustard-ink/15` tile behind the arc, and — inside the older
-          // shared `LoadingSpinner` — a full `circle` at `stroke-opacity 0.25`,
-          // the grey track ring the arc runs on. The tenth graded reading
-          // measured both as undrawn chrome on the parked box in both palettes.
-          //
-          // AND IT STAYS DRAWN HERE, WHICH IS A DECISION, NOT AN OVERSIGHT. The
-          // registered `@/components/ui/spinner` is this same arc and would read
-          // identically on the surface; it is an icon-library component, and
-          // every suite that pins THIS box's arc stubs that library to null, so
-          // mounting it would make the one property these guards exist to
-          // measure — "the box draws the arc" — unmeasurable in exactly the
-          // place it is measured. The box therefore owns the node it is judged
-          // on. Its measures are the registered component's: `--primary`,
-          // 22px, spinning.
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.4"
-            strokeLinecap="round"
-            className="size-[22px] animate-spin text-primary"
+          // Use the registered arc, with the drawing's palette-invariant
+          // indigo rather than the action token (near-white in dark mode).
+          <Spinner
+            className="size-[22px] text-indigo-ink"
+            strokeWidth={2.4}
             aria-hidden="true"
-          >
-            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-          </svg>
+          />
         )}
       </div>
     </div>
