@@ -43,6 +43,7 @@ export type {
   HostUiPort,
   HostLoggerPort,
   HostRuntimePort,
+  HostDevInstanceIsolation,
   HostCapabilitiesPort,
   HostTelemetryPort,
   HostUsageEvent,

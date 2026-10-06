@@ -123,3 +123,12 @@ describe("resolveInstalledDisplayName (cinatra#1570 §VI card title)", () => {
     ).toBe("Default Artifact");
   });
 });
+
+describe("raw package IDs are fallback labels, not human titles (cinatra#3571)", () => {
+  it("uses the registry title when a connector descriptor only repeats its package ID", () => {
+    expect(resolveInstalledDisplayName({ nativeName: PKG, registryTitle: "JSON", manifestDisplayName: null, packageName: PKG })).toBe("JSON");
+  });
+  it("uses the manifest name when the registry has only its package-ID fallback", () => {
+    expect(resolveInstalledDisplayName({ nativeName: null, registryTitle: PKG, manifestDisplayName: "JSON", packageName: PKG })).toBe("JSON");
+  });
+});

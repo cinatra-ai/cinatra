@@ -14,12 +14,16 @@ const {
   readMetadataValueMock,
   ensureSchemaMock,
   getActiveConnectSiteByIdMock,
+  listActiveConnectSiteOriginsMock,
+  readInstanceIdentityMock,
 } = vi.hoisted(() => ({
   runPostgresQueriesSyncMock: vi.fn(),
   readConnectorConfigMock: vi.fn(),
   readMetadataValueMock: vi.fn(),
   ensureSchemaMock: vi.fn(),
   getActiveConnectSiteByIdMock: vi.fn(),
+  listActiveConnectSiteOriginsMock: vi.fn(),
+  readInstanceIdentityMock: vi.fn(),
 }));
 
 vi.mock("@/lib/postgres-config", () => ({
@@ -39,6 +43,12 @@ vi.mock("@/lib/database", () => ({
 }));
 vi.mock("@/lib/connect-sites-store", () => ({
   getActiveConnectSiteById: getActiveConnectSiteByIdMock,
+  // cinatra#3715 — the handshake rule's own reading (the frame gate's helper).
+  listActiveConnectSiteOrigins: listActiveConnectSiteOriginsMock,
+}));
+// cinatra#3715 — this application's own instance identity, as the SERVER reads it.
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentityRequiringInstanceId: readInstanceIdentityMock,
 }));
 
 import {
@@ -186,6 +196,10 @@ beforeEach(() => {
   runPostgresQueriesSyncMock.mockReset();
   runPostgresQueriesSyncMock.mockImplementation(runQueries);
   getActiveConnectSiteByIdMock.mockReset();
+  listActiveConnectSiteOriginsMock.mockReset();
+  listActiveConnectSiteOriginsMock.mockReturnValue([]);
+  readInstanceIdentityMock.mockReset();
+  readInstanceIdentityMock.mockReturnValue(null);
 });
 
 function mint(overrides: Partial<Parameters<typeof mintWidgetStreamToken>[0]> = {}) {
@@ -453,5 +467,164 @@ describe("widget-token-broker — connect-site (cnx_) cit_ path", () => {
   it("a legacy tokenConfigKey may NOT use the reserved connect_site: prefix (fail-closed mint → null)", () => {
     const forged: GeneratedWidgetStreamAuth = { ...WP_AUTH, tokenConfigKey: "connect_site:forged" };
     expect(mint({ auth: forged })).toBeNull();
+  });
+});
+
+// cinatra#3715 — a site connected through the handshake ONLY: its `connect_sites`
+// row exists, the connector holds NO instance for it, and the site holds this
+// application's own instance identity. The consume's configured-site re-check
+// answers for its connect-site-bound token through the SAME helper the frame gate
+// and the sign-in ask (`resolveHandshakeSiteBinding`), driven here for real over
+// stubbed stores; every other refusal keeps its reason.
+describe("widget-token-broker — cinatra#3715 handshake-connected site (connect_sites row only)", () => {
+  const SITE_ID = "22222222-2222-4222-8222-222222222222";
+  const OWN_INSTANCE_ID = "33333333-3333-4333-8333-333333333333";
+
+  function mintCnx(version = 1) {
+    return mintWidgetStreamToken({
+      agentSlug: "wordpress-content-editor",
+      auth: WP_AUTH,
+      origin: ORIGIN,
+      issuerBaseUrl: ISS,
+      connectSite: { siteId: SITE_ID, credentialVersion: version },
+    });
+  }
+
+  function liveSite(version: number, over: Partial<{ client: string; widgetOrigin: string }> = {}) {
+    return {
+      siteId: SITE_ID,
+      client: over.client ?? "wordpress",
+      widgetOrigin: over.widgetOrigin ?? ORIGIN,
+      callbackOrigin: null,
+      credentialVersion: version,
+      webhookSecretHash: null,
+      adminUserId: "u-1",
+      orgId: "org-1",
+      revokedAt: null,
+    };
+  }
+
+  beforeEach(() => {
+    // The connector holds NO instance for the site; only the handshake's row exists.
+    CONFIG.wordpress = { instances: [] };
+    readInstanceIdentityMock.mockReturnValue({ instanceId: OWN_INSTANCE_ID });
+    listActiveConnectSiteOriginsMock.mockReturnValue([ORIGIN]);
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(1));
+  });
+
+  it("consumes a connect-site-bound token of a handshake-only site at the chat audience", () => {
+    const minted = mintCnx(1);
+    const res = consume(minted!.token);
+    expect(res).toEqual(expect.objectContaining({ ok: true, origin: ORIGIN }));
+    // The helper read the site table by the entry's OWN connect client, never a
+    // request value.
+    expect(listActiveConnectSiteOriginsMock).toHaveBeenCalledWith("wordpress");
+    expect(readInstanceIdentityMock).toHaveBeenCalled();
+  });
+
+  it("consumes the same site's token after the site was also added under the connector", () => {
+    CONFIG.wordpress = {
+      instances: [
+        { id: "wp-1", name: "WP", siteUrl: ORIGIN, username: "admin", applicationPassword: "secret" },
+      ],
+    };
+    const minted = mintCnx(1);
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.origin).toBe(ORIGIN);
+  });
+
+  it("refuses when the connect client has ZERO active site origins — origin_unconfigured", () => {
+    listActiveConnectSiteOriginsMock.mockReturnValue([]);
+    const res = consume(mintCnx(1)!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("refuses when the connect client has SEVERAL active site origins — origin_unconfigured", () => {
+    listActiveConnectSiteOriginsMock.mockReturnValue([ORIGIN, "https://other.test"]);
+    const res = consume(mintCnx(1)!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("refuses when the helper's origin differs from the token's stored origin — origin_unconfigured", () => {
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://other.test"]);
+    const res = consume(mintCnx(1)!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("refuses when this application has no readable instance identity — origin_unconfigured", () => {
+    readInstanceIdentityMock.mockReturnValue(null);
+    const res = consume(mintCnx(1)!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("refuses when reading the instance identity throws — origin_unconfigured, never an escape", () => {
+    readInstanceIdentityMock.mockImplementation(() => {
+      throw new Error("identity row corrupt");
+    });
+    const res = consume(mintCnx(1)!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("refuses when the connector holds a row for the application's own identity (an ambiguity the handshake road never rescues)", () => {
+    CONFIG.wordpress = {
+      instances: [
+        { id: OWN_INSTANCE_ID, name: "WP", siteUrl: "https://elsewhere.test", username: "a", applicationPassword: "p" },
+      ],
+    };
+    const res = consume(mintCnx(1)!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("refuses a rotated site (credential_version bump) — key_rotated", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(2));
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("refuses a revoked site reconnected at the same origin under a new row — key_rotated", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(null);
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("refuses a site re-bound to a different client — key_rotated", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(1, { client: "drupal" }));
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("refuses a revoked site with no active row left for the client", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(null);
+    listActiveConnectSiteOriginsMock.mockReturnValue([]);
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
+  });
+
+  it("a request value cannot open the road: a forged forwarded origin is still origin_mismatch", () => {
+    const res = consume(mintCnx(1)!.token, { requestOrigin: "https://evil.test" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_mismatch");
+  });
+
+  it("a LEGACY long-lived-key token of the same handshake-only site is still origin_unconfigured", () => {
+    const minted = mint();
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("origin_unconfigured");
   });
 });

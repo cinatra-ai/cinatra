@@ -10,6 +10,7 @@ import {
   DASHBOARD_ENTITY_TYPES,
   INSTANCE_ENTITY_TYPES,
   MIGRATABLE_SURFACE_ENTITY_TYPES,
+  WORKSPACE_ENTITY_TYPES,
   OVERVIEW_DASHBOARD_NAME,
   buildOverviewDashboardId,
   compareDashboardsForList,
@@ -28,12 +29,17 @@ const ref: DashboardEntityRef = {
 };
 
 describe("entity-identity: known types", () => {
-  it("accepts the six migratable surfaces + the three instance surfaces", () => {
+  it("accepts the six migratable surfaces + the three instance surfaces + the workspace (cinatra#2811)", () => {
     for (const t of MIGRATABLE_SURFACE_ENTITY_TYPES) expect(isKnownEntityType(t)).toBe(true);
     for (const t of INSTANCE_ENTITY_TYPES) expect(isKnownEntityType(t)).toBe(true);
+    for (const t of WORKSPACE_ENTITY_TYPES) expect(isKnownEntityType(t)).toBe(true);
     expect(DASHBOARD_ENTITY_TYPES.length).toBe(
-      MIGRATABLE_SURFACE_ENTITY_TYPES.length + INSTANCE_ENTITY_TYPES.length,
+      MIGRATABLE_SURFACE_ENTITY_TYPES.length +
+        INSTANCE_ENTITY_TYPES.length +
+        WORKSPACE_ENTITY_TYPES.length,
     );
+    // The lock itself: exactly ten kinds, so a new kind is a deliberate edit here.
+    expect(DASHBOARD_ENTITY_TYPES.length).toBe(10);
   });
   it("rejects unknown / non-string entity types (fail-closed)", () => {
     expect(isKnownEntityType("workflows")).toBe(false);

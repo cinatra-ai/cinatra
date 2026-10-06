@@ -27,6 +27,16 @@
 // reader cannot resolve (a spread of a call, an unknown import, a non-literal)
 // THROWS naming the entry and the file — the reader never guesses.
 //
+// The per-pack route reading (cinatra#3664): the route-graph ratchet counts core
+// modules only, so a pinned pack's own modules no longer count against the
+// tracked routes. For every changed or new pin whose checkout is at its tip,
+// with a flow or without one, the base form logs one reading line with the
+// pack's reachable module count on each tracked route (scripts/route-graph.mjs
+// FIXED_ROUTES, analyzed once per run over the tree this script lives in). The
+// reading is a record only: it never adds a finding, never changes the exit
+// code and never refuses; an error while loading the counter or analyzing is
+// logged as its reading.
+//
 // Usage:
 //   node scripts/ci/pin-advance-host-tools.mjs --base <rev>
 //   node scripts/ci/pin-advance-host-tools.mjs --flow <file> --package <name> --tip <sha>
@@ -37,6 +47,16 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// The counter is loaded guarded: loading it reads this tree's tsconfig.json, and
+// a failure there must reach the reading line, never the check's exit code.
+let routeGraph = null;
+let routeGraphLoadError = null;
+try {
+  routeGraph = await import("../route-graph.mjs");
+} catch (e) {
+  routeGraphLoadError = e;
+}
 
 export const ROUTE_FILE = "src/app/api/agents/passthrough/route.ts";
 export const ALLOWLIST_NAME = "ALLOWED_TOOLS";
@@ -357,6 +377,37 @@ export function hostToolFindings({ packageName, tip, calls, allowlist }) {
   return { packageName, tip, tools, findings };
 }
 
+/**
+ * One changed pack's reachable module count on each tracked route, in
+ * FIXED_ROUTES order. `routes` = [{ route, ok, missingCount,
+ * extensionModulesByPack }]; a route that did not resolve (or is absent) reads
+ * `<route> unresolved`, a route with missing imports `<route> <n> (+<m> missing)`.
+ * A reading is a record, never a finding.
+ */
+export function packRouteReading({ packageName, tip, routes }) {
+  const byRoute = new Map((Array.isArray(routes) ? routes : []).map((r) => [r?.route, r]));
+  const perRoute = [];
+  const parts = [];
+  if (routeGraph === null) throw routeGraphLoadError;
+  for (const { route } of routeGraph.FIXED_ROUTES) {
+    const r = byRoute.get(route);
+    if (!r || r.ok !== true) {
+      perRoute.push({ route, modules: null });
+      parts.push(`${route} unresolved`);
+      continue;
+    }
+    const modules = r.extensionModulesByPack?.[packageName] ?? 0;
+    perRoute.push({ route, modules });
+    parts.push(r.missingCount > 0 ? `${route} ${modules} (+${r.missingCount} missing)` : `${route} ${modules}`);
+  }
+  return {
+    packageName,
+    tip,
+    perRoute,
+    line: `${PREFIX} ${packageName} at ${tip} — reachable modules on the tracked routes: ${parts.join(", ")}`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The command line.
 
@@ -440,6 +491,24 @@ function runBaseForm(args, repoRoot, log) {
   const results = [];
   const refusals = [];
   let withoutFlow = 0;
+  // The tracked routes are analyzed at most once per run, and only when a pin at
+  // its tip needs a reading.
+  let routeAnalyses = null;
+  let analysisError = null;
+  const readingLine = (packageName, tip) => {
+    if (routeAnalyses === null && analysisError === null) {
+      try {
+        if (routeGraph === null) throw routeGraphLoadError;
+        routeAnalyses = routeGraph.FIXED_ROUTES.map(({ route, entry }) => ({ route, ...routeGraph.analyzeRoute(entry) }));
+      } catch (e) {
+        analysisError = e;
+      }
+    }
+    if (analysisError !== null) {
+      return `${PREFIX} ${packageName} at ${tip} — reachable modules on the tracked routes: not read (${analysisError?.message ?? analysisError})`;
+    }
+    return packRouteReading({ packageName, tip, routes: routeAnalyses }).line;
+  };
   for (const { packageName, to } of [...changed, ...added].sort((a, b) => a.packageName.localeCompare(b.packageName))) {
     if (!SAFE_SCOPED_PKG_RE.test(packageName)) throw new Error(`the lock names an invalid package ${packageName}`);
     const [scope, name] = packageName.slice(1).split("/");
@@ -457,6 +526,7 @@ function runBaseForm(args, repoRoot, log) {
       );
       continue;
     }
+    log(readingLine(packageName, to));
     const flowFile = path.join(dir, "cinatra", "oas.json");
     if (!existsSync(flowFile)) {
       withoutFlow += 1;

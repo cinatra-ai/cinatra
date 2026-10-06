@@ -82,6 +82,49 @@ export function publishCrumbContributions(
   }
 }
 
+// THE PAGE WITH NO HIERARCHY (cinatra#2934, fix leg 10). The 404 boundary
+// renders at the pathname the reader TYPED, so the shell cannot tell a page
+// that was not found from one that was — and the drawing gives the first no
+// trail at all ("Page not found", one crumb, nothing above it). The boundary
+// therefore says so here, on the same route-scoped bus that already carries its
+// negative crumb clearing, and the shell reads it beside the contributions.
+//
+// It is PATHNAME-SCOPED for the same reason the snapshot is: the marker must
+// never survive into the next route the reader opens.
+let notFoundPathname: string | null = null;
+
+/** The 404 boundary's own mark. Subsumes the negative clearing — a page that was
+ *  not found also parks no labels. */
+export function markPageNotFound(pathname: string): void {
+  notFoundPathname = pathname;
+  snapshot = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(CRUMB_CONTRIBUTIONS_EVENT));
+  }
+}
+
+/** Lifts the mark when the boundary is left.
+ *
+ * SCOPED TO THE MARK'S OWN PATHNAME (fix leg 10, convergence round). React runs
+ * the ARRIVING boundary's layout effect before the LEAVING one's cleanup during
+ * an overlapping transition, so an unconditional clear would erase a mark the
+ * leaving page never owned and the newer page would draw the hierarchy of a URL
+ * its reader never reached. A caller that names its pathname lifts only its own
+ * mark; a bare call (a reset, a test) still lifts whatever is marked. */
+export function clearPageNotFound(pathname?: string): void {
+  if (notFoundPathname === null) return;
+  if (pathname !== undefined && notFoundPathname !== pathname) return;
+  notFoundPathname = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(CRUMB_CONTRIBUTIONS_EVENT));
+  }
+}
+
+/** Whether THIS pathname is the one the boundary marked. */
+export function isPageNotFound(pathname: string): boolean {
+  return notFoundPathname !== null && notFoundPathname === pathname;
+}
+
 /** The current snapshot (parked value for late-mounting consumers). */
 export function getCrumbSnapshot(): CrumbSnapshot | null {
   return snapshot;

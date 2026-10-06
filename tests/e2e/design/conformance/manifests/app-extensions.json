@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-extensions.html",
-  "contentHash": "sha256:e3750c2ffe277089e4de5f191b4287882d141760d5442610e13487f97c23530f",
+  "contentHash": "sha256:2805226dd6ad80968ac04e54a8835b72bccad7d68170beadd2527ea5acfe90e1",
   "surfaces": [
     {
       "id": "extension-listing-grid",
@@ -193,6 +193,28 @@
       "states": [
         "empty",
         "kind:connector"
+      ]
+    },
+    {
+      "id": "agent-assignment-skills",
+      "fields": [
+        {
+          "field": "scope-label",
+          "source": "scope.label"
+        }
+      ],
+      "actions": [
+        {
+          "action": "search-skills",
+          "outcome": "matching-skills-shown"
+        },
+        {
+          "action": "remove-skill",
+          "outcome": "skill-unassigned"
+        }
+      ],
+      "states": [
+        "kind:agent"
       ]
     },
     {

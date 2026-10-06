@@ -65,6 +65,7 @@ permissions:
 
 jobs:
   truthful-attribution-gate:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>)
     # and the `ref` engine-checkout input below are pinned to the SAME
     # cinatra-ai/ci commit, so the gate code is never pulled from mutable main.
@@ -75,7 +76,7 @@ jobs:
     # run's referenced_workflows[] entry against the suite's pinned SHA
     # EXACTLY, so the caller `uses:@`, the `ref:` below and
     # gate-suite.json requiredContexts[].pinned must move in one commit.
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@1e40675e1642dcc32d195f27b3deb285b4d3d6fc # v0.1.4-next.1e40675
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@534e1794bff9071fee584d5366962391de4e8ac2 # v0.1.4-next.534e179
     with:
       mode: enforce
-      ref: 1e40675e1642dcc32d195f27b3deb285b4d3d6fc # same SHA as the workflow @ref
+      ref: 534e1794bff9071fee584d5366962391de4e8ac2 # same SHA as the workflow @ref

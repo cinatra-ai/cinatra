@@ -105,12 +105,10 @@ const TYPED: readonly Row[] = [
 ];
 
 const REPRESENTATION_ONLY: readonly Row[] = [
-  // NOTHING claims text/plain as a representation: the text pack accepts it but
-  // declares only `text/csv` for its display. That declaration is the pack's own
-  // (the acceptance item names it as work in the pack's repository), so an
-  // untyped plain-text row honestly reaches the floor here rather than a core
-  // viewer standing in for the pack.
-  ["representation-only text/plain", "@acme/x:row", NO_WINNER, "text/plain", null],
+  // The text pack declares text/plain beside text/csv (acceptance item 4, made in
+  // the pack's own repository), so an untyped plain-text row reaches the text
+  // pack's own display.
+  ["representation-only text/plain", "@acme/x:row", NO_WINNER, "text/plain", "@cinatra-ai/text-artifact"],
   ["representation-only text/markdown", "@acme/x:row", NO_WINNER, "text/markdown", "@cinatra-ai/markdown-artifact"],
   // The host's one canonicalisation: the legacy spelling reaches the same pack.
   ["representation-only text/x-markdown", "@acme/x:row", NO_WINNER, "text/x-markdown", "@cinatra-ai/markdown-artifact"],

@@ -99,6 +99,10 @@ function sourceBadge(type: ExtensionSourceType): LifecycleBadgeDescriptor {
  * Installed-extensions management surface (cinatra#948), which renders the
  * installed version of non-agent kinds from the canonical row's source
  * provenance (the registry summary only knows the LATEST published version).
+ * The Extensions drawing's §III.2 notes explicitly distinguish local builds
+ * and `0.0.0-dev.*` from registry-comparable versions. Keep that distinction
+ * even when the same package also exists in a registry: the selected LOCAL
+ * row describes the in-tree code, not the published package (cinatra#3571).
  */
 export function sourceVersion(ext: InstalledExtension): string | null {
   if (ext.source.type === "verdaccio") {

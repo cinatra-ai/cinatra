@@ -222,7 +222,17 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     });
     const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
     expect(res.status).toBe(401);
-    expect(emitWidgetAuthAudit).not.toHaveBeenCalled();
+    // cinatra#3715 re-key: a refused caller is NEVER recorded as advertised, and
+    // the refusal now writes its own line with the origin-disagreement reason.
+    expect(emitWidgetAuthAudit).not.toHaveBeenCalledWith(
+      "assistant_chat_capabilities_broker_advertised",
+      expect.anything(),
+    );
+    expect(emitWidgetAuthAudit).toHaveBeenCalledTimes(1);
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "assistant_chat_capabilities_broker_rejected",
+      expect.objectContaining({ reason: "origin_disagreement" }),
+    );
   });
 
   it("does NOT fall back to an ambient session when broker validation fails (credentials:omit posture)", async () => {
@@ -232,6 +242,93 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
     expect(res.status).toBe(401); // the cookie must NOT rescue the failed broker read
     expect(getAuthSession).not.toHaveBeenCalled(); // the broker branch never even reads the session
+  });
+});
+
+// cinatra#3715 — every refusal on the broker branch writes ONE widget-auth-audit
+// line naming the refusal point (and, for the two consumes, the consume's own
+// reason code). The caller's answer stays the one generic 401, and the line
+// carries no token, hash or header value.
+describe("GET — every broker refusal writes one audit line (cinatra#3715)", () => {
+  const REFUSED = "assistant_chat_capabilities_broker_rejected";
+  const HEADER_VALUES = ["cit_a", "cwu_b", "blog.example.com"];
+
+  async function expectOneRefusal(res: Response, reason: string) {
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+    expect(emitWidgetAuthAudit).toHaveBeenCalledTimes(1);
+    const [event, fields] = emitWidgetAuthAudit.mock.calls[0] as [string, Record<string, unknown>];
+    expect(event).toBe(REFUSED);
+    expect(fields.reason).toBe(reason);
+    // Only the refusal point and the server-resolved agent — never a token, a
+    // hash or a header value.
+    for (const key of Object.keys(fields)) expect(["agentSlug", "reason"]).toContain(key);
+    const line = JSON.stringify(fields);
+    for (const value of HEADER_VALUES) expect(line).not.toContain(value);
+  }
+
+  it("the missing cwu_ user token", async () => {
+    primeHappyBroker();
+    await expectOneRefusal(
+      await GET(brokerGet({ cit: "cit_a", origin: ORIGIN, assistant: "wordpress" })),
+      "user_token_missing",
+    );
+  });
+
+  it("an unknown/forged assistant handle", async () => {
+    primeHappyBroker();
+    resolveAssistantWidgetBinding.mockReturnValue(null);
+    await expectOneRefusal(
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "cinatra" })),
+      "widget_binding_unresolved",
+    );
+  });
+
+  it("the widget-stream union not resolving", async () => {
+    primeHappyBroker();
+    resolveWidgetStreamAgentUnion.mockResolvedValue(null);
+    await expectOneRefusal(
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" })),
+      "agent_unresolved",
+    );
+  });
+
+  it("the cit_ consume refusing, with the consume's own reason code", async () => {
+    primeHappyBroker();
+    consumeWidgetStreamToken.mockReturnValue({ ok: false, reason: "origin_unconfigured" });
+    await expectOneRefusal(
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" })),
+      "transport_token_rejected:origin_unconfigured",
+    );
+  });
+
+  it("the cwu_ consume refusing, with the consume's own reason code", async () => {
+    primeHappyBroker();
+    consumeUserWidgetToken.mockReturnValue({ ok: false, reason: "site_revoked" });
+    await expectOneRefusal(
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" })),
+      "user_token_rejected:site_revoked",
+    );
+  });
+
+  it("the two tokens' origins disagreeing", async () => {
+    primeHappyBroker();
+    consumeUserWidgetToken.mockReturnValue({
+      ok: true,
+      claims: { userId: "u1", orgId: "o1", siteOrigin: "https://evil.example.com", agentSlug: "wordpress-content-editor" },
+    });
+    await expectOneRefusal(
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" })),
+      "origin_disagreement",
+    );
+  });
+
+  it("the success still writes ONLY the advertised event", async () => {
+    primeHappyBroker();
+    const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
+    expect(res.status).toBe(200);
+    expect(emitWidgetAuthAudit).toHaveBeenCalledTimes(1);
+    expect(emitWidgetAuthAudit.mock.calls[0][0]).toBe("assistant_chat_capabilities_broker_advertised");
   });
 });
 

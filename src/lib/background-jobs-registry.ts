@@ -247,6 +247,31 @@ type LifecycleGateMaintenanceSummary = {
 type LifecycleReviewRunner = {
   orchestrate: () => Promise<LifecycleReviewOrchestrationSummary>;
   maintain: () => Promise<LifecycleGateMaintenanceSummary>;
+  /**
+   * cinatra#3007 — the EXECUTOR's half of the same slot: drain ONE run's
+   * production, and hold the per-production lock while doing it, so a run's
+   * review moment can be decided before its terminal status.
+   *
+   * It rides this slot for the SAME reason the two sweeps do — the boot phase is
+   * the only place allowed to reach the orchestration store, because the store's
+   * graph must not become reachable from the locked dev-perf routes (route-graph
+   * ratchet), and `packages/agents/src/execution.ts` sits squarely in them.
+   *
+   * OPTIONAL, and safe when absent: a run whose executor finds no drain here
+   * simply parks on its still-pending production and the recurring sweep
+   * finishes the orchestration. The ordering invariant holds either way; only
+   * the latency differs.
+   */
+  drainProducedProductionForRun?: (input: {
+    orgId: string;
+    runId: string;
+    limit?: number;
+  }) => Promise<void>;
+  withProducedProductionLock?: (
+    orgId: string,
+    producerRunId: string,
+    fn: () => Promise<void>,
+  ) => Promise<boolean>;
 };
 
 declare global {
@@ -330,6 +355,8 @@ function resolveAnthropicSkillReconcileRunner(): AnthropicSkillReconcileRunner |
 type LeaseExpiryFinalizerSweepSummary = {
   swept: number;
   skippedLeaseGone: number;
+  /** cinatra#3007 — the run still owed a produced-output review. */
+  skippedProducedReview: number;
   cancelDeferred: number;
   settled: number;
   settledLeaseOnly: number;
@@ -1378,6 +1405,11 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         // read added to the worker prologue must not make a run less likely to
         // survive a DB blip (`attempts` defaults to 1).
         ScopeRecheckUnavailableError,
+        // cinatra#3007: the run finished its work but the attempt could not
+        // WRITE DOWN that it still owed a produced-output review. The recovery
+        // is queued where that is raised; this worker only re-enters the SAME
+        // delivery in place when the raise could not queue it.
+        ProducedReviewHoldUnpersistedError,
       } = await import("@cinatra-ai/agents");
       try {
         await runAgentBuilderExecutionJob(
@@ -1420,6 +1452,34 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         // The park ordinal is written back onto the job data (the SAME pattern
         // the trigger gate uses for `gateAttempt`) so the worker's own cap can
         // land the run `failed` on a PERMANENT fault instead of looping.
+        // cinatra#3007: a hold that could not be recorded has its recovery queued
+        // where it is RAISED, on the one delivery every path shares — this
+        // worker and the three direct resume callers converge the same way, and
+        // none of them carries, or can drop, the terminal write still owed.
+        //
+        // This branch is that SAME road's second on-ramp, taken only when the
+        // first was closed. The producer connection is deliberately fail-fast
+        // (`enableOfflineQueue: false`) while this worker's own connection rides
+        // a brief outage out, so an enqueue that failed does NOT mean the job
+        // cannot be re-delivered in place — with the same job data the road
+        // carries, chain and ordinal included, so the recovery leg cannot tell
+        // the two apart. A CAPPED chain is never re-delivered: the cap is the
+        // operator signal. Either way the run keeps its non-terminal status —
+        // landing it terminal here is exactly what must not happen.
+        if (err instanceof ProducedReviewHoldUnpersistedError) {
+          if (err.delivered || err.capped) throw err;
+          console.warn(
+            `[produced-review-hold] run ${err.runId} recovery could not be queued — re-delivering this job in place in ${err.delayMs}ms (delivery ${err.nextPark})`,
+          );
+          await job.updateData({
+            ...(job.data as Record<string, unknown>),
+            producedReviewHold: err.recovery,
+            producedReviewHoldPark: err.nextPark,
+            producedReviewHoldChain: err.chain,
+          });
+          await job.moveToDelayed(Date.now() + err.delayMs, job.token);
+          throw new DelayedError();
+        }
         if (err instanceof ScopeRecheckUnavailableError) {
           console.warn(
             `[scope-recheck] run ${err.runId} scope check unreadable — re-queuing in ${err.delayMs}ms: ${err.message}`,
@@ -2773,7 +2833,7 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           const summary = await runner.sweep();
           if (summary.swept > 0) {
             console.log(
-              `[lease-expiry-finalizer] swept=${summary.swept} settled=${summary.settled} settledLeaseOnly=${summary.settledLeaseOnly} skippedLeaseGone=${summary.skippedLeaseGone} cancelDeferred=${summary.cancelDeferred} escalated=${summary.escalated} failed=${summary.failed}`,
+              `[lease-expiry-finalizer] swept=${summary.swept} settled=${summary.settled} settledLeaseOnly=${summary.settledLeaseOnly} skippedLeaseGone=${summary.skippedLeaseGone} skippedProducedReview=${summary.skippedProducedReview} cancelDeferred=${summary.cancelDeferred} escalated=${summary.escalated} failed=${summary.failed}`,
             );
           }
         },

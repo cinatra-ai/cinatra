@@ -57,8 +57,9 @@ export const RUN_STEP_RAIL_CONFORMANCE_ENTRIES: RunStepRailEntry[] = [
       gateId: "conformance-gate-1",
       reviewTaskId: "conformance-review-1",
       // "records how it was settled (continued, superseded by a regeneration,
-      // changes requested)" — the word the history row carries.
-      disposition: "continued",
+      // changes requested)" — the STORED disposition a gate row carries for a
+      // review the person continued with; the rail draws its own word for it.
+      disposition: "approve",
       resolved: true,
     },
   },
@@ -144,8 +145,8 @@ export const RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION =
 /** The 1-based position of the answered gate kept on the rail as history. */
 export const RUN_STEP_RAIL_CONFORMANCE_SETTLED_POSITION = 2;
 
-/** The disposition that settled row records. */
-export const RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION = "continued";
+/** The word the settled row draws for the disposition it stores. */
+export const RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION = "Continued";
 
 /** The 1-based positions of the rows the run has already passed. */
 export const RUN_STEP_RAIL_CONFORMANCE_PASSED_POSITIONS = [1, 2, 3];

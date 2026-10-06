@@ -103,7 +103,7 @@ const ROWS: ReadonlyArray<readonly [string, string, EffectiveIdentity, string]> 
   ["a json representation", `${PKG}:blob`, { kind: "no-primary" }, "application/json"],
   ["an image representation", `${PKG}:pic`, { kind: "no-primary" }, "image/png"],
   ["a pdf representation", `${PKG}:doc`, { kind: "no-primary" }, "application/pdf"],
-  ["a plain-text representation nothing claims", `${PKG}:note`, { kind: "no-primary" }, "text/plain"],
+  ["a plain-text representation the text pack claims", `${PKG}:note`, { kind: "no-primary" }, "text/plain"],
   ["a media type nothing claims at all", `${PKG}:note`, { kind: "no-primary" }, "application/vnd.acme.opaque"],
 ];
 

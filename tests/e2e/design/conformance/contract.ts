@@ -19,6 +19,8 @@
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
+import { TOAST_DRIVER } from "./toast-driver";
+import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 
 import { CONFORMANCE_SEED_REFUSAL_HEADER } from "../../../../src/lib/test-support/conformance-seed-fence";
 import {
@@ -4788,9 +4790,11 @@ const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
 // connector-sharing-locked (a declared ceiling, or a recommended scope).
 //
 // Each driver asserts against the conformance id the PRODUCT component emits
-// (`ConnectorSharingPanels`, and the `PermissionsForm` it mounts beneath each
-// row) — the harness `data-surface-id` wrapper only selects WHICH mount, so a
-// driver can never pass against harness-only chrome. Field values are the
+// (`ConnectorSharingPanels`, and the shared `PermissionsPanel` it draws beneath
+// each row). The harness `data-surface-id` wrapper only selects WHICH mount,
+// so a driver can never pass against harness-only chrome. Since cinatra#3385
+// the fixture states the panel's DATA and its bindings, exactly as a connector
+// pack does, so these drivers grade the parts the SDK draws. Field values are the
 // anti-lookalike seeds of connector-sharing-seed.ts, so a wrong-source read
 // reds.
 // ---------------------------------------------------------------------------
@@ -7491,6 +7495,8 @@ const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
 
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
+  toast: TOAST_DRIVER,
+  "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,
   "connector-setup": CONNECTOR_SETUP_DRIVER,
   "connector-config-tab": CONNECTOR_CONFIG_TAB_DRIVER,

@@ -103,19 +103,23 @@ describe("G2 — never-blank guardrail", () => {
       generatedKey: "@cinatra-ai/markdown-artifact::detail",
       pattern: expect.any(String),
     });
-    // PLAIN TEXT HAS NO DISPLAY AT ALL as a bare representation: text-artifact
-    // declares representations=[text/csv] only, and the host viewer that used to
-    // stand under it retired with the core content arms — so an untyped
-    // plain-text row lands on the terminal floor and draws a host diagnostic.
-    expect(dispatchFor("text/plain")).toEqual({ kind: "fallback" });
+    // PLAIN TEXT MOVED (cinatra#3319, acceptance item 4): text-artifact now
+    // declares representations=[text/plain, text/csv], so the text base claims a
+    // plain-text representation beside CSV and draws it through its own display.
+    expect(dispatchFor("text/plain")).toEqual({
+      kind: "representation",
+      packageName: "@cinatra-ai/text-artifact",
+      generatedKey: "@cinatra-ai/text-artifact::detail",
+      pattern: expect.any(String),
+    });
   });
 });
 
 // The SEMANTIC (by object-type) path is distinct from the representation path
 // above (epic #1883 A1). A row TYPED to a required text/JSON base renders via THAT
 // pack's own detail renderer regardless of its representation MIME — the base owns
-// its typed rows. text-artifact's `representations=[text/csv]` subset bounds only
-// the mime-keyed REPRESENTATION path (preserving the host floor above); it does
+// its typed rows. text-artifact's `representations=[text/plain, text/csv]` claim
+// bounds only the mime-keyed REPRESENTATION path (the plain-text dispatch above); it does
 // NOT change that a text-artifact-TYPED row mounts text-artifact::detail. Pinned
 // here so the two paths' interaction is deliberate, not accidental.
 describe("G2 — a required text base owns its OWN typed rows via the semantic path", () => {
