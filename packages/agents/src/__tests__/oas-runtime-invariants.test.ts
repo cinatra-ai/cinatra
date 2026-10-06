@@ -1475,6 +1475,7 @@ function baseFlow(spec: BaseFlowSpec): Record<string, unknown> {
         id: "start",
         name: "Inputs",
         inputs: spec.startInputs,
+        metadata: { cinatra: { required: spec.startInputs.map(input => input.title) } },
       },
       api: {
         component_type: "ApiNode",
@@ -1751,5 +1752,60 @@ describe("OAS-RUNTIME-013 — InputMessageNode gate must be mountable on the pin
     const found = code013(orchestrator);
     expect(found).toHaveLength(1);
     expect(found[0]!.message).toContain("draft-bundle");
+  });
+});
+
+
+describe("OAS-RUNTIME-015 — visible inputs omitted from setup", () => {
+  const scan = (spec: Parameters<typeof flowWithStartMeta>[0]) =>
+    scanOasForRuntimeInvariantFindings(flowWithStartMeta(spec)).filter(f => f.code === "OAS-RUNTIME-015");
+
+  it("refuses a visible input without a default or required declaration, naming the input", () => {
+    const findings = scan({ inputs: [{ title: "brief", type: "string" }] });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ severity: "blocker", source: "deterministic" });
+    expect(findings[0].message).toContain('"brief"');
+  });
+
+  it.each(["", null, false, 0, []])("an explicit default %j permits omission", defaultValue => {
+    expect(scan({ inputs: [{ title: "brief", type: "string", default: defaultValue }] })).toEqual([]);
+  });
+
+  it("keeps required, hidden and platform-supplied inputs on their existing roads", () => {
+    expect(scan({ inputs: [
+      { title: "required", type: "string" }, { title: "hidden", type: "string" },
+      { title: "cinatra_run_id", type: "string" }, { title: "agent_run_id", type: "string" },
+    ], required: ["required"], hidden: ["hidden"] })).toEqual([]);
+  });
+
+  it("stays within the historical thirteen-pair install ceiling", async () => {
+    const { VISIBLE_UNDEFAULTED_INPUT_BASELINE } = await import("../../../../scripts/extensions/platform-supplied-flow-inputs.mjs");
+    const ceiling: Record<string, string[]> = {
+      "@cinatra-ai/drupal-agent": ["instanceId", "nodeId", "nodeBundle", "nodeStatus", "instructions"],
+      "@cinatra-ai/wordpress-agent": ["instanceId", "postId", "postType", "postStatus", "instructions"],
+      "@cinatra-ai/project-manager-agent": ["as_of", "configured_provider_id", "project_id"],
+    };
+    expect(VISIBLE_UNDEFAULTED_INPUT_BASELINE).toBeDefined();
+    for (const [pkg, titles] of Object.entries(VISIBLE_UNDEFAULTED_INPUT_BASELINE ?? {})) {
+      expect(ceiling).toHaveProperty(pkg);
+      for (const title of titles) {
+        expect(ceiling[pkg]).toContain(title);
+        expect(scan({ packageName: pkg, inputs: [{ title, type: "string" }] })).toEqual([]);
+      }
+      expect(scan({ packageName: pkg, inputs: [{ title: "new_input", type: "string" }] })).toHaveLength(1);
+    }
+    expect(scan({ packageName: "@other/wordpress-agent", inputs: [{ title: "postId", type: "string" }] })).toHaveLength(1);
+  });
+
+  it("does not extend the install baseline to the scrubbed token or hidden exemptions", () => {
+    expect(scan({ inputs: [{ title: "__cinatra_run_token__", type: "string" }] })).toHaveLength(1);
+    expect(scan({ packageName: "@cinatra-ai/email-drafting-agent", inputs: [{ title: "campaignId", type: "string" }] })).toHaveLength(1);
+  });
+
+  it("does not apply a root-start rule to an embedded subflow", () => {
+    const child = flowWithStartMeta({ inputs: [{ title: "from_parent", type: "string" }] });
+    const root = flowWithStartMeta({ inputs: [] });
+    (root.$referenced_components as Record<string, unknown>).child = child;
+    expect(scanOasForRuntimeInvariantFindings(root).filter(f => f.code === "OAS-RUNTIME-015")).toEqual([]);
   });
 });

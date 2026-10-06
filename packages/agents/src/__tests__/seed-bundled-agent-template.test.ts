@@ -58,6 +58,17 @@ const OAS_FIXTURE = readFileSync(
   "utf8",
 );
 
+// Positive fixture inputs are optional with explicit defaults. The shared
+// fixture file is unchanged; own negative cases remove defaults explicitly.
+const defaultedOasFixture = JSON.parse(OAS_FIXTURE);
+for (const input of defaultedOasFixture.inputs ?? []) {
+  if (!("default" in input)) input.default = "";
+}
+for (const input of defaultedOasFixture.$referenced_components.start.inputs ?? []) {
+  if (!("default" in input)) input.default = "";
+}
+const VALID_OAS_FIXTURE = JSON.stringify(defaultedOasFixture);
+
 const PACKAGE_NAME = "@cinatra-ai/synthetic-gemini-agent";
 const VERSION = "0.1.0";
 
@@ -79,7 +90,7 @@ async function stageSeed(opts?: { oas?: string; manifest?: Record<string, unknow
   const seedDir = await mkdtemp(join(tmpdir(), "bundled-agent-seed-"));
   const packageDir = join(seedDir, "cinatra-ai", "synthetic-gemini-agent");
   await mkdir(join(packageDir, "cinatra"), { recursive: true });
-  await writeFile(join(packageDir, "cinatra", "oas.json"), opts?.oas ?? OAS_FIXTURE, "utf8");
+  await writeFile(join(packageDir, "cinatra", "oas.json"), opts?.oas ?? VALID_OAS_FIXTURE, "utf8");
   await writeFile(
     join(packageDir, "package.json"),
     JSON.stringify(
@@ -209,4 +220,14 @@ describe("ensureBundledAgentTemplateRecord", () => {
     expect(bundledAgentPackageDir("/seed", "unscoped-name")).toBeNull();
     expect(bundledAgentPackageDir("/seed", "@cinatra-ai/../../etc")).toBeNull();
   });
+});
+
+
+it("refuses an undeclared visible input before bundled seeding creates a record", async () => {
+  const oas = JSON.parse(OAS_FIXTURE);
+  oas.$referenced_components.start.metadata = { cinatra: { required: [] } };
+  const { seedDir } = await stageSeed({ oas: JSON.stringify(oas) });
+  await expect(ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir })).rejects.toThrow(/user/);
+  expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();
+  expect(claimAgentTemplateIdentity).not.toHaveBeenCalled();
 });

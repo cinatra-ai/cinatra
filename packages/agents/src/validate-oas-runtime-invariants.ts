@@ -106,6 +106,7 @@ import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
 import {
   PLATFORM_SUPPLIED_FLOW_INPUTS,
   isExemptFromUnsatisfiableInputCheck,
+  isOnVisibleInputInstallBaseline,
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore — dependency-free .mjs data module (allowJs)
 } from "../../../scripts/extensions/platform-supplied-flow-inputs.mjs";
@@ -201,6 +202,7 @@ export function scanOasForRuntimeInvariantFindings(
     findings.push(...scanAgentRunIdPropagation(flow));
     findings.push(...scanEndNodeOutputSources(flow));
   }
+  findings.push(...scanOasForVisibleInputContractFindings(parsed));
   // OAS-RUNTIME-014 scans the START-CONVERSATION surface only — the TOP-LEVEL
   // Flow. That is the one input set the A2A start message has to satisfy. A
   // nested subflow's inputs are fed by its parent's DataFlowEdges, never by the
@@ -1909,6 +1911,36 @@ export function scanOasForUndeclaredTypeSaves(
         }
       }
     }
+  }
+  return findings;
+}
+
+
+/**
+ * cinatra#3759: a root Flow input not collected by setup needs a declared
+ * default. Installers pass their actual package identity; OAS metadata cannot
+ * impersonate one of the bounded legacy package/input pairs.
+ */
+export function scanOasForVisibleInputContractFindings(
+  parsed: Record<string, unknown>,
+  packageName = resolvePackageName(parsed),
+): ReviewFinding[] {
+  if (parsed.component_type !== "Flow") return [];
+  const flow = extractFlow(parsed);
+  if (!flow) return [];
+  const findings: ReviewFinding[] = [];
+  const agentLabel = packageName || describeAgentForFindings(parsed);
+  for (const title of flow.flowInputTitles) {
+    if (flow.startHidden.includes(title) || flow.startRequired.includes(title)) continue;
+    if (flow.flowInputDefaults.has(title) || PLATFORM_SUPPLIED_FLOW_INPUTS.includes(title)) continue;
+    if (isOnVisibleInputInstallBaseline(packageName, title)) continue;
+    findings.push({
+      code: "OAS-RUNTIME-015",
+      severity: "blocker",
+      message: `${agentLabel}: visible Flow input "${title}" has no default and is not declared required in the StartNode's metadata.cinatra.required. Setup cannot ask for it as a required field. Declare it required or give the Flow and StartNode input an explicit default before installing.`,
+      location: `inputs[] "${title}" (Flow "${flow.flowId}")`,
+      source: "deterministic",
+    });
   }
   return findings;
 }
