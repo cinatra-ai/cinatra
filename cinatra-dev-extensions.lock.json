@@ -165,7 +165,7 @@
     {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
-      "resolvedSha": "6c236f1c557d20960178abd10314a6d8ccdccb58"
+      "resolvedSha": "ddd9c9d3a72cdeec0d7301616b3bf3ade7de47c3"
     },
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
