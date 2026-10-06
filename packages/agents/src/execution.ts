@@ -85,8 +85,8 @@ const isScopeDenial = (err: unknown): err is { reason: string } =>
 // then rides ONLY the boot graph, never a route). The seam's `emit` returns a
 // RESULT (never throws the store's typed error) so this file needs no store type
 // either. An unbound slot (boot hasn't run in this bundle — near-impossible)
-// makes a marked gate FAIL CLOSED to the review surface (never the legacy gate,
-// which could dual-path an already-pinned gate); see the branch below.
+// now fails through the existing execution error road before any mint or new
+// decision-path interrupt (cinatra#3944, App163); see the branch below.
 type ArtifactReviewGateSeam = {
   // cinatra#2929: the one review core, reached the same way the gate store is —
   // through the boot-bound slot, so this file gains no import edge for it.
@@ -116,7 +116,12 @@ type ArtifactReviewGateSeam = {
   readGate(
     runId: string,
     reviewTaskId: string,
-  ): Promise<{ orgId: string; status: string } | null>;
+  ): Promise<{ orgId: string; status: string; targets?: unknown } | null>;
+  /** cinatra#3035: every gate this run owns, so a per-artifact review can be
+   *  routed to the first artifact still waiting to be read. Older bundles may
+   *  lack this method; calling that unavailable inventory fails before minting
+   *  through the existing execution error road, rather than assuming absence. */
+  listGates?(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
 };
 function resolveArtifactReviewGateSeam(): ArtifactReviewGateSeam | null {
   return (
@@ -512,6 +517,13 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import {
+  inventoryReviewTargets,
+  nextUnresolvedLeg,
+  normalizeReviewTargets,
+  planPerArtifactReviewGates,
+  resolveDeclaredReviewTargets,
+} from "@/lib/artifacts/artifact-review-target";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
 function enrichmentContextFor(userId: string | null) {
@@ -2327,11 +2339,23 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       typeof wayflowArtifactReviewTargetsInput === "string" &&
       wayflowArtifactReviewTargetsInput.length > 0
     ) {
-      const reviewTaskId = `wayflow-${task.id}`;
-      const rawTargets =
-        (run.inputParams as Record<string, unknown> | null | undefined)?.[
-          wayflowArtifactReviewTargetsInput
-        ] ?? interruptPayload[wayflowArtifactReviewTargetsInput];
+      let reviewTaskId = `wayflow-${task.id}`;
+      // cinatra#3035 (epic #3023 W11) — THE MID-RUN TARGET SET. The pipeline's
+      // gate names references the materialize step minted DURING the run, so the
+      // value the gate's own pause carries is the one that matters; the run's
+      // start params are the fallback for a gate whose set is resolved at run
+      // start. Read the other way round (as `startParams ?? pausePayload` was), a
+      // start node that also lists the marked input — every compiled flow does,
+      // since a node input is a flow input with a default — shadowed the run's own
+      // projection with that default and the gate pinned nothing.
+      const rawTargets = resolveDeclaredReviewTargets({
+        inputName: wayflowArtifactReviewTargetsInput,
+        startParams: run.inputParams as Record<string, unknown> | null | undefined,
+        // cinatra#3035: the runtime hands a pause's inputs over only as its own
+        // message, so the gate's surfaced message is read too; the metadata's
+        // pendingApproval keeps precedence when it is present.
+        pausePayload: { ...spreadFromOutput, ...interruptPayload },
+      });
       // routeToReviewSurface is true when a USABLE pending gate for THIS run+org
       // is (or already was) pinned — so exactly ONE decision path exists (the
       // review surface + resume-delivery worker). On an emit failure we do NOT
@@ -2345,27 +2369,30 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // gate), a different-org conflict, or a vanished row all fall open to the
       // legacy HITL gate so the run degrades rather than dead-ends.
       // What the gate will pin. It starts as the marker's own value — which is
-      // what an unbound seam and a core that cannot answer both fall back to —
-      // and is replaced by the core's decided set when there is one.
+      // retained in the raw inventory even when approved policy filters it —
+      // and is replaced by a successful core's decided set when there is one.
       let pinnedTargets: unknown = rawTargets;
       let routeToReviewSurface = false;
+      // Inventory the original caller set BEFORE the approved policy filters
+      // it. Keep its exact pairs and every uncertain entry separately; a
+      // filtered-out ambiguity must remain observable without overruling the
+      // policy result. Log counts/positions only, never arbitrary raw values.
+      const rawPinInventory = inventoryReviewTargets(rawTargets);
+      console.log(`[artifact-review-gate] run=${runId} task=${task.id} raw target inventory`, {
+        rawTargetCount: rawPinInventory.rawTargetCount,
+        validOccurrenceCount: rawPinInventory.validOccurrenceCount,
+        distinctValidPairCount: rawPinInventory.distinctValidPairCount,
+        duplicateValidPairCount: rawPinInventory.duplicateValidPairCount,
+        distinctArtifactCount: new Set(rawPinInventory.validPairs.map((target) => target.artifactId)).size,
+        invalidOccurrenceCount: rawPinInventory.invalidOccurrenceCount,
+        invalidPositions: rawPinInventory.invalidEntries.map((entry) => entry.index),
+      });
       const gateSeam = resolveArtifactReviewGateSeam();
       if (!gateSeam) {
-        // Boot has not bound the gate store in this bundle (a near-impossible
-        // degraded state — the bind phase is a trivial boot step). We cannot pin
-        // NOR read the gate here. FAIL CLOSED against a DUAL decision path: route
-        // to the review surface (which reads the store on its own route) rather
-        // than ALSO emitting the legacy in-panel gate — if a PRIOR execution
-        // already pinned this gate, emitting the legacy gate now would create a
-        // SECOND resume path into the same paused context. A first-visit run whose
-        // gate was never pinned simply sees the review surface's graceful
-        // unavailable/blocked state until boot re-binds the seam; it can never
-        // double-resume. Mirrors the read-failure fail-closed branch below.
-        console.warn(
-          `[artifact-review-gate] run=${runId} task=${task.id} gate seam not bound — ` +
-            `routing to the review surface (fail-closed against a dual path)`,
-        );
-        routeToReviewSurface = true;
+        // App163: an absent seam also means the policy cannot be read. Leave
+        // any stored gate alone and surface the existing technical failure
+        // through execution's error road; do not emit a redirect/ordinary gate.
+        throw new TypeError(`[artifact-review-gate] run=${runId} task=${task.id} gate seam not bound`);
       } else {
         // ------------------------------------------------------------------
         // THE ONE REVIEW CORE (cinatra#2929, epic #2926 W2b) — the DECLARED
@@ -2383,35 +2410,16 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // branch is built around: the review surface OR the legacy gate, and
         // never both, because nothing is pinned when the core declines.
         //
-        // FAIL-OPEN, deliberately, on a core that THROWS: a decision that cannot
-        // be reached must not decide. The pre-#2929 behaviour is the fallback —
-        // pin and route — because a marked step is a step whose author asked for
-        // a review, and refusing one on a resolver fault would drop it silently.
-        let coreDecision: {
-          review: boolean;
-          why?: string;
-          reason?: string;
-          targets?: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
-        };
-        try {
-          coreDecision = await gateSeam.decideDeclaredReview({
-            orgId: run.orgId,
-            templateId: run.templateId,
-            // The version the RUN is pinned to. `agent_templates` is a mutable
-            // row a reinstall overwrites in place, so a template that has moved
-            // on must not supply a declared skip that takes this run's review
-            // away.
-            packageVersion: run.packageVersion ?? null,
-            targets: rawTargets,
-          });
-        } catch (coreErr) {
-          console.warn(
-            `[artifact-review-gate] run=${runId} task=${task.id} review core unavailable ` +
-              `(${coreErr instanceof Error ? coreErr.message : String(coreErr)}) — ` +
-              `opening the review the marked step asked for`,
-          );
-          coreDecision = { review: true };
-        }
+        // App163: an unavailable policy cannot authorize any mint or new
+        // decision path. Preserve the exact failure through the existing
+        // execution error road; do not convert a thrown/missing core to review.
+        const coreDecision = await gateSeam.decideDeclaredReview({
+          orgId: run.orgId,
+          templateId: run.templateId,
+          // The RUN's pinned version, never the template's mutable current row.
+          packageVersion: run.packageVersion ?? null,
+          targets: rawTargets,
+        });
         if (!coreDecision.review) {
           console.log(
             `[artifact-review-gate] run=${runId} task=${task.id} no review for this work ` +
@@ -2423,23 +2431,137 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // dropped any target the organization forbids a review for — emitting
         // the raw value again would put a refused artifact back under the gate
         // and ask the emitter to re-derive a set that had already been decided.
-        // The fail-open branch above resolves no set, so it keeps the raw value:
-        // a core that could not answer must not narrow what a person reviews.
+        // A successful policy decline keeps the raw inventory but opens no
+        // review. A failed core already exited through the existing error road.
         if (coreDecision.review && coreDecision.targets) {
           pinnedTargets = coreDecision.targets;
         }
-        const emitResult = coreDecision.review
-          ? await gateSeam.emit({
+        // Read the complete existing gate inventory BEFORE any mint. Failure is
+        // an existing execution error, not proof that no review remains. Reuse
+        // this reading for leg election; do not mint and only then discover that
+        // the inventory was unavailable (cinatra#3944, App160).
+        const known = coreDecision.review ? await gateSeam.listGates!(runId) : [];
+        const pinInventory = inventoryReviewTargets(pinnedTargets);
+        console.log(`[artifact-review-gate] run=${runId} task=${task.id} policy target inventory`, {
+          rawTargetCount: rawPinInventory.rawTargetCount,
+          rawDistinctValidPairCount: rawPinInventory.distinctValidPairCount,
+          policyReview: coreDecision.review,
+          policyTargetCount: pinInventory.rawTargetCount,
+          policyDistinctValidPairCount: pinInventory.distinctValidPairCount,
+          policyInvalidOccurrenceCount: pinInventory.invalidOccurrenceCount,
+        });
+        const legs = coreDecision.review
+          ? planPerArtifactReviewGates({ reviewTaskId, targets: pinnedTargets })
+          : [];
+        type GateEmitResult = Awaited<ReturnType<typeof gateSeam.emit>>;
+        let emitResult: GateEmitResult;
+        // A gate from before singleton minting keeps its complete original pins.
+        // Read it BEFORE emitting any leg: a conflict on the first scalar must
+        // never be followed by a new sibling overlapping that combined review.
+        // Missing pin metadata (including an older seam) is not proof of absence.
+        let original: Awaited<ReturnType<typeof gateSeam.readGate>> | "read-failed" = null;
+        if (coreDecision.review) {
+          try {
+            original = await gateSeam.readGate(runId, reviewTaskId);
+          } catch {
+            original = "read-failed";
+          }
+        }
+        const originalPins = original && original !== "read-failed" && original.orgId === run.orgId
+          ? normalizeReviewTargets(original.targets)
+          : null;
+        if (original === "read-failed") {
+          pinnedTargets = null;
+          emitResult = { ok: false, code: "pin-conflict", message: "the original review could not be read" };
+        } else if (original && (original.orgId !== run.orgId || !originalPins?.ok)) {
+          pinnedTargets = null;
+          emitResult = { ok: false, code: "pin-conflict", message: "the original review's ownership and complete pins could not be verified" };
+        } else if (pinInventory.distinctValidPairCount > new Set(pinInventory.validPairs.map((target) => target.artifactId)).size) {
+          // Two exact revisions of one artifact are distinct inventory entries,
+          // not two artifact reviews. No decided partial-set rule authorizes
+          // dropping that artifact and minting the rest, so refuse the WHOLE
+          // ambiguous set before any emit. This uses the existing held road;
+          // first/latest-wins and re-pin remain product policy (App162).
+          emitResult = { ok: false, code: "invalid-targets", message: "the review target set names different revisions of the same artifact" };
+        } else if (original && pinInventory.invalidOccurrenceCount > 0) {
+          // An uncertain caller set cannot reuse its valid-looking subset or
+          // mint siblings. Keep the original immutable gate and hold this step
+          // through the same refusal/re-read road below. The inventory retains
+          // every malformed/unknown entry separately, without rewriting pins.
+          emitResult = { ok: false, code: "invalid-targets", message: "the review target set contains unverified pins" };
+        } else if (originalPins?.ok && originalPins.targets.length === 1 && pinInventory.validPairs.length > 0 && (
+          pinInventory.validPairs[0].artifactId !== originalPins.targets[0].artifactId ||
+          pinInventory.validPairs[0].representationRevisionId !== originalPins.targets[0].representationRevisionId ||
+          pinInventory.validPairs.some((target) => target.artifactId === originalPins.targets[0].artifactId && target.representationRevisionId !== originalPins.targets[0].representationRevisionId)
+        )) {
+          // Reusing the first leg requires its exact original pair, and no
+          // second revision of that artifact may hide behind first-wins dedup.
+          // Refuse BEFORE any emit, so no later sibling is minted. Never re-pin
+          // the original or let the newer revision's step run past this hold.
+          emitResult = { ok: false, code: "pin-conflict", message: "the original review pins a different revision" };
+        } else if (originalPins?.ok && originalPins.targets.length > 1) {
+          // Replay through the SAME central emitter with the caller's whole set.
+          // It validates org and exact immutable pins, and leaves an existing
+          // pending/resolved gate and its decision/outbox untouched. Never mint
+          // scalar legs or replace the caller's set with the stored set to make
+          // a mismatched request pass. The route describes the actual old gate.
+          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          pinnedTargets = originalPins.targets;
+        } else if (legs.length > 1) {
+          // ONE EMIT PER ARTIFACT, in the order the set named them. Every leg is
+          // pinned now — a gate is immutable once pinned, so the whole review is
+          // frozen at the moment the run reached it — and the person is routed to
+          // the first leg still open. The routed leg's own emit decides the route,
+          // exactly as the single emit always did.
+          const emitted = new Map<string, GateEmitResult>();
+          let refusedLeg: (typeof legs)[number] | undefined;
+          for (const leg of legs) {
+            const result = await gateSeam.emit({
               runId,
               orgId: run.orgId,
-              reviewTaskId,
-              targets: pinnedTargets,
-            })
-          : ({
-              ok: false as const,
-              code: "invalid-targets" as const,
-              message: coreDecision.why ?? "the review core opened no review",
+              reviewTaskId: leg.reviewTaskId,
+              targets: leg.targets,
             });
+            emitted.set(leg.reviewTaskId, result);
+            if (!result.ok) {
+              // The preflight and mint are separate reads. A combined gate can
+              // appear between them; reconcile this refusal before attempting
+              // any later leg, or that later mint overlaps the original gate.
+              refusedLeg = leg;
+              break;
+            }
+          }
+          // A later refusal cannot replace an already-minted pending decision
+          // with an ordinary human gate. Consider only successfully emitted legs
+          // first, using the successful inventory read taken before minting.
+          // If none remains unresolved, recover the refused leg as before (in
+          // particular a first-leg conflict with a grandfathered combined gate).
+          const successfulLegs = legs.filter((leg) => emitted.get(leg.reviewTaskId)?.ok);
+          const next = refusedLeg
+            ? nextUnresolvedLeg({ planned: successfulLegs, gates: known }) ?? refusedLeg
+            : nextUnresolvedLeg({ planned: legs, gates: known }) ?? legs[0];
+          reviewTaskId = next.reviewTaskId;
+          pinnedTargets = next.targets;
+          emitResult = emitted.get(next.reviewTaskId) ?? {
+            ok: false as const,
+            code: "invalid-targets" as const,
+            message: "the per-artifact review named a leg that was never emitted",
+          };
+        } else {
+          if (legs.length === 1) pinnedTargets = legs[0].targets;
+          emitResult = coreDecision.review
+            ? await gateSeam.emit({
+                runId,
+                orgId: run.orgId,
+                reviewTaskId,
+                targets: pinnedTargets,
+              })
+            : ({
+                ok: false as const,
+                code: "invalid-targets" as const,
+                message: coreDecision.why ?? "the review core opened no review",
+              });
+        }
         if (emitResult.ok) {
           routeToReviewSurface = true;
         } else {
@@ -2450,7 +2572,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // missing gate) rather than ALSO emitting the legacy gate. Only a re-read
           // that DEFINITIVELY resolves to no usable gate for THIS run (null,
           // resolved, or a foreign org) falls open to the legacy HITL gate.
-          let reread: { orgId: string; status: string } | null | "read-failed";
+          let reread: Awaited<ReturnType<typeof gateSeam.readGate>> | "read-failed";
           try {
             reread = await gateSeam.readGate(runId, reviewTaskId);
           } catch {
@@ -2464,6 +2586,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             );
             routeToReviewSurface = true;
           } else if (reread && reread.orgId === run.orgId && reread.status === "pending") {
+            const actualPins = normalizeReviewTargets(reread.targets);
+            pinnedTargets = actualPins.ok ? actualPins.targets : null;
             console.warn(
               `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
                 `(${emitResult.message}) — a usable pending gate for this run already exists; ` +

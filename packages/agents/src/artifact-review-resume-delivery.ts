@@ -57,9 +57,14 @@ import {
 } from "./wayflow-url";
 import {
   claimPendingResumeIntents,
+  listReviewGatesForRun,
   markResumeIntentDelivered,
   type ResumeIntentRow,
 } from "./artifact-review-gate-store";
+import {
+  baseReviewTaskId,
+  hasPendingSiblingLeg,
+} from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
 /** The per-intent delivery outcome. */
@@ -142,7 +147,7 @@ export async function deliverArtifactReviewResumeIntent(
     );
     return "retryable";
   }
-  const taskId = reviewTaskId.slice("wayflow-".length);
+  const taskId = baseReviewTaskId(reviewTaskId.slice("wayflow-".length));
 
   // Resolve the paused run: the per-gate a2a_task_id column first, then the
   // Redis reverse-map written at interrupt-emit (authoritative when the column
@@ -310,6 +315,28 @@ export async function deliverArtifactReviewResumeIntent(
       );
       return "retryable";
     }
+  }
+
+  // Retain the current dispatch authorization before acknowledging a sibling
+  // hold; the existing per-artifact model changes no install-scope boundary.
+  // cinatra#3035 (epic #3023 W11) — THE RUN PARKS AT EACH. One WayFlow pause can
+  // carry one review per artifact — the post's, then each picture's — and the run
+  // may only go on when the LAST of them is decided. A decision on an earlier leg
+  // is complete in itself: its intent is closed here WITHOUT a resume, the run
+  // stays exactly where it is, and the person reads the next artifact on its own
+  // gate. A failed inventory read answers nothing: propagate through the
+  // existing sweep error road, which leaves the intent pending for lease
+  // re-claim. Neither a resume nor a delivered acknowledgement is authorized by
+  // an unreadable sibling set (cinatra#3944, App160).
+  const siblingLegs = await listReviewGatesForRun(run.id);
+  if (hasPendingSiblingLeg({ reviewTaskId, gates: siblingLegs })) {
+    const ok = await markResumeIntentDelivered(gateId, leaseToken);
+    console.log(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} decided one artifact of a ` +
+        `per-artifact review; another artifact of the same pause is still open — the run stays ` +
+        `parked, marked ${ok ? "done" : "LEASE-LOST"}`,
+    );
+    return ok ? "already-advanced" : "lease-lost";
   }
 
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic

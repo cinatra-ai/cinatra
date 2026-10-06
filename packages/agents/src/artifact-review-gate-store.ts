@@ -163,7 +163,7 @@ export interface EmitReviewGateResult {
 }
 
 /**
- * PIN a run's review targets at gate creation. "Latest" is resolved by the
+ * PIN one artifact revision at gate creation. "Latest" is resolved by the
  * CALLER before it reaches here — this store freezes exactly what it is given, so
  * a reviewer approves the exact revision the gate froze (no review/serve TOCTOU).
  *
@@ -207,7 +207,26 @@ export async function emitArtifactReviewGate(input: {
     throw new ArtifactReviewGateError("invalid-targets", normalized.error);
   }
   const pinned = canonicalPinnedSet(normalized.targets);
-
+  // Only NEW gates must be singleton. An exact replay of a grandfathered gate
+  // is a read, not a mint: keep its original pins, status and decision untouched.
+  // Keep the general normalizer's historical bound for readback and decisions.
+  if (normalized.targets.length !== 1) {
+    const existing = await readReviewGateVia(executor, input.runId, input.reviewTaskId);
+    if (existing) {
+      const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
+      if (existing.orgId !== input.orgId || pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
+        throw new ArtifactReviewGateError(
+          "pin-conflict",
+          `Review gate ${input.reviewTaskId} on run ${input.runId} already belongs to another organization or target set.`,
+        );
+      }
+      return { gateId: existing.id, targets: rowsToTargets(existingPinned), idempotent: true };
+    }
+    throw new ArtifactReviewGateError(
+      "invalid-targets",
+      "A review gate must pin exactly one artifact revision. Open a separate review for each artifact.",
+    );
+  }
   const gateId = randomUUID();
   const [inserted] = await executor
     .insert(artifactReviewGates)

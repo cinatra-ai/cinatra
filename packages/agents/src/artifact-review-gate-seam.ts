@@ -15,12 +15,13 @@ import "server-only";
 //
 // The seam's `emit` returns a RESULT (never throws the store's typed
 // `ArtifactReviewGateError`) so the run executor needs neither the store nor its
-// error type; `readGate` projects the gate row down to the minimal {orgId,
-// status} the executor's re-read decision needs.
+// error type; `readGate` projects the gate row down to the org/status and complete pinned target identity the executor needs to
+// distinguish a grandfathered combined gate before any singleton mint.
 // ---------------------------------------------------------------------------
 
 import {
   emitArtifactReviewGate,
+  listReviewGatesForRun,
   readReviewGate,
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
@@ -55,7 +56,12 @@ export type ArtifactReviewGateSeam = {
   readGate(
     runId: string,
     reviewTaskId: string,
-  ): Promise<{ orgId: string; status: string } | null>;
+  ): Promise<{ orgId: string; status: string; targets: Array<{ artifactId: string; representationRevisionId: string }> } | null>;
+  /** cinatra#3035 (epic #3023 W11) — every gate this run owns, projected to what
+   *  the per-artifact routing needs: a review that opens one gate per artifact
+   *  sends the person to the first artifact still waiting to be read, and only
+   *  the run's own gate list can say which that is. */
+  listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -79,7 +85,15 @@ export function bindArtifactReviewGateSeam(): void {
     },
     async readGate(runId, reviewTaskId) {
       const gate = await readReviewGate(runId, reviewTaskId);
-      return gate ? { orgId: gate.orgId, status: gate.status } : null;
+      return gate ? {
+        orgId: gate.orgId,
+        status: gate.status,
+        targets: gate.pinnedTargets.map(({ artifactId, representationRevisionId }) => ({ artifactId, representationRevisionId })),
+      } : null;
+    },
+    async listGates(runId) {
+      const gates = await listReviewGatesForRun(runId);
+      return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
     },
   };
   (

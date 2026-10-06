@@ -63,6 +63,7 @@ vi.mock("../wayflow-url", () => ({
 
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
+  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ reviewTaskId: string; status: string }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
@@ -126,6 +127,7 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun());
     storeMock.readAgentTemplateById.mockResolvedValue(internalTemplate());
     gateStoreMock.markResumeIntentDelivered.mockResolvedValue(true);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([]);
     sendTaskSpy.mockResolvedValue({ id: "task-x", status: { state: "completed" } });
     handleWayflowTaskStateSpy.mockResolvedValue(undefined);
     // Default: the run's authoritative latest gate task IS this gate → deliver.
@@ -147,6 +149,57 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
 
     expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("resolves a suffixed artifact leg through its original paused task", async () => {
+    storeMock.readAgentRunByTaskId.mockImplementation(async (taskId: string) =>
+      taskId === "task-1" ? pausedRun() : null,
+    );
+    const responseText = JSON.stringify(buildReviewApproveEnvelope({
+      reviewTaskId: "wayflow-task-1#2", comment: null, targets: [],
+    }));
+    const outcome = await deliverArtifactReviewResumeIntent(intent({
+      reviewTaskId: "wayflow-task-1#2", responseText,
+    }));
+    expect(outcome).toBe("delivered");
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+    const sent = sendTaskSpy.mock.calls[0]![0] as { message: { parts: Array<{ text: string }> } };
+    expect(sent.message.parts[0]!.text).toBe(responseText);
+  });
+
+  it("keeps the original pause parked while another artifact leg is pending", async () => {
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "wayflow-task-1", status: "resolved" },
+      { reviewTaskId: "wayflow-task-1#2", status: "pending" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("does not let another pause's pending leg hold this original task", async () => {
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "wayflow-task-1", status: "resolved" },
+      { reviewTaskId: "wayflow-task-2#2", status: "pending" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ reviewTaskId: "wayflow-task-1#2" }));
+    expect(outcome).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+  });
+
+  it("retains dispatch authorization before acknowledging a pending sibling hold", async () => {
+    const { assertAgentRunDispatchAuthorized } = await import("../agent-run-serde");
+    vi.mocked(assertAgentRunDispatchAuthorized).mockRejectedValueOnce(new Error("unreadable scope"));
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "wayflow-task-1#2", status: "pending" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
   it("REJECT never reads as approval — the reject envelope travels the wire verbatim", async () => {
@@ -251,4 +304,20 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(summary.failed).toBe(1);
     expect(summary.delivered).toBe(0);
   });
+  it("App160: a failed gate-list read sends and acknowledges nothing, then the existing intent retries", async () => {
+    const failure = new Error("existing sibling inventory unavailable");
+    const currentIntent = intent();
+    const before = JSON.stringify(currentIntent);
+    gateStoreMock.listReviewGatesForRun.mockRejectedValueOnce(failure);
+    await expect(deliverArtifactReviewResumeIntent(currentIntent)).rejects.toBe(failure);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    expect(JSON.stringify(currentIntent)).toBe(before);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([]);
+    await expect(deliverArtifactReviewResumeIntent(currentIntent)).resolves.toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledTimes(1);
+  });
+
 });
