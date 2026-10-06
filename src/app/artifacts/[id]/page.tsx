@@ -25,7 +25,6 @@
  *     http/https before it ever reaches this href).
  */
 import "server-only";
-import { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ExternalLink } from "lucide-react";
@@ -41,7 +40,10 @@ import {
   readArtifactForDetail,
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
-import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import {
+  resolveArtifactVersionForServe,
+  resolveNonFileArtifactRevision,
+} from "@/lib/artifacts/artifact-read";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
   absentArtifactContent,
@@ -49,11 +51,8 @@ import {
   grantArtifactEdit,
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
-import { hostArtifactContentBuilder } from "./review-surface-roads";
-import {
-  artifactDisplayTitle,
-  buildArtifactDetailHeader,
-} from "./artifact-detail-header";
+import { hostArtifactContentBuilder, SESSION_DATA_ROAD } from "./review-surface-roads";
+import { buildArtifactDetailHeader } from "./artifact-detail-header";
 import { resolveArtifactContentClass } from "@/lib/artifacts/artifact-content-channel";
 import {
   getRepresentationByIdForReplay,
@@ -65,15 +64,7 @@ import {
   ARTIFACT_EDIT_TEXT_CAP_BYTES,
 } from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
-import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
-import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
-
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
-import {
-  DashboardPointerDetail,
-  DashboardPointerLoading,
-  DashboardPointerError,
-} from "./dashboard-pointer-detail";
 import {
   pickArtifactRenderer,
   isSelectionPreparing,
@@ -114,30 +105,9 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   if (access.kind === "denied") return <ArtifactReadDeniedPanel />;
   const artifact: ArtifactSummary = access.artifact;
 
-  // §VIII — a dashboard artifact opens as a POINTER, never an inline render
-  // (owner ruling 2026-07-20; spec app-artifacts.html §VIII, design@5daf862). It carries
-  // NO renderer dispatch and NO Download: the detail is a pointer surface that
-  // navigates to the dashboard's canonical surface. The dual authorization + the
-  // dashboard name/scope resolve inside the streamed boundary, so the loading /
-  // error / not-authorized states are the pointer surface's own frames.
-  if (isDashboardArtifactType(artifact.objectType)) {
-    return (
-      <Main className="min-h-screen">
-        <PageHeader
-          title={artifactDisplayTitle(artifact)}
-          description="A dashboard artifact — opens at its canonical surface."
-        />
-        <PageContent
-          className="flex flex-col gap-6 pb-8"
-          data-render-dispatch="dashboard-pointer"
-        >
-          <Suspense fallback={<DashboardPointerLoading />}>
-            <DashboardPointerBoundary artifactId={id} />
-          </Suspense>
-        </PageContent>
-      </Main>
-    );
-  }
+  // EVERY ROW REACHES THE ONE DISPLAY DISPATCH BELOW, whatever its type
+  // (cinatra#3092). The page holds no branch for any one type: a type's own
+  // display draws it, and a type with none draws the generic floor.
 
   // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
   //
@@ -161,13 +131,29 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // Latest representation is required for any in-page rendering. Without
   // it (rare — artifact metadata without a materialized representation),
   // fall through to the fallback handler.
-  const resolved = revisionId
+  const fileRevision = revisionId
     ? resolveArtifactVersionForServe({
         orgId,
         artifactId: id,
         representationRevisionId: revisionId,
       })
     : null;
+  // A HEAD REVISION THAT IS NOT A FILE (cinatra#3092) is read exactly as the
+  // review binder reads it: through the non-file reader, which verifies the
+  // (organization, artifact, revision) tuple and answers the revision's recorded
+  // mime. It has no bytes, so it gets no preview or download address below —
+  // the review binder's own rule that "non-file props carry no preview or
+  // download address". A file revision reads exactly as before.
+  const nonFileRevision =
+    revisionId && !fileRevision
+      ? resolveNonFileArtifactRevision({
+          orgId,
+          artifactId: id,
+          representationRevisionId: revisionId,
+        })
+      : null;
+  const resolved: { mime: string; sizeBytes: number | null } | null =
+    fileRevision ?? (nonFileRevision ? { mime: nonFileRevision.mime, sizeBytes: null } : null);
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
   // THE HEADER DESCRIBES THE REVISION UNDER IT, both halves of the sentence.
@@ -178,12 +164,14 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
   // The header model carries no size cell either — the drawing draws a size on
   // the per-kind download card (the drawing's V.2), not on this line, so the
   // page resolves none for the header and passes none to it.
-  const previewHref = revisionId
-    ? `/api/artifacts/${id}/versions/${revisionId}/preview`
-    : null;
-  const downloadHref = revisionId
-    ? `/api/artifacts/${id}/versions/${revisionId}/content`
-    : null;
+  const previewHref =
+    revisionId && !nonFileRevision
+      ? `/api/artifacts/${id}/versions/${revisionId}/preview`
+      : null;
+  const downloadHref =
+    revisionId && !nonFileRevision
+      ? `/api/artifacts/${id}/versions/${revisionId}/content`
+      : null;
 
   // Renderer dispatch spine (cinatra#1629, epic #1620 S2): the pre-spine
   // always-true `hasTypedRenderer` signal is REPLACED by claimant-keyed
@@ -307,6 +295,10 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
     downloadHref,
     content,
     edit,
+    // THE DATA ROAD (props v3, cinatra#3092), handed to every display on this
+    // page: its reader carries a session. No review reading — this page is
+    // outside a review, and the contract says absent outside a review.
+    data: SESSION_DATA_ROAD,
   });
 
   // The generic floor — reused by every degrade path so the body is never blank.
@@ -470,24 +462,4 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
       </PageContent>
     </Main>
   );
-}
-
-/**
- * §VIII pointer boundary — streams the READY pointer behind the detail page's
- * Suspense (fallback = the loading frame). Applies the Phase-1 DUAL
- * AUTHORIZATION: `denied` routes to the not-authorized panel (the object.read
- * gate already passed above — this is the "may list but not read" case);
- * `not-found` 404s (existence stays hidden); a dashboards-source failure renders
- * the error frame rather than bubbling. NEVER renders the dashboard inline.
- */
-async function DashboardPointerBoundary({ artifactId }: { artifactId: string }) {
-  let resolved;
-  try {
-    resolved = await resolveDashboardArtifactPointer(artifactId);
-  } catch {
-    return <DashboardPointerError />;
-  }
-  if (resolved.access === "not-found") notFound();
-  if (resolved.access === "denied") return <ArtifactReadDeniedPanel />;
-  return <DashboardPointerDetail pointer={resolved.pointer} />;
 }
