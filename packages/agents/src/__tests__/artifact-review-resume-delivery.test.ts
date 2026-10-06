@@ -1,3 +1,4 @@
+import { declaredReviewPlan } from "@/lib/artifacts/artifact-review-target";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // cinatra#1796 (epic #1620 S13) — the resume-delivery worker.
@@ -63,6 +64,7 @@ vi.mock("../wayflow-url", () => ({
 
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
+  listReviewGatesForRun: vi.fn<(runId: string) => Promise<Array<{ runId?: string; orgId?: string; reviewTaskId: string; status: string; pinnedTargets?: unknown }>>>(async () => []),
   markResumeIntentDelivered: vi.fn(),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
@@ -120,12 +122,21 @@ function intent(overrides: Partial<ResumeIntentRow> = {}): ResumeIntentRow {
   };
 }
 
+const PAUSE_TARGETS = [{ artifactId: "post", representationRevisionId: "r1" }, { artifactId: "image", representationRevisionId: "r2" }];
+function familyRows(statuses: string[] = ["resolved", "resolved"]) {
+  const plan = declaredReviewPlan({ runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-1", targets: PAUSE_TARGETS })!;
+  return plan.legs.map((leg, i) => ({ runId: "run-1", orgId: "org-1", reviewTaskId: leg.reviewTaskId,
+    status: statuses[i], pinnedTargets: [{ ...leg.targets[0], declaredReviewPlan: plan }] }));
+}
+function legacyRow() { return { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-1", status: "resolved", pinnedTargets: [PAUSE_TARGETS[0]] }; }
+
 describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun());
     storeMock.readAgentTemplateById.mockResolvedValue(internalTemplate());
     gateStoreMock.markResumeIntentDelivered.mockResolvedValue(true);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([legacyRow()]);
     sendTaskSpy.mockResolvedValue({ id: "task-x", status: { state: "completed" } });
     handleWayflowTaskStateSpy.mockResolvedValue(undefined);
     // Default: the run's authoritative latest gate task IS this gate → deliver.
@@ -147,6 +158,57 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
 
     expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
     expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("resolves a suffixed artifact leg through its original paused task", async () => {
+    storeMock.readAgentRunByTaskId.mockImplementation(async (taskId: string) =>
+      taskId === "task-1" ? pausedRun() : null,
+    );
+    const responseText = JSON.stringify(buildReviewApproveEnvelope({
+      reviewTaskId: "wayflow-task-1#2", comment: null, targets: [],
+    }));
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(familyRows());
+    const outcome = await deliverArtifactReviewResumeIntent(intent({
+      reviewTaskId: "wayflow-task-1#2", responseText,
+    }));
+    expect(outcome).toBe("delivered");
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+    const sent = sendTaskSpy.mock.calls[0]![0] as { message: { parts: Array<{ text: string }> } };
+    expect(sent.message.parts[0]!.text).toBe(responseText);
+  });
+
+  it("keeps the original pause parked while another artifact leg is pending", async () => {
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      ...familyRows(["resolved", "pending"]),
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("already-advanced");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+  });
+
+  it("does not let another pause's pending leg hold this original task", async () => {
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      ...familyRows(),
+      { reviewTaskId: "wayflow-task-2#2", status: "pending" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent({ reviewTaskId: "wayflow-task-1#2" }));
+    expect(outcome).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(storeMock.readAgentRunByTaskId).toHaveBeenCalledWith("task-1");
+  });
+
+  it("retains dispatch authorization before acknowledging a pending sibling hold", async () => {
+    const { assertAgentRunDispatchAuthorized } = await import("../agent-run-serde");
+    vi.mocked(assertAgentRunDispatchAuthorized).mockRejectedValueOnce(new Error("unreadable scope"));
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "wayflow-task-1#2", status: "pending" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(outcome).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 
   it("REJECT never reads as approval — the reject envelope travels the wire verbatim", async () => {
@@ -251,4 +313,79 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(summary.failed).toBe(1);
     expect(summary.delivered).toBe(0);
   });
+  it("App160: a failed gate-list read sends and acknowledges nothing, then the existing intent retries", async () => {
+    const failure = new Error("existing sibling inventory unavailable");
+    const currentIntent = intent();
+    const before = JSON.stringify(currentIntent);
+    gateStoreMock.listReviewGatesForRun.mockRejectedValueOnce(failure);
+    await expect(deliverArtifactReviewResumeIntent(currentIntent)).rejects.toBe(failure);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    expect(JSON.stringify(currentIntent)).toBe(before);
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([legacyRow()]);
+    await expect(deliverArtifactReviewResumeIntent(currentIntent)).resolves.toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledTimes(1);
+  });
+  it("REVIEW completeness: an original singleton must not resume after a second required leg failed to mint", async () => {
+    // execution.ts's partial-mint branch leaves just this gate when the next
+    // required emit refuses (the authored marked-gate test proves that state).
+    // After its decision, no pending row represents the still-unreviewed second
+    // target; a successful list read must not prove the whole pause complete.
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "wayflow-task-1", status: "resolved" },
+    ]);
+    const outcome = await deliverArtifactReviewResumeIntent(intent());
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    expect(outcome).toBe("retryable");
+  });
+
+  it.each(["missing", "resolved-mismatch", "missing-witness", "malformed-witness", "foreign", "wrong-run"])("H1: %s family sends and acknowledges nothing", async corruption => {
+    const rows = familyRows();
+    if (corruption === "missing") rows.pop();
+    if (corruption === "resolved-mismatch") rows[1].pinnedTargets[0].representationRevisionId = "different";
+    if (corruption === "missing-witness") delete (rows[1].pinnedTargets[0] as { declaredReviewPlan?: unknown }).declaredReviewPlan;
+    if (corruption === "malformed-witness") Object.assign(rows[1].pinnedTargets[0], { declaredReviewPlan: {} });
+    if (corruption === "foreign") rows[1].orgId = "other";
+    if (corruption === "wrong-run") rows[1].runId = "other";
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(familyRows());
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "completed" }));
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("already-advanced");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+  it("keeps a legitimate historical combined gate drain unchanged", async () => {
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue([{ ...legacyRow(), pinnedTargets: PAUSE_TARGETS }]);
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("H2: the independent trailing malformed duplicate witness cannot authorize resume", async () => {
+    const rows = familyRows();
+    for (const row of rows) {
+      const witness = row.pinnedTargets[0].declaredReviewPlan as unknown as { legs: unknown[] };
+      witness.legs.push({ reviewTaskId: "wayflow-task-1#3", targets: [PAUSE_TARGETS[0]], unexpected: true });
+    }
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it("H2: raw duplicate pinned entries cannot impersonate one witnessed singleton", async () => {
+    const rows = familyRows();
+    rows[1].pinnedTargets.push({ ...rows[1].pinnedTargets[0] });
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
 });

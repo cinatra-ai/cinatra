@@ -3,6 +3,8 @@
  * review. Exercise the real declared-review wrapper and policy with mocked
  * reads only. This separate fix leg replaces the two defective fallback
  * expectations while preserving the template-read fallback and healthy policy.
+ * Keep the default-manifest read-failure cases from the #3944 caller tests;
+ * their former fail-open expectations now require the original refusal.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,6 +48,18 @@ describe("cinatra#3948: failed declared-review lookups never weaken review", () 
     readArtifact.mockResolvedValue([{ type: "blog-post", deletedAt: null }]);
     readOrgRule.mockResolvedValue({ bound: "silent" });
     templateWith(null);
+  });
+
+  it.each(["artifact", "organization"] as const)("propagates a default-manifest %s read failure without returning a review decision", async (lookup) => {
+    const original = structuredClone(REQUEST);
+    const failure = new Error(`${lookup} lookup unavailable without a manifest skip`);
+    if (lookup === "artifact") readArtifact.mockRejectedValueOnce(failure);
+    else readOrgRule.mockRejectedValueOnce(failure);
+    await expect(decideDeclaredReviewForGate(REQUEST)).rejects.toBe(failure);
+    expect(readArtifact).toHaveBeenCalledTimes(1);
+    if (lookup === "artifact") expect(readOrgRule).not.toHaveBeenCalled();
+    else expect(readOrgRule).toHaveBeenCalledTimes(1);
+    expect(REQUEST).toEqual(original);
   });
 
   it("propagates an artifact read failure instead of bypassing the required organization bound", async () => {
@@ -115,6 +129,7 @@ describe("cinatra#3948: failed declared-review lookups never weaken review", () 
       review: true,
       targets: TARGETS,
     });
+    expect(readTemplate).toHaveBeenCalledWith(REQUEST.templateId);
     expect(REQUEST).toEqual(original);
   });
 
