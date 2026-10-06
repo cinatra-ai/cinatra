@@ -23,8 +23,8 @@
  *     as an unknown one (`enforceRunAccess(null, …)`);
  *   - a refusal raised by the gate propagates unchanged (404 hidden /
  *     403 forbidden), never a redirect to an administrator screen;
- *   - LIST SCOPE IS UNCHANGED: the single call stays
- *     `searchLists({ query: "", objectType: "contact" })`;
+ *   - every view in the workspace's connected CRM is requested without an
+ *     object-type filter (cinatra#3562), after the same run-access gate;
  *   - CrmList[] is mapped 1:1 to AvailableListSummary[], with `memberCount`
  *     + `lastUpdated` set to null (the provider doesn't surface them)
  *     and `memberType` derived from `CrmList.objectType`;
@@ -217,13 +217,33 @@ describe("fetchAvailableLists — run-access gate (cinatra#3050)", () => {
 });
 
 describe("fetchAvailableLists", () => {
-  it("calls searchLists with objectType:'contact' — list scope unchanged", async () => {
+  it("requests all connected workspace views after run authorization, without an object-type filter", async () => {
     searchMock.mockResolvedValueOnce([]);
 
     await fetchAvailableLists(RUN_ID);
 
     expect(searchMock).toHaveBeenCalledTimes(1);
-    expect(searchMock).toHaveBeenCalledWith({ query: "", objectType: "contact" });
+    expect(searchMock).toHaveBeenCalledWith({ query: "" });
+  });
+
+  it("includes both contact and account views returned by a provider that honors the filter", async () => {
+    const views = [
+      { id: "contacts", slug: "contacts", name: "Contacts", objectType: "contact" },
+      { id: "accounts", slug: "accounts", name: "Accounts", objectType: "account" },
+    ];
+    searchMock.mockImplementationOnce(async (input: { query: string; objectType?: string }) =>
+      views.filter((view) => !input.objectType || view.objectType === input.objectType),
+    );
+
+    const result = await fetchAvailableLists(RUN_ID);
+
+    expect(result.map(({ id, memberType }) => ({ id, memberType }))).toEqual([
+      { id: "contacts", memberType: "contact" },
+      { id: "accounts", memberType: "account" },
+    ]);
+    expect(readAgentRunByIdMock.mock.invocationCallOrder[0]).toBeLessThan(
+      searchMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("maps CrmList[] to AvailableListSummary[] with objectType -> memberType + null counts/timestamps", async () => {

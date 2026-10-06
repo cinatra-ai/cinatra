@@ -50,7 +50,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { registerFieldRendererBindings, ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
@@ -732,4 +732,51 @@ describe("OrchestratorStepperPanel — a setup field whose renderer draws no con
       expect(document.querySelector('[data-run-input-step-reading="answered"]')).toBeNull(),
     );
   });
+});
+
+
+// The real binding, list renderer, staging and product-owned Continue.
+vi.mock("../list-picker-actions", () => ({ fetchAvailableLists: vi.fn() }));
+const MULTI_PICKER = "@cinatra-test/pack-agent:multiple-picks";
+async function registerMultiplePicker() {
+  const { fetchAvailableLists } = await import("../list-picker-actions");
+  vi.mocked(fetchAvailableLists).mockResolvedValue([
+    { id: "one", name: "First view", memberCount: null, lastUpdated: null, memberType: "contact" },
+    { id: "two", name: "Second list", memberCount: null, lastUpdated: null, memberType: "account" },
+  ]);
+  registerFieldRendererBindings([{
+    id: MULTI_PICKER, kind: "list-picker", priority: 200,
+    params: { selection: "multiple", minSelected: 1, question: "Pick entries", emptyState: "Create an entry first." },
+  }]);
+}
+
+it("keeps its one Continue unavailable with no list ticked and submits every tick under the gate field", async () => {
+  await registerMultiplePicker();
+  const view = await mountGate({ xRenderer: MULTI_PICKER, fieldName: "accountScope" });
+  await view.findByRole("checkbox", { name: "First view" });
+  expect(productContinues()[0]!.disabled).toBe(true);
+  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
+  expect(productContinues()[0]!.disabled).toBe(false);
+  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
+  expect(productContinues()[0]!.disabled).toBe(true);
+  fireEvent.click(productContinues()[0]!);
+  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
+  fireEvent.click(view.getByRole("checkbox", { name: "First view" }));
+  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  fireEvent.click(productContinues()[0]!);
+  await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+    "setup-run-3532", { accountScope: JSON.stringify({ type: "list", listIds: ["two", "one"], listNames: ["Second list", "First view"] }) }, "accountScope", { type: "string" },
+  ));
+});
+
+it("a valid pick cannot enable the next gate before that gate has a choice", async () => {
+  await registerMultiplePicker();
+  const view = await mountGate({ xRenderer: MULTI_PICKER, fieldName: "accountScope" });
+  fireEvent.click(await view.findByRole("checkbox", { name: "First view" }));
+  expect(productContinues()[0]!.disabled).toBe(false);
+  view.advanceTo({ xRenderer: MULTI_PICKER, fieldName: "anotherScope" });
+  await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+  fireEvent.click(productContinues()[0]!);
+  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
 });
