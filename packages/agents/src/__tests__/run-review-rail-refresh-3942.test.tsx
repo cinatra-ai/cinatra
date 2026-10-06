@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const refresh = vi.hoisted(() => vi.fn());
 
 import { parseRunReviewSlot } from "../lifecycle-card-runtime";
-import { useRunReviewRailRefresh } from "../use-run-review-rail-refresh";
+import { useRunReviewRailRefresh } from "../lifecycle-card-runtime";
 
 function Probe({
   seed,

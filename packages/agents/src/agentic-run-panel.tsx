@@ -50,10 +50,10 @@ import {
   useComposerTarget,
   useLifecycleCardHost,
   useRunReviewSlot,
+  useRunReviewRailRefresh,
   type RunReviewSlot,
   type RunReviewSlotReader,
 } from "./lifecycle-card-runtime";
-import { useRunReviewRailRefresh } from "./use-run-review-rail-refresh";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 // The review screen's PLACEHOLDER (cinatra#2997) and the gate-level BLOCKED
 // state (cinatra#3219) — both are the review screen's own states, so they live

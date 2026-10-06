@@ -69,7 +69,6 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
-import { useRunReviewRailRefresh } from "./use-run-review-rail-refresh";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
@@ -82,6 +81,7 @@ import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
   useRunReviewSlot,
+  useRunReviewRailRefresh,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
