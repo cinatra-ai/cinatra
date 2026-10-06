@@ -327,7 +327,7 @@ function AgentRunTurnSlot({
    *  card's standing reading on exactly the terms its neighbours are reported
    *  on: off this container's own settled reading, up to the parts list that
    *  draws the sibling prose. */
-  onScheduleStandingReadingChange?: (runId: string, reading: ScheduleCardReading) => void;
+  onScheduleStandingReadingChange?: (runId: string, reading: ScheduleCardReading, slot: number) => void;
   /** The §6e apply-intent seam, threaded to the settled reading this container
    *  draws for exactly the reason the ordinary slotted views get it: the card is
    *  the same card, drawn through the same registry, and the gesture the widget
@@ -578,13 +578,13 @@ function AgentRunTurnSlot({
   const scheduleStandingReading: ScheduleCardReading =
     settledMomentViews.length > 0 ? settledReading : "other";
   useEffect(() => {
-    onScheduleStandingReadingChange?.(runId, scheduleStandingReading);
+    onScheduleStandingReadingChange?.(runId, scheduleStandingReading, slot);
     // A SLOT THAT LEAVES TAKES ITS ANSWER WITH IT, exactly as the two above.
     if (scheduleStandingReading === "other") return;
     return () => {
-      onScheduleStandingReadingChange?.(runId, "other");
+      onScheduleStandingReadingChange?.(runId, "other", slot);
     };
-  }, [onScheduleStandingReadingChange, runId, scheduleStandingReading]);
+  }, [onScheduleStandingReadingChange, runId, scheduleStandingReading, slot]);
 
   // THE RUN'S PROGRESS READING STANDS DOWN while the moment's card owns the
   // slot. It also WAITS on a turn that carries the moment's card until the run
@@ -1269,19 +1269,23 @@ function OrderedPartsSection({
   // Readings that draw no sentence are not carried at all, so the list is the
   // turn's drawn sentences in slot order and an empty list means "no line".
   const [scheduleStandingReadings, setScheduleStandingReadings] = useState<
-    readonly { runId: string; reading: ScheduleCardReading }[]
+    readonly { runId: string; reading: ScheduleCardReading; slot: number }[]
   >([]);
   const onScheduleStandingReadingChange = useCallback(
-    (runId: string, reading: ScheduleCardReading) => {
+    (runId: string, reading: ScheduleCardReading, slot: number) => {
       setScheduleStandingReadings((prev) => {
         const known = prev.find((entry) => entry.runId === runId);
-        // Identity is preserved when nothing changed, so a run that reports the
-        // same reading on every read cannot re-render the transcript.
-        if ((known?.reading ?? "other") === reading) return prev;
-        if (reading === "other") return prev.filter((entry) => entry.runId !== runId);
-        return known === undefined
-          ? [...prev, { runId, reading }]
-          : prev.map((entry) => (entry.runId === runId ? { runId, reading } : entry));
+        // Independent card reads can resolve in any order. The rendered part
+        // index decides which card comes first, including when a retained run
+        // moves to another slot on a subsequent render.
+        if (reading === "other") {
+          return known === undefined ? prev : prev.filter((entry) => entry.runId !== runId);
+        }
+        if (known?.reading === reading && known.slot === slot) return prev;
+        const next = known === undefined
+          ? [...prev, { runId, reading, slot }]
+          : prev.map((entry) => (entry.runId === runId ? { runId, reading, slot } : entry));
+        return next.sort((a, b) => a.slot - b.slot);
       });
     },
     [],

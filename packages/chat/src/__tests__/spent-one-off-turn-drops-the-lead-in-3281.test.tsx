@@ -497,3 +497,93 @@ it("keeps one flat proposal turn through first-shown, configured and spent readi
   await assertReading("fired-one-off", SPENT_ONE_OFF_SENTENCE);
   expect(container.textContent).not.toContain(MODEL_LEAD_IN);
 });
+
+
+const SECOND_SCHEDULE_RUN = "be7c9b24-5d08-4a6e-b3f1-92c4de0a5b77";
+const SECOND_SCHEDULE_REF = "schedule-ref-second-3281";
+
+async function mountTwoFlatScheduleSlots(firstResponse: "one-off" | "recurring") {
+  let releaseLater!: () => void;
+  const laterResponse = new Promise<void>((resolve) => { releaseLater = resolve; });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/agents/runs/")) return jsonResponse(RUN_PAST_SCHEDULE);
+    if (url === "/api/lifecycle-views/resolve") {
+      const request = JSON.parse(String(init?.body)) as { ref: string };
+      const oneOff = request.ref === CARD_REF;
+      if (!oneOff && request.ref !== SECOND_SCHEDULE_REF) return jsonResponse({}, 404);
+      if (oneOff !== (firstResponse === "one-off")) await laterResponse;
+      return jsonResponse({
+        kind: "trigger_schedule_proposal", state: { state: "settled" },
+        body: oneOff ? ONE_OFF_BODY : { ...RECURRING_BODY, runId: SECOND_SCHEDULE_RUN },
+        firedOnce: true,
+      });
+    }
+    return jsonResponse({}, 404);
+  }) as typeof fetch;
+  const messages = flatProposalTurn();
+  const assistant = messages[1] as unknown as { lifecycleParts: Array<Record<string, unknown>> };
+  assistant.lifecycleParts.push({
+    kind: "tool_call", id: "second-flat-schedule", name: "agent_run", status: "completed",
+    runId: SECOND_SCHEDULE_RUN,
+    result: JSON.stringify({ runId: SECOND_SCHEDULE_RUN, status: "queued" }),
+    views: [{ viewType: "trigger_schedule_proposal", schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: SECOND_SCHEDULE_REF }],
+  });
+  const view = await mountSurface("chat", { messages, slackMode: true });
+  await waitFor(() => {
+    const blocks = assistantProseBlocks(view.container);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.textContent).toBe(firstResponse === "one-off" ? SPENT_ONE_OFF_SENTENCE : FIRED_RECURRING_SENTENCE);
+  });
+  await act(async () => { releaseLater(); });
+  await waitFor(() => {
+    const cards = Array.from(view.container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]'));
+    expect(cards).toHaveLength(2);
+    expect(cards.map((card) => card.getAttribute("data-schedule-reading"))).toEqual(["fired-one-off", "fired-recurring"]);
+  });
+  return { ...view, messages, assistant };
+}
+
+it.each(["one-off", "recurring"] as const)(
+  "elects the first flat schedule slot when %s resolves first",
+  async (firstResponse) => {
+    const { container } = await mountTwoFlatScheduleSlots(firstResponse);
+    await waitFor(() => {
+      const blocks = assistantProseBlocks(container);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]?.textContent).toBe(SPENT_ONE_OFF_SENTENCE);
+      expect(blocks[0]?.getAttribute("data-schedule-standing-line")).toBe("spent-one-off");
+    });
+    expect(container.textContent).not.toContain(MODEL_LEAD_IN);
+  },
+);
+
+it("follows reordered flat schedule slots and withdraws the removed slot's reading", async () => {
+  const { container, rerender, messages, assistant } = await mountTwoFlatScheduleSlots("one-off");
+  assistant.lifecycleParts = [...assistant.lifecycleParts].reverse();
+  rerender(surfaceElement("chat", { messages, slackMode: true }));
+  await waitFor(() => {
+    const cards = Array.from(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]'));
+    expect(cards.map((card) => card.getAttribute("data-schedule-reading"))).toEqual(["fired-recurring", "fired-one-off"]);
+    const blocks = assistantProseBlocks(container);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.textContent).toBe(FIRED_RECURRING_SENTENCE);
+  });
+  assistant.lifecycleParts = assistant.lifecycleParts.slice(1);
+  rerender(surfaceElement("chat", { messages, slackMode: true }));
+  await waitFor(() => {
+    expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
+    const blocks = assistantProseBlocks(container);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.textContent).toBe(SPENT_ONE_OFF_SENTENCE);
+  });
+  assistant.lifecycleParts = [];
+  rerender(surfaceElement("chat", { messages, slackMode: true }));
+  await waitFor(() => {
+    expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(0);
+    const blocks = assistantProseBlocks(container);
+    expect(blocks).toHaveLength(1);
+    expect(visibleText(blocks[0]!)).toBe(MODEL_LEAD_IN);
+    expect(container.querySelector("[data-schedule-standing-line]")).toBeNull();
+  });
+});
