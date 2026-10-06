@@ -138,6 +138,8 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  buildGateContinuePayload,
+  mergeGateRendererValues,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -821,7 +823,9 @@ export function AgentHitlScreenFields({
                   // the reader only ever sees one Continue.
                   let nextBuffered = buffered;
                   if (next && typeof next === "object" && !Array.isArray(next)) {
-                    nextBuffered = { ...buffered, ...(next as Record<string, unknown>) };
+                    nextBuffered = mergeGateRendererValues(
+                      gate.reviewTaskId, buffered, next as Record<string, unknown>,
+                    );
                     onBuffer(nextBuffered);
                   }
                   if (isGroupedSetup) await onSubmitBuffer(nextBuffered);
@@ -916,11 +920,7 @@ export function AgentHitlScreenContinue({
       submitting={submitting}
       blocked={blocked}
       onPress={async () => {
-        let payload: Record<string, unknown> = {
-          ...buffered,
-          approved: true,
-          approvedAt: new Date().toISOString(),
-        };
+        let payload = buildGateContinuePayload(gate.reviewTaskId, buffered);
         if (!isSetupGateTaskId(gate.reviewTaskId)) {
           payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
         }
@@ -1260,13 +1260,14 @@ export function AgentHitlScreenCard({
     }
   }, [submit, gateKey, takeSetupAnswer]);
 
-  // The grouped-setup form's own submit lands here: the SAME approved envelope
-  // the Continue builds, from the buffer the form just wrote.
+  // The grouped form submits the same stored choice as Continue. Setup values
+  // remain field data, without adding the mid-run approval envelope.
   const onSubmitBuffer = useCallback(
     async (next: Record<string, unknown>) => {
-      await submit({ ...next, approved: true, approvedAt: new Date().toISOString() }, undefined);
+      if (!gate) return;
+      await submit(buildGateContinuePayload(gate.reviewTaskId, next), undefined);
     },
-    [submit],
+    [submit, gate],
   );
 
   const body = useMemo<ReactNode>(() => {
