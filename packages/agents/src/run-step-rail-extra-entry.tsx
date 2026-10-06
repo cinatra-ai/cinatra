@@ -451,6 +451,16 @@ export function RailExtraEntry({
     </StepperTitle>
   );
 
+  // Separate adjacent spoken words without changing the drawn row. The
+  // review name keeps the same settlement the badge displays.
+  const accessibleName = isGate && isResolved
+    ? `${entry.label} ${gateSettlement}`
+    : isVerification
+      ? `${entry.label} ${entry.verification?.outcome ?? "verified"}`
+      : entry.kind === "step" && displayStep != null
+        ? `${displayStep} ${entry.label}`
+        : undefined;
+
   const indicatorNode = (
     <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
       {isVerification ? (
@@ -508,6 +518,7 @@ export function RailExtraEntry({
         // row reachable from the keyboard, and the key handler below keeps it
         // openable from there, as the link it replaces was.
         <StepperTrigger
+          aria-label={accessibleName}
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-gate-open={entry.gate.reviewTaskId}
@@ -540,6 +551,7 @@ export function RailExtraEntry({
         // reading as the parked row above; only the key differs, because a run
         // may have passed several gates and this row stands for one of them.
         <StepperTrigger
+          aria-label={accessibleName}
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           // THE ANCHOR THE ROW HAS ALWAYS CARRIED, unchanged: a capture and a
@@ -570,6 +582,7 @@ export function RailExtraEntry({
         // Rendered as a plain Link (not a StepperTrigger button) to avoid a
         // button-in-anchor.
         <Link
+          aria-label={accessibleName}
           href={`${reviewHrefBase}/${encodeURIComponent(entry.gate.reviewTaskId)}`}
           // ONE ROW BOX FOR EVERY ROW (cinatra#3225). The row's geometry is the
           // shared declaration above, not a second copy written out here: a
@@ -590,6 +603,7 @@ export function RailExtraEntry({
         // carries), so the row that stands for it selects that card rather than
         // deep-linking into a reading on another page.
         <StepperTrigger
+          aria-label={accessibleName}
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-verification-open={entry.verification.reviewTaskId}
@@ -612,6 +626,7 @@ export function RailExtraEntry({
         // into the same review surface's VERIFICATION view — the before/after
         // "Audit".
         <Link
+          aria-label={accessibleName}
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className={cn(
             "flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -654,6 +669,7 @@ export function RailExtraEntry({
         // height back to the content so a taller row PUSHES the rail down;
         // `min-h-8` keeps every single-line row at exactly the height it had.
         <StepperTrigger
+          aria-label={accessibleName}
           className={cn(
             // The row's own box AND its alignment are the shared row class's
             // (`h-auto`, content sized, `items-center`, cinatra#3225) — no
