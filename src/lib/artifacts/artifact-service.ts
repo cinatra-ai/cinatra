@@ -41,6 +41,9 @@ import {
   type ArtifactIdentityEnrichment,
   type EffectiveIdentity,
 } from "@/lib/objects/effective-identity";
+// The pure, type-driven half of that resolution — what a row that belongs to
+// no organization resolves to (see `resolveByRowOrganization`).
+import { resolveEffectiveIdentity } from "@cinatra-ai/objects/effective-identity";
 
 // Presentation-identity service (epic #1883 slice A6): the assertion-aware
 // identity the renderer dispatch, the library Type facet, and row labeling
@@ -361,9 +364,10 @@ export type WriteUploadedArtifactResult = CreateSemanticArtifactResult;
  *  Each summary is enriched with semantic identity
  *  (eligibleExtensions + primaryExtension) read from `semantic_assertion`.
  *  A single batched query fetches assertions for every artifact in the
- *  page, avoiding N+1. orgId must be non-null for enrichment to fire
- *  (null = no tenant boundary -> caller bug elsewhere, but we degrade
- *  gracefully to floor-default identity). */
+ *  page, avoiding N+1. A null orgId reads with no tenant boundary (the
+ *  workspace tab's union across the actor's organizations); its rows are
+ *  enriched per row against the organization each belongs to, so a row reads
+ *  the identity its own organization's listing gives it. */
 export function listArtifacts(input: {
   orgId: string | null;
   actor?: ActorContext;
@@ -477,7 +481,10 @@ function scanArtifacts(input: {
           orgId: input.orgId,
           rows: rawRecs.map((r) => ({ id: r.id, type: r.type })),
         })
-      : new Map<string, ArtifactIdentityEnrichment>();
+      : resolveByRowOrganization(rawRecs, resolveArtifactEffectiveIdentities, (r) => ({
+          identity: resolveEffectiveIdentity(r.type),
+          eligibleExtensions: [],
+        }));
   // Presentation identity (A6) — a second batched pass (active assertions ×
   // install/live × thresholds × the org toggle). Separate from the shared
   // effective-identity resolution above so that path stays untouched.
@@ -487,7 +494,13 @@ function scanArtifacts(input: {
           orgId: input.orgId,
           rows: rawRecs.map((r) => ({ id: r.id, type: r.type })),
         })
-      : new Map<string, PresentationIdentity>();
+      : resolveByRowOrganization<PresentationIdentity>(
+          rawRecs,
+          resolveArtifactPresentationIdentities,
+          // No organization holds an assertion for it: the row presents its
+          // effective identity (`toSummary`'s own fallback).
+          () => undefined,
+        );
   const out: ArtifactSummary[] = rawRecs.map((r) =>
     toSummary(r, identityByArtifact.get(r.id), presentationByArtifact.get(r.id)),
   );
@@ -500,6 +513,51 @@ function scanArtifacts(input: {
     ),
   );
   return { rows: out, watermark };
+}
+
+/**
+ * Identity for an ORGLESS read, resolved per row against the organization the
+ * row belongs to (cinatra#2810).
+ *
+ * Identity is an organization-scoped answer: a row's meaning assertions, the
+ * auto-surface toggle and the matcher install gate all live in ONE
+ * organization. An org-scoped read holds rows of its own organization only (the
+ * store's `org_id = $1` clause), so it resolves the whole page against
+ * `input.orgId`. An orgless read — the workspace tab's union across every
+ * organization the actor belongs to — holds rows of several organizations, and
+ * resolving none of them drew every row as the generic floor although each
+ * resolves on its own organization's surface. So each organization's rows are
+ * resolved against that organization, in one batch per organization: a row
+ * reads exactly what its own organization's read gives it, and never another
+ * organization's assertions.
+ *
+ * A row with no organization has no organization-scoped assertion to read;
+ * `resolveOrgless` gives it what needs no organization.
+ */
+function resolveByRowOrganization<T>(
+  recs: readonly ObjectRecord[],
+  resolveForOrg: (input: {
+    orgId: string;
+    rows: ReadonlyArray<{ id: string; type: string }>;
+  }) => Map<string, T>,
+  resolveOrgless: (rec: ObjectRecord) => T | undefined,
+): Map<string, T> {
+  const out = new Map<string, T>();
+  const rowsByOrg = new Map<string, Array<{ id: string; type: string }>>();
+  for (const r of recs) {
+    if (typeof r.orgId !== "string" || r.orgId.length === 0) {
+      const value = resolveOrgless(r);
+      if (value !== undefined) out.set(r.id, value);
+      continue;
+    }
+    const rows = rowsByOrg.get(r.orgId);
+    if (rows) rows.push({ id: r.id, type: r.type });
+    else rowsByOrg.set(r.orgId, [{ id: r.id, type: r.type }]);
+  }
+  for (const [orgId, rows] of rowsByOrg) {
+    for (const [id, value] of resolveForOrg({ orgId, rows })) out.set(id, value);
+  }
+  return out;
 }
 
 /** `created_at DESC, id DESC` — the order the store applies, in JS. */

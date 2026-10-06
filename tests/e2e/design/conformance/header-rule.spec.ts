@@ -17,6 +17,8 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 
+import { contrastAgainst, parseCssColor } from "../../../../src/lib/color-contrast";
+
 import { classifyEtchedRule, SPEC_NAVY, type RuleComputed } from "./etched-rule";
 
 const FIXTURE = "/design-fixtures/header-rule";
@@ -199,7 +201,6 @@ test.describe("tab-row rule — the paired etched band in both palettes", () => 
     });
   }
 
-  const inkPerTheme: Record<string, string> = {};
 
   for (const theme of ["light", "dark"] as const) {
     test(`the trailing rule is the paired etched band in one palette ink (${theme} theme)`, async ({
@@ -222,7 +223,6 @@ test.describe("tab-row rule — the paired etched band in both palettes", () => 
       ).toBe(1);
 
       const ink = stops[0];
-      inkPerTheme[theme] = ink;
 
       const cs = await ruleComputed(rule);
       const verdict = classifyEtchedRule(cs, ink);
@@ -246,7 +246,8 @@ test.describe("tab-row rule — the paired etched band in both palettes", () => 
             "navy — the token is inherited, not declared, and the rule all but " +
             "vanishes on a dark ground",
         ).not.toBe(SPEC_NAVY);
-        expect(ink).not.toBe(inkPerTheme.light);
+        const foreground = await rule.evaluate(el => getComputedStyle(el).color);
+        expect(parseCssColor(ink)).toEqual(parseCssColor(foreground));
       }
     });
 
@@ -340,4 +341,39 @@ test.describe("tab-row rule start — the rule begins immediately right of the l
       ).toBeLessThanOrEqual(1);
     });
   }
+});
+
+
+// Same named tolerance as the token-source regression. These readings are
+// browser-computed paint over the actual opaque ancestor ground, not raw vars.
+const PARITY_TOLERANCE = 1.5;
+const NON_TEXT_FLOOR = 3;
+
+test("the computed dark section-rule contrast matches the light reading", async ({ page }) => {
+  const readings: Array<{ ink: string; ground: string; ratio: number }> = [];
+  for (const theme of ["light", "dark"] as const) {
+    await visitInTheme(page, theme);
+    const rule = page.getByTestId("fixture-tabs-row").locator('[data-slot="separator"][data-major]');
+    await expect(rule).toBeVisible();
+    const paint = await rule.evaluate(el => {
+      const cs = getComputedStyle(el);
+      const colors = cs.backgroundImage.match(/(?:rgba?|oklch|oklab|lab|color)\([^)]*\)/g) ?? [];
+      const ink = colors.find(value => !/[,/]\s*0\s*\)$/.test(value));
+      if (!ink) throw new Error("section rule paints no color stop");
+      let ancestor: Element | null = el.parentElement;
+      while (ancestor) {
+        const ground = getComputedStyle(ancestor).backgroundColor;
+        if (ground !== "transparent" && ground !== "rgba(0, 0, 0, 0)") return { ink, ground };
+        ancestor = ancestor.parentElement;
+      }
+      throw new Error("section rule has no measurable ancestor ground");
+    });
+    expect(parseCssColor(paint.ink), `${theme}: rule ink must parse`).not.toBeNull();
+    expect(parseCssColor(paint.ground)?.a, `${theme}: measured ground must be opaque`).toBe(1);
+    const ratio = contrastAgainst(paint.ink, paint.ground);
+    expect(ratio, `${theme}: ${paint.ink} against ${paint.ground}`).toBeGreaterThanOrEqual(NON_TEXT_FLOOR);
+    readings.push({ ...paint, ratio });
+  }
+  expect(parseCssColor(readings[1].ink)).not.toEqual(parseCssColor(readings[0].ink));
+  expect(readings[1].ratio, JSON.stringify(readings)).toBeGreaterThanOrEqual(readings[0].ratio - PARITY_TOLERANCE);
 });

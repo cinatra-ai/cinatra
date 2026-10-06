@@ -47,7 +47,12 @@ import { markTriggerReleased } from "./trigger-gate";
 // SAVE CHANGES translates §VI's selections into the scheduler's fields with the
 // SAME `buildCron` the scheduling step and the proposal producer submit with, so
 // a schedule saved from the card and one armed from the form cannot differ.
-import { buildCron, type RecurringConfig } from "./trigger-recurrence";
+import {
+  buildCron,
+  SAVE_SCHEDULE_REFUSALS,
+  mayChangeRunSchedule,
+  type RecurringConfig,
+} from "./trigger-recurrence";
 // cinatra#2981 — the ONE serialization this service, **Cancel schedule** and the
 // release job's fire decision all take. See trigger-claim.ts for what a claim
 // guarantees and where the BullMQ/Redis boundary limits it.
@@ -314,13 +319,16 @@ function isOwnerOrAdmin(
   actor: TriggerActorContext,
   runOwnerId: string | null,
 ): boolean {
-  if (actor.role === "admin") return true;
-  // Unowned runs (runBy: null) require admin — any authenticated user should
-  // NOT be able to schedule or delete triggers on runs they did not create.
-  // The old "bypass for legacy runs" rationale does not apply to trigger ops
-  // which have permanent schedule effects.
-  if (!runOwnerId) return false;
-  return runOwnerId === actor.userId;
+  // ONE PREDICATE FOR THE WRITE AND FOR EVERY SURFACE ABOVE IT (cinatra#2934,
+  // the fourth graded capture). The rule is unchanged — the run's owner, or an
+  // administrator, and an unowned run needs an administrator because a trigger
+  // has permanent effects — but it now lives where the card and the resolver
+  // can ask it too, so a surface can no longer offer what this guard refuses.
+  return mayChangeRunSchedule({
+    actorUserId: actor.userId,
+    isAdmin: actor.role === "admin",
+    runOwnerId,
+  });
 }
 
 /**
@@ -1846,35 +1854,11 @@ export type UpdateTriggerScheduleResult =
   | { ok: true; runId: string }
   | { ok: false; error: string };
 
-/** What the card says when the schedule can no longer be changed. Reader-facing
- *  copy: it names the state and what to do instead, exactly as the immediate
- *  ladder's refusals do. */
-export const SAVE_SCHEDULE_REFUSALS = {
-  noTrigger:
-    "There is no armed schedule on this run to change.",
-  released:
-    "This trigger has already been released — its steps are eligible now, so there is no schedule left to change.",
-  firedOneOff:
-    "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
-  immediate:
-    "\u201cRun right after setup\u201d starts the run now rather than scheduling it, so it is not a change you can save here. Set a time or a recurrence instead.",
-  /** cinatra#2972 — the schedule was stopped with **Cancel schedule**. */
-  stopped:
-    "This schedule was stopped, so it can't be changed. Ask for a new schedule instead of changing this one.",
-  /** cinatra#3004 — a schedule that is OVER, asked to be REMOVED rather than
-   *  changed. The row is the record of the ending, so it stays. */
-  overCannotRemove:
-    "This run's schedule is over, so it can't be changed or removed. Start a new run to schedule it again.",
-  /** The prior scheduler would not cancel, so the replacement was NOT installed
-   *  — the schedule the reader is looking at is still the live one. */
-  cancelFailed:
-    "The schedule could not be changed just now. Your existing schedule is unchanged and still armed — please try again.",
-  /** cinatra#2981 — another writer (a **Cancel schedule**, or another save)
-   *  held the trigger claim for longer than this call would wait. Nothing was
-   *  written, so the reader's schedule is exactly as they left it. */
-  busy:
-    "Something else is changing this schedule right now. Nothing was changed — please try again in a moment.",
-} as const;
+/** What the card says when the schedule can no longer be changed. ONE
+ *  definition, in a leaf both the server and the card can import — see the note
+ *  atop `save-schedule-refusals.ts`. Re-exported here so every reader that
+ *  already names it through this module keeps its import. */
+export { SAVE_SCHEDULE_REFUSALS } from "./trigger-recurrence";
 
 /**
  * THE SAVE GUARD, in ONE place (cinatra#2788).
@@ -1917,6 +1901,29 @@ function saveScheduleGuardRefusal(trigger: TriggerRecord | null): string | null 
     return SAVE_SCHEDULE_REFUSALS.firedOneOff;
   }
   return null;
+}
+
+/**
+ * WHY THIS ARMED SCHEDULE CANNOT BE CHANGED RIGHT NOW — in words, for a surface
+ * that has to say it (cinatra#2934, the armed-trigger tab's window).
+ *
+ * NOT A SECOND PREDICATE, AND THAT IS THE WHOLE POINT. It is the guard above —
+ * the one function `updateRunTriggerScheduleForActor` asks before it delegates
+ * and again inside the setter — plus the ONE state that guard deliberately
+ * leaves alone: a trigger still arming, which **Save changes** is withheld for
+ * (`canSaveInstalled`) while the write is still granted. So the window's answer
+ * and the write's answer are the same answer, and the parity is pinned by a
+ * table test rather than by two functions agreeing on purpose.
+ *
+ * `null` means "this schedule can still be changed" — the same reading
+ * `canSaveInstalled` returns `true` for.
+ */
+export function saveScheduleRefusalFor(input: {
+  readonly trigger: TriggerRecord | null;
+  readonly arming: boolean;
+}): string | null {
+  if (input.arming) return SAVE_SCHEDULE_REFUSALS.arming;
+  return saveScheduleGuardRefusal(input.trigger);
 }
 
 /** The status a run waits for its schedule CHOICE in (cinatra#3044) — the one

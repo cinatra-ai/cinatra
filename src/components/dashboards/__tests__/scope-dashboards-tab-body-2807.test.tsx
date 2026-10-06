@@ -125,7 +125,9 @@ describe("the body's frame", () => {
   });
 
   it("renders the drawn empty reading, and never the manager sentence where there is no manager", () => {
-    render(<ScopeDashboardsTab data={data({ scopeKind: "workspace" })} caption={{ kind: "own" }} />);
+    // Personal since cinatra#2811: the amended drawing gives the workspace the
+    // reference half of Add, so personal is the one scope with no manager.
+    render(<ScopeDashboardsTab data={data({ scopeKind: "personal" })} caption={{ kind: "own" }} />);
     expect(screen.getByText("No dashboards in this scope yet")).toBeTruthy();
     expect(document.body.textContent).not.toContain("A manager can");
   });
@@ -196,7 +198,12 @@ describe("the empty block, at the drawn type step and under the drawing's own su
   // the member cannot take is not rendered." A helper sentence whose whole
   // subject is an Add this scope does not offer is that same unavailable action
   // in prose, so it is not rendered either — the headline stands alone.
-  it.each(["personal", "workspace"] as const)(
+  // AMENDED by cinatra#2811: the drawing's §IX.1 now reads "a personal scope
+  // keeps its landed shape, Create new and the installed catalog only, with no
+  // reference section, so the reference half of Add dashboard is the three
+  // shared scopes and the workspace". The workspace therefore joins the scopes
+  // that offer an Add, below; personal alone keeps the bare headline.
+  it.each(["personal"] as const)(
     "on %s the headline stands ALONE inside the dashed container — no helper sentence at all",
     (scopeKind) => {
       render(
@@ -220,7 +227,7 @@ describe("the empty block, at the drawn type step and under the drawing's own su
   // On a scope that DOES offer an Add the drawing's one helper sentence is the
   // reading, verbatim — it is third-person prose about what a manager can do,
   // not a control, so it does not depend on this viewer's own authority.
-  it.each(["team", "project", "organization"] as const)(
+  it.each(["team", "project", "organization", "workspace"] as const)(
     "on %s the drawn manager sentence renders verbatim, even for a read-only member",
     (scopeKind) => {
       render(

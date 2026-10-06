@@ -18,6 +18,13 @@
 //      a check red, or carry a machine-readable exception entry in
 //      scripts/audit/root-tier-runner-exceptions.json.
 //
+// The two exception files are floors (cinatra#3832): each is compared with its
+// copy on the base branch, and a new item fails, so a pull request cannot
+// excuse its own unrun suite or tier; a retired item passes. The base comes
+// from CI_PINNED_TESTS_BASE when a workflow sets it, else from the pull
+// request's base branch; a base that cannot be read fails closed (the shared
+// guard, scripts/audit/lib/floor-base-guard.mjs).
+//
 // Why (1) exists: `vitest run a.test.ts b.test.ts` treats positionals as
 // FILTERS. If one positional matches zero files, vitest SILENTLY ignores it as
 // long as the others match — the step still passes. So a pinned test that was
@@ -149,6 +156,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, posix } from "node:path";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = join(__dirname, "..", "..");
@@ -2808,6 +2816,47 @@ export function readRootTierExceptions(repoRoot = REPO_ROOT, text) {
   return out;
 }
 
+/** The exception files' own base variable (a git revision), when a workflow sets one. */
+export const LEDGER_BASE_VAR = "CI_PINNED_TESTS_BASE";
+
+/**
+ * The floor base guard over both exception files (cinatra#3832): growth is an
+ * item (a `file` in direction 3's file, a `config` in direction 4's) that the
+ * base branch's copy does not hold. Each file is read, in the checkout and at
+ * the base, by its own validating reader; a checkout copy that does not
+ * validate fails the guard with the reader's reason. Returns one guard result
+ * per file.
+ */
+export function checkLedgersAgainstBase({ repoRoot = REPO_ROOT, env = process.env } = {}) {
+  const ledgers = [
+    { file: PACKAGE_EXCEPTIONS_FILE, keys: (text) => readPackageSuiteExceptions(repoRoot, text).map((e) => e.file) },
+    { file: ROOT_TIER_EXCEPTIONS_FILE, keys: (text) => readRootTierExceptions(repoRoot, text).map((e) => e.config) },
+  ];
+  return ledgers.map(({ file, keys }) => {
+    let head;
+    try {
+      const abs = join(repoRoot, file);
+      head = existsSync(abs) ? keys(readFileSync(abs, "utf8")) : [];
+    } catch (err) {
+      return {
+        status: "unreadable",
+        ok: false,
+        lines: [`[ci-pinned-tests-exist] FAIL — the floor ${file} in the checkout is not readable: ${err?.message ?? err}.`],
+      };
+    }
+    return compareFloorWithBase({
+      gate: "ci-pinned-tests-exist",
+      envVar: LEDGER_BASE_VAR,
+      floorPath: file,
+      headFloor: head,
+      parse: keys,
+      grown: (base, current) => newKeys(base, current),
+      repoRoot,
+      env,
+    });
+  });
+}
+
 // Direction 4's verdict for every root tier config.
 //
 // `ungated`   — no runner, no ledger entry. HARD FAILURE.
@@ -3077,6 +3126,11 @@ export function auditSection6Gates(repoRoot = REPO_ROOT, workflowDir = WORKFLOW_
 // exiting so one run tells the whole truth.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let failed = false;
+
+  // The exception files are floors: compared with the base branch first.
+  for (const result of checkLedgersAgainstBase()) {
+    if (!reportFloorGuard(result)) failed = true;
+  }
 
   const { resolved, nodeExact, missing } = resolveWorkflowPins();
   if (missing.length > 0) {

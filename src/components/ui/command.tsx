@@ -111,11 +111,7 @@ function CommandInput({
   }
 
   return (
-    <div
-      data-slot="command-input-wrapper"
-      data-chrome="field"
-      className="p-1 pb-0"
-    >
+    <div data-slot="command-input-wrapper" className="p-1 pb-0">
       <InputGroup className="h-8! rounded-lg! border-input/30 bg-input-fill/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
         <CommandPrimitive.Input
           data-slot="command-input"

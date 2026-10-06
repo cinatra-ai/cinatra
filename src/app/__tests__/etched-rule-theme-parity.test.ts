@@ -1,27 +1,8 @@
 /**
- * THE ETCHED SECTION RULE FOLLOWS THE THEME (cinatra#3142 §2, acceptance 4 and 5).
- *
- *   pnpm exec vitest run src/app/__tests__/etched-rule-theme-parity.test.ts
- *
- * The rule that closes the tab strip was measured at grey 32 of 255 in BOTH
- * themes on twelve frames, while the application's own hairlines beside it
- * measured 224 in light and 23 in dark. 32 of 255 is the relative luminance of
- * `#15213a`, the light palette's full navy: the rule does not flip because
- * `--line-strong`, the token `.divider-etched` paints from, was never declared
- * for the dark palette and cascaded in at its light value.
- *
- * The drawing states the principle the fix follows: "All hairlines use navy at
- * low alpha. Major section dividers use full navy as paired rules — the
- * etched-glass treatment. Never use a neutral grey on a divider." Over a dark
- * ground the inverted pairing is white-over-ground, which is the vocabulary the
- * dark palette already states for `--line` and `--line-control`; the section
- * rule takes the same vocabulary at the strength its role asks for. The paired
- * 1px/5px-gap geometry is untouched — the drawing draws the pair, and #3106
- * ruled it intended, so this is a token fix and NEVER a second divider style.
- *
- * The assertions read the SHIPPED token layer and composite every alpha over the
- * grounds a section rule actually sits on, so they are made on normalized
- * computed values rather than on source strings.
+ * Token-source regression for #3142. Approved app.html Section rule:
+ * "In the dark palette, the section rule takes that palette's own text colour."
+ * This resolves source declarations and models contrast. Browser-computed
+ * ink, grounds and geometry remain the conformance suite's responsibility.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -99,7 +80,7 @@ describe("`--line-strong` has a dark value", () => {
       ).toBeDefined();
     });
 
-    it(`${label}: it resolves to a different computed value under dark than under light`, () => {
+    it(`${label}: it resolves to a different parsed value under dark than under light`, () => {
       const light = parseCssColor(resolve(css, ":root", "--line-strong"));
       const dark = parseCssColor(resolve(css, ".dark", "--line-strong"));
       expect(light, "the light --line-strong must parse").not.toBeNull();
@@ -113,7 +94,8 @@ describe("`--line-strong` has a dark value", () => {
     it(`${label}: every --line token the light palette declares is declared in dark too`, () => {
       const root = declarations(block(css, ":root"));
       const dark = declarations(block(css, ".dark"));
-      const lineTokens = [...root.keys()]
+      const light = declarations(block(css, ".cinatra"));
+      const lineTokens = [...new Set([...root.keys(), ...light.keys()])]
         .filter((name) => name.startsWith("--line"))
         .sort();
       expect(lineTokens.length, "the light palette must declare line tokens").toBeGreaterThan(0);

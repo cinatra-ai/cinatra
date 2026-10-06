@@ -15,6 +15,8 @@
 // keywords the search matches on, which is what keeps typing a label a way to
 // find its row.
 import * as React from "react"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 
@@ -262,4 +264,19 @@ describe("the trigger's popup contract and its keyboard road", () => {
       "a disabled control must stay closed on the arrows too",
     ).toBe("false")
   })
+})
+
+
+it("maps the drawn check and six-percent tint to the palette-invariant indigo", () => {
+  // app-components.html Combobox: --blue=#364e81, active rgba(54,78,129,0.06).
+  // Primary is near-white in dark, so primary-to-primary assertions miss this bug.
+  const css = readFileSync(path.join(process.cwd(), "src/app/globals.css"), "utf8")
+  expect([...css.matchAll(/^\s*--indigo-ink:\s*([^;]+);/gm)].map(match => match[1])).toEqual(["#364e81"])
+  expect(css).toContain("--color-indigo-ink: var(--indigo-ink)")
+  const { list } = open(SHARED_LABEL, "America/Santiago")
+  const chosen = rows(list).find(row => row.getAttribute("data-checked") === "true")!
+  expect(chosen.className).toContain("data-[checked=true]:[&_svg]:text-indigo-ink!")
+  expect(chosen.className).toContain("data-[selected=true]:bg-indigo-ink/[0.06]!")
+  expect(chosen.className).not.toContain("text-primary")
+  expect(chosen.className).not.toContain("bg-primary/[0.08]")
 })

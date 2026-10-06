@@ -122,34 +122,12 @@ describe("the tokens that must NOT move with it", () => {
     expect(DARK.get("--line")).toBe("oklch(1 0 0 / 10%)");
   });
 
-  /**
-   * REVERSED DELIBERATELY (cinatra#3142). This assertion used to require the
-   * dark palette NOT to declare `--line-strong`, on the reading that the
-   * etched-rule conformance gate bound to the light navy. That reading was
-   * wrong twice over: the gate binds to whatever `--line-strong` resolves to in
-   * the palette under test, not to a literal; and leaving the token out is
-   * precisely what painted every etched section rule in the dark theme in the
-   * light palette's near-black navy — measured at grey 32 of 255 in BOTH themes
-   * on twelve frames of the agent run page.
-   *
-   * What #3107 needed from this test survives unchanged and is what is asserted
-   * below: #3107 rebound the CONTROL boundary to its own `--line-control` and
-   * must not have moved the section-rule ink WITH it, and the LIGHT reading of
-   * `--line-strong` is still the drawing's full navy. The dark value's own
-   * floor and its light-versus-dark parity are owned by
-   * src/app/__tests__/etched-rule-theme-parity.test.ts.
-   */
-  it("leaves the light etched paired-line ink untouched, so the control-boundary rebind moved the control boundary alone", () => {
+  it("keeps the light section rule and uses the approved dark palette ink", () => {
     expect(ROOT.get("--line-strong")).toBe("#15213a");
     expect(CINATRA.get("--line-strong")).toBe("#15213a");
-  });
-
-  it("gives the etched paired-line ink a dark value of its own rather than the light navy", () => {
     expect(
       DARK.get("--line-strong"),
-      "the dark palette must declare --line-strong: left inherited, every etched " +
-        "section rule in the dark theme is painted in the light palette's full navy",
-    ).toBeDefined();
-    expect(DARK.get("--line-strong")).not.toBe(ROOT.get("--line-strong"));
+      "the dark section rule takes the palette's own text colour (app.html)",
+    ).toBe("var(--foreground)");
   });
 });

@@ -26,9 +26,9 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 
-import { alphaOf } from "./computed-color";
+import { parseCssColor } from "../../../../src/lib/color-contrast";
 
-const FIXTURE = "/design-fixtures/header-band-opacity";
+const FIXTURE = "/design-fixtures/header-rule?controls=header";
 
 /**
  * Switch the palette the way a reader switches it, and the way the pixel
@@ -103,7 +103,7 @@ for (const theme of ["light", "dark"] as const) {
         };
       });
 
-      const alpha = alphaOf(paint.backgroundColor);
+      const alpha = parseCssColor(paint.backgroundColor)?.a ?? null;
       expect(
         alpha,
         `the band's ground computes to ${paint.backgroundColor}, whose alpha this ` +

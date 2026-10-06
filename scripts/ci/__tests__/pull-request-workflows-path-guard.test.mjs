@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { splitBuildOnlyHeadGuard } from "../build-only-heads.mjs";
 import { selectCiImpact } from "../ci-impact.mjs";
 import { parseTriggers } from "../merge-group-coverage-guard.mjs";
 // The workflow file the skills-drift check is called from is named through the
@@ -76,7 +77,6 @@ const TREE_WIDE_JOBS = {
     "design-pin-drift": "reads the pull request's own touched-path set against the design pin maps — every path is its input",
     "design-pin-freshness": "sibling of design-pin-drift on the same touched-path set",
     "design-anchor-resolution": "sibling of design-pin-drift on the same touched-path set",
-    "design-record-grammar": "sibling of design-pin-drift on the same touched-path set",
   },
 };
 
@@ -96,6 +96,8 @@ const UNCONDITIONAL = {
     "a live-config drift probe: it reads the repository's configured secrets against the pinned manifest, never a file in the diff, so no path list could predict when it must run",
   "truthful-attribution-gate.yml": "reads the candidate's commit records, not the tree",
   "merge-readiness.yml": "reads the candidate's own check runs, not the tree",
+  "design-record-grammar.yml":
+    "reads the pull request body against the branch's pin, and must run again when the body is edited, which changes no file",
 };
 
 /** The gates the `main` ruleset requires: unconditional, whole-tree readers. */
@@ -192,7 +194,11 @@ const readsDetector = (body, detectors) =>
 
 /** A job that only ever runs outside a pull request needs no path guard. */
 function eventScoped(body) {
-  const guard = jobIf(body);
+  // The build-only heads condition (cinatra#3890) names the pull request's
+  // head repository on every job; only the job's own condition beside it says
+  // which events the job runs on.
+  const split = splitBuildOnlyHeadGuard(jobIf(body));
+  const guard = split.carries ? split.existing : jobIf(body);
   return Boolean(guard) && guard.includes("github.event_name") && !guard.includes("pull_request");
 }
 

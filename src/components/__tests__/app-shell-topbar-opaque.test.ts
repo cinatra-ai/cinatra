@@ -16,8 +16,7 @@
  *
  * This suite pins the two halves a static read can prove: the band's ground
  * utility carries no alpha and no backdrop filter, and the token it draws from
- * parses to alpha 1 in every palette (a normalized computed value, not a source
- * string). The pixel half — that a known content string is not composited into
+ * parses to alpha 1 in every palette (a parsed source value, not a browser measurement). The pixel half — that a known content string is not composited into
  * the band once it scrolls under it — is measured on the real boot by
  * tests/e2e/design/conformance/header-band-opacity.spec.ts, which samples the
  * band rather than reading a class list.

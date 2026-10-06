@@ -294,7 +294,9 @@ function Combobox({
                   }
                   // CommandItem appends the trailing check and reveals it on
                   // `data-checked`; the tint below makes it the indigo check the
-                  // spec names, without a second check of our own.
+                  // spec names, without a second check of our own. The drawing's
+                  // #364e81 ink and 6% tint use the invariant indigo token;
+                  // primary is near-white in the dark palette.
                   data-checked={isSelected ? "true" : "false"}
                   // cmdk stamps `data-selected` on EVERY row — "true" on the one
                   // it has highlighted and "false" on all the others — so the
@@ -308,8 +310,8 @@ function Combobox({
                   // the one stamped "true" — is the only one tinted. Same idiom
                   // the access-picker already uses for the same reason.
                   className={cn(
-                    "data-selected:bg-transparent data-[selected=true]:bg-primary/[0.08]!",
-                    "data-[checked=true]:[&_svg]:text-primary!",
+                    "data-selected:bg-transparent data-[selected=true]:bg-indigo-ink/[0.06]!",
+                    "data-[checked=true]:[&_svg]:text-indigo-ink!",
                   )}
                   onSelect={() => {
                     onValueChange?.(option.value)

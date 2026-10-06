@@ -193,11 +193,31 @@ describe("query assembly", () => {
     const q = call.queries[0];
     expect(q.text.toLowerCase()).toContain('insert into "app_test"."assistant_threads"');
     expect(q.text.toLowerCase()).toContain("returning");
-    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId, titleSlug]
+    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId,
+    //  assistantPackage, instanceId, titleSlug, assignmentScopeSnapshot]
     // Binding columns default to null at creation (seeded later by the W3 route);
     // origin is stamped as the SQL literal 'assistant-native', not a bound param.
     // A titleless create defers the slug → title_slug ($10) is null (AC#2).
-    expect(q.values).toEqual(["th1", "au1", "u1", "org1", "proj1", null, null, null, null, null]);
+    // cinatra#2815 S3: $11 carries the scopes this conversation freezes. No
+    // scope actor was named here, so it names no originating human.
+    expect(q.values.slice(0, 10)).toEqual([
+      "th1",
+      "au1",
+      "u1",
+      "org1",
+      "proj1",
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(JSON.parse(q.values[10] as string)).toEqual({
+      v: 1,
+      orgId: "org1",
+      projectId: "proj1",
+      teamIds: [],
+    });
   });
 
   it("appendAssistantTurn inserts thread_id/run_id/principal/role/status", () => {
@@ -1626,8 +1646,9 @@ describe("thread binding (AC#4)", () => {
     expect(t.assistantPackage).toBe("@cinatra-ai/drupal-assistant");
     expect(t.instanceId).toBe("inst-7");
     const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
-    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId, assistantPackage, instanceId, titleSlug]
-    expect(q.values).toEqual([
+    // [id, assistantUserId, ownerUserId, orgId, projectId, title, contextId,
+    //  assistantPackage, instanceId, titleSlug, assignmentScopeSnapshot]
+    expect(q.values.slice(0, 10)).toEqual([
       "th1",
       null,
       "u1",
@@ -1639,6 +1660,12 @@ describe("thread binding (AC#4)", () => {
       "inst-7",
       null,
     ]);
+    // cinatra#2815 S3: the frozen scopes ride the same insert.
+    expect(JSON.parse(q.values[10] as string)).toEqual({
+      v: 1,
+      orgId: "org1",
+      teamIds: [],
+    });
   });
 });
 

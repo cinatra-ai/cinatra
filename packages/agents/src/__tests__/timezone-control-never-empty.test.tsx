@@ -87,7 +87,9 @@ import {
   TriggerScreenClient,
   type TriggerScreenClientProps,
 } from "../trigger-screen-client";
-import { TIMEZONE_DEGRADED_NOTE, TIMEZONE_PLACEHOLDER } from "../trigger-timezone";
+import { DEFAULT_RECURRING_CONFIG } from "../trigger-recurrence";
+const TIMEZONE_DEGRADED_NOTE = "This browser did not offer its time-zone list. Only the current zone is available.";
+const TIMEZONE_PLACEHOLDER = "Select a time zone";
 
 /** A stand-in for the browser's full IANA set — far past the drawing's ~8. */
 const ZONES = [
@@ -122,7 +124,10 @@ function renderStep(overrides: Partial<TriggerScreenClientProps> = {}) {
     setupComplete: true,
     ...overrides,
   } as TriggerScreenClientProps;
-  return render(<TriggerScreenClient {...props} />);
+  return render(<>
+    <TriggerScreenClient {...props} />
+    <TriggerScreenClient {...props} statedSchedule={{ kind: "recurring", timezone: "Europe/Berlin", selection: DEFAULT_RECURRING_CONFIG }} />
+  </>);
 }
 
 function trigger(id: (typeof TRIGGER_IDS)[number]): HTMLElement {
@@ -244,7 +249,7 @@ describe('"Reach for it over Select whenever the option count passes ~8"', () =>
     // The check's indigo is declared on the row that reveals it. The ink itself
     // is a colour claim and is measured on the real boot, never here: jsdom
     // resolves no token.
-    expect(checked[0].getAttribute("class") ?? "").toMatch(/text-primary/);
+    expect(checked[0].getAttribute("class") ?? "").toMatch(/text-indigo-ink/);
 
     // Typing narrows the list to the matches.
     expect(listing.queryByText("Asia/Tokyo")).not.toBeNull();
@@ -327,5 +332,41 @@ describe("what the control draws is what the form submits", () => {
     });
     const values = onSubmit.mock.calls[0]?.[0] as { timezone?: string };
     expect(values.timezone).toBe("Asia/Tokyo");
+  });
+});
+
+
+describe("browser fallback and keyboard selection", () => {
+  it("keeps the browser zone readable when it is missing from a healthy Intl list", () => {
+    const resolved = Intl.DateTimeFormat().resolvedOptions();
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({ ...resolved, timeZone: "Antarctica/Troll" });
+    renderStep({ embeddedAsRenderer: true, aiSuggestions: { timezone: "" } });
+    for (const id of TRIGGER_IDS) expect(triggerText(id)).toBe("Antarctica/Troll");
+    fireEvent.click(trigger("timezone-scheduled"));
+    expect(document.querySelector('[data-checked="true"]')?.textContent).toBe("Antarctica/Troll");
+  });
+
+  it("reports a missing Intl.supportedValuesOf method without drawing an empty field", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Intl, "supportedValuesOf")!;
+    try {
+      Object.defineProperty(Intl, "supportedValuesOf", { configurable: true, value: undefined });
+      const { container } = renderStep();
+      for (const id of TRIGGER_IDS) expect(triggerText(id)).toBe("Europe/Berlin");
+      expect(container.querySelectorAll('[data-slot="timezone-degraded"]')).toHaveLength(2);
+    } finally {
+      Object.defineProperty(Intl, "supportedValuesOf", descriptor);
+    }
+  });
+
+  it("filters from the keyboard and commits the matching timezone with Enter", async () => {
+    renderStep();
+    fireEvent.keyDown(trigger("timezone-scheduled"), { key: "ArrowDown" });
+    const input = document.querySelector('[data-slot="command-input"]') as HTMLInputElement;
+    expect(input).not.toBeNull();
+    fireEvent.change(input, { target: { value: "Tokyo" } });
+    await waitFor(() => expect(document.querySelector('[data-slot="command-item"][data-selected="true"]')?.textContent).toBe("Asia/Tokyo"));
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+    await waitFor(() => expect(triggerText("timezone-scheduled")).toBe("Asia/Tokyo"));
+    expect(trigger("timezone-scheduled").getAttribute("aria-expanded")).toBe("false");
   });
 });

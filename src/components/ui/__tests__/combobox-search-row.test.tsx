@@ -20,10 +20,13 @@
 // row is built from, that the pill is gone, that the glyph exists beside the
 // input, and that the placeholder a caller passes reaches it.
 import * as React from "react"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { cleanup, fireEvent, render } from "@testing-library/react"
 
 import { Combobox } from "@/components/ui/combobox"
+import { Command, CommandInput } from "@/components/ui/command"
 
 // jsdom omits the layout APIs the popover primitive calls.
 if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
@@ -274,4 +277,29 @@ describe("the trigger keeps its seam while the closing list is still standing", 
         "the whole of the close",
     ).toBe(side)
   })
+})
+
+
+describe("existing CommandInput callers retain their field chrome", () => {
+  it("keeps the bordered InputGroup and search addon without opting in", () => {
+    const { container } = render(<Command><CommandInput placeholder="Search commands" /></Command>)
+    const wrapper = container.querySelector('[data-slot="command-input-wrapper"]')!
+    expect(wrapper.className).toBe("p-1 pb-0")
+    expect(wrapper.getAttribute("data-chrome")).toBeNull()
+    const group = wrapper.querySelector('[data-slot="input-group"]')!
+    expect(group).not.toBeNull()
+    expect(group.className).toContain("border-input/30")
+    expect(group.className).toContain("bg-input-fill/30")
+    expect(group.querySelector('[data-slot="input-group-addon"] svg')).not.toBeNull()
+    expect(group.querySelector('input')?.placeholder).toBe("Search commands")
+  })
+})
+
+
+it("keeps the focused list's prompt in the muted ink while ordinary fields still hide theirs", () => {
+  const css = readFileSync(path.join(process.cwd(), "src/app/globals.css"), "utf8")
+  const flush = css.match(/\[data-slot="command-input-wrapper"\]\[data-chrome="flush"\] input:focus::placeholder\s*\{([^}]+)\}/)
+  expect(flush, "the automatically focused list must keep its search prompt").not.toBeNull()
+  expect(flush?.[1]).toContain("color: var(--muted-foreground)")
+  expect(css).toMatch(/input:focus::placeholder,\s*textarea:focus::placeholder\s*\{\s*color: transparent;/)
 })

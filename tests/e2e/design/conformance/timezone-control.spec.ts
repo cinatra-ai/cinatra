@@ -10,13 +10,13 @@
  *
  * This is the other half, on the production-equivalent boot, where the palette
  * actually resolves: the same render the product ships (`TimezoneField`, driven
- * by `resolveTimezoneField`) mounted by /design-fixtures/timezone-control in
- * the three conditions the issue names, with the check's ink MEASURED against
- * the palette's own primary rather than read off the class list.
+ * by `resolveTimezoneField`) mounted by the header-rule fixture’s timezone mode in
+ * the three conditions the issue names. Ink and tint are measured against the
+ * drawing's fixed indigo, independently of the application's primary token.
  */
 import { test, expect, type Page } from "@playwright/test";
 
-const FIXTURE = "/design-fixtures/timezone-control";
+const FIXTURE = "/design-fixtures/header-rule?controls=timezones";
 const CONTROLS = ["timezone-scheduled", "timezone-recurring"] as const;
 
 /**
@@ -56,7 +56,7 @@ async function open(
   theme: "light" | "dark",
   condition: "ordinary" | "degraded" | "blank" = "ordinary",
 ) {
-  await visitInTheme(page, theme, `${FIXTURE}?condition=${condition}`);
+  await visitInTheme(page, theme, `${FIXTURE}&condition=${condition}`);
   await expect(page.locator("#timezone-scheduled")).toBeVisible();
 }
 
@@ -137,6 +137,24 @@ for (const theme of ["light", "dark"] as const) {
       ).toHaveCount(0);
     });
 
+    test("the automatically focused search prompt stays visible in its muted ink", async ({ page }) => {
+      await open(page, theme);
+      await page.locator("#timezone-scheduled").click();
+      const search = page.locator('[data-slot="command-input"]');
+      await expect(search).toBeFocused();
+      await expect(search).toHaveAttribute("placeholder", "Search time zones…");
+      const paint = await search.evaluate(el => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--muted-foreground)";
+        el.parentElement!.appendChild(probe);
+        const muted = getComputedStyle(probe).color;
+        probe.remove();
+        return { placeholder: getComputedStyle(el, "::placeholder").color, muted };
+      });
+      expect(paint.placeholder).toBe(paint.muted);
+      expect(paint.placeholder).not.toBe("rgba(0, 0, 0, 0)");
+    });
+
     test("the current value carries the indigo check — measured, not read off a class", async ({
       page,
     }) => {
@@ -155,31 +173,34 @@ for (const theme of ["light", "dark"] as const) {
       const mark = checked.locator("svg");
       await expect(mark).toBeVisible();
 
-      const inks = await page.evaluate(() => {
-        const read = (el: Element | null) =>
-          el ? getComputedStyle(el).color : null;
+      const paint = await page.evaluate(() => {
+        const checked = document.querySelector('[data-slot="command-list"] [data-checked="true"] svg');
+        const highlighted = document.querySelector('[data-slot="command-list"] [data-selected="true"]');
+        if (!checked || !highlighted) throw new Error("current check or highlighted row is absent");
+        // Normalize color-mix()/color(srgb) and rgba through the browser's own
+        // color conversion. The expected ink/tint are literals in the approved
+        // components drawing, not another app token that could share the bug.
+        const normalize = (color: string) => {
+          if (!CSS.supports("color", color)) throw new Error(`unreadable color: ${color}`);
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d")!;
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          return Array.from(context.getImageData(0, 0, 1, 1).data);
+        };
         return {
-          primary: read(document.querySelector('[data-testid="primary-ink"]')),
-          foreground: read(
-            document.querySelector('[data-testid="foreground-ink"]'),
-          ),
-          check: read(
-            document.querySelector('[data-slot="command-list"] [data-checked="true"] svg'),
-          ),
+          check: normalize(getComputedStyle(checked).color),
+          tint: normalize(getComputedStyle(highlighted).backgroundColor),
+          approvedTint: normalize("rgba(54, 78, 129, 0.06)"),
         };
       });
 
-      expect(inks.check, "the check's ink could not be read").not.toBeNull();
-      expect(
-        inks.check,
-        `the check draws ${inks.check} while the palette's primary is ` +
-          `${inks.primary} — the drawing gives the current value an INDIGO check`,
-      ).toBe(inks.primary);
-      expect(
-        inks.check,
-        "the check draws in the ordinary foreground ink, so nothing marks the " +
-          "current value apart from the rows around it",
-      ).not.toBe(inks.foreground);
+      // design@8b634a3b specs/app-components.html:22,1002 — --blue and the row.
+      expect(paint.check, "the check must be the drawing's indigo in both palettes")
+        .toEqual([54, 78, 129, 255]);
+      expect(paint.tint, "the highlighted row must use the drawing's six-percent indigo tint")
+        .toEqual(paint.approvedTint);
 
       // The check is on the CURRENT value: choosing another zone moves it.
       await list.getByText("Asia/Tokyo", { exact: true }).click();
