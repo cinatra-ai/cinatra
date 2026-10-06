@@ -1341,6 +1341,16 @@ function OrderedPartsSection({
     });
   }, []);
   const firstStandingLineSlot = standingLineSlots.length === 0 ? null : standingLineSlots[0]!;
+  const scheduleSentences = useContext(ScheduleWaitContext);
+  const reportSlottedStandingLine = scheduleSentences?.reportSlottedStandingLine;
+  const slottedStandingLine = firstStandingLineSlot !== null || scheduleStandingReadings.length > 0;
+  useEffect(() => {
+    reportSlottedStandingLine?.(slottedStandingLine);
+    return () => reportSlottedStandingLine?.(false);
+  }, [reportSlottedStandingLine, slottedStandingLine]);
+  const carriedStandingLine = (scheduleSentences?.carriedStandingReadings ?? []).some(
+    (reading) => standingScheduleLineFor(reading) !== null,
+  );
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
@@ -1353,6 +1363,9 @@ function OrderedPartsSection({
           // history — the reader's request, every earlier turn — is untouched
           // because this decision is scoped to the parts of THIS turn.
           if (firstStandingLineSlot !== null && idx < firstStandingLineSlot) return null;
+          // A restored card without a producing slot stands after this trace.
+          // Its current reading owns the lead-in only when no earlier slot does.
+          if (!slottedStandingLine && carriedStandingLine) return null;
           let raw = trimContent ? trimContent(part.content) : part.content;
           // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
           // construction: only the sentence this platform minted, only for a
@@ -2079,15 +2092,57 @@ function MessageRenderableViews({
    *  changes which card renders. */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
-  const views = message.dataParts ?? [];
-  if (views.length === 0) return null;
-  return views.map((view, i) => (
-    <RenderableViewCard
-      key={`view-${message.id}-${i}`}
-      data={view}
-      {...(onApplyIntent ? { onApplyIntent } : {})}
-    />
-  ));
+  const scheduleSentences = useContext(ScheduleWaitContext);
+  const reportCarriedStandingReadings = scheduleSentences?.reportCarriedStandingReadings;
+  const [readings, setReadings] = useState<Readonly<Record<string, ScheduleCardReading>>>({});
+  const views = message.dataParts;
+  // Ref identity belongs to the report as well as the card: a replacement may
+  // not borrow a settled reading from the card it replaced. Array order, not
+  // asynchronous resolver order, elects the first standing sentence.
+  const entries = useMemo(() => (views ?? []).map((view, i) => {
+    const key = `${i}:${JSON.stringify(view)}`;
+    const onReading = (reading: ScheduleCardReading) => {
+      setReadings((prev) => {
+        if ((prev[key] ?? "other") === reading) return prev;
+        const next = { ...prev };
+        if (reading === "other") delete next[key];
+        else next[key] = reading;
+        return next;
+      });
+    };
+    return { view, key, onReading };
+  }), [views]);
+  const standingReadings = useMemo(() => entries.flatMap(({ key }) => {
+    const reading = readings[key];
+    return reading && standingScheduleLineFor(reading) !== null ? [reading] : [];
+  }), [entries, readings]);
+  useEffect(() => {
+    reportCarriedStandingReadings?.(standingReadings);
+    return () => reportCarriedStandingReadings?.([]);
+  }, [reportCarriedStandingReadings, standingReadings]);
+  const earlierStandingLine = scheduleSentences?.slottedStandingLine ||
+    (scheduleSentences?.standingReadings ?? []).some(
+      (reading) => standingScheduleLineFor(reading) !== null,
+    );
+  return (
+    <>
+      {!earlierStandingLine && standingReadings[0] && (
+        <StandingScheduleLine reading={standingReadings[0]} />
+      )}
+      {entries.map(({ view, key, onReading }, i) => {
+        const card = <RenderableViewCard
+          key={`view-${message.id}-${i}`}
+          data={view}
+          {...(onApplyIntent ? { onApplyIntent } : {})}
+        />;
+        return view.viewType === "trigger_schedule_proposal" ? (
+          <ScheduleReadingReport key={`view-${message.id}-${key}`} onReading={onReading}>
+            {card}
+          </ScheduleReadingReport>
+        ) : card;
+      })}
+    </>
+  );
 }
 
 /**
@@ -2130,10 +2185,14 @@ const ScheduleWaitContext = createContext<{
   /** The sentences §VI draws over this turn's settled cards, in slot order
    *  (cinatra#3281) — the answer the flat prose needs and cannot derive. */
   standingReadings: readonly ScheduleCardReading[];
+  carriedStandingReadings: readonly ScheduleCardReading[];
+  slottedStandingLine: boolean;
   reportWaitingRunIds: (runIds: readonly string[]) => void;
   reportFiredRunIds: (runIds: readonly string[]) => void;
   reportFiredRecurringRunIds: (runIds: readonly string[]) => void;
   reportStandingReadings: (readings: readonly ScheduleCardReading[]) => void;
+  reportCarriedStandingReadings: (readings: readonly ScheduleCardReading[]) => void;
+  reportSlottedStandingLine: (drawn: boolean) => void;
 } | null>(null);
 
 /** The assistant turn's body, and the scope of the correction inside it. */
@@ -2148,6 +2207,8 @@ function ScheduleWaitTurnBody({
   const [firedRunIds, setFiredRunIds] = useState<readonly string[]>([]);
   const [firedRecurringRunIds, setFiredRecurringRunIds] = useState<readonly string[]>([]);
   const [standingReadings, setStandingReadings] = useState<readonly ScheduleCardReading[]>([]);
+  const [carriedStandingReadings, setCarriedStandingReadings] = useState<readonly ScheduleCardReading[]>([]);
+  const [slottedStandingLine, reportSlottedStandingLine] = useState(false);
   // Identity is preserved when the answer did not change, so a run that reports
   // the same reading on every poll cannot re-render the transcript.
   const reportWaitingRunIds = useCallback((next: readonly string[]) => {
@@ -2172,26 +2233,39 @@ function ScheduleWaitTurnBody({
         : next,
     );
   }, []);
+  const reportCarriedStandingReadings = useCallback((next: readonly ScheduleCardReading[]) => {
+    setCarriedStandingReadings((prev) =>
+      prev.length === next.length && prev.every((reading, i) => reading === next[i]) ? prev : next,
+    );
+  }, []);
   const value = useMemo(
     () => ({
       waitingRunIds,
       firedRunIds,
       firedRecurringRunIds,
       standingReadings,
+      carriedStandingReadings,
+      slottedStandingLine,
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
       reportStandingReadings,
+      reportCarriedStandingReadings,
+      reportSlottedStandingLine,
     }),
     [
       waitingRunIds,
       firedRunIds,
       firedRecurringRunIds,
       standingReadings,
+      carriedStandingReadings,
+      slottedStandingLine,
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
       reportStandingReadings,
+      reportCarriedStandingReadings,
+      reportSlottedStandingLine,
     ],
   );
   return (
@@ -2237,6 +2311,10 @@ function FlatAssistantContent({
       (reading) => standingScheduleLineFor(reading) !== null,
     ) ?? null;
   if (standingReading !== null) return <StandingScheduleLine reading={standingReading} />;
+  // The turn-level card's line is rendered with that card, after any trace.
+  if ((scheduleSentences?.carriedStandingReadings ?? []).some(
+    (reading) => standingScheduleLineFor(reading) !== null,
+  )) return null;
   // While streaming, trim incomplete embed prefixes so partial JSON/mermaid
   // never flashes as raw text in the markdown output.
   let raw = streaming ? trimIncompleteEmbeds(message.content) : message.content;

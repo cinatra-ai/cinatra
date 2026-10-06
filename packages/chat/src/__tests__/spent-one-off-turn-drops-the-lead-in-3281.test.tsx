@@ -94,6 +94,13 @@ vi.mock("../inline-agent-run-card", () => ({
   InlineAgentRunCard: ({ runId }: { runId: string }) => <div data-inline-run-card={runId} />,
 }));
 
+// The durable projection is pure. Fail loudly if a fixture reaches SQL; this
+// regression reconstructs stored turn content, never boots or queries a thread.
+vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: () => { throw new Error("reload regression must not execute SQL"); } }));
+vi.mock("@/lib/postgres-config", () => ({ getPostgresConnectionString: () => { throw new Error("reload regression must not request a database"); }, postgresSchema: "reload_native_only" }));
+vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => { throw new Error("reload regression must not provision a database"); } }));
+import { projectDurableAssistantTurn } from "../../../../src/lib/assistant-thread-store";
+
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { mountSurface, surfaceElement } from "./conversation-column-harness";
 
@@ -586,4 +593,128 @@ it("follows reordered flat schedule slots and withdraws the removed slot's readi
     expect(visibleText(blocks[0]!)).toBe(MODEL_LEAD_IN);
     expect(container.querySelector("[data-schedule-standing-line]")).toBeNull();
   });
+});
+
+
+/** Rebuild the server's legitimate turn-level fallback, not a copied renderer. */
+function reloadedProposalTurn(ordered: boolean): UiMessage[] {
+  const projected = projectDurableAssistantTurn("reload-a1", {
+    format: "assistant-turn-v1",
+    content: MODEL_LEAD_IN,
+    ...(ordered ? { parts: [{ type: "text", text: MODEL_LEAD_IN }] } : {}),
+    dataParts: [{ viewType: "trigger_schedule_proposal", schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: CARD_REF }],
+    // A missing producing call is the documented durable turn-level fallback.
+    dataPartSlots: ["call-that-is-absent-from-this-saved-trace"],
+  });
+  expect(projected).not.toBeNull();
+  expect(projected!.dataParts).toHaveLength(1);
+  expect(projected!.content).toBe(MODEL_LEAD_IN);
+  return [
+    { id: "reload-u1", role: "user", content: READER_REQUEST },
+    { id: "reload-history", role: "assistant", content: "Earlier reply stays unchanged." },
+    projected as unknown as UiMessage,
+  ];
+}
+
+describe("cinatra#3281 — durable reload keeps the card's standing reading", () => {
+  for (const road of ["flat", "slack", "ordered"] as const) {
+    for (const row of READINGS) {
+      it(`${road} reload preserves the ${row.reading} reading without restoring the lead-in`, async () => {
+        serveReading(row.body, row.firedOnce);
+        const messages = reloadedProposalTurn(road === "ordered");
+        const { container } = await mountSurface("chat", { messages, slackMode: road === "slack" });
+        await waitFor(() => expect(container.querySelector('[data-conformance-id="schedule-proposal-card"]')?.getAttribute("data-schedule-reading")).toBe(CARD_ATTRIBUTE[row.reading]));
+        await act(async () => {});
+        const prose = assistantProseBlocks(container).map(block => block.textContent);
+        expect(prose).toEqual(["Earlier reply stays unchanged.", row.sentence ?? MODEL_LEAD_IN]);
+        expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
+        expect(visibleText(container)).toContain(READER_REQUEST);
+        if (row.sentence !== null) expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
+        // Rendering the current reading never rewrites what was persisted.
+        expect(messages[2]!.content).toBe(MODEL_LEAD_IN);
+      });
+    }
+  }
+
+  it("restores the durable turn's lead-in when its turn-level card is withdrawn", async () => {
+    serveReading(ONE_OFF_BODY, true);
+    const messages = reloadedProposalTurn(false);
+    const view = await mountSurface("chat", { messages, slackMode: true });
+    await waitFor(() => expect(assistantProseBlocks(view.container).map(block => block.textContent)).toEqual(["Earlier reply stays unchanged.", SPENT_ONE_OFF_SENTENCE]));
+    const withdrawn = messages.map(message => message.id === "reload-a1" ? { ...message, dataParts: [] } : message);
+    view.rerender(surfaceElement("chat", { messages: withdrawn, slackMode: true }));
+    await waitFor(() => expect(assistantProseBlocks(view.container).map(block => block.textContent)).toEqual(["Earlier reply stays unchanged.", MODEL_LEAD_IN]));
+    expect(view.container.querySelector('[data-conformance-id="schedule-proposal-card"]')).toBeNull();
+  });
+});
+
+
+it("preserves a durable known producing slot and its later prose", async () => {
+  serveReading(ONE_OFF_BODY, true);
+  const projected = projectDurableAssistantTurn("known-slot-reload", {
+    format: "assistant-turn-v1", content: MODEL_LEAD_IN,
+    parts: [
+      { type: "text", text: MODEL_LEAD_IN },
+      { type: "tool_call", id: "saved-schedule-call", name: "schedule_proposal" },
+      { type: "tool_result", id: "saved-schedule-call" },
+      { type: "text", text: "Later explanation is still visible." },
+    ],
+    dataParts: [{ viewType: "trigger_schedule_proposal", schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: CARD_REF }],
+    dataPartSlots: ["saved-schedule-call"],
+  });
+  expect(projected!.dataParts).toBeUndefined();
+  const { container } = await mountSurface("chat", { messages: [projected as unknown as UiMessage] });
+  await waitFor(() => expect(assistantProseBlocks(container).map(block => block.textContent?.trim())).toEqual([SPENT_ONE_OFF_SENTENCE, "Later explanation is still visible."]));
+  expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
+});
+
+it.each(["one-off", "recurring"] as const)("elects turn-level cards in displayed order when %s resolves first", async (firstResponse) => {
+  let releaseLater!: () => void;
+  const later = new Promise<void>(resolve => { releaseLater = resolve; });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/lifecycle-views/resolve") {
+      const { ref } = JSON.parse(String(init?.body)) as { ref: string };
+      const oneOff = ref === CARD_REF;
+      if (oneOff !== (firstResponse === "one-off")) await later;
+      return jsonResponse({ kind: "trigger_schedule_proposal", state: { state: "settled" }, body: oneOff ? ONE_OFF_BODY : { ...RECURRING_BODY, runId: SECOND_SCHEDULE_RUN }, firedOnce: true });
+    }
+    return jsonResponse({}, 404);
+  }) as typeof fetch;
+  const messages = reloadedProposalTurn(false);
+  const current = messages[2]!;
+  current.dataParts = [...current.dataParts!, { viewType: "trigger_schedule_proposal", schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: SECOND_SCHEDULE_REF }];
+  const view = await mountSurface("chat", { messages, slackMode: true });
+  await waitFor(() => expect(assistantProseBlocks(view.container).at(-1)?.textContent).toBe(firstResponse === "one-off" ? SPENT_ONE_OFF_SENTENCE : FIRED_RECURRING_SENTENCE));
+  await act(async () => { releaseLater(); });
+  await waitFor(() => expect(Array.from(view.container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).map(card => card.getAttribute("data-schedule-reading"))).toEqual(["fired-one-off", "fired-recurring"]));
+  await waitFor(() => expect(assistantProseBlocks(view.container).map(block => block.textContent)).toEqual(["Earlier reply stays unchanged.", SPENT_ONE_OFF_SENTENCE]));
+  current.dataParts = [...current.dataParts!].reverse();
+  view.rerender(surfaceElement("chat", { messages, slackMode: true }));
+  await waitFor(() => expect(assistantProseBlocks(view.container).map(block => block.textContent)).toEqual(["Earlier reply stays unchanged.", FIRED_RECURRING_SENTENCE]));
+  current.dataParts = current.dataParts.slice(1);
+  view.rerender(surfaceElement("chat", { messages, slackMode: true }));
+  await waitFor(() => expect(assistantProseBlocks(view.container).map(block => block.textContent)).toEqual(["Earlier reply stays unchanged.", SPENT_ONE_OFF_SENTENCE]));
+  expect(view.container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
+});
+
+it("withdraws the old reading while a replacement reference resolves", async () => {
+  serveReading(ONE_OFF_BODY, true);
+  const messages = reloadedProposalTurn(false);
+  const view = await mountSurface("chat", { messages, slackMode: true });
+  await waitFor(() => expect(assistantProseBlocks(view.container).at(-1)?.textContent).toBe(SPENT_ONE_OFF_SENTENCE));
+  let releaseReplacement!: () => void;
+  const replacement = new Promise<void>(resolve => { releaseReplacement = resolve; });
+  globalThis.fetch = (async () => {
+    await replacement;
+    return jsonResponse({ kind: "trigger_schedule_proposal", state: { state: "settled" }, body: RECURRING_BODY, firedOnce: false });
+  }) as typeof fetch;
+  messages[2]!.dataParts = [{ viewType: "trigger_schedule_proposal", schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: "replacement-ref-3281" }];
+  view.rerender(surfaceElement("chat", { messages, slackMode: true }));
+  await waitFor(() => {
+    expect(view.container.querySelector('[data-schedule-standing-line]')).toBeNull();
+    expect(assistantProseBlocks(view.container).at(-1)?.textContent).toBe(MODEL_LEAD_IN);
+  });
+  await act(async () => { releaseReplacement(); });
+  await waitFor(() => expect(view.container.querySelector('[data-conformance-id="schedule-proposal-card"]')?.getAttribute("data-schedule-reading")).toBe("configured"));
+  expect(assistantProseBlocks(view.container).at(-1)?.textContent).toBe(MODEL_LEAD_IN);
 });
