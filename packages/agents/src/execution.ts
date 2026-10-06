@@ -1989,6 +1989,12 @@ export function launchScopeAnchorBaseCopy(raw: unknown): string | null {
  * its agreement with the host's originals, and with the identical copy in
  * packages/notifications, is pinned by
  * `src/lib/__tests__/launch-scope-copies-agree-3693.test.ts`.
+ *
+ * THE INSTANCE ID IS A PATH SEGMENT, SO IT IS ENCODED AS ONE (cinatra#3080).
+ * Every ordinary run id is a uuid, which encodes to itself, so every link the
+ * product has ever drawn is byte-identical. A repair run's id is not: it is
+ * derived from its repair (`lifecycle-repair-run:` plus the repair id) and
+ * carries a character a path segment must escape.
  */
 function buildReviewRunBasePath(
   agentPackageName: string,
@@ -1996,9 +2002,10 @@ function buildReviewRunBasePath(
   launchScopeAnchor?: unknown,
 ): string {
   const base = launchScopeAnchorBaseCopy(launchScopeAnchor) ?? "";
+  const segment = encodeURIComponent(instanceId);
   const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `${base}/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `${base}/agents/${agentPackageName}/${instanceId}`;
+  if (match) return `${base}/agents/${match[1]}/${match[2]}/${segment}`;
+  return `${base}/agents/${agentPackageName}/${segment}`;
 }
 
 /**

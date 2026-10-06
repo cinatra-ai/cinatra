@@ -1476,7 +1476,7 @@ export async function SetupScreen({
       // launched from a vantage belongs to it, so the fresh run's address is
       // this launcher's own scope base plus the one agent-path grammar.
       redirect(
-        buildAgentInstancePath(agentId, encodeURIComponent(result.runId), {
+        buildAgentInstancePath(agentId, result.runId, {
           scopeBase: scopeBase ?? null,
         }),
       );
@@ -1922,7 +1922,7 @@ export async function SetupScreen({
   // Under the run's own scope base (cinatra#3693): after the home check above,
   // `scopeBase` IS the run's canonical base, and null for a flat run.
   const reviewHrefBase = run
-    ? `${buildAgentInstancePath(agentId, encodeURIComponent(run.id), { scopeBase: scopeBase ?? null })}/review`
+    ? `${buildAgentInstancePath(agentId, run.id, { scopeBase: scopeBase ?? null })}/review`
     : "";
   // ── §VII's audit card, on the `run_card` host (cinatra#2789, epic #2784 S9e) ──
   //
@@ -2409,7 +2409,7 @@ export async function SetupScreen({
               agentName={template.name}
               allStepsComplete={true}
               runStatus={run.status}
-              redirectTo={buildAgentInstancePath(agentId, encodeURIComponent(run.id), {
+              redirectTo={buildAgentInstancePath(agentId, run.id, {
                 scopeBase: scopeBase ?? null,
               })}
             />
@@ -3533,7 +3533,7 @@ export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps
   // sub-route that walked the reader out to the global route would be a
   // silent scope change dressed up as a redirect.
   redirect(
-    buildAgentInstancePath(agentPath, encodeURIComponent(instanceId), {
+    buildAgentInstancePath(agentPath, instanceId, {
       scopeBase: scopeBase ?? null,
     }),
   );
@@ -3844,7 +3844,7 @@ export async function TriggerScreen({
           </h2>
           <p className="text-sm text-muted-foreground">{finishedNotice.body}</p>
           <Link
-            href={buildAgentInstancePath(agentId, encodeURIComponent(instanceId), {
+            href={buildAgentInstancePath(agentId, instanceId, {
               scopeBase: scopeBase ?? null,
             })}
             className="text-sm font-medium text-primary underline-offset-4 hover:underline"
