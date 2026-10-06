@@ -113,6 +113,7 @@ type ArtifactReviewGateSeam = {
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
   >;
+  emitFamily?: ArtifactReviewGateSeam["emit"];
   readGate(
     runId: string,
     reviewTaskId: string,
@@ -2508,48 +2509,34 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
           pinnedTargets = originalPins.targets;
         } else if (legs.length > 1) {
-          // ONE EMIT PER ARTIFACT, in the order the set named them. Every leg is
-          // pinned now — a gate is immutable once pinned, so the whole review is
-          // frozen at the moment the run reached it — and the person is routed to
-          // the first leg still open. The routed leg's own emit decides the route,
-          // exactly as the single emit always did.
-          const emitted = new Map<string, GateEmitResult>();
-          let refusedLeg: (typeof legs)[number] | undefined;
-          for (const leg of legs) {
-            const result = await gateSeam.emit({
-              runId,
-              orgId: run.orgId,
-              reviewTaskId: leg.reviewTaskId,
-              targets: leg.targets,
-            });
-            emitted.set(leg.reviewTaskId, result);
-            if (!result.ok) {
-              // The preflight and mint are separate reads. A combined gate can
-              // appear between them; reconcile this refusal before attempting
-              // any later leg, or that later mint overlaps the original gate.
-              refusedLeg = leg;
-              break;
+          // Freeze the whole original pause through the existing store transaction.
+          // A later refusal leaves no newly-visible actionable partial family.
+          // Older bundles without this binding fail before any singleton mint.
+          if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
+          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          if (!emitResult.ok) {
+            // An old combined review may commit after the preflight. The atomic
+            // attempt inserted nothing; only the same complete original pins
+            // can replay as minted, never a scalar success from a partial set.
+            const raced = await gateSeam.readGate(runId, reviewTaskId);
+            const racedPins = raced?.orgId === run.orgId ? normalizeReviewTargets(raced.targets) : null;
+            if (!racedPins?.ok || racedPins.targets.length < 2) {
+              throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             }
+            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            if (!emitResult.ok) throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
+            pinnedTargets = racedPins.targets;
+          } else {
+            const next = nextUnresolvedLeg({ planned: legs, gates: known }) ?? legs[0];
+            reviewTaskId = next.reviewTaskId;
+            pinnedTargets = next.targets;
           }
-          // A later refusal cannot replace an already-minted pending decision
-          // with an ordinary human gate. Consider only successfully emitted legs
-          // first, using the successful inventory read taken before minting.
-          // If none remains unresolved, recover the refused leg as before (in
-          // particular a first-leg conflict with a grandfathered combined gate).
-          const successfulLegs = legs.filter((leg) => emitted.get(leg.reviewTaskId)?.ok);
-          const next = refusedLeg
-            ? nextUnresolvedLeg({ planned: successfulLegs, gates: known }) ?? refusedLeg
-            : nextUnresolvedLeg({ planned: legs, gates: known }) ?? legs[0];
-          reviewTaskId = next.reviewTaskId;
-          pinnedTargets = next.targets;
-          emitResult = emitted.get(next.reviewTaskId) ?? {
-            ok: false as const,
-            code: "invalid-targets" as const,
-            message: "the per-artifact review named a leg that was never emitted",
-          };
         } else {
           if (legs.length === 1) pinnedTargets = legs[0].targets;
-          emitResult = coreDecision.review
+          if (legs.length === 1 && !original) {
+            if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
+            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          } else emitResult = coreDecision.review
             ? await gateSeam.emit({
                 runId,
                 orgId: run.orgId,

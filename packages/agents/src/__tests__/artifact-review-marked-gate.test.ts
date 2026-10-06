@@ -1,3 +1,4 @@
+import { planPerArtifactReviewGates } from "@/lib/artifacts/artifact-review-target";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // cinatra#1796 (epic #1620 S13) — the execution.ts MARKED artifact-review gate.
@@ -133,6 +134,13 @@ function bindSeam() {
   (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
     decideDeclaredReview: decideSpy,
     emit: emitSpy,
+    emitFamily: async (input: { runId: string; orgId: string; reviewTaskId: string; targets: unknown }) => {
+      for (const leg of planPerArtifactReviewGates(input)) {
+        const result = await emitSpy({ ...input, reviewTaskId: leg.reviewTaskId, targets: leg.targets });
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    },
     readGate: readGateSpy,
     listGates: listGatesSpy,
   };
@@ -552,17 +560,16 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
           expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
           return;
         }
-        await attempt;
+        await expect(attempt).rejects.toThrow("Declared review family could not be pinned");
         expect(listGatesSpy).toHaveBeenCalledTimes(1);
         expect(emitSpy).toHaveBeenCalledTimes(2);
         expect([...rows.keys()]).toEqual([originalId]);
         expect(rows.get(originalId)?.status).toBe("pending");
-        expect(onInterruptSpy).toHaveBeenCalledTimes(1);
-        const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;
-        expect(renderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
-        expect(routedId).toBe(originalId);
-        expect((values as Record<string, unknown>).targetCount).toBe(1);
-        expect((values as Record<string, unknown>).reviewSurfaceUrl).toContain("step=review%3Awayflow-task-rev-1");
+        // The storage-boundary fake above is scalar; the real atomic port's
+        // rollback is covered in artifact-review-single-target-mint.test.ts.
+        // The caller never exposes its failed family as a new decision path.
+        expect(onInterruptSpy).not.toHaveBeenCalled();
+        expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
       },
     );
   }
@@ -578,6 +585,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       if (input.reviewTaskId === originalId) {
         // Another execution minted the historical gate after the null preflight.
         rows.set(originalId, original);
+        if (JSON.stringify(input.targets) === JSON.stringify(original.targets)) return { ok: true };
         return { ok: false, code: "pin-conflict", message: "the existing complete pins differ" };
       }
       rows.set(input.reviewTaskId, { orgId: input.orgId, status: "pending", targets: input.targets as typeof TARGETS, disposition: null, fingerprint: "new" });
@@ -586,7 +594,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("preflight race") });
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledTimes(2);
     expect([...rows.keys()]).toEqual([originalId]);
     expect(JSON.stringify(rows.get(originalId))).toBe(before);
     const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;

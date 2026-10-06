@@ -63,7 +63,7 @@ import {
 } from "./artifact-review-gate-store";
 import {
   baseReviewTaskId,
-  hasPendingSiblingLeg,
+  declaredReviewFamilyState,
 } from "@/lib/artifacts/artifact-review-target";
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
@@ -329,7 +329,10 @@ export async function deliverArtifactReviewResumeIntent(
   // re-claim. Neither a resume nor a delivered acknowledgement is authorized by
   // an unreadable sibling set (cinatra#3944, App160).
   const siblingLegs = await listReviewGatesForRun(run.id);
-  if (hasPendingSiblingLeg({ reviewTaskId, gates: siblingLegs })) {
+  const familyState = declaredReviewFamilyState({ runId: run.id, orgId: run.orgId,
+    reviewTaskId, gates: siblingLegs });
+  if (familyState === "incomplete") return "retryable";
+  if (familyState === "pending") {
     const ok = await markResumeIntentDelivered(gateId, leaseToken);
     console.log(
       `[artifact-review-resume] gate=${gateId} run=${run.id} decided one artifact of a ` +

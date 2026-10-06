@@ -1,3 +1,4 @@
+import { planPerArtifactReviewGates } from "@/lib/artifacts/artifact-review-target";
 /**
  * THE DECLARED REVIEW GOES THROUGH THE CORE (cinatra#2929, epic #2926 W2b).
  *
@@ -154,6 +155,13 @@ function bindSeam() {
   (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
     decideDeclaredReview: decideSpy,
     emit: emitSpy,
+    emitFamily: async (input: { runId: string; orgId: string; reviewTaskId: string; targets: unknown }) => {
+      for (const leg of planPerArtifactReviewGates(input)) {
+        const result = await emitSpy({ ...input, reviewTaskId: leg.reviewTaskId, targets: leg.targets });
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    },
     readGate: readGateSpy,
     listGates: listGatesSpy,
   };

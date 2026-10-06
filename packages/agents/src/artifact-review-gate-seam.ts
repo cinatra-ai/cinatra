@@ -21,6 +21,7 @@ import "server-only";
 
 import {
   emitArtifactReviewGate,
+  emitDeclaredReviewGateFamily,
   listReviewGatesForRun,
   readReviewGate,
   ArtifactReviewGateError,
@@ -53,6 +54,7 @@ export type ArtifactReviewGateSeam = {
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
   >;
+  emitFamily: ArtifactReviewGateSeam["emit"];
   readGate(
     runId: string,
     reviewTaskId: string,
@@ -80,6 +82,15 @@ export function bindArtifactReviewGateSeam(): void {
         if (err instanceof ArtifactReviewGateError) {
           return { ok: false, code: err.code, message: err.message };
         }
+        throw err;
+      }
+    },
+    async emitFamily(input) {
+      try {
+        await emitDeclaredReviewGateFamily(input);
+        return { ok: true };
+      } catch (err) {
+        if (err instanceof ArtifactReviewGateError) return { ok: false, code: err.code, message: err.message };
         throw err;
       }
     },

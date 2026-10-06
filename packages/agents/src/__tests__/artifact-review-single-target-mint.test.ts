@@ -14,9 +14,17 @@ type StoredGate = {
 const storage = vi.hoisted(() => {
   const rows = new Map<string, StoredGate>();
   const inserts: StoredGate[] = [];
+  let readFailure = false;
+  let lateConflict: StoredGate | null = null;
+  let crashAfter: number | null = null;
   let readIdentity: { runId: string; reviewTaskId: string } | undefined;
   const key = (row: StoredGate) => `${row.runId}/${row.reviewTaskId}`;
   const executor = {
+    async transaction<T>(callback: (tx: unknown) => Promise<T>): Promise<T> {
+      const before = new Map(rows);
+      try { return await callback(executor); }
+      catch (err) { rows.clear(); for (const [k, v] of before) rows.set(k, v); throw err; }
+    },
     insert() {
       return {
         values(row: StoredGate) {
@@ -26,6 +34,8 @@ const storage = vi.hoisted(() => {
             onConflictDoNothing() {
               return {
                 async returning() {
+                  if (crashAfter !== null && inserts.length > crashAfter) throw new Error("interrupted before family commit");
+                  if (lateConflict?.reviewTaskId === row.reviewTaskId) return [];
                   if (rows.has(key(row))) return [];
                   rows.set(key(row), row);
                   return [{ id: row.id }];
@@ -44,7 +54,9 @@ const storage = vi.hoisted(() => {
               const [runId, reviewTaskId] = new PgDialect().sqlToQuery(condition).params;
               readIdentity = { runId: String(runId), reviewTaskId: String(reviewTaskId) };
               return {
+                async orderBy() { if (readFailure) throw new Error("family inventory unreadable"); return [...rows.values()].filter(row => row.runId === String(runId)); },
                 async limit() {
+                  if (readIdentity?.reviewTaskId === lateConflict?.reviewTaskId && lateConflict) return [lateConflict];
                   return readIdentity ? [rows.get(`${readIdentity.runId}/${readIdentity.reviewTaskId}`)].filter(Boolean) : [];
                 },
               };
@@ -54,7 +66,7 @@ const storage = vi.hoisted(() => {
       };
     },
   };
-  return { rows, inserts, executor, setReadKey(row: StoredGate) { readIdentity = row; } };
+  return { rows, inserts, executor, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
 });
 
 vi.mock("../db", () => ({ db: storage.executor }));
@@ -65,13 +77,13 @@ vi.mock("../auth-policy", () => ({ enforceRunAccess: vi.fn(), resolveEffectivePo
 vi.mock("../run-wait-notifier", () => ({ dispatchAutoGateResolved: vi.fn() }));
 vi.mock("../run-produced-review-hold", () => ({ isParkedOnProducedReview: vi.fn(() => false) }));
 
-import { emitArtifactReviewGate, readGatePinnedTargets } from "../artifact-review-gate-store";
+import { emitArtifactReviewGate, emitDeclaredReviewGateFamily, readGatePinnedTargets } from "../artifact-review-gate-store";
 
 const A = { artifactId: "post", representationRevisionId: "post-r1" };
 const B = { artifactId: "image", representationRevisionId: "image-r1" };
 const input = (targets: unknown) => ({ runId: "run", orgId: "org", reviewTaskId: "task", targets });
 
-beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; });
+beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
 
 describe("new review gates freeze one artifact revision", () => {
   it.each([
@@ -132,4 +144,100 @@ describe("grandfathered combined gate replay", () => {
     await expect(emitArtifactReviewGate(input([A, B]))).rejects.toMatchObject({ code: "pin-conflict" });
     expect(storage.inserts).toEqual([]);
   });
+});
+
+
+describe("H1 atomic original-pause membership", () => {
+  const familyInput = () => ({ runId: "run", orgId: "org", reviewTaskId: "wayflow-task", targets: [A, B] });
+  it("persists exact complete immutable membership, and retries without rewriting", async () => {
+    await emitDeclaredReviewGateFamily(familyInput());
+    const before = JSON.stringify([...storage.rows]);
+    expect(storage.rows.size).toBe(2);
+    for (const row of storage.rows.values()) {
+      expect(row.pinnedTargets).toHaveLength(1);
+      expect(row.pinnedTargets[0]).toMatchObject({ declaredReviewPlan: { runId: "run", orgId: "org", baseTaskId: "wayflow-task", legs: [
+        { reviewTaskId: "wayflow-task", targets: [A] }, { reviewTaskId: "wayflow-task#2", targets: [B] },
+      ] } });
+    }
+    await emitDeclaredReviewGateFamily(familyInput());
+    expect(JSON.stringify([...storage.rows])).toBe(before);
+  });
+  it("a crash after the first insert rolls back and an exact retry recovers both", async () => {
+    storage.setCrashAfter(1);
+    await expect(emitDeclaredReviewGateFamily(familyInput())).rejects.toThrow("interrupted");
+    expect(storage.rows.size).toBe(0);
+    storage.setCrashAfter(null);
+    await emitDeclaredReviewGateFamily(familyInput());
+    expect(storage.rows.size).toBe(2);
+  });
+  it.each(["pending", "resolved"] as const)("late %s pin conflict rolls back the newly inserted first leg", async status => {
+    const old: StoredGate = { id: "old", runId: "run", orgId: "org", reviewTaskId: "wayflow-task#2", status,
+      pinnedTargets: [{ ...B, representationRevisionId: "different" }] };
+    storage.rows.set("run/wayflow-task#2", old);
+    await expect(emitDeclaredReviewGateFamily(familyInput())).rejects.toMatchObject({ code: "pin-conflict" });
+    expect([...storage.rows.keys()]).toEqual(["run/wayflow-task#2"]);
+    expect(storage.rows.get("run/wayflow-task#2")).toBe(old);
+  });
+  it("a witnessed missing leg recovers without rewriting its first exact gate", async () => {
+    await emitDeclaredReviewGateFamily(familyInput());
+    const first = storage.rows.get("run/wayflow-task")!;
+    storage.rows.delete("run/wayflow-task#2");
+    await emitDeclaredReviewGateFamily(familyInput());
+    expect(storage.rows.get("run/wayflow-task")).toBe(first);
+    expect(storage.rows.size).toBe(2);
+  });
+  it("an unreadable family inventory refuses before any insert", async () => {
+    storage.setReadFailure(true);
+    await expect(emitDeclaredReviewGateFamily(familyInput())).rejects.toThrow("inventory unreadable");
+    expect(storage.inserts).toEqual([]);
+    expect(storage.rows.size).toBe(0);
+  });
+  it.each(["missing-witness", "malformed-witness", "foreign", "extra-slot"])("an existing %s member refuses without rewriting", async corruption => {
+    await emitDeclaredReviewGateFamily(familyInput());
+    const old = storage.rows.get("run/wayflow-task#2")!;
+    if (corruption === "missing-witness") delete (old.pinnedTargets[0] as { declaredReviewPlan?: unknown }).declaredReviewPlan;
+    if (corruption === "malformed-witness") Object.assign(old.pinnedTargets[0], { declaredReviewPlan: {} });
+    if (corruption === "foreign") old.orgId = "other";
+    if (corruption === "extra-slot") storage.rows.set("run/wayflow-task#3", { ...old, reviewTaskId: "wayflow-task#3" });
+    const before = JSON.stringify([...storage.rows]);
+    await expect(emitDeclaredReviewGateFamily(familyInput())).rejects.toMatchObject({ code: "pin-conflict" });
+    expect(JSON.stringify([...storage.rows])).toBe(before);
+  });
+  it("jsonb object-key ordering does not erase immutable membership", async () => {
+    await emitDeclaredReviewGateFamily(familyInput());
+    for (const row of storage.rows.values()) {
+      const target = row.pinnedTargets[0] as typeof A & { declaredReviewPlan: { runId: string; orgId: string; baseTaskId: string; legs: Array<{reviewTaskId: string; targets: typeof A[]}> } };
+      const p = target.declaredReviewPlan;
+      Object.assign(target, { declaredReviewPlan: { legs: p.legs.map(leg => ({ targets: leg.targets.map(t => ({ representationRevisionId: t.representationRevisionId, artifactId: t.artifactId })), reviewTaskId: leg.reviewTaskId })), orgId: p.orgId, baseTaskId: p.baseTaskId, runId: p.runId } });
+    }
+    const before = JSON.stringify([...storage.rows]);
+    await emitDeclaredReviewGateFamily(familyInput());
+    expect(JSON.stringify([...storage.rows])).toBe(before);
+  });
+
+  it("a typed second-insert conflict after successful first insert rolls back the whole new set", async () => {
+    const conflicting: StoredGate = { id: "conflicting", runId: "run", orgId: "org", reviewTaskId: "wayflow-task#2", status: "resolved",
+      pinnedTargets: [{ ...B, representationRevisionId: "other" }] };
+    // Storage boundary reports the unique conflict only when the second insert
+    // reaches it, then serves its exact old row to the real conflict reader.
+    storage.setLateConflict(conflicting);
+    await expect(emitDeclaredReviewGateFamily(familyInput())).rejects.toMatchObject({ code: "pin-conflict" });
+    expect(storage.inserts).toHaveLength(2);
+    expect(storage.rows.size).toBe(0);
+    expect(conflicting.pinnedTargets[0].representationRevisionId).toBe("other");
+    storage.setLateConflict(null);
+    await emitDeclaredReviewGateFamily(familyInput());
+    expect(storage.rows.size).toBe(2);
+  });
+
+  it("caller-supplied target metadata cannot create or replace a server witness", async () => {
+    await emitArtifactReviewGate(input([{ ...A, declaredReviewPlan: { orgId: "invented" } }]));
+    expect(storage.rows.get("run/task")!.pinnedTargets).toEqual([A]);
+    storage.rows.clear(); storage.inserts.length = 0;
+    await emitDeclaredReviewGateFamily({ ...familyInput(), targets: [
+      { ...A, declaredReviewPlan: { orgId: "invented" } }, B,
+    ] });
+    expect(storage.rows.get("run/wayflow-task")!.pinnedTargets[0]).toMatchObject({ declaredReviewPlan: { orgId: "org" } });
+  });
+
 });
