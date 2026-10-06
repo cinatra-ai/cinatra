@@ -354,7 +354,7 @@ export function RailExtraEntry({
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
   // THE SETTLED WORD IS THE DRAWING'S, NOT THE WIRE'S (cinatra#3046, fix leg
-  // 16). This badge used to print `entry.gate.disposition` straight through, so
+  // 16). This row used to print `entry.gate.disposition` straight through, so
   // the rail read "APPROVE" beside a Review step whose card, on the same
   // screen, read "Continued" — one settlement in two vocabularies, one of them
   // the decider's verb rather than a reading. Derived from the one closed set
@@ -417,15 +417,8 @@ export function RailExtraEntry({
         "data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground",
       )}
     >
-      {entry.label}
-      {isGate && isResolved ? (
-        <span
-          className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground"
-          data-rail-gate-settlement={gateSettlement}
-        >
-          {gateSettlement}
-        </span>
-      ) : null}
+      {/* Review I.3 draws one text run, including its lowercase settlement. */}
+      {isGate && isResolved ? `${entry.label} · ${gateSettlement.toLowerCase()}` : entry.label}
       {isVerification ? (
         <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
           {entry.verification?.outcome ?? "verified"}
@@ -485,6 +478,7 @@ export function RailExtraEntry({
       data-rail-openable={entry.openable === false ? "false" : undefined}
       data-rail-gated-step={isGate ? "true" : undefined}
       data-rail-gate-history={isGate && isResolved ? "true" : undefined}
+      data-rail-gate-settlement={isGate && isResolved ? gateSettlement : undefined}
       data-rail-gate-pending={isGate && isPending ? "true" : undefined}
       data-rail-verification={isVerification ? "true" : undefined}
       data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
