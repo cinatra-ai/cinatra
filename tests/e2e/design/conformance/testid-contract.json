@@ -181,7 +181,20 @@
             "data-conformance-id=\"review-gate-placeholder\"",
             "aria-busy=\"true\"",
             "Agentic Run Progress",
-            "className=\"size-[22px] animate-spin text-primary\""
+            "import { Spinner } from \"@/components/ui/spinner\";",
+            "<Spinner",
+            "className=\"size-[22px] text-indigo-ink\"",
+            "strokeWidth={2.4}",
+            "aria-hidden=\"true\""
+          ]
+        },
+        {
+          "file": "src/components/ui/spinner.tsx",
+          "literals": [
+            "import { Loader2Icon } from \"lucide-react\"",
+            "<Loader2Icon",
+            "className={cn(\"size-4 animate-spin text-primary\", className)}",
+            "{...props}"
           ]
         }
       ]
