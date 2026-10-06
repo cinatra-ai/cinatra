@@ -321,6 +321,16 @@ describe("the settled copy is the drawing's one marker", () => {
     }
   });
 
+  it("does NOT claim a live repair the way the post-press notice does", () => {
+    // The decision bar's `requested` line says "a repair is now in flight" — a
+    // fact about what the reviewer's own press started. A settled card has not
+    // read that, so it may not assert it.
+    expect(reviewSettledCopy("changes_requested").body).toBe(
+      "Decided on the revision above.",
+    );
+    expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
+  });
+
   it("takes no decider at all — there is nowhere on this surface to put one", () => {
     expect(reviewSettledCopy.length).toBe(1);
   });
@@ -356,7 +366,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("organization · organization · text/markdown · updated 8 minutes ago");
+    expect(line).toBe("organization · organization · text/markdown · updated 8 min ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -371,7 +381,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
   });
 
   // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
@@ -388,7 +398,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts[3]).toBe("updated 8 min ago");
     expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
   });
 
@@ -403,7 +413,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
   });
 
   it("falls back to the value it was handed when that value is not a readable instant", () => {
