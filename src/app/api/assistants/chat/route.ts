@@ -190,6 +190,12 @@ const assistantChatBodySchema = z.object({
     .object({
       refs: z.array(z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH)).max(10),
       focused: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH).nullish(),
+      // cinatra#2934 — the RUNS whose waiting screen the composer sits under. A
+      // screen carries no ref on any client, so the page names the run and the
+      // server mints the ref from the run's own durable row, under the reader's
+      // access. Bounded here for the same reason `refs` is: an unbounded list
+      // would be the client choosing how much resolve work the server does.
+      screenRunIds: z.array(z.string().min(1).max(200)).max(4).optional(),
     })
     .strict()
     .optional(),
@@ -370,10 +376,13 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   // instanceId. Zero/multiple origin-matched rows, or a divergent id → deny.
   // This re-pins the write target to the verified origin's single canonical row
   // (the server-verified-origin authority the AUTH INVARIANT preserves EXACTLY).
+  // cinatra#3715: a sign-in pinned to the handshake's identity re-pins through
+  // the same opt-in the sign-in used — the frame gate's one handshake rule.
   const reResolvedInstance = resolveCanonicalInstanceForOrigin({
     instancesConfigKey: entry.auth.instancesConfigKey,
     origin: verifiedOrigin ?? "",
     claimedInstanceId: claims.instanceId,
+    connectSiteFallbackClient: entry.auth.instancesConfigKey,
   });
   if (!reResolvedInstance || reResolvedInstance !== claims.instanceId) {
     return denyUserAuth("instance_binding_failed");
@@ -594,6 +603,9 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     ? {
         candidateRefs: parsed.data.boundCard.refs,
         focusedRef: parsed.data.boundCard.focused ?? null,
+        ...(parsed.data.boundCard.screenRunIds
+          ? { screenRunIds: parsed.data.boundCard.screenRunIds }
+          : {}),
       }
     : null;
   const runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"] = (
@@ -616,6 +628,12 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
       // cinatra#2240 — the harness-bound turn/run identity keys this turn's
       // durable skill-delivery record.
       turnIdentity,
+      // cinatra#2815 S3: the DURABLE thread identifier, so assigned-skill
+      // delivery resolves this conversation's frozen assignment scopes. Without
+      // it the runtime mints a per-turn binding, delivery finds no thread behind
+      // that id, and every turn of every thread falls back to the narrowest
+      // answer, losing the layers somebody granted the conversation.
+      sessionId: parsed.data.threadId,
       widgetPrincipal,
       // cinatra#2932 — the bound-card claim, re-checked inside the runtime under
       // this person's own standing. The widget is on the same road as the chat
@@ -626,6 +644,15 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   const response = await streamAgUiChatTurn({
     request,
     threadId: parsed.data.threadId,
+    // cinatra#2815 S3: the scopes a NEW conversation freezes. This branch's
+    // turn actor is floored on teams and projects by design, so the frozen
+    // snapshot names the organization and the person and no team layer: never
+    // wider than what this seam can vouch for.
+    scopeActor: {
+      principalType: "HumanUser",
+      principalId: widgetPrincipal.userId,
+      teamIds: [],
+    },
     mirrorOrgId: authz.mirrorOrgId,
     needsStructuredRow: authz.needsStructuredRow,
     userId: widgetPrincipal.userId,
@@ -703,6 +730,9 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
     ? {
         candidateRefs: parsed.data.boundCard.refs,
         focusedRef: parsed.data.boundCard.focused ?? null,
+        ...(parsed.data.boundCard.screenRunIds
+          ? { screenRunIds: parsed.data.boundCard.screenRunIds }
+          : {}),
       }
     : null;
   const { threadId } = parsed.data;
@@ -820,6 +850,12 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
         signal,
         // cinatra#2240 — keys this turn's durable skill-delivery record.
         turnIdentity,
+        // cinatra#2815 S3: the DURABLE thread identifier, so assigned-skill
+        // delivery resolves this conversation's frozen assignment scopes. Without
+        // it the runtime mints a per-turn binding, delivery finds no thread behind
+        // that id, and every turn of every thread falls back to the narrowest
+        // answer, losing the layers somebody granted the conversation.
+        sessionId: threadId,
         // cinatra#2932 — the bound-card claim; re-checked inside the runtime.
         ...(boundCardClaim ? { boundCard: boundCardClaim } : {}),
       });
@@ -860,12 +896,21 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
         signal,
         // cinatra#2240 — keys this turn's durable skill-delivery record.
         turnIdentity,
+        // cinatra#2815 S3: the DURABLE thread identifier, so assigned-skill
+        // delivery resolves this conversation's frozen assignment scopes. Without
+        // it the runtime mints a per-turn binding, delivery finds no thread behind
+        // that id, and every turn of every thread falls back to the narrowest
+        // answer, losing the layers somebody granted the conversation.
+        sessionId: threadId,
       });
   }
 
   return streamAgUiChatTurn({
     request,
     threadId,
+    // cinatra#2815 S3: the scopes a NEW conversation freezes, taken from the
+    // actor this route already verified.
+    scopeActor: actorContext,
     mirrorOrgId: authz.mirrorOrgId,
     needsStructuredRow: authz.needsStructuredRow,
     userId,

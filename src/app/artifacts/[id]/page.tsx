@@ -34,6 +34,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { ArtifactHeadingTitle } from "./artifact-title-save-refresh";
 
 import { getAuthSession, requireActorContext } from "@/lib/auth-session";
 import {
@@ -347,7 +348,11 @@ export default async function ArtifactDetailPage({ params, searchParams }: PageP
         title={title}
         titleContent={
           <span className="flex flex-wrap items-baseline gap-3">
-            <span>{title}</span>
+            <ArtifactHeadingTitle
+              artifactId={id}
+              title={title}
+              untitledTitle={artifactDisplayTitle({ title: "", artifactId: artifact.artifactId })}
+            />
             <span
               className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 font-sans text-xs font-semibold not-italic text-primary"
               data-testid="artifact-kind-label"

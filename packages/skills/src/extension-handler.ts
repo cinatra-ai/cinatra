@@ -6,13 +6,19 @@ import type {
   ExtensionDiscoveryScope,
   ActiveExtensionManifest,
 } from "@cinatra-ai/extension-types";
-import { visibleManifestPackageNames } from "@cinatra-ai/extension-types";
+import {
+  visibleManifestPackageNames,
+  isSuppliedPackageProvenance,
+} from "@cinatra-ai/extension-types";
 import { installSkillPackageFromGitHub } from "./github";
 import { installSkillPackageFromVerdaccio } from "./verdaccio";
 import { uninstallSkillPackage } from "./skills-store";
 // Explicit catalog rebuild at skill-extension lifecycle points (cinatra#1364).
 import { rebuildSkillsCatalog } from "./skill-packages";
-import { resolveSkillPackageSource } from "./skill-package-source";
+import {
+  resolveSkillPackageSource,
+  type SkillPackageSourceKind,
+} from "./skill-package-source";
 import { listInstalledSkills, type SkillManifest } from "./skills-registry";
 import { matchAgentsToSkills } from "@/lib/agents-store";
 
@@ -117,13 +123,75 @@ function filterSkillsForScope(
 // methods (install / update / uninstall / archive / restore), each of which
 // dispatches on the resolved kind.
 
+/**
+ * The planned canonical row anchor, in the shape the dispatcher threads it.
+ * Structural on purpose: a static import of `@cinatra-ai/extensions` from this
+ * package would close a dependency cycle (that package depends on this one), so
+ * the shared resolver is reached the same way every other cross-package call in
+ * this package reaches one — lazily, inside the call.
+ */
+type InstallRowOwnershipInput = {
+  ownerLevel: string;
+  ownerId: string | null;
+  organizationId: string | null;
+};
+
+/**
+ * The organization scope a skill install resolves its FINALIZED store payload
+ * at: the planned anchor's organization when the dispatcher threaded one, the
+ * actor's organization otherwise (byte-identical to the previous derivation for
+ * every caller that plans no anchor).
+ */
+async function resolveSkillInstallAnchorOrgId(
+  actor: Actor,
+  planned: InstallRowOwnershipInput | null,
+): Promise<string | null> {
+  if (!planned) return actor.orgId ?? null;
+  const { resolveNativeInstallOwnership } = await import(
+    "@cinatra-ai/extensions/canonical-types"
+  );
+  return resolveNativeInstallOwnership(actor.orgId ?? null, planned as never).anchorOrgId;
+}
+
+/**
+ * WHICH ROAD A GITHUB-SOURCED REF TAKES (cinatra#3204).
+ *
+ * The legacy GitHub installer is the CONFIGURED-REPOSITORY sync: its argument
+ * is a repository reference (`owner/repo`), and its second act mints a
+ * connection-bearing client. A package the operator SUPPLIED by a public
+ * repository link is neither of those things — its `packageName` is the
+ * RESOLVED package name, which is not a repository reference, and the person
+ * provided a public link precisely so that nothing had to be signed in to.
+ *
+ * A supplied package also needs nothing from that installer, because by the
+ * time this handler runs its bytes are already in the content-addressed store:
+ * the dispatcher fires the store pipeline BEFORE the handler for this kind, and
+ * the pipeline has already recorded the honest provenance — the repository, the
+ * proven ref and the pinned commit — on the canonical row. Projecting that
+ * FINALIZED payload into the skills catalog is exactly what the arm below does
+ * for a package supplied as a FILE, and for exactly the reason stated there:
+ * the branch is about WHERE THE PAYLOAD IS, never which registry it came from.
+ *
+ * So the discriminator is whether the ref is SUPPLIED — a declared provenance
+ * carrying a content digest, the grammar `isSuppliedPackageProvenance` owns —
+ * and never the provenance's type. A ref that declares no supplied provenance
+ * keeps the legacy road exactly as it was.
+ */
+function takesLegacyGitHubRoad(ref: PackageRef, sourceKind: SkillPackageSourceKind): boolean {
+  return sourceKind === "github" && !isSuppliedPackageProvenance(ref.provenance);
+}
+
 export function createSkillExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "skill",
 
-    async install(ref: PackageRef, actor: Actor): Promise<void> {
+    async install(
+      ref: PackageRef,
+      actor: Actor,
+      options?: { destination?: "private" | "public"; rowOwnership?: InstallRowOwnershipInput },
+    ): Promise<void> {
       const source = resolveSkillPackageSource(ref);
-      if (source.kind === "github") {
+      if (takesLegacyGitHubRoad(ref, source.kind)) {
         await installSkillPackageFromGitHub(ref.packageName);
       } else {
         // cinatra#793: the verdaccio installer consumes the FINALIZED unified-
@@ -137,10 +205,19 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
         // is about WHERE THE PAYLOAD IS (the finalized store) rather than which
         // registry it came from; the honest provenance lives on the canonical
         // row, not in this call.
+        // cinatra#3204 criterion 16: the payload was finalized at the anchor the
+        // DISPATCHER planned (the scope the operator chose on the install
+        // screen), which is not the actor's organization whenever the two
+        // differ — a "Workspace: All" install finalizes at the org-NULL
+        // workspace anchor while the actor still has an active organization.
+        // Looking the payload up at `actor.orgId` therefore missed it and the
+        // handler refused a package that had just been installed correctly.
+        // The anchor rule is not re-derived here: it is the same shared
+        // function the canonical row is anchored by.
         await installSkillPackageFromVerdaccio({
           packageName: ref.packageName,
           packageVersion: ref.version,
-          orgId: actor.orgId ?? null,
+          orgId: await resolveSkillInstallAnchorOrgId(actor, options?.rowOwnership ?? null),
         });
       }
       // Explicit lifecycle rebuild (cinatra#1364) BEFORE matching, so matching
@@ -152,7 +229,7 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
     async update(ref: PackageRef, actor: Actor): Promise<void> {
       // upsert semantics — same as install per source kind.
       const source = resolveSkillPackageSource(ref);
-      if (source.kind === "github") {
+      if (takesLegacyGitHubRoad(ref, source.kind)) {
         await installSkillPackageFromGitHub(ref.packageName);
       } else {
         await installSkillPackageFromVerdaccio({

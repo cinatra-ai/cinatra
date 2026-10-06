@@ -1,9 +1,8 @@
 /**
  * THE OWNER ON THE ARTIFACT PAGE'S HEADER, AND ON THE DASHBOARD'S (cinatra#3475).
  *
- * The issue's fourth build item is over EVERY place that printed the owner level
- * or the visibility raw on the library row, the dashboard row or the artifact
- * page header. The library row is pinned by
+ * The shared owner vocabulary applies to the library row, dashboard row and
+ * artifact page header. The library row is pinned by
  * `src/components/artifacts/__tests__/library-row-meta-and-glyph.test.tsx`; this
  * file pins the page header, which drew those two facts through a local
  * `capitalized()` over the STORED value — so one artifact read "Organization:

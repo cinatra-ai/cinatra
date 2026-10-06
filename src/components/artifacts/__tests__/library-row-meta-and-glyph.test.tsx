@@ -22,7 +22,21 @@
  * ONE ROW PER OWNER LEVEL AND TWO KINDS, rendered, pinning both.
  */
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/generated/artifact-renderers", () => ({ GENERATED_ARTIFACT_RENDERERS: {} }));
+vi.mock("@/lib/artifacts/artifact-service", () => ({ listArtifacts: () => [] }));
+vi.mock("@/lib/better-auth-db", () => ({
+  readOrgsWithTeamsForUserActiveOnly: async () => [],
+  readProjectsForUser: async () => [],
+  readTeamsByIdsForOrg: async () => [],
+}));
+vi.mock("@/lib/dashboards/dashboard-artifact-pointer-resolvers", () => ({ resolveLibraryDashboardPointers: async () => new Map() }));
+vi.mock("@/components/artifacts/library-upload", () => ({
+  LibraryUploadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  LibraryUploadDropZone: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  LibraryUploadButton: () => null,
+}));
 
 import {
   semanticRendererRegistry,
@@ -89,6 +103,14 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("the library row's meta line names the owner, as the drawing writes it", () => {
+  it.each(["constructor", "toString", "__proto__", "custom-scope"])(
+    "unknown owner level %s stays a readable string, including inherited object keys",
+    (level) => {
+      const label = artifactOwnerLabel(level, "Unrelated owner");
+      expect(typeof label).toBe("string");
+      expect(label).toBe(level.charAt(0).toUpperCase() + level.slice(1));
+    },
+  );
   it("names the owning TEAM — 'Team: Growth'", async () => {
     const html = await renderRow(
       summaryOf({ ownerLevel: "team", ownerId: "team_growth", visibility: "private" }),
@@ -180,11 +202,13 @@ describe("the library row's glyph follows the artifact's kind, not one icon for 
     const typedHtml = await renderRow(typed, "Acme Corp");
     const fallbackHtml = await renderRow(fallback, "Acme Corp");
 
-    const typedCase = typedHtml.match(/data-glyph-case="([a-z-]+)"/)?.[1];
-    const fallbackCase = fallbackHtml.match(/data-glyph-case="([a-z-]+)"/)?.[1];
-    expect(typedCase).toBe("typed-data");
-    expect(fallbackCase).toBe("generic-fallback");
-    expect(typedCase).not.toBe(fallbackCase);
+    const typedIcon = typedHtml.match(/<svg\b[\s\S]*?<\/svg>/)?.[0];
+    const fallbackIcon = fallbackHtml.match(/<svg\b[\s\S]*?<\/svg>/)?.[0];
+    expect(typedIcon).toContain("lucide-boxes");
+    expect(fallbackIcon).toContain("lucide-braces");
+    expect(typedIcon).not.toBe(fallbackIcon);
+    expect(typedHtml).toContain('data-glyph-source="recorded-exception"');
+    expect(fallbackHtml).toContain('data-glyph-source="recorded-exception"');
   });
 
   it("both rows still carry the owner's NAME on their meta line", async () => {

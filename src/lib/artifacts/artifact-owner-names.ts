@@ -75,7 +75,9 @@ export async function resolveArtifactOwnerNames(input: {
     ),
   );
   if (input.orgId && teamIds.length > 0) {
-    const teams = await readTeamsByIdsForOrg(teamIds, input.orgId);
+    // Names are optional row metadata. Preserve the already-authorized list
+    // and organization names when this one bounded lookup is unavailable.
+    const teams = await readTeamsByIdsForOrg(teamIds, input.orgId).catch(() => []);
     for (const team of teams) {
       if (team.name && team.name.trim() !== "") names.set(`team:${team.id}`, team.name);
     }

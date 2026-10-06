@@ -22,6 +22,10 @@ import {
   isClassBootstrap,
   classGrowth,
 } from "../workspace-phantom-deps.mjs";
+// The HOST-SERVED virtual module id, imported from its ONE definition (the
+// client-bundle builder) — the same road scripts/extensions/inventory.mjs takes.
+// Never re-typed as a literal here: one id, one definition.
+import { HOST_DESIGN_PRIMITIVES_MODULE } from "../../extensions/build-client-renderer-bundle.mjs";
 
 const GATE_SCRIPT = fileURLToPath(new URL("../workspace-phantom-deps.mjs", import.meta.url));
 
@@ -216,6 +220,38 @@ test("extractThirdPartyImports rejects a URL-shaped specifier", () => {
   const src = `throw new Error("failed to fetch from \\"https://example.com/pkg\\"");`;
   const got = extractThirdPartyImports(src, new Set(), null);
   assert.deepEqual([...got], []);
+});
+
+test("extractThirdPartyImports exempts the EXACT host-served virtual module id (cinatra#3471)", () => {
+  // The host serves the id at run time and nothing is published under it, so
+  // docs/internals/contracts/host-shared-primitives-contract.md requires a
+  // migrating package to declare it in NO manifest bucket — an undeclared
+  // import of it is CORRECT, never a phantom dependency.
+  const src = `import { Alert, AlertDescription } from "${HOST_DESIGN_PRIMITIVES_MODULE}";`;
+  const got = extractThirdPartyImports(src, new Set(), "@fixture/pkg");
+  assert.deepEqual([...got], []);
+});
+
+test("extractThirdPartyImports still reports a SUB-PATH of the host-served id (exact-tuple discipline)", () => {
+  // Pins what must NOT change: the exemption is matched on the RAW specifier
+  // BEFORE resolveSpecifierToPackage collapses a subpath to its owning package,
+  // so a near-miss keeps falling through to the resolver and stays a finding —
+  // the same exact-tuple discipline the externals allowlist holds the id to.
+  // An exemption applied to the RESOLVED name instead would turn this red.
+  const src = `import { Card } from "${HOST_DESIGN_PRIMITIVES_MODULE}/card";`;
+  const got = extractThirdPartyImports(src, new Set(), "@fixture/pkg");
+  assert.deepEqual([...got], [HOST_DESIGN_PRIMITIVES_MODULE]);
+});
+
+test("extractThirdPartyImports still reports a real undeclared package beside the host-served id", () => {
+  // Pins what must NOT change, by PRESENCE rather than exact-set equality, so
+  // the arm does not depend on the exemption and passes on both sides.
+  const src = `
+    import { Alert } from "${HOST_DESIGN_PRIMITIVES_MODULE}";
+    import { z } from "zod";
+  `;
+  const got = extractThirdPartyImports(src, new Set(), "@fixture/pkg");
+  assert.ok(got.has("zod"), "a real undeclared npm package stays a finding");
 });
 
 test("isBuiltinPackage recognizes Node built-ins and rejects real packages", () => {

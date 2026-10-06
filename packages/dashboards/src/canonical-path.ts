@@ -3,8 +3,10 @@
 // route so the URL carries the ancestry). Single source of truth: the detail
 // routes, the flat-route redirect, and any future listing surface (#1897/B4
 // scope collections) derive from HERE rather than re-inventing the mapping.
-// NULL/unknown anchors (personal, workspace, legacy unanchored rows) fall back
-// to the flat route, which remains their canonical address.
+// NULL/unknown anchors (personal, legacy unanchored rows) fall back to the flat
+// route, which remains their canonical address. A WORKSPACE dashboard
+// (cinatra#2811: the org-NULL '__workspace__' entity) lives under the workspace
+// page, whose own surface renders it (and builds the workspace Overview fresh).
 
 type CanonicalPathRow = {
   readonly id: string;
@@ -14,6 +16,9 @@ type CanonicalPathRow = {
 
 export function canonicalDashboardPath(row: CanonicalPathRow): string {
   const id = encodeURIComponent(row.id);
+  if (row.entityType === "workspace" && row.entityId === "__workspace__") {
+    return `/workspace/dashboards/${id}`;
+  }
   if (row.entityId) {
     if (row.entityType === "team") {
       return `/teams/${encodeURIComponent(row.entityId)}/dashboards/${id}`;

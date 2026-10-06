@@ -68,7 +68,7 @@ export function artifactOwnerLabel(
   level: ArtifactScopeLevel | string,
   ownerName?: string | null,
 ): string {
-  const known = (level in ARTIFACT_SCOPE_LEVEL_WORD
+  const known = (Object.hasOwn(ARTIFACT_SCOPE_LEVEL_WORD, level)
     ? (level as ArtifactScopeLevel)
     : null);
   const word = known ? ARTIFACT_SCOPE_LEVEL_WORD[known] : capitalizedWord(String(level));

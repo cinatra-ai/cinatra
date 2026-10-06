@@ -123,3 +123,87 @@ describe("untrustedActivationMode", () => {
     expect(untrustedActivationMode({ CINATRA_EXTENSION_UNTRUSTED_ISOLATION: "container" })).toBe("deny");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE OPERATOR-SUPPLIED ACTIVATION ORIGIN (cinatra#3204).
+//
+// The issue's headline is that each of the four kinds installs from a file
+// archive or a resolved repository EXACTLY as the store installs it. A connector
+// is the kind whose whole install exists to run `register(ctx)` in this process,
+// so it is the kind that has to pass this classifier — and it could not, on any
+// deployment, because the supplied road carries no registry URL and the origin
+// factor only ever accepted a host from the deployment's allowlist.
+//
+// The road is the other answer to that factor. These cases hold BOTH halves of
+// the fix: the supplied road is admitted, and admitting it moves nothing else —
+// every other factor still refuses exactly as it did, and a STORE-road package
+// is judged byte-for-byte as before.
+// ---------------------------------------------------------------------------
+describe("the operator-supplied road is an activation origin of the same standing as the store", () => {
+  // The host policy of a deployment with NO configured marketplace at all: no
+  // activation host, and the unsigned-bootstrap lever off. A store install
+  // reaches nothing here — which is the point: the supplied road stands on the
+  // supply act, not on a registry the deployment may not even have.
+  function supplied(over: Partial<TrustInput> = {}): TrustInput {
+    return {
+      packageName: "@acme/thing-connector",
+      registryUrl: "supplied:operator",
+      integrityVerified: true,
+      persistedTrustDecision: true,
+      trustedActivationHosts: [],
+      allowMarketplaceBootstrapTrust: false,
+      operatorSuppliedOrigin: true,
+      ...over,
+    };
+  }
+
+  it("admits an unsigned supplied package with no activation host configured at all", () => {
+    const v = classifyExtensionTrust(supplied());
+    expect(v.trusted).toBe(true);
+    expect(v.tier).toBe("trusted-bootstrap");
+    expect(v.reason).toMatch(/supplied/i);
+  });
+
+  it("admits it for IMPORT only — never the privileged tier, without a verified signature", () => {
+    expect(classifyExtensionTrust(supplied()).tier).not.toBe("trusted-signed");
+    // A supplied package that IS signed against a host-trusted key reaches the
+    // privileged tier on the same terms as any other road.
+    expect(classifyExtensionTrust(supplied({ signatureVerified: true })).tier).toBe("trusted-signed");
+  });
+
+  it("still refuses a supplied package whose trust decision was REVOKED", () => {
+    const v = classifyExtensionTrust(supplied({ persistedTrustDecision: false }));
+    expect(v.trusted).toBe(false);
+    expect(v.reason).toBe("trust explicitly revoked by host decision");
+  });
+
+  it("still refuses a supplied package whose integrity was not verified", () => {
+    const v = classifyExtensionTrust(supplied({ integrityVerified: false }));
+    expect(v.trusted).toBe(false);
+    expect(v.reason).toBe("tarball integrity not verified");
+  });
+
+  it("still refuses a supplied package whose attested signature did NOT verify", () => {
+    const v = classifyExtensionTrust(supplied({ signatureVerified: false }));
+    expect(v.trusted).toBe(false);
+    expect(v.reason).toBe("package signature did not verify");
+  });
+
+  it("does NOT move the store road: the same inputs without the supplied origin stay untrusted", () => {
+    const v = classifyExtensionTrust(supplied({ operatorSuppliedOrigin: false }));
+    expect(v.trusted).toBe(false);
+    expect(v.reason).toMatch(/not a trusted activation host/);
+    // And a package from a host that is NOT on the allowlist is refused whether
+    // or not the deployment has one configured.
+    const offHost = classifyExtensionTrust(
+      supplied({
+        operatorSuppliedOrigin: false,
+        registryUrl: "https://evil.example.com",
+        trustedActivationHosts: ["registry.cinatra.ai"],
+        allowMarketplaceBootstrapTrust: true,
+      }),
+    );
+    expect(offHost.trusted).toBe(false);
+    expect(offHost.reason).toMatch(/not a trusted activation host/);
+  });
+});

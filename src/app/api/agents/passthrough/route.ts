@@ -35,6 +35,7 @@ import {
   isRunScopedPersistTool,
   enforceAnsweredGateProvenance,
 } from "./answered-gate-provenance";
+import { shapeObjectsUpdateInput } from "./objects-update-seam";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 
@@ -333,6 +334,12 @@ TOOL_INPUT_SHAPERS.email_outreach_initial_drafts_update = (raw) =>
 // degrading to `{ recipients: [] }` and silently deleting every recipient.
 TOOL_INPUT_SHAPERS.email_outreach_recipients_update = (raw) =>
   shapeRecipientsReviewResumeInput(raw);
+
+// objects_update (cinatra#3564): the publish packs' write_address leaf renders its
+// address patch through tojson, so input.data arrives as JSON text that the pure
+// ./objects-update-seam parses into the record the handler merges, refusing
+// anything but a plain object (the shaper-throw contract answers HTTP 400).
+TOOL_INPUT_SHAPERS.objects_update = (raw) => shapeObjectsUpdateInput(raw);
 
 export async function POST(req: Request): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {

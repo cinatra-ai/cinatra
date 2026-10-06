@@ -41,58 +41,25 @@ export function isFileMime(mime: string): boolean {
   return Boolean(mime) && mime !== "application/octet-stream";
 }
 
-/**
- * THE ROW'S DISPATCH CASE (§III — cinatra#3475). The drawing gives a row THREE
- * dispatch cases and the glyph follows the one the row actually opens through:
- *
- *   typed-data       — its type's defining extension registered a renderer;
- *   file-form        — an uploaded representation opened by its MIME viewer;
- *   generic-fallback — no renderer and no MIME handler, so the row opens to the
- *                      read-only structured-data (JSON) view.
- *
- * MEASURED DEFECT: the tier used to answer "is this row claimed at all" FIRST,
- * so EVERY claimed row — a Blog Idea, a JSON artifact, anything — collapsed onto
- * one icon whatever its own renderer resolution was. The case is now resolved
- * from the renderer declared for the row's OBJECT TYPE, so a renderer-backed
- * kind, a file-form kind and a fallback kind no longer share one glyph.
- */
-export type LibraryRowGlyphCase = "typed-data" | "file-form" | "generic-fallback";
-
-function glyphCaseOf(summary: ArtifactSummary): LibraryRowGlyphCase {
-  const identity = summary.presentationIdentity;
-  const semantic =
-    identity.kind === "extension"
-      ? resolveSemanticDispatch(summary.objectType, identity)
-      : null;
-  if (semantic) return "typed-data";
-  if (isFileMime(summary.mime)) return "file-form";
-  return "generic-fallback";
-}
-
-const CASE_FALLBACK_ICON: Readonly<Record<LibraryRowGlyphCase, typeof FileText>> = {
-  "typed-data": Boxes,
-  "file-form": FileText,
-  "generic-fallback": Braces,
-};
-
 /** The host cell tint classes per glyph tier (the cell chrome stays host-side;
- * an extension `listRow` renderer draws only the glyph CONTENT inside it). The
- * TINT stays identity-driven — a claimed row keeps the claimed tint — while the
- * host's fallback ICON follows the row's dispatch case. */
+ * an extension `listRow` renderer draws only the glyph CONTENT inside it). */
 function glyphTier(summary: ArtifactSummary): {
   className: string;
   Fallback: typeof FileText;
-  glyphCase: LibraryRowGlyphCase;
 } {
-  const glyphCase = glyphCaseOf(summary);
-  const Fallback = CASE_FALLBACK_ICON[glyphCase];
+  // Keep the host cell tint and recorded-exception coverage, while its icon
+  // follows the row's declared detail renderer / file / structured-data case.
+  const semantic = summary.presentationIdentity.kind === "extension"
+    ? resolveSemanticDispatch(summary.objectType, summary.presentationIdentity)
+    : null;
+  const Fallback = semantic ? Boxes : isFileMime(summary.mime) ? FileText : Braces;
   if (summary.presentationIdentity.kind === "extension") {
-    return { className: "bg-primary/10 text-primary", Fallback, glyphCase };
+    return { className: "bg-primary/10 text-primary", Fallback };
   }
   if (isFileMime(summary.mime)) {
-    return { className: "bg-warning/10 text-warning", Fallback, glyphCase };
+    return { className: "bg-warning/10 text-warning", Fallback };
   }
-  return { className: "bg-surface-muted text-muted-foreground", Fallback, glyphCase };
+  return { className: "bg-surface-muted text-muted-foreground", Fallback };
 }
 
 /**
@@ -109,7 +76,7 @@ export async function LibraryRowGlyph({
 }: {
   summary: ArtifactSummary;
 }): Promise<ReactNode> {
-  const { className, Fallback, glyphCase } = glyphTier(summary);
+  const { className, Fallback } = glyphTier(summary);
   // Row labeling presents the assertion-aware PRESENTATION identity (epic
   // #1883 A6): the winner's `listRow` glyph resolves for the presented type.
   const identity = summary.presentationIdentity;
@@ -164,7 +131,6 @@ export async function LibraryRowGlyph({
       className={`grid size-[34px] flex-none place-items-center overflow-hidden rounded-lg ${className}`}
       data-testid="artifacts-library-glyph"
       data-glyph-source={extensionGlyph ? "extension" : "generic"}
-      data-glyph-case={glyphCase}
     >
       {extensionGlyph ? (
         <>

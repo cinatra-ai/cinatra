@@ -150,6 +150,14 @@ type AcquiredPackage = {
   closureHash: string | null;
   /** The signature verdict fed to the trust classifier. */
   signatureVerified: boolean | undefined;
+  /**
+   * Whether the bytes came from the OPERATOR-SUPPLIED road — an archive an admin
+   * uploaded, or a repository this instance resolved and pinned. It is the
+   * supplied entry's answer to the trust classifier's ORIGIN factor, the way a
+   * deployment's marketplace host is the registry road's answer to it. Absent on
+   * the registry road, which passes a real registry URL instead.
+   */
+  operatorSuppliedOrigin?: boolean;
   /** The materialized store payload. */
   mat: { storeDir: string; digest: string; integrity: string; contentHash: string };
   /** Road-specific provenance writer (see ProvenanceWrite). */
@@ -176,9 +184,10 @@ type AcquiredPackage = {
    *   activation is FORCED OFF so untrusted bytes cannot be imported even if an
    *   activator is wired.
    *
-   * A supplied CONNECTOR therefore still refuses: its install exists to run
-   * `register(ctx)` in this process, which is exactly the code execution an
-   * untrusted verdict must prevent.
+   * A supplied CONNECTOR is not in that set — its install exists to run
+   * `register(ctx)` in this process — so it is admitted the only honest way:
+   * through the classifier, by the road's own activation standing
+   * (`operatorSuppliedOrigin`), and never by this policy.
    */
   untrustedInstallPolicy: "refuse" | "finalize-without-activation";
 };
@@ -337,6 +346,12 @@ export type SuppliedInstallPipelineDeps = InstallPipelineDeps & {
     orgId: string | null;
     version: string;
     provenance: SuppliedPackageProvenance;
+    /**
+     * The sha512 SRI the pipeline COMPUTED over the delivered tarball. Recorded
+     * on the row beside the content hash so the supplied install has the same
+     * out-of-store anchor evidence a registry install has (cinatra#3204).
+     */
+    integrity: string;
     contentHash: string;
     digest?: string | null;
     storeRoot?: string;
@@ -418,14 +433,23 @@ export async function installExtensionFromSuppliedSnapshot(
 
   return runInstallPipelineCore(input, deps, {
     resolvedVersion: input.version,
-    // A supplied package has no registry. The core threads this into the trust
-    // classifier, which is exactly right: an origin that is not an allow-listed
-    // activation host cannot reach `trusted-signed`.
+    // A supplied package has no registry, and the marker says so rather than
+    // inventing a URL. What answers the classifier's ORIGIN factor is the road
+    // itself (`operatorSuppliedOrigin` below), never this string.
     registryUrl: SUPPLIED_PACKAGE_ORIGIN,
     integrity,
     // No registry attestation, no producer signature, no signed plan.
     closureHash: null,
     signatureVerified: undefined,
+    // THE ROAD'S OWN ACTIVATION STANDING (cinatra#3204). An admin with install
+    // rights supplied these exact bytes and this entry re-verified their content
+    // digest over what materialized, so the origin factor is answered here the
+    // way a deployment's marketplace host answers it for a store install — of the
+    // same standing, and with no other factor relaxed: the package is unsigned,
+    // so it reaches `trusted-bootstrap` at most, self-grants no privileged host
+    // port and runs no host DDL. This is the ONLY caller that declares it; the
+    // registry road never does.
+    operatorSuppliedOrigin: true,
     mat,
     // THE KIND DECIDES. A metadata-only kind imports nothing, so an untrusted
     // supplied package of that kind installs and stays untrusted (criterion 26).
@@ -442,6 +466,7 @@ export async function installExtensionFromSuppliedSnapshot(
         orgId: write.orgId,
         version: write.version,
         provenance,
+        integrity: write.integrity,
         contentHash: write.contentHash,
         digest: write.digest ?? null,
         ...(write.storeRoot ? { storeRoot: write.storeRoot } : {}),
@@ -466,6 +491,7 @@ async function runInstallPipelineCore(
     signature,
     closureHash,
     signatureVerified,
+    operatorSuppliedOrigin,
     mat,
     writeProvenance,
     untrustedInstallPolicy,
@@ -691,6 +717,9 @@ async function runInstallPipelineCore(
     // carries a plan the verdict is NEVER undefined and a non-true verdict
     // already refused the install before any write (cinatra#181).
     signatureVerified,
+    // The supplied road's own activation standing (absent on the registry road,
+    // where the deployment's host allowlist is the only origin answer).
+    ...(operatorSuppliedOrigin ? { operatorSuppliedOrigin: true } : {}),
     trustedActivationHosts: (deps.trustedActivationHosts ?? trustedActivationHosts)(),
     allowMarketplaceBootstrapTrust: (
       deps.allowMarketplaceBootstrapTrust ?? allowMarketplaceBootstrapTrust
@@ -730,9 +759,12 @@ async function runInstallPipelineCore(
   // nothing, may still install — see `untrustedInstallPolicy`. It never
   // activates in process (forced below), never self-grants and never runs
   // migrations, so nothing about the trust boundary moves.
-  const untrustedButImportsNothing =
-    !verdict.trusted && untrustedInstallPolicy === "finalize-without-activation";
-  if (!verdict.trusted && !untrustedButImportsNothing) {
+  // A kind that IMPORTS NOTHING never activates in this process — whatever the
+  // verdict says. It is the kind that decides, so the two questions stay apart:
+  // "may this code be imported here" (the classifier) and "does this kind import
+  // anything at all" (the policy the road passes).
+  const importsNothingByKind = untrustedInstallPolicy === "finalize-without-activation";
+  if (!verdict.trusted && !importsNothingByKind) {
     const isLiveDigest = materializedDirIsLive();
     // Whether the materialized bytes are actually gone. The refusal SAYS what it
     // did, so a swallowed GC failure must not be reported as a removal: a
@@ -1487,12 +1519,15 @@ async function runInstallPipelineCore(
       rollbackComplete = lastResortComplete;
       activationReason = `update-activate-threw:${err instanceof Error ? err.message : String(err)}`;
     }
-  } else if (untrustedButImportsNothing) {
-    // The package was admitted for INSTALL only. It imports nothing by kind, and
-    // it is untrusted — so the in-process activator is not called at all, rather
-    // than called and expected to refuse.
+  } else if (importsNothingByKind) {
+    // The package imports nothing by kind, so the in-process activator is not
+    // called at all, rather than called and expected to report a non-activation.
+    // The reason says WHICH fact ended the activation half — the kind, or a
+    // verdict that never admitted the bytes in the first place.
     activated = false;
-    activationReason = "untrusted-no-in-process-activation";
+    activationReason = verdict.trusted
+      ? "metadata-only-no-in-process-activation"
+      : "untrusted-no-in-process-activation";
   } else if (deps.activateInProcess) {
     try {
       const res = await deps.activateInProcess({

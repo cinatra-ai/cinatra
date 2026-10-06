@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { PresentationHint } from "./result-renderers";
-import type { DataPartEvent } from "@cinatra-ai/agent-ui-protocol";
 import {
   declaresLifecycleInteraction,
   readLifecycleInterruptInteraction,
@@ -115,6 +114,69 @@ export type AgUiRunStreamResult = {
 // Hook
 // ---------------------------------------------------------------------------
 
+type RunStreamEvent = { type: string; [key: string]: unknown };
+type RunStreamListener = (event: RunStreamEvent) => void;
+type SharedRunStream = {
+  source: EventSource;
+  listeners: Set<RunStreamListener>;
+  events: RunStreamEvent[];
+  closed: boolean;
+};
+
+const runStreams = new Map<string, SharedRunStream>();
+
+function closeRunStream(stream: SharedRunStream) {
+  if (stream.closed) return;
+  stream.closed = true;
+  stream.source.close();
+}
+
+function subscribeToRunStream(runId: string, listener: RunStreamListener) {
+  let stream = runStreams.get(runId);
+  if (!stream) {
+    const source = new EventSource(`/api/agents/runs/${encodeURIComponent(runId)}/stream`);
+    const shared: SharedRunStream = {
+      source,
+      listeners: new Set(),
+      events: [],
+      closed: false,
+    };
+    runStreams.set(runId, shared);
+    stream = shared;
+    source.onmessage = (message: MessageEvent<string>) => {
+      if (shared.closed) return;
+      let event: RunStreamEvent;
+      try {
+        event = JSON.parse(message.data) as RunStreamEvent;
+      } catch {
+        return;
+      }
+      if (!event || typeof event.type !== "string") return;
+      shared.events.push(event);
+      for (const subscriber of [...shared.listeners]) subscriber(event);
+      if (event.type === "RUN_FINISHED" || event.type === "RUN_ERROR") {
+        closeRunStream(shared);
+      }
+    };
+    // EventSource reconnects itself on transient errors. Only a terminal
+    // event or the final subscriber leaving closes the shared transport.
+  }
+
+  stream.listeners.add(listener);
+  // A panel can mount after its watcher has already received events. Preserve
+  // the server's replay behavior for that panel without opening another source.
+  // The history and terminal state live only as long as this run has listeners.
+  for (const event of stream.events) listener(event);
+
+  return () => {
+    stream.listeners.delete(listener);
+    if (stream.listeners.size === 0) {
+      closeRunStream(stream);
+      runStreams.delete(runId);
+    }
+  };
+}
+
 /**
  * Subscribe to the AG-UI SSE stream for a run and derive status + presentationHint.
  *
@@ -144,9 +206,26 @@ export function useAgUiRunStream(
     useState<LifecycleInterruptContext | null>(null);
   const [streamedText, setStreamedText] = useState<string>(initialStreamedText ?? "");
   const [dataPartFrames, setDataPartFrames] = useState<Record<string, unknown>[]>([]);
+  const [streamSeed, setStreamSeed] = useState({ runId, enabled, initialStreamedText });
 
-  // Ref to track current EventSource for cleanup — avoids stale closure issues.
-  const esRef = useRef<EventSource | null>(null);
+  // Reset before rendering a changed subscription, so another run's output
+  // cannot appear while its effect is being replaced. Live and replayed events
+  // then build on this DB seed through the subscriber below.
+  if (
+    streamSeed.runId !== runId ||
+    streamSeed.enabled !== enabled ||
+    streamSeed.initialStreamedText !== initialStreamedText
+  ) {
+    setStreamSeed({ runId, enabled, initialStreamedText });
+    if (enabled) {
+      setStreamedText(initialStreamedText ?? "");
+      setDataPartFrames([]);
+      setError(null);
+      setPresentationHint(null);
+      setInterruptContext(null);
+      setLifecycleInterrupt(null);
+    }
+  }
 
   // A run whose DB-seeded status is terminally `failed` must never be
   // re-animated by replayed history (cinatra#809). The SSE route replays the
@@ -166,32 +245,7 @@ export function useAgUiRunStream(
   useEffect(() => {
     if (!enabled) return;
 
-    // reset run-scoped state so prior run output never leaks into a new runId.
-    // Reset to the DB seed, not to "". The EventSource opens AFTER
-    // this reset; any live TEXT_MESSAGE_CONTENT deltas overwrite the seed via
-    // the existing accumulator branches below.
-    setStreamedText(initialStreamedText ?? "");
-    // Reset data-part frames on runId change to prevent leakage
-    // across runs. Must live in the SAME useEffect as setStreamedText for
-    // lifecycle parity.
-    setDataPartFrames([]);
-    setError(null);
-    setPresentationHint(null);
-    setInterruptContext(null);
-    setLifecycleInterrupt(null);
-
-    const url = `/api/agents/runs/${encodeURIComponent(runId)}/stream`;
-    const es = new EventSource(url);
-    esRef.current = es;
-
-    es.onmessage = (ev: MessageEvent<string>) => {
-      let event: { type: string; [key: string]: unknown };
-      try {
-        event = JSON.parse(ev.data) as { type: string; [key: string]: unknown };
-      } catch {
-        return; // Malformed frame — skip
-      }
-
+    return subscribeToRunStream(runId, (event) => {
       switch (event.type) {
         case "RUN_STARTED":
           // Replayed RUN_STARTED must not regress a terminally-failed run
@@ -295,8 +349,6 @@ export function useAgUiRunStream(
           const finishedStatus = event.status === "stopped" ? "stopped" : "completed";
           setStatus(finishedStatus);
           setLifecycleInterrupt(null);
-          es.close();
-          esRef.current = null;
           break;
         }
 
@@ -304,8 +356,6 @@ export function useAgUiRunStream(
           setStatus("failed");
           setError(typeof event.message === "string" ? event.message : "Unknown error");
           setLifecycleInterrupt(null);
-          es.close();
-          esRef.current = null;
           break;
 
         case "TEXT_MESSAGE_START":
@@ -341,21 +391,7 @@ export function useAgUiRunStream(
           // Unknown or future event types (TOOL_CALL_*) — silently skip.
           break;
       }
-    };
-
-    es.onerror = () => {
-      // do NOT read `status` here — the closure is seeded when the
-      // effect ran and will be stale after state updates. EventSource auto-
-      // reconnects on transient transport errors. Terminal events (RUN_FINISHED,
-      // RUN_ERROR) close the stream explicitly from their handlers above, so by
-      // the time onerror fires after a terminal event the status is already
-      // correct. No fallback work is needed here.
-    };
-
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, enabled, initialStreamedText]); // Re-seed on prop change
 

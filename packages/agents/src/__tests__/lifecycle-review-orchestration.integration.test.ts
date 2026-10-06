@@ -158,17 +158,8 @@ beforeAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await admin.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    if (qy.text.includes("user_slug_move_trg")) continue;
-    try {
-      await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
@@ -768,6 +759,128 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
 
     const reqAfter = await readGate(required.producerRunId!, autoReviewTaskId(required.eventId));
     expect(reqAfter!.status).toBe("pending"); // required stays blocking
+  });
+
+  // cinatra#3745 — the end of an automatic review's waiting time is not a
+  // person's decision. An automatic review of an artifact whose destination lies
+  // outside the product (the three outward destination classes) stays pending
+  // past its waiting time until a person decides, and the effect it holds stays
+  // held; a review of an artifact that stays inside the product (class none)
+  // keeps its lapse.
+  it.each(["external_publish", "visibility_promotion", "pipeline_handoff"] as const)(
+    "EXPIRY (%s): an automatic review of an outward artifact stays pending past its waiting time until a person decides",
+    async (destinationClass) => {
+      const ev = await produce("outward-expiry-doc", {
+        destinationClass,
+        originKind: "agent_produced",
+        artifactId: `art-${randomUUID()}`,
+        producerRunId: `run-${randomUUID()}`,
+      });
+      await orch.sweepReviewOrchestration();
+      const gate = await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId));
+      expect(gate).not.toBeNull();
+      expect(gate!.status).toBe("pending");
+
+      await pool(
+        `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET expires_at = now() - interval '1 hour' WHERE id = $1`,
+        [gate!.id],
+      );
+
+      const maint = await orch.sweepLifecycleGateMaintenance();
+      expect(maint.requiredExpiredBlocked).toBeGreaterThanOrEqual(1);
+
+      const after = await readGate(ev.producerRunId!, autoReviewTaskId(ev.eventId));
+      expect(after!.status).toBe("pending");
+      expect(after!.disposition ?? null).toBeNull();
+      expect(after!.fingerprint ?? null).toBeNull();
+
+      const effect = await orch.isArtifactEffectHeld({
+        artifactId: ev.artifactId,
+        representationRevisionId: ev.representationRevisionId,
+      });
+      expect(effect.held).toBe(true);
+    },
+  );
+
+  async function readRunGate(runId: string) {
+    const r = await pool(
+      `SELECT id, review_task_id, status, disposition, fingerprint, pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
+      [runId],
+    );
+    return r.rows as Array<{
+      id: string;
+      review_task_id: string;
+      status: string;
+      disposition: string | null;
+      fingerprint: string | null;
+      pinned_targets: Array<{ artifactId: string; representationRevisionId: string }> | null;
+    }>;
+  }
+
+  it("EXPIRY (batch, external_publish): a batch review of outward artifacts stays pending past its waiting time until a person decides", async () => {
+    const runId = `run-${randomUUID()}`;
+    await produce("outward-expiry-batch-doc", {
+      destinationClass: "external_publish",
+      originKind: "agent_produced",
+      artifactId: `art-${randomUUID()}`,
+      producerRunId: runId,
+    });
+    await produce("outward-expiry-batch-doc", {
+      destinationClass: "external_publish",
+      originKind: "agent_produced",
+      artifactId: `art-${randomUUID()}`,
+      producerRunId: runId,
+    });
+    await orch.sweepReviewOrchestration();
+    const gates = await readRunGate(runId);
+    expect(gates.length).toBe(1);
+    expect(gates[0].pinned_targets?.length).toBe(2);
+    expect(gates[0].status).toBe("pending");
+
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET expires_at = now() - interval '1 hour' WHERE id = $1`,
+      [gates[0].id],
+    );
+    const maint = await orch.sweepLifecycleGateMaintenance();
+    expect(maint.requiredExpiredBlocked).toBeGreaterThanOrEqual(1);
+
+    const [after] = await readRunGate(runId);
+    expect(after.status).toBe("pending");
+    expect(after.disposition).toBeNull();
+    expect(after.fingerprint).toBeNull();
+  });
+
+  it("EXPIRY (batch, none): a batch review of artifacts that stay inside the product lapses at the end of its waiting time", async () => {
+    const runId = `run-${randomUUID()}`;
+    await produce("inside-expiry-batch-doc", {
+      destinationClass: "none",
+      originKind: "agent_produced",
+      artifactId: `art-${randomUUID()}`,
+      producerRunId: runId,
+    });
+    await produce("inside-expiry-batch-doc", {
+      destinationClass: "none",
+      originKind: "agent_produced",
+      artifactId: `art-${randomUUID()}`,
+      producerRunId: runId,
+    });
+    await orch.sweepReviewOrchestration();
+    const gates = await readRunGate(runId);
+    expect(gates.length).toBe(1);
+    expect(gates[0].pinned_targets?.length).toBe(2);
+    expect(gates[0].status).toBe("pending");
+
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET expires_at = now() - interval '1 hour' WHERE id = $1`,
+      [gates[0].id],
+    );
+    const maint = await orch.sweepLifecycleGateMaintenance();
+    expect(maint.optionalExpired).toBeGreaterThanOrEqual(1);
+
+    const [after] = await readRunGate(runId);
+    expect(after.status).toBe("resolved");
+    expect(after.disposition).toBe("approve");
+    expect(after.fingerprint).toBe(`expiry:${gates[0].id}`);
   });
 
   // -------------------------------------------------------------------------

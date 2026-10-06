@@ -7,8 +7,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { SEMANTIC_ARTIFACT_OBJECT_TYPE } from "@cinatra-ai/artifacts";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import { readAdmissibleArtifactTypeIdsForOrg } from "./resolve-bound-artifact-type";
 import { artifactWriterWitnessExistsSql } from "./artifact-writer-witness";
 
 // Serve-side resolver. Tenant isolation is enforced HERE: a representation is
@@ -41,14 +40,19 @@ export function resolveArtifactVersionForServe(input: {
 }): ServeResolution | null {
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
-  // The registered isArtifact pack types (read at CALL time — never a frozen
-  // module-load snapshot). A pack-typed row's DIRECT (uploaded/latest,
-  // non-snapshot) representation must serve; the generic-literal gate alone
-  // 404s it (epic #1785 wave A4). Warm the registry first: the serve routes do
-  // not transitively trigger boot registration, so a cold process would see an
-  // empty artifact-type set and strand every pack row.
-  ensureArtifactTypesRegistered();
-  const artifactTypeIds = objectTypeRegistry.listArtifacts().map((d) => d.type);
+  // The ADMISSIBLE artifact types for THIS organisation (read at CALL time —
+  // never a frozen module-load snapshot): the registered isArtifact pack types
+  // TOGETHER WITH the org's live, artifact-safe claim-winner types. A
+  // pack-typed row's DIRECT (uploaded/latest, non-snapshot) representation must
+  // serve; the generic-literal gate alone 404s it (epic #1785 wave A4).
+  //
+  // cinatra#3603: the registered list ALONE was a different source of truth
+  // from the writer's. A CLAIM-BACKED HOST-REGISTERED type (the claiming pack's
+  // name is not the type's namespace, so the artifact bridge never registers it
+  // and the host registrar attaches no `isArtifact`) can never be on it, so
+  // bytes this host's own artifact writer authored were refused here forever.
+  // The helper warms the registry and applies the WRITER's own arbitration.
+  const artifactTypeIds = readAdmissibleArtifactTypeIdsForOrg(input.orgId);
   const [res] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
@@ -303,8 +307,9 @@ export function resolveNonFileArtifactRevision(input: {
 }): NonFileRevisionResolution | null {
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
-  ensureArtifactTypesRegistered();
-  const artifactTypeIds = objectTypeRegistry.listArtifacts().map((d) => d.type);
+  // cinatra#3603: the same source the serve arm above uses — the registered
+  // artifact types plus this organisation's artifact-safe claim winners.
+  const artifactTypeIds = readAdmissibleArtifactTypeIdsForOrg(input.orgId);
   const liveOnly = input.liveOnly !== false;
   const [res] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),

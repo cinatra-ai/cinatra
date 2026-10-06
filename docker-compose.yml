@@ -18,7 +18,7 @@
 
 services:
   postgres:
-    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
     # MAJOR: Postgres 17 -> 18 (upgrade track; see docs/internals/workflows/upgrade-track.md §3).
     # Pinned to the CONFIRMED multi-arch (amd64/arm64/...) OCI index digest of
     # postgres:18-alpine (18.4, resolved 2026-07-11 via imagetools) — the tag is

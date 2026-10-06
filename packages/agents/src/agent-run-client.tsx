@@ -15,8 +15,12 @@
 // Active/Archived status row (both props simply go unpassed), the
 // description clamped to 3 lines (cinatra#3227), and the right panel dropping to
 // the primary action Run (a solid, fill-current play icon in place of the
-// settings gear) PLUS "More details". Run stays a filled button; More details
-// takes the design's `btn link` treatment, never a second filled button.
+// settings gear) PLUS the "Settings" and "More details" text links, Settings to
+// the left (cinatra#3683). Run stays a filled button; both links take the
+// design's `btn link` treatment, never a second filled button. This page carries
+// no scope base, so Settings opens at the WORKSPACE scope —
+// /workspace/agents/<vendor>/<slug>/settings?tab=skills — because the All
+// Agents list is the workspace-wide list.
 //
 // "More details" opens the §V detail modal IN PLACE (owner ruling, 2026-07-06:
 // design#25 §VIII) — the SAME <MarketplaceDetailModal> the §VI installed-
@@ -34,7 +38,7 @@
 // (no /not-authorized bounce); the data is the truly-public storefront listing.
 //
 // External A2A / unscoped agents carry no listing → packageName + detailHref
-// are null → no More-details rendered at all (Run only).
+// are null → no Settings and no More-details rendered at all (Run only).
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
@@ -44,6 +48,7 @@ import {
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
 import { AgentAllCard } from "@/components/extensions/agent-all-card";
+import { scopeSurfaceAgentSettingsHref } from "@/lib/scope-surfaces";
 
 export type AgentRunRowModel = {
   key: string;
@@ -101,10 +106,18 @@ export type AgentRunRowModel = {
  * the Active / Archived indicator". The two fields are therefore DROPPED here,
  * at the renderer that decides what /agents draws — the version stays in the
  * row model for the search/meta uses that own it.
+ *
+ * The Settings text link (cinatra#3683): this page carries no scope base, so
+ * the card opens its Settings at the WORKSPACE scope, composed by the same
+ * href contract the per-scope Agents tabs use. A row with no package name
+ * (external A2A / unscoped) has no settings page and gets no link.
  */
 function toAllAgentsCardRow(row: AgentRunRowModel) {
   const { version: _version, skills: _skills, ...rest } = row;
-  return { ...rest, version: null, status: null, settingsHref: null };
+  const settingsHref = row.packageName
+    ? scopeSurfaceAgentSettingsHref({ kind: "workspace" }, row.packageName)
+    : null;
+  return { ...rest, version: null, status: null, settingsHref };
 }
 
 export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
