@@ -80,7 +80,11 @@ function stubPorts() {
     contentRead: vi.fn(async () => ({ text: "fixture text" })),
   };
   const clock = { now: vi.fn(() => new Date("2026-09-12T00:00:00.000Z")) };
-  return { data, artifacts, clock } satisfies Omit<ExtensionToolPorts, "review">;
+  const objects = {
+    read: vi.fn(async () => ({ objectId: "fixture-object", type: "fixture", data: {} })),
+    save: vi.fn(async () => ({ objectId: "fixture-object", type: "fixture", isNew: true })),
+  };
+  return { data, artifacts, clock, objects } satisfies Omit<ExtensionToolPorts, "review">;
 }
 
 afterEach(() => {
@@ -225,6 +229,10 @@ describe("extension_tool — the run- and scope-bound table a pack declares (cin
           contentRead: async () => ({ text: "fixture text" }),
         },
         clock: { now: () => new Date("2026-09-12T00:00:00.000Z") },
+        objects: {
+          read: async () => ({ objectId: "fixture-object", type: "fixture", data: {} }),
+          save: async () => ({ objectId: "fixture-object", type: "fixture", isNew: true }),
+        },
       } satisfies Omit<ExtensionToolPorts, "review">,
     };
   };
