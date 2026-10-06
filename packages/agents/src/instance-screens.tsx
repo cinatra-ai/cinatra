@@ -32,6 +32,7 @@ import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-s
 import {
   listReviewGatesForRun,
   readReviewGate,
+  isParkedOnProducedReview,
   readRunReviewSlot,
   readVerificationRecordsForGates,
 } from "./artifact-review-gate-store";
@@ -1980,6 +1981,13 @@ export async function SetupScreen({
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // AND WHETHER THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). The page
+        // already knows — it read the run and it read the slot — so the panel is
+        // handed the answer rather than made to discover it, exactly as the two
+        // facts beside it are. A run parked on its produced output's review
+        // therefore draws that review on its FIRST paint here, with no frame of
+        // the question it already answered in front of it.
+        producedReviewPark: isParkedOnProducedReview(run),
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────
@@ -2296,8 +2304,13 @@ export async function SetupScreen({
   // run in front of it, and that row is unreached, so it opens nothing: this
   // read stays where it is rather than paying for a list the reader cannot
   // reach.
+  //
+  // AND A RUN HELD BY ITS PRODUCED-REVIEW PARK (cinatra#3046) has finished
+  // making what it made: the rail draws its record reached once the review is
+  // decided, before the release writes the withheld terminal status, so the
+  // rows are read for it too rather than opening that step on an empty record.
   const runMadeRows: RunMadeArtifactRow[] =
-    run && isTerminalRunStatus(run.status)
+    run && (isTerminalRunStatus(run.status) || isParkedOnProducedReview(run))
       ? await (async () => {
           const { listRunMadeArtifacts } = await import(
             "@/lib/artifacts/run-made-artifacts"
@@ -3031,10 +3044,20 @@ export async function SetupScreen({
               const runHasAnUndecidedReviewGate = railGates.some((g) => g.status === "pending");
               const runParkedAtReviewGate =
                 runHasAnUndecidedReviewGate || initialReviewGate?.awaiting === true;
+              // AND THE RUN HELD BY ITS PRODUCED-REVIEW PARK (cinatra#3046). Such a run is
+              // past its work: it stays `pending_approval` only until the release writes
+              // the withheld terminal status, and once no gate holds it any more it has
+              // reached its record.
+              const runHeldByProducedReviewPark = initialReviewGate?.producedReviewPark === true;
               const runReachedItsRecord =
-                run != null && isTerminalRunStatus(run.status) && !runParkedAtReviewGate;
+                run != null &&
+                (isTerminalRunStatus(run.status) || runHeldByProducedReviewPark) &&
+                !runParkedAtReviewGate;
               const railCarriesMadeStep =
-                run != null && (isTerminalRunStatus(run.status) || runParkedAtReviewGate);
+                run != null &&
+                (isTerminalRunStatus(run.status) ||
+                  runParkedAtReviewGate ||
+                  runHeldByProducedReviewPark);
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
