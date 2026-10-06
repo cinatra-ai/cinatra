@@ -85,8 +85,22 @@ vi.mock("sonner", () => ({
  */
 vi.mock("../review-gate-card", () => ({
   LIFECYCLE_VIEW_SCHEMA_VERSION: 1,
-  ReviewGateCard: () => <div data-testid="review-gate-card" />,
+  ReviewGateCard: ({ view }: { view?: { ref?: string } }) => (
+    <div data-testid="review-gate-card" data-card-ref={view?.ref} />
+  ),
 }));
+
+/** §VII's audit card, stubbed for the same reason. */
+vi.mock("../verification-summary-card", () => ({
+  VerificationSummaryCard: ({ view }: { view?: { ref?: string } }) => (
+    <div data-testid="verification-summary-card" data-card-ref={view?.ref} />
+  ),
+}));
+
+// The gate refs the screen mints are authenticated-encrypted under the app
+// secret, and a run whose instance cannot mint one draws no card at all. This
+// suite is about the rows and what they open, so the secret is present.
+process.env.BETTER_AUTH_SECRET ??= "test-secret-for-3693-review-rows";
 
 const RUN_ID = "run-3478";
 const REVIEW_TASK_ID = "task-review-1";
@@ -117,6 +131,11 @@ function gateRow(status: "pending" | "resolved") {
     createdAt: new Date("2026-09-14T12:00:00Z"),
   };
 }
+
+/** The run's post-change audit records, as §VII's reader lists them. */
+const verifications = vi.hoisted(() => ({
+  rows: [] as Array<{ gateId: string; outcome: string }>,
+}));
 
 /** The live gate the run is parked at, as the stream delivers it. */
 const stream = vi.hoisted(() => ({
@@ -246,12 +265,23 @@ vi.mock("../auth-policy", () => ({
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
 }));
 
-vi.mock("../artifact-review-gate-store", () => ({
-  listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
-  readReviewGate: vi.fn(async () => null),
-  readRunReviewSlot: vi.fn(async () => ({ reviewTaskId: null, awaiting: false })),
-  readVerificationRecordsForGates: vi.fn(async () => []),
-}));
+vi.mock("../artifact-review-gate-store", async () => {
+  // cinatra#3046 — this screen also asks the store whether the run is parked on
+  // the review its own output opened. That predicate is PURE: it answers from the
+  // run row it is handed, so this factory hands the suite the REAL one (re-exported
+  // by the store from its writer) instead of a stub that could answer differently
+  // from the page under test.
+  const hold = await vi.importActual<typeof import("../run-produced-review-hold")>(
+    "../run-produced-review-hold",
+  );
+  return {
+    listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
+    readReviewGate: vi.fn(async () => null),
+    readRunReviewSlot: vi.fn(async () => ({ reviewTaskId: null, awaiting: false })),
+    readVerificationRecordsForGates: vi.fn(async () => verifications.rows),
+    isParkedOnProducedReview: hold.isParkedOnProducedReview,
+  };
+});
 
 vi.mock("../lifecycle-policy-store", () => ({
   readLifecycleDecisionsForRun: vi.fn(async () => []),
@@ -344,6 +374,7 @@ beforeEach(() => {
   row.status = "pending_approval";
   row.required = ["idea"];
   reviewGates.rows = [gateRow("pending")];
+  verifications.rows = [];
   stream.interruptContext = markedReviewGate();
 });
 
@@ -360,8 +391,12 @@ afterAll(() => {
 });
 
 /** Render the REAL run page for the row as it currently stands. */
-async function renderRunPage() {
-  const tree = await SetupScreen({ agentId: "blog-idea-generator", instanceId: RUN_ID });
+async function renderRunPage(searchParams?: Record<string, string | string[] | undefined>) {
+  const tree = await SetupScreen({
+    agentId: "blog-idea-generator",
+    instanceId: RUN_ID,
+    searchParams,
+  });
   return render(tree as React.ReactElement);
 }
 
@@ -528,24 +563,248 @@ describe("the parked review opens in the run detail, under the same rail (cinatr
     }
   });
 
-  it("keeps the review's own page reachable — Agents → Reviews, and the settled gate's link", async () => {
-    // C29. Nothing of the review's own navigation is touched by this leg: the
-    // Agents tab strip still carries Reviews, and a gate the run has already
-    // decided keeps the deep link that replays it read-only on that page.
-    expect(
-      AGENTS_NAV.some((tab) => tab.href === "/agents/reviews" && tab.label === "Reviews"),
-    ).toBe(true);
+  it("keeps no Reviews tab on the Agents strip", async () => {
+    // C29. The owner retired the Reviews list (cinatra#3693): "reviews are
+    // reached through the Notifications page for every scope, so the
+    // workspace-wide Reviews tab under `/agents` and the standalone review page
+    // go away".
+    expect(AGENTS_NAV.some((tab) => tab.href === "/agents/reviews" || tab.label === "Reviews")).toBe(
+      false,
+    );
+  });
+});
 
+/**
+ * AND SO DOES EVERY OTHER REVIEW ROW ON THE RAIL (cinatra#3693).
+ *
+ * The click leg gave the PARKED gate its in-place control and left the other two
+ * rows navigating: a settled gate still opened the review's own page, and an
+ * Audit row still deep-linked into that page's verification reading. The
+ * drawings give neither a page — "a pending review renders the review gate in
+ * the run detail, under the same rail, never as a standalone document", and
+ * "there is no review page view outside the run's route" — so both rows select a
+ * step of the run detail, and the run page draws the reading there.
+ */
+describe("a settled gate and its audit read in place too (cinatra#3693)", () => {
+  /** A run that is over, with one decided gate on its rail. */
+  function aSettledRun() {
     reviewGates.rows = [gateRow("resolved")];
     stream.interruptContext = null;
     row.status = "completed";
+  }
+
+  it("the settled gate's row is a control, and pressing it draws the settled card in place", async () => {
+    aSettledRun();
+    const { container } = await renderRunPage();
+    const column = railColumn(container);
+    const detail = detailColumn(container);
+
+    const history = column.querySelector<HTMLElement>('[data-rail-gate-history="true"]');
+    expect(history, "the decided gate keeps its place on the rail").not.toBeNull();
+
+    // NOT A ROAD OFF THIS PAGE. The row used to be an anchor into the review's
+    // own route, which is exactly what took the reader off the run.
+    expect(history!.querySelector("a[href]")).toBeNull();
+    expect(history!.querySelector("[data-rail-gate-link]")).toBeNull();
+
+    const control = history!.querySelector<HTMLElement>("button[data-rail-gate-open]");
+    expect(control, "the settled row draws a control a reader can press").not.toBeNull();
+    expect(control!.getAttribute("data-rail-gate-open")).toBe(REVIEW_TASK_ID);
+
+    const locationBefore = window.location.href;
+    press(control!);
+
+    await waitFor(() =>
+      expect(detail.getAttribute("data-run-surface-selected-step")).toBe(
+        `review:${REVIEW_TASK_ID}`,
+      ),
+    );
+    // The settled reading is the shipped card, drawn in the run detail beside
+    // the rail — the reading the review page drew.
+    const cards = detail.querySelectorAll('[data-testid="review-gate-card"]');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.getAttribute("data-card-ref")).toBeTruthy();
+
+    // AND THE LOCATION STAYED ON THE RUN PAGE.
+    expect(window.location.href).toBe(locationBefore);
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(routerReplace).not.toHaveBeenCalled();
+
+    // AND THE ROW READS CURRENT while its screen is the one drawn, in the same
+    // vocabulary the spine rows of this rail use.
+    expect(control!.getAttribute("aria-current")).toBe("step");
+    expect(control!.getAttribute("data-run-surface-rail-selected")).toBe("true");
+  });
+
+  it("opens that same settled reading from the keyboard — Enter and Space", async () => {
+    for (const key of ["Enter", " "]) {
+      aSettledRun();
+      const { container } = await renderRunPage();
+      const column = railColumn(container);
+      const detail = detailColumn(container);
+      const control = column.querySelector<HTMLElement>("button[data-rail-gate-open]");
+      expect(control, `the settled row is pressable for ${key}`).not.toBeNull();
+
+      const locationBefore = window.location.href;
+      control!.focus();
+      fireEvent.keyDown(control!, { key });
+      fireEvent.keyUp(control!, { key });
+
+      await waitFor(() =>
+        expect(detail.getAttribute("data-run-surface-selected-step")).toBe(
+          `review:${REVIEW_TASK_ID}`,
+        ),
+      );
+      expect(detail.querySelector('[data-testid="review-gate-card"]')).not.toBeNull();
+      expect(window.location.href).toBe(locationBefore);
+      expect(routerPush).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+
+  it("the Audit row is a control, and pressing it draws that record's card in place", async () => {
+    aSettledRun();
+    verifications.rows = [{ gateId: "gate-1", outcome: "clean" }];
 
     const { container } = await renderRunPage();
     const column = railColumn(container);
-    const history = column.querySelector<HTMLElement>('[data-rail-gate-history="true"]');
-    expect(history).not.toBeNull();
-    expect(
-      history!.querySelector<HTMLAnchorElement>("a[data-rail-gate-link]")?.getAttribute("href"),
-    ).toBe(`/agents/blog-idea-generator/${RUN_ID}/review/${REVIEW_TASK_ID}`);
+    const detail = detailColumn(container);
+
+    const auditRow = column.querySelector<HTMLElement>('[data-rail-verification="true"]');
+    expect(auditRow, "the rail carries the gate's Audit entry").not.toBeNull();
+    expect(auditRow!.querySelector("a[href]")).toBeNull();
+    expect(auditRow!.querySelector("[data-rail-verification-link]")).toBeNull();
+
+    const control = auditRow!.querySelector<HTMLElement>("button[data-rail-verification-open]");
+    expect(control, "the Audit row draws a control a reader can press").not.toBeNull();
+    expect(control!.getAttribute("data-rail-verification-open")).toBe(REVIEW_TASK_ID);
+
+    const locationBefore = window.location.href;
+    press(control!);
+
+    await waitFor(() =>
+      expect(detail.getAttribute("data-run-surface-selected-step")).toBe(
+        `audit:${REVIEW_TASK_ID}`,
+      ),
+    );
+    // ONE record, ONE card: the row stands for one audit, not for the column of
+    // every audit the run carries.
+    expect(detail.querySelectorAll('[data-testid="verification-summary-card"]')).toHaveLength(1);
+    expect(window.location.href).toBe(locationBefore);
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("opens the Audit reading from the keyboard too", async () => {
+    for (const key of ["Enter", " "]) {
+      aSettledRun();
+      verifications.rows = [{ gateId: "gate-1", outcome: "clean" }];
+      const { container } = await renderRunPage();
+      const detail = detailColumn(container);
+      const control = railColumn(container).querySelector<HTMLElement>(
+        "button[data-rail-verification-open]",
+      );
+      expect(control, `the Audit row is pressable for ${key}`).not.toBeNull();
+      control!.focus();
+      fireEvent.keyDown(control!, { key });
+      fireEvent.keyUp(control!, { key });
+      await waitFor(() =>
+        expect(detail.getAttribute("data-run-surface-selected-step")).toBe(
+          `audit:${REVIEW_TASK_ID}`,
+        ),
+      );
+      cleanup();
+    }
+  });
+
+  it("the rail draws ONE row per entry — a step with no row of its own adds none", async () => {
+    // The two selections above are steps the SCREEN hands the frame, and their
+    // rows are drawn by the rail's own entry component from the run's gate list.
+    // A frame that also drew a row for them would put the same entry on the rail
+    // twice, and a separator over nothing between them.
+    aSettledRun();
+    verifications.rows = [{ gateId: "gate-1", outcome: "clean" }];
+    const { container } = await renderRunPage();
+    const column = railColumn(container);
+    expect(column.querySelectorAll('[data-rail-gate-history="true"]')).toHaveLength(1);
+    expect(column.querySelectorAll('[data-rail-verification="true"]')).toHaveLength(1);
+    const labels = railEntryLabels(column);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+/**
+ * THE ADDRESS CARRIES THE SELECTION (cinatra#3693).
+ *
+ * A reader sent to one review — from a notification, from the run engine's own
+ * interrupt, from the admin console — arrives at the RUN's address with the step
+ * named on it. The run detail has to open there at FIRST render, or the reader
+ * lands on whatever step the run would otherwise have elected and has to find
+ * the review themselves.
+ */
+describe("the run page opens on the step its address names (cinatra#3693)", () => {
+  function aSettledRun() {
+    reviewGates.rows = [gateRow("resolved")];
+    stream.interruptContext = null;
+    row.status = "completed";
+  }
+
+  it("lands with the settled gate already selected and drawn", async () => {
+    aSettledRun();
+    const { container } = await renderRunPage({ step: `review:${REVIEW_TASK_ID}` });
+    const detail = detailColumn(container);
+    expect(detail.getAttribute("data-run-surface-selected-step")).toBe(
+      `review:${REVIEW_TASK_ID}`,
+    );
+    expect(detail.querySelector('[data-testid="review-gate-card"]')).not.toBeNull();
+  });
+
+  it("lands with the audit reading already selected and drawn", async () => {
+    aSettledRun();
+    verifications.rows = [{ gateId: "gate-1", outcome: "clean" }];
+    const { container } = await renderRunPage({ step: `audit:${REVIEW_TASK_ID}` });
+    const detail = detailColumn(container);
+    expect(detail.getAttribute("data-run-surface-selected-step")).toBe(`audit:${REVIEW_TASK_ID}`);
+    expect(detail.querySelectorAll('[data-testid="verification-summary-card"]')).toHaveLength(1);
+  });
+
+  it("lands on the review a PENDING gate's address names, drawn in the run detail", async () => {
+    // WHAT THE CONVERGENCE ROUND CAUGHT (finding 2). Both roads that mint this
+    // address — the run engine's interrupt and a review notification — mint it
+    // while the gate is still PENDING, and a pending gate has no step of its own:
+    // it is the run detail's own reading. The named key matched no composed step,
+    // so the frame fell back to the first row it could open — a settled Schedule
+    // row — and the reader landed nowhere near the review they were sent to.
+    const { container } = await renderRunPage({ step: `review:${REVIEW_TASK_ID}` });
+    const detail = detailColumn(container);
+    expect(detail.getAttribute("data-run-surface-selected-step")).toBe("detail");
+    expect(detail.querySelector('[data-testid="review-gate-card"]')).not.toBeNull();
+  });
+
+  it("falls back to the run's own election for a step the run does not carry", async () => {
+    // The address is READ, never trusted: a step this run has no row for cannot
+    // be opened, so the page opens where it would have opened anyway.
+    aSettledRun();
+    const { container } = await renderRunPage({ step: "review:a-gate-this-run-never-had" });
+    const detail = detailColumn(container);
+    expect(detail.getAttribute("data-run-surface-selected-step")).not.toBe(
+      "review:a-gate-this-run-never-had",
+    );
+  });
+
+  it("falls back for a value outside the rail's vocabulary, and for a repeated key", async () => {
+    aSettledRun();
+    const values: Array<string | string[]> = [
+      "../../etc/passwd",
+      "",
+      "review:",
+      ["review:a", "review:b"],
+    ];
+    for (const step of values) {
+      const { container } = await renderRunPage({ step });
+      const selected = detailColumn(container).getAttribute("data-run-surface-selected-step");
+      expect(selected).not.toBeNull();
+      expect(selected).not.toContain("etc/passwd");
+      cleanup();
+    }
   });
 });

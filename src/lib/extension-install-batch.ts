@@ -58,6 +58,7 @@ import type {
 import type {
   DependencyInstallPlan,
   DependencyPlanDeps,
+  MemberSummary,
   RowOwnership,
 } from "@/lib/extension-dependency-plan";
 import type {
@@ -643,6 +644,81 @@ async function defaultUninstallMemberRowScoped(
   });
 }
 
+/**
+ * THE SAGA'S REGISTRY READ, lifted out of `makeDefaultInstallBatchSagaDeps` so
+ * the upload road reads the connected registry through this same function
+ * rather than a second client (cinatra#3204 criterion 24). The factory's
+ * `fetchSummary` IS this function — no behaviour change here: an exact
+ * version, a range or a dist-tag resolved against the connected registry; on
+ * the gatekept path through `resolveGatekeptInstallConfig`, which derives from
+ * the batch grant inside a batch and authorizes outside one.
+ */
+export async function fetchRegistryExtensionSummary(
+  packageName: string,
+  versionOrRange: string,
+): Promise<MemberSummary> {
+  const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import(
+    "@/lib/gatekept-install"
+  );
+  const {
+    getPublishedExtensionSummary,
+    resolveExtensionDistIntegrity,
+    resolveMaxSatisfyingVersion,
+    isExactVersion,
+    isValidVersionRange,
+  } = await import("@cinatra-ai/registries");
+  // Config: gatekept ON → the grant-context-aware resolver (derives the
+  // broker config under the root grant inside a batch); OFF → the
+  // server read config (legacy direct read).
+  let config;
+  if (isGatekeptInstallEnabled()) {
+    const { config: c } = await resolveGatekeptInstallConfig(packageName, versionOrRange);
+    config = c;
+  } else {
+    const { loadVerdaccioConfigForReads } = await import("@/lib/verdaccio-config");
+    config = await loadVerdaccioConfigForReads();
+  }
+  const isExact = isExactVersion(versionOrRange);
+  let exact = isExact ? versionOrRange : undefined;
+  if (!isExact && versionOrRange !== "latest" && versionOrRange !== "") {
+    if (isValidVersionRange(versionOrRange)) {
+      // A RANGE (dev path): pacote resolves exact versions and dist-tags
+      // but NOT ranges against Verdaccio — resolve via the packument's
+      // version list (highest satisfying; live-verify finding).
+      const resolved = await resolveMaxSatisfyingVersion(
+        { packageName, range: versionOrRange },
+        config,
+      );
+      if (!resolved) {
+        throw new Error(
+          `[extension-install-batch] no published version of ${packageName} satisfies "${versionOrRange}"`,
+        );
+      }
+      exact = resolved;
+    } else {
+      // A DIST-TAG (e.g. "beta"/"next") — keep the original pacote
+      // resolution semantics (merge-gate finding: tags are not ranges).
+      const resolved = await resolveExtensionDistIntegrity(
+        { packageName, packageVersion: versionOrRange },
+        config,
+      );
+      exact = resolved.resolvedVersion ?? undefined;
+    }
+  }
+  const summary = await getPublishedExtensionSummary(
+    { packageName, ...(exact ? { packageVersion: exact } : {}) },
+    config,
+  );
+  if (!summary.resolvedVersion) {
+    throw new Error(`[extension-install-batch] no resolvable version for ${packageName}@${versionOrRange}`);
+  }
+  return {
+    resolvedVersion: summary.resolvedVersion,
+    kind: summary.kind,
+    manifest: summary.manifest,
+  };
+}
+
 export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSagaDeps> {
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig, refreshGatekeptInstallGrant } =
     await import("@/lib/gatekept-install");
@@ -660,65 +736,7 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
   const { isAutoInstallableEdge } = await import("@cinatra-ai/extensions/dependency-closure");
 
   const planDeps: DependencyPlanDeps = {
-    fetchSummary: async (packageName, versionOrRange) => {
-      const {
-        getPublishedExtensionSummary,
-        resolveExtensionDistIntegrity,
-        resolveMaxSatisfyingVersion,
-        isExactVersion,
-        isValidVersionRange,
-      } = await import("@cinatra-ai/registries");
-      // Config: gatekept ON → the grant-context-aware resolver (derives the
-      // broker config under the root grant inside a batch); OFF → the
-      // server read config (legacy direct read).
-      let config;
-      if (isGatekeptInstallEnabled()) {
-        const { config: c } = await resolveGatekeptInstallConfig(packageName, versionOrRange);
-        config = c;
-      } else {
-        const { loadVerdaccioConfigForReads } = await import("@/lib/verdaccio-config");
-        config = await loadVerdaccioConfigForReads();
-      }
-      const isExact = isExactVersion(versionOrRange);
-      let exact = isExact ? versionOrRange : undefined;
-      if (!isExact && versionOrRange !== "latest" && versionOrRange !== "") {
-        if (isValidVersionRange(versionOrRange)) {
-          // A RANGE (dev path): pacote resolves exact versions and dist-tags
-          // but NOT ranges against Verdaccio — resolve via the packument's
-          // version list (highest satisfying; live-verify finding).
-          const resolved = await resolveMaxSatisfyingVersion(
-            { packageName, range: versionOrRange },
-            config,
-          );
-          if (!resolved) {
-            throw new Error(
-              `[extension-install-batch] no published version of ${packageName} satisfies "${versionOrRange}"`,
-            );
-          }
-          exact = resolved;
-        } else {
-          // A DIST-TAG (e.g. "beta"/"next") — keep the original pacote
-          // resolution semantics (merge-gate finding: tags are not ranges).
-          const resolved = await resolveExtensionDistIntegrity(
-            { packageName, packageVersion: versionOrRange },
-            config,
-          );
-          exact = resolved.resolvedVersion ?? undefined;
-        }
-      }
-      const summary = await getPublishedExtensionSummary(
-        { packageName, ...(exact ? { packageVersion: exact } : {}) },
-        config,
-      );
-      if (!summary.resolvedVersion) {
-        throw new Error(`[extension-install-batch] no resolvable version for ${packageName}@${versionOrRange}`);
-      }
-      return {
-        resolvedVersion: summary.resolvedVersion,
-        kind: summary.kind,
-        manifest: summary.manifest,
-      };
-    },
+    fetchSummary: fetchRegistryExtensionSummary,
     // The PR-1 dual-read helper (fail-loud on conflict/malformed) + the
     // shared auto-install predicate — the SAME seams the install gates use.
     parseEdges: (manifest, packageName) =>

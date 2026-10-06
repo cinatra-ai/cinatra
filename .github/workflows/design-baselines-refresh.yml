@@ -16,6 +16,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   refresh:
+    permissions:
+      contents: read
     name: design baselines refresh (pixel runner)
     runs-on: ${{ fromJSON(vars.CI_RUNNER_PIXEL || '"ubuntu-latest"') }}
     timeout-minutes: 70

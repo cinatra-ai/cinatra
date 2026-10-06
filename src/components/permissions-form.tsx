@@ -1,101 +1,54 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// PermissionsForm.
+// PermissionsForm: the HOST BINDING over the shared permissions panel.
 //
-// Generic widget that composes the unified AccessCombobox (selectionMode="multiple", the
-// hierarchical "Only me / Project / Team / Organization / Workspace" picker)
-// with an ownership panel (owner + co-owners list, lazy-loaded user search).
-// Designed to be reused for every resource that carries an
-// AgentAuthPolicy-shaped access policy + a co-owner list:
+// The anatomy this widget draws (the access picker, the ownership card, the
+// scope line, the Save bar and the self-removal confirm) moved into
+// `@cinatra-ai/sdk-ui/permissions-panel` (cinatra#3385), so the connector
+// Sharing tab draws the same controls whether the app's generated page or a
+// connector pack's own page draws them. One implementation, never two copies.
 //
-//   • agent runs  — used by packages/agents/src/permissions-tab-client.tsx
-//   • skill packages
-//   • individual skills
-//   • upload-time policy capture (transient mode)
+// This file keeps the host's side of the seam, and its props are unchanged:
 //
-// Behaviour preserved verbatim from the agent-run flavour:
-//   - cmdk Combobox in a Popover with 300 ms debounce / 0 ms on open,
-//     `shouldFilter={false}` (server-side filtering).
-//   - Lazy-load pagination: 20 rows per page, fetches next page when the
-//     CommandList scrolls within 64 px of bottom.
-//   - Optimistic add + remove with sonner undo on remove.
-//   - Last-owner guard (cannot remove the last remaining owner).
-//   - Self-removal AlertDialog confirm → router.push(redirect target).
+//   • the kind-derived redirect target for a self-removal that loses access
+//     (a route only the app knows), and
+//   • the resource-kind vocabulary every existing caller passes.
+//
+// Every caller mounts this path exactly as before: agent runs, agent
+// templates, skill packages, skills, connectors, artifacts, workflows and
+// per-connection grants.
+//
+//   • agent runs: packages/agents/src/instance-screens.tsx
+//   • skill packages and skills: packages/skills/src/plugin-pages.tsx
+//   • per-connection grants: src/components/extensions/connection-sharing-section.tsx
+//
+// Behaviour preserved verbatim: the cmdk combobox in a popover with a 300 ms
+// debounce (0 ms on open) and `shouldFilter={false}`, 20 rows a page fetched
+// within 64 px of the bottom, optimistic add and remove, the last-owner guard,
+// and the self-removal confirm that navigates only after the server confirms.
 // ---------------------------------------------------------------------------
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  useTransition,
-} from "react";
-import { useRouter } from "next/navigation";
-import { Loader2, Lock, Trash2, Users } from "lucide-react";
-import { useForm, Controller } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-
-import { toast } from "@/lib/cinatra-toast";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import { Input } from "@/components/ui/input";
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-} from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 
 import {
-  AccessCombobox,
-  resolveAccessSummary,
-  type AvailableScopes,
-  type AllowedScopes,
-} from "@/components/access-combobox";
-import type {
-  AgentAuthPolicy,
-  AgentAuthPolicyVisibility,
-} from "@cinatra-ai/agents/auth-policy";
-// Client-safe module (zod only): this is a "use client" component, so the
-// value import must NOT come from the server auth-policy barrel — that barrel
-// carries `import "server-only"`, which the bundler rejects in client code.
-import { normalizeVisibilitySelection } from "@cinatra-ai/agents/auth-policy-types";
+  PermissionsPanel,
+  type OwnerView,
+  type SharingCandidate,
+  type PermissionsPanelResult,
+  type PermissionsPanelSearchResult,
+  type PermissionsPanelActions,
+} from "@cinatra-ai/sdk-ui/permissions-panel";
+import type { AvailableScopes, AllowedScopes } from "@/components/access-combobox";
 
 // ---------------------------------------------------------------------------
-// Shared types
+// Shared types. The panel owns the shapes; these names stay the in-app import.
 // ---------------------------------------------------------------------------
 
-export type OwnerView = {
-  userId: string;
-  name: string;
-  email: string;
-  image: string | null;
-};
-
-export type SharingCandidate = {
-  id: string;
-  name: string;
-  email: string;
-  image: string | null;
-};
+export type { OwnerView, SharingCandidate };
+export type PermissionsFormResult = PermissionsPanelResult;
+export type PermissionsFormSearchResult = PermissionsPanelSearchResult;
+export type PermissionsFormActions = PermissionsPanelActions;
 
 export type PermissionsFormResourceKind =
   | "agent_run"
@@ -112,37 +65,6 @@ export type PermissionsFormResourceKind =
   // Per-connection grants (cinatra#950/#951): resource_id is the
   // nango_connection identity UUID.
   | "connection";
-
-export type PermissionsFormResult =
-  | { ok: true }
-  | { ok: false; error?: string };
-
-export type PermissionsFormSearchResult =
-  | { ok: true; results: SharingCandidate[]; hasMore: boolean }
-  | { ok: false; error?: string };
-
-export type PermissionsFormActions = {
-  /** Persist the access policy. Called when the user clicks Save. */
-  savePolicy: (policy: AgentAuthPolicy) => Promise<PermissionsFormResult>;
-  /**
-   * Lazy-paginated user search for the owner picker. The component passes
-   * offset / limit; the server returns trimmed rows + a hasMore flag.
-   */
-  searchCandidates: (
-    query: string,
-    page: { offset: number; limit: number },
-  ) => Promise<PermissionsFormSearchResult>;
-  /** Add a co-owner. Called after the user picks a candidate. */
-  addCoOwner: (userId: string) => Promise<PermissionsFormResult>;
-  /** Remove a co-owner. */
-  removeCoOwner: (userId: string) => Promise<PermissionsFormResult>;
-  /**
-   * Remove the resource's primary owner. Optional — when omitted the owner
-   * row has no Remove button (used for resources whose primary owner is
-   * intrinsic, e.g. agent runs where runBy is the launching user).
-   */
-  removeOwner?: () => Promise<PermissionsFormResult>;
-};
 
 export type PermissionsFormProps = {
   resourceKind: PermissionsFormResourceKind;
@@ -197,568 +119,64 @@ export type PermissionsFormProps = {
   /** Rendered under the picker: the lock note ("Locked by this connector…")
    * or the default-recommendation note. */
   accessScopeNote?: string;
+  /**
+   * Which note `accessScopeNote` is (cinatra#3454). Section II of the
+   * connectors drawing puts the lock in front of the ceiling line only, so
+   * only `locked` draws it. Forwarded to the shared panel unchanged.
+   */
+  accessScopeNoteKind?: "locked" | "recommended";
 };
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Host-only knowledge: where a self-removal lands when the caller states no
+// target. These are app routes, so the panel takes the resolved string.
 // ---------------------------------------------------------------------------
 
-const PAGE_SIZE = 20;
-
-// Multi-scope W3: the access field is a NON-EMPTY array of visibility tokens.
-// The canonical validation gate is server-side (AgentAuthPolicySchema); this
-// permissive client schema only guarantees non-emptiness so the picker always
-// has a floor token.
-const AccessFormSchema = z.object({ access: z.array(z.string()).nonempty() });
-type AccessFormValues = z.infer<typeof AccessFormSchema>;
-
-function getInitials(name: string): string {
-  if (!name) return "";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 0 || !parts[0]) return "";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  const first = parts[0][0] ?? "";
-  const last = parts[parts.length - 1][0] ?? "";
-  return (first + last).toUpperCase();
-}
-
-function defaultRedirectFor(resourceKind: PermissionsFormResourceKind): string {
+export function defaultRedirectFor(resourceKind: PermissionsFormResourceKind): string {
   if (resourceKind === "skill_package" || resourceKind === "skill") return "/skills";
   if (resourceKind === "agent_template") return "/configuration/extensions";
   return "/agents";
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
 export function PermissionsForm({
   resourceKind,
   canEdit,
   initialPolicy,
-  owner: initialOwner,
-  coOwners: initialCoOwners,
+  owner,
+  coOwners,
   availableScopes,
   allowedScopes,
   currentUserId,
   allowSharing,
   actions,
   selfRemoveRedirect,
-  accessHelperText = "Choose who can find and view it.",
-  ownershipHelperText = "Owners have full rights such as view, edit, delete, manage permissions.",
+  accessHelperText,
+  ownershipHelperText,
   accessValueOverride,
   accessDisabledScopes,
   accessDisabledReasons,
   accessScopeNote,
+  accessScopeNoteKind,
 }: PermissionsFormProps) {
-  const router = useRouter();
-
-  // -------------------------------------------------------------------------
-  // Access form (locksteps runListVisibility / runDataVisibility /
-  // runExecuteVisibility to a single value)
-  // -------------------------------------------------------------------------
-  // Multi-scope W3: the checkbox multi-select picker holds the full token
-  // array. `accessValueOverride` is a SINGLE-token preselect/lock override (the
-  // connection-share surface's connector recommendation, or a locked canonical
-  // value). It only overrides when it genuinely DIFFERS from the stored primary
-  // token — when it merely echoes the stored primary, the FULL stored selection
-  // is shown, so a saved multi-scope policy is never collapsed to one token
-  // (codex round-0 D4). The connection surface sets `value !== primary` exactly
-  // for the canonical/recommendation cases and `value === primary` when it is
-  // reflecting the stored policy, so this predicate matches its intent exactly.
-  const effectiveAccessSelection: string[] =
-    accessValueOverride != null &&
-    accessValueOverride !== initialPolicy.runListVisibility[0]
-      ? [accessValueOverride]
-      : [...initialPolicy.runListVisibility];
-  // Stable dependency key for the reset effect (the array identity changes
-  // every render).
-  const effectiveAccessKey = effectiveAccessSelection.join(" ");
-  const [isSavingPolicy, startSavePolicy] = useTransition();
-  const { control, handleSubmit, reset: resetAccessForm } = useForm<AccessFormValues>({
-    resolver: zodResolver(AccessFormSchema),
-    defaultValues: { access: effectiveAccessSelection as [string, ...string[]] },
-  });
-
-  // `useForm.defaultValues` is captured only at mount. If the parent
-  // re-renders with a new `initialPolicy` (e.g. after
-  // a router.refresh() following a save, or when the same form widget is
-  // re-used across resource-kind transitions), the form keeps showing the
-  // stale access value. Reset on every effective-value change so the form
-  // always reflects the persisted state (or the explicit pre-selection).
-  useEffect(() => {
-    resetAccessForm({ access: effectiveAccessSelection as [string, ...string[]] });
-    // effectiveAccessSelection is a fresh array each render; key on its content.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveAccessKey, resetAccessForm]);
-
-  const onSubmit = (values: AccessFormValues) => {
-    startSavePolicy(async () => {
-      // Multi-scope W3: the picker already canonicalises live, but normalize
-      // again defensively before the server write (the write path is the
-      // authority; a double-normalize is idempotent).
-      const selection = normalizeVisibilitySelection(
-        values.access as AgentAuthPolicyVisibility[],
-      );
-      const policy: AgentAuthPolicy = {
-        runListVisibility: selection,
-        runDataVisibility: selection,
-        runExecuteVisibility: selection,
-        allowRunSharing: initialPolicy.allowRunSharing,
-      };
-      const result = await actions.savePolicy(policy);
-      if (result.ok) {
-        toast.success("Access policy saved.");
-        router.refresh();
-      } else if (result.error === "scope_locked_by_connector") {
-        // Typed server rejection (cinatra#953 W3): the connector's declared
-        // access ceiling refused the grant — the disabled rows are the
-        // affordance, this is the enforcement surfacing.
-        toast.error(
-          "This connector locks its sharing scope — the selected scope is outside its allowed access.",
-        );
-      } else if (result.error === "invalid_locus") {
-        toast.error(
-          "The selected scope is not one of your organizations, teams, or projects.",
-        );
-      } else {
-        toast.error("Could not save access policy. Try again.");
-      }
-    });
-  };
-
-  // -------------------------------------------------------------------------
-  // Ownership state
-  // -------------------------------------------------------------------------
-  const [coOwners, setCoOwners] = useState<OwnerView[]>(initialCoOwners);
-  const [owner, setOwner] = useState<OwnerView | null>(initialOwner);
-  const [pendingRemoveIds, setPendingRemoveIds] = useState<Set<string>>(new Set());
-  const [selfRemovalTarget, setSelfRemovalTarget] = useState<{
-    userId: string;
-    name: string;
-    isOwner: boolean;
-  } | null>(null);
-  const [, startOwnershipTransition] = useTransition();
-
-  useEffect(() => {
-    setCoOwners(initialCoOwners);
-  }, [initialCoOwners]);
-  useEffect(() => {
-    setOwner(initialOwner);
-  }, [initialOwner]);
-
-  const allOwners: OwnerView[] = owner
-    ? [owner, ...coOwners.filter((c) => c.userId !== owner.userId)]
-    : coOwners;
-  const totalOwnerCount = allOwners.length;
-  const ownerIdSet = new Set(allOwners.map((o) => o.userId));
-
-  // -------------------------------------------------------------------------
-  // Search popover state
-  // -------------------------------------------------------------------------
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [results, setResults] = useState<SharingCandidate[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      setResults([]);
-      setSearching(false);
-      setHasMore(false);
-      return;
-    }
-    let cancelled = false;
-    const handle = window.setTimeout(async () => {
-      setSearching(true);
-      const result = await actions.searchCandidates(query, { offset: 0, limit: PAGE_SIZE });
-      if (cancelled) return;
-      setSearching(false);
-      if (result.ok) {
-        setResults(result.results);
-        setHasMore(result.hasMore);
-      } else {
-        setResults([]);
-        setHasMore(false);
-      }
-    }, query.length === 0 ? 0 : 300);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [open, query, actions]);
-
-  const handleListScroll = (event: React.UIEvent<HTMLDivElement>) => {
-    if (!hasMore || loadingMore || searching) return;
-    const el = event.currentTarget;
-    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
-    if (distanceFromBottom > 64) return;
-    setLoadingMore(true);
-    const offset = results.length;
-    void actions
-      .searchCandidates(query, { offset, limit: PAGE_SIZE })
-      .then((result) => {
-        setLoadingMore(false);
-        if (!result.ok) return;
-        setResults((prev) => {
-          const seen = new Set(prev.map((r) => r.id));
-          const additions = result.results.filter((r) => !seen.has(r.id));
-          return additions.length > 0 ? [...prev, ...additions] : prev;
-        });
-        setHasMore(result.hasMore);
-      });
-  };
-
-  const visibleResults = results.filter((r) => !ownerIdSet.has(r.id));
-
-  // -------------------------------------------------------------------------
-  // Add / remove handlers
-  // -------------------------------------------------------------------------
-  const handleAdd = (candidate: SharingCandidate) => {
-    const optimistic: OwnerView = {
-      userId: candidate.id,
-      name: candidate.name,
-      email: candidate.email,
-      image: candidate.image,
-    };
-    setCoOwners((prev) =>
-      prev.some((c) => c.userId === optimistic.userId) ? prev : [...prev, optimistic],
-    );
-    setQuery("");
-    setOpen(false);
-    startOwnershipTransition(async () => {
-      const result = await actions.addCoOwner(candidate.id);
-      if (!result.ok) {
-        setCoOwners((prev) => prev.filter((c) => c.userId !== candidate.id));
-        toast.error("Could not add owner. Try again.");
-        return;
-      }
-      toast.success(`${candidate.name} added.`);
-      const refreshed = await actions.searchCandidates("", { offset: 0, limit: PAGE_SIZE });
-      if (refreshed.ok) {
-        setResults(refreshed.results);
-        setHasMore(refreshed.hasMore);
-      }
-      router.refresh();
-    });
-  };
-
-  // Return Promise<boolean> so the self-removal AlertDialog can await the
-  // actual server-action result before navigating away. This prevents a
-  // failed removal from redirecting the user. Background-thread
-  // (non-self-removal) callers can still ignore the returned promise; their
-  // behavior is unchanged.
-  const handleRemoveCoOwner = (userId: string, name: string): Promise<boolean> => {
-    setCoOwners((prev) => prev.filter((c) => c.userId !== userId));
-    setPendingRemoveIds((prev) => new Set(prev).add(userId));
-    return new Promise<boolean>((resolve) => {
-      startOwnershipTransition(async () => {
-        const result = await actions.removeCoOwner(userId);
-        setPendingRemoveIds((prev) => {
-          const next = new Set(prev);
-          next.delete(userId);
-          return next;
-        });
-        if (!result.ok) {
-          router.refresh();
-          toast.error("Could not remove owner. Try again.");
-          resolve(false);
-          return;
-        }
-        toast.success(`${name} removed.`);
-        resolve(true);
-      });
-    });
-  };
-
-  const handleRemoveOwner = (name: string): Promise<boolean> => {
-    if (!owner || !actions.removeOwner) return Promise.resolve(false);
-    const removedOwner = owner;
-    setOwner(null);
-    setPendingRemoveIds((prev) => new Set(prev).add(removedOwner.userId));
-    return new Promise<boolean>((resolve) => {
-      startOwnershipTransition(async () => {
-        const result = await actions.removeOwner!();
-        setPendingRemoveIds((prev) => {
-          const next = new Set(prev);
-          next.delete(removedOwner.userId);
-          return next;
-        });
-        if (!result.ok) {
-          setOwner(removedOwner);
-          if (result.error === "last_owner") {
-            toast.error("Cannot remove the last owner.");
-          } else {
-            toast.error("Could not remove owner. Try again.");
-          }
-          resolve(false);
-          return;
-        }
-        toast.success(`${name} removed.`);
-        router.refresh();
-        resolve(true);
-      });
-    });
-  };
-
-  const showAdd = allowSharing && canEdit;
-  const redirect = selfRemoveRedirect ?? defaultRedirectFor(resourceKind);
-
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className="rounded-card border border-line px-6 py-5 flex flex-col gap-6 bg-surface"
-    >
-      {/* Access section */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-base font-semibold text-foreground">Access</h2>
-
-        {!canEdit && (
-          <p className="text-xs text-muted-foreground">
-            You can view the access policy but cannot edit it.
-          </p>
-        )}
-
-        <div className="flex flex-col gap-1.5">
-          {canEdit ? (
-            <Controller
-              control={control}
-              name="access"
-              render={({ field: f }) => (
-                <AccessCombobox
-                  selectionMode="multiple"
-                  value={f.value}
-                  onChange={f.onChange}
-                  scopes={availableScopes}
-                  allowedScopes={allowedScopes}
-                  disabledScopes={accessDisabledScopes}
-                  disabledReasons={accessDisabledReasons}
-                />
-              )}
-            />
-          ) : (
-            <span className="text-sm text-foreground">
-              {resolveAccessSummary(
-                initialPolicy.runListVisibility,
-                availableScopes,
-              )}
-            </span>
-          )}
-          {accessScopeNote && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1">
-              <Lock className="size-3 shrink-0" aria-hidden="true" />
-              {accessScopeNote}
-            </p>
-          )}
-          <p className="text-xs text-muted-foreground">{accessHelperText}</p>
-        </div>
-      </div>
-
-      {/* Ownership section */}
-      <div className="flex flex-col gap-3">
-        <h2 className="text-base font-semibold text-foreground">Ownership</h2>
-
-        {showAdd && (
-          <div className="flex flex-col gap-1.5">
-            <Popover open={open} onOpenChange={setOpen}>
-              <PopoverAnchor asChild>
-                <Input
-                  ref={inputRef}
-                  placeholder="Search by name or email…"
-                  value={query}
-                  onChange={(e) => {
-                    setQuery(e.target.value);
-                    if (!open) setOpen(true);
-                  }}
-                  onClick={() => setOpen((prev) => !prev)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") e.preventDefault();
-                  }}
-                  className="bg-surface-strong"
-                />
-              </PopoverAnchor>
-              <PopoverContent
-                align="start"
-                sideOffset={4}
-                onOpenAutoFocus={(e) => e.preventDefault()}
-                onInteractOutside={(e) => {
-                  const target = e.target as HTMLElement;
-                  if (inputRef.current?.contains(target)) {
-                    e.preventDefault();
-                  }
-                }}
-                className="w-[var(--radix-popover-trigger-width)] p-0 bg-surface-strong"
-              >
-                <Command shouldFilter={false} className="bg-surface-strong">
-                  <CommandList
-                    onScroll={handleListScroll}
-                    className="max-h-64 bg-surface-strong"
-                  >
-                    {!searching && visibleResults.length === 0 && (
-                      <CommandEmpty>No matches.</CommandEmpty>
-                    )}
-                    {searching && (
-                      <CommandItem disabled className="italic text-muted-foreground">
-                        <Loader2 className="size-4 animate-spin mr-2" /> Searching…
-                      </CommandItem>
-                    )}
-                    {!searching && visibleResults.length > 0 && (
-                      <CommandGroup className="p-0">
-                        {visibleResults.map((r) => (
-                          <CommandItem
-                            key={r.id}
-                            value={r.id}
-                            onSelect={() => handleAdd(r)}
-                            className="text-sm rounded-none px-3 py-2 bg-surface-strong hover:bg-surface-muted data-[selected=true]:bg-surface-muted"
-                          >
-                            <span className="text-foreground">{r.name}</span>
-                            <span className="ml-2 text-xs text-muted-foreground truncate">
-                              {r.email}
-                            </span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    )}
-                    {loadingMore && (
-                      <div className="flex items-center justify-center gap-2 px-3 py-2 text-xs italic text-muted-foreground">
-                        <Loader2 className="size-3 animate-spin" /> Loading more…
-                      </div>
-                    )}
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-            <p className="text-xs text-muted-foreground">{ownershipHelperText}</p>
-          </div>
-        )}
-
-        {allOwners.length > 0 ? (
-          <ScrollArea className={allOwners.length > 6 ? "max-h-[280px]" : undefined}>
-            <ul className="flex flex-col">
-              {allOwners.map((c) => {
-                const isPending = pendingRemoveIds.has(c.userId);
-                const isResourceOwner = owner?.userId === c.userId;
-                const showRemove = canEdit && (isResourceOwner ? !!actions.removeOwner : true);
-                const removeDisabled = isPending || totalOwnerCount <= 1;
-                return (
-                  <li
-                    key={c.userId}
-                    className="flex items-center gap-3 py-2 border-b border-line last:border-b-0"
-                  >
-                    <Avatar className="h-8 w-8 rounded-full">
-                      <AvatarImage src={c.image ?? undefined} alt={c.name} />
-                      <AvatarFallback>
-                        {getInitials(c.name) || <Users className="size-4" />}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col flex-1 min-w-0 leading-tight">
-                      <span className="text-sm font-medium text-foreground truncate">
-                        {c.name}
-                      </span>
-                      <span className="text-xs text-muted-foreground truncate">
-                        {c.email}
-                      </span>
-                    </div>
-                    {showRemove ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Remove ${c.name}`}
-                        onClick={() => {
-                          if (currentUserId && c.userId === currentUserId) {
-                            setSelfRemovalTarget({
-                              userId: c.userId,
-                              name: c.name,
-                              isOwner: isResourceOwner,
-                            });
-                            return;
-                          }
-                          if (isResourceOwner) {
-                            handleRemoveOwner(c.name);
-                          } else {
-                            handleRemoveCoOwner(c.userId, c.name);
-                          }
-                        }}
-                        disabled={removeDisabled}
-                        title={totalOwnerCount <= 1 ? "Cannot remove the last owner" : undefined}
-                        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 rounded-control disabled:opacity-40"
-                      >
-                        {isPending ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="size-4" />
-                        )}
-                      </Button>
-                    ) : (
-                      <Lock
-                        className="size-4 text-muted-foreground"
-                        aria-hidden="true"
-                      />
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </ScrollArea>
-        ) : null}
-      </div>
-
-      {/* Save bar */}
-      {canEdit && (
-        <div className="flex justify-end">
-          <Button type="submit" disabled={isSavingPolicy}>
-            {isSavingPolicy && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-            )}
-            {isSavingPolicy ? "Saving…" : "Save changes"}
-          </Button>
-        </div>
-      )}
-
-      {/* Self-removal confirm */}
-      <AlertDialog
-        open={selfRemovalTarget !== null}
-        onOpenChange={(o) => {
-          if (!o) setSelfRemovalTarget(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove yourself?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You will lose access to this resource. You will be redirected to{" "}
-              <span className="font-mono text-foreground">{redirect}</span>.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={async () => {
-                // Only push the redirect after the server confirms the
-                // removal. This prevents navigation when the removal fails.
-                const target = selfRemovalTarget;
-                if (!target) return;
-                setSelfRemovalTarget(null);
-                const ok = target.isOwner
-                  ? await handleRemoveOwner(target.name)
-                  : await handleRemoveCoOwner(target.userId, target.name);
-                if (ok) {
-                  router.push(redirect);
-                }
-              }}
-            >
-              Remove me
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </form>
+    <PermissionsPanel
+      canEdit={canEdit}
+      initialPolicy={initialPolicy}
+      owner={owner}
+      coOwners={coOwners}
+      availableScopes={availableScopes}
+      allowedScopes={allowedScopes}
+      currentUserId={currentUserId}
+      allowSharing={allowSharing}
+      selfRemoveRedirect={selfRemoveRedirect ?? defaultRedirectFor(resourceKind)}
+      accessHelperText={accessHelperText}
+      ownershipHelperText={ownershipHelperText}
+      accessValueOverride={accessValueOverride}
+      accessDisabledScopes={accessDisabledScopes}
+      accessDisabledReasons={accessDisabledReasons}
+      accessScopeNote={accessScopeNote}
+      accessScopeNoteKind={accessScopeNoteKind}
+      actions={actions}
+    />
   );
 }

@@ -29,7 +29,7 @@
  *
  * WHY THIS SUITE ITERATES. The resolved install panel has exactly TWO
  * mountings on this screen, both rendering the one component: the GitHub tab's
- * form (import-skill-from-github-form.tsx) and the File tab's form
+ * form (upload-repository-link-form.tsx) and the File tab's form
  * (import-form.tsx). One test drives BOTH to their resolved state and grades
  * each, so a mounting that lacks the drawn treatment fails the suite. The
  * census itself is read from the package's own source rather than trusted: the
@@ -91,7 +91,7 @@ const toastState = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning
 vi.mock("@/lib/cinatra-toast", () => ({ toast: toastState }));
 
 import { ImportAgentForm } from "../import-form";
-import { ImportPackageFromGitHubForm } from "../import-skill-from-github-form";
+import { ImportPackageFromGitHubForm } from "../upload-repository-link-form";
 
 const INSTALL_SCOPE = {
   installTargets: [
@@ -208,7 +208,7 @@ function sourceFilesMountingThePanel(): string[] {
 }
 
 /** The files the MOUNTINGS below drive, in the same shape. */
-const CENSUS_FILES = ["import-form.tsx", "import-skill-from-github-form.tsx"];
+const CENSUS_FILES = ["import-form.tsx", "upload-repository-link-form.tsx"];
 
 /** Every class that would re-introduce a bordered box on an ancestor. */
 function boxClassesOf(el: Element): string[] {
@@ -252,7 +252,7 @@ const MOUNTINGS: {
   drive: () => Promise<HTMLElement>;
 }[] = [
   {
-    label: "the GitHub tab's form (import-skill-from-github-form.tsx)",
+    label: "the GitHub tab's form (upload-repository-link-form.tsx)",
     drive: async () => {
       actions.previewSuppliedRepositoryAction.mockResolvedValue({
         ok: true,

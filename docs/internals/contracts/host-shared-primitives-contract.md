@@ -14,7 +14,7 @@ onto. Slice 3 moves the packages, one package at a time.
 | | |
 | --- | --- |
 | Module id | `@cinatra-ai/design-primitives` |
-| Contract version | `1.0.0` (major `1`) |
+| Contract version | `1.1.0` (major `1`) |
 | Declared in | `packages/sdk-extensions/src/artifact-client-bundle.ts`, next to the React externals allowlist |
 | Typed contract export | `@cinatra-ai/sdk-extensions/design-primitives-contract` |
 | Host implementation | `src/lib/artifacts/host-shared-primitives.ts` |
@@ -81,13 +81,14 @@ same module.
 
 ## The frozen export list (contract major 1)
 
-Exactly the exports of the sixteen product components under `src/components/ui/`
+Exactly the exports of the seventeen product components under `src/components/ui/`
 that the border floor records as byte copies inside connector and artifact
 packages. Adding a name is a MINOR bump; removing or renaming one is a MAJOR.
 
 | Component | Exports |
 | --- | --- |
 | `alert` | `Alert`, `AlertDescription`, `AlertTitle` |
+| `alert-dialog` (added in `1.1.0`) | `AlertDialog`, `AlertDialogAction`, `AlertDialogCancel`, `AlertDialogContent`, `AlertDialogDescription`, `AlertDialogFooter`, `AlertDialogHeader`, `AlertDialogOverlay`, `AlertDialogPortal`, `AlertDialogTitle`, `AlertDialogTrigger` |
 | `badge` | `Badge`, `badgeVariants` |
 | `button` | `Button`, `buttonVariants` |
 | `card` | `Card`, `CardAction`, `CardContent`, `CardDescription`, `CardFooter`, `CardHeader`, `CardTitle` |
@@ -104,19 +105,26 @@ packages. Adding a name is a MINOR bump; removing or renaming one is a MAJOR.
 | `table` | `Table`, `TableBody`, `TableCaption`, `TableCell`, `TableFooter`, `TableHead`, `TableHeader`, `TableRow` |
 | `textarea` | `Textarea` |
 
-72 exports. `HOST_DESIGN_PRIMITIVES_EXPORTS` in the SDK leaf is the single source
+83 exports. `HOST_DESIGN_PRIMITIVES_EXPORTS` in the SDK leaf is the single source
 of truth; the host barrel `satisfies` it, so a removed or renamed export is a
 host build failure rather than a run-time `undefined` inside somebody's package.
+
+Contract `1.1.0` adds the existing product AlertDialog family without changing
+its rendering, props or behavior. Both import roads return the bindings from
+`src/components/ui/alert-dialog.tsx`, including its portal, modal content and
+destructive action. The registry's per-export identity guard uses the expanded
+frozen list, so a vendored AlertDialog copy is rejected just like a vendored
+Button. Existing `1.0.0` bundles remain within the served major; a package that
+uses the new exports needs a host serving `1.1.0` or later. The compatibility
+check still compares majors and does not replace that host rollout dependency.
 
 ### Not in the list
 
 The border floor also records `external-link.tsx`, `link.tsx` and
 `text-link.tsx`. Those are **not** product primitives — they are the extensions'
-own components (`vendor-extension-primitives.mjs`: *dialog.tsx / link.tsx are the
-connector's OWN components, not registry items, so they are outside this
-channel*), and no such file exists under `src/components/ui/`, so the host cannot
-serve them. A package keeps its own copy of those, or folds them into its own
-source; they never enter this contract.
+own components, and no such file exists under `src/components/ui/`, so the host
+cannot serve them. A package keeps its own copy of those, or folds them into
+its own source; they never enter this contract.
 
 ## How a package migrates (the three lines a package changes)
 

@@ -1,17 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AgenticRunPanel } from "./agentic-run-panel";
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import type { HitlGateContext } from "./run-surface-status";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import { buildAgentPackageBasePath } from "@/lib/agent-url";
+
+/** The run's schedule step, under the scope base the run is read under
+ *  (cinatra#3693); the bare address when there is none. */
+function scheduleStepPath(agentId: string, instanceId: string, scopeBase?: string | null): string {
+  return `${buildAgentPackageBasePath(agentId, { scopeBase: scopeBase ?? null })}/${encodeURIComponent(instanceId)}/trigger`;
+}
 
 type SetupCompletionWatcherProps = {
   runId: string;
   agentId: string;
   instanceId: string;
+  /**
+   * The scope base the run is read under (cinatra#3693), so the hand-off to
+   * the schedule step — and the panel's own restart — stay in the run's scope.
+   * Absent on the bare route.
+   */
+  scopeBase?: string | null;
   agUiEnabled?: boolean | null;
   initialStatus: string;
   initialError: string | null;
@@ -108,6 +121,15 @@ type SetupCompletionWatcherProps = {
    *  unchanged; see `AgenticRunPanel`'s own prop. */
   inputStepInRail?: boolean;
   /**
+   * THE LAUNCHER THE PANEL'S SUCCESSOR CONTROLS OPEN (cinatra#3786), forwarded
+   * unchanged. This watcher carries TWO bases on purpose, and they are not the
+   * same value. `scopeBase` above addresses THIS run, and the push to its
+   * schedule step is built from it. This one names the launcher a fresh run is
+   * started at. They agree for four anchor kinds and part on the personal one,
+   * whose run is addressed bare and whose successor is launched at `/personal`.
+   */
+  launchBase?: string | null;
+  /**
    * Forwarded to the panel unchanged, exactly like `inputStepInRail`: whether
    * the run page's two-column frame is drawn beside this column, so the gate's
    * own card is the whole page and no section plate is stacked around it
@@ -120,6 +142,8 @@ export function SetupCompletionWatcher({
   runId,
   agentId,
   instanceId,
+  scopeBase,
+  launchBase,
   agUiEnabled,
   initialStatus,
   initialError,
@@ -144,6 +168,34 @@ export function SetupCompletionWatcher({
   const router = useRouter();
   const hasFiredRef = useRef(false);
   const [hasSeenInterrupt, setHasSeenInterrupt] = useState(false);
+
+  // THE PAGE LEARNS OF A GATE MINTED AFTER IT WAS SERVED (cinatra#3007, F3).
+  // The rail's gate entries come from the server render alone, so a page served
+  // while the run was still working never draws the entry of the review the
+  // run is now waiting on. The panel reports when its reading becomes the review
+  // screen; the first time that happens for a review the served page did not
+  // carry, the server tree is rendered once more — never one per tick, and none
+  // for a page served with it. A reading that leaves and returns for the same
+  // gate (a one-look status change, a panel effect's cleanup) is no new gate:
+  // the ask re-arms only when a NEW SERVER RENDER lands — the one authoritative
+  // word on what the page's rail carries — never on a reading going false.
+  const servedReviewGateRef = useRef(initialReviewGate);
+  const pageCarriesTheReviewRef = useRef(initialReviewGate?.ref != null);
+  const refreshAskedRef = useRef(false);
+  useEffect(() => {
+    if (servedReviewGateRef.current === initialReviewGate) return;
+    servedReviewGateRef.current = initialReviewGate;
+    pageCarriesTheReviewRef.current = initialReviewGate?.ref != null;
+    refreshAskedRef.current = false;
+  }, [initialReviewGate]);
+  const handleReviewReadingChange = useCallback(
+    (_runId: string, drawsReview: boolean) => {
+      if (!drawsReview || pageCarriesTheReviewRef.current || refreshAskedRef.current) return;
+      refreshAskedRef.current = true;
+      router.refresh();
+    },
+    [router],
+  );
 
   // Mount-time check: if all required fields are already in inputParams and the
   // run is past the setup phase, navigate to Trigger immediately. Handles the
@@ -171,7 +223,7 @@ export function SetupCompletionWatcher({
     );
     if (allFilled && !noRedirect) {
       hasFiredRef.current = true;
-      router.push(`/agents/${agentId}/${encodeURIComponent(instanceId)}/trigger`);
+      router.push(scheduleStepPath(agentId, instanceId, scopeBase));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally runs once on mount only
@@ -218,11 +270,11 @@ export function SetupCompletionWatcher({
         );
         if (allFilled && !hasFiredRef.current && !noRedirect) {
           hasFiredRef.current = true;
-          router.push(`/agents/${agentId}/${encodeURIComponent(instanceId)}/trigger`);
+          router.push(scheduleStepPath(agentId, instanceId, scopeBase));
         }
       })
       .catch(() => {});
-  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, router, noRedirect, runHasExecuted, triggerConfigured]);
+  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, scopeBase, router, noRedirect, runHasExecuted, triggerConfigured]);
 
   // Polling-based navigation (fallback — covers agUiEnabled=false and any missed SSE events).
   useEffect(() => {
@@ -255,7 +307,7 @@ export function SetupCompletionWatcher({
           if (allFilled && !hasFiredRef.current && !noRedirect) {
             hasFiredRef.current = true;
             window.clearInterval(interval);
-            router.push(`/agents/${agentId}/${encodeURIComponent(instanceId)}/trigger`);
+            router.push(scheduleStepPath(agentId, instanceId, scopeBase));
           }
         })
         .catch(() => {});
@@ -284,6 +336,8 @@ export function SetupCompletionWatcher({
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}
+      launchBase={launchBase}
+      onReviewReadingChange={handleReviewReadingChange}
     />
   );
 }

@@ -298,6 +298,23 @@ describe("the GitHub tab's archive enters the FILE road's install path", () => {
     ).rejects.toThrow(/rate limit/i);
   });
 
+  it("refuses a link whose archive is not served in the drawing's own sentence, with no developer tag (cinatra#3897)", async () => {
+    await expect(
+      previewSuppliedRepositoryArchive({
+        owner: "acme",
+        repo: "thing",
+        ref: null,
+        archiveUrl: "https://codeload.github.com/acme/thing/zip/HEAD",
+        fetchImpl: respondStatus(404, "Not Found"),
+      }),
+    ).rejects.toHaveProperty(
+      "message",
+      "GitHub served no archive for acme/thing at its default branch (HTTP 404). " +
+        "This instance downloads the archive anonymously, so a private repository - or a branch, tag " +
+        "or release that does not exist - cannot be read. Check the link, or upload the package as a file.",
+    );
+  });
+
   it("refuses an archive that carries no commit id, so nothing installs off a moving ref", async () => {
     await expect(
       prepareSuppliedRepositoryArchiveSnapshot({
@@ -1123,8 +1140,9 @@ describe("a BARE link proves the branch name it records (cinatra#3204)", () => {
         archiveUrl: SENTINEL_ARCHIVE_URL,
         fetchImpl: host.impl,
       }),
-    ).rejects.toThrow(
-      "[supplied-install] acme/thing: this install could not resolve the branch, tag or release name " +
+    ).rejects.toHaveProperty(
+      "message",
+      "this install could not resolve the branch, tag or release name " +
         "to record - the link named none and the archive that was downloaded does not name the branch " +
         "it was generated from. Type the branch, tag or release to install from and try again. " +
         "Nothing was written.",

@@ -147,7 +147,15 @@ describe("POST /api/oas-lint/scan-all — response shape", () => {
       name: "@cinatra-ai/blog-draft-writer-agent",
       version: "0.1.0",
       license: "Apache-2.0",
-      cinatra: { produces: [{ extension: "@cinatra-ai/blog-post-artifact" }] },
+      cinatra: {
+        produces: [
+          {
+            extension: "@cinatra-ai/blog-post-artifact",
+            // cinatra#3597 — the id namespace is NOT the providing package name.
+            objectTypeId: "@cinatra-ai/blog-post:post",
+          },
+        ],
+      },
     };
     const res = await POST(
       makeReq({ oasJson: "{}", packageJson: JSON.stringify(pkg) }),
@@ -157,8 +165,19 @@ describe("POST /api/oas-lint/scan-all — response shape", () => {
     // produces extension ids are threaded from the sibling package.json.
     expect(scanOasForArtifactParityFindingsMock).toHaveBeenCalledWith(
       expect.any(Object),
-      { produces: ["@cinatra-ai/blog-post-artifact"] },
+      // cinatra#3597 — the owner resolver the route now supplies beside produces.
+      { produces: ["@cinatra-ai/blog-post-artifact"], resolveTypeOwner: expect.any(Function) },
     );
+    // The resolver ITSELF maps the manifest's own produces pairing: the owner of
+    // a type whose id namespace is not the package name, and null for a type the
+    // manifest does not pair (so the scanner keeps its own id reading there).
+    const parityOpts = scanOasForArtifactParityFindingsMock.mock.calls.at(-1)?.[1] as {
+      resolveTypeOwner: (typeId: string) => string | null;
+    };
+    expect(parityOpts.resolveTypeOwner("@cinatra-ai/blog-post:post")).toBe(
+      "@cinatra-ai/blog-post-artifact",
+    );
+    expect(parityOpts.resolveTypeOwner("@cinatra-ai/unknown:thing")).toBeNull();
     const findings = JSON.parse(body.findings) as ReviewFinding[];
     const parity = findings.find((f) => f.code === "OAS-RUNTIME-009");
     expect(parity).toBeDefined();
@@ -172,7 +191,7 @@ describe("POST /api/oas-lint/scan-all — response shape", () => {
     await POST(makeReq({ oasJson: "{}" }));
     expect(scanOasForArtifactParityFindingsMock).toHaveBeenCalledWith(
       expect.any(Object),
-      { produces: null },
+      { produces: null, resolveTypeOwner: expect.any(Function) },
     );
   });
 

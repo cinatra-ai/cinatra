@@ -62,6 +62,21 @@ export const HOST_DESIGN_TOKEN_MODULE = "@cinatra-ai/design";
 export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
 
 /**
+ * The HOST-SERVED READ-ONLY DASHBOARD COMPOSITION module (cinatra#3092, epic
+ * #3087). The plan: "the dashboard extension lives outside this repository and
+ * cannot import the host's composition". The dashboard's two displays must draw
+ * through the SAME read-only composition the application draws with, so a
+ * bundle leaves THIS EXACT specifier external and the host module-registry shim
+ * resolves it to the host's ONE instance — the road the design primitives take.
+ *
+ * EXACT, NEVER A PACKAGE: it admits the one module that exports the two promoted
+ * views (`@cinatra-ai/sdk-extensions/read-only-compositions` registers them), and
+ * neither the package root nor any other subpath of it; `@cinatra-ai/sdk-dashboard`
+ * stays private and unpublished.
+ */
+export const HOST_DASHBOARD_COMPOSITION_MODULE = "@cinatra-ai/sdk-dashboard/components";
+
+/**
  * The VERSIONED contract the shared primitives module serves. Semver: a MAJOR
  * bump is a breaking change to {@link HOST_DESIGN_PRIMITIVES_EXPORTS} (an export
  * removed or renamed, or a prop contract broken); a MINOR adds exports. A bundle
@@ -69,7 +84,7 @@ export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
  * load, a bundle whose MAJOR it does not serve (see
  * {@link checkDesignPrimitivesContract}).
  */
-export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.0.0";
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.1.0";
 
 /** The MAJOR of {@link HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION} — the single
  * number the load-time fail-closed check compares on. */
@@ -78,19 +93,18 @@ export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
 /**
  * The FROZEN export list of the shared primitives module at contract major
  * {@link HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR} — exactly the exports of the
- * sixteen product components under `src/components/ui/` that the
+ * seventeen product components under `src/components/ui/` that the
  * self-rendering-extensions border floor
  * (`scripts/extensions/self-rendering-extensions-border.baseline.json`) records
- * as byte copies inside connector/artifact packages: alert, badge, button, card,
- * checkbox, dialog, field, input-group, input, label, paginated-table,
- * pagination, select, separator, table, textarea.
+ * as byte copies inside connector/artifact packages: alert, alert-dialog,
+ * badge, button, card, checkbox, dialog, field, input-group, input, label,
+ * paginated-table, pagination, select, separator, table, textarea.
  *
  * The baseline ALSO lists `external-link.tsx`, `link.tsx` and `text-link.tsx`.
- * Those are NOT product primitives — they are the extensions' OWN components
- * (`vendor-extension-primitives.mjs`: "dialog.tsx / link.tsx are the
- * connector's OWN components, not registry items, so they are outside this
- * channel") and no such file exists under `src/components/ui/`, so the host
- * cannot and does not serve them.
+ * Those are NOT product primitives — they are the extensions' OWN components,
+ * and no such file exists under `src/components/ui/`, so the host cannot and
+ * does not serve them. The product's AlertDialog joins the shared contract in
+ * version 1.1.0.
  *
  * Adding a name here is a MINOR bump; removing or renaming one is a MAJOR.
  */
@@ -99,6 +113,18 @@ export const HOST_DESIGN_PRIMITIVES_EXPORTS = Object.freeze([
   "Alert",
   "AlertDescription",
   "AlertTitle",
+  // alert-dialog (added in 1.1.0)
+  "AlertDialog",
+  "AlertDialogAction",
+  "AlertDialogCancel",
+  "AlertDialogContent",
+  "AlertDialogDescription",
+  "AlertDialogFooter",
+  "AlertDialogHeader",
+  "AlertDialogOverlay",
+  "AlertDialogPortal",
+  "AlertDialogTitle",
+  "AlertDialogTrigger",
   // badge
   "Badge",
   "badgeVariants",
@@ -246,7 +272,8 @@ export function checkDesignPrimitivesContract(input: {
  * renderer client bundle may leave EXTERNAL. In the shared (main) realm a
  * second React copy is a correctness hazard ("Invalid hook call", broken
  * context/hooks — plan §2.2), so React / ReactDOM / the JSX runtimes / the
- * design-token module / the shared design-PRIMITIVES module stay external and
+ * design-token module / the shared design-PRIMITIVES module / the read-only
+ * dashboard COMPOSITION module stay external and
  * resolve to the host's SINGLE shared instances through the host
  * module-registry shim. ANY other external in the
  * publish-time esbuild metafile is REJECTED by the externals-allowlist gate
@@ -261,6 +288,7 @@ export const CLIENT_BUNDLE_EXTERNAL_ALLOWLIST: readonly string[] = Object.freeze
   "react-dom/client",
   HOST_DESIGN_TOKEN_MODULE,
   HOST_DESIGN_PRIMITIVES_MODULE,
+  HOST_DASHBOARD_COMPOSITION_MODULE,
 ]);
 
 /**

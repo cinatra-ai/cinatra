@@ -1344,3 +1344,25 @@ The correction commit states no verification line of its own: the verification a
 correction is composed at its merge, by the merge tooling, from the maintainer's approval standing
 on the correction pull request, and a later mirror commit appends the merge record's composed arm
 lines to this entry.
+
+## Correction for `652de6894ecf4bed457a6de86b3b09bfbb64050c`
+
+```
+correction: verification record for 652de6894 (docs: replace the README with the launch draft and add assets/)
+
+The record on 652de6894 ("docs: replace the README with the launch draft and add
+assets/ (#3594)") is invalid under the record grammar: it carries one Assisted-by
+line and no verification arm. The change landed the reviewed head 5a11b8e64 of
+pull request #3594 exactly; the maintainer approved at that head, and both
+required contexts concluded success there. The squash body written at merge
+omitted the arm. The change is documentation only (README.md, assets/, the old
+screenshot.png) and touches no high-risk path, so the corrected record carries
+the gate arm. The change itself is untouched; this repairs the RECORD only.
+
+Gate-suite: cinatra-core@2026.09.5
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5-1)
+Correction-for: 652de6894ecf4bed457a6de86b3b09bfbb64050c
+```
+
+---
