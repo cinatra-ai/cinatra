@@ -731,6 +731,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // SLOT — what the run card draws where the review screen goes (cinatra#2997).
   //
+  // AND WHETHER THE RUN IS WAITING ON IT (cinatra#3046). None of the runs below
+  // has an `agent_runs` row at all, so none of them is parked and every reading
+  // here is the unparked one — which is the point: the third fact is a fact about
+  // the RUN, and it is false for a run that is not held by a review.
+  //
   // The run card is a placeholder for the review screen while the agent works
   // and becomes that screen when the work opens one, so it asks the run's own
   // rows: which gate is this run's, and might one still be opened for what it
@@ -743,6 +748,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       reviewTaskId: null,
       awaiting: false,
       pending: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -763,6 +769,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       reviewTaskId: null,
       awaiting: true,
       pending: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -822,6 +829,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       reviewTaskId,
       awaiting: false,
       pending: true,
+      parkedOnProducedReview: false,
     });
     // And the gate on file PINS the revision the run produced — the outbox
     // row's own artifact and revision, read back off the gate itself.
@@ -852,6 +860,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       // choose between drawing the gate and drawing the run's own current
       // rendering cannot make that choice from the id alone.
       pending: true,
+      parkedOnProducedReview: false,
     });
 
     // A RESOLVED gate is still the answer. The reader who decided in place must
@@ -875,6 +884,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       // decided, drawn by the card's own settled state — not by a slot that
       // still claims a decision is owed.
       pending: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -921,6 +931,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       // are separate on purpose — a surface that conflated them would draw the
       // reader's own settled decision as a live question.
       pending: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -952,6 +963,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       reviewTaskId: second,
       awaiting: false,
       pending: true,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -969,6 +981,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       reviewTaskId: null,
       awaiting: false,
       pending: false,
+      parkedOnProducedReview: false,
     });
   });
 });

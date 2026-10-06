@@ -8,6 +8,7 @@ import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
 import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
 import {
   setDashboardArtifactTwinWriter,
   type DashboardArtifactTwinWriter,
@@ -46,6 +47,11 @@ import {
  *   3. `representation` — a NEW revision `COALESCE(MAX(revision),0)+1` under the
  *      advisory lock (delta D2: rev=1 is merely the empty-history result). NOT
  *      outbox-gated — a no-op object update still advances the revision (D3).
+ *      THE PINNED CONFIGURATION (cinatra#3092): when the context carries the
+ *      dashboard's configuration, the revision records it — an immutable copy,
+ *      in this same transaction — as `classifier_signals` holding exactly one
+ *      key, the non-file revision reader's `pinnedConfiguration`. Without one the
+ *      column stays NULL, as before.
  *   4. `artifact_audit` — the substrate audit row. NOT outbox-gated (D3).
  *   5. `buildBindingReconcileQueries` — spliced VERBATIM (drift tier a). The
  *      dashboard object type is self-registered + NON-dedicated-claim, so the
@@ -117,11 +123,18 @@ function buildDashboardRepresentationQuery(
   representationRevisionId: string,
 ): SubstrateQuery {
   const s = schema.replaceAll('"', '""');
+  // THE PINNED CONFIGURATION RECORD (cinatra#3092): the configuration the
+  // context carries (the just-written row's `config_json`, set by `twinCtx` on
+  // every upsert) is written onto THIS revision, unchanged, as a jsonb
+  // parameter holding exactly one key — the reserved key the non-file revision
+  // reader (`resolveNonFileArtifactRevision`) reads. A context without one
+  // writes NULL, byte for byte the statement it wrote before.
+  const pinned = ctx.configuration != null;
   return {
     text: `INSERT INTO "${s}"."representation"
   (id, org_id, artifact_id, resource_id, revision, form, created_by, created_by_run_id, classifier_signals)
 SELECT $1::text, $2::text, $3::text, $4::text,
-       COALESCE(MAX(r.revision), 0) + 1, '${DASHBOARD_REPRESENTATION_FORM}', $5::text, NULL, NULL
+       COALESCE(MAX(r.revision), 0) + 1, '${DASHBOARD_REPRESENTATION_FORM}', $5::text, NULL, ${pinned ? "$6::jsonb" : "NULL"}
 FROM "${s}"."representation" r
 WHERE r.org_id = $2::text AND r.artifact_id = $3::text`,
     values: [
@@ -130,6 +143,9 @@ WHERE r.org_id = $2::text AND r.artifact_id = $3::text`,
       ctx.dashboardId,
       dashboardResourceId(ctx.dashboardId),
       ctx.actorId ?? null,
+      ...(pinned
+        ? [JSON.stringify({ [PINNED_CONFIGURATION_SIGNAL_KEY]: ctx.configuration })]
+        : []),
     ],
   };
 }

@@ -155,6 +155,28 @@ describe("cinatra#3471 slice 2 — the LOAD-BOUNDARY conformance (the convergenc
     expect(assertSingleDesignPrimitivesIdentity(facadeNamespace)).toBe(hostPrimitiveMembers);
   });
 
+  it.each([
+    "AlertDialog",
+    "AlertDialogAction",
+    "AlertDialogCancel",
+    "AlertDialogContent",
+    "AlertDialogDescription",
+    "AlertDialogFooter",
+    "AlertDialogHeader",
+    "AlertDialogOverlay",
+    "AlertDialogPortal",
+    "AlertDialogTitle",
+    "AlertDialogTrigger",
+  ])("refuses a bundle that replaces only %s with a vendored component", (name) => {
+    initWithMemberPrimitives();
+    expect(() =>
+      assertDesignPrimitivesBundleConformance({
+        __cinatraDesignPrimitivesContract: HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION,
+        __cinatraDesignPrimitives: { ...facadeNamespace, [name]: () => null },
+      }),
+    ).toThrow(/a second copy of the design primitives was mounted/);
+  });
+
   it("still THROWS on a namespace whose members are a SECOND copy", () => {
     initWithMemberPrimitives();
     const vendored = Object.fromEntries(

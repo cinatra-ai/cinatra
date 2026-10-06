@@ -60,6 +60,21 @@
 // byte-for-byte their earlier captures, which is the measurement that says this
 // change moved what it meant to move and nothing else.
 
+// TWELVE ENTRIES WERE REGENERATED ON PURPOSE (cinatra#3046). §I asks a resolved
+// gate to stay as read-only history that "records how it was settled", and the
+// header said "Review requested" on every settled reading — the request, still
+// present tense, over the outcome written further down the card in a second
+// voice. The header now reads the outcome through `reviewGateHeaderTitle`, the
+// same closed set the settled line reads, so the two cannot drift.
+//
+// THE REGENERATION DIFF IS THE PROOF, and it is what a change of WORDS should
+// look like: exactly the three outcome-bearing readings — `settled-approved`,
+// `settled-rejected`, `settled-approved-no-decider` — on each of the four hosts,
+// with the only difference in each being the header's own words. The other 32
+// entries, the outcome-LESS `settled` among them, are byte-identical to what was
+// committed: that reading really does still say "Review requested", because it
+// cannot say what the decision was.
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -177,8 +192,12 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
     name: "settled-rejected",
     state: { state: "settled", outcome: "rejected", decidedByName: "Ada Lovelace" },
   },
-  // The decider is optional and its absence is quiet: the card states the
-  // outcome alone rather than a dangling "by".
+  // RE-RECORDED again for cinatra#2934 fix leg 12: the three settled captures
+  // held the person-naming decision line ("Approved by Ada Lovelace") over a
+  // per-outcome status glyph, and the drawing leaves one settled reading and no
+  // card naming who decided. The decider is still carried on the state — the
+  // wire records it — and the card must now draw the same marker with it as
+  // without it, which is what these three entries pin together.
   {
     name: "settled-approved-no-decider",
     state: { state: "settled", outcome: "approved" },
@@ -293,7 +312,14 @@ describe("review card render parity across the resolve envelope", () => {
           drawn.chat_thread,
         );
         expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);
-        expect(drawn[host]).toContain("Ada Lovelace");
+        // RE-PINNED (cinatra#2934, fix leg 12). The card used to carry the
+        // decider's name on every host; the drawing gives the settled state one
+        // marker and no card naming who decided (Lifecycle cards §XIII.1,
+        // Artifact review §VI), so what every host must draw identically is the
+        // marker — and none of them may draw the name.
+        expect(drawn[host]).toContain("Continued");
+        expect(drawn[host]).toContain("Decided on the revision above.");
+        expect(drawn[host]).not.toContain("Ada Lovelace");
       }
     }
   });

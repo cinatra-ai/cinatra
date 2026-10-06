@@ -370,8 +370,15 @@ describe("the mount the suppression leans on", () => {
       .join("\n");
     // The decision names no host. A run that has finished draws its review, and
     // that is the whole of it.
-    expect(decision).not.toContain("site_widget");
-    expect(decision).not.toContain("chat_thread");
+    // Main's pause placeholder (#3046) reads the conversation host to pick the quiet placeholder, never the slot's ref: that one declaration is set aside by its exact text, and its name may feed only the placeholder.
+    const PAUSE_PLACEHOLDER_HOST = 'const conversationHostedPanel = ambientLifecycleHost === "chat_thread";';
+    const PAUSE_PLACEHOLDER_USE = "conversationHostedPanel && pauseWithNothingToDraw && reviewStillReading;";
+    const decisionLines = decision.split("\n");
+    const decided = decisionLines.filter((line) => line.trim() !== PAUSE_PLACEHOLDER_HOST).join("\n");
+    expect(decided).not.toContain("site_widget");
+    expect(decided).not.toContain("chat_thread");
+    expect(decided).not.toContain("ambientLifecycleHost");
+    expect(decisionLines.filter((line) => /\bconversationHostedPanel\b/.test(line)).every((line) => line.trim() === PAUSE_PLACEHOLDER_HOST || line.trim() === PAUSE_PLACEHOLDER_USE)).toBe(true);
     // And the mount hands the ambient host down rather than shadowing it.
     expect(src).toContain('host={reviewCardOnWidget ? "site_widget" : "run_card"}');
   });

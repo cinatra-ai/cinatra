@@ -607,3 +607,28 @@ describe("the frame routes agree on the canonical origin, never on request.url",
     expect(mintWidgetStreamToken).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3715 — the transaction's own re-derivation refusing (the state
+// changed between the two reads) answers the ONE generic refusal, never a
+// distinct status or reason; the audit keeps the reason.
+// ---------------------------------------------------------------------------
+describe("cinatra#3715 — a binding refusal of the transaction answers the one generic refusal", () => {
+  it("instance_unresolved from createAuthTransaction answers 400 invalid_request, audited with its reason", async () => {
+    createAuthTransaction.mockReturnValue({ ok: false, reason: "instance_unresolved" });
+    const res = await frameInit(
+      frameRequest("/api/widget-auth/frame/init", {
+        ...SELECTORS,
+        codeChallenge: "a".repeat(43),
+        codeChallengeMethod: "S256",
+        state: "state-value-1234",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_request" });
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "init_failure",
+      expect.objectContaining({ reason: "instance_unresolved", siteId: SITE.siteId }),
+    );
+  });
+});

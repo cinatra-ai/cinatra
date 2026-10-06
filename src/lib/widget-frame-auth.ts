@@ -215,9 +215,13 @@ export function deriveFrameBinding(input: {
   //    to LEARN which origin to look a site up by, and step 4 re-derives the
   //    instance the authoritative way (origin → instance) and requires the two to
   //    agree. Zero / duplicate instance rows fail closed inside the resolver.
+  //    cinatra#3715: the sign-in opts into the handshake road EXACTLY as the
+  //    frame gate does (`frameAncestorsDirectiveFor`), with the client the
+  //    closed table named, so the two answer the same question the same way.
   const instanceOrigin = resolveInstanceFrameAncestor({
     instancesConfigKey,
     instanceId,
+    connectSiteFallbackClient: instancesConfigKey,
   });
   if (!instanceOrigin) return { ok: false, reason: "instance_unresolved" };
 
@@ -254,10 +258,14 @@ export function deriveFrameBinding(input: {
   //    on zero or multiple matches — and require it to be the instance named. A
   //    claimed instance that does not round-trip is refused, not silently
   //    replaced by whatever the origin resolves to.
+  //    For a site connected through the handshake the same resolver confirms
+  //    the application's own identity through the gate's one handshake rule
+  //    (cinatra#3715), for this site's origin only.
   const canonicalInstanceId = resolveCanonicalInstanceForOrigin({
     instancesConfigKey,
     origin: site.siteOrigin,
     claimedInstanceId: instanceId,
+    connectSiteFallbackClient: instancesConfigKey,
   });
   if (!canonicalInstanceId || canonicalInstanceId !== instanceId) {
     return { ok: false, reason: "instance_mismatch" };

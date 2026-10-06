@@ -153,14 +153,10 @@ describe("the arc is drawn on the card's horizontal centre", () => {
     const root = placeholderRoot(container);
     const svg = root.querySelector("svg");
     expect(svg).not.toBeNull();
-    // The ratified drawing draws the arc STRAIGHT INTO the band — the band is
-    // the arc's own parent, with no tile between them. The drawing names the
-    // placeholder's whole anatomy: "while the run is working that card is a
-    // placeholder for the review screen: the card frame, and a spinning icon,
-    // the indigo arc of Components § Skeleton / Spinner". A tile between the band
-    // and the arc is not in that sentence, so the helper walks one level, not
-    // two. The CENTRING this suite pins is unchanged — it is the same band, read
-    // through one fewer element.
+    // THE BAND IS THE ARC'S OWN PARENT (cinatra#3046, fix leg 12). It used to be
+    // the parent of a coloured TILE the arc was wrapped in; the drawing's band
+    // holds the arc directly, and the tenth graded reading measured that tile as
+    // chrome the drawing does not give.
     const band = svg!.parentElement as HTMLElement;
     expect(band).not.toBeNull();
     expect(band.contains(svg as Node)).toBe(true);
@@ -191,9 +187,8 @@ describe("the arc is drawn on the card's horizontal centre", () => {
   it("puts nothing beside the arc in the band that could pull it off centre", () => {
     const { container } = render(<ReviewGatePlaceholder />);
     const band = arcBand(container);
-    // One child only: the arc itself, now that no tile stands between it and
-    // the band. A sibling in a centring band shifts the arc off the centre just
-    // as surely as a left-aligned row does.
+    // One child only: the arc itself. A sibling in a centring band shifts the
+    // arc off the centre just as surely as a left-aligned row does.
     expect(band.children.length).toBe(1);
   });
 });

@@ -147,6 +147,10 @@ type SeedData = {
     awaiting: boolean;
     /** Whether the gate the ref names is still open (cinatra#3051). */
     pending?: boolean;
+    /** The run is parked on the review of what it produced (cinatra#3046), so
+     *  the card draws that review where the run is drawn rather than redrawing
+     *  the question the run already moved past. */
+    producedReviewPark?: boolean;
   } | null;
 };
 
@@ -185,6 +189,7 @@ function reviewSlotReader(
       ref: string | null;
       awaiting: boolean;
       pending: boolean;
+      producedReviewPark: boolean;
     } | null>)
   | undefined {
   const request = seedRequest(credential, runId);
@@ -197,6 +202,7 @@ function reviewSlotReader(
         ref?: string | null;
         awaiting?: boolean;
         pending?: boolean;
+        producedReviewPark?: boolean;
       } | null;
     };
     if (!data?.reviewGate) return null;
@@ -209,6 +215,11 @@ function reviewSlotReader(
       // surface that drops one of them cannot draw the reading the other two
       // hosts draw (cinatra#3051).
       pending: Boolean(data.reviewGate.pending),
+      // cinatra#3046 — the third fact of the same slot, carried on the SAME
+      // credential as the other two. Without it the conversation's card cannot
+      // tell a run parked on its own review from a run parked on a question, and
+      // it drew the question.
+      producedReviewPark: Boolean(data.reviewGate.producedReviewPark),
     };
   };
 }

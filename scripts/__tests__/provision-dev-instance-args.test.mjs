@@ -46,7 +46,7 @@ describe("parseProvisionInstanceArgs", () => {
       "--public-origin",
       "https://origin.example",
       "--provider",
-      "anthropic",
+      "openai",
       "--admin-email",
       "operator@example.test",
       "--admin-name",
@@ -55,7 +55,7 @@ describe("parseProvisionInstanceArgs", () => {
     assert.equal(parsed.namespace, "acme-dev");
     assert.equal(parsed.displayName, "Acme Development");
     assert.equal(parsed.publicOrigin, "https://origin.example");
-    assert.equal(parsed.provider, "anthropic");
+    assert.equal(parsed.provider, "openai");
     // An address is not a secret, and neither is a display name.
     assert.equal(parsed.adminEmail, "operator@example.test");
     assert.equal(parsed.adminName, "The Operator");

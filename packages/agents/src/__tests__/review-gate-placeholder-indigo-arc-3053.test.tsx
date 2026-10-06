@@ -25,13 +25,14 @@
 // So this file pins two things that have to hold together: the arc is drawn with
 // a REGISTERED token, and that token is the indigo one.
 //
-// AND `--color-mustard-ink` IS REGISTERED NOW. The theme block binds it for the
-// warm tint the same wrapper carries behind the arc (`bg-mustard-ink/15`), so
-// the ABSENCE is the history of the defect, not the present state of the theme.
-// What still has to hold is the invariant that absence exposed, and that is
-// what this file pins: the arc's own COLOUR utility is the registered indigo,
-// and the mustard token may reach this wrapper only as a background, never as
-// the arc's text colour.
+// AND `--color-mustard-ink` IS REGISTERED NOW, though this card no longer draws
+// with it (cinatra#3046, fix leg 12). The tint used to be a warm ground behind
+// the arc; the drawing's band holds the arc alone, the tenth graded reading
+// measured the tile as chrome the drawing does not give, and it is gone. The
+// token stays registered for the surfaces that do draw it. So the ABSENCE is the
+// history of the defect, not the present state of the theme, and what still has
+// to hold is the invariant that absence exposed: the arc's own COLOUR utility is
+// the registered indigo, and the mustard token never paints it.
 //
 // THE DARK READING IS THE ITEM ALREADY TRACKED ON THIS PULL REQUEST. The
 // registered indigo token resolves to the drawing's `#364e81` in light and to
@@ -64,8 +65,9 @@ function registersColourToken(name: string): boolean {
   return new RegExp(`--color-${name}\\s*:`).test(GLOBALS);
 }
 
-/** The arc's own class list. The drawn placeholder gives the arc no wrapper
- *  tile to inherit a colour from, so the token is read off the arc itself. */
+/** The arc itself, which carries its own colour now (cinatra#3046, fix leg 12).
+ *  It used to take `currentColor` from a wrapper tile; the drawing's band holds
+ *  the arc directly, so the colour utility is on the node it paints. */
 function arcClasses(root: HTMLElement): string {
   const placeholder = root.querySelector<HTMLElement>(
     '[data-conformance-id="review-gate-placeholder"]',
@@ -73,6 +75,8 @@ function arcClasses(root: HTMLElement): string {
   expect(placeholder).not.toBeNull();
   const svg = placeholder!.querySelector("svg");
   expect(svg).not.toBeNull();
+  // An SVG element's `className` is an SVGAnimatedString, never a string — the
+  // attribute is the one reading that works on both kinds of node.
   return svg!.getAttribute("class") ?? "";
 }
 
@@ -116,25 +120,17 @@ describe("the token the arc now takes", () => {
     expect(registersColourToken("mustard-ink")).toBe(true);
     expect(GLOBALS).toMatch(/--color-mustard-ink:\s*var\(--mustard-ink\)/);
 
-    // What the absence exposed, and what still has to hold: the arc's own
-    // colour utility is never built on the mustard token, so no later tint can
-    // take the arc back to `currentColor`.
-    //
-    // RETIRED HERE, BY THE DRAWING'S OWN SENTENCE: this suite used to also pin
-    // that the mustard token reached the arc's WRAPPER as a background. The
-    // ratified `app-lifecycle-cards` names the placeholder's anatomy in full and
-    // it has no such wrapper in it — "while the run is working that card is a
-    // placeholder for the review screen: the card frame, and a spinning icon,
-    // the indigo arc of Components § Skeleton / Spinner". The card frame and the
-    // arc are the whole of it, so the coloured tile that assertion measured is
-    // not drawn at all, and a pin on its background colour would pin a shape the
-    // drawing does not have. What that assertion was FOR — the arc's own colour
-    // can never fall back to `currentColor` — is pinned above and below it, on
-    // the arc itself, where the drawing puts the colour.
+    // What the absence exposed, and what still has to hold: the arc's own colour
+    // utility is never built on the mustard token, so no later tint can take the
+    // arc back to `currentColor`. And the tint reaches this card NOWHERE now —
+    // the drawing's band holds the arc alone (fix leg 12).
     const { container } = render(<ReviewGatePlaceholder />);
     const classes = arcClasses(container).split(/\s+/);
-    expect(classes.some((c) => c.startsWith("text-mustard-ink"))).toBe(false);
-    expect(classes).toContain("text-primary");
+    expect(classes.some((c) => /mustard-ink(\/|$)/.test(c))).toBe(false);
+    const box = container.querySelector<HTMLElement>(
+      '[data-conformance-id="review-gate-placeholder"]',
+    );
+    expect(box!.innerHTML).not.toMatch(/mustard-ink/);
   });
 });
 

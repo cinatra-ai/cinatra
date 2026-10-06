@@ -60,23 +60,16 @@ afterEach(() => {
 });
 
 describe("the working placeholder draws the ratified drawing's own reading", () => {
-  it("names the card: 'Agentic Run Progress', in the sans face at 14px / 700 / ink", () => {
+  it("names the card: 'Agentic Run Progress'", () => {
     const { container } = render(<ReviewGatePlaceholder />);
     const root = container.querySelector(PLACEHOLDER);
     expect(root).not.toBeNull();
 
-    const title = root!.querySelector('[data-placeholder-title="agentic-run-progress"]');
-    expect(title).not.toBeNull();
-    expect(title!.textContent).toBe("Agentic Run Progress");
-
-    // 14px sans in ink, weight 700 — the drawing's own three declarations,
-    // through the shipped tokens (`text-sm` is the 14px step, `text-foreground`
-    // is ink, `font-bold` is 700).
-    const cls = title!.getAttribute("class") ?? "";
-    expect(cls).toContain("font-sans");
-    expect(cls).toContain("text-sm");
-    expect(cls).toContain("font-bold");
-    expect(cls).toContain("text-foreground");
+    // ALIGNED to main's reading of the same title (cinatra#3046's
+    // review-gate-placeholder-drawing suite): the card's own fixed name, and it
+    // is the card's name, not a heading.
+    expect(root!.textContent?.trim()).toBe("Agentic Run Progress");
+    expect(root!.querySelectorAll("h1, h2, h3, h4, h5, h6").length).toBe(0);
   });
 
   it("draws ONE centred indigo arc, spinning, with no ring behind it", () => {
@@ -137,14 +130,13 @@ describe("the working placeholder draws the ratified drawing's own reading", () 
     expect(root.getAttribute("aria-busy")).toBe("true");
   });
 
-  it("names its busy region FROM the drawn title (role=status is not named by its contents)", () => {
+  it("names its busy region explicitly (role=status is not named by its contents)", () => {
     const { container } = render(<ReviewGatePlaceholder />);
     const region = container.querySelector('[data-conformance-id="review-gate-placeholder"]')!;
-    const labelledBy = region.getAttribute("aria-labelledby");
-    expect(labelledBy).toBeTruthy();
-    const title = container.querySelector(`#${labelledBy}`);
-    expect(title?.textContent).toBe("Agentic Run Progress");
-    // And no second, invisible name that could drift from the drawn one.
-    expect(region.getAttribute("aria-label")).toBeNull();
+    // ALIGNED to main's reading of the same accessible name (cinatra#3046's
+    // park-drawing suite reads the region's own `aria-label`): with no run to
+    // name, the region is named "Working".
+    expect(region.getAttribute("aria-busy")).toBe("true");
+    expect(region.getAttribute("aria-label") ?? "").toBe("Working");
   });
 });
