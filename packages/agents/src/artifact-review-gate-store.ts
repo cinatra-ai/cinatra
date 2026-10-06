@@ -315,7 +315,7 @@ export async function emitDeclaredReviewGateFamily(input: {
     for (const gate of existing) {
       const leg = plan.legs.find(leg => leg.reviewTaskId === gate.reviewTaskId);
       const pins = normalizeReviewTargets(gate.pinnedTargets);
-      if (!leg || gate.orgId !== input.orgId || !pins.ok || pins.targets.length !== 1 ||
+      if (!leg || gate.orgId !== input.orgId || gate.pinnedTargets.length !== 1 || !pins.ok || pins.targets.length !== 1 ||
           reviewTargetKey(pins.targets[0]) !== reviewTargetKey(leg.targets[0]) ||
           !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(gate.pinnedTargets), plan)) {
         throw new ArtifactReviewGateError("pin-conflict", "The existing declared review membership cannot be verified.");

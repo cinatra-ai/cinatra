@@ -367,4 +367,25 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("H2: the independent trailing malformed duplicate witness cannot authorize resume", async () => {
+    const rows = familyRows();
+    for (const row of rows) {
+      const witness = row.pinnedTargets[0].declaredReviewPlan as unknown as { legs: unknown[] };
+      witness.legs.push({ reviewTaskId: "wayflow-task-1#3", targets: [PAUSE_TARGETS[0]], unexpected: true });
+    }
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it("H2: raw duplicate pinned entries cannot impersonate one witnessed singleton", async () => {
+    const rows = familyRows();
+    rows[1].pinnedTargets.push({ ...rows[1].pinnedTargets[0] });
+    gateStoreMock.listReviewGatesForRun.mockResolvedValue(rows);
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
 });
