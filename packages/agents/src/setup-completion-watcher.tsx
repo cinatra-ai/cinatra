@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AgenticRunPanel } from "./agentic-run-panel";
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import type { HitlGateContext } from "./run-surface-status";
+import type { RunReviewSlot } from "./lifecycle-card-runtime";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 import { buildAgentPackageBasePath } from "@/lib/agent-url";
@@ -105,7 +106,7 @@ type SetupCompletionWatcherProps = {
   /** cinatra#2997 — the run's review slot, read server-side by the screen that
    *  mounts this watcher and threaded straight through to the panel, so the run
    *  page's FIRST paint of a run that already has a review draws that review. */
-  initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
+  initialReviewGate?: RunReviewSlot | null;
   /**
    * WAS THIS RUN'S SKILL SET DECIDED ON THE RECOMMENDATION CARD?
    *
@@ -121,6 +122,15 @@ type SetupCompletionWatcherProps = {
    *  unchanged; see `AgenticRunPanel`'s own prop. */
   inputStepInRail?: boolean;
   /**
+   * THE LAUNCHER THE PANEL'S SUCCESSOR CONTROLS OPEN (cinatra#3786), forwarded
+   * unchanged. This watcher carries TWO bases on purpose, and they are not the
+   * same value. `scopeBase` above addresses THIS run, and the push to its
+   * schedule step is built from it. This one names the launcher a fresh run is
+   * started at. They agree for four anchor kinds and part on the personal one,
+   * whose run is addressed bare and whose successor is launched at `/personal`.
+   */
+  launchBase?: string | null;
+  /**
    * Forwarded to the panel unchanged, exactly like `inputStepInRail`: whether
    * the run page's two-column frame is drawn beside this column, so the gate's
    * own card is the whole page and no section plate is stacked around it
@@ -134,6 +144,7 @@ export function SetupCompletionWatcher({
   agentId,
   instanceId,
   scopeBase,
+  launchBase,
   agUiEnabled,
   initialStatus,
   initialError,
@@ -158,6 +169,42 @@ export function SetupCompletionWatcher({
   const router = useRouter();
   const hasFiredRef = useRef(false);
   const [hasSeenInterrupt, setHasSeenInterrupt] = useState(false);
+
+  // THE PAGE LEARNS OF A GATE MINTED AFTER IT WAS SERVED (cinatra#3007, F3).
+  // The rail's gate entries come from the server render alone, so a page served
+  // while the run was still working never draws the entry of the review the
+  // run is now waiting on. The panel reports when its reading becomes the review
+  // screen; the first time that happens for a review the served page did not
+  // carry, the server tree is rendered once more — never one per tick, and none
+  // for a page served with it. A reading that leaves and returns for the same
+  // gate (a one-look status change, a panel effect's cleanup) is no new gate:
+  // the ask re-arms only when a NEW SERVER RENDER lands — the one authoritative
+  // word on what the page's rail carries — never on a reading going false.
+  const servedReviewGateRef = useRef(initialReviewGate);
+  const pageCarriesTheReviewRef = useRef(initialReviewGate?.ref != null);
+  const refreshAskedRef = useRef(false);
+  useEffect(() => {
+    if (servedReviewGateRef.current === initialReviewGate) return;
+    servedReviewGateRef.current = initialReviewGate;
+    pageCarriesTheReviewRef.current = initialReviewGate?.ref != null;
+    refreshAskedRef.current = false;
+  }, [initialReviewGate]);
+  const handleReviewReadingChange = useCallback(
+    (_runId: string, drawsReview: boolean) => {
+      if (!drawsReview || pageCarriesTheReviewRef.current || refreshAskedRef.current) return;
+      refreshAskedRef.current = true;
+      router.refresh();
+    },
+    [router],
+  );
+
+  // The identity-aware rail hook and the existing first-review reading share
+  // this page owner's refresh guard. A discovered gate asks once, rather than
+  // the reading callback immediately asking for the same server tree again.
+  const handleReviewRailRefresh = useCallback(() => {
+    refreshAskedRef.current = true;
+    router.refresh();
+  }, [router]);
 
   // Mount-time check: if all required fields are already in inputParams and the
   // run is past the setup phase, navigate to Trigger immediately. Handles the
@@ -295,10 +342,13 @@ export function SetupCompletionWatcher({
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
       initialReviewGate={initialReviewGate}
+      // This page owner already has a router; conversation panels do not need one.
+      refreshReviewRail={handleReviewRailRefresh}
       recommendationDecided={recommendationDecided}
       inputStepInRail={inputStepInRail}
       railDrawsTheFrame={railDrawsTheFrame}
-      scopeBase={scopeBase}
+      launchBase={launchBase}
+      onReviewReadingChange={handleReviewReadingChange}
     />
   );
 }

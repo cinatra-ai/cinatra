@@ -153,9 +153,11 @@ describe("the arc is drawn on the card's horizontal centre", () => {
     const root = placeholderRoot(container);
     const svg = root.querySelector("svg");
     expect(svg).not.toBeNull();
-    // The spinner sits inside its coloured tile; the BAND is the tile's parent.
-    const tile = svg!.parentElement as HTMLElement;
-    const band = tile.parentElement as HTMLElement;
+    // THE BAND IS THE ARC'S OWN PARENT (cinatra#3046, fix leg 12). It used to be
+    // the parent of a coloured TILE the arc was wrapped in; the drawing's band
+    // holds the arc directly, and the tenth graded reading measured that tile as
+    // chrome the drawing does not give.
+    const band = svg!.parentElement as HTMLElement;
     expect(band).not.toBeNull();
     expect(band.contains(svg as Node)).toBe(true);
     return band;
@@ -185,7 +187,7 @@ describe("the arc is drawn on the card's horizontal centre", () => {
   it("puts nothing beside the arc in the band that could pull it off centre", () => {
     const { container } = render(<ReviewGatePlaceholder />);
     const band = arcBand(container);
-    // One child only: the arc's tile. A sibling in a centring band shifts the
+    // One child only: the arc itself. A sibling in a centring band shifts the
     // arc off the centre just as surely as a left-aligned row does.
     expect(band.children.length).toBe(1);
   });

@@ -1536,3 +1536,40 @@ SELECT gen_random_uuid()::text, upserted.id, upserted.version, upserted.org_id,
 FROM upserted`;
   return { text, values };
 }
+
+/**
+ * Build the spliceable row guard for one object row: "this row is live in this
+ * organization and still at this version, locked for the transaction".
+ *
+ * For a caller that read a row BEFORE its transaction and writes it back INSIDE
+ * one: the caller splices this op ahead of its write. It takes the row lock
+ * (`FOR UPDATE`) and requires the row to be not deleted, still in the given
+ * organization and still at the version that was read. A row deleted, moved to
+ * another organization or changed since that read leaves the subquery empty, so
+ * the projected `1 / COUNT(*)` is a division by zero, which aborts the caller's
+ * whole transaction.
+ *
+ * A pure builder: it executes nothing. `$1..$3` bind id, org_id and the expected
+ * version; a null version reads as 1, as `getObjectById` reports it. The
+ * organization must be a non-empty string (the condition is never widened to a
+ * null scope) and the version an integer.
+ */
+export function buildObjectRowLiveAtVersionGuardQuery(
+  schemaName: string,
+  input: { id: string; orgId: string; expectedVersion: number },
+): { text: string; values: unknown[] } {
+  if (typeof input.orgId !== "string" || input.orgId.length === 0) {
+    throw new Error("objects row guard: orgId must be a non-empty string");
+  }
+  if (!Number.isInteger(input.expectedVersion)) {
+    throw new Error("objects row guard: expectedVersion must be an integer");
+  }
+  const schema = schemaName.replaceAll('"', '""');
+  const text = `SELECT 1 / COUNT(*)::int AS row_live_at_version
+FROM (
+  SELECT 1 FROM "${schema}"."objects"
+  WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL AND COALESCE(version, 1) = $3
+  FOR UPDATE
+) AS live`;
+  return { text, values: [input.id, input.orgId, input.expectedVersion] };
+}

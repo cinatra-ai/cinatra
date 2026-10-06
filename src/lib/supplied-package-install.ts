@@ -498,7 +498,7 @@ export async function fetchSuppliedRepositoryArchive(
 
   if (response.status === 404) {
     throw new Error(
-      `[supplied-install] GitHub served no archive for ${repository} at ${refLabel} (HTTP 404). ` +
+      `GitHub served no archive for ${repository} at ${refLabel} (HTTP 404). ` +
         `This instance downloads the archive anonymously, so a private repository - or a branch, tag ` +
         `or release that does not exist - cannot be read. Check the link, or upload the package as a file.`,
     );
@@ -717,7 +717,7 @@ function finalizeRecordedRef(input: {
   const proved = input.proved?.trim() ?? "";
   if (proved.length > 0 && !isPlaceholderRefName(proved)) return proved;
   throw new Error(
-    `[supplied-install] ${input.owner}/${input.repo}: this install could not resolve the branch, tag or ` +
+    `this install could not resolve the branch, tag or ` +
       `release name to record - the link named none and the archive that was downloaded does not name the ` +
       `branch it was generated from. Type the branch, tag or release to install from and try again. ` +
       `Nothing was written.`,

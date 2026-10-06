@@ -22,7 +22,7 @@
 // The matcher is IMPORTED from the gate, so a fixture can never assert a
 // rule that differs from what CI enforces.
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,17 @@ import {
   isScannable,
   loadAllowlist,
   scanSessionColumnWrites,
+  FLOOR_BASE_VAR,
+  FLOOR_FILE,
+  checkFloorAgainstBase,
 } from "../org-archive-bypass-scan.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 import { scanSource } from "../system-writer-manifest-gate.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -228,5 +238,65 @@ describe("the gate on the current tree", () => {
     const result = spawnSync("node", [GATE_REL], { encoding: "utf8", cwd: REPO_ROOT });
     expect(result.stderr ?? "").toBe("");
     expect(result.status).toBe(0);
+  });
+});
+
+// cinatra#3832: the committed allow list is compared with the copy on the base
+// branch, so a pull request cannot list its own new write site. The live run
+// above ("exits 0 against the repo as checked out") inherits the run's
+// environment, so on a pull request's run it compares with the base as well.
+describe("org-archive-bypass-scan — allow list compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const row = (file, ref, count) => ({ file, ref, count, reason: "fixture row with a written reason" });
+  const floor = (writers) => ({ note: "fixture", version: 1, writers });
+  function repo(baseRows, headRows) {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: floor(baseRows) }, head: { [FLOOR_FILE]: floor(headRows) } });
+    fixtures.push(f);
+    return f.root;
+  }
+
+  it("a raised floor (a new row, a raised count) FAILS against the base", () => {
+    const root = repo(
+      [row("src/lib/a.ts", "raw-sql:member", 1)],
+      [row("src/lib/a.ts", "raw-sql:member", 2), row("src/lib/b.ts", "raw-sql:invitation", 1)],
+    );
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["src/lib/a.ts raw-sql:member (1 -> 2)", "src/lib/b.ts raw-sql:invitation (0 -> 1)"]);
+  });
+
+  it("a lowered floor (a lower count, a removed stale row) PASSES", () => {
+    const root = repo(
+      [row("src/lib/a.ts", "raw-sql:member", 2), row("src/lib/b.ts", "raw-sql:invitation", 1)],
+      [row("src/lib/a.ts", "raw-sql:member", 1)],
+    );
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo([], []);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/did not resolve/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo([], [row("src/lib/a.ts", "raw-sql:member", 1)]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const result = spawnSync("node", [GATE_REL], {
+      encoding: "utf8",
+      cwd: REPO_ROOT,
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
   });
 });

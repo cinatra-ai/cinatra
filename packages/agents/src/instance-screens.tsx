@@ -7,6 +7,7 @@ import {
   launchScopeInstanceLabel,
   parseLaunchScopeAnchor,
   readLaunchScopeAnchor,
+  successorLaunchBase,
 } from "@/lib/launch-scope-anchor";
 import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 import Link from "next/link";
@@ -31,6 +32,7 @@ import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-s
 import {
   listReviewGatesForRun,
   readReviewGate,
+  isParkedOnProducedReview,
   readRunReviewSlot,
   readVerificationRecordsForGates,
 } from "./artifact-review-gate-store";
@@ -75,6 +77,10 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { AuthzError } from "@/lib/authz";
+// The standard not-authorized panel every run surface refuses with
+// (cinatra#2934, the fifth graded proof set) — see `runScreenAccessAnswer`
+// below for which refusal reaches it and which one does not.
+import { RunNotAuthorizedPanel } from "./run-not-authorized-panel";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
 // Type re-exports (AvailableScopes, CoOwnerView) originate from their
@@ -1326,6 +1332,25 @@ function personalOwnerLabel(launchScopeAnchor: unknown): string | null {
   return label === "Personal (owner)" ? label : null;
 }
 
+/**
+ * THE LAUNCHER A SUCCESSOR OPENS, read from the RUN rather than from the route
+ * (cinatra#3786). "Start fresh" on a failed or stopped run and "Start new run"
+ * on a finished one used to be handed this page's own `scopeBase`, which is
+ * null for a user-anchored run because that run is addressed bare by design. So
+ * they opened the bare launcher, which mints no anchor, and a personal run's
+ * successor was written with none: it lost the owner words on its trail and the
+ * personal Executions list did not hold it.
+ *
+ * Answered from the run's own anchor, so it cannot disagree with the record the
+ * successor inherits. For a team, project, organization or workspace run it is
+ * the same base the addresses take; for an unanchored run it is null and
+ * nothing moves; for a user-anchored run it is `/personal`, the one launcher
+ * that mints a `user` anchor.
+ */
+function successorLaunchBaseForRun(launchScopeAnchor: unknown): string | null {
+  return successorLaunchBase(parseLaunchScopeAnchor(launchScopeAnchor));
+}
+
 async function resolveTemplateForActor(agentId: string) {
   const session = await getAuthSession();
   // admin-parity P4 (cinatra#1129): resolve the actor's admin-standing bag so a
@@ -1489,7 +1514,12 @@ export async function SetupScreen({
       run = await readAgentRunById(instanceId, setupActor, setupRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Setup" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
     // ONE CANONICAL HOME (cinatra#2809, epic #2806). A run launched from a
@@ -1951,6 +1981,18 @@ export async function SetupScreen({
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // AND WHETHER THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). The page
+        // already knows — it read the run and it read the slot — so the panel is
+        // handed the answer rather than made to discover it, exactly as the two
+        // facts beside it are. A run parked on its produced output's review
+        // therefore draws that review on its FIRST paint here, with no frame of
+        // the question it already answered in front of it.
+        producedReviewPark: isParkedOnProducedReview(run),
+        // Stable metadata only; the opaque ref remains the action ticket.
+        reviewTaskId: runReviewSlot?.reviewTaskId ?? null,
+        // The rail's earlier query is authoritative for what it actually drew.
+        // A gate may open before this later slot read in the SAME render.
+        railReviewTaskIds: railGates.map((gate) => gate.reviewTaskId),
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────
@@ -2267,8 +2309,13 @@ export async function SetupScreen({
   // run in front of it, and that row is unreached, so it opens nothing: this
   // read stays where it is rather than paying for a list the reader cannot
   // reach.
+  //
+  // AND A RUN HELD BY ITS PRODUCED-REVIEW PARK (cinatra#3046) has finished
+  // making what it made: the rail draws its record reached once the review is
+  // decided, before the release writes the withheld terminal status, so the
+  // rows are read for it too rather than opening that step on an empty record.
   const runMadeRows: RunMadeArtifactRow[] =
-    run && isTerminalRunStatus(run.status)
+    run && (isTerminalRunStatus(run.status) || isParkedOnProducedReview(run))
       ? await (async () => {
           const { listRunMadeArtifacts } = await import(
             "@/lib/artifacts/run-made-artifacts"
@@ -2552,7 +2599,11 @@ export async function SetupScreen({
                     // this panel's own column down — or the page draws two
                     // rails again.
                     railDrawsTheFrame={railFramesTheRunDetail || runCarriesScheduleStep}
-                    scopeBase={scopeBase ?? null}
+                    // NOT `scopeBase`: this panel's successor controls open a
+                    // LAUNCHER, and the launcher of a user-anchored run is
+                    // `/personal` while its every address stays bare
+                    // (cinatra#3786).
+                    launchBase={successorLaunchBaseForRun(run.launchScopeAnchor)}
                   />
                 ) : (
                   <SetupCompletionWatcher
@@ -2560,6 +2611,10 @@ export async function SetupScreen({
                     agentId={agentId}
                     instanceId={instanceId}
                     scopeBase={scopeBase ?? null}
+                    // …and the LAUNCHER its panel's successor controls open,
+                    // which is not the address base above for a user-anchored
+                    // run (cinatra#3786).
+                    launchBase={successorLaunchBaseForRun(run.launchScopeAnchor)}
                     // cinatra#2933 (lifecycle-b W5b) -- the run page is one of
                     // the five windows, and this watcher is the panel it is
                     // drawn by. Both halves travel together: the template the
@@ -2994,10 +3049,20 @@ export async function SetupScreen({
               const runHasAnUndecidedReviewGate = railGates.some((g) => g.status === "pending");
               const runParkedAtReviewGate =
                 runHasAnUndecidedReviewGate || initialReviewGate?.awaiting === true;
+              // AND THE RUN HELD BY ITS PRODUCED-REVIEW PARK (cinatra#3046). Such a run is
+              // past its work: it stays `pending_approval` only until the release writes
+              // the withheld terminal status, and once no gate holds it any more it has
+              // reached its record.
+              const runHeldByProducedReviewPark = initialReviewGate?.producedReviewPark === true;
               const runReachedItsRecord =
-                run != null && isTerminalRunStatus(run.status) && !runParkedAtReviewGate;
+                run != null &&
+                (isTerminalRunStatus(run.status) || runHeldByProducedReviewPark) &&
+                !runParkedAtReviewGate;
               const railCarriesMadeStep =
-                run != null && (isTerminalRunStatus(run.status) || runParkedAtReviewGate);
+                run != null &&
+                (isTerminalRunStatus(run.status) ||
+                  runParkedAtReviewGate ||
+                  runHeldByProducedReviewPark);
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
@@ -3225,7 +3290,12 @@ export async function PermissionsScreen({
     run = await readAgentRunById(instanceId, permActor, permRoles);
     if (!run) notFound();
   } catch (err) {
-    if (err instanceof AuthzError) notFound();
+    const answer = runScreenAccessAnswer(err);
+    if (answer === "not-found") notFound();
+    if (answer === "not-authorized")
+      return (
+        <RunNotAuthorizedPanel surface="Permissions" conformanceId="run-not-authorized" />
+      );
     throw err;
   }
   // ONE CANONICAL HOME (cinatra#3693), after the access door above.
@@ -3474,6 +3544,26 @@ export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps
   );
 }
 
+/**
+ * HOW A RUN SURFACE ANSWERS A REFUSED READER (cinatra#2934; the refusal answer
+ * of cinatra#3697 stands).
+ *
+ * Every authorization refusal is answered with the flat not-found, exactly as
+ * the scoped run pages answer it: a run stays under its scope, and a reader the
+ * access door refuses learns nothing of it — not even that it exists. The
+ * earlier reading of this mapping, which drew the not-authorized panel for a
+ * 403 refusal, is superseded by cinatra#3697.
+ *
+ * Anything that is not an authorization refusal is handed back to be rethrown: a
+ * store that fell over is not a permission answer and must not be drawn as one.
+ */
+export function runScreenAccessAnswer(
+  err: unknown,
+): "not-found" | "not-authorized" | "rethrow" {
+  if (!(err instanceof AuthzError)) return "rethrow";
+  return "not-found";
+}
+
 export async function TriggerScreen({
   agentId,
   instanceId,
@@ -3516,7 +3606,12 @@ export async function TriggerScreen({
       run = await readAgentRunById(instanceId, triggerActor, triggerRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Schedule" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
     // ONE CANONICAL HOME (cinatra#3693), after the access door above.
@@ -3766,7 +3861,7 @@ export async function TriggerScreen({
       ) : null}
       {/*
         THE SAME FORM, AS A READING (cinatra#2980).
-        design@fe2182547d4a `specs/app-components.html` § "Standard
+        design@c73c68f5e39e `specs/app-components.html` § "Standard
         scheduling step", the "Configured schedule step" reading: "Once a
         *Run right after setup* or *Schedule for later* schedule has fired it
         cannot be changed any more: the form stays as a **read-only** reading

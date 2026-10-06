@@ -1,7 +1,8 @@
 import path from "node:path";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import os from "node:os";
-import { afterAll, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import {
   classifyGeneratedReferences,
@@ -9,7 +10,20 @@ import {
   coverageDefects,
   readDeclaredRequiredNames,
   scanHostImportedExtensions,
+  FLOOR_BASE_VAR,
+  FLOOR_FILE,
+  PERMIT_FILE,
+  PERMIT_LIST,
+  PERMIT_ROAD,
+  checkFloorAgainstBase,
 } from "../required-extensions-cover-host-imports.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 import { stripComments } from "../lib/strip-comments.mjs";
 
 const tmpRoots = [];
@@ -525,5 +539,162 @@ describe("repo-live coverage (the gate's own contract against THIS tree)", () =>
     for (const sys of live.systemExtensions) {
       expect(live.hostImported.has(sys) || live.rootDepExtensions.has(sys)).toBe(true);
     }
+  });
+});
+
+// cinatra#3832: the set of system extensions (cinatra.systemExtensions in the
+// root package.json) is compared with the copy on the base branch, so a pull
+// request cannot add a package to the set in its own change.
+describe("required-extensions-cover-host-imports — system set compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const pkg = (systemExtensions) => ({ name: "fixture", cinatra: { systemExtensions } });
+  function repo(baseSet, headSet) {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: pkg(baseSet) }, head: { [FLOOR_FILE]: pkg(headSet) } });
+    fixtures.push(f);
+    return f.root;
+  }
+
+  it("a raised floor (a new package in the system set) FAILS against the base", () => {
+    const root = repo(["@x/a"], ["@x/a", "@x/b"]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["@x/b"]);
+  });
+
+  it("a lowered floor (a package removed from the system set) PASSES", () => {
+    const root = repo(["@x/a", "@x/b"], ["@x/a"]);
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo([], []);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/did not resolve/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo([], ["@x/a"]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [path.join(import.meta.dirname, "..", "required-extensions-cover-host-imports.mjs")], {
+      cwd: path.join(import.meta.dirname, "..", "..", ".."),
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  });
+});
+
+// cinatra#3832: the record road. The set of system extensions is a register
+// of packages allowed after a review: a new package passes in the pull request
+// that carries it, with its record in the permits file.
+describe("required-extensions-cover-host-imports — the record road for a new system extension", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const pkg = (systemExtensions) => ({ name: "fixture", cinatra: { systemExtensions } });
+  const REASON = "the host needs this package at every start";
+  const record = (row, reason = REASON, pr = 3900) => ({ list: PERMIT_LIST, row, reason, pr });
+  const records = (...permits) => ({ note: "fixture", permits });
+  function repo({ baseSet, headSet, basePermits, headPermits }) {
+    const base = { [FLOOR_FILE]: pkg(baseSet) };
+    if (basePermits !== undefined) base[PERMIT_FILE] = basePermits;
+    const head = { [FLOOR_FILE]: pkg(headSet) };
+    if (headPermits !== undefined) head[PERMIT_FILE] = headPermits;
+    const f = makeFloorRepo({ base, head });
+    fixtures.push(f);
+    return f.root;
+  }
+  const check = (root, env = PULL_REQUEST_RUN) => checkFloorAgainstBase({ repoRoot: root, env });
+
+  it("the permits file of this commit holds exactly the records of the two mail connectors added to the system set", () => {
+    const doc = JSON.parse(readFileSync(path.join(import.meta.dirname, "..", "..", "..", PERMIT_FILE), "utf8"));
+    expect(doc.permits).toEqual([
+      {
+        list: PERMIT_LIST,
+        row: "@cinatra-ai/email-connector",
+        reason: "The mail delivery connector requires this outbound mail road, so it is always installed.",
+        pr: 3908,
+      },
+      {
+        list: PERMIT_LIST,
+        row: "@cinatra-ai/resend-connector",
+        reason: "The application's own account mails go through this connector, so it is always installed.",
+        pr: 3908,
+      },
+    ]);
+  });
+
+  it("an addition with its record in the same change PASSES, with a NOTICE naming row, reason and pull request", () => {
+    const r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a", "@x/b"], basePermits: records(), headPermits: records(record("@x/b")) }));
+    expect(r).toMatchObject({ ok: true, status: "held", absorbed: ["@x/b"] });
+    expect(r.lines).toContain(
+      `[required-extensions-cover-host-imports] NOTICE — ADDITION ABSORBED: @x/b, reason: "${REASON}", pull request #3900`,
+    );
+  });
+
+  it("an addition without its record FAILS, and the refusal names the permits file and the record's form", () => {
+    const r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a", "@x/b"] }));
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["@x/b"]);
+    expect(r.lines).toContain(`[required-extensions-cover-host-imports] ${PERMIT_ROAD}`);
+    expect(PERMIT_ROAD).toContain(PERMIT_FILE);
+    expect(PERMIT_ROAD).toMatch(/"list": "system-extensions", "row": .*"reason": .*"pr"/);
+  });
+
+  it("a record for a package the set does not hold is an orphan and FAILS", () => {
+    const r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a"], headPermits: records(record("@x/z")) }));
+    expect(r.ok).toBe(false);
+    expect(r.permitProblems).toEqual(["@x/z: orphan record, the register does not hold its row; remove the record"]);
+  });
+
+  it("a carried-forward record PASSES unchanged, and FAILS altered or deleted while its package stands", () => {
+    const base = { baseSet: ["@x/a", "@x/b"], headSet: ["@x/a", "@x/b"], basePermits: records(record("@x/b")) };
+    expect(check(repo(base))).toMatchObject({ ok: true, status: "held" });
+    let r = check(repo({ ...base, headPermits: records(record("@x/b", REASON, 3901)) }));
+    expect(r.permitProblems).toEqual(["@x/b: the record is altered while its row stands; carry it unchanged"]);
+    r = check(repo({ ...base, headPermits: records() }));
+    expect(r.permitProblems).toEqual(["@x/b: the record is deleted while its row stands; carry it unchanged"]);
+  });
+
+  it("a record removed together with its package PASSES", () => {
+    const r = check(repo({ baseSet: ["@x/a", "@x/b"], headSet: ["@x/a"], basePermits: records(record("@x/b")), headPermits: records() }));
+    expect(r).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a record for a package that stood on the base and is not added in the change FAILS", () => {
+    const r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a"], headPermits: records(record("@x/a")) }));
+    expect(r.permitProblems).toEqual(["@x/a: a record annotates an addition, and this change does not add the row"]);
+  });
+
+  it("a reason of one repeated word FAILS", () => {
+    const r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a", "@x/b"], headPermits: records(record("@x/b", "yes yes yes yes yes yes yes")) }));
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/at least 6 words of three letters or more, at least 4 of them different/);
+  });
+
+  it("an unreadable permits file on a pull request's run FAILS with its reason (head or base)", () => {
+    let r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a"], basePermits: records(), headPermits: "{ not json" }));
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/the permit file scripts\/audit\/required-extensions-cover-host-imports\.permits\.json is not readable/);
+    r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a"], basePermits: "{ not json", headPermits: records() }));
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/permits\.json on "origin\/main" is not readable/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const r = check(repo({ baseSet: ["@x/a"], headSet: ["@x/a", "@x/b"], headPermits: "{ not json" }), NO_PULL_REQUEST_RUN);
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
   });
 });
