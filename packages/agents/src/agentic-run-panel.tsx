@@ -2591,21 +2591,15 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          // Off-frame, both working and actual review readings share the
-          // drawn run card ground: border-line and surface-strong (cinatra#3242).
-          //
-          // AND THE FRAME'S OWNER OWNS THIS BOX'S CHROME TOO (fix leg 14).
-          // Section I of the review drawing rules the run detail as a whole:
-          // "two cards are never stacked in one detail". This box is drawn in
-          // that same detail, so when the rail already draws the frame beside
-          // it the box gives up its card chrome for exactly the reason the
-          // progress plate below does — the chrome belongs to whoever draws the
-          // frame, and a card of our own around the gate's card is the second
-          // card section I forbids. Off the frame both readings keep the same
-          // strong ground, edge and radius.
+          // The rail owns the two-column layout; this slot owns the one
+          // .runcard frame and strong ground in both working and review readings
+          // (cinatra#3242, App262, approved drawing §I). The gate and placeholder
+          // inside it draw content only, so the swap cannot lose the ground or
+          // stack a second card inside it. Progress/input frame ownership below
+          // retains its existing railDrawsTheFrame contract.
           className={
             railDrawsTheFrame
-              ? "flex flex-col gap-4"
+              ? "rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
               : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           }
           // Which of the two readings this box is drawing. Passive — it draws
@@ -2619,11 +2613,9 @@ export function AgenticRunPanel({
           {reviewCardDrawn ? null : (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
-              // THE CARD FRAME IS THE PLACEHOLDER'S OWN where the rail draws the
-              // frame and this box gives its chrome up (fix leg 20): "the card
-              // frame, and a spinning icon". Off the frame the box above draws
-              // it, and a second one would be a card inside a card.
-              framed={railDrawsTheFrame}
+              // The slot owns the frame on every run host, including the rail.
+              // Its placeholder must not draw another border or ground.
+              framed={false}
               // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
               // WAITS IN (fix leg 7). Measured on the sixth graded reading: the pair
               // shot for this card was taken with the run already completed and

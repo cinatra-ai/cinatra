@@ -72,6 +72,7 @@ const row = vi.hoisted(() => ({
     unknown
   >,
   producedReviewPark: null as string | null,
+  templateSourceType: "external" as "external" | "internal",
 }));
 
 /**
@@ -162,6 +163,7 @@ const TEMPLATE = {
 function makeTemplate() {
   return {
     ...TEMPLATE,
+    sourceType: row.templateSourceType,
     inputSchema: {
       ...TEMPLATE.inputSchema,
       properties: row.properties,
@@ -326,8 +328,9 @@ vi.mock("../run-recommendation-core", () => ({
   resolveRecommendationHoldStateForActor: vi.fn(async () => null),
 }));
 
-import { TriggerScreen } from "../instance-screens";
+import { SetupScreen, TriggerScreen } from "../instance-screens";
 import { AgenticRunPanel } from "../agentic-run-panel";
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 
 /**
  * The run panel opens the run's event stream on mount. jsdom carries no
@@ -365,7 +368,7 @@ vi.mock("@/lib/generated/field-renderer-components", () => ({ GENERATED_FIELD_RE
 vi.mock("@/lib/generated/extensions.server", () => ({ STATIC_EXTENSION_MANIFEST: {}, GENERATED_CONNECTOR_ENTRY_MODULES: {}, GENERATED_CONNECTOR_MCP_MODULES: {}, GENERATED_DEV_SETUP_MODULES: {}, GENERATED_WIDGET_STREAM_AGENTS: {} }));
 vi.mock("../a2a-actions", () => ({ getAgentBuilderTask: vi.fn(async () => null) }));
 vi.mock("../hitl-actions", () => ({ approveReviewTask: vi.fn(), rejectReviewTask: vi.fn() }));
-vi.mock("../use-ag-ui-run-stream", () => ({ useAgUiRunStream: () => ({ status: null, error: null, presentationHint: null, isLive: false, interruptContext: null, streamedText: "", dataPartFrames: [] }) }));
+vi.mock("../use-ag-ui-run-stream", () => ({ useAgUiRunStream: () => ({ status: row.status, error: null, presentationHint: null, isLive: false, interruptContext: null, streamedText: "", dataPartFrames: [] }) }));
 
 beforeEach(() => {
   vi.stubGlobal("EventSource", StubEventSource);
@@ -379,6 +382,7 @@ beforeEach(() => {
   row.properties = {};
   row.inputParams = {};
   row.producedReviewPark = null;
+  row.templateSourceType = "external";
   recommendationPark.row = null;
   recommendationPark.holdState = { state: "none" };
   reviewSlot.awaiting = false;
@@ -388,7 +392,7 @@ beforeEach(() => {
   resolveReading.value = { kind: "artifact_review_gate", state: { state: "pending", canDecide: true, canComment: true }, body: null };
   vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
     const url = String(input);
-    const data = url.includes("/api/agents/runs/") ? { status: row.status, error: null, startedAt: null, completedAt: null, messages: [], hitlContext: null, reviewGate: { ref: reviewSlot.reviewTaskId ? "lcr-ground-3242" : null, awaiting: reviewSlot.awaiting } } : resolveReading.value;
+    const data = url.includes("/api/agents/runs/") ? { status: row.status, error: null, startedAt: null, completedAt: null, messages: [], hitlContext: null, reviewGate: { ref: reviewSlot.reviewTaskId ? encodeLifecycleGateRef({ runId: RUN_ID, reviewTaskId: reviewSlot.reviewTaskId }) : null, awaiting: reviewSlot.awaiting, producedReviewPark: row.producedReviewPark !== null } } : resolveReading.value;
     return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
 });
@@ -399,11 +403,30 @@ function strongGround(slot: HTMLElement) {
   expect(classes).toContain("bg-surface-strong");
   expect(classes).toContain("border");
   expect(classes).toContain("border-line");
-  expect(classes).toContain("rounded-card");
+  expect(classes.some((token) => token === "rounded-card" || token === "rounded-[12px]")).toBe(true);
   expect(classes).not.toContain("soft-panel");
 }
+// The run-detail rail is a layout, while the slot is the one .runcard.
+// A placeholder or gate inside it must not draw a second card frame.
+function singleSlotFrame(slot: HTMLElement) {
+  strongGround(slot);
+  expect(slot.classList.contains("rounded-[12px]")).toBe(true);
+  const children = slot.querySelectorAll<HTMLElement>('[data-conformance-id="review-gate-card"],[data-conformance-id="review-gate-placeholder"]');
+  for (const child of children) {
+    // Include the placeholder's literal rounded-[12px], not only rounded-card.
+    expect(child.classList.contains("border")).toBe(false);
+    expect(child.classList.contains("bg-surface-strong")).toBe(false);
+  }
+}
+async function runPage(step?: string) {
+  const tree = await SetupScreen({
+    agentId: "blog-idea-generator", instanceId: RUN_ID,
+    searchParams: { step: step ?? "detail" },
+  });
+  return render(tree as React.ReactElement);
+}
 async function panel(railDrawsTheFrame = false) {
-  const view = render(<AgenticRunPanel runId={RUN_ID} initialStatus={row.status} initialError={null} initialMessages={[]} agUiEnabled={false} templateId={TEMPLATE.id} surface="agent-detail" railDrawsTheFrame={railDrawsTheFrame} initialReviewGate={{ ref: reviewSlot.reviewTaskId ? "lcr-ground-3242" : null, awaiting: reviewSlot.awaiting }} />);
+  const view = render(<AgenticRunPanel runId={RUN_ID} initialStatus={row.status} initialError={null} initialMessages={[]} agUiEnabled={false} templateId={TEMPLATE.id} surface="agent-detail" railDrawsTheFrame={railDrawsTheFrame} initialReviewGate={{ ref: reviewSlot.reviewTaskId ? encodeLifecycleGateRef({ runId: RUN_ID, reviewTaskId: reviewSlot.reviewTaskId }) : null, awaiting: reviewSlot.awaiting }} />);
   return view;
 }
 async function reviewSlotElement() {
@@ -429,10 +452,9 @@ async function triggerSlot() {
 
 describe("the actual run gate ground", () => {
   it("draws the pending off-frame gate on the strong card ground", async () => { await panel(); strongGround(await reviewSlotElement()); });
-  it("keeps the rail-owned review wrapper frameless", async () => {
-    await panel(true); const slot = await reviewSlotElement();
-    expect(slot.className).toBe("flex flex-col gap-4");
-    expect(slot.querySelector('[data-conformance-id="review-gate-card"]')).not.toBeNull();
+  it("gives the rail-owned pending review one strong slot frame", async () => {
+    await panel(true);
+    singleSlotFrame(await reviewSlotElement());
   });
   it("keeps the off-frame working placeholder on the same strong ground", async () => {
     reviewSlot.reviewTaskId = null; reviewSlot.awaiting = true; row.status = "running";
@@ -444,7 +466,7 @@ describe("the actual run gate ground", () => {
     expect(document.querySelector('[data-run-review-slot]')).toBeNull();
   });
   it("keeps a refused gate from becoming an empty review reading", async () => {
-    resolveReading.value = { kind: "artifact_review_gate", state: { state: "forbidden" }, body: null };
+    resolveReading.value = { kind: "artifact_review_gate", state: { state: "absent" }, body: null };
     await panel();
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("resolve"))).toBe(true));
     await act(async () => { await Promise.resolve(); });
@@ -469,4 +491,115 @@ describe("the actual run gate ground", () => {
     reviewSlot.reviewTaskId = null; reviewSlot.awaiting = false;
     expect(await triggerSlot()).toBeNull();
   });
+});
+
+
+describe("the real run page's scheduled rail owns one review card frame", () => {
+  beforeEach(() => {
+    // The real right-after-setup trigger row is present even for immediate runs.
+    triggerRow.row = { triggerType: "immediate", releasedAt: new Date("2026-01-01") };
+  });
+
+  it("draws the pending gate on the strong ground inside the actual run page rail", async () => {
+    await runPage();
+    const slot = await reviewSlotElement();
+    expect(slot.closest("[data-run-detail-column]")).not.toBeNull();
+    singleSlotFrame(slot);
+    expect(slot.querySelector('[data-conformance-id="review-gate-placeholder"]')).toBeNull();
+  });
+
+  it("keeps a working immediate run on one strong frame before its gate exists", async () => {
+    row.status = "running"; reviewSlot.reviewTaskId = null; reviewSlot.awaiting = true;
+    await runPage();
+    await waitFor(() => expect(document.querySelector('[data-run-review-slot="working"]')).not.toBeNull());
+    const slot = document.querySelector<HTMLElement>("[data-run-review-slot]")!;
+    singleSlotFrame(slot);
+    expect(slot.querySelector('[data-conformance-id="review-gate-placeholder"]')).not.toBeNull();
+  });
+
+  it("retains the same rail slot when its gate has settled", async () => {
+    resolveReading.value = { kind: "artifact_review_gate", state: { state: "settled", outcome: "approved" }, body: null };
+    await runPage(); singleSlotFrame(await reviewSlotElement());
+  });
+
+  it("frames an explicitly selected historical gate from the actual server run page", async () => {
+    reviewSlot.reviewTaskId = null;
+    reviewGates.rows = [{ id: "gate-history", reviewTaskId: "history-review", status: "resolved", disposition: "approve", createdAt: new Date("2026-01-01") }];
+    resolveReading.value = { kind: "artifact_review_gate", state: { state: "settled", outcome: "approved" }, body: null };
+    await runPage("review:history-review");
+    await waitFor(() => expect(document.querySelector('[data-conformance-id="review-gate-card"]')).not.toBeNull());
+    const card = document.querySelector<HTMLElement>('[data-conformance-id="review-gate-card"]')!;
+    const slot = card.closest<HTMLElement>("[data-run-review-slot]");
+    expect(slot).not.toBeNull(); singleSlotFrame(slot!);
+  });
+
+  it("does not create a review slot for a finished immediate run that has no gate", async () => {
+    reviewSlot.reviewTaskId = null; reviewSlot.awaiting = false;
+    await runPage(); expect(document.querySelector("[data-run-review-slot]")).toBeNull();
+  });
+
+  it("keeps one working frame if the actual rail gate refuses the viewer", async () => {
+    resolveReading.value = { kind: "artifact_review_gate", state: { state: "absent" }, body: null };
+    await runPage();
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("resolve"))).toBe(true));
+    await act(async () => { await Promise.resolve(); });
+    const slot = document.querySelector<HTMLElement>('[data-run-review-slot="working"]')!;
+    expect(slot).not.toBeNull(); singleSlotFrame(slot);
+    expect(slot.querySelector('[data-conformance-id="review-gate-card"]')).toBeNull();
+  });
+
+  it("keeps one working frame if the actual rail gate resolve is unavailable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "unavailable" }), { status: 503 })));
+    await runPage();
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("resolve"))).toBe(true));
+    await act(async () => { await Promise.resolve(); });
+    const slot = document.querySelector<HTMLElement>('[data-run-review-slot="working"]')!;
+    expect(slot).not.toBeNull(); singleSlotFrame(slot);
+  });
+});
+
+
+describe("the real internal orchestrator run page owns one review card frame", () => {
+  beforeEach(() => {
+    row.templateSourceType = "internal";
+    row.status = "pending_approval";
+    row.producedReviewPark = JSON.stringify({ status: "completed" });
+    triggerRow.row = { triggerType: "immediate", releasedAt: new Date("2026-01-01") };
+  });
+  it.each(["pending", "settled"])("frames its %s gate under the actual rail", async (state) => {
+    resolveReading.value = { kind: "artifact_review_gate", state: state === "pending" ? { state, canDecide: true, canComment: true } : { state, outcome: "approved" }, body: null };
+    await runPage();
+    await waitFor(() => {
+      const card = document.querySelector<HTMLElement>('[data-conformance-id="review-gate-card"]');
+      expect(card).not.toBeNull();
+      const slot = card!.closest<HTMLElement>("[data-run-review-slot]");
+      expect(slot).not.toBeNull(); singleSlotFrame(slot!);
+      expect(slot!.closest("[data-run-detail-column]")).not.toBeNull();
+    });
+  });
+});
+
+
+it("keeps the actual rail framed when a stale ref resolves absent", async () => {
+  triggerRow.row = { triggerType: "immediate", releasedAt: new Date("2026-01-01") };
+  resolveReading.value = { kind: "artifact_review_gate", state: { state: "absent" }, body: null };
+  await runPage();
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("resolve"))).toBe(true));
+  await act(async () => { await Promise.resolve(); });
+  const slot = document.querySelector<HTMLElement>('[data-run-review-slot="working"]')!;
+  expect(slot).not.toBeNull(); singleSlotFrame(slot);
+  expect(slot.querySelector('[data-conformance-id="review-gate-card"]')).toBeNull();
+  expect(slot.querySelector('[data-conformance-id="review-gate-placeholder"]')).not.toBeNull();
+});
+
+it("gives the internal produced-review wait one strong frame before its ref exists", async () => {
+  row.templateSourceType = "internal"; row.status = "pending_approval";
+  row.producedReviewPark = JSON.stringify({ status: "completed" });
+  reviewSlot.reviewTaskId = null; reviewSlot.awaiting = true;
+  triggerRow.row = { triggerType: "immediate", releasedAt: new Date("2026-01-01") };
+  await runPage();
+  await waitFor(() => expect(document.querySelector('[data-run-review-slot="working"]')).not.toBeNull());
+  const slot = document.querySelector<HTMLElement>('[data-run-review-slot="working"]')!;
+  singleSlotFrame(slot);
+  expect(slot.querySelector('[data-conformance-id="review-gate-placeholder"]')).not.toBeNull();
 });
