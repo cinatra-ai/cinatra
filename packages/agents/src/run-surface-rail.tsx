@@ -43,7 +43,6 @@ import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
   useEffect,
-  useRef,
   useState,
   type ReactElement,
   type ReactNode,
