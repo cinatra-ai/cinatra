@@ -81,6 +81,9 @@ class ObjectTypeRegistryImpl {
   // populated when a caller passes `packageName`; built-in/host registrations
   // (no package) are absent here, so removeByPackage never touches them.
   private packageByType: Map<string, string> = new Map();
+  // The type ids registered through `registerGovernedByClaim`: a type no
+  // definer registered, governed by a claimant's claim until a definer does.
+  private governedByClaim: Set<string> = new Set();
 
   /**
    * Register (or idempotently replace) an object type. `packageName` records
@@ -111,6 +114,14 @@ class ObjectTypeRegistryImpl {
       console.warn(
         `Object type ID '${def.type}' is not namespaced. Use '@scope/package:local-id' format.`,
       );
+    }
+    // A CLAIM-GOVERNED entry (registerGovernedByClaim) is no definition: the
+    // host's own registration or the type's own definer replaces it with no
+    // conflict, and the type stops being governed by the claim.
+    if (this.governedByClaim.has(def.type)) {
+      this.governedByClaim.delete(def.type);
+      this.entries.delete(def.type);
+      this.packageByType.delete(def.type);
     }
     // CONFLICT-ON-DUPLICATE (epic #1785): if this type is already defined, only
     // the ORIGINAL definer may re-register it. `packageByType.get` returns the
@@ -145,6 +156,32 @@ class ObjectTypeRegistryImpl {
     }
   }
 
+  /**
+   * Register a type that NO definer has registered, governed by a claim of it:
+   * a claimant that does not own the type's namespace offers its own definition
+   * (the claim's schema and the record identity it declares). The claimant is
+   * recorded as the provenance, so `removeByPackage` reaps the type with the
+   * claimant. A type that is already registered — by the host, by its own
+   * definer or by another claimant — keeps its own definition: nothing changes,
+   * nothing throws, and the answer is false. A later `register` of the type by
+   * the host or by a package replaces a claim-governed entry with no conflict
+   * (a definer always wins over a claim). A retired dynamic-namespace id is
+   * skipped as in `register`. Returns true iff the type was registered.
+   */
+  registerGovernedByClaim(def: ObjectTypeDefinition<unknown>, claimantPackage: string): boolean {
+    if (isTombstonedObjectTypeId(def.type)) {
+      console.warn(
+        `Object type ID '${def.type}' is under a permanently-retired dynamic namespace (cinatra#1789) — NOT registered.`,
+      );
+      return false;
+    }
+    if (this.entries.has(def.type)) return false;
+    this.entries.set(def.type, def);
+    this.packageByType.set(def.type, claimantPackage);
+    this.governedByClaim.add(def.type);
+    return true;
+  }
+
   /** The package that registered `typeId`, or `null` for a host / built-in
    *  (provenance-less) registration or an unregistered type. The type-driven
    *  disposition seam (epic #1785) uses this to name the faceted projection's
@@ -177,6 +214,7 @@ class ObjectTypeRegistryImpl {
       if (pkg === packageName) {
         this.entries.delete(type);
         this.packageByType.delete(type);
+        this.governedByClaim.delete(type);
         removed.push(type);
       }
     }
@@ -231,6 +269,7 @@ class ObjectTypeRegistryImpl {
   _clearForTests(): void {
     this.entries.clear();
     this.packageByType.clear();
+    this.governedByClaim.clear();
   }
 }
 
