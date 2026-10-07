@@ -567,7 +567,7 @@ only the error's class is kept).
 
 <!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
 
-## `uploadFile(page, { control, path, record, bounds? })`
+## `uploadFile(page, { control, path, record, bounds?, done? })`
 
 Uploads the file at `path` through the page's own upload control. It presses the
 first shown button named `control` (the library's Upload button, which opens a
@@ -579,6 +579,19 @@ place it was read from. A press the page's handler has not taken over yet (befor
 the page has hydrated) opens no chooser, and is refused as such at once. It
 answers `{ control, file, path, elapsedMs }`.
 
+For an extension import that acknowledges the file on its own screen, pass
+`done: { selector: '[data-testid="upload-resolved-name"]', text: '@cinatra-ai/list-curation-skill' }`. This optional
+road waits for the named trigger's own file input to belong to React's current
+committed tree and carry its change handler, then uses `setInputFiles` on that
+input. Server markup, an uncommitted fiber or a missing handler cannot admit
+an upload. It does not press the sr-only input or a covering icon, and does not
+change any checkbox. It refuses ambiguous controls and an already shown
+completion signal before handing over a file, then waits for the caller's
+selector to read the expected text within `doneMs` (60 seconds by default). Without this option, the chooser and library-row
+road above is unchanged. The existing driver forwards this option with the
+other `uploadFile` options. The record line names `done.selector` and the text
+it read; a shown selector with a different package name is not completion.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `UPLOAD_CONTROL_BOUND_MS` | 15_000 | the control shown with its name |
@@ -586,10 +599,12 @@ answers `{ control, file, path, elapsedMs }`.
 | `UPLOAD_CHOOSER_BOUND_MS` | 5_000 | from the press to the file chooser |
 | `UPLOAD_ROW_BOUND_MS` | 120_000 | from the file handed over to its row |
 | `UPLOAD_POLL_MS` | 250 | how often the control and the list are read |
+| `doneMs` | 60_000 | from hand-over to the caller's exact completion text (`doneMs`) |
 
 Refusal kinds: `input` (nothing was pressed), `no-control` (naming the page's file
 inputs), `driver-failure`, `no-chooser` (the press opened no file chooser) and
-`no-row` (naming the rows the list shows).
+`no-row` (naming the rows the list shows). With `done`,
+`unhydrated`, `ambiguous`, `stale-completion` and `no-completion` also apply.
 
 ## `fillForm(page, { fields, record, form?, submit?, bounds? })`
 
@@ -1145,7 +1160,15 @@ window's path).
   `pnpm exec vitest run --config vitest.config.ts tests/e2e/steps`). Each step's
   branches run against a page double over a local fixture app: no browser, no
   server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
-  over the same fixture pages, which keeps the double honest.
+  over the same fixture pages, which keeps the double honest. In the checks, the
+  job **Step tests in a real browser** runs them with the switch set for every
+  pull request that changes a file here other than Markdown: first on the page
+  double, then with the switch. Both runs receive `E2E_STEPS_UNIT_DATABASE_URL`
+  from a job-scoped PostgreSQL service at its mapped host port, so the real
+  `readRows` database cases run too. It fails unless every case passed, so in that
+  job a browser that cannot be launched is a failure, not a skip, and the
+  required `build` check fails with it. Any other pull request skips the job;
+  the selection line of **Detect CI impact (build-image)** names the reason.
 - **The live smoke**, one per step, against a running development server:
   `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
   browser or a server every test is skipped, and its reason names what is missing.

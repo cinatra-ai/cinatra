@@ -7242,8 +7242,9 @@ const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
 async function resolveUploadReference(root: Locator): Promise<Locator> {
   const panel = root.locator(UPLOAD_PANEL_NODE);
   await expect(async () => {
-    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
-    await root.locator(UPLOAD_RESOLVE_CONTROL).click();
+    // An unbounded action consumes the outer budget before toPass can refill.
+    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+    await root.locator(UPLOAD_RESOLVE_CONTROL).click({ timeout: 5_000 });
     await expect(panel).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 30_000 });
   return panel;

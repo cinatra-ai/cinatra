@@ -169,7 +169,7 @@ function parkedRow() {
     messages: [],
     hitlContext: ANSWERED_CONTEXT_GATE,
     lifecycleMoment: "hitl",
-    reviewGate: { ref: freshTicket(), awaiting: false, producedReviewPark: true },
+    reviewGate: { ref: freshTicket(), awaiting: false, producedReviewPark: true, reviewTaskId: "review-task-3007-f2" },
   };
 }
 
