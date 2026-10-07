@@ -1234,7 +1234,9 @@ export function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding })
           data-conformance-id="review-composer-bound"
           className="text-xs leading-relaxed text-muted-foreground"
         >
-          Your next chat message becomes a comment on this review. Press again to chat normally.
+          {
+            "Your next chat message goes to Cinatra, which can use this review's own controls for you. Press again to chat normally."
+          }
         </span>
       ) : binding.ambiguous ? (
         // The refusal the composer will give, said BEFORE the reader types it.
@@ -1887,7 +1889,8 @@ export function islandFrameServedTheDenial(frame: HTMLIFrameElement | null): boo
   try {
     const doc = frame?.contentDocument;
     if (!doc) return false;
-    return doc.querySelector(`[data-conformance-id="${REVIEW_ISLAND_EMPTY_MARKER}"]`) !== null;
+    // Single-quoted: this READS the island's marker; it renders no anchor of this card.
+    return doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_EMPTY_MARKER}']`) !== null;
   } catch {
     return false;
   }
