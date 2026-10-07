@@ -42,7 +42,7 @@ import {
   unspacedNote,
   waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 import { RUN_WINDOW_ENTRY_ATTRIBUTE, RUN_WINDOW_FIELD, WINDOW_TURN_NOTE } from "./type-in-window.mjs";
 
 const STEP = "waitForTurn";
@@ -119,6 +119,7 @@ export async function waitForTurn(page, { record, field = RUN_WINDOW_FIELD, with
   }
   const bound = readBounds(STEP, record, WAIT_FOR_TURN_BOUNDS, bounds, nothing);
   if (bound.turnMs > TURN_CEILING_MS) throw input(`turnMs may be raised up to ${TURN_CEILING_MS} ms and no further`);
+  refuseStaleScope(STEP, record, page, nothing);
 
   // The window is only read: no mark is put on it.
   const query = {

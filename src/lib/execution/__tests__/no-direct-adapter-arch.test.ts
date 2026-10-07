@@ -147,16 +147,6 @@ const ADAPTER_ACQUISITION_ALLOWLIST: ReadonlyArray<{
       "ids and discards every adapter.",
   },
   {
-    file: "src/lib/blog/gemini.ts",
-    invokes: false,
-    reason:
-      "IMAGE ADAPTER. `resolveDefaultImageAdapter()` then `generateImage()` — " +
-      "a single-shot image call with no tool loop and no post-tool turn, so " +
-      "there is no step for a sandbox capability to occupy (the same " +
-      "structural reason as the D4 single-step carve-out). It runs NO " +
-      "`generate`/`stream` turn, and the probe-only arm below checks that.",
-  },
-  {
     file: "src/lib/artifact-image-tool.ts",
     invokes: false,
     reason:

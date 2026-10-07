@@ -377,8 +377,6 @@ export const CONNECTOR_ARTIFACT_BORDER_FLOOR = Object.freeze({
     "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
   "@cinatra-ai/drupal-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
     "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
-  "@cinatra-ai/blog-connector:src/register.ts:@cinatra-ai/host:blog-routing":
-    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:blog-routing)",
   "@cinatra-ai/email-connector:src/register.ts:@cinatra-ai/host:email-routing":
     "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:email-routing)",
 });
