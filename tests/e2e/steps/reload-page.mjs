@@ -12,7 +12,7 @@
 // (`performance.timeOrigin`, which every new document has anew, as armPageTape
 // reads it) and answers it with the path. A reload that lands on another path
 // than the one the page was on is refused, naming where it landed.
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "reloadPage";
 
@@ -44,6 +44,7 @@ function readTimeOrigin() {
  * @returns {Promise<{ path: string, timeOrigin: number, elapsedMs: number }>}
  */
 export async function reloadPage(page, { record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was reloaded");
   requireRecord(STEP, record);
   const nothing = "nothing was reloaded";
   const bound = readBounds(STEP, record, RELOAD_PAGE_BOUNDS, bounds, nothing);

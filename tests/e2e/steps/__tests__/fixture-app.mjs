@@ -301,6 +301,89 @@ const TIMELINE_RUNNER = `<script>
 })();
 </script>`;
 
+// A page that hydrates late, as a page of the product's development server
+// does: started with `hydrate: { afterMs }`, the app gives every HTML page it
+// serves one declaration (`fixture-hydration`) and a script that plays it. The
+// page carries the App Router's flight data (`self.__next_f`) from the start,
+// and hydrates ONCE: `afterMs` after it was built (null: never), or at the
+// first press, fill, typed key or focus on it, whichever comes first, as React
+// hydrates a pending page at once on such an event. Then every element of its
+// body carries the key React sets on an element it has hydrated, and the page
+// reports that moment by one request to HYDRATION_REPORT_PATH: `by` (`time` or
+// `event`), `marked` (how many elements carried the steps' mark then), `path`
+// and `at` (the moment, by the clock, since the request itself may reach the
+// app a little later). A request, so the report outlives a navigation that follows it; no
+// navigation, so no press reads it as its start signal. page-double.mjs plays
+// the same declaration.
+
+/** Where a page reports its hydration. */
+export const HYDRATION_REPORT_PATH = "/fixture/hydrated";
+/** The key a hydrated element carries, as React's own `__reactFiber$…` key. */
+export const HYDRATION_KEY = "__reactFiber$fixture";
+/** The mark the steps write on the one control they act on (CONTROL_MARK). */
+export const STEP_MARK = "data-step-control";
+/** The events on which a page that has not hydrated yet hydrates at once. */
+export const HYDRATING_EVENTS = Object.freeze(["pointerdown", "mousedown", "click", "keydown", "focusin", "input"]);
+
+const HYDRATION_RUNNER = `<script>
+(function () {
+  var declared = JSON.parse(document.getElementById("fixture-hydration").textContent);
+  var events = ${JSON.stringify(HYDRATING_EVENTS)};
+  self.__next_f = self.__next_f || [];
+  var pending = true;
+  function hydrate(by) {
+    if (!pending) return;
+    pending = false;
+    events.forEach(function (name) { document.removeEventListener(name, onEvent, true); });
+    var marked = document.querySelectorAll("[${STEP_MARK}]").length;
+    Array.prototype.forEach.call(document.body ? document.body.querySelectorAll("*") : [], function (element) {
+      element[${JSON.stringify(HYDRATION_KEY)}] = true;
+    });
+    var report = new URLSearchParams({ by: by, marked: String(marked), path: location.pathname, at: String(Date.now()) });
+    fetch(${JSON.stringify(HYDRATION_REPORT_PATH)} + "?" + report.toString());
+  }
+  function onEvent() { hydrate("event"); }
+  events.forEach(function (name) { document.addEventListener(name, onEvent, true); });
+  if (declared.afterMs !== null) setTimeout(function () { hydrate("time"); }, declared.afterMs);
+})();
+</script>`;
+
+/**
+ * `html` with the declaration of a late hydration and the script that plays it,
+ * in its head: after its `<head>`, else after its doctype, else first.
+ * @param {string} html
+ * @param {{ afterMs: number | null }} hydrate
+ */
+export function withHydration(html, { afterMs }) {
+  const declaration = `<script type="application/json" id="fixture-hydration">${JSON.stringify({ afterMs })}</script>${HYDRATION_RUNNER}`;
+  for (const at of [/<head>/i, /^<!doctype html>/i]) {
+    const found = at.exec(html);
+    if (found) return `${html.slice(0, found.index + found[0].length)}${declaration}${html.slice(found.index + found[0].length)}`;
+  }
+  return `${declaration}${html}`;
+}
+
+/** Every HTML page `response` serves carries the declaration: the first text it writes after an HTML head. */
+function declareHydration(response, hydrate) {
+  let html = false;
+  let declared = false;
+  const writeHead = response.writeHead.bind(response);
+  response.writeHead = (status, headers, ...rest) => {
+    html = /text\/html/.test(String(headers?.["content-type"] ?? ""));
+    return writeHead(status, headers, ...rest);
+  };
+  for (const name of ["write", "end"]) {
+    const own = response[name].bind(response);
+    response[name] = (chunk, ...rest) => {
+      if (html && !declared && typeof chunk === "string") {
+        declared = true;
+        return own(withHydration(chunk, hydrate), ...rest);
+      }
+      return own(chunk, ...rest);
+    };
+  }
+}
+
 /** A fixture page: its body, and the timeline its inline script plays (fixture-app-contexts.mjs draws its pages with it too). */
 export function page(title, body, timeline = []) {
   return `<!doctype html>
@@ -956,14 +1039,20 @@ export const TITLE_SCENARIOS = Object.freeze({
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
- * `secure`, every page is also served over HTTP/2 at `secureOrigin`.
+ * `secure`, every page is also served over HTTP/2 at `secureOrigin`. With
+ * `hydrate` (`{ afterMs }`), every HTML page hydrates late (see withHydration),
+ * and each report of a page's hydration is recorded with its `report`. With
+ * `site`, a site's page that embeds the app is served on two further origins,
+ * `siteOrigin` and `crossSiteOrigin`, and the app serves its embed page and
+ * windows (see fixture-app-site.mjs).
  */
-export async function startFixtureApp({ answer = 200, secure = false } = {}) {
+export async function startFixtureApp({ answer = 200, secure = false, hydrate, site = false } = {}) {
   const requests = [];
   const loads = new Map();
   const streams = new Set();
   let origin = null;
   const handle = (request, response) => {
+    if (hydrate) declareHydration(response, hydrate);
     let body = "";
     request.on("data", (chunk) => {
       body += chunk;
@@ -978,11 +1067,26 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         bodyFields: formBody ? [...new URLSearchParams(body).keys()] : [],
         body,
         at: Date.now(),
+        ...(url.pathname === HYDRATION_REPORT_PATH
+          ? {
+              report: {
+                by: url.searchParams.get("by"),
+                marked: Number(url.searchParams.get("marked")),
+                path: url.searchParams.get("path"),
+                at: Number(url.searchParams.get("at")),
+              },
+            }
+          : {}),
       });
       const html = (status, text) => {
         response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
         response.end(text);
       };
+      if (url.pathname === HYDRATION_REPORT_PATH) {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
       if (request.method === "POST" && (url.pathname === EMAIL_ROUTE || url.pathname === USERNAME_ROUTE)) {
         const headers = { "content-type": "application/json" };
         if (answer === 200) headers["set-cookie"] = "fixture_session=1; Path=/; HttpOnly";
@@ -1119,6 +1223,16 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         );
         return;
       }
+      // frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow:
+      // the embed page and its windows, served only with `site`, live in
+      // fixture-app-site.mjs, so this file changes in this one place.
+      if (site && /^\/(embed|widget)\//.test(url.pathname)) {
+        import("./fixture-app-site.mjs").then(
+          ({ serveSiteAppPage }) => serveSiteAppPage({ request, url, response }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
       html(404, "<!doctype html><title>Not found</title>");
     });
   };
@@ -1137,7 +1251,10 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
     await new Promise((done) => secureServer.listen(0, LOOPBACK, done));
     secureOrigin = `https://${LOOPBACK}:${secureServer.address().port}`;
   }
+  const sites = site ? await (await import("./fixture-app-site.mjs")).startSiteServers(origin) : null;
   return {
+    // The site's page on two further origins, when the app was started with `site`.
+    ...(sites ? { siteOrigin: sites.siteOrigin, crossSiteOrigin: sites.crossSiteOrigin } : {}),
     origin,
     /** The same app over HTTP/2, when it was started with `secure`. */
     secureOrigin,
@@ -1161,6 +1278,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
             for (const session of sessions) session.destroy();
             secureServer.close(done);
           }),
+        sites && sites.stop(),
       ]),
   };
 }

@@ -8,7 +8,7 @@
       "createsArtifact": false
     },
     "@cinatra-ai/host:blog-routing": {
-      "createsArtifact": true
+      "createsArtifact": false
     },
     "@cinatra-ai/host:cms-review": {
       "createsArtifact": true,
@@ -84,9 +84,6 @@
     }
   },
   "roads": {
-    "@cinatra-ai/host:blog-routing :: src/lib/artifacts/artifact-creation.ts": {
-      "removedBy": "cinatra#3821's follow-up"
-    },
     "@cinatra-ai/host:cms-review :: src/lib/artifacts/cms-content-snapshot-capture.ts": {
       "removedBy": "cinatra#3821's follow-up"
     },

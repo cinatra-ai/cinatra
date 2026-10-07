@@ -66,6 +66,7 @@
 // before the selection. A search field's choice shows as SEARCHED says.
 import {
   CONTROL_ACTION_BOUND_MS,
+  CONTROL_HYDRATION_BOUND_MS,
   CONTROL_MARK,
   CONTROL_NAMES_LISTED,
   CONTROL_POLL_MS,
@@ -74,11 +75,12 @@ import {
   newMark,
   plainName,
   quotedName,
-  readControls,
+  readPageControls,
   unmarkControls,
   unspacedNote,
+  waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "selectFrom";
 
@@ -174,6 +176,7 @@ async function waitForClose(page, { mark, readMarked, bound, onlyWhileHidden }) 
  * @returns {Promise<{ picker: string, entry: string, kind: string, via: "state" | "confirmation", path: string, elapsedMs: number }>}
  */
 export async function selectFrom(page, { picker, entry, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was selected");
   requireRecord(STEP, record);
   const nothing = "nothing was selected";
   const pickerName = plainName(picker);
@@ -187,9 +190,9 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
   const from = pathOf(page.url());
   const mark = newMark();
   const query = { mode: "picker", picker: pickerName, entry: entryText, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
-  const read = () => within(page.evaluate(readControls, query), READING_BOUND_MS);
+  const read = () => within(readPageControls(page, query), READING_BOUND_MS);
   // The picker the step has opened, read again by its mark (see OPENED).
-  const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  const readMarked = () => within(readPageControls(page, { ...query, marked: true }), READING_BOUND_MS);
   let openedHere = false;
   // Waits until the list the step opened has closed; answers what the log line adds.
   const waitForListToClose = async (entryNamed) => {
@@ -199,6 +202,10 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
     }
     return closing.waited ? `; its list closed after ${closing.elapsedMs} ms` : "";
   };
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   try {
     let reading = await read();
     if (!reading) throw refuse(STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
@@ -211,12 +218,13 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       );
     }
     const standIn = STAND_INS[reading.by];
+    const noName = reading.fallbackNamed ? "no explicit accessible name" : "no accessible name";
     if (reading.found > 1 && standIn) {
       throw refuse(
         STEP,
         record,
         "ambiguous",
-        `${reading.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a selection never guesses`,
+        `${reading.found} shown comboboxes on ${from} have ${noName} and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(reading.unspaced, reading.named)} — ${nothing}, since a selection never guesses`,
       );
     }
     if (reading.found > 1) {
@@ -228,7 +236,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
       );
     }
     // A line says what a combobox with no accessible name was found by.
-    if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
+    if (standIn) pickerNamed = `${pickerNamed} (a combobox with ${noName}, found by ${standIn[0]})`;
     if (reading.disabled) throw refuse(STEP, record, "disabled", `the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
 
     if (reading.kind === "search") {
@@ -317,7 +325,7 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
     // The page shows the entry as it reads it, which may differ from the wanted text in white space.
     const shownAs = reading.chosen || entryText;
     for (;;) {
-      const shown = await within(page.evaluate(readControls, { mode: "reflected", kind, index, entry: shownAs, before, drawn, attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
+      const shown = await within(readPageControls(page, { mode: "reflected", kind, index, entry: shownAs, before, drawn, attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
       const elapsedMs = elapsedSince(selectedAt);
       if (shown && shown.instead) {
         const where = shown.instead.where === "field" ? "the field shows" : "the page draws";
@@ -385,6 +393,7 @@ const READ_STEP = "readOptions";
  * @returns {Promise<{ picker: string, kind: string, entries: string[], more: number, shows: string, path: string }>}
  */
 export async function readOptions(page, { picker, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(READ_STEP, record, page, "nothing was read");
   requireRecord(READ_STEP, record);
   const nothing = "nothing was read";
   const pickerName = plainName(picker);
@@ -396,9 +405,13 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
   const mark = newMark();
   const query = { mode: "picker", picker: pickerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
   // The picker the step has opened, read again by its mark (see OPENED).
-  const readMarked = () => within(page.evaluate(readControls, { ...query, marked: true }), READING_BOUND_MS);
+  const readMarked = () => within(readPageControls(page, { ...query, marked: true }), READING_BOUND_MS);
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(READ_STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   try {
-    const first = await within(page.evaluate(readControls, query), READING_BOUND_MS);
+    const first = await within(readPageControls(page, query), READING_BOUND_MS);
     if (!first) throw refuse(READ_STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
     if (first.found === 0) {
       throw refuse(
@@ -409,12 +422,13 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
       );
     }
     const standIn = STAND_INS[first.by];
+    const noName = first.fallbackNamed ? "no explicit accessible name" : "no accessible name";
     if (first.found > 1 && standIn) {
       throw refuse(
         READ_STEP,
         record,
         "ambiguous",
-        `${first.found} shown comboboxes on ${from} have no accessible name and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(first.unspaced, first.named)}, and a reading never guesses — ${nothing}`,
+        `${first.found} shown comboboxes on ${from} have ${noName} and are found by ${standIn[1]}: ${pickerNamed}${unspacedNote(first.unspaced, first.named)}, and a reading never guesses — ${nothing}`,
       );
     }
     if (first.found > 1) {
@@ -426,7 +440,7 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
       );
     }
     // A line says what a combobox with no accessible name was found by.
-    if (standIn) pickerNamed = `${pickerNamed} (a combobox with no accessible name, found by ${standIn[0]})`;
+    if (standIn) pickerNamed = `${pickerNamed} (a combobox with ${noName}, found by ${standIn[0]})`;
     if (first.disabled) throw refuse(READ_STEP, record, "disabled", `the picker ${pickerNamed} on ${from} is disabled — ${nothing}`);
     if (first.kind === "search") throw refuse(READ_STEP, record, "no-list", `the picker ${pickerNamed} on ${from} is a search field, which lists entries only for typed text — ${nothing}`);
 

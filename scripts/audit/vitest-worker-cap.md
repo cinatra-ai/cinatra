@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 18 workflow files carry a test-runner step;
-11 of them are governed. 137 invocations:
-95 governed, 13 hosted-pinned,
+11 of them are governed. 139 invocations:
+97 governed, 13 hosted-pinned,
 20 node:test, 8 playwright,
 1 extension-suite-gate.
 
@@ -209,6 +209,8 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | perpetual-core | name%3AData-safety%20UI%20unit%20tests | 2816 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3AAuthz%20inventory%20drift%20gate | 2821 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-extension-suites | name%3AExtension%20suites%20%E2%80%94%20discovery%20gate%20(every%20materialized%20suite) | 2926 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
+| build-image.yml | steps-browser | name%3AStep%20tests%20on%20the%20page%20double | 3015 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | steps-browser | name%3AStep%20tests%20with%20E2E_STEPS_UNIT_BROWSER%3D1 | 3032 | CI_RUNNER_E2E | vitest | governed | 3 |
 | build-image.yml | e2e-rbac | id%3Ae2e | 3231 | CI_RUNNER_E2E | playwright | playwright | 3 |
 | build-image.yml | chat-hitl-held-turn-e2e | id%3Ae2e | 3557 | ubuntu-latest | playwright | playwright | 1 |
 | build-image.yml | chat-hitl-held-turn-e2e | name%3ALifecycle-moment%20triple%20%E2%80%94%20real-DB%20tier%20(cinatra%232928%2C%20W2a) | 3706 | ubuntu-latest | vitest | hosted-pinned | 1 |
@@ -227,7 +229,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | crm-migration-gate.yml | gate | name%3AOAS%20banned-primitives%20gate%20tests | 152 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3ACRM%20pointer-row%20gate%20tests | 155 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
 | dashboard-live-verify.yml | smoke | id%3Ae2e | 440 | CI_RUNNER_E2E | playwright | playwright | none |
-| dev-hmr-smoke.yml | hmr-smoke | name%3ARun%20warm%20dev-session%20HMR%20smoke%20(Playwright) | 192 | CI_RUNNER_E2E | playwright | playwright | none |
+| dev-hmr-smoke.yml | hmr-smoke | name%3ARun%20warm%20dev-session%20HMR%20smoke%20(Playwright) | 190 | %24%7B%7B%2C%20(github.event_name%2C%20!%3D%2C%20pull_request%2C%20%7C%7C%2C%20github.event.pull_request.head.repo.full_name%2C%20%3D%3D%2C%20github.repository)%2C%20%26%26%2C%20fromJSON(vars.CI_RUNNER_DEV_SMOKE%2C%20%7C%7C%2C%20ubuntu-latest)%2C%20%7C%7C%2C%20ubuntu-latest%2C%20%7D%7D | playwright | playwright | none |
 | e2e-app-suites.yml | render-smoke-e2e | id%3Ae2e | 318 | CI_RUNNER_E2E | playwright | playwright | none |
 | e2e-app-suites.yml | notifications-e2e | id%3Ae2e | 541 | CI_RUNNER_E2E | playwright | playwright | none |
 | e2e-app-suites.yml | agents-run-invariants | name%3ARun%20agents-run%20tunnel-wiring%20invariant | 610 | CI_RUNNER_E2E | playwright | playwright | none |

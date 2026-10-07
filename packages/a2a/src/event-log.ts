@@ -470,6 +470,58 @@ export async function resolveLatestWayflowGateTaskId(
   return typeof taskId === "string" && taskId.length > 0 ? taskId : null;
 }
 
+/**
+ * cinatra#3745 — the step of the flow that paused a run at a gate, as the flow
+ * runtime signed it: `{ node, attestation }`, where `attestation` is
+ * `g1:<hex>` over (context id, gate task id, node id) with the runtime's
+ * dedicated key. Stored beside the gate's task id, as signed, under
+ * `cinatra:wayflow:gate-node:<runId>:<taskId>` with the gate sequence's time
+ * to live. A reader verifies the claim before it relies on the node.
+ *
+ * Written best-effort by the caller: this record never gates the interrupt.
+ */
+export type WayflowGateNodeClaim = { node: string; attestation: string };
+
+function gateNodeClaimKey(runId: string, taskId: string): string {
+  return `cinatra:wayflow:gate-node:${runId}:${taskId}`;
+}
+
+function parseWayflowGateNodeClaim(value: unknown): WayflowGateNodeClaim | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { node, attestation } = value as { node?: unknown; attestation?: unknown };
+  if (typeof node !== "string" || node.length === 0) return null;
+  if (typeof attestation !== "string" || attestation.length === 0) return null;
+  return { node, attestation };
+}
+
+export async function rememberWayflowGateNodeClaim(
+  runId: string,
+  taskId: string,
+  claim: WayflowGateNodeClaim,
+): Promise<void> {
+  const parsed = parseWayflowGateNodeClaim(claim);
+  if (!runId || !taskId || !parsed) return;
+  const r = getPublisher();
+  await r.set(gateNodeClaimKey(runId, taskId), JSON.stringify(parsed), "EX", GATE_SEQUENCE_TTL_S);
+}
+
+/** Read back the claim `rememberWayflowGateNodeClaim` stored for (run, gate
+ *  task); null when absent, expired or malformed. */
+export async function resolveWayflowGateNodeClaim(
+  runId: string,
+  taskId: string,
+): Promise<WayflowGateNodeClaim | null> {
+  if (!runId || !taskId) return null;
+  const r = getPublisher();
+  const raw = await r.get(gateNodeClaimKey(runId, taskId));
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  try {
+    return parseWayflowGateNodeClaim(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // #1987 (F1 deferred from #1960) — ANSWERED-gate-submission provenance.
 //

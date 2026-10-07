@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: a834fe85613a8734b0cbc4ace8dfc950031daa71d55ee54b010863b9fe15723a
+  # Source job SHA256: 589393084ee1f8064ce8e778362ba624c51fa2ab64afb8c18fe8a6a9b0711125
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
