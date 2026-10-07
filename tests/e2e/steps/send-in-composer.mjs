@@ -34,7 +34,7 @@ import {
   newRunSignal,
   readRunSignals,
 } from "./dispatch-run.mjs";
-import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 import { CONTROL_CHARACTER, WINDOW_SENT_BOUND_MS, typeThrough } from "./type-in-window.mjs";
 import { RUN_COMPLETION_SELECTOR, RUN_STATUS_SELECTOR } from "./watch-run.mjs";
 
@@ -131,6 +131,7 @@ export async function sendInComposer(page, { prompt, composer, record, bounds } 
   const composerName = plainName(composer);
   if (typeof composer !== "string" || composerName === "") throw input("name the composer, such as Send message");
   const bound = readBounds(STEP, record, SEND_IN_COMPOSER_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const named = quotedName(composerName);
 
   const key = `__stepComposer${newMark()}`;
