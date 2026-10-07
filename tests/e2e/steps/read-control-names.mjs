@@ -19,7 +19,7 @@
 // NOTHING LEFT OUT. A control without a name is listed, with an empty name: a
 // reading that left it out could not show that its name is missing.
 import { CONTROL_NAMES_LISTED, describeNames, describePart, plainName, quotedName, readPageControls, unspacedNote, withoutAddress } from "./page-controls.mjs";
-import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, requireRecord } from "./step-kit.mjs";
+import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, refuseStaleScope, requireRecord } from "./step-kit.mjs";
 
 const STEP = "readControlNames";
 
@@ -76,6 +76,7 @@ export async function readControlNames(page, { record, within: scope, bounds } =
     throw refuse(STEP, record, "input", `name the part of the page by the name of a landmark, a heading or a labelled section, such as Settings — ${nothing}`);
   }
   const bound = readBounds(STEP, record, READ_CONTROL_NAMES_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
 
   const on = pathOf(page.url());
   const query = { mode: "names", within: scopeName, limit: READ_CONTROL_NAMES_LIMIT, listed: CONTROL_NAMES_LISTED };

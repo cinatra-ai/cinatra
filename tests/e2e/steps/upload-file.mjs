@@ -21,7 +21,7 @@ import { statSync } from "node:fs";
 import { basename } from "node:path";
 
 import { NAMES_LISTED, listed, quoted } from "./control-kit.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, pollUntilSettled, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, pollUntilSettled, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "uploadFile";
 
@@ -125,6 +125,7 @@ function describeFileInput(input) {
  * @returns {Promise<{ control: string, file: string, path: string, elapsedMs: number }>}
  */
 export async function uploadFile(page, { control, path, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was pressed");
   requireRecord(STEP, record);
   const nothing = "nothing was pressed";
   if (typeof control !== "string" || control.trim() === "") {

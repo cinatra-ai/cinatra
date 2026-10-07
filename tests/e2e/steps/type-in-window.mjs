@@ -51,7 +51,7 @@ import {
   unspacedNote,
   waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, errorClass, pathOf, pause, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "typeInWindow";
 
@@ -296,6 +296,7 @@ export async function typeInWindow(page, { field, text, record, send = false, re
     throw input("name the part of the page by the name of a landmark, a heading or a labelled section, such as Review");
   }
   const bound = readBounds(STEP, record, TYPE_IN_WINDOW_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
 
   const typed = await typeThrough(page, { step: STEP, record, field: wanted, text, replace, send, scope: scopeName, bound, missing: "no-field" });
   const act = replace ? "replaced the text of" : "typed into";

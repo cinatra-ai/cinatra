@@ -80,7 +80,7 @@ import {
   unspacedNote,
   waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "selectFrom";
 
@@ -176,6 +176,7 @@ async function waitForClose(page, { mark, readMarked, bound, onlyWhileHidden }) 
  * @returns {Promise<{ picker: string, entry: string, kind: string, via: "state" | "confirmation", path: string, elapsedMs: number }>}
  */
 export async function selectFrom(page, { picker, entry, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was selected");
   requireRecord(STEP, record);
   const nothing = "nothing was selected";
   const pickerName = plainName(picker);
@@ -392,6 +393,7 @@ const READ_STEP = "readOptions";
  * @returns {Promise<{ picker: string, kind: string, entries: string[], more: number, shows: string, path: string }>}
  */
 export async function readOptions(page, { picker, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(READ_STEP, record, page, "nothing was read");
   requireRecord(READ_STEP, record);
   const nothing = "nothing was read";
   const pickerName = plainName(picker);

@@ -33,7 +33,7 @@ import {
   standingRequests,
   takeStandingReading,
 } from "./read-standing-requests.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, pause, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "navigateTo";
 
@@ -232,6 +232,7 @@ function describeInstead(reading) {
  * @returns {Promise<{ path: string, from: string, pressed: boolean, elapsedMs: number, furtherPage?: import("@playwright/test").Page, standing?: { count: number, bound: number, counted: boolean } }>}
  */
 export async function navigateTo(page, { path, record, bounds, furtherPage, standingBound } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was pressed");
   requireRecord(STEP, record);
   const nothing = "nothing was pressed";
   if (!isPagePath(path) || /[?#]/.test(path)) {
