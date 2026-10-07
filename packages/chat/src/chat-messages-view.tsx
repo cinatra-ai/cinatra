@@ -21,6 +21,7 @@
 
 import { isRunStartToolName } from "./run-start-tool-names";
 import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -641,7 +642,13 @@ function AgentRunTurnSlot({
       return next;
     });
   }, []);
-  const turnCarriesSettledSchedule = settledScheduleCards.size > 0;
+  // A durable view without a producing-step stamp is drawn by the turn's
+  // sibling view list. Associate it only through the admitted body's run ID,
+  // never through its opaque reference or the first run in the transcript.
+  const scheduleTurn = useContext(ScheduleWaitContext);
+  const turnLevelSettledSchedule = scheduleTurn !== null &&
+    [...scheduleTurn.settledScheduleRuns.values()].includes(runId);
+  const turnCarriesSettledSchedule = settledScheduleCards.size > 0 || turnLevelSettledSchedule;
 
   const [gateSignal, setGateSignal] = useState<string | null>(null);
   const onGateChange = useCallback(
@@ -945,6 +952,13 @@ function AgentRunTurnSlot({
   // such card, this container does not exist and the turn is exactly what it
   // always was.
   if (!turnCarriesSettledSchedule) return turn;
+  if (turnLevelSettledSchedule && scheduleTurn?.screenContainer) {
+    return <>{turn}{createPortal(
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>,
+      scheduleTurn.screenContainer,
+      runId,
+    )}</>;
+  }
   return (
     <>
       {turn}
@@ -2030,6 +2044,8 @@ const ScheduleWaitContext = createContext<{
   reportWaitingRunIds: (runIds: readonly string[]) => void;
   reportFiredRunIds: (runIds: readonly string[]) => void;
   reportFiredRecurringRunIds: (runIds: readonly string[]) => void;
+  settledScheduleRuns: ReadonlyMap<string, string>;
+  screenContainer: HTMLDivElement | null;
 } | null>(null);
 
 /** The assistant turn's body, and the scope of the correction inside it. */
@@ -2040,6 +2056,18 @@ function ScheduleWaitTurnBody({
   className?: string;
   children: ReactNode;
 }) {
+  const [settledScheduleRuns, setSettledScheduleRuns] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [screenContainer, setScreenContainer] = useState<HTMLDivElement | null>(null);
+  const registerSettledSchedule = useCallback((cardId: string, settled: boolean, runId?: string | null) => {
+    const admittedRunId = settled && typeof runId === "string" && runId.trim() !== "" ? runId : null;
+    setSettledScheduleRuns((previous) => {
+      if ((previous.get(cardId) ?? null) === admittedRunId) return previous;
+      const next = new Map(previous);
+      if (admittedRunId === null) next.delete(cardId);
+      else next.set(cardId, admittedRunId);
+      return next;
+    });
+  }, []);
   const [waitingRunIds, setWaitingRunIds] = useState<readonly string[]>([]);
   const [firedRunIds, setFiredRunIds] = useState<readonly string[]>([]);
   const [firedRecurringRunIds, setFiredRecurringRunIds] = useState<readonly string[]>([]);
@@ -2068,6 +2096,8 @@ function ScheduleWaitTurnBody({
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
+      settledScheduleRuns,
+      screenContainer,
     }),
     [
       waitingRunIds,
@@ -2076,11 +2106,18 @@ function ScheduleWaitTurnBody({
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
+      settledScheduleRuns,
+      screenContainer,
     ],
   );
   return (
     <ScheduleWaitContext.Provider value={value}>
-      <div className={className}>{children}</div>
+      <SettledScheduleRegisterProvider register={registerSettledSchedule}>
+        <div className={className}>
+          {children}
+          {settledScheduleRuns.size > 0 ? <div ref={setScreenContainer} data-agent-run-follow-up-slots="" /> : null}
+        </div>
+      </SettledScheduleRegisterProvider>
     </ScheduleWaitContext.Provider>
   );
 }
