@@ -34,7 +34,12 @@ export async function projectHitlRenderInputs(
     let manifest: { name?: unknown; cinatra?: { dependencies?: unknown; fieldRenderers?: unknown } } | undefined;
     for (const root of [resolveDevExtensionSourceRoot(), resolveAgentRuntimeMountDir()]) {
       try {
-        const candidate = JSON.parse(readFileSync(join(root, binding.declaredBy, "package.json"), "utf8")) as typeof manifest;
+        let candidate: typeof manifest;
+        // Maintained dev sources use scope/name without the leading @; runtime
+        // mounts may retain npm's @scope/name. Both are exact bounded paths.
+        for (const packagePath of [binding.declaredBy.slice(1), binding.declaredBy]) {
+          try { candidate = JSON.parse(readFileSync(join(root, packagePath, "package.json"), "utf8")) as typeof manifest; break; } catch { /* Try the other maintained namespace layout. */ }
+        }
         const declarations = candidate?.cinatra?.fieldRenderers;
         if (candidate?.name === binding.declaredBy && Array.isArray(declarations) && declarations.some(b => b?.id === binding.id && JSON.stringify(b.params ?? {}) === JSON.stringify(binding.params ?? {}))) { manifest = candidate; break; }
       } catch { /* Missing declaration means no display projection. */ }

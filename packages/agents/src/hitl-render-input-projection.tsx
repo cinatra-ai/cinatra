@@ -17,7 +17,8 @@ export function useHitlRenderInputValue(bindingId: string, props: FieldRendererP
   const declaration = props.bindingParams?.renderInputs as { siteHost?: unknown } | undefined;
   if (!declaration?.siteHost || !props.value || typeof props.value !== "object" || Array.isArray(props.value)) return props.value;
   const original = props.value as Record<string, unknown>;
-  const { siteHost: _untrustedHost, ...value } = original;
+  const value = { ...original };
+  delete value.siteHost;
   const projection = scope?.gate.renderInputs;
   const spec = declaration.siteHost as Record<string, unknown>;
   const identities = spec.identityFields;

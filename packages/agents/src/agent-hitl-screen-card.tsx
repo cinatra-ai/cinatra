@@ -450,17 +450,17 @@ export function useAgentHitlScreenState(params: {
   onResolved?: (state: AgentHitlScreenState) => void;
 }): AgentHitlScreenState | null {
   const { runId, wireRef, reloadToken, auth, carried, onResolved } = params;
-  const [resolved, setResolved] = useState<{ runId: string; state: AgentHitlScreenState } | null>(
+  const [resolved, setResolved] = useState<{ runId: string; state: AgentHitlScreenState; displayKey?: string; displayAuth?: typeof auth } | null>(
     () => {
       if (!runId || !carried) return null;
       if (carried.state !== "asking") return { runId, state: carried };
-      const { renderInputs: _oldDisplay, ...gate } = carried.gate;
+      const gate = { ...carried.gate };
+      delete gate.renderInputs;
       return { runId, state: { ...carried, gate } };
     },
   );
   const [focusToken, setFocusToken] = useState(0);
   const displayReadKey = JSON.stringify([runId, wireRef, reloadToken, focusToken]);
-  const displayReadRef = useRef<{ key: string; auth: typeof auth } | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -472,13 +472,6 @@ export function useAgentHitlScreenState(params: {
   useEffect(() => {
     if (!runId) return;
     let live = true;
-    // Keep the actionable gate on a failed refresh, but never keep optional
-    // destination data while a new gate/run/focus read is pending.
-    setResolved(previous => {
-      if (!previous || previous.state.state !== "asking" || !previous.state.gate.renderInputs) return previous;
-      const { renderInputs: _oldDisplay, ...gate } = previous.state.gate;
-      return { ...previous, state: { ...previous.state, gate } };
-    });
     void (async () => {
       const state = auth
         ? await readHitlScreenThroughBroker(runId, auth)
@@ -486,11 +479,11 @@ export function useAgentHitlScreenState(params: {
       // A read that could not be completed is a FAILURE, not a state: the last
       // authorized answer stands, and an unread card stays silent.
       if (!live || state === null) return;
-      displayReadRef.current = { key: displayReadKey, auth };
-      setResolved({ runId, state });
+      setResolved({ runId, state, displayKey: displayReadKey, displayAuth: auth });
       // Optional authorization-dependent display is never seeded from carry.
       if (state.state === "asking") {
-        const { renderInputs: _display, ...gate } = state.gate;
+        const gate = { ...state.gate };
+        delete gate.renderInputs;
         onResolved?.({ ...state, gate });
       } else onResolved?.(state);
     })();
@@ -506,8 +499,9 @@ export function useAgentHitlScreenState(params: {
   // An answer that belongs to a DIFFERENT run is not this card's answer.
   if (!resolved || resolved.runId !== runId) return null;
   const state = resolved.state;
-  if (state.state !== "asking" || !state.gate.renderInputs || (displayReadRef.current?.key === displayReadKey && displayReadRef.current.auth === auth)) return state;
-  const { renderInputs: _staleDisplay, ...gate } = state.gate;
+  if (state.state !== "asking" || !state.gate.renderInputs || (resolved.displayKey === displayReadKey && resolved.displayAuth === auth)) return state;
+  const gate = { ...state.gate };
+  delete gate.renderInputs;
   return { ...state, gate };
 }
 
