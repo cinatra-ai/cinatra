@@ -83,6 +83,6 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json(NO_SCREEN, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const state = await agentHitlScreenStateForRun(run).catch(() => null);
+  const state = await agentHitlScreenStateForRun(run, caller.actorCtx).catch(() => null);
   return Response.json(state ?? NO_SCREEN, { headers: { "Cache-Control": "no-store" } });
 }

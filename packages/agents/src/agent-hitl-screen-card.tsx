@@ -103,6 +103,7 @@
 //     their own work, not this slice's.
 // ---------------------------------------------------------------------------
 
+import { HitlRenderInputProvider } from "./hitl-render-input-projection";
 import {
   useCallback,
   useEffect,
@@ -450,9 +451,16 @@ export function useAgentHitlScreenState(params: {
 }): AgentHitlScreenState | null {
   const { runId, wireRef, reloadToken, auth, carried, onResolved } = params;
   const [resolved, setResolved] = useState<{ runId: string; state: AgentHitlScreenState } | null>(
-    () => (runId && carried ? { runId, state: carried } : null),
+    () => {
+      if (!runId || !carried) return null;
+      if (carried.state !== "asking") return { runId, state: carried };
+      const { renderInputs: _oldDisplay, ...gate } = carried.gate;
+      return { runId, state: { ...carried, gate } };
+    },
   );
   const [focusToken, setFocusToken] = useState(0);
+  const displayReadKey = JSON.stringify([runId, wireRef, reloadToken, focusToken]);
+  const displayReadRef = useRef<{ key: string; auth: typeof auth } | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -464,6 +472,13 @@ export function useAgentHitlScreenState(params: {
   useEffect(() => {
     if (!runId) return;
     let live = true;
+    // Keep the actionable gate on a failed refresh, but never keep optional
+    // destination data while a new gate/run/focus read is pending.
+    setResolved(previous => {
+      if (!previous || previous.state.state !== "asking" || !previous.state.gate.renderInputs) return previous;
+      const { renderInputs: _oldDisplay, ...gate } = previous.state.gate;
+      return { ...previous, state: { ...previous.state, gate } };
+    });
     void (async () => {
       const state = auth
         ? await readHitlScreenThroughBroker(runId, auth)
@@ -471,8 +486,13 @@ export function useAgentHitlScreenState(params: {
       // A read that could not be completed is a FAILURE, not a state: the last
       // authorized answer stands, and an unread card stays silent.
       if (!live || state === null) return;
+      displayReadRef.current = { key: displayReadKey, auth };
       setResolved({ runId, state });
-      onResolved?.(state);
+      // Optional authorization-dependent display is never seeded from carry.
+      if (state.state === "asking") {
+        const { renderInputs: _display, ...gate } = state.gate;
+        onResolved?.({ ...state, gate });
+      } else onResolved?.(state);
     })();
     return () => {
       live = false;
@@ -484,7 +504,11 @@ export function useAgentHitlScreenState(params: {
   }, [runId, wireRef, reloadToken, focusToken, auth]);
 
   // An answer that belongs to a DIFFERENT run is not this card's answer.
-  return resolved && resolved.runId === runId ? resolved.state : null;
+  if (!resolved || resolved.runId !== runId) return null;
+  const state = resolved.state;
+  if (state.state !== "asking" || !state.gate.renderInputs || (displayReadRef.current?.key === displayReadKey && displayReadRef.current.auth === auth)) return state;
+  const { renderInputs: _staleDisplay, ...gate } = state.gate;
+  return { ...state, gate };
 }
 
 /**
@@ -1058,8 +1082,8 @@ export function AgentHitlScreenCard({
   }, []);
 
   // THE HOST OWNS THE GATE WHEN IT OWNS THE DRAWING. See the header: a host that
-  // hands in a screen has already decided the run is asking, so the card asks
-  // the server nothing on that path and can never withhold what its host draws.
+  // hands in a screen has already decided the run is asking. The optional
+  // authorized display read below can never withhold what that host draws.
   //
   // AND ONLY WHERE THERE IS A SESSION TO DRAW IT WITH (convergence). The
   // production topology already only supplies a screen from the run panel,
@@ -1072,14 +1096,14 @@ export function AgentHitlScreenCard({
   const hostSuppliesScreen = screen !== undefined && cookieSession;
 
   // Hooks run unconditionally (rules of hooks); a surface with no declared host —
-  // or one that supplies its own screen — asks for nothing, because the empty
-  // run id short-circuits the read.
+  // asks for nothing, because the empty run id short-circuits the read. A host
+  // screen still uses the same read transport for optional display data only.
   const onResolvedState = useCallback(
     (next: AgentHitlScreenState) => writeCarry({ state: next }),
     [writeCarry],
   );
   const state = useAgentHitlScreenState({
-    runId: present && !hostSuppliesScreen ? runId : "",
+    runId: present ? runId : "",
     wireRef: wireRef ?? null,
     reloadToken,
     auth,
@@ -1362,7 +1386,7 @@ export function AgentHitlScreenCard({
       data-lifecycle-card-host={host}
       data-conformance-id="agent-hitl-screen-card"
     >
-      {body}
+      <HitlRenderInputProvider runId={runId} gate={gate}>{body}</HitlRenderInputProvider>
     </div>
   );
 }
