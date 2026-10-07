@@ -1370,7 +1370,7 @@ describe("a finished run keeps its resolved gate on the one rail (cinatra#3449)"
     expect(railEntryLabels(column)).toEqual([
       "Draft the post",
       "Pick the image",
-      "Review · Continued",
+      "Review · continued",
       "What this run made",
     ]);
 
