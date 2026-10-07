@@ -630,6 +630,10 @@ export function ScheduleProposalCard({
   // saying "the rows below still take a change" over rows that take nothing.
   // The signal is the body's own `stopped`, which is exactly what the rows
   // freeze on below, so the sentence and the rows cannot come to two answers.
+  //
+  // The readings that have not fired are named (cinatra#2853 fix leg 2), so the
+  // turn can draw section VI's proposal sentence; a card with no body still
+  // reports `other`.
   useReportScheduleReading(
     body === null
       ? "other"
@@ -639,7 +643,7 @@ export function ScheduleProposalCard({
           ? "spent-one-off"
           : scheduleReadingOf(body, firedOnce) === "fired-recurring"
             ? "fired-recurring"
-            : "other",
+            : "never-fired",
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);

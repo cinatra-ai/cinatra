@@ -1281,11 +1281,18 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
  * schedule was still reported as `fired-recurring`, because the firing that
  * elects that reading stays true after the stop, so the turn kept the
  * still-recurring claim standing over a card that had just gone read-only.
+ *
+ * AND A FIFTH (cinatra#2853 fix leg 2). The readings that have not fired —
+ * first shown, configured and expired — are named too: section VI gives them
+ * one sentence of their own, see `RUN_START_SCHEDULE_PROPOSAL_SENTENCE`, so a
+ * card with a body that is neither stopped nor fired reports `never-fired`, and
+ * `other` is left to a card with no reading at all.
  */
 export type ScheduleCardReading =
   | "spent-one-off"
   | "fired-recurring"
   | "stopped-recurring"
+  | "never-fired"
   | "other";
 
 const ScheduleReadingSinkContext = createContext<

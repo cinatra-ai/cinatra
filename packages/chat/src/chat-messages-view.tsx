@@ -97,6 +97,7 @@ import {
   runIsWaitingForItsSchedule,
   RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
   RUN_START_SCHEDULE_FIRED_SENTENCE,
+  RUN_START_SCHEDULE_PROPOSAL_SENTENCE,
   RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE,
 } from "@cinatra-ai/agents/run-status";
 import { useConversationCredential } from "./conversation-credential";
@@ -1001,9 +1002,10 @@ function carriedMomentView(view: Record<string, unknown>): boolean {
  * The section gives the two fired readings their own words and gives them
  * DIFFERENT words — see `RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE` and
  * `RUN_START_SCHEDULE_FIRED_SENTENCE` for the sentences and for why each is a
- * standing sentence rather than a clause after a dispatch head. Every other
- * reading draws no line of its own: a schedule that has never run says nothing
- * extra above its rows, and a graded round measured that as correct.
+ * standing sentence rather than a clause after a dispatch head. The readings
+ * that have not fired — first shown, configured and expired — draw section
+ * VI's proposal sentence (`RUN_START_SCHEDULE_PROPOSAL_SENTENCE`, cinatra#2853
+ * fix leg 2), and only a card with no reading yet draws no line of its own.
  *
  * AND THE STOP IS A READING TOO (fix leg 8). Section VI's Cancel schedule
  * "stops the recurring schedule and then leaves the rows no longer editable",
@@ -1018,6 +1020,7 @@ function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
   if (reading === "stopped-recurring") return RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE;
   if (reading === "fired-recurring") return RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE;
   if (reading === "spent-one-off") return RUN_START_SCHEDULE_FIRED_SENTENCE;
+  if (reading === "never-fired") return RUN_START_SCHEDULE_PROPOSAL_SENTENCE;
   return null;
 }
 
@@ -1228,9 +1231,9 @@ function OrderedPartsSection({
   // ABOVE the sentence. Prose below a slot is not what this measured, and is
   // left exactly as it was drawn.
   //
-  // AND ONLY THE READINGS THAT HAVE A SENTENCE. A schedule that has never fired
-  // draws no line of its own, so its lead-in is the turn's ONE line and stays —
-  // which is what §VI's first-shown and configured examples draw.
+  // AND EVERY READING NOW HAS A SENTENCE. §VI's first-shown, configured and
+  // expired examples draw the proposal sentence as the turn's ONE line, so the
+  // lead-in stands only while the card has not yet reported (fix leg 2, #2853).
   const [standingLineSlots, setStandingLineSlots] = useState<readonly number[]>([]);
   const onStandingLineChange = useCallback((slot: number, drawn: boolean) => {
     setStandingLineSlots((prev) => {
