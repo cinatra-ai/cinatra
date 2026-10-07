@@ -87,6 +87,42 @@ function compileClaimValidator(jsonSchema: Record<string, unknown>): z.ZodType<u
   });
 }
 
+// A claim's RECORD IDENTITY, declared inside the claim's own inline JSON Schema
+// under the keyword `x-cinatra-identity` (a JSON Schema validator ignores an
+// unknown keyword, so the schema validates exactly as before). The declaration
+// is well-formed only as a non-empty list of distinct field names, each a key of
+// the schema's `properties`; anything else answers null.
+const CLAIM_IDENTITY_KEYWORD = "x-cinatra-identity";
+
+function claimIdentityFields(jsonSchema: Record<string, unknown>): readonly string[] | null {
+  const declared = jsonSchema[CLAIM_IDENTITY_KEYWORD];
+  const properties = jsonSchema.properties;
+  if (!Array.isArray(declared) || declared.length === 0) return null;
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) return null;
+  const fields: string[] = [];
+  for (const field of declared) {
+    if (typeof field !== "string" || fields.includes(field) || !Object.hasOwn(properties, field)) return null;
+    fields.push(field);
+  }
+  return fields;
+}
+
+// The identity key of a record of a claim-governed type: the declared fields'
+// values, in the declared order, as stored, joined with ':' — null unless every
+// one of them is a string whose trim is not empty.
+function claimIdentityKey(fields: readonly string[]): (data: unknown) => string | null {
+  return (data) => {
+    if (data === null || typeof data !== "object") return null;
+    const values: string[] = [];
+    for (const field of fields) {
+      const value = (data as Record<string, unknown>)[field];
+      if (typeof value !== "string" || value.trim() === "") return null;
+      values.push(value);
+    }
+    return values.join(":");
+  };
+}
+
 function registerOneArtifactDir(dir: string): boolean {
   const pkgPath = path.join(dir, "package.json");
   if (!existsSync(pkgPath)) return false;
@@ -281,16 +317,58 @@ function registerDeclaredArtifactTypes(
     // activation evidence, not a second registrar." A pack registers ONLY the types
     // it OWNS (a self-namespaced id, `@scope/pkg:local` where `@scope/pkg` is this
     // package). A cross-namespace claim — WITH or WITHOUT an inline schema — is
-    // never registered as a TYPE here; its owning package is the sole registrar.
+    // never registered as a TYPE here; its owning package is the sole registrar
+    // (the one exception, a type nobody registers, is the claim-governed type
+    // below, which yields to any registrar).
     // (The registry is replace-by-id, so shadowing another package's registrant and
     // then reaping it via this pack's removeByPackage would delete the real owner's
     // type — and, with the registry conflict guard, would throw at boot.) But a
     // well-formed foreign claim IS recorded as a cross-namespace renderer target
     // (cinatra#1896) so this pack's semantic renderers register for it below; a
     // malformed / non-namespaced id (owner === null) is skipped entirely.
+    //
+    // CLAIM-GOVERNED TYPE: a well-formed foreign claim whose inline schema
+    // declares the record identity (`x-cinatra-identity`) is OFFERED to the
+    // registry as a type governed by this claim. The registry takes it only
+    // while nobody has registered the type; a type the host or its own package
+    // registered keeps its own definition, and a later registration by either
+    // replaces the claim-governed one. It validates records, it is no artifact
+    // this pack presents (no `isArtifact`), and it is not counted as an owned
+    // type. The reconcile above removes it with this pack's other registrations,
+    // so a rescan offers it again. A claim without the declaration is unchanged.
     const owner = claimedTypeRegisteringPackage(claim.type);
     if (owner !== packageName) {
       if (owner !== null) crossNamespaceRendererTypeIds.push(claim.type);
+      if (owner !== null && claim.schema && Object.hasOwn(claim.schema, CLAIM_IDENTITY_KEYWORD)) {
+        const fields = claimIdentityFields(claim.schema);
+        const governedSchema = fields ? compileClaimValidator(claim.schema) : null;
+        if (!fields || !governedSchema) {
+          console.warn(
+            `[artifacts:bridge] ${packageName} type '${claim.type}' ` +
+              (fields
+                ? "has an uncompilable inline JSON Schema"
+                : `declares a malformed ${CLAIM_IDENTITY_KEYWORD} (it must list distinct field names of the schema's properties)`) +
+              " — not registered as a claim-governed type",
+          );
+        } else {
+          objectTypeRegistry.registerGovernedByClaim(
+            {
+              type: claim.type,
+              category: "report",
+              schema: governedSchema,
+              lifecycle: { sources: ["agent", "import"], mutableBy: ["agent"] },
+              renderers: {
+                listRow: GenericObjectListRow,
+                card: GenericObjectCard,
+                detail: GenericObjectDetail,
+              },
+              dispositions: claim.dispositions ?? { projection: "artifact-safe" },
+              identityKey: claimIdentityKey(fields),
+            },
+            packageName,
+          );
+        }
+      }
       continue;
     }
     // Enforce the type's inline JSON Schema when present; fall back to a permissive
