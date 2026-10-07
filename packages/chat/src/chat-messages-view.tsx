@@ -1993,7 +1993,7 @@ function MessageRenderableViews({
    *  changes which card renders. */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
-  const scheduleTurn = useContext(ScheduleWaitContext);
+  const { settledScheduleRuns, setScreenContainer } = useContext(ScheduleWaitContext) ?? {};
   const views = message.dataParts ?? [];
   if (views.length === 0) return null;
   const cards = views.map((view, i) => (
@@ -2010,8 +2010,8 @@ function MessageRenderableViews({
   return (
     <div className="flex flex-col gap-2">
       {cards}
-      {scheduleTurn && scheduleTurn.settledScheduleRuns.size > 0 ? (
-        <div ref={scheduleTurn.setScreenContainer} data-agent-run-follow-up-slots="" />
+      {settledScheduleRuns && settledScheduleRuns.size > 0 ? (
+        <div ref={setScreenContainer} data-agent-run-follow-up-slots="" />
       ) : null}
     </div>
   );
