@@ -34,15 +34,11 @@
 // to hold is the invariant that absence exposed: the arc's own COLOUR utility is
 // the registered indigo, and the mustard token never paints it.
 //
-// THE DARK READING IS THE ITEM ALREADY TRACKED ON THIS PULL REQUEST. The
-// registered indigo token resolves to the drawing's `#364e81` in light and to
-// the application's near-white dark primary in dark — which is exactly the
-// dark-theme token deviation this pull request already records for the chosen
-// row and the floor. Folding the arc onto the same token folds it into that one
-// item rather than opening a second: whatever settles the dark token settles the
-// arc with it, in one place.
+// THE ARC'S INDIGO IS PALETTE-INVARIANT (cinatra#3290). The action
+// token turns near-white in dark mode; the registered --indigo-ink token
+// stays at the drawing's #364e81. Both palettes take that shared value.
 //
-// Run:
+// // Run:
 //   cd packages/agents && pnpm exec vitest run \
 //     src/__tests__/review-gate-placeholder-indigo-arc-3053.test.tsx
 import { readFileSync } from "node:fs";
@@ -95,7 +91,7 @@ describe("the placeholder's spinning icon", () => {
     const { container } = render(<ReviewGatePlaceholder />);
 
     const classes = arcClasses(container);
-    expect(classes).toMatch(/\btext-primary\b/);
+    expect(classes).toMatch(/\btext-indigo-ink\b/);
     // The unregistered utility that painted the measured foreground.
     expect(classes).not.toMatch(/\btext-mustard-ink\b/);
   });
@@ -103,10 +99,10 @@ describe("the placeholder's spinning icon", () => {
 
 describe("the token the arc now takes", () => {
   it("is the drawing's indigo in the light theme", () => {
-    expect(registersColourToken("primary")).toBe(true);
+    expect(registersColourToken("indigo-ink")).toBe(true);
     // The application's own indigo, the one the drawing fixes for the chosen
     // row's edge and this arc alike.
-    expect(GLOBALS).toMatch(/--primary:\s*#364e81/i);
+    expect(GLOBALS).toMatch(/--indigo-ink:\s*#364e81/i);
   });
 
   it("names the token whose absence produced the measured foreground", () => {

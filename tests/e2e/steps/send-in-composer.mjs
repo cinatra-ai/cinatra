@@ -21,7 +21,7 @@
 // answer with no card within the bound is refused, naming an error the page
 // shows, the conversation's error card among them.
 //
-// NO RUN. The page is read as dispatchRun reads it (readRunSignals): the run
+// DEFAULT: NO RUN. The page is read as dispatchRun reads it (readRunSignals): the run
 // page's surface or the run panel the conversation draws, and a notification of
 // a run. A send after which either shows has started a run, which is
 // dispatchRun's act: it is refused, as soon as it shows.
@@ -34,11 +34,31 @@ import {
   newRunSignal,
   readRunSignals,
 } from "./dispatch-run.mjs";
-import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, pathOf, pause, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 import { CONTROL_CHARACTER, WINDOW_SENT_BOUND_MS, typeThrough } from "./type-in-window.mjs";
 import { RUN_COMPLETION_SELECTOR, RUN_STATUS_SELECTOR } from "./watch-run.mjs";
 
 const STEP = "sendInComposer";
+
+// Runs in the caller's document (including a frame scope). Chat admits a run
+// card before its progress panel can stand: an open review replaces that panel.
+// Its passive wrapper carries the actual run ID, independent of its contents.
+function readInlineRuns() {
+  const shown = (element) => {
+    if (!element.isConnected || getComputedStyle(element).visibility === "hidden") return false;
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || getComputedStyle(node).display === "none") return false;
+    }
+    return true;
+  };
+  return {
+    threadPath: location.pathname,
+    ids: Array.from(document.querySelectorAll("[data-inline-run-card]"))
+      .filter(shown)
+      .map((card) => card.getAttribute("data-inline-run-card"))
+      .filter((id) => typeof id === "string" && id.trim() !== ""),
+  };
+}
 
 /** A card the conversation draws for an answer: a lifecycle card, or a renderable view. */
 export const COMPOSER_CARD_SELECTOR = "[data-lifecycle-card], [data-view-type]";
@@ -111,26 +131,33 @@ function newCard(before, after) {
  * `not-typed` and `not-sent`; then `starts-run` (the send started a run, as
  * dispatchRun reads one: that is dispatchRun's act) and `no-card` (no new card
  * within the bound, naming an error the page shows). No line carries the
- * prompt.
+ * prompt. With explicit `expect: "run"`, waits for a new visible inline run
+ * card's concrete ID instead of a progress panel or notification and answers
+ * `{ composer, runId, threadPath, elapsedMs }`. The thread path is read from
+ * the caller's document; `no-run` refuses a missing ID within `cardMs`.
+ *
  *
  * @param {import("@playwright/test").Page} page
  * @param {{
  *   prompt: string,
  *   composer: string,
+ *   expect?: "card" | "run",
  *   record: import("./step-kit.mjs").StepRecord,
  *   bounds?: Partial<Record<keyof typeof SEND_IN_COMPOSER_BOUNDS, number>>,
  * }} options
- * @returns {Promise<{ composer: string, kind: string, path: string, elapsedMs: number }>}
+ * @returns {Promise<{ composer: string, kind: string, path: string, elapsedMs: number } | { composer: string, runId: string, threadPath: string, elapsedMs: number }>}
  */
-export async function sendInComposer(page, { prompt, composer, record, bounds } = /** @type {any} */ ({})) {
+export async function sendInComposer(page, { prompt, composer, expect = "card", record, bounds } = /** @type {any} */ ({})) {
   requireRecord(STEP, record);
   const nothing = "nothing was sent";
   const input = (/** @type {string} */ why) => refuse(STEP, record, "input", `${why} — ${nothing}`);
   if (typeof prompt !== "string" || prompt.trim() === "") throw input("hand the step a prompt with some text to send");
   if (CONTROL_CHARACTER.test(prompt)) throw input("the prompt is typed key by key, so it may hold no line break or other control character: a line break would press Enter");
+  if (expect !== "card" && expect !== "run") throw input("expect must be card or run");
   const composerName = plainName(composer);
   if (typeof composer !== "string" || composerName === "") throw input("name the composer, such as Send message");
   const bound = readBounds(STEP, record, SEND_IN_COMPOSER_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const named = quotedName(composerName);
 
   const key = `__stepComposer${newMark()}`;
@@ -147,16 +174,20 @@ export async function sendInComposer(page, { prompt, composer, record, bounds } 
   let before = null;
   /** @type {string[]} */
   let cardsBefore = [];
+  /** @type {string[]} */
+  let runsBefore = [];
   const from = pathOf(page.url());
   try {
     // What the page shows right before the press, so that only what the send brought counts.
     const noteBefore = async (/** @type {string} */ on) => {
       before = await within(page.evaluate(readRunSignals, { ...signals, set: true }), READING_BOUND_MS);
       const read = await within(page.evaluate(readCards, cards), READING_BOUND_MS);
-      if (!before || !before.same || !read) {
+      const inline = expect === "run" ? await within(page.evaluate(readInlineRuns), READING_BOUND_MS) : null;
+      if (!before || !before.same || !read || (expect === "run" && !inline)) {
         throw refuse(STEP, record, "unreadable", `the page on ${on} could not be read before the send — the text stays in the composer, and nothing was sent`);
       }
       cardsBefore = read;
+      runsBefore = inline?.ids ?? [];
     };
     const sent = await typeThrough(page, {
       step: STEP,
@@ -181,12 +212,20 @@ export async function sendInComposer(page, { prompt, composer, record, bounds } 
       const elapsedMs = elapsedSince(sent.pressedAt);
       if (reading) {
         last = reading;
-        const run = newRunSignal(before, reading);
+        if (expect === "run") {
+          const inline = await within(page.evaluate(readInlineRuns), READING_BOUND_MS);
+          const runId = inline?.ids.find((/** @type {string} */ id) => !runsBefore.includes(id));
+          if (runId) {
+            record(`${STEP}: ${message} started run ${quotedName(runId)} on ${inline.threadPath} after ${elapsedMs} ms`);
+            return { composer: composerName, runId, threadPath: inline.threadPath, elapsedMs };
+          }
+        }
+        const run = expect === "card" ? newRunSignal(before, reading) : null;
         if (run) {
           const how = run.via === "run" ? `it shows on ${reading.path} (${run.state})` : `the page notifies of it: ${quotedName(run.state)}`;
           throw refuse(STEP, record, "starts-run", `${message} started a run: ${how} — starting a run is dispatchRun's act`);
         }
-        const kind = shown ? newCard(cardsBefore, shown) : null;
+        const kind = expect === "card" && shown ? newCard(cardsBefore, shown) : null;
         if (kind !== null) {
           record(`${STEP}: ${message} is answered with a card ${kind} on ${reading.path} after ${elapsedMs} ms`);
           return { composer: composerName, kind, path: reading.path, elapsedMs };
@@ -197,6 +236,9 @@ export async function sendInComposer(page, { prompt, composer, record, bounds } 
     }
     const errors = last ? last.errors.filter((/** @type {string} */ line) => line && !before.errors.includes(line)) : [];
     const shows = errors.length > 0 ? `; it shows an error: ${quotedName(errors[0])}` : "";
+    if (expect === "run") {
+      throw refuse(STEP, record, "no-run", `${message} showed no new run ID within ${bound.cardMs} ms (the page is on ${pathOf(page.url())})${shows}`);
+    }
     throw refuse(STEP, record, "no-card", `${message} was answered with no card within ${bound.cardMs} ms (the page is on ${pathOf(page.url())})${shows}`);
   } finally {
     // The document's note of this send comes off, where the document still holds it.
