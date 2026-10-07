@@ -81,6 +81,7 @@ import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
   useRunReviewSlot,
+  useRunReviewRailRefresh,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
@@ -2751,6 +2752,28 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   const parkedOnProducedReview =
     status === "pending_approval" &&
     (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+  // Follow the card branch: the produced-output park wins over its spent
+  // interrupt, and only a discovered card carries a stable rail identity.
+  const reviewTaskId = parkedOnProducedReview
+    ? reviewSlot.ref !== null
+      ? reviewSlot.reviewTaskId
+      : null
+    : status === "pending_approval" &&
+    !awaitingNextStep &&
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
+        ? effectiveInterruptContext.values.reviewTaskId
+        : null
+      : status === "completed"
+        ? reviewSlot.reviewTaskId
+        : null;
+  useRunReviewRailRefresh({
+    runId,
+    reviewTaskId,
+    initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    refresh: embedMode ? undefined : router.refresh,
+  });
+
 
   // -------------------------------------------------------------------------
   // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL

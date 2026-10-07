@@ -28,13 +28,17 @@ defect of a step, with a test, fixed once for every run.
 | `typeInWindow` | Text typed into a window's text box through the keyboard, read back from the box, and sent through the window's own send control when asked. |
 | `waitForTurn` | A turn of a window's conversation waited for without a reload: a new entry of the assistant, and the send control idle again. |
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
-| `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
+| `sendInComposer` | One message sent through the conversation's composer, awaiting its card by default or, with explicit `expect: "run"`, its new run ID. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
 | `readAddress` | The page's path and the values of the query parameters the caller names, read once the address has held still; any other parameter counted, never written. |
 | `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
 | `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
 | `openPageInOwnContext` | A further page opened from a visible link in a browser context of its own, with connections of its own, signed in by the session the first page carries and never through the sign-in page. |
-<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
+| `frameOf` | The one frame of a page, found by its element through open shadow roots, and a frame scope in which the control steps read and act in that frame's document alone. |
+| `pressWithoutName` | One control without an accessible name, such as a site widget's launcher, pressed by its selector through open shadow roots, never a guess, with the fault said, and the page's next settled state. |
+| `openPageOfOrigin` | A page of another origin than the page's, such as a site that embeds the product, loaded once by its address in an empty browser context of its own or in the page's own. |
+| `signInThroughWindow` | One sign-in through the window a control opens, as an embedded product signs in: the window that returns by itself, or its form typed into key by key and the window closed again. |
+<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress; then frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -63,6 +67,23 @@ imports only Node's builtins and its own files, so both of these work:
 - **Frames through a shutter.** The two watching steps take their frame through a
   `shutter` the caller passes: `({ step, state, settled, elapsedMs }) => path`.
   The shutter takes the picture (usually `page.screenshot`) and answers its path.
+- **A frame scope.** `frameOf` answers a scope of one frame of a page, such as
+  the frame a site's widget mounts. `readCount`, `press`, `pressByTestId`,
+  `dispatchRun`, `sendInComposer`, `typeInWindow`, `waitForTurn`, `fillForm`
+  and `readControlNames` take it in place of a page: they find, read, mark,
+  fill, type and press in that frame's document alone, with every guarantee
+  their sections state for a page, and write the frame's path where they write
+  a page's. `reloadPage`, `openAddress`, `readAddress`, `navigateTo`,
+  `openPageInOwnContext`, `signInThroughPage`, `armPageTape`, `readPageTape`,
+  `selectFrom`, `readOptions`, `uploadFile`, `switchTheme`, `decideGate`,
+  `watchRun`, `readStandingRequests`, `readTitle` and `waitForIsland` refuse a
+  scope (`input`) before they read, load, press or record anything else: a
+  frame is never reloaded, typed into or photographed; the page is. A scope
+  whose frame was replaced (the page reloaded, the frame mounted anew) is
+  stale: a step given it refuses (`unreadable`), naming that the frame is
+  detached, and the caller calls `frameOf` again. A frame's palette is the
+  class the app writes on the frame document's root, read with
+  `readCount(scope, { selector: "html.dark" })` (or `html.cinatra`).
 
 ## `signInThroughPage(page, { credentials, budget, record, url?, bounds? })`
 
@@ -737,7 +758,7 @@ the sign-in page, is refused, naming where it landed.
 Refusal kinds: `input` and `closed` (nothing was reloaded), `no-load`,
 `landed-elsewhere` and `driver-failure` (the new document could not be read).
 
-## `sendInComposer(page, { prompt, composer, record, bounds? })`
+## `sendInComposer(page, { prompt, composer, expect?, record, bounds? })`
 
 Sends one message through the conversation's composer, the one shown text box
 named `composer` ("Send message" in the product), and waits for the card that
@@ -753,6 +774,21 @@ run page's surface, the run panel the conversation draws, or a notification of
 a run) and refuses a send after which one shows: starting a run is
 `dispatchRun`'s act. No line carries the prompt.
 
+When a chat message is expected to start a run, opt in with
+`sendInComposer(page, { prompt, composer: "Send message", expect: "run", record })`.
+This arm waits for a new **visible** inline card's `data-inline-run-card` ID and
+returns `{ composer, runId, threadPath, elapsedMs }`, reading `threadPath` from
+the caller's document (the frame's path when called on a frame scope). It does
+not wait for a progress panel: a landed review card can occupy that place.
+IDs already visible before the send, hidden cards, empty IDs, a card without a
+run ID, and a run-start notification alone cannot satisfy it. If no new ID
+appears within `cardMs`, it refuses `no-run`, naming any new page error.
+
+Omitting `expect`, or passing `expect: "card"`, keeps the existing card arm:
+a run or run-start notification still refuses `starts-run`. An unsupported
+`expect` refuses `input` before typing. Both arms type once and never infer a
+run ID from prompt text, a toast, or an API request.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call to the composer shown with its name (`composerMs`) |
@@ -762,7 +798,7 @@ a run) and refuses a send after which one shows: starting a run is
 | `CONTROL_POLL_MS` | 100 | how often the page is read (`pollMs`) |
 
 Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
-`no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
+`no-composer` in place of `no-field`, `starts-run`, `no-run` (the opt-in arm), and `no-card` (naming an
 error the page shows, the conversation's error card among them).
 
 ## `openAddress(page, { path, record, params?, bounds? })`
@@ -950,6 +986,152 @@ Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
 `no-browser` (no context was opened), `driver-failure`, and `session-lost` and
 `landed-elsewhere` (the new context was closed).
 
+<!-- frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow: a frame of a site's page, a control without a name, a page of another origin, and the sign-in through a window. -->
+
+## `frameOf(page, { frame, record, bounds? })`
+
+Finds the one frame of a page by its element: `frame` is a CSS selector of the
+frame element, looked for as Playwright's locators look, through open shadow
+roots, since a site's widget mounts its frame inside its own shadow root. It
+waits until exactly one attached element matches and its frame's document has
+loaded, and answers `{ scope, path, elapsedMs }`: `path` is the frame's path,
+and `scope` the frame scope the control steps take in place of a page (see
+'What every step shares'). A scope's address, readings, locators and waits are
+the frame's; its keyboard, mouse, context and events are its page's, as a
+browser types into the frame that has the focus and announces the frame's
+requests on its page; it has no reload, address to go to, picture or close.
+A scope is known by a mark the kit alone sets, never by its shape. The line
+names the page's path, the selector and the frame's path, never an origin or
+an address, such as `frameOf: on /wp-admin/post.php, the frame of the selector
+"iframe.cw-frame" stands on /embed/assistant; the steps given its scope read
+and act in that frame's document alone`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `FRAME_SCOPE_BOUND_MS` | 120_000 | from the call to the one frame element attached with its document loaded (`frameMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (no selector, an unknown or non-positive bound, or a
+scope in place of a page), `no-frame` (naming how many elements matched when
+the bound ran out), `ambiguous` (several match, naming how many) and
+`driver-failure`.
+
+## `pressWithoutName(page, { selector, record, bounds? })`
+
+Presses the one shown element of a CSS `selector`, looked for through open
+shadow roots, whose role (its own, or the one its tag gives it) is one `press`
+presses and whose accessible name, read from Chromium's accessibility tree as
+the control steps read names, is empty: a site widget's launcher drawn as a
+button that holds an icon alone. `press` finds a control by its name, so it has
+nothing to name there. It takes a page or a frame scope.
+
+- **Never a guess.** No shown element of the selector is refused
+  (`no-control`), naming how many attached elements match it, and so is one of
+  no role `press` presses; several are refused (`ambiguous`), naming the part
+  of the page each sits in.
+- **The accessible road first.** An element of the selector that has a name is
+  `press`'s: the step refuses it (`has-name`), naming its role and its name,
+  and presses nothing.
+- **The fault said.** Before the press it writes one line: the page's path, the
+  selector, the role, and that the control has no accessible name and was found
+  by its selector, such as `pressWithoutName: on /wp-admin/post.php, the button
+  of the selector "button.cw-circle" has no accessible name; it was found by its
+  selector`. A person who uses a screen reader finds such a control by no name,
+  and every record of a run that needs the step says so.
+
+It reads the page's next settled state with the reading `press` uses
+(press-settle.mjs), within the same bounds (`PRESS_WITHOUT_NAME_BOUNDS`, the
+bounds of `press`), and answers `{ name: "", role, selector, from, path,
+navigated, elapsedMs }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press (`actionMs`) |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation (`startMs`) |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation (`settleMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-control`,
+`ambiguous` and `has-name` (nothing was pressed), `driver-failure` and
+`unsettled`.
+
+## `openPageOfOrigin(page, { address, record, params?, sameContext?, bounds? })`
+
+Loads `address`, an absolute http or https address of another origin than the
+page's, such as the page of a site that embeds the product, once, in a new
+page: by default of a new browser context of the page's browser that starts
+empty (no cookie and no storage of the page's context crosses into it), with
+the page's viewport; with `sameContext: true`, of the page's own context, the
+person's same browser, so what the product's tab holds, the new page holds.
+It takes a page only.
+
+Before anything opens it refuses an address of the page's own origin
+(`same-origin`: that is `openAddress`'s act), anything that is no absolute http
+or https address, an address with a user or a password in it, a fragment, and
+a query that names a parameter `params` does not name (`input`, the parameter
+never written); and `no-browser` when the page's context has no browser to
+open a context on. It answers `{ furtherPage, path, status, from, elapsedMs }`
+and, with `params`, `query` and `others` as `openAddress` answers them. Its line
+says that an address of another origin was typed, and names the paths and the
+named parameters' values only, never the origin or the address, such as
+`openPageOfOrigin: typed the address of /wp-login.php on another origin than
+the page's on /chat into a page of a browser context of its own; it landed on
+/wp-login.php with status 200 after 412 ms`. The caller closes `furtherPage`,
+and the context it opened with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OTHER_ORIGIN_BOUND_MS` | 120_000 | from the typed address to the landing (`loadMs`) |
+
+Refusal kinds: `input`, `same-origin` and `no-browser` (nothing was opened),
+`driver-failure`, and `no-load` (what was opened was closed).
+
+## `signInThroughWindow(page, { name, role?, credentials, budget, record, bounds? })`
+
+Signs a run in once through the window a control opens, as an embedded product
+signs a person in: it takes no cookie of the product, and its sign-in control
+opens a window of the product that closes itself when it is done. It takes a
+page or a frame scope. It presses the one control of `role` (a button by
+default) named `name`, found as `press` finds it, and waits for the window the
+press opens (the page's `popup`). Then exactly one of two roads, read by
+polling and never assumed:
+
+- **The window returns by itself.** A person with a live session in that
+  browser context is returned at once, and the window closes itself. The step
+  answers `{ window: "returned", spent: false, path, elapsedMs }` without
+  touching the budget.
+- **The window shows the product's sign-in form**, on whatever path the window
+  stands. The step keeps every rule of `signInThroughPage` that applies to a
+  form it did not load itself: the budget refused when spent and spent by the
+  same rules, the two guards armed before the press, the hydration mark
+  `novalidate` waited for, and the app's own sign-in request on
+  `SIGN_IN_REQUEST_PATHS` read with its answer. It types the email and the
+  password key by key into the window's two fields, never a fill (the window's
+  fields are controlled inputs), reads the email back by its value and the
+  password by its length only, presses the form's submit once, and waits for
+  the window to close itself. It answers `{ window: "signed-in", spent: true,
+  path, windowPath, elapsedMs }`.
+
+No line carries the email, the password, a token, a cookie or an address; the
+window is named by its path.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `SIGN_IN_ACTION_BOUND_MS` | 30_000 | the press, and each field pressed into (`actionMs`) |
+| `WINDOW_OPEN_BOUND_MS` | 30_000 | from the press to the window it opens (`openMs`) |
+| `WINDOW_RETURN_BOUND_MS` | 120_000 | from the window's opening to its return or its form, and from the app's answer to the window closing itself (`returnMs`) |
+| `SIGN_IN_HYDRATION_POLL_MS` | 100 | how often the window is read (`pollMs`) |
+| `SIGN_IN_REQUEST_BOUND_MS` | 10_000 | from the press to the app's own sign-in request (`requestMs`) |
+| `SIGN_IN_ANSWER_BOUND_MS` | 120_000 | from that request to the app's answer (`answerMs`) |
+
+The bounds are `SIGN_IN_WINDOW_BOUNDS`. Refusal kinds: `input` and `spent`
+(nothing was pressed), `unreadable`, `no-control`, `ambiguous` and `disabled`
+(nothing was pressed), `no-window` (pressed, and no window within the bound),
+`blocker`, `driver-failure`, `rejected` and `no-answer` (as
+`signInThroughPage`'s), and `not-returned` (the window neither closed nor showed
+the form within the bound, or stayed open after the answer, naming the
+window's path).
+
 ## Shared bounds
 
 | Bound | Default | Covers |
@@ -963,7 +1145,15 @@ Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
   `pnpm exec vitest run --config vitest.config.ts tests/e2e/steps`). Each step's
   branches run against a page double over a local fixture app: no browser, no
   server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
-  over the same fixture pages, which keeps the double honest.
+  over the same fixture pages, which keeps the double honest. In the checks, the
+  job **Step tests in a real browser** runs them with the switch set for every
+  pull request that changes a file here other than Markdown: first on the page
+  double, then with the switch. Both runs receive `E2E_STEPS_UNIT_DATABASE_URL`
+  from a job-scoped PostgreSQL service at its mapped host port, so the real
+  `readRows` database cases run too. It fails unless every case passed, so in that
+  job a browser that cannot be launched is a failure, not a skip, and the
+  required `build` check fails with it. Any other pull request skips the job;
+  the selection line of **Detect CI impact (build-image)** names the reason.
 - **The live smoke**, one per step, against a running development server:
   `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
   browser or a server every test is skipped, and its reason names what is missing.

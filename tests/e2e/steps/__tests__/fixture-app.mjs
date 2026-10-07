@@ -1041,9 +1041,12 @@ export const TITLE_SCENARIOS = Object.freeze({
  * is recorded with the field NAMES its query string or form body carried. With
  * `secure`, every page is also served over HTTP/2 at `secureOrigin`. With
  * `hydrate` (`{ afterMs }`), every HTML page hydrates late (see withHydration),
- * and each report of a page's hydration is recorded with its `report`.
+ * and each report of a page's hydration is recorded with its `report`. With
+ * `site`, a site's page that embeds the app is served on two further origins,
+ * `siteOrigin` and `crossSiteOrigin`, and the app serves its embed page and
+ * windows (see fixture-app-site.mjs).
  */
-export async function startFixtureApp({ answer = 200, secure = false, hydrate } = {}) {
+export async function startFixtureApp({ answer = 200, secure = false, hydrate, site = false } = {}) {
   const requests = [];
   const loads = new Map();
   const streams = new Set();
@@ -1220,6 +1223,16 @@ export async function startFixtureApp({ answer = 200, secure = false, hydrate } 
         );
         return;
       }
+      // frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow:
+      // the embed page and its windows, served only with `site`, live in
+      // fixture-app-site.mjs, so this file changes in this one place.
+      if (site && /^\/(embed|widget)\//.test(url.pathname)) {
+        import("./fixture-app-site.mjs").then(
+          ({ serveSiteAppPage }) => serveSiteAppPage({ request, url, response }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
       html(404, "<!doctype html><title>Not found</title>");
     });
   };
@@ -1238,7 +1251,10 @@ export async function startFixtureApp({ answer = 200, secure = false, hydrate } 
     await new Promise((done) => secureServer.listen(0, LOOPBACK, done));
     secureOrigin = `https://${LOOPBACK}:${secureServer.address().port}`;
   }
+  const sites = site ? await (await import("./fixture-app-site.mjs")).startSiteServers(origin) : null;
   return {
+    // The site's page on two further origins, when the app was started with `site`.
+    ...(sites ? { siteOrigin: sites.siteOrigin, crossSiteOrigin: sites.crossSiteOrigin } : {}),
     origin,
     /** The same app over HTTP/2, when it was started with `secure`. */
     secureOrigin,
@@ -1262,6 +1278,7 @@ export async function startFixtureApp({ answer = 200, secure = false, hydrate } 
             for (const session of sessions) session.destroy();
             secureServer.close(done);
           }),
+        sites && sites.stop(),
       ]),
   };
 }

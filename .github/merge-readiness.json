@@ -591,6 +591,16 @@
       "timeoutMinutes": null
     },
     {
+      "context": "Step tests in a real browser",
+      "app": "github-actions",
+      "workflow": ".github/workflows/build-image.yml",
+      "paths": [
+        "**"
+      ],
+      "skippable": true,
+      "timeoutMinutes": 30
+    },
+    {
       "context": "toast-banner-gate / toast-banner-gate",
       "app": "github-actions",
       "workflow": ".github/workflows/toast-banner-gate.yml",

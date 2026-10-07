@@ -82,6 +82,71 @@ export function requireRecord(step, record) {
 }
 
 /**
+ * The mark of a frame scope (frameOf): a symbol of this module, which the kit
+ * alone sets. A scope is recognised by this mark and never by its shape.
+ */
+const FRAME_SCOPE_MARK = Symbol("frame scope");
+
+/**
+ * Mark `scope` as a frame scope and freeze it. frameOf alone calls this.
+ * @template {object} T
+ * @param {T} scope
+ * @returns {Readonly<T>}
+ */
+export function markFrameScope(scope) {
+  Object.defineProperty(scope, FRAME_SCOPE_MARK, { value: true });
+  return Object.freeze(scope);
+}
+
+/**
+ * Whether `value` is a frame scope frameOf answered: it carries the mark as its
+ * own. The mark is looked up, never read through the page, so a page is not
+ * touched by the question.
+ * @param {unknown} value
+ */
+export function isFrameScope(value) {
+  return value !== null && typeof value === "object" && Object.hasOwn(value, FRAME_SCOPE_MARK);
+}
+
+/**
+ * THE GUARD of every step that needs a page and refuses a frame scope: called
+ * first, before the step reads, loads, presses or records anything else. Given a
+ * page it does nothing; given a frame scope it refuses `input`, in the words
+ * `<step> refused (input): a frame scope stands where a page is needed — <nothing>`,
+ * written through the record when there is one.
+ * @param {string} step
+ * @param {unknown} record
+ * @param {unknown} page
+ * @param {string} nothing what the refusal says was not done
+ */
+export function refuseFrameScope(step, record, page, nothing) {
+  if (!isFrameScope(page)) return;
+  const refusal = new StepRefusal(step, "input", `a frame scope stands where a page is needed — ${nothing}`);
+  if (typeof record === "function") record(refusal.message);
+  throw refusal;
+}
+
+/**
+ * A frame scope whose frame was replaced (its page reloaded, or the frame
+ * mounted anew) is stale: a step given it refuses `unreadable`, naming that the
+ * frame is detached, and the caller calls frameOf again. Given a page, or a
+ * scope whose frame stands, it does nothing.
+ * @param {string} step
+ * @param {StepRecord} record
+ * @param {unknown} page
+ * @param {string} nothing what the refusal says was not done
+ */
+export function refuseStaleScope(step, record, page, nothing) {
+  if (!isFrameScope(page) || !(/** @type {any} */ (page).isClosed())) return;
+  throw refuse(
+    step,
+    record,
+    "unreadable",
+    `the frame of the scope, last on ${pathOf(/** @type {any} */ (page).url())}, is detached: its page was reloaded or the frame was mounted anew, so call frameOf again — ${nothing}`,
+  );
+}
+
+/**
  * A bound or a cadence must be a positive, finite number of milliseconds.
  * @param {string} step
  * @param {StepRecord} record

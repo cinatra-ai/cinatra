@@ -219,8 +219,8 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
   // ---- separate-default --------------------------------------------------
   {
     purpose: "image-generation",
-    file: "src/lib/blog/gemini.ts",
-    what: "Blog/campaign image materialization.",
+    file: "src/lib/artifact-image-tool.ts",
+    what: "Artifact image generation through the image tool.",
     policy: "separate-default",
     rationale:
       "Image generation is orthogonal to text generation and already has its OWN stored admin preference (llm_default_image_provider, read by resolveDefaultImageAdapter). It deliberately does NOT follow llm_default_provider — an operator on a text provider with no image support must still be able to generate images.",
