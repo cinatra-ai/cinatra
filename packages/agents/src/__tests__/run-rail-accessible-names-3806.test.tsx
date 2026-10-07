@@ -8,7 +8,7 @@ import { RunStepRailPanel } from "../run-step-rail-panel";
 import { RailExtraEntry, RunStepSelectionProvider } from "../run-step-rail-extra-entry";
 import { RunSurfaceRailRow } from "../run-surface-rail";
 import { Stepper, StepperItem } from "@/components/reui/stepper";
-import type { RunStepRailEntry } from "../run-step-rail";
+import { buildRunStepRail, type RunStepRailEntry } from "../run-step-rail";
 
 const stream = vi.hoisted(() => ({ interruptContext: null as unknown }));
 
@@ -178,16 +178,25 @@ describe("run rail accessible names (cinatra#3806)", () => {
     const view = extra({ key: "step:extra", ordinal: 5, kind: "step", label: "Finish the post", status: "completed", sources: ["template"] }, framed);
     expect(view.getByRole("tab", { name: "5 Finish the post" })).toBeDefined();
   });
-  it.each([
-    [false, "approve", "Continued"], [true, "approve", "Continued"],
-    [false, "reject", "Changes requested"], [true, "reject", "Changes requested"],
-    [false, "changes_requested", "Changes requested"], [true, "changes_requested", "Changes requested"],
-    [false, null, "resolved"], [true, null, "resolved"],
-  ] as const)("a settled review keeps its drawn settlement as separate words (frame=%s, disposition=%s)", (framed, disposition, word) => {
-    const view = extra(gate(disposition), framed);
-    const row = view.getByRole(framed ? "tab" : "link", { name: `Review ${word}` });
-    expect(row.textContent).toBe(`Review${word}`);
-    expect(view.container.querySelector("[data-rail-gate-settlement]")!.textContent).toBe(word);
+  it.each([false, true].flatMap((framed) =>
+    [undefined, "Campaign draft"].flatMap((artifactName) => [
+      [framed, artifactName, "approve", "Continued"],
+      [framed, artifactName, "reject", "Changes requested"],
+      [framed, artifactName, "changes_requested", "Changes requested"],
+      [framed, artifactName, null, "resolved"],
+    ] as const),
+  ))("a settled review names its actual complete drawn title (frame=%s, artifact=%s, disposition=%s)", (framed, artifactName, disposition, word) => {
+    const entry = buildRunStepRail({ gates: [{ gateId: "gate-names", reviewTaskId: "review-names", status: "resolved", disposition, artifactName, createdAt: "2026-10-07T00:00:00Z" }] }).entries[0];
+    const label = artifactName ? `Review · ${artifactName}` : "Review";
+    expect(entry.label).toBe(label);
+    const title = `${label} · ${word.toLowerCase()}`;
+    const view = extra(entry, framed);
+    const row = view.getByRole(framed ? "tab" : "link", { name: title });
+    expect(row.textContent).toBe(title);
+    const wrapper = row.closest("[data-rail-gate-settlement]");
+    expect(wrapper?.getAttribute("data-rail-gate-settlement")).toBe(word);
+    expect(wrapper?.textContent).toBe(title);
+    expect(wrapper?.querySelector("[data-slot=stepper-title]")?.textContent).toBe(title);
   });
   it.each([false, true])("an audit keeps its status as a separate word with frame=%s", (framed) => {
     const view = extra({ key: "verification:names", ordinal: 6, kind: "verification", label: "Audit", status: "completed", sources: ["verification"],

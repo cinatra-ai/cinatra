@@ -70,19 +70,20 @@ export const labelOf = (backend) => (backend.skip ? `${backend.name}, skipped: $
 
 /**
  * One case on one backend: a fixture app (serving HTTP/2 as well with `secure`,
- * and pages that hydrate late with `hydrate`), a page, and a record that keeps
- * every line the step wrote. After the case, no line may carry one of `secrets`
- * or an origin of the app: a step writes paths, never addresses or values.
+ * pages that hydrate late with `hydrate`, and a site's page that embeds it on
+ * two further origins with `site`), a page, and a record that keeps every line
+ * the step wrote. After the case, no line may carry one of `secrets` or an
+ * origin of the app or its site: a step writes paths, never addresses or values.
  */
-export async function scene(backend, { answer, secure, hydrate, secrets = [] } = {}, body) {
-  const app = await startFixtureApp({ answer, secure, hydrate });
+export async function scene(backend, { answer, secure, hydrate, site, secrets = [] } = {}, body) {
+  const app = await startFixtureApp({ answer, secure, hydrate, site });
   const page = await backend.open(app.origin);
   const lines = [];
   const record = (line) => lines.push(String(line));
   try {
     await body({ app, page, record, lines });
     for (const line of lines) {
-      for (const secret of [...secrets, app.origin, ...(app.secureOrigin ? [app.secureOrigin] : [])]) {
+      for (const secret of [...secrets, app.origin, ...(app.secureOrigin ? [app.secureOrigin] : []), ...(app.siteOrigin ? [app.siteOrigin, app.crossSiteOrigin] : [])]) {
         expect(line.includes(secret), `a line the step wrote carries a value or the origin: ${line.slice(0, 48)}`).toBe(false);
       }
     }
