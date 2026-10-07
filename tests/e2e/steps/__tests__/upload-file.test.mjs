@@ -19,6 +19,8 @@ afterAll(closeBrowser);
 // Short bounds, so a refusal costs a second, not minutes.
 const BOUNDS = Object.freeze({ controlMs: 1000, actionMs: 2000, chooserMs: 600, rowMs: 3000, pollMs: 25 });
 const CONTENT = ["fixture", "upload", "content"].join("-");
+const EXTENSION_CONTROL = "Select an extension package Click here or drag and drop — an agent, skill, connector or artifact package";
+const DONE = Object.freeze({ selector: '[data-testid="upload-resolved-name"]', text: "@acme/fixture-skill" });
 const ROWS = '[data-conformance-id="artifacts-library-list"] > li';
 
 let folder = "";
@@ -122,6 +124,66 @@ for (const backend of BACKENDS) {
         expect(lines).toEqual([error.message]);
         // The file did reach the app, which refused it.
         expect(posted(app, UPLOAD_REFUSE_ROUTE)).toHaveLength(1);
+      });
+    });
+
+    it("hands the extension trigger its file only after committed hydration and waits for its own completion signal", async () => {
+      await scene(backend, { secrets: secrets() }, async ({ app, page, record, lines }) => {
+        const uploadFile = await open(page, app, "/upload/extension");
+        const started = performance.now();
+        const result = await uploadFile(page, { control: EXTENSION_CONTROL, path: file, done: DONE, record, bounds: BOUNDS });
+        expect(result).toMatchObject({ control: EXTENSION_CONTROL, file: "notes.txt", path: "/upload/extension" });
+        expect(performance.now() - started).toBeGreaterThanOrEqual(300);
+        expect(posted(app, UPLOAD_ACCEPT_ROUTE)).toHaveLength(1);
+        expect(posted(app, UPLOAD_ACCEPT_ROUTE)[0].body).toBe(CONTENT);
+        expect(await page.evaluate(() => document.querySelector('[data-testid="upload-resolved-name"]').textContent)).toBe("@acme/fixture-skill");
+        expect(await page.evaluate(() => document.querySelector('[data-testid="upload-consent"]').checked)).toBe(false);
+        expect(await page.evaluate(() => document.querySelectorAll('[data-step-upload]').length)).toBe(0);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain("[data-testid='upload-resolved-name']");
+        expect(lines[0]).toContain("@acme/fixture-skill");
+      });
+    });
+
+    for (const mode of ["never", "uncommitted", "no-handler"]) {
+      it(`refuses the SSR-present extension trigger without committed event handling (${mode})`, async () => {
+        await scene(backend, { secrets: secrets() }, async ({ app, page, record }) => {
+          const uploadFile = await open(page, app, `/upload/extension-${mode}`);
+          const error = await refusal(uploadFile(page, { control: EXTENSION_CONTROL, path: file, done: DONE, record, bounds: { ...BOUNDS, controlMs: 300 } }));
+          expect(error.kind).toBe("unhydrated");
+          expect(posted(app, UPLOAD_ACCEPT_ROUTE)).toEqual([]);
+          expect(await page.evaluate(() => document.querySelector('[data-testid="upload-consent"]').checked)).toBe(false);
+        });
+      });
+    }
+
+    for (const mode of ["stale", "ambiguous"]) {
+      it(`refuses an unsafe completion/control reading before upload (${mode})`, async () => {
+        await scene(backend, { secrets: secrets() }, async ({ app, page, record }) => {
+          const uploadFile = await open(page, app, `/upload/extension-${mode}`);
+          const error = await refusal(uploadFile(page, { control: EXTENSION_CONTROL, path: file, done: DONE, record, bounds: BOUNDS }));
+          expect(error.kind).toBe(mode === "stale" ? "stale-completion" : "ambiguous");
+          expect(posted(app, UPLOAD_ACCEPT_ROUTE)).toEqual([]);
+        });
+      });
+    }
+
+    it("refuses a handed-over extension whose caller-named completion never appears", async () => {
+      await scene(backend, { secrets: secrets() }, async ({ app, page, record }) => {
+        const uploadFile = await open(page, app, "/upload/extension-no-result");
+        const error = await refusal(uploadFile(page, { control: EXTENSION_CONTROL, path: file, done: DONE, record, bounds: { ...BOUNDS, doneMs: 400 } }));
+        expect(error.kind).toBe("no-completion");
+        expect(posted(app, UPLOAD_ACCEPT_ROUTE)).toHaveLength(1);
+      });
+    });
+
+    it("does not acknowledge a different package at the requested completion selector", async () => {
+      await scene(backend, { secrets: secrets() }, async ({ app, page, record }) => {
+        const uploadFile = await open(page, app, "/upload/extension-wrong-result");
+        const error = await refusal(uploadFile(page, { control: EXTENSION_CONTROL, path: file, done: DONE, record, bounds: { ...BOUNDS, doneMs: 400 } }));
+        expect(error.kind).toBe("no-completion");
+        expect(posted(app, UPLOAD_ACCEPT_ROUTE)).toHaveLength(1);
+        expect(await page.evaluate(() => document.querySelector('[data-testid="upload-resolved-name"]').textContent)).toBe("@acme/different-skill");
       });
     });
 

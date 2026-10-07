@@ -67,6 +67,10 @@ export type DurableRunContextBinding = {
   agentId?: string;
   packageVersion?: string;
   agentSpecVersion?: string;
+  /** The verified step of the calling model step (cinatra#3745). Written by
+   *  the bridge only from the flow runtime's signed step pair it verified;
+   *  unlike the provenance fields above it is a verified value. */
+  stepId?: string;
 };
 
 export type DurableRunContextResolution =
@@ -77,6 +81,8 @@ export type DurableRunContextResolution =
         agentId?: string;
         packageVersion?: string;
         agentSpecVersion?: string;
+        /** The binding's verified step (cinatra#3745), when it carries one. */
+        stepId?: string;
       };
     }
   | { outcome: "invalid" }
@@ -284,17 +290,19 @@ function parseBinding(raw: string): DurableRunContextBinding | null {
   // Schema-STRICT on the provenance fields too: a present-but-wrong-type
   // value is a corrupt binding and must classify "invalid" (fail closed),
   // never be silently dropped and refilled from the weaker legacy channels.
-  for (const field of ["agentId", "packageVersion", "agentSpecVersion"] as const) {
+  for (const field of ["agentId", "packageVersion", "agentSpecVersion", "stepId"] as const) {
     const value = candidate[field];
     if (value !== undefined && typeof value !== "string") return null;
   }
   const optional = (v: unknown): string | undefined =>
     typeof v === "string" && v.length > 0 ? v : undefined;
+  const stepId = optional(candidate.stepId);
   return {
     tokenHash: candidate.tokenHash,
     agentId: optional(candidate.agentId),
     packageVersion: optional(candidate.packageVersion),
     agentSpecVersion: optional(candidate.agentSpecVersion),
+    ...(stepId ? { stepId } : {}),
   };
 }
 
@@ -362,6 +370,7 @@ export async function resolveDurableRunContext(
       agentId: binding.agentId,
       packageVersion: binding.packageVersion,
       agentSpecVersion: binding.agentSpecVersion,
+      ...(binding.stepId ? { stepId: binding.stepId } : {}),
     },
   };
 }

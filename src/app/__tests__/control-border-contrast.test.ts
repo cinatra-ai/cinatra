@@ -122,12 +122,12 @@ describe("the tokens that must NOT move with it", () => {
     expect(DARK.get("--line")).toBe("oklch(1 0 0 / 10%)");
   });
 
-  it("leaves the etched paired-line ink untouched, so the divider gate is unaffected", () => {
+  it("keeps the light section rule and uses the approved dark palette ink", () => {
     expect(ROOT.get("--line-strong")).toBe("#15213a");
     expect(CINATRA.get("--line-strong")).toBe("#15213a");
     expect(
       DARK.get("--line-strong"),
-      "the dark palette must not re-declare --line-strong: the etched-rule conformance gate binds to it",
-    ).toBeUndefined();
+      "the dark section rule takes the palette's own text colour (app.html)",
+    ).toBe("var(--foreground)");
   });
 });
