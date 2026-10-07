@@ -201,8 +201,8 @@ describe("the review line and the artifact page header name the same pack the sa
 
 describe("exact declared object types before package fallback (#3527)", () => {
   it("reads the actual pinned differently named package declaration", () => {
-    expect(resolveArtifactKindLabel("  @cinatra-ai/linkedin:post-draft  ")).toEqual({ label: "LinkedIn Artifacts", source: "declared" });
-    expect(artifactKindLabelFor("@cinatra-ai/linkedin-artifacts")).toBe("LinkedIn Artifacts");
+    expect(resolveArtifactKindLabel("  @cinatra-ai/linkedin:post-draft  ")).toEqual({ label: "LinkedIn post", source: "declared" });
+    expect(artifactKindLabelFor("@cinatra-ai/linkedin-artifacts")).toBe("LinkedIn post");
   });
   it("distinguishes exact types sharing a namespace before falling back to a package label", () => {
     expect(artifactKindLabelFor("@fixture/blog:idea")).toBe("Idea");

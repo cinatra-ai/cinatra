@@ -1684,7 +1684,7 @@ describe("artifact kind labels — exact declared object-type identity (#3527)",
     const manifest = await buildManifest();
     const record = manifest.records.find((r) => r.packageName === "@cinatra-ai/linkedin-artifacts");
     expect(record.artifactObjectTypes).toEqual(expect.arrayContaining([{ type: "@cinatra-ai/linkedin:post-draft", claim: "dedicated" }]));
-    expect(emitArtifactKindLabels(manifest.records)).toContain('"@cinatra-ai/linkedin:post-draft": "LinkedIn Artifacts",');
+    expect(emitArtifactKindLabels(manifest.records)).toContain('"@cinatra-ai/linkedin:post-draft": "LinkedIn post",');
   });
   it("refuses conflicting dedicated labels rather than selecting by arrival order", () => {
     expect(() => emitArtifactKindLabels([records[0], { ...records[1], artifactObjectTypes: records[0].artifactObjectTypes }])).toThrow("conflicting declared labels for @owner/blog:idea");
