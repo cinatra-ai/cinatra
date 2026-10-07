@@ -106,6 +106,7 @@
 //     Playwright's fill does;
 //   - contexts keep their cookies apart: a new context starts with none, and a
 //     request carries only the cookies of its own host.
+import { hydrateFixtureUpload } from "./fixture-app-controls.mjs";
 import { connect, constants } from "node:http2";
 
 import { JSDOM } from "jsdom";
@@ -855,6 +856,7 @@ export class PageDouble {
         focus: (element) => this.#focus(element),
         acted: () => this.#acted(),
         handle: (element) => this.#handleOf(element),
+        setInputFilesOn: (element, files) => this.setInputFilesOn(element, files),
       },
       selector,
       {},
@@ -994,6 +996,9 @@ export class PageDouble {
       return node ? JSON.parse(node.textContent) : null;
     };
     for (const op of declared("fixture-timeline") ?? []) this.#later(() => this.#play(dom, op), op.at);
+    for (const op of declared("fixture-behaviour") ?? []) {
+      if (op.direct && op.hydrateAfterMs !== null) this.#later(() => hydrateFixtureUpload(dom.window.document, op), op.hydrateAfterMs);
+    }
     const scenario = declared("fixture-scenario");
     if (scenario && scenario.hydrateAfterMs !== null) {
       this.#later(() => this.#hydrate(dom, scenario), scenario.hydrateAfterMs);
@@ -1608,6 +1613,7 @@ export class PageDouble {
       },
       click: async ({ timeout = 30_000 } = {}) => {
         const element = await one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`, true);
+        if (element.hasAttribute("data-fixture-pointer-intercepted")) throw new TimeoutError("locator.click: another element intercepts pointer events");
         this.#acted();
         this.#pressControl(element);
       },
@@ -1628,6 +1634,13 @@ export class PageDouble {
       },
     };
     return locator;
+  }
+
+  /** Playwright's direct file-input hand-over, without a pointer action. */
+  async setInputFilesOn(element, files) {
+    this.#acted();
+    if (element.localName !== "input" || element.type !== "file") throw new Error("Element is not an input[type=file]");
+    return this.#setFiles(element, files);
   }
 
   /** What the page declares its own handlers do. */
@@ -1740,7 +1753,7 @@ export class PageDouble {
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     input.dispatchEvent(new window.Event("change", { bubbles: true }));
     for (const op of this.#declared(document)) {
-      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen, input);
+      if (op.chosen && input.matches(op.chosen) && (!op.direct || typeof input.__reactProps$fixture?.onChange === "function")) this.#playChosen(document, op, chosen, input);
     }
   }
 
@@ -1756,6 +1769,11 @@ export class PageDouble {
           this.#later(() => {
             if (this.#dom !== dom) return;
             if (sent.status >= 200 && sent.status < 300) {
+              if (op.completion) {
+                const signal = document.querySelector(op.completion);
+                if (signal && !op.completionNever) { signal.textContent = op.wrongResult ? "@acme/different-skill" : "@acme/fixture-skill"; signal.removeAttribute("hidden"); }
+                return;
+              }
               const list = document.querySelector(op.rows);
               if (!list) return;
               const row = document.createElement("li");
@@ -2011,6 +2029,17 @@ class LocatorDouble {
       if (found.length > 1) throw new Error(`strict mode violation: ${this.#selector} resolved to ${found.length} elements`);
       if (found.length === 1) return found[0].getAttribute(name);
       if (Date.now() >= until) throw new TimeoutError(`locator.getAttribute: Timeout ${timeout}ms exceeded.`);
+      await pause(20);
+    }
+  }
+
+  async setInputFiles(files, { timeout = 30_000 } = {}) {
+    const until = Date.now() + timeout;
+    for (;;) {
+      const found = this.#matches();
+      if (found.length > 1) throw new Error(`strict mode violation: ${this.#selector} resolved to ${found.length} elements`);
+      if (found.length === 1) return this.#page.setInputFilesOn(found[0], files);
+      if (Date.now() >= until) throw new TimeoutError("locator.setInputFiles: Timeout exceeded");
       await pause(20);
     }
   }

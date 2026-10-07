@@ -2703,6 +2703,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     mayStillOpen: reviewMayStillOpen,
     stillReading: reviewStillReading,
   } = useRunReviewSlot({
+    runId,
     status,
     initial: initialReviewGate,
     read: slotReader,
