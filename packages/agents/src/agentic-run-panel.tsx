@@ -3270,7 +3270,6 @@ export function AgenticRunPanel({
               example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
-              size="sm"
               variant="outline"
               disabled={isRetrying}
               onClick={handleRetryFailedRun}
