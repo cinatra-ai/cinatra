@@ -605,3 +605,31 @@ it("keeps response actions absent while this scheduled turn is streaming (cinatr
   expect(container.querySelectorAll(SCREEN)).toHaveLength(1);
   expect(container.querySelector('[title="Copy response"]')).toBeNull();
 });
+
+describe("live and durable schedule cards share a non-collapsing screen stack (cinatra#3984)", () => {
+  it.each(["github-light", "github-dark"] as const)("preserves the live card stack when the screen reloads (%s)", async (theme) => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    for (const reloaded of [false, true]) {
+      const result = await mountProseTurn(reloaded, theme);
+      await act(async () => { window.dispatchEvent(new Event("focus")); });
+      await waitFor(() => {
+        const schedule = result.container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
+        const screen = result.container.querySelector(SCREEN);
+        expect(schedule).not.toBeNull();
+        expect(screen).not.toBeNull();
+        let stack = schedule!.parentElement;
+        while (stack && !stack.contains(screen!)) stack = stack.parentElement;
+        // Both real cards retain their own vertical margins. The live column
+        // keeps them from collapsing and contributes its ordinary inter-slot
+        // gap; a reload must preserve that same composition, including a late
+        // screen, rather than compensate by changing either card's frame.
+        expect(stack?.classList.contains("flex")).toBe(true);
+        expect(stack?.classList.contains("flex-col")).toBe(true);
+        expect(stack?.classList.contains("gap-2")).toBe(true);
+        expectScheduleScreenActionsInOrder(result.container);
+      }, { timeout: 3_000 });
+      result.unmount();
+    }
+  });
+});

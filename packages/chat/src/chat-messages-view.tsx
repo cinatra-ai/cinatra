@@ -1993,15 +1993,28 @@ function MessageRenderableViews({
    *  changes which card renders. */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
+  const scheduleTurn = useContext(ScheduleWaitContext);
   const views = message.dataParts ?? [];
   if (views.length === 0) return null;
-  return views.map((view, i) => (
+  const cards = views.map((view, i) => (
     <RenderableViewCard
       key={`view-${message.id}-${i}`}
       data={view}
       {...(onApplyIntent ? { onApplyIntent } : {})}
     />
   ));
+  if (!views.some((view) => view.viewType === SPENT_MOMENT_CARD_VIEW_TYPE)) return cards;
+  // The durable schedule and its next screen use the live trace's same flex
+  // column. Keep the cards' own margins separate with the ordinary slot gap;
+  // independent block containers would collapse them after a reload.
+  return (
+    <div className="flex flex-col gap-2">
+      {cards}
+      {scheduleTurn && scheduleTurn.settledScheduleRuns.size > 0 ? (
+        <div ref={scheduleTurn.setScreenContainer} data-agent-run-follow-up-slots="" />
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -2046,6 +2059,7 @@ const ScheduleWaitContext = createContext<{
   reportFiredRecurringRunIds: (runIds: readonly string[]) => void;
   settledScheduleRuns: ReadonlyMap<string, string>;
   screenContainer: HTMLDivElement | null;
+  setScreenContainer: (container: HTMLDivElement | null) => void;
 } | null>(null);
 
 /** The assistant turn's body, and the scope of the correction inside it. */
@@ -2100,6 +2114,7 @@ function ScheduleWaitTurnBody({
       reportFiredRecurringRunIds,
       settledScheduleRuns,
       screenContainer,
+      setScreenContainer,
     }),
     [
       waitingRunIds,
@@ -2117,7 +2132,6 @@ function ScheduleWaitTurnBody({
       <SettledScheduleRegisterProvider register={registerSettledSchedule}>
         <div className={className}>
           {children}
-          {settledScheduleRuns.size > 0 ? <div ref={setScreenContainer} data-agent-run-follow-up-slots="" /> : null}
           {/* Whole-response actions follow every card in this turn, including
               the next screen rehydrated into the sibling portal (#3984). */}
           {responseActions}
