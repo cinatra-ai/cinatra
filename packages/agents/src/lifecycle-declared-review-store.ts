@@ -57,11 +57,11 @@ export type DeclaredReviewRequest = {
  * Decide whether a template's marked review step opens a review.
  *
  * TWO STEPS, BOTH SHARED WITH THE PRODUCED KIND: prove the binding, then ask the
- * policy. Every fact this resolves is best-effort in the direction that keeps a
- * review OPEN — an artifact whose type cannot be read is evaluated against a
- * SILENT organization bound rather than skipped, because a review that fires
- * when it need not have is a person reading something they did not have to read,
- * and a review that silently does not fire is work nobody looked at.
+ * policy. Artifact and organization-rule read failures propagate: replacing an
+ * unreadable required bound with SILENT would let a manifest skip remove the
+ * required review (cinatra#3948). A successful absent/deleted artifact reading
+ * retains its existing default behavior. The template manifest remains
+ * best-effort: losing a skip can add review but cannot weaken an org bound.
  */
 export async function decideDeclaredReviewForGate(
   input: DeclaredReviewRequest,
@@ -87,7 +87,7 @@ export async function decideDeclaredReviewForGate(
             artifactType,
             destinationClass: DECLARED_REVIEW_DESTINATION_CLASS,
             originKind: DECLARED_REVIEW_ORIGIN_KIND,
-          }).catch(() => ({ bound: "silent" as const }));
+          });
     perTarget.push(
       decideReviewPolicy({
         artifactType: artifactType ?? "",
@@ -106,19 +106,16 @@ export async function decideDeclaredReviewForGate(
   return decideDeclaredReview({ binding, perTarget });
 }
 
-/** The artifact's semantic type, or null when the row cannot be read. */
+/** The artifact's semantic type, or null for a successfully read absent/deleted
+ * row. A failed read is not an absent row and must not bypass organization policy. */
 async function resolveArtifactType(orgId: string, artifactId: string): Promise<string | null> {
-  try {
-    const [row] = await db
-      .select({ type: objectsRef.type, deletedAt: objectsRef.deletedAt })
-      .from(objectsRef)
-      .where(and(eq(objectsRef.id, artifactId), eq(objectsRef.orgId, orgId)))
-      .limit(1);
-    if (!row || row.deletedAt) return null;
-    return typeof row.type === "string" ? row.type : null;
-  } catch {
-    return null;
-  }
+  const [row] = await db
+    .select({ type: objectsRef.type, deletedAt: objectsRef.deletedAt })
+    .from(objectsRef)
+    .where(and(eq(objectsRef.id, artifactId), eq(objectsRef.orgId, orgId)))
+    .limit(1);
+  if (!row || row.deletedAt) return null;
+  return typeof row.type === "string" ? row.type : null;
 }
 
 /**
