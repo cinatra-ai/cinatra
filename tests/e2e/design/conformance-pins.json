@@ -12,7 +12,7 @@
     {
       "id": "app-components",
       "file": "app-components.json",
-      "source": "published",
+      "source": "repo",
       "manifestSha256": "f91eee6c9f3238830e2a7e11ff637b37ddfdbea44b11a5a10f893acff81d93a2",
       "specContentHash": "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c"
     },
