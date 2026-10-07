@@ -4,11 +4,12 @@
 // Functional-acceptance harness for the ONE-OFF surfaces of the in-conversation
 // lifecycle drawing (cinatra#3165, epic #3155 W9).
 //
-// Four of this wave's twelve surfaces are addressable on the default branch,
-// and each is mounted here from the component that SHIPS it — the review
+// The addressable surfaces are mounted here from the component that SHIPS
+// them — the review
 // target's header, the gate's loading skeleton, the gate's "no longer open"
-// panel, the run-progress placeholder, and the chip row §IX's READER matrix is
-// drawn with. Nothing is reimplemented, restyled or approximated.
+// panel, the run-progress placeholder, the inert settled marker, and the chip
+// row §IX's READER matrix is drawn with. Nothing is reimplemented, restyled or
+// approximated.
 //
 // WHY THERE IS NO PRESENCE MATRIX HERE. §IX's presence claim is about what the
 // HOST DECLARATION does to a card, so only a card that READS that declaration
@@ -51,7 +52,7 @@ import type { ReactElement } from "react";
 
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewTargetHeader, SuggestionChips } from "@cinatra-ai/agents/review-gate-card";
-import { ReviewGateBlocked, ReviewGateLoading, ReviewGatePlaceholder } from "@cinatra-ai/agents/review-gate-states";
+import { ReviewGateBlocked, ReviewGateLoading, ReviewGatePlaceholder, ReviewGateSettled } from "@cinatra-ai/agents/review-gate-states";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 
 import {
@@ -135,6 +136,14 @@ export function LifecycleOneOffFixtures(): ReactElement {
         <div data-surface-id="run-progress-placeholder-in-thread" data-variant="populated">
           <ReviewGatePlaceholder />
         </div>
+
+        {/* #3294 — props-only mounts of the real settled row. The product
+            supplies the same generic reading for every recorded outcome. */}
+        {(["approved", "rejected", "changes_requested"] as const).map((outcome) => (
+          <div key={outcome} data-review-settled-fixture={outcome}>
+            <ReviewGateSettled outcome={outcome} />
+          </div>
+        ))}
       </LifecycleCardSurfaceProvider>
 
       {/* §XIII.1 — the SAME review states outside a conversation, in the run

@@ -544,6 +544,7 @@ export async function runWindowTurn(
   let text = "";
   let toolLess = false;
   let acted = false;
+  let platformSentence: string | null = null;
   let runtimeError: string | null = null;
   try {
     const { runAssistantTurn, buildCinatraAssistantRuntimeConfig } =
@@ -589,6 +590,12 @@ export async function runWindowTurn(
           // and the card disagree, the card is right", so the sentence is not
           // the evidence. Only the lent ACTION counts: a fill presses nothing.
           if (d.name === LENT_ACTION_TOOL_NAME && didPress(d.result)) acted = true;
+          // THE REVIEW WINDOW'S REPLY is the platform's own sentence for the
+          // outcome, never the model's wording of a record. This window only.
+          if (input.surface === "review" && d.name === LENT_ACTION_TOOL_NAME) {
+            const sentence = readPlatformSentence(d.result);
+            if (sentence) platformSentence = sentence;
+          }
         } else if (event === "error") {
           if (typeof d.message === "string" && d.message) runtimeError = d.message;
         }
@@ -599,7 +606,7 @@ export async function runWindowTurn(
     runtimeError = runtimeError ?? "the assistant turn failed";
   }
 
-  const answer = composeWindowAnswer({ text, toolLess, runtimeError });
+  const answer = composeWindowAnswer({ text, toolLess, runtimeError, platformSentence });
   try {
     await appendRunWindowMessage({
       runId: input.runId,
@@ -675,13 +682,32 @@ export function didPress(result: unknown): boolean {
 }
 
 /**
+ * The person-facing sentence the lent action's relayed result carries, if any.
+ * PURE and DEFENSIVE, like `didPress`: anything that is not an unambiguous JSON
+ * object with a non-empty string `message` reads as none.
+ */
+export function readPlatformSentence(result: unknown): string | null {
+  if (typeof result !== "string" || result.length === 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const message = (parsed as { message?: unknown }).message;
+    return typeof message === "string" && message.trim().length > 0 ? message : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * What the window shows for one turn. PURE, so the three cases are pinned by a
- * test rather than by reading a model's mind.
+ * test rather than by reading a model's mind. A platform sentence (the review
+ * window's, see `readPlatformSentence`) replaces the model's text exactly.
  */
 export function composeWindowAnswer(args: {
   text: string;
   toolLess: boolean;
   runtimeError: string | null;
+  platformSentence?: string | null;
 }): string {
   const body = args.text.trim();
   if (args.toolLess) {
@@ -690,6 +716,8 @@ export function composeWindowAnswer(args: {
     // will not do it here.
     return body ? `${RUN_WINDOW_TOOL_LESS_NOTICE}\n\n${body}` : RUN_WINDOW_TOOL_LESS_NOTICE;
   }
+  const sentence = args.platformSentence?.trim();
+  if (sentence) return sentence;
   if (body) return body;
   if (args.runtimeError) {
     return "The assistant could not answer just now — please try again.";

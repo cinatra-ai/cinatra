@@ -9,7 +9,7 @@
 import { expect } from "vitest";
 
 import { startFixtureApp } from "./fixture-app.mjs";
-import { ContextDouble } from "./page-double.mjs";
+import { BrowserDouble } from "./page-double.mjs";
 
 // The module is loaded here and not imported at the top of each file, so a
 // module that does not load fails each case on a named assertion instead of
@@ -52,8 +52,9 @@ export const BACKENDS = [
   {
     name: "page double",
     skip: false,
-    open: async (origin) => new ContextDouble(origin).newPage(),
-    close: (page) => page.context().close(),
+    // A browser of its own per case, so a context a case opens beside its page closes with it.
+    open: async (origin) => (await new BrowserDouble(origin).newContext()).newPage(),
+    close: (page) => page.context().browser().close(),
   },
   {
     name: "browser",
@@ -68,20 +69,21 @@ export const BACKENDS = [
 export const labelOf = (backend) => (backend.skip ? `${backend.name}, skipped: ${backend.skip}` : backend.name);
 
 /**
- * One case on one backend: a fixture app (serving HTTP/2 as well with `secure`),
- * a page, and a record that keeps every line the step wrote. After the case, no
- * line may carry one of `secrets` or an origin of the app: a step writes paths,
- * never addresses or values.
+ * One case on one backend: a fixture app (serving HTTP/2 as well with `secure`,
+ * pages that hydrate late with `hydrate`, and a site's page that embeds it on
+ * two further origins with `site`), a page, and a record that keeps every line
+ * the step wrote. After the case, no line may carry one of `secrets` or an
+ * origin of the app or its site: a step writes paths, never addresses or values.
  */
-export async function scene(backend, { answer, secure, secrets = [] } = {}, body) {
-  const app = await startFixtureApp({ answer, secure });
+export async function scene(backend, { answer, secure, hydrate, site, secrets = [] } = {}, body) {
+  const app = await startFixtureApp({ answer, secure, hydrate, site });
   const page = await backend.open(app.origin);
   const lines = [];
   const record = (line) => lines.push(String(line));
   try {
     await body({ app, page, record, lines });
     for (const line of lines) {
-      for (const secret of [...secrets, app.origin, ...(app.secureOrigin ? [app.secureOrigin] : [])]) {
+      for (const secret of [...secrets, app.origin, ...(app.secureOrigin ? [app.secureOrigin] : []), ...(app.siteOrigin ? [app.siteOrigin, app.crossSiteOrigin] : [])]) {
         expect(line.includes(secret), `a line the step wrote carries a value or the origin: ${line.slice(0, 48)}`).toBe(false);
       }
     }

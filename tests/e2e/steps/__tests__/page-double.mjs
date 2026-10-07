@@ -17,6 +17,14 @@
 //     from that part, and its own request stays open with it, without a
 //     response end in its timing;
 //   - a press that holds the new-tab modifier opens the link in a further page;
+//   - a browser opens contexts, and each context keeps its own cookies, its own
+//     storage and its own connections: at most six to one origin over plain
+//     HTTP, and a request beyond them waits until one of them ends. A new
+//     context starts from a storage state handed to it as an object (a path to a
+//     file is refused). A document's storage is kept for its origin when the
+//     document is left and when the context's storage state is read, and a new
+//     document of that origin starts from it. A response's cookies are not
+//     taken: a test adds the cookies a context starts with;
 //   - a press on a link the page's own handler takes over plays that handler: it
 //     cancels the press, or opens a dialog or a panel in place, or requests the
 //     page from the app and, once the app has answered, moves the address
@@ -24,9 +32,13 @@
 //   - a list drawn as the shared select draws it hides everything outside it
 //     from assistive technology while it is open, as the select's library does,
 //     and a press on one of its entries takes the entry, closes the list and
-//     shows the page again (see hideOthers);
+//     shows the page again (see hideOthers); the list may close after a delay
+//     the page names, or never; the Escape key closes it too, taking no entry,
+//     unless the page has it ignore the key (see pressEscape);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - a press on a row drawn without a role plays the page's handlers for it: it
+//     counts the press, selects the row, or leaves the page;
 //   - text filled into a search field, and a press on an entry of its list, run
 //     the page's own handlers for them: the same two functions the page's inline
 //     script runs in a browser (see typeInSearchField in fixture-app.mjs);
@@ -51,17 +63,65 @@
 //     Playwright's own call log does, so a step that forwards that message fails
 //     these cases;
 //   - a press moves the focus, and the keyboard types into the element that has
-//     it (see the keyboard, further down).
+//     it (see the keyboard, further down);
+//   - a page that declares a late hydration (`fixture-hydration`, see
+//     withHydration in fixture-app.mjs) carries the App Router's flight data
+//     from the start and hydrates once: at its time, or at the first press,
+//     fill, typed key or focus played on it, whichever comes first; it reports
+//     that moment to the app as its script does in a browser.
 // The page's declared behaviour (the JSON each fixture page carries) is played on
 // its document with timers, as the page's inline script does in a browser: a
 // stream it opens stays open, and while its main thread is declared busy, a
 // reading waits. Inline scripts never run here.
+//
+// frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow: what
+// these steps, and the control steps given a frame scope, do with a page, with
+// a browser's rules:
+//   - a document's open shadow roots: a locator looks through them as
+//     Playwright's CSS does (a selector matched inside every root), and the
+//     accessibility tree holds their elements, as a browser's does; an in-page
+//     reading sees them only where it walks into them itself; the site's page
+//     mounts its widget into one, as its inline script does (see
+//     fixture-app-site.mjs);
+//   - a frame element's frame (`elementHandle().contentFrame()`) is a document
+//     of its own, loaded from its element's address the first time it is
+//     looked for, with its own focus and its own declared behaviour: its
+//     readings, its locators and its waits are its own; its requests and its
+//     navigations are announced on its page, each naming that frame; a press in
+//     it moves the focus into it, and the page's keyboard types into the frame
+//     that has the focus; it is detached once its element leaves the page's
+//     document (a reload, or the element removed), and a frame of another site
+//     than its page's has a CDP session of its own, as Chromium runs it out of
+//     process when it runs every site in a process of its own (the browser leg
+//     drives such a browser beside Playwright's own launch), while a frame of
+//     the same site is read through its page's session, by the frame's id and
+//     its document node (`DOM.describeNode`);
+//   - `window.open` from a press (`data-fixture-window-opens`) opens a further
+//     page in the same context and announces it on the page (`popup`), and a
+//     page so opened that closes itself (`window.close`, declared by
+//     `fixture-window-closes` or by its sign-in form once the app has answered
+//     200) closes and announces `close`; a page waits for either event
+//     (`waitForEvent`);
+//   - a fill of an element whose content is editable sets its text, as
+//     Playwright's fill does;
+//   - contexts keep their cookies apart: a new context starts with none, and a
+//     request carries only the cookies of its own host.
+import { hydrateFixtureUpload } from "./fixture-app-controls.mjs";
 import { connect, constants } from "node:http2";
 
 import { JSDOM } from "jsdom";
 
-import { EMAIL_ROUTE, USERNAME_ROUTE, pressSearchEntry, typeInSearchField } from "./fixture-app.mjs";
+import {
+  EMAIL_ROUTE,
+  HYDRATION_KEY,
+  HYDRATION_REPORT_PATH,
+  STEP_MARK,
+  USERNAME_ROUTE,
+  pressSearchEntry,
+  typeInSearchField,
+} from "./fixture-app.mjs";
 import { inputInFixtureWindow, sendInFixtureWindow } from "./fixture-app-windows.mjs";
+import { mountFixtureSite, pressFixtureLauncher } from "./fixture-app-site.mjs";
 
 export class TimeoutError extends Error {
   constructor(message) {
@@ -80,6 +140,73 @@ const NEW_TAB_MODIFIERS = ["ControlOrMeta", "Control", "Meta"];
 const INNER = Symbol("context double");
 /** A page's first part that says the rest of its response is still to come. */
 const STREAMING_MARK = /<meta name="fixture-streaming"/;
+/** How many connections a context opens to one origin over plain HTTP, as a browser does. */
+const ORIGIN_CONNECTIONS = 6;
+/** The viewport a context gives its pages unless it was made with another. */
+const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 720 });
+/** How a context asks a page to keep its document's storage. */
+const KEEP_STORAGE = Symbol("keep the storage");
+const ACCESSIBILITY_SESSION = Symbol("fixture accessibility session");
+/** How a frame of the double reaches the document that stands in it. */
+const FRAME_PAGE = Symbol("frame document");
+/** The ids frames are given, as a browser gives each frame one. */
+let frameCount = 0;
+
+/** Every element under `root`, and under every open shadow root inside it, in the order a browser's tree lists them. */
+function deepElements(root) {
+  const found = [];
+  const walk = (node) => {
+    for (const element of node.querySelectorAll("*")) {
+      found.push(element);
+      if (element.shadowRoot) walk(element.shadowRoot);
+    }
+  };
+  walk(root);
+  return found;
+}
+
+/** The elements `selector` matches under `root`, looking through open shadow roots as Playwright's CSS does. */
+function deepQueryAll(root, selector) {
+  return deepElements(root).filter((element) => element.matches(selector));
+}
+
+// A fixture-only name/source double for the existing branch tests. It is NOT
+// the platform algorithm: browser-control-names.test.mjs exercises the cases
+// (including SVG descendants and HTML label ARIA) that only Chromium can prove.
+function fixtureName(element) {
+  const text = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const content = (node, skip) => {
+    if (node === skip) return "";
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1 || node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") return "";
+    if (["script", "style", "template"].includes(node.localName)) return "";
+    if (node.localName === "img") return ` ${node.getAttribute("alt") || ""} `;
+    if (node.localName === "select") return ` ${Array.from(node.selectedOptions || [], (option) => option.text).join(" ")} `;
+    if (node.localName === "textarea") return ` ${node.value} `;
+    if (node.localName === "input") return ["radio", "checkbox", "hidden", "file"].includes(node.type) ? "" : ` ${node.value || ""} `;
+    return Array.from(node.childNodes, (child) => content(child, skip)).join("");
+  };
+  const named = (name, from) => ({ name, from: name ? from : "" });
+  const labelled = text(text(element.getAttribute("aria-labelledby")).split(" ").map((id) => element.ownerDocument.getElementById(id)).filter(Boolean).map((node) => content(node, element)).join(" "));
+  if (labelled) return named(labelled, "aria-labelledby");
+  const aria = text(element.getAttribute("aria-label"));
+  if (aria) return named(aria, "aria-label");
+  const label = text(Array.from(element.labels || [], (node) => content(node, element)).join(" "));
+  if (label) return named(label, "label");
+  if (element.localName === "fieldset") return named(text(content(element.querySelector("legend"), null)), "label");
+  if (element.localName === "input" && ["button", "submit", "reset", "image"].includes(element.type)) {
+    const name = text(element.type === "image" ? element.getAttribute("alt") : element.value);
+    if (name) return named(name, "text");
+  }
+  const role = element.getAttribute("role") || ({ a: "link" }[element.localName] ?? element.localName);
+  if (["button", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "option", "radio", "checkbox", "switch", "treeitem"].includes(role)) {
+    const name = text(content(element, null));
+    if (name) return named(name, "text");
+  }
+  const title = text(element.getAttribute("title"));
+  if (title) return named(title, "title");
+  return named(text(element.getAttribute("placeholder")), "placeholder");
+}
 
 /**
  * A response body as it arrives: `head` resolves with what has come once its
@@ -119,16 +246,25 @@ function collect(subscribe) {
  * arrives (`head` and `whole`, see collect) and `cancel`. Plain HTTP goes over
  * HTTP/1.1; an https origin over HTTP/2.
  */
-async function transfer(sessionOf, href, { method, body, headers, follow }) {
+async function transfer(inner, href, { method, body, headers, follow }) {
+  headers = { ...headers, ...inner.cookiesFor(href) };
   if (new URL(href).protocol === "http:") {
+    // One of the context's connections to the origin, held until the body has ended.
+    const release = await inner.connection(new URL(href).origin);
     const controller = new AbortController();
-    const response = await fetch(href, {
-      method,
-      body: body ?? undefined,
-      headers,
-      redirect: follow ? "follow" : "manual",
-      signal: controller.signal,
-    });
+    let response;
+    try {
+      response = await fetch(href, {
+        method,
+        body: body ?? undefined,
+        headers,
+        redirect: follow ? "follow" : "manual",
+        signal: controller.signal,
+      });
+    } catch (error) {
+      release();
+      throw error;
+    }
     const { head, whole } = collect((onPart, onEnd, onFail) => {
       if (!response.body) return onEnd();
       const reader = response.body.getReader();
@@ -145,9 +281,10 @@ async function transfer(sessionOf, href, { method, body, headers, follow }) {
         }, onFail);
       pump();
     });
+    whole.then(release, release);
     return { status: response.status, url: response.url, protocol: "http/1.1", head, whole, cancel: () => controller.abort() };
   }
-  const session = await sessionOf(new URL(href).origin);
+  const session = await inner.session(new URL(href).origin);
   for (let hops = 0; ; hops += 1) {
     const url = new URL(href);
     const stream = session.request({ ":method": method, ":path": `${url.pathname}${url.search}`, ...headers });
@@ -175,15 +312,71 @@ async function transfer(sessionOf, href, { method, body, headers, follow }) {
   }
 }
 
-/** A browser context: its open pages, and the request events of all of them. */
-export class ContextDouble {
+/** Whether a cookie of `domain` goes to `host`: the host itself, or a host under a domain written with a leading dot. */
+const domainMatches = (host, domain) => host === domain || (domain.startsWith(".") && (host === domain.slice(1) || host.endsWith(domain)));
+
+/** A browser: the contexts it has open. */
+export class BrowserDouble {
   #origin;
-  #pages = [];
-  #listeners = new Map();
-  #sessions = new Map();
+  #contexts = [];
 
   constructor(origin) {
     this.#origin = origin;
+    this[INNER] = {
+      forget: (context) => {
+        this.#contexts = this.#contexts.filter((open) => open !== context);
+      },
+    };
+  }
+
+  contexts() {
+    return [...this.#contexts];
+  }
+
+  /** A context of its own: `storageState` (an object), `viewport`. */
+  async newContext(options = {}) {
+    const context = new ContextDouble(this.#origin, { ...options, browser: this });
+    this.#contexts.push(context);
+    return context;
+  }
+
+  async close() {
+    for (const context of this.contexts()) await context.close();
+  }
+}
+
+/** A browser context: its open pages, the request events of all of them, and its own cookies, storage and connections. */
+export class ContextDouble {
+  async newCDPSession(page) {
+    // A frame has a session of its own only when it runs out of process: when it stands on another site than its page.
+    if (page[FRAME_PAGE]) return page[FRAME_PAGE][ACCESSIBILITY_SESSION](true);
+    return page[ACCESSIBILITY_SESSION]();
+  }
+  #origin;
+  #browser;
+  #viewport;
+  #pages = [];
+  #listeners = new Map();
+  #sessions = new Map();
+  #cookies = [];
+  /** The storage of each origin: a map of names to values. */
+  #storage = new Map();
+  /** The connections to each origin over plain HTTP: how many are taken, and the requests that wait for one. */
+  #pools = new Map();
+  #closed = false;
+
+  /** Made by a browser (BrowserDouble.newContext), or alone, as a context no browser opened. */
+  constructor(origin, { browser = null, storageState, viewport } = {}) {
+    this.#origin = origin;
+    this.#browser = browser;
+    this.#viewport = viewport === undefined ? { ...DEFAULT_VIEWPORT } : viewport;
+    if (storageState !== undefined) {
+      if (!storageState || typeof storageState !== "object") throw new Error("the page double takes a storage state as an object, never a file");
+      this.#addCookies(storageState.cookies ?? []);
+      for (const { origin: of, localStorage } of storageState.origins ?? []) {
+        this.#storage.set(of, new Map(localStorage.map(({ name, value }) => [name, value])));
+      }
+    }
     this[INNER] = {
       emit: (event, value) => {
         for (const listener of [...(this.#listeners.get(event) ?? [])]) listener(value);
@@ -212,12 +405,85 @@ export class ContextDouble {
         }
         return session;
       },
-      transfer: (href, options) => transfer(this[INNER].session, href, options),
+      transfer: (href, options) => transfer(this[INNER], href, options),
+      /** The cookie header a request to `href` carries. */
+      cookiesFor: (href) => {
+        const url = new URL(href);
+        const sent = this.#cookies.filter((cookie) => domainMatches(url.hostname, cookie.domain) && url.pathname.startsWith(cookie.path));
+        return sent.length > 0 ? { cookie: sent.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ") } : {};
+      },
+      /** One connection to `origin`, once one is free: answers its release. */
+      connection: (origin) => {
+        let pool = this.#pools.get(origin);
+        if (!pool) this.#pools.set(origin, (pool = { taken: 0, waiting: [] }));
+        return new Promise((done, fail) => {
+          if (this.#closed) return fail(new Error("the context was closed"));
+          const take = () => {
+            pool.taken += 1;
+            let released = false;
+            done(() => {
+              if (released) return;
+              released = true;
+              pool.taken -= 1;
+              pool.waiting.shift()?.take();
+            });
+          };
+          if (pool.taken < ORIGIN_CONNECTIONS) take();
+          else pool.waiting.push({ take, fail });
+        });
+      },
+      /** The storage of `origin`, which a new document of that origin starts from. */
+      storage: (origin) => {
+        let kept = this.#storage.get(origin);
+        if (!kept) this.#storage.set(origin, (kept = new Map()));
+        return kept;
+      },
+      viewport: () => this.#viewport,
     };
+  }
+
+  /** The browser that opened the context, or null when none did. */
+  browser() {
+    return this.#browser;
   }
 
   pages() {
     return [...this.#pages];
+  }
+
+  #addCookies(cookies) {
+    for (const given of cookies) {
+      const domain = given.domain ?? new URL(given.url).hostname;
+      const path = given.path ?? "/";
+      this.#cookies = this.#cookies.filter((cookie) => !(cookie.name === given.name && cookie.domain === domain && cookie.path === path));
+      this.#cookies.push({
+        name: given.name,
+        value: given.value,
+        domain,
+        path,
+        expires: given.expires ?? -1,
+        httpOnly: given.httpOnly ?? false,
+        secure: given.secure ?? false,
+        sameSite: given.sameSite ?? "Lax",
+      });
+    }
+  }
+
+  async addCookies(cookies) {
+    this.#addCookies(cookies);
+  }
+
+  async cookies() {
+    return this.#cookies.map((cookie) => ({ ...cookie }));
+  }
+
+  /** The cookies and the storage of each origin, as Playwright answers them. */
+  async storageState() {
+    for (const page of this.#pages) page[KEEP_STORAGE]();
+    const origins = [...this.#storage]
+      .filter(([, kept]) => kept.size > 0)
+      .map(([origin, kept]) => ({ origin, localStorage: [...kept].map(([name, value]) => ({ name, value })) }));
+    return { cookies: await this.cookies(), origins };
   }
 
   async newPage() {
@@ -236,9 +502,14 @@ export class ContextDouble {
   }
 
   async close() {
+    if (this.#closed) return;
+    this.#closed = true;
+    // A request that waits for a connection goes nowhere once its context is gone.
+    for (const pool of this.#pools.values()) for (const waiting of pool.waiting.splice(0)) waiting.fail(new Error("the context was closed"));
     for (const page of this.pages()) await page.close();
     for (const session of this.#sessions.values()) (await session.catch(() => null))?.destroy();
     this.#sessions.clear();
+    this.#browser?.[INNER].forget(this);
   }
 }
 
@@ -282,24 +553,55 @@ function hideOthers(list) {
   walk(document.body);
 }
 
-/**
- * An entry pressed in such a list is taken: the list closes, the combobox that
- * controls it shows the entry, and every element the list hid is shown again.
- */
-function chooseEntry(entry) {
-  const document = entry.ownerDocument;
-  const list = entry.closest("[role='listbox']");
-  if (!list) return;
+/** Such a list closes: it is hidden, and every element it hid is shown again. */
+function closeList(list) {
   list.setAttribute("hidden", "");
-  for (const node of document.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
+  for (const node of list.ownerDocument.querySelectorAll(`[${HIDDEN_MARKER}]`)) {
     node.removeAttribute("aria-hidden");
     node.removeAttribute(HIDDEN_MARKER);
   }
+}
+
+/**
+ * The Escape key closes every shown list a combobox opened, as the select's
+ * library does, and takes no entry: the combobox reads collapsed again. A list
+ * that carries `data-fixture-escape="ignored"` stays open. The inline script of
+ * fixture-app.mjs does the same in a browser.
+ */
+function pressEscape(document) {
+  for (const list of Array.from(document.querySelectorAll("[role='listbox']"))) {
+    if (!list.id || list.hasAttribute("hidden") || list.getAttribute("data-fixture-escape") === "ignored") continue;
+    const picker = document.querySelector(`[data-fixture-opens="${list.id}"][aria-controls="${list.id}"]`);
+    if (!picker) continue;
+    closeList(list);
+    picker.setAttribute("aria-expanded", "false");
+  }
+}
+
+/**
+ * An entry pressed in such a list is taken: the combobox that controls it shows
+ * the entry, and the list closes and every element it hid is shown again, at
+ * once or, when the list carries `data-fixture-closes-after`, after that many
+ * milliseconds (`later` is the page's timer road) or never.
+ */
+function chooseEntry(entry, later) {
+  const document = entry.ownerDocument;
+  const list = entry.closest("[role='listbox']");
+  if (!list) return;
+  const close = () => closeList(list);
   const picker = document.querySelector(`[aria-controls="${list.id}"]`);
-  if (!picker) return;
-  picker.textContent = entry.textContent;
-  picker.removeAttribute("data-placeholder");
-  picker.setAttribute("aria-expanded", "false");
+  if (picker) {
+    picker.textContent = entry.textContent;
+    picker.removeAttribute("data-placeholder");
+    picker.setAttribute("aria-expanded", "false");
+  }
+  // A list that carries `data-fixture-closes-after` closes that many milliseconds later, or never.
+  const closesAfter = list.getAttribute("data-fixture-closes-after");
+  if (closesAfter === null) close();
+  else {
+    entry.setAttribute("aria-selected", "true");
+    if (closesAfter !== "never") later(close, Number(closesAfter));
+  }
 }
 
 export class PageDouble {
@@ -318,12 +620,58 @@ export class PageDouble {
   #streams = new Set();
   #entries = new WeakMap();
   #busyUntil = new WeakMap();
+  /** The documents that declare a late hydration and have not hydrated yet. */
+  #unhydrated = new WeakSet();
+  #viewport;
+  /** The page a frame's document stands in (the page itself for a page), and the frame element it stands for (null for a page). */
+  #top = this;
+  #owner = null;
+  /** A page's frames, by their elements, and all of them, so they close with it. */
+  #innerFrames = new WeakMap();
+  #children = new Set();
+  /** The frame that has the focus, when a press moved it into one. */
+  #inFrame = null;
+  #frameId = "";
+  /** Whether a press opened this page (`window.open`): such a page may close itself. */
+  #opened = false;
 
-  /** Opened by its context: `context.newPage()`. */
-  constructor(origin, context) {
+  /**
+   * Opened by its context: `context.newPage()`. With `owner`, the document of a
+   * frame instead: `{ top, element }`, the page the frame stands in and its
+   * element (see the frames of a page, further down).
+   */
+  constructor(origin, context, owner = null) {
     this.#origin = origin;
     this.#context = context;
+    this.#viewport = context[INNER].viewport();
+    if (owner) {
+      this.#top = owner.top;
+      this.#owner = owner.element;
+      this.#frameId = `frame-${(frameCount += 1)}`;
+      this.#frame = this.#frameApi();
+    }
     this.#dom = this.#build("about:blank", "<!doctype html><html><body></body></html>", null, 0);
+  }
+
+  viewportSize() {
+    return this.#viewport ? { ...this.#viewport } : null;
+  }
+
+  async setViewportSize(size) {
+    this.#viewport = { width: size.width, height: size.height };
+  }
+
+  /** Keep the storage of `dom` for its origin, in the context. */
+  #keepStorage(dom) {
+    if (!/^https?:/.test(dom.window.location.href)) return;
+    const kept = this.#context[INNER].storage(dom.window.location.origin);
+    const storage = dom.window.localStorage;
+    kept.clear();
+    for (let i = 0; i < storage.length; i += 1) kept.set(storage.key(i), storage.getItem(storage.key(i)));
+  }
+
+  [KEEP_STORAGE]() {
+    if (!this.#closed) this.#keepStorage(this.#dom);
   }
 
   url() {
@@ -370,9 +718,15 @@ export class PageDouble {
     for (const [name, listeners] of this.#listeners) this.#listeners.set(name, listeners.filter((l) => l !== listener));
   }
 
-  /** Tells the page's listeners of `event`. */
+  /** Tells the page's listeners of `event`. A frame's document tells its page's, its own `close` aside. */
   #emit(event, value) {
-    for (const listener of [...(this.#listeners.get(event) ?? [])]) listener(value);
+    const target = event === "close" ? this : this.#top;
+    for (const listener of [...(target.#listeners.get(event) ?? [])]) listener(value);
+  }
+
+  /** Announces `request` to the page's request listeners: a frame's requests are its page's. */
+  #announce(request) {
+    for (const listener of [...this.#top.#requestListeners]) listener(request);
   }
 
   async evaluate(fn, arg) {
@@ -387,6 +741,91 @@ export class PageDouble {
     if (this.#closed) throw new Error(DESTROYED);
     const inPage = this.#dom.window.eval(`(${fn.toString()})`);
     return viaJson(await inPage(viaJson(arg)));
+  }
+
+  /**
+   * The CDP session of this page's target: its document is the root, every
+   * element (inside open shadow roots too) a node of its accessibility tree.
+   * A frame of the same site is read through it, by the frame's id and its
+   * document node; a frame's own session (`ownTarget`) exists only for a frame
+   * of another site, which a browser runs out of process.
+   */
+  [ACCESSIBILITY_SESSION](ownTarget = false) {
+    if (ownTarget && !this.#outOfProcess()) throw new Error("This frame does not have a separate CDP session, it is a part of the parent frame's session");
+    if (this.#closed) throw new Error(DESTROYED);
+    const document = this.#dom.window.document;
+    // Backend ids: the document is 1, and each node after it in the order the session meets it.
+    const ids = new Map();
+    const objects = [];
+    const idOf = (node) => {
+      if (!ids.has(node)) {
+        objects.push(node);
+        ids.set(node, objects.length);
+      }
+      return ids.get(node);
+    };
+    for (const node of [document, ...deepElements(document)]) idOf(node);
+    /** The documents of this page's frames of the same site, by the frame's id, once a frame element was described. */
+    const frameDocuments = new Map();
+    const nodeOf = (id) => {
+      const node = objects[Number(id) - 1];
+      if (!node) throw new Error("Could not find node with given id");
+      return node;
+    };
+    let detached = false;
+    return {
+      send: async (command, args = {}) => {
+        await this.evaluate(() => true); // Preserve busy, closed and navigating failures.
+        if (detached || document !== this.#dom.window.document) throw new Error(DESTROYED);
+        if (command === "DOM.getDocument") return { root: { backendNodeId: 1 } };
+        if (command === "DOM.resolveNode") return { object: { objectId: String(args.backendNodeId) } };
+        if (command === "Accessibility.getFullAXTree") {
+          const of = args.frameId === undefined ? document : frameDocuments.get(args.frameId);
+          if (!of) throw new Error("Frame with the given frameId is not found.");
+          return {
+            nodes: deepElements(of).map((element) => {
+              const { name, from } = fixtureName(element);
+              const source = { value: { value: name } };
+              if (from === "label") source.nativeSource = "label";
+              else if (from === "text") source.type = "contents";
+              else if (from === "placeholder") source.type = "placeholder";
+              else source.attribute = from;
+              return { backendDOMNodeId: idOf(element), name: { value: name, sources: [source] } };
+            }),
+          };
+        }
+        if (command === "Runtime.evaluate") {
+          const value = this.#dom.window.eval(args.expression);
+          return value && typeof value === "object" && value.nodeType ? { result: { objectId: String(idOf(value)) } } : { result: { value: viaJson(value) } };
+        }
+        if (command === "DOM.describeNode") {
+          const node = nodeOf(args.objectId);
+          const described = { backendNodeId: idOf(node), nodeName: node.nodeName };
+          const inner = node.localName === "iframe" ? this.#innerFrames.get(node) : undefined;
+          if (inner && !inner.#detached()) {
+            described.frameId = inner.#frameId;
+            // A frame of the same site is part of this target: its document is this session's to read.
+            if (!inner.#outOfProcess()) {
+              const frameDocument = inner.#dom.window.document;
+              frameDocuments.set(inner.#frameId, frameDocument);
+              described.contentDocument = { backendNodeId: idOf(frameDocument), nodeName: "#document" };
+            }
+          }
+          return { node: described };
+        }
+        if (command === "Runtime.callFunctionOn") {
+          const self = nodeOf(args.objectId);
+          const realm = (self.ownerDocument ?? self).defaultView;
+          if (!realm || (self !== document && self.ownerDocument !== document && ![...frameDocuments.values()].includes(self.ownerDocument ?? self))) throw new Error(DESTROYED);
+          const fn = realm.eval(`(${args.functionDeclaration})`);
+          const values = args.arguments.map((arg) => (arg.objectId ? nodeOf(arg.objectId) : viaJson(arg.value)));
+          return { result: { value: viaJson(await fn.apply(self, values)) } };
+        }
+        if (command === "Runtime.releaseObjectGroup") return {};
+        throw new Error(`The fixture has no CDP command ${command}`);
+      },
+      detach: async () => { detached = true; },
+    };
   }
 
   async waitForFunction(fn, arg, { timeout = 30_000, polling = 100 } = {}) {
@@ -415,6 +854,9 @@ export class PageDouble {
         press: (element, modifiers) => this.#press(element, modifiers),
         typed: (element) => this.#typed(element),
         focus: (element) => this.#focus(element),
+        acted: () => this.#acted(),
+        handle: (element) => this.#handleOf(element),
+        setInputFilesOn: (element, files) => this.setInputFilesOn(element, files),
       },
       selector,
       {},
@@ -423,13 +865,84 @@ export class PageDouble {
 
   async close() {
     if (this.#closed) return;
+    this.#keepStorage(this.#dom);
     this.#closed = true;
     for (const timer of this.#timers) clearTimeout(timer);
     this.#timers.clear();
     this.#endStreams(null, "closed");
     this.#context[INNER].forget(this);
+    // The frames of the page close with it.
+    for (const child of this.#children) await child.close();
+    this.#children.clear();
     this.#dom.window.close();
     this.#emit("close", this);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The frames of a page: a frame element's frame is a document of its own, the
+  // document of a PageDouble made for that element (`owner`), which is no page
+  // of its context. See the header for the rules kept.
+  // ---------------------------------------------------------------------------
+
+  /** A handle on `element`: its frame, when it is a frame element, and an evaluation on it. */
+  #handleOf(element) {
+    return {
+      contentFrame: async () => this.#contentFrame(element),
+      evaluate: async (fn, arg) => {
+        if (this.#closed || !element.isConnected) throw new Error("Element is not attached to the DOM");
+        const inPage = element.ownerDocument.defaultView.eval(`(${fn.toString()})`);
+        return viaJson(await inPage(element, viaJson(arg)));
+      },
+      dispose: async () => {},
+    };
+  }
+
+  /** The frame of a frame element of this page's document: made, and loaded from the element's address, the first time it is looked for. */
+  #contentFrame(element) {
+    if (element.localName !== "iframe" || !element.isConnected || element.ownerDocument !== this.#dom.window.document) return null;
+    const held = this.#innerFrames.get(element);
+    if (held && !held.#detached()) return held.#frame;
+    const inner = new PageDouble(this.#origin, this.#context, { top: this.#top, element });
+    this.#innerFrames.set(element, inner);
+    this.#top.#children.add(inner);
+    const href = new URL(element.getAttribute("src") || "about:blank", this.#href).href;
+    if (/^https?:/.test(href)) inner.goto(href).catch(() => {});
+    return inner.#frame;
+  }
+
+  /** Whether this frame's document no longer stands in its page: its element left the page's document, or the page closed. */
+  #detached() {
+    if (this.#owner === null) return this.#closed;
+    const gone = this.#closed || this.#top.#closed || !this.#owner.isConnected || this.#owner.ownerDocument !== this.#top.#dom.window.document;
+    if (gone && !this.#closed) this.close().catch(() => {});
+    return gone;
+  }
+
+  /** Whether this frame stands on another site than its page (a browser then runs it out of process). */
+  #outOfProcess() {
+    if (this.#owner === null) return false;
+    const site = (href) => (/^https?:/.test(href) ? `${new URL(href).protocol}//${new URL(href).hostname}` : null);
+    const own = site(this.#href);
+    return own !== null && own !== site(this.#top.#href);
+  }
+
+  /** What a frame answers of itself, as Playwright's Frame does, for the calls the steps make. */
+  #frameApi() {
+    const owner = this.#owner;
+    return {
+      [FRAME_PAGE]: this,
+      page: () => this.#top,
+      url: () => this.#href,
+      name: () => owner.getAttribute("name") ?? "",
+      parentFrame: () => this.#top.mainFrame(),
+      childFrames: () => [],
+      isDetached: () => this.#detached(),
+      evaluate: (fn, arg) => this.evaluate(fn, arg),
+      locator: (selector) => this.locator(selector),
+      waitForFunction: (fn, arg, options) => this.waitForFunction(fn, arg, options),
+      getByRole: (role, options) => this.getByRole(role, options),
+      frameElement: async () => this.#top.#handleOf(owner),
+    };
   }
 
   #later(fn, ms) {
@@ -453,6 +966,10 @@ export class PageDouble {
   /** A document for `html`, with its resource timing and the behaviour the page declares scheduled on it. */
   #build(href, html, protocol, responseEnd) {
     const dom = new JSDOM(html, { url: /^https?:/.test(href) ? href : "about:blank", runScripts: "outside-only" });
+    // A new document starts from the storage its context keeps for its origin.
+    if (/^https?:/.test(href)) {
+      for (const [name, value] of this.#context[INNER].storage(new URL(href).origin)) dom.window.localStorage.setItem(name, value);
+    }
     const entries = /^https?:/.test(href)
       ? [{ name: href, entryType: "navigation", nextHopProtocol: protocol ?? "", startTime: 0, responseEnd }]
       : [];
@@ -479,15 +996,53 @@ export class PageDouble {
       return node ? JSON.parse(node.textContent) : null;
     };
     for (const op of declared("fixture-timeline") ?? []) this.#later(() => this.#play(dom, op), op.at);
+    for (const op of declared("fixture-behaviour") ?? []) {
+      if (op.direct && op.hydrateAfterMs !== null) this.#later(() => hydrateFixtureUpload(dom.window.document, op), op.hydrateAfterMs);
+    }
     const scenario = declared("fixture-scenario");
     if (scenario && scenario.hydrateAfterMs !== null) {
       this.#later(() => this.#hydrate(dom, scenario), scenario.hydrateAfterMs);
     }
+    // The site's page mounts its widget as its inline script does, and a window that closes itself does so once it has loaded.
+    if (dom.window.document.getElementById("fixture-site")) mountFixtureSite(dom.window.document);
+    if (dom.window.document.getElementById("fixture-window-closes")) {
+      this.#later(() => {
+        if (this.#dom === dom && this.#opened) this.close().catch(() => {});
+      }, 0);
+    }
+    const hydration = declared("fixture-hydration");
+    if (hydration) {
+      dom.window.__next_f = [];
+      this.#unhydrated.add(dom);
+      if (hydration.afterMs !== null) this.#later(() => this.#hydrateLate(dom, "time"), hydration.afterMs);
+    }
     return dom;
+  }
+
+  /**
+   * A page that declares a late hydration hydrates once, `by` its time or by an
+   * event: every element of its body carries the key React sets on an element
+   * it has hydrated, and the page reports the moment, with the marks it carried.
+   */
+  #hydrateLate(dom, by) {
+    if (this.#closed || this.#dom !== dom || !this.#unhydrated.has(dom)) return;
+    this.#unhydrated.delete(dom);
+    const { document, location } = dom.window;
+    const marked = document.querySelectorAll(`[${STEP_MARK}]`).length;
+    for (const element of document.body?.querySelectorAll("*") ?? []) element[HYDRATION_KEY] = true;
+    const report = new URL(HYDRATION_REPORT_PATH, location.href);
+    report.search = new URLSearchParams({ by, marked: String(marked), path: location.pathname, at: String(Date.now()) }).toString();
+    this.#send("GET", report.href, null, false).catch(() => {});
+  }
+
+  /** A press, a fill, a typed key or a focus is played on the page: a page that has not hydrated yet hydrates at once. */
+  #acted() {
+    this.#hydrateLate(this.#dom, "event");
   }
 
   #commit(href, html, protocol = null, elapsedMs = 0, streaming = null) {
     const previous = this.#dom;
+    this.#keepStorage(previous);
     this.#href = href;
     this.#dom = this.#build(href, html, protocol, streaming ? 0 : Math.max(1, elapsedMs));
     // A new document has the focus on nothing of its own yet.
@@ -507,6 +1062,10 @@ export class PageDouble {
       );
     }
     previous.window.close();
+    // The frames of the document left behind are detached, and close.
+    for (const child of [...this.#children]) {
+      if (child.#detached()) this.#children.delete(child);
+    }
     this.#emit("framenavigated", this.#frame);
   }
 
@@ -561,6 +1120,17 @@ export class PageDouble {
           })
           .catch(() => {});
       });
+    } else if (scenario.handler === "posts-closes") {
+      // A window's form: the app's own sign-in request, and the window closes itself once the app has answered 200.
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const payload = { email: field("email").value, password: field("password").value };
+        this.#send("POST", new URL(EMAIL_ROUTE, this.#href).href, JSON.stringify(payload), false)
+          .then((sent) => {
+            if (sent.status === 200 && this.#dom === dom && this.#opened) this.close().catch(() => {});
+          })
+          .catch(() => {});
+      });
     } else if (scenario.handler === "silent") {
       form.addEventListener("submit", (event) => event.preventDefault());
     } else if (scenario.handler === "scripted") {
@@ -592,6 +1162,32 @@ export class PageDouble {
   }
 
   #press(element, modifiers) {
+    // The site's own handler of its widget's launcher (see fixture-app-site.mjs).
+    if (element.hasAttribute("data-fixture-site-launcher")) {
+      pressFixtureLauncher(element);
+      return;
+    }
+    // The page's handler of a control that opens a window: a further page in the same context, announced as a popup.
+    const opener = element.closest("[data-fixture-window-opens]");
+    if (opener) {
+      const popup = this.#context[INNER].open();
+      popup.#opened = true;
+      this.#emit("popup", popup);
+      popup.goto(new URL(opener.getAttribute("data-fixture-window-opens"), this.#href).href).catch(() => {});
+      return;
+    }
+    // The page's handlers of a row drawn without a role (see PRESS_ROWS_PAGE in
+    // fixture-app.mjs): it counts its presses, selects itself, or leaves the page.
+    if (element.hasAttribute("data-fixture-counts")) {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") ?? 0) + 1));
+    }
+    if (element.hasAttribute("data-fixture-selects")) {
+      for (const row of element.ownerDocument.querySelectorAll("[data-fixture-selects]")) row.setAttribute("data-selected", String(row === element));
+    }
+    if (element.hasAttribute("data-fixture-goes")) {
+      this.#navigate("GET", new URL(element.getAttribute("data-fixture-goes"), this.#href).href, null).catch(() => {});
+      return;
+    }
     // The page's handler takes a press on a window's send control.
     const send = element.closest("[data-fixture-window-send]");
     if (send) {
@@ -621,7 +1217,12 @@ export class PageDouble {
       if (element.hasAttribute("data-fixture-inert")) return;
       // The page's handler takes an entry of a list drawn as the shared select draws it.
       if (element.hasAttribute("data-fixture-chooses")) {
-        chooseEntry(element);
+        const document = element.ownerDocument;
+        chooseEntry(element, (run, ms) =>
+          this.#later(() => {
+            if (this.#dom.window.document === document) run();
+          }, ms),
+        );
         return;
       }
       // The page's handler cancels the press and opens the dialog or the panel it names, in place.
@@ -763,7 +1364,7 @@ export class PageDouble {
     const startedAt = performance.now();
     let protocol = "";
     const held = this.#hold(dom, request, () => this.#timed(dom, href, protocol, startedAt));
-    for (const listener of [...this.#requestListeners]) listener(request);
+    this.#announce(request);
     inner.emit("request", request);
     inner.transfer(href, { method: "GET", body: null, headers: { accept: "text/event-stream" }, follow: false }).then(
       (reply) => {
@@ -803,7 +1404,7 @@ export class PageDouble {
       answered = done;
     });
     const request = this.#request(method, href, navigation, answer);
-    for (const listener of [...this.#requestListeners]) listener(request);
+    this.#announce(request);
     inner.emit("request", request);
     for (const { matcher, handler } of [...this.#routes].reverse()) {
       if (!matcher(new URL(href))) continue;
@@ -902,6 +1503,20 @@ export class PageDouble {
   }
 
   waitForEvent(event, { timeout = 30_000 } = {}) {
+    if (event === "popup" || event === "close") {
+      return new Promise((done, fail) => {
+        const listener = (value) => {
+          clearTimeout(timer);
+          this.off(event, listener);
+          done(value);
+        };
+        const timer = setTimeout(() => {
+          this.off(event, listener);
+          fail(new TimeoutError(`page.waitForEvent: Timeout ${timeout}ms exceeded while waiting for event "${event}"`));
+        }, timeout);
+        this.on(event, listener);
+      });
+    }
     if (event !== "filechooser") return Promise.reject(new Error(`the page double waits for a file chooser only, not for ${event}`));
     return new Promise((done, fail) => {
       const waiter = { done };
@@ -997,10 +1612,14 @@ export class PageDouble {
         return viaJson(await inPage(element, viaJson(arg)));
       },
       click: async ({ timeout = 30_000 } = {}) => {
-        this.#pressControl(await one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`, true));
+        const element = await one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`, true);
+        if (element.hasAttribute("data-fixture-pointer-intercepted")) throw new TimeoutError("locator.click: another element intercepts pointer events");
+        this.#acted();
+        this.#pressControl(element);
       },
       fill: async (value, { timeout = 30_000 } = {}) => {
         const element = await one(timeout, `locator.fill: Timeout ${timeout}ms exceeded.\nCall log:\n  - fill("${value}")`, true);
+        this.#acted();
         const type = (element.getAttribute("type") ?? "text").toLowerCase();
         if (element.localName === "select" || !["input", "textarea"].includes(element.localName)) {
           throw new Error("Error: Element is not an <input>, <textarea> or [contenteditable] element");
@@ -1015,6 +1634,13 @@ export class PageDouble {
       },
     };
     return locator;
+  }
+
+  /** Playwright's direct file-input hand-over, without a pointer action. */
+  async setInputFilesOn(element, files) {
+    this.#acted();
+    if (element.localName !== "input" || element.type !== "file") throw new Error("Element is not an input[type=file]");
+    return this.#setFiles(element, files);
   }
 
   /** What the page declares its own handlers do. */
@@ -1127,7 +1753,7 @@ export class PageDouble {
     input.dispatchEvent(new window.Event("input", { bubbles: true }));
     input.dispatchEvent(new window.Event("change", { bubbles: true }));
     for (const op of this.#declared(document)) {
-      if (op.chosen && input.matches(op.chosen)) this.#playChosen(document, op, chosen, input);
+      if (op.chosen && input.matches(op.chosen) && (!op.direct || typeof input.__reactProps$fixture?.onChange === "function")) this.#playChosen(document, op, chosen, input);
     }
   }
 
@@ -1143,6 +1769,11 @@ export class PageDouble {
           this.#later(() => {
             if (this.#dom !== dom) return;
             if (sent.status >= 200 && sent.status < 300) {
+              if (op.completion) {
+                const signal = document.querySelector(op.completion);
+                if (signal && !op.completionNever) { signal.textContent = op.wrongResult ? "@acme/different-skill" : "@acme/fixture-skill"; signal.removeAttribute("hidden"); }
+                return;
+              }
               const list = document.querySelector(op.rows);
               if (!list) return;
               const row = document.createElement("li");
@@ -1244,7 +1875,8 @@ export class PageDouble {
   //     the element reports `input`. A browser types key by key and reports each
   //     key; the double types the whole text at once and reports it once;
   //   - Backspace deletes what the selection holds, or the last character of
-  //     the text when the caret is at its end; no other key is pressed here;
+  //     the text when the caret is at its end; Escape closes the open lists of
+  //     the shared select (see pressEscape); no other key is pressed here;
   //   - text typed into a window's box, and a press on a window's send control,
   //     run the page's own handlers for them: the same two functions the page's
   //     inline script runs in a browser (see fixture-app-windows.mjs).
@@ -1252,15 +1884,34 @@ export class PageDouble {
 
   #focused = null;
 
-  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus. */
+  /** The keyboard: text typed, and Backspace pressed, into the element that has the focus; Escape pressed on the page. */
   keyboard = {
-    type: async (text) => this.#typeText(String(text)),
-    press: async (key) => this.#pressKey(String(key)),
+    type: async (text) => {
+      // The page's keyboard types into the frame that has the focus.
+      const inner = this.#focusedFrame();
+      if (inner) return inner.keyboard.type(text);
+      this.#acted();
+      this.#typeText(String(text));
+    },
+    press: async (key) => {
+      const inner = this.#focusedFrame();
+      if (inner) return inner.keyboard.press(key);
+      this.#acted();
+      this.#pressKey(String(key));
+    },
   };
+
+  /** The frame the focus stands in, while it stands in its page. */
+  #focusedFrame() {
+    const inner = this.#inFrame;
+    return inner && !inner.#detached() ? inner : null;
+  }
 
   #focus(element) {
     const focusable = element.matches("a[href], button, input, select, textarea, [tabindex]") || PageDouble.#takesText(element);
     this.#focused = focusable ? element : null;
+    // A press in a frame moves the page's focus into that frame; a press in the page itself out of any.
+    this.#top.#inFrame = this.#owner === null ? null : this;
   }
 
   /** Whether `element` takes text typed into it. */
@@ -1317,7 +1968,11 @@ export class PageDouble {
   }
 
   #pressKey(key) {
-    if (key !== "Backspace") throw new Error(`the page double presses Backspace only, not ${key}`);
+    if (key === "Escape") {
+      pressEscape(this.#dom.window.document);
+      return;
+    }
+    if (key !== "Backspace") throw new Error(`the page double presses Backspace and Escape only, not ${key}`);
     const element = this.#typingTarget();
     if (!element) return;
     const window = element.ownerDocument.defaultView;
@@ -1343,7 +1998,7 @@ export class PageDouble {
   }
 }
 
-/** The locator calls the steps make: count, the visible filter, first, fill and click (with its modifiers). */
+/** The locator calls the steps make: count, the visible filter, first, an attribute, fill and click (with its modifiers). */
 class LocatorDouble {
   #page;
   #selector;
@@ -1367,23 +2022,76 @@ class LocatorDouble {
     return this.#matches().length;
   }
 
+  async getAttribute(name, { timeout = 30_000 } = {}) {
+    const until = Date.now() + timeout;
+    for (;;) {
+      const found = this.#matches();
+      if (found.length > 1) throw new Error(`strict mode violation: ${this.#selector} resolved to ${found.length} elements`);
+      if (found.length === 1) return found[0].getAttribute(name);
+      if (Date.now() >= until) throw new TimeoutError(`locator.getAttribute: Timeout ${timeout}ms exceeded.`);
+      await pause(20);
+    }
+  }
+
+  async setInputFiles(files, { timeout = 30_000 } = {}) {
+    const until = Date.now() + timeout;
+    for (;;) {
+      const found = this.#matches();
+      if (found.length > 1) throw new Error(`strict mode violation: ${this.#selector} resolved to ${found.length} elements`);
+      if (found.length === 1) return this.#page.setInputFilesOn(found[0], files);
+      if (Date.now() >= until) throw new TimeoutError("locator.setInputFiles: Timeout exceeded");
+      await pause(20);
+    }
+  }
+
   async fill(value, { timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.fill: Timeout ${timeout}ms exceeded.\nCall log:\n  - fill("${value}")`);
-    element.value = value;
+    this.#page.acted();
     const window = element.ownerDocument.defaultView;
+    if (LocatorDouble.#editable(element)) {
+      // An element whose content is editable takes the value as its text, as Playwright's fill sets it.
+      element.textContent = value;
+      element.dispatchEvent(new window.InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      this.#page.typed(element);
+      return;
+    }
+    element.value = value;
     element.dispatchEvent(new window.Event("input", { bubbles: true }));
     element.dispatchEvent(new window.Event("change", { bubbles: true }));
     this.#page.typed(element);
   }
 
+  /** Whether `element` is no field but an element whose content is editable. */
+  static #editable(element) {
+    if (["input", "textarea", "select"].includes(element.localName)) return false;
+    for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+      const editable = node.getAttribute("contenteditable");
+      if (editable !== null) return editable.toLowerCase() !== "false";
+    }
+    return false;
+  }
+
+  /** A handle on the one attached element: its frame, when it is a frame element. */
+  async elementHandle({ timeout = 30_000 } = {}) {
+    const until = Date.now() + timeout;
+    for (;;) {
+      const found = this.#matches();
+      if (found.length > 1) throw new Error(`strict mode violation: ${this.#selector} resolved to ${found.length} elements`);
+      if (found.length === 1) return this.#page.handle(found[0]);
+      if (Date.now() >= until) throw new TimeoutError(`locator.elementHandle: Timeout ${timeout}ms exceeded.`);
+      await pause(20);
+    }
+  }
+
   async click({ timeout = 30_000, modifiers = [] } = {}) {
     const element = await this.#one(timeout, `locator.click: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
     this.#page.focus(element);
     this.#page.press(element, modifiers);
   }
 
   #matches() {
-    const all = Array.from(this.#page.document().querySelectorAll(this.#selector));
+    const all = deepQueryAll(this.#page.document(), this.#selector);
     const kept = this.#options.visible ? all.filter(isVisible) : all;
     return this.#options.first ? kept.slice(0, 1) : kept;
   }
@@ -1406,6 +2114,7 @@ class LocatorDouble {
   // group and announces the change.
   async selectOption(value, { timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.selectOption: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
     if (element.localName !== "select") throw new Error("locator.selectOption: Element is not a <select> element");
     const index = value && typeof value === "object" ? value.index : undefined;
     if (!Number.isInteger(index) || !element.options[index]) throw new Error("locator.selectOption: did not find some options");
@@ -1418,6 +2127,7 @@ class LocatorDouble {
 
   async check({ timeout = 30_000 } = {}) {
     const element = await this.#one(timeout, `locator.check: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
     if (element.localName !== "input" || !["radio", "checkbox"].includes(element.type)) throw new Error("locator.check: Not a checkbox or radio button");
     if (!element.checked) element.click();
     if (!element.checked) throw new Error("locator.check: Clicking the checkbox did not change its state");

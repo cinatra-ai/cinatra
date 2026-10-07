@@ -429,6 +429,25 @@ export const ARTIFACT_UI_REGISTRY_ITEM_TYPES = ["registry:ui", "registry:lib"] a
 export type ArtifactUiRegistryItemType = (typeof ARTIFACT_UI_REGISTRY_ITEM_TYPES)[number];
 
 /**
+ * The roads by which extension code makes the application create an artifact
+ * (cinatra#3821): the host capabilities whose services store an artifact (the
+ * CMS review seam's staged-write snapshot, the
+ * sent-mail and received-reply records of the mail routing) and the tools that
+ * author or materialize one. An agent extension's flow may reach them; a
+ * connector must not — a connector gives an agent its connection and its
+ * tools, and the agent creates the artifact.
+ *
+ * Pure data. Read AS A LITERAL by the conformance gate's rule derivation
+ * (`scripts/extensions/lib/conformance-rules.mjs`) — never a re-listed copy.
+ */
+export const ARTIFACT_CREATING_ROADS = [
+  "@cinatra-ai/host:cms-review",
+  "@cinatra-ai/host:email-routing",
+  "artifact_materialize",
+  "artifact_authoring_emit",
+] as const;
+
+/**
  * The shadcn item-name grammar for the `<component>` token: strict lowercase
  * kebab (a leading alnum segment, hyphen-joined alnum segments). This is the
  * SAME strict-lowercase slug grammar the registry-identity `registryNamespace`

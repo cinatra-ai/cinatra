@@ -150,7 +150,7 @@ const RAIL_EXTRAS: RailEntry[] = [
     label: "Review",
     status: "resolved",
     sources: ["gate"],
-    gate: { gateId: "gate-1", reviewTaskId: "task-resolved", disposition: "approved", resolved: true },
+    gate: { gateId: "gate-1", reviewTaskId: "task-resolved", disposition: "approve", resolved: true },
   },
   {
     key: "verification:task-resolved",

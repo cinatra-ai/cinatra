@@ -29,6 +29,8 @@ import {
 import {
   PAGE_NOT_FOUND_CRUMB_LABEL,
   agentInstanceTabLabel,
+  connectorRouteTabLabel,
+  isConnectorDispatchPathname,
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   humanizePathSegment,
@@ -690,6 +692,7 @@ export function AppShell({
       agentLabel === null
         ? null
         : documentTitleLabelForAgentInstance(agentLabel, breadcrumbSegments);
+    const connectorLabel = connectorRouteTabLabel(pathname, crumbContributions);
     let resolved: string | null = null;
     if (pageNotFound) {
       // A PAGE THAT IS NOT FOUND HAS NO HIERARCHY (cinatra#2934, fix leg 11).
@@ -701,6 +704,12 @@ export function AppShell({
       resolved = `${chatThreadTitle} | Cinatra`;
     } else if (agentTabLabel) {
       resolved = `${agentTabLabel} | Cinatra`;
+    } else if (connectorLabel) {
+      resolved = `${connectorLabel} | Cinatra`;
+    } else if (isConnectorDispatchPathname(pathname)) {
+      // Until the server-authorized publisher lands, preserve its metadata.
+      // Neither the selected tab nor a raw connector slug is a title source.
+      resolved = null;
     } else if (segments.some((seg) => isIdLikeSegment(seg))) {
       // Id-bearing route (cinatra#1737): the gate-repeating `generateMetadata`
       // on the route owns the tab title — clobbering it here would replace a
@@ -739,7 +748,7 @@ export function AppShell({
     const observer = new MutationObserver(apply);
     observer.observe(head, { childList: true, subtree: true, characterData: true });
     return () => observer.disconnect();
-  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments, pageNotFound]);
+  }, [activeHeader?.title, pathname, chatThreadTitle, breadcrumbSegments, crumbContributions, pageNotFound]);
 
   // <NotificationsProvider> (packages/notifications) owns the E6 store's
   // polling / SSE / per-route mark-read that feed the bell badge.
@@ -908,7 +917,7 @@ export function AppShell({
           data-testid="app-shell-topbar"
           style={{ top: "var(--banner-height, 0px)" }}
           className={cn(
-            "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background/90 backdrop-blur-xl transition-shadow",
+            "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background transition-shadow",
             scrollOffset > 10 ? "shadow-sm" : "shadow-none",
           )}
         >

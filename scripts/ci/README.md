@@ -167,6 +167,49 @@ The `.github/workflows/works-after-proof.yml` `workflow_dispatch` already expose
 a `gate_mode` input for a maintainer-run CI gate; that dispatch lane runs the
 same harness in gate mode with candidate pins derived from the checked-out ref.
 
+## Build-only heads
+
+Every workflow a `pull_request` event starts, except `build-image.yml`, skips
+its jobs when the head is a branch of this repository whose name starts with
+`merge-queue/` or `merge-batch/`: such a pull request exists only to build the
+exact tree main is about to carry, is never merged, and needs the image
+workflow alone (`files-hold.yml`, a `pull_request_target` workflow that names
+no pull request reference, runs as before). A fork's branch of the same name
+is an ordinary head and runs every job, so no contributor skips a check by
+naming a branch. The condition is written once in `build-only-heads.mjs`, and
+`__tests__/build-only-heads-skip.test.mjs` requires it on every such workflow,
+checks that it runs as before on an ordinary branch and on a push, and pins
+each required context to the job that produces it.
+
+## Jobs on a named runner class
+
+A job whose `runs-on` reads a runner class variable (`vars.CI_RUNNER_<CLASS>`)
+other than the gate, end-to-end, heavy and pool classes (`GATE`, `E2E`,
+`HEAVY`, `POOL`) runs for every event that is not a pull request, and for pull
+requests from branches of this repository; a pull request from another
+repository skips it. Today these jobs are `pixel-diff` in
+`design-visual-verify.yml` (class `PIXEL`) and `build-and-smoke-worker` in
+`build-exec-images.yml` (class `SMOKE`). When a pull request from another
+repository changes the design pages, `pixel-diff` is skipped and the design
+suite verdict reports the selected suite as not passed. The condition is
+written once in `runner-class-own-branches.mjs` and joined with the job's own
+condition, before the build-only head condition:
+
+    if: ${{ ((EXISTING) && CONDITION) && BUILD_ONLY_HEAD_CONDITION }}
+
+A job can carry the condition in one of three forms. Its `if` is the condition
+alone, with or without the build-only head condition beside it. Its `if` joins
+the condition with `&&` at any depth of plain parentheses, with no `||` above
+it. Its `runs-on` reads each runner variable only behind the condition, as in
+`${{ CONDITION && fromJSON(vars.CI_RUNNER_<CLASS> || '"ubuntu-latest"') || 'ubuntu-latest' }}`.
+
+A workflow without a pull request trigger needs no condition, so
+`design-baselines-refresh.yml` and `hosted-build-size-trial.yml`, both started
+by hand only, carry none. `__tests__/runner-class-own-branches.test.mjs` reads
+every workflow and refuses, by name, such a job without the condition; each job
+carries it itself, and a job that only needs one that carries it does not
+count.
+
 ## Other scripts
 
 - `sync-dev-extensions.mjs` — clones the companion extension repos back into the

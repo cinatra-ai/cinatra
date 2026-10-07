@@ -49,7 +49,7 @@ export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";
 // host module-registry shim to the host's ONE instance.
 export const HOST_DASHBOARD_COMPOSITION_MODULE = "@cinatra-ai/sdk-dashboard/components";
 
-export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.0.0";
+export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.1.0";
 
 export const HOST_DESIGN_PRIMITIVES_CONTRACT_MAJOR = 1;
 

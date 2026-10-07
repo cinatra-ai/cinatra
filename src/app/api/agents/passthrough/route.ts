@@ -5,6 +5,11 @@ import { readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
+import {
+  verifyRunStepAttestation,
+  RUN_STEP_NODE_HEADER,
+  RUN_STEP_ATTESTATION_HEADER,
+} from "@/lib/agent-run-token";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
@@ -392,6 +397,18 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: binding.error }, { status: binding.status });
   }
 
+  // cinatra#3745 — the verified step of the calling flow step. The flow runtime
+  // signs the executing step's id over the run's context id; it is verified
+  // here with the context id the run binding above proved, and stamped on the
+  // run-scoped frame below. An absent or unverified pair gives no step.
+  const verifiedStepId =
+    verifyRunStepAttestation({
+      key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      contextId: req.headers.get("x-cinatra-a2a-context-id"),
+      node: req.headers.get(RUN_STEP_NODE_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
+    }) ?? undefined;
+
   const shaper = TOOL_INPUT_SHAPERS[tool];
   let input: Record<string, unknown>;
   try {
@@ -728,6 +745,7 @@ export async function POST(req: Request): Promise<Response> {
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
               ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
+              ...(verifiedStepId ? { verifiedStepId } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
