@@ -84,6 +84,11 @@ import { AuthzError } from "@/lib/authz/errors";
 
 import {
   normalizeReviewTargets,
+  declaredReviewPlan,
+  baseReviewTaskId,
+  pinnedDeclaredReviewPlan,
+  sameDeclaredReviewPlan,
+  type DeclaredReviewPlan,
   reviewTargetKey,
   type ArtifactReviewTarget,
 } from "@/lib/artifacts/artifact-review-target";
@@ -163,7 +168,7 @@ export interface EmitReviewGateResult {
 }
 
 /**
- * PIN a run's review targets at gate creation. "Latest" is resolved by the
+ * PIN one artifact revision at gate creation. "Latest" is resolved by the
  * CALLER before it reaches here — this store freezes exactly what it is given, so
  * a reviewer approves the exact revision the gate froze (no review/serve TOCTOU).
  *
@@ -201,13 +206,42 @@ export async function emitArtifactReviewGate(input: {
    * none (null — the expiry drain never touches it). Set only on the INSERT: a
    * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
   expiresAt?: Date | null;
-}, executor: GateStoreExecutor = db): Promise<EmitReviewGateResult> {
+}, executor: GateStoreExecutor = db, plan?: DeclaredReviewPlan): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
     throw new ArtifactReviewGateError("invalid-targets", normalized.error);
   }
   const pinned = canonicalPinnedSet(normalized.targets);
-
+  if (plan) {
+    const canonical = declaredReviewPlan({ runId: input.runId, orgId: input.orgId,
+      reviewTaskId: plan.baseTaskId, targets: plan.legs.map(leg => leg.targets[0]) });
+    const leg = canonical?.legs.find(leg => leg.reviewTaskId === input.reviewTaskId);
+    if (!canonical || !sameDeclaredReviewPlan(plan, canonical) || !leg || pinned.length !== 1 ||
+        reviewTargetKey(pinned[0]) !== reviewTargetKey(leg.targets[0])) {
+      throw new ArtifactReviewGateError("invalid-targets", "The declared review plan does not bind this exact gate.");
+    }
+    Object.assign(pinned[0], { declaredReviewPlan: canonical });
+  }
+  // Only NEW gates must be singleton. An exact replay of a grandfathered gate
+  // is a read, not a mint: keep its original pins, status and decision untouched.
+  // Keep the general normalizer's historical bound for readback and decisions.
+  if (normalized.targets.length !== 1) {
+    const existing = await readReviewGateVia(executor, input.runId, input.reviewTaskId);
+    if (existing) {
+      const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
+      if (existing.orgId !== input.orgId || pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
+        throw new ArtifactReviewGateError(
+          "pin-conflict",
+          `Review gate ${input.reviewTaskId} on run ${input.runId} already belongs to another organization or target set.`,
+        );
+      }
+      return { gateId: existing.id, targets: rowsToTargets(existingPinned), idempotent: true };
+    }
+    throw new ArtifactReviewGateError(
+      "invalid-targets",
+      "A review gate must pin exactly one artifact revision. Open a separate review for each artifact.",
+    );
+  }
   const gateId = randomUUID();
   const [inserted] = await executor
     .insert(artifactReviewGates)
@@ -249,6 +283,9 @@ export async function emitArtifactReviewGate(input: {
     );
   }
   const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
+  if (plan && !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(existing.pinnedTargets), plan)) {
+    throw new ArtifactReviewGateError("pin-conflict", "The existing gate has no matching immutable declared review plan.");
+  }
   if (pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
     throw new ArtifactReviewGateError(
       "pin-conflict",
@@ -261,6 +298,34 @@ export async function emitArtifactReviewGate(input: {
 // ---------------------------------------------------------------------------
 // Read ports.
 // ---------------------------------------------------------------------------
+
+/** All required singleton rows become visible together. A later refusal or
+ * crash rolls back the earlier inserts using the store's existing transaction.
+ * Replays cannot change a previously frozen plan or accept a different revision. */
+export async function emitDeclaredReviewGateFamily(input: {
+  runId: string; orgId: string; reviewTaskId: string; targets: unknown;
+}): Promise<void> {
+  const plan = declaredReviewPlan(input);
+  if (!plan) throw new ArtifactReviewGateError("invalid-targets", "The declared review set cannot form exact singleton legs.");
+  await db.transaction(async tx => {
+    // Read before any insert; extra or mismatched historical slots cannot be
+    // reinterpreted as the current pause's exact required membership.
+    const existing = (await listReviewGatesForRun(input.runId, tx))
+      .filter(gate => baseReviewTaskId(gate.reviewTaskId) === plan.baseTaskId);
+    for (const gate of existing) {
+      const leg = plan.legs.find(leg => leg.reviewTaskId === gate.reviewTaskId);
+      const pins = normalizeReviewTargets(gate.pinnedTargets);
+      if (!leg || gate.orgId !== input.orgId || gate.pinnedTargets.length !== 1 || !pins.ok || pins.targets.length !== 1 ||
+          reviewTargetKey(pins.targets[0]) !== reviewTargetKey(leg.targets[0]) ||
+          !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(gate.pinnedTargets), plan)) {
+        throw new ArtifactReviewGateError("pin-conflict", "The existing declared review membership cannot be verified.");
+      }
+    }
+    for (const leg of plan.legs) {
+      await emitArtifactReviewGate({ ...input, reviewTaskId: leg.reviewTaskId, targets: leg.targets }, tx, plan);
+    }
+  });
+}
 
 export interface ReviewGateRow {
   id: string;
@@ -335,8 +400,8 @@ async function readReviewGateVia(
 // through the actor-aware `readAgentRunById`, which enforces the run's
 // effective policy in `enforceRunAccess`.
 // ---------------------------------------------------------------------------
-export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRow[]> {
-  const rows = await db
+export async function listReviewGatesForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateRow[]> {
+  const rows = await executor
     .select()
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))

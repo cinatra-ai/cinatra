@@ -5,7 +5,7 @@
     {
       "packageName": "@cinatra-ai/a2a-server-connector",
       "repo": "cinatra-ai/a2a-server-connector",
-      "resolvedSha": "23f7d0d401a1b28ad4f507c85ee777a60a8f200c"
+      "resolvedSha": "5b14553672bfb1969b65add7fd5c146303624b5e"
     },
     {
       "packageName": "@cinatra-ai/apify-connector",
@@ -165,7 +165,7 @@
     {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
-      "resolvedSha": "65d42d7d5ca2a6683ce1c677d043c12cfc2e5a4d"
+      "resolvedSha": "ddd9c9d3a72cdeec0d7301616b3bf3ade7de47c3"
     },
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "5551c858a378476af2918502b5db50def0f86f12"
+      "resolvedSha": "6dd400f3bc155081d39a34bbf73df59c2f3e6004"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
@@ -235,12 +235,12 @@
     {
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
-      "resolvedSha": "ab6d1b99d81bf043a6abb5636a2909408a1cc68b"
+      "resolvedSha": "fc9dd8b3c974aab0be8aad9f132a658f6276a635"
     },
     {
       "packageName": "@cinatra-ai/gmail-connector",
       "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "d9ee0a6b59cc221483b7d300449a7c12ffaa57ad"
+      "resolvedSha": "8badd37a4631a71e8d984575709217b54e12acf7"
     },
     {
       "packageName": "@cinatra-ai/google-appointment-schedules-connector",
@@ -250,7 +250,7 @@
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
       "repo": "cinatra-ai/google-calendar-connector",
-      "resolvedSha": "42543a7f0e774992c0d17268b26a7dae27bb2ed6"
+      "resolvedSha": "348b45783b3f3b42f2b038be69621c7b4ce808fc"
     },
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
