@@ -750,3 +750,62 @@ describe("the pure arms", () => {
     expect(refreshes({})).toBe(false);
   });
 });
+
+describe("the real follower across run identity changes", () => {
+  it("follows a new run on the same mounted component after the previous run stopped", async () => {
+    expect(typeof frame.RunStopFollower).toBe("function");
+    if (typeof frame.RunStopFollower !== "function") return;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const reads: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      reads.push(String(url));
+      return { ok: true, json: async () => ({ status: "pending_approval", lifecycleMoment: "hitl" }) };
+    }));
+    let refreshes = 0;
+    wired.refreshed.current = () => { refreshes += 1; };
+    const view = render(<frame.RunStopFollower runId="run-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    expect(refreshes).toBe(1);
+    view.rerender(<frame.RunStopFollower runId="run-b" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    expect(reads).toEqual(["/api/agents/runs/run-a", "/api/agents/runs/run-b"]);
+    expect(refreshes).toBe(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(refreshes).toBe(2);
+    expect(reads).toHaveLength(2);
+  });
+
+  it("ignores an old run's late response without stopping the new run's follower", async () => {
+    expect(typeof frame.RunStopFollower).toBe("function");
+    if (typeof frame.RunStopFollower !== "function") return;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let resolveOld!: (response: { ok: boolean; json: () => Promise<{ status: string; lifecycleMoment: string }> }) => void;
+    let oldSignal: AbortSignal | undefined;
+    const reads: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string, options: { signal: AbortSignal }) => {
+      reads.push(String(url));
+      if (url.endsWith("run-a")) {
+        oldSignal = options.signal;
+        return new Promise((resolve) => { resolveOld = resolve; });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ status: "pending_approval", lifecycleMoment: "hitl" }) });
+    }));
+    let refreshes = 0;
+    wired.refreshed.current = () => { refreshes += 1; };
+    const view = render(<frame.RunStopFollower runId="run-a" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    expect(reads).toEqual(["/api/agents/runs/run-a"]);
+    view.rerender(<frame.RunStopFollower runId="run-b" />);
+    expect(oldSignal?.aborted).toBe(true);
+    await act(async () => {
+      resolveOld({ ok: true, json: async () => ({ status: "pending_approval", lifecycleMoment: "hitl" }) });
+    });
+    expect(refreshes).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+    expect(reads).toEqual(["/api/agents/runs/run-a", "/api/agents/runs/run-b"]);
+    expect(refreshes).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(reads).toHaveLength(2);
+    expect(refreshes).toBe(1);
+  });
+});

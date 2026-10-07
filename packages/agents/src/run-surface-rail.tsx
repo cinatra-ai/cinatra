@@ -437,14 +437,16 @@ export function runRowReadsAnUncarriedStop(read: {
  */
 export function RunStopFollower({ runId }: { runId: string }): null {
   const router = useRouter();
-  const doneRef = useRef(false);
 
   useEffect(() => {
+    // Completion belongs to this effect generation, not to a later run that
+    // reuses the component. Cleanup cancels every old response before restart.
+    let done = false;
     let cancelled = false;
     let inFlight = false;
     const controller = new AbortController();
     const intervalId = window.setInterval(() => {
-      if (doneRef.current) {
+      if (done) {
         window.clearInterval(intervalId);
         return;
       }
@@ -456,9 +458,9 @@ export function RunStopFollower({ runId }: { runId: string }): null {
       })
         .then((res) => (res.ok ? res.json() : Promise.reject(new Error("not ok"))))
         .then((data: { status?: string | null; lifecycleMoment?: string | null }) => {
-          if (cancelled || doneRef.current) return;
+          if (cancelled || done) return;
           if (runRowReadsAnUncarriedStop(data)) {
-            doneRef.current = true;
+            done = true;
             window.clearInterval(intervalId);
             router.refresh();
             return;
@@ -468,7 +470,7 @@ export function RunStopFollower({ runId }: { runId: string }): null {
             data.status === "running" ||
             data.status === "pending_approval";
           if (typeof data.status === "string" && !stillWorking) {
-            doneRef.current = true;
+            done = true;
             window.clearInterval(intervalId);
           }
         })
