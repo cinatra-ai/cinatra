@@ -28,7 +28,7 @@ defect of a step, with a test, fixed once for every run.
 | `typeInWindow` | Text typed into a window's text box through the keyboard, read back from the box, and sent through the window's own send control when asked. |
 | `waitForTurn` | A turn of a window's conversation waited for without a reload: a new entry of the assistant, and the send control idle again. |
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
-| `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
+| `sendInComposer` | One message sent through the conversation's composer, awaiting its card by default or, with explicit `expect: "run"`, its new run ID. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
 | `readAddress` | The page's path and the values of the query parameters the caller names, read once the address has held still; any other parameter counted, never written. |
 | `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
@@ -758,7 +758,7 @@ the sign-in page, is refused, naming where it landed.
 Refusal kinds: `input` and `closed` (nothing was reloaded), `no-load`,
 `landed-elsewhere` and `driver-failure` (the new document could not be read).
 
-## `sendInComposer(page, { prompt, composer, record, bounds? })`
+## `sendInComposer(page, { prompt, composer, expect?, record, bounds? })`
 
 Sends one message through the conversation's composer, the one shown text box
 named `composer` ("Send message" in the product), and waits for the card that
@@ -774,6 +774,21 @@ run page's surface, the run panel the conversation draws, or a notification of
 a run) and refuses a send after which one shows: starting a run is
 `dispatchRun`'s act. No line carries the prompt.
 
+When a chat message is expected to start a run, opt in with
+`sendInComposer(page, { prompt, composer: "Send message", expect: "run", record })`.
+This arm waits for a new **visible** inline card's `data-inline-run-card` ID and
+returns `{ composer, runId, threadPath, elapsedMs }`, reading `threadPath` from
+the caller's document (the frame's path when called on a frame scope). It does
+not wait for a progress panel: a landed review card can occupy that place.
+IDs already visible before the send, hidden cards, empty IDs, a card without a
+run ID, and a run-start notification alone cannot satisfy it. If no new ID
+appears within `cardMs`, it refuses `no-run`, naming any new page error.
+
+Omitting `expect`, or passing `expect: "card"`, keeps the existing card arm:
+a run or run-start notification still refuses `starts-run`. An unsupported
+`expect` refuses `input` before typing. Both arms type once and never infer a
+run ID from prompt text, a toast, or an API request.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call to the composer shown with its name (`composerMs`) |
@@ -783,7 +798,7 @@ a run) and refuses a send after which one shows: starting a run is
 | `CONTROL_POLL_MS` | 100 | how often the page is read (`pollMs`) |
 
 Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
-`no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
+`no-composer` in place of `no-field`, `starts-run`, `no-run` (the opt-in arm), and `no-card` (naming an
 error the page shows, the conversation's error card among them).
 
 ## `openAddress(page, { path, record, params?, bounds? })`

@@ -146,7 +146,7 @@ export const RUN_STEP_RAIL_CONFORMANCE_PAUSED_POSITION =
 export const RUN_STEP_RAIL_CONFORMANCE_SETTLED_POSITION = 2;
 
 /** The word the settled row draws for the disposition it stores. */
-export const RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION = "Continued";
+export const RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION = "continued";
 
 /** The 1-based positions of the rows the run has already passed. */
 export const RUN_STEP_RAIL_CONFORMANCE_PASSED_POSITIONS = [1, 2, 3];
