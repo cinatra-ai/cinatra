@@ -191,7 +191,8 @@ function gateRow(status: "pending" | "resolved") {
     pinnedTargets: [] as Array<{ artifactId: string; representationRevisionId: string }>,
     reviewTaskId: "task-review-1",
     status,
-    disposition: status === "resolved" ? "approved" : null,
+    // The stored decision is the wire verb; the real rail derives Continued.
+    disposition: status === "resolved" ? "approve" : null,
     createdAt: new Date("2026-09-13T12:00:00Z"),
   };
 }
@@ -1369,7 +1370,7 @@ describe("a finished run keeps its resolved gate on the one rail (cinatra#3449)"
     expect(railEntryLabels(column)).toEqual([
       "Draft the post",
       "Pick the image",
-      "Reviewapproved",
+      "Review · Continued",
       "What this run made",
     ]);
 

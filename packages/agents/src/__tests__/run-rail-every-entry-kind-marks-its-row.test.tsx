@@ -420,6 +420,53 @@ const KINDS: EntryKind[] = [
         "made",
       ),
   },
+  // Current-main keyed history selections are real frame entries too. Keep
+  // their own keys in the complete census, rather than deleting vocabulary
+  // members just because the original published test preceded these mounts.
+  {
+    id: "frame:review:*",
+    name: "a settled review selected by its own review task",
+    where: "packages/agents/src/run-surface-rail-step.ts:RunReviewGateStepKey through RunSurfaceRailRow",
+    rowClass: RUN_SURFACE_RAIL_ROW_CLASS,
+    reached: "true",
+    settled: "true",
+    selected: "true",
+    stepKey: "review:task-history",
+    mount: async () => frameRow(
+      <RunSurfaceRailRow
+        selectionKey="review:task-history"
+        label="Review the post"
+        displayStep={3}
+        conformanceId="run-surface-rail-step"
+        action="open-review-step"
+        reached
+        settled
+      />,
+      "review:task-history",
+    ),
+  },
+  {
+    id: "frame:audit:*",
+    name: "a settled audit keyed by the gate it follows",
+    where: "packages/agents/src/run-surface-rail-step.ts:RunReviewAuditStepKey through RunSurfaceRailRow",
+    rowClass: RUN_SURFACE_RAIL_ROW_CLASS,
+    reached: "true",
+    settled: "true",
+    selected: "false",
+    stepKey: "audit:task-history",
+    mount: async () => frameRow(
+      <RunSurfaceRailRow
+        selectionKey="audit:task-history"
+        label="Audit"
+        displayStep={4}
+        conformanceId="run-surface-rail-step"
+        action="open-audit-step"
+        reached
+        settled
+      />,
+      "review:task-history",
+    ),
+  },
   // The panel's ordinary work-step rows, in each status the kind takes.
   {
     id: "panel:step",

@@ -48,7 +48,7 @@ const gateEntry = (
   gate: {
     gateId: `gate_${status}`,
     reviewTaskId: `task_${status}`,
-    disposition: status === "resolved" ? "approved" : null,
+    disposition: status === "resolved" ? "approve" : null,
     resolved: status === "resolved",
     ...over,
   },
@@ -94,10 +94,24 @@ describe("§I — a resolved gate keeps its place on the rail, and says so the w
     expect(wrapper!.getAttribute("data-rail-gate-history")).toBe("true");
     const text = wrapper!.textContent ?? "";
     expect(text).toContain("Review the post");
-    expect(text).toContain("approved");
+    expect(text).toContain("Continued");
+    expect(text).not.toContain("approved");
     const link = wrapper!.querySelector<HTMLElement>("[data-rail-gate-link]");
     expect(link).not.toBeNull();
     expect(link!.getAttribute("href")).toBe(`${REVIEW_HREF_BASE}/task_resolved`);
+  });
+
+  it("keeps an unreadable settled outcome resolved without inventing Continued", () => {
+    const { container } = mount(gateEntry("resolved", { disposition: "approved" }));
+    const entryRow = row(container);
+    const wrapper = entryRow.closest<HTMLElement>("[data-rail-kind]")!;
+    expect(entryRow.getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(entryRow.getAttribute("data-run-surface-rail-settled")).toBe("true");
+    expect(wrapper.textContent).toContain("resolved");
+    expect(wrapper.textContent).not.toContain("Continued");
+    expect(wrapper.querySelector("[data-rail-gate-link]")?.getAttribute("href")).toBe(
+      `${REVIEW_HREF_BASE}/task_resolved`,
+    );
   });
 
   it("marks a pending entry reached but not settled", () => {
