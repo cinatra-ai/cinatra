@@ -9,6 +9,10 @@
 //
 //   * NO UI            -> print "no UI change in <n> files — skipped" and exit
 //                         0 WITHOUT starting Playwright.
+//   * DRAWS NOTHING    -> a test file or fixture, the generated SERVER map of
+//                         the extensions, and an extension lock whose moved pins
+//                         cross only pack files that draw nothing are set aside
+//                         before anything else is judged (cinatra#3748).
 //   * A NARROW CHANGE  -> run only the spec families whose own static graph
 //                         (the spec file, the design-fixture route pages it
 //                         drives, and everything those import, transitively)
@@ -21,6 +25,8 @@
 //   * the branch is main, the event is a push / dispatch / merge group,
 //   * the diff base does not resolve (a fetch-depth misconfiguration) or git
 //     fails at all,
+//   * a pull request run whose event payload names no head, or whose checkout
+//     is not the merge of exactly that head (the range paragraph below),
 //   * an in-repo import inside a family's graph does not resolve (then the
 //     graph is not trustworthy and NOTHING is judged against it, not even a
 //     documentation-only diff),
@@ -36,13 +42,22 @@
 // the base resolves in THIS checkout, fetch it once if the checkout is shallow,
 // and never diff against nothing.
 //
+// The range is the change's OWN (cinatra#3667). A pull request run checks out
+// the merge ref, whose first parent is the tip of main when that merge was made,
+// while the base it is handed was frozen when the event fired: once main moves,
+// the range up to HEAD carries main's changes as if they were the pull request's.
+// So a pull request run takes its head from the event payload, requires HEAD to
+// be the merge of exactly that head, and diffs merge-base(base, head)..head. A
+// merge queue run keeps HEAD: the group head is a real commit on its base.
+//
 // What this selector does NOT do: it never touches a pin gate. The pin
 // freshness / drift / testid / ratchet gates are separate steps and separate
 // jobs; narrowing the Playwright invocation cannot bypass one of them.
 //
-// Dependency-free (node builtins only) so a pure-node job runs it without an
-// install. Its IO and its git are injectable so the unit suite can exercise the
-// graph walk over a virtual repo.
+// Dependency-free (node builtins, plus the suite's own dependency-free worker
+// rule in tests/e2e/config/design-workers.mjs) so a pure-node job runs it
+// without an install. Its IO and its git are injectable so the unit suite can
+// exercise the graph walk over a virtual repo.
 //
 // Usage:
 //   node scripts/ci/design-select.mjs             # print the plan (dry run)
@@ -63,6 +78,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { workersSummary } from "../../tests/e2e/config/design-workers.mjs";
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -541,6 +558,233 @@ export function specsUnderNearestDir(path, specs) {
   return [];
 }
 
+// Explicit, measured component exception. Both production importers are
+// ordinary static imports; the pinned graph reaches its card fixture families.
+// Never generalize this to src/components/** or a workspace package wholesale.
+const GRAPH_COVERED_COMPONENTS = new Set([
+  "src/components/extension-card-icon-image.tsx",
+]);
+
+// WHAT DRAWS NOTHING (cinatra#3748). This changes what the design suite runs:
+// a changed path of one of these three kinds can change no page, so it is set
+// aside before the rest of the diff is judged, and a diff made only of such
+// paths runs no family. Every other path keeps today's reading.
+//
+//   * test-file: a path under `__tests__/`, a name ending `.test.ts`,
+//     `.test.tsx` or `.test.mjs`, or a path under `__fixtures__/` — but never the
+//     selection's own proofs (the selector, its suites, the workflow), never a
+//     file of the design suite itself, and never a file a family's graph
+//     reaches (a fixture that production source imports feeds a drawn module).
+//   * generated-server-map: exactly the generated SERVER map of the extensions.
+//     The client map and every other generated file keep today's reading.
+//   * extension-lock: one of the two extension locks, only when the lock
+//     evidence below reads every pin the change moves as crossing pack files
+//     that all draw nothing. Any other answer keeps today's reading (all
+//     families).
+const GENERATED_SERVER_MAP = "src/lib/generated/extensions.server.ts";
+const EXTENSION_LOCKS = new Set([
+  "cinatra-dev-extensions.lock.json",
+  "cinatra-required-extensions.lock.json",
+]);
+const TEST_OR_FIXTURE = /(?:^|\/)__tests__\/|\.test\.(?:ts|tsx|mjs)$|(?:^|\/)__fixtures__\//;
+const OWN_PROOF_RULES = new Set(["selector", "selector-test", "suite-workflow"]);
+
+/**
+ * The rule under which a changed path draws nothing, or null.
+ *
+ * @param {string} path
+ * @param {{inAnyFamily?: (path: string) => boolean, readLock?: (lock: string) => string | null}} [context]
+ * @returns {"test-file" | "generated-server-map" | "extension-lock" | null}
+ */
+export function drawsNothingRule(path, { inAnyFamily = () => true, readLock = () => "no lock evidence" } = {}) {
+  if (TEST_OR_FIXTURE.test(path)) {
+    if (OWN_PROOF_RULES.has(wideningRuleFor(path)?.id)) return null;
+    if (path.startsWith(`${DESIGN_SUITE_DIR}/`)) return null;
+    if (inAnyFamily(path)) return null;
+    return "test-file";
+  }
+  if (path === GENERATED_SERVER_MAP) return "generated-server-map";
+  if (EXTENSION_LOCKS.has(path) && readLock(path) === null) return "extension-lock";
+  return null;
+}
+
+// THE LOCK EVIDENCE: the approval gate's lock reading, rule for rule, over the
+// pinned companion checkouts the `select` job already has (each pack at
+// extensions/<scope>/<name>, detached at the head's pin). It reads with local
+// git alone — never a fetch, never the network — and every doubt is a reason.
+//
+// The pack rule, its patterns copied verbatim from the gate's lock evidence.
+const TEST_PATH = /(^|\/)__tests__\/|\.(test|spec|stories)\./;
+const NON_UI_DIR = /^(\.github\/|ci\/|scripts\/|tests\/|src\/lib\/test-support\/)/;
+const PACK_DRAWN_FILE = /\.(tsx|jsx|vue|svelte|css|scss|sass|less|html|hbs|mdx|svg)$/i;
+const ASSET_EXT = /\.(png|jpe?g|webp|gif|avif|ico|woff2?|ttf|otf|mp4|webm)$/i;
+const PACK_DRAWN_DIR =
+  /(^|\/)(renderers|components|views|ui|styles|templates|assets|icons|images|fonts|screens|displays?|pages|app|public|static|locales|translations|tokens|themes)\//i;
+const PACK_OWNER = "cinatra-ai";
+const PACK_NAME = /^[A-Za-z0-9_.-]+$/;
+const PIN_SHA = /^[0-9a-f]{40}$/;
+const PLAIN_REPO = /^[^/\s]+\/[^/\s]+$/;
+const COMPARE_BOUND = 300;
+const SCOPED_PACKAGE = /^@([a-z0-9][a-z0-9._-]*)\/([a-z0-9][a-z0-9._-]*)$/;
+
+/** Is a pack file drawn, by the gate's pack rule? */
+export function packDrawn(path) {
+  if (TEST_PATH.test(path) || NON_UI_DIR.test(path)) return false;
+  return PACK_DRAWN_FILE.test(path) || ASSET_EXT.test(path) || PACK_DRAWN_DIR.test(path);
+}
+
+/** A lock at one revision: {pins: Map(repo -> entry), document} or {error}. */
+function lockAt(git, revision, lock) {
+  let document;
+  try {
+    document = JSON.parse(git(["show", `${revision}:${lock}`]));
+  } catch (error) {
+    return { error: error.message.split("\n")[0] };
+  }
+  if (document === null || typeof document !== "object" || Array.isArray(document)) {
+    return { error: "it is not a JSON object" };
+  }
+  if (!Array.isArray(document.packages)) return { error: "its packages are not a list" };
+  const pins = new Map();
+  for (const entry of document.packages) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      return { error: "a package is not an object" };
+    }
+    if (typeof entry.repo !== "string" || typeof entry.resolvedSha !== "string") {
+      return { error: "a package names no repo or no resolvedSha" };
+    }
+    if (!PLAIN_REPO.test(entry.repo)) return { error: `a package names no plain repo (${entry.repo})` };
+    if (pins.has(entry.repo)) return { error: `${entry.repo} is pinned twice` };
+    pins.set(entry.repo, entry);
+  }
+  return { pins, document };
+}
+
+/** JSON with every object's keys sorted, so key order never reads as a change. */
+const canonical = (value) =>
+  Array.isArray(value)
+    ? `[${value.map(canonical).join(",")}]`
+    : value !== null && typeof value === "object"
+      ? `{${Object.keys(value)
+          .sort()
+          .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+          .join(",")}}`
+      : JSON.stringify(value);
+
+const withoutPins = (document) =>
+  canonical({ ...document, packages: document.packages.map((entry) => ({ ...entry, resolvedSha: "" })) });
+
+/** `git diff --name-status -z` rows as lists of names (the old name too for a rename or copy). */
+function nameStatusRows(output) {
+  const fields = output.split("\0");
+  const rows = [];
+  let index = 0;
+  while (index < fields.length && fields[index] !== "") {
+    const status = fields[index];
+    const count = /^[RC]/.test(status) ? 2 : 1;
+    const names = fields.slice(index + 1, index + 1 + count);
+    if (names.length !== count || names.some((name) => !name)) {
+      throw new Error(`an unreadable name-status row after ${status}`);
+    }
+    rows.push(names);
+    index += 1 + count;
+  }
+  return rows;
+}
+
+/**
+ * The pack files a moved pin crosses, read in its companion checkout: from the
+ * old pin to the new one, and — when the pin moved back or across — the changes
+ * on both sides since their merge base, united. {rows} or {reason}.
+ */
+function packFilesBetween(git, entry, before, after) {
+  const scoped = SCOPED_PACKAGE.exec(String(entry.packageName ?? ""));
+  if (!scoped) return { reason: `the pin of ${entry.repo} names no extension checkout` };
+  const checkout = `extensions/${scoped[1]}/${scoped[2]}`;
+  try {
+    // The checkout's own repository, not the application around it.
+    if (git(["-C", checkout, "rev-parse", "--git-dir"]).trim() !== ".git") throw new Error("not a repository");
+  } catch {
+    return { reason: `the checkout ${checkout} is absent` };
+  }
+  for (const sha of [before, after]) {
+    try {
+      git(["-C", checkout, "cat-file", "-e", `${sha}^{commit}`]);
+    } catch {
+      return { reason: `the pin ${short(sha)} of ${entry.repo} is absent from its checkout ${checkout}` };
+    }
+  }
+  try {
+    const base = git(["-C", checkout, "merge-base", before, after]).trim();
+    if (!PIN_SHA.test(base)) return { reason: `the pins of ${entry.repo} have no merge base` };
+    const diff = (end) => nameStatusRows(git(["-C", checkout, "diff", "--name-status", "-M", "-z", base, end]));
+    const rows = new Map();
+    for (const names of [...diff(after), ...(base === before ? [] : diff(before))]) {
+      rows.set(names.join("\0"), names);
+    }
+    return { rows: [...rows.values()] };
+  } catch (error) {
+    return { reason: `git could not compare the pins of ${entry.repo} (${error.message.split("\n")[0]})` };
+  }
+}
+
+/**
+ * THE LOCK EVIDENCE for one extension lock over the change's range: null when
+ * every pin the change moves crosses pack files that all draw nothing, else the
+ * reason it does not — the approval gate's refusals, in the gate's order.
+ *
+ * @param {{lock: string, range: {base: string, head: string} | null, git?: (args: string[]) => string}} input
+ * @returns {string | null}
+ */
+export function lockEvidence({ lock, range, git = defaultGit }) {
+  if (!EXTENSION_LOCKS.has(lock)) return `${lock} is not an extension lock`;
+  if (!range || !range.base || !range.head) {
+    return "no range was handed to the selection, so the pins the change moves are unknown";
+  }
+  try {
+    const status = git(["diff", "--name-status", "--no-renames", "-z", range.base, range.head, "--", lock])
+      .split("\0")
+      .filter(Boolean);
+    if (status.length !== 2 || status[0] !== "M" || status[1] !== lock) {
+      return `the lock is not modified in the range (${status[0] ?? "unchanged"})`;
+    }
+    // A local run also judges the working tree; a lock edited there is not the
+    // lock the range shows, so it is a doubt.
+    if (git(["status", "--porcelain", "--", lock]).trim() !== "") {
+      return "the lock has uncommitted changes the range does not show";
+    }
+  } catch (error) {
+    return `git could not read the lock's status (${error.message.split("\n")[0]})`;
+  }
+  const before = lockAt(git, range.base, lock);
+  if (before.error) return `the lock cannot be read at the base (${before.error})`;
+  const after = lockAt(git, range.head, lock);
+  if (after.error) return `the lock cannot be read at the head (${after.error})`;
+  const added = [...after.pins.keys()].find((repo) => !before.pins.has(repo));
+  if (added) return `the lock adds the pin of ${added}`;
+  const removed = [...before.pins.keys()].find((repo) => !after.pins.has(repo));
+  if (removed) return `the lock removes the pin of ${removed}`;
+  if (withoutPins(before.document) !== withoutPins(after.document)) {
+    return "the lock changes more than the commits it pins";
+  }
+  for (const [repo, entry] of after.pins) {
+    const old = before.pins.get(repo).resolvedSha;
+    const now = entry.resolvedSha;
+    if (old === now) continue;
+    const [owner, name, ...rest] = repo.split("/");
+    if (owner !== PACK_OWNER || rest.length > 0 || !PACK_NAME.test(name ?? "")) return `${repo} is an unknown pack`;
+    if (!PIN_SHA.test(old) || !PIN_SHA.test(now)) return `the pin of ${repo} is unreadable`;
+    const crossed = packFilesBetween(git, entry, old, now);
+    if (crossed.reason) return crossed.reason;
+    if (crossed.rows.length >= COMPARE_BOUND) {
+      return `the compare of ${repo} from ${short(old)} to ${short(now)} is truncated (${crossed.rows.length} files)`;
+    }
+    const drawn = crossed.rows.flat().find(packDrawn);
+    if (drawn !== undefined) return `the pin of ${repo} moves across ${drawn}, which the pack rule reads as drawn`;
+  }
+  return null;
+}
+
 const allResult = (families, summary) => ({
   mode: "all",
   specs: [...families.keys()],
@@ -552,7 +796,13 @@ const allResult = (families, summary) => ({
  * The decision. `changedFiles` are repo-relative paths from the diff.
  * mode "all" | "subset" | "none"; "none" means Playwright must not start.
  */
-export function selectFamilies({ changedFiles, families, routes = new Map(), unresolved = [] }) {
+export function selectFamilies({
+  changedFiles,
+  families,
+  routes = new Map(),
+  unresolved = [],
+  lockReading = null,
+}) {
   // An unresolved in-repo import means the walk does not know where that edge
   // went — so it cannot know that ANY changed file is outside the graph, not
   // even a documentation-only one. An untrustworthy graph widens first and
@@ -567,20 +817,50 @@ export function selectFamilies({ changedFiles, families, routes = new Map(), unr
   }
 
   const inAnyFamily = (path) => [...families.values()].some((files) => files.has(path));
-  const uiFiles = changedFiles.filter((path) => isUiPath(path) || inAnyFamily(path));
+  // The lock evidence is read once per lock; a reading that throws is a doubt.
+  const lockAnswers = new Map();
+  const readLock = (lock) => {
+    if (!lockAnswers.has(lock)) {
+      let answer;
+      try {
+        answer = typeof lockReading === "function" ? lockReading(lock) : "no lock evidence was handed to the selection";
+      } catch (error) {
+        answer = `the lock evidence failed (${error.message})`;
+      }
+      lockAnswers.set(lock, answer === null ? null : String(answer));
+    }
+    return lockAnswers.get(lock);
+  };
+  const quiet = new Map();
+  const judged = [];
+  for (const path of changedFiles) {
+    const rule = drawsNothingRule(path, { inAnyFamily, readLock });
+    if (rule) quiet.set(rule, (quiet.get(rule) ?? 0) + 1);
+    else judged.push(path);
+  }
+  const quietCount = changedFiles.length - judged.length;
+  const note =
+    quietCount === 0
+      ? ""
+      : ` (${quietCount} read as drawing nothing: ${[...quiet].map(([rule, n]) => `${rule} ${n}`).join(", ")})`;
+  const withNote = (result) => ({ ...result, summary: `${result.summary}${note}` });
+
+  const uiFiles = judged.filter((path) => isUiPath(path) || inAnyFamily(path));
   if (uiFiles.length === 0) {
-    return {
+    return withNote({
       mode: "none",
       specs: [],
       reasons: [],
       summary: `design suite: no UI change in ${changedFiles.length} files — skipped`,
-    };
+    });
   }
 
   for (const path of uiFiles) {
     const rule = wideningRuleFor(path);
-    if (rule) {
-      return allResult(families, `design suite: running ALL families — ${path}: ${rule.why}`);
+    const coveredComponent = GRAPH_COVERED_COMPONENTS.has(path) && inAnyFamily(path);
+    if (rule && !coveredComponent) {
+      const lockNote = EXTENSION_LOCKS.has(path) ? ` (the lock evidence: ${readLock(path)})` : "";
+      return withNote(allResult(families, `design suite: running ALL families — ${path}: ${rule.why}${lockNote}`));
     }
   }
 
@@ -619,19 +899,20 @@ export function selectFamilies({ changedFiles, families, routes = new Map(), unr
     if (path.startsWith(`${DESIGN_SUITE_DIR}/`)) {
       const local = specsUnderNearestDir(path, [...families.keys()]);
       if (local.length === 0) {
-        return allResult(
-          families,
-          `design suite: running ALL families — ${path} is in the suite but no family imports it ` +
-            `and no spec sits under its own directory`,
+        return withNote(
+          allResult(
+            families,
+            `design suite: running ALL families — ${path} is in the suite but no family imports it ` +
+              `and no spec sits under its own directory`,
+          ),
         );
       }
       for (const spec of local) pick(spec, path);
       continue;
     }
     if (path.startsWith(`${APP_DIR}/design-fixtures/`)) {
-      return allResult(
-        families,
-        `design suite: running ALL families — ${path} is a fixture-route file no family imports`,
+      return withNote(
+        allResult(families, `design suite: running ALL families — ${path} is a fixture-route file no family imports`),
       );
     }
   }
@@ -641,21 +922,21 @@ export function selectFamilies({ changedFiles, families, routes = new Map(), unr
     .map((spec) => ({ family: spec, because: picked.get(spec) }));
   if (reasons.length === 0) {
     const noun = uiFiles.length === 1 ? "file" : "files";
-    return {
+    return withNote({
       mode: "none",
       specs: [],
       reasons: [],
       summary:
         `design suite: ${uiFiles.length} changed UI ${noun}, but no design family renders ` +
         `${uiFiles.length === 1 ? "it" : "any of them"} — skipped`,
-    };
+    });
   }
-  return {
+  return withNote({
     mode: "subset",
     specs: reasons.map((reason) => reason.family),
     reasons,
     summary: `design suite: ${reasons.length} of ${families.size} spec families selected`,
-  };
+  });
 }
 
 const MAIN_REFS = new Set(["main", "refs/heads/main"]);
@@ -667,12 +948,46 @@ const ALWAYS_ALL_EVENTS = new Set(["push", "workflow_dispatch", "schedule"]);
 // honest diff — so it is used as one, and the widening stays only for the
 // events that genuinely have no range (a push, a dispatch, a schedule).
 const QUEUE_EVENT = "merge_group";
+// A pull_request run's HEAD is the merge ref, not the change (cinatra#3667).
+const PULL_REQUEST_EVENT = "pull_request";
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const short = (rev) => (FULL_SHA.test(rev) ? rev.slice(0, 12) : rev);
+
+/**
+ * The pull request's head commit, as this run's event payload names it: {sha}
+ * or {error}. An absent or unreadable payload, or one that names no full commit
+ * id, is an error the caller widens on. The head is never guessed.
+ */
+function pullRequestHead({ env, readFile }) {
+  const eventPath = (env.GITHUB_EVENT_PATH ?? "").trim();
+  if (eventPath === "") {
+    return { error: "the pull_request event payload is absent (GITHUB_EVENT_PATH is not set)" };
+  }
+  let payload;
+  try {
+    payload = JSON.parse(readFile(eventPath, "utf8"));
+  } catch (error) {
+    return { error: `the pull_request event payload could not be read (${error.message})` };
+  }
+  const sha = payload?.pull_request?.head?.sha;
+  if (typeof sha !== "string" || !FULL_SHA.test(sha.toLowerCase())) {
+    return { error: "the pull_request event payload names no pull_request.head.sha" };
+  }
+  return { sha: sha.toLowerCase() };
+}
 
 /**
  * The diff to classify. Returns {mode:"all", reason} whenever the diff cannot
- * be computed honestly, and {mode:"diff", files, reason} otherwise.
+ * be computed honestly, and {mode:"diff", files, reason, mergeBase, head}
+ * otherwise (the range's two ends, which the lock evidence reads). A
+ * pull_request run in CI reads the pull request's own range (its head from the
+ * event payload); every other run reads HEAD against its merge base with the base.
  */
-export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}) {
+export function resolveChangedFiles({
+  env = process.env,
+  git = defaultGit,
+  readFile = readFileSync,
+} = {}) {
   if ((env.DESIGN_SELECT ?? "").trim() === "all") {
     return { mode: "all", files: [], reason: "DESIGN_SELECT=all (documented override)" };
   }
@@ -731,12 +1046,49 @@ export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}
         };
       }
     }
-    const mergeBase = git(["merge-base", base, "HEAD"]).trim();
+    // The head of the range. A pull_request run in CI takes the head the event
+    // payload names, and only when HEAD is the merge of exactly that head;
+    // anything else it finds is a doubt, and a doubt widens.
+    let head = "HEAD";
+    if (env.CI && event === PULL_REQUEST_EVENT) {
+      const own = pullRequestHead({ env, readFile });
+      if (own.error) {
+        return {
+          mode: "all",
+          files: [],
+          reason: `${own.error}, so the pull request's own range is unknown`,
+        };
+      }
+      const [checkout = "", ...parents] = git(["rev-list", "--parents", "-n", "1", "HEAD"])
+        .trim()
+        .split(/\s+/);
+      if (parents.length !== 2) {
+        const count = `${parents.length} parent${parents.length === 1 ? "" : "s"} visible`;
+        return {
+          mode: "all",
+          files: [],
+          reason:
+            `the checkout ${short(checkout)} is not a two-parent merge commit (${count}), ` +
+            `so the pull request head ${short(own.sha)} cannot be matched to it`,
+        };
+      }
+      if (parents[1].toLowerCase() !== own.sha) {
+        return {
+          mode: "all",
+          files: [],
+          reason:
+            `the checkout ${short(checkout)} merges ${short(parents[1])}, ` +
+            `not the pull request head ${short(own.sha)} the event names`,
+        };
+      }
+      head = own.sha;
+    }
+    const mergeBase = git(["merge-base", base, head]).trim();
     if (mergeBase === "") {
       return { mode: "all", files: [], reason: `no merge base with ${base}` };
     }
     const files = new Set(
-      git(["diff", "--name-only", mergeBase, "HEAD"])
+      git(["diff", "--name-only", mergeBase, head])
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean),
@@ -749,7 +1101,12 @@ export function resolveChangedFiles({ env = process.env, git = defaultGit } = {}
         if (path) files.add(path.includes(" -> ") ? path.split(" -> ")[1] : path);
       }
     }
-    return { mode: "diff", files: [...files], reason: `diff against ${base} (${mergeBase})` };
+    const reason =
+      head === "HEAD"
+        ? `diff against ${base} (${mergeBase})`
+        : `${short(mergeBase)}..${short(head)}, the pull request's own commits ` +
+          `(merge base with ${short(base)})`;
+    return { mode: "diff", files: [...files], reason, mergeBase, head };
   } catch (error) {
     return { mode: "all", files: [], reason: `git could not compute the diff (${error.message})` };
   }
@@ -865,8 +1222,26 @@ function runPlaywright(result) {
   return run.status ?? 1;
 }
 
+/**
+ * The line under the suite summary that names the workers per family
+ * (cinatra#3770): the functional-acceptance family runs with several workers,
+ * every other family with one. The number comes from the same module the
+ * Playwright configuration reads (tests/e2e/config/design-workers.mjs), and an
+ * opt-in partition (CINATRA_DESIGN_PARTITION, read here the way the
+ * configuration reads it) keeps one worker for every family. Null when the run
+ * starts no family.
+ *
+ * @param {{mode: string, specs: string[]}} plan
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string | null}
+ */
+export function workersLine(plan, env = process.env) {
+  if (plan.mode === "none" || plan.specs.length === 0) return null;
+  return workersSummary(plan.specs, { partitioned: Boolean(env.CINATRA_DESIGN_PARTITION) });
+}
+
 /** Run (or just show) the plan a previous job published. Never re-decides. */
-function runPublishedPlan(planPath, shouldRun) {
+function runPublishedPlan(planPath, shouldRun, env) {
   let source;
   try {
     source = readFileSync(resolve(REPO_ROOT, planPath), "utf8");
@@ -883,6 +1258,8 @@ function runPublishedPlan(planPath, shouldRun) {
   }
   console.log(plan.summary || `design suite: published plan ${plan.mode}`);
   console.log(`  plan: ${planPath} (${plan.mode}, ${plan.specs.length} families)`);
+  const workers = workersLine(plan, env);
+  if (workers) console.log(`  ${workers}`);
   for (const reason of plan.reasons) {
     if (reason && typeof reason === "object") console.log(`  ${reason.family}  <-  ${reason.because}`);
   }
@@ -894,9 +1271,11 @@ function runPublishedPlan(planPath, shouldRun) {
   return runPlaywright(plan);
 }
 
-function printPlan(result, diff) {
+function printPlan(result, diff, env) {
   console.log(result.summary);
   console.log(`  diff: ${diff.reason}`);
+  const workers = workersLine(result, env);
+  if (workers) console.log(`  ${workers}`);
   for (const reason of result.reasons) {
     console.log(`  ${reason.family}  <-  ${reason.because}`);
   }
@@ -931,7 +1310,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
       console.error("design suite: --plan consumes a published decision; --changed invents one");
       return 1;
     }
-    return runPublishedPlan(planPath, shouldRun);
+    return runPublishedPlan(planPath, shouldRun, env);
   }
   // A dry-run aid: classify a hypothetical change list instead of the real
   // diff, so the selection can be shown for a change that is not checked out.
@@ -947,12 +1326,16 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const diff = hypothetical
     ? { mode: "diff", files: hypothetical, reason: `--changed ${hypothetical.join(" ")}` }
     : resolveChangedFiles({ env });
+  // The lock evidence reads the real range only: the --changed aid has none, so
+  // a lock it names keeps today's reading.
+  const range = !hypothetical && diff.mode === "diff" ? { base: diff.mergeBase, head: diff.head } : null;
+  const lockReading = (lock) => lockEvidence({ lock, range });
   const result =
     diff.mode === "all"
       ? allResult(families, `design suite: running ALL families — ${diff.reason}`)
-      : selectFamilies({ changedFiles: diff.files, families, routes, unresolved });
+      : selectFamilies({ changedFiles: diff.files, families, routes, unresolved, lockReading });
 
-  printPlan(result, diff);
+  printPlan(result, diff, env);
 
   if (outPath) {
     mkdirSync(dirname(resolve(REPO_ROOT, outPath)), { recursive: true });

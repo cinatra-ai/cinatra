@@ -1268,6 +1268,14 @@ function toPackageSummary(
   const manifest = summary.manifest ?? {};
   const payload = ((manifest as { cinatra?: Record<string, unknown> }).cinatra ?? {}) as Record<string, unknown>;
   const m = manifest as Record<string, unknown>;
+  // All extension kinds declare their card metadata inside `cinatra`. npm's
+  // optional title/author fields are legacy fallbacks, not the vendor identity.
+  const displayText = (value: unknown): string | null =>
+    typeof value === "string" && value.trim() ? value.trim() : null;
+  const vendor = payload.vendor;
+  const vendorName = vendor && typeof vendor === "object"
+    ? displayText((vendor as { name?: unknown }).name)
+    : null;
   const authorRaw = m.author;
   const authorString: string | null =
     typeof authorRaw === "string"
@@ -1278,7 +1286,7 @@ function toPackageSummary(
   return {
     packageName,
     packageVersion: summary.resolvedVersion ?? "",
-    title: (m.title as string | undefined) ?? packageName,
+    title: displayText(payload.displayName) ?? displayText(m.title) ?? packageName,
     description: (m.description as string | undefined) ?? null,
     changelog: null,
     riskLevel: "low",
@@ -1291,6 +1299,7 @@ function toPackageSummary(
     registryUiUrl: resolvedConfig.uiUrl ?? resolvedConfig.registryUrl,
     deprecated: false,
     author: authorString ? authorString.slice(0, 120) : null,
+    vendorName,
     kind: summary.kind,
     origin: extractOriginFromCinatraPayload(payload, packageName),
   };

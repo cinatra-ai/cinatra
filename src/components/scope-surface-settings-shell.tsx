@@ -1,36 +1,20 @@
-// The RESOLVING settings shell (cinatra#2809, per-scope surfaces S3).
+// The RESOLVING settings shell (cinatra#2809, per-scope surfaces S3), filled
+// by the assignment epic (cinatra#2814, per-scope assignment S2).
 //
-// This epic pins the settings HREF contract — the card's Settings button
-// targets `<scope-base>/agents/<vendor>/<packageName>/settings`, and the
-// assistants analog — and mounts a route that RESOLVES at that address. The
-// pane's CONTENTS and the end-to-end navigation acceptance live with the
-// assignment epic, which fills this shell in place rather than moving it.
-//
-// It is a shell and it SAYS so, rather than drawing an invented pane: a page
-// that guessed at what per-scope settings are would be a surface nobody
-// ratified, and replacing it later would be a second migration of a thing that
-// should never have shipped. The honest reading here is the same one the four
-// scoped tabs already carry from #2807 — what this surface will hold, never a
-// claim about data it has not read.
-
-import Link from "next/link";
+// #2809 pins the settings HREF contract (the card's Settings button targets
+// `<scope-base>/agents/<vendor>/<packageName>/settings`, and the assistants
+// analog) and mounts a route that RESOLVES at that address. The assignment
+// epic fills the shell in place rather than moving it: the frame (the trail
+// this page publishes, the page landmark) stays #2809's, and the body is the
+// per-scope assignment page, whose model the route resolved on the server
+// before this shell renders. A package the reader does not reach at this
+// scope never gets here: the route answers not found instead.
 
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { Main } from "@/components/layout/main";
-import { PageContent } from "@/components/page-content";
-import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
+import { ScopeAssignmentPage } from "@/components/scope-assignment/scope-assignment-page";
+import type { ScopeAssignmentPageModel } from "@/lib/scope-assignment/scope-assignment-page.server";
 import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import {
-  SCOPE_SURFACE_KIND_LABEL,
-  SCOPE_SURFACE_TAB_LABEL,
-  scopeSurfaceBase,
   scopeSurfaceCrumbEntries,
   type ScopeSurfaceRef,
 } from "@/lib/scope-surfaces";
@@ -46,6 +30,7 @@ export function ScopeSurfaceSettingsShell({
   scope,
   scopeTitle,
   subject,
+  page,
 }: {
   scope: ScopeSurfaceRef;
   /**
@@ -57,11 +42,10 @@ export function ScopeSurfaceSettingsShell({
    */
   scopeTitle?: string | null;
   subject: ScopeSurfaceSettingsSubject;
+  /** The assignment page the route resolved for this reader (cinatra#2814). */
+  page: ScopeAssignmentPageModel;
 }) {
-  const base = scopeSurfaceBase(scope);
   const tab = subject.kind === "agent" ? "agents" : "assistants";
-  const tabHref = `${base}/${tab}`;
-  const tabLabel = SCOPE_SURFACE_TAB_LABEL[tab];
   return (
     <Main className="min-h-screen">
       {/* The trail above this page is the SCOPE and its tab — published from
@@ -71,30 +55,7 @@ export function ScopeSurfaceSettingsShell({
           entry this shell used to publish for it targeted `<base>/<tab>/
           settings`, a path no route answers on, so it named nothing. */}
       <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, scopeTitle ?? undefined)} />
-      <PageHeader
-        label={SCOPE_SURFACE_KIND_LABEL[scope.kind]}
-        title="Settings"
-        description={`Settings for ${subject.packageName} in this scope.`}
-        divider={false}
-      />
-      <PageContent className="flex flex-col gap-6 pb-8">
-        <Empty
-          data-testid="scope-surface-settings-shell"
-          data-subject={subject.packageName}
-        >
-          <EmptyHeader>
-            <EmptyTitle>This surface is not ready yet</EmptyTitle>
-            <EmptyDescription>
-              {`The settings ${subject.packageName} carries in this scope appear here.`}
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button asChild>
-              <Link href={tabHref}>{`Back to ${tabLabel}`}</Link>
-            </Button>
-          </EmptyContent>
-        </Empty>
-      </PageContent>
+      <ScopeAssignmentPage model={page} />
     </Main>
   );
 }

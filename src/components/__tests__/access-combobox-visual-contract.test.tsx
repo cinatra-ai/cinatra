@@ -23,8 +23,8 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import * as Mod from "@/components/access-combobox";
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
-const FLAT_MODEL_SOURCE = readFileSync("src/components/access-scope.ts", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
+const FLAT_MODEL_SOURCE = readFileSync("packages/sdk-ui/src/access/scope.ts", "utf-8");
 
 describe("AccessCombobox single-mode spec alignment (app-permissions.html §III)", () => {
   it("module still loads and exports AccessCombobox + resolveAccessLabel", () => {

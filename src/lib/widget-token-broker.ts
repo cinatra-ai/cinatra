@@ -15,6 +15,8 @@ import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { readMetadataValueFromDatabase } from "@/lib/database";
 import { getActiveConnectSiteById } from "@/lib/connect-sites-store";
 import { isConfiguredOrigin } from "@/lib/widget-stream-auth";
+import { resolveHandshakeSiteBinding } from "@/lib/embed/frame-ancestors.server";
+import { readInstanceIdentityRequiringInstanceId } from "@/lib/instance-identity-store";
 import {
   getPostgresConnectionString,
   postgresSchema,
@@ -449,13 +451,22 @@ export function consumeWidgetStreamToken(input: {
   }
   // Fresh (uncached) configured-instance re-check: a token minted for a
   // now-removed instance is dead immediately, not after the 10s cache TTL.
-  if (!isConfiguredOrigin(storedOrigin, input.auth, { forceFresh: true })) {
+  // cinatra#3715: a CONNECT-SITE-bound token of a site connected through the
+  // handshake alone (its `connect_sites` row, no connector instance) is answered
+  // by the frame gate's and the sign-in's ONE handshake rule instead, and only
+  // when that rule's origin is this token's stored origin. A legacy token is
+  // never answered by it.
+  const storedConfigKey = String(row.token_config_key ?? "");
+  const isConnectSiteToken = storedConfigKey.startsWith(CONNECT_SITE_CONFIG_PREFIX);
+  if (
+    !isConfiguredOrigin(storedOrigin, input.auth, { forceFresh: true }) &&
+    !(isConnectSiteToken && handshakeSiteAnswersFor(storedOrigin, input.auth))
+  ) {
     return { ok: false, reason: "origin_unconfigured" };
   }
 
   // Rotation re-check, discriminated by the stored config-key marker.
-  const storedConfigKey = String(row.token_config_key ?? "");
-  if (storedConfigKey.startsWith(CONNECT_SITE_CONFIG_PREFIX)) {
+  if (isConnectSiteToken) {
     // cinatra#410 — connect-site (`cnx_`) path. Re-read the LIVE connect-site
     // row; a revoke (no active row) or a reconnect (credential_version bump)
     // invalidates the token immediately. We ALSO re-assert the live row's
@@ -489,6 +500,41 @@ export function consumeWidgetStreamToken(input: {
     jti: String(row.jti ?? ""),
     origin: storedOrigin,
   };
+}
+
+/**
+ * cinatra#3715 — the configured-site answer for a handshake-connected site,
+ * through the SAME exported rule the frame gate and the sign-in ask
+ * (`resolveHandshakeSiteBinding`), never a second copy of it.
+ *
+ * The token row stores no instance id, so the id presented to the rule is this
+ * application's own instance identity as the SERVER reads it — the one value the
+ * handshake hands a site and the only one the rule can accept. No request value
+ * reaches it: the connect client is the agent entry's own instances-config key
+ * (the client the connect-site branch below already requires of the live row).
+ * The rule keeps its own conditions whole (no connector row for that id, exactly
+ * one active site origin for the client), and its origin must equal the token's
+ * stored origin. Any throw is a refusal.
+ */
+function handshakeSiteAnswersFor(
+  storedOrigin: string,
+  auth: GeneratedWidgetStreamAuth,
+): boolean {
+  try {
+    const identity = readInstanceIdentityRequiringInstanceId();
+    const ownInstanceId =
+      identity && typeof identity.instanceId === "string" ? identity.instanceId.trim() : "";
+    if (!ownInstanceId) return false;
+    const binding = resolveHandshakeSiteBinding({
+      instancesConfigKey: auth.instancesConfigKey,
+      connectClient: auth.instancesConfigKey,
+      instanceId: ownInstanceId,
+    });
+    const stored = normalizeOriginStrict(storedOrigin);
+    return !!binding && !!stored && normalizeOriginStrict(binding.origin) === stored;
+  } catch {
+    return false;
+  }
 }
 
 export const __testing = {

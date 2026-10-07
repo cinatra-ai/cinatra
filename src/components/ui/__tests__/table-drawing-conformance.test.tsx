@@ -15,9 +15,26 @@
 //    primitive. Headers always uppercase mono with the navy underline; never
 //    centre body cells; right-align numerics and timestamps."
 //
-// ONE DEPARTURE RECORDED, NOT FIXED — table is beyond the first ten rows of
-// the issue's table, so this leg records it with a visibly failing assertion
-// and names the follow-up. See the `RECORDED DEPARTURE` block.
+// FIXED IN LEG 2 ON THE DOM SEAM, not in this file, and the reason is a
+// boundary rather than a judgement about the drawing. `table.tsx` is a VENDORED
+// primitive: it sits in apollo-connector's vendored closure (pulled in
+// transitively by `paginated-table`), and
+// `scripts/extensions/vendor-extension-primitives.mjs --check` is a standing
+// provenance gate in CI that requires every vendored copy to equal this source
+// byte-for-byte modulo the import rewrite. Editing the primitive turns that
+// gate red for exactly as long as a consumer is still pinned at the pre-change
+// copy — a cross-repository transaction, which this leg cannot run.
+//
+// So the clause is stated where it reaches the host copy and every vendored
+// copy alike and changes no file the gate reads: a scope on the DOM seam at the
+// end of src/app/globals.css. That is the road leg 1 took for the card corner,
+// in the same file, for the same reason, and it is graded here the same way —
+// as a recipe read out of the CSS source — and read as a rendered value in both
+// palettes on the live boot by
+// tests/e2e/design/conformance/primitive-wave-leg2.spec.ts.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -138,31 +155,190 @@ describe('clause: "right-align numerics and timestamps" / "IDs/times mono 11px s
   });
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "cell padding 10-14px"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): pads the body cell inside the stated 10-14px band — clause "cell padding 10-14px"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table,
-    // so it is recorded here rather than fixed.
-    //
-    // MEASURED: the body cell is `p-2` = 8px on all four sides, 2px below the
-    // band's 10px floor. The header cell is `px-2` with `h-10`, so the header
-    // and body columns are also padded inconsistently with each other.
-    //
-    // FOLLOW-UP: leg 2 takes the body cell to `p-2.5` (10px, the band's floor)
-    // and the header cell's horizontal padding with it, so the two stay on one
-    // column edge. The change reflows every table in the product by 2px per
-    // side, so it wants its own proof round against the run and desk surfaces
-    // rather than riding along inside a checklist commit.
-    const { cell } = renderTable();
-    expect(cell.className).toMatch(/(^|\s)p-(2\.5|3)(\s|$)/);
+// Resolved from the vitest root (the repository root), not from
+// import.meta.url: the file is transformed, so its module URL is not a file
+// URL and cannot be turned into a path. Same helper shape as the card
+// checklist, which grades its own seam out of this file.
+function globals(): string {
+  return readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+}
+
+/**
+ * The brace depth a rule opens at, counted over the whole file with comments
+ * stripped. Depth 0 is top level — outside every `@layer` — which is what makes
+ * an unlayered rule beat Tailwind's `layer(utilities)` import without an
+ * `!important`. Returns -1 when the marker appears nowhere.
+ */
+function depthOfRule(marker: string): number {
+  const source = globals().replace(/\/\*[\s\S]*?\*\//g, "");
+  const index = source.indexOf(marker);
+  if (index === -1) return -1;
+  let depth = 0;
+  for (const character of source.slice(0, index)) {
+    if (character === "{") depth += 1;
+    else if (character === "}") depth -= 1;
+  }
+  return depth;
+}
+
+const BODY_SEAM = '[data-slot="table-cell"][class~="p-2"]:not(';
+const HEAD_SEAM = '[data-slot="table-head"][class~="px-2"]:not(';
+const BAND = { min: 10, max: 14 };
+
+describe('clause: "cell padding 10-14px"', () => {
+  it("pads the body cell from a value inside the stated band", () => {
+    // THE VALUE IS READ OUT OF THE RECIPE, not restated here, so a later edit
+    // that walks the padding back out of the band fails this case rather than
+    // passing it on a literal that agrees with itself.
+    const match =
+      /\[data-slot="table-cell"\]\[class~="p-2"\]:not\([\s\S]*?\)\s*\{\s*padding:\s*(\d+)px;/.exec(
+        globals(),
+      );
+    expect(match, "the body-cell seam declares no padding in globals.css").not.toBeNull();
+    const padding = Number((match as RegExpExecArray)[1]);
+    expect(padding, `body cell pads ${padding}px`).toBeGreaterThanOrEqual(BAND.min);
+    expect(padding, `body cell pads ${padding}px`).toBeLessThanOrEqual(BAND.max);
   });
 
-  it("pads the header cell horizontally, so the follow-up is a value change and not a new rule", () => {
-    // Passes today; recorded alongside the failure as the shape the fix takes.
-    expect(renderTable().head.className).toContain("px-2");
+  it("pads the header cell from that same value, so the two columns keep one edge", () => {
+    // The header's horizontal padding has to move WITH the body cell or the
+    // header text sits inboard of its own column for every table in the
+    // product. Leg 1 pinned that pairing; this is the pairing, landed.
+    const body =
+      /\[data-slot="table-cell"\]\[class~="p-2"\]:not\([\s\S]*?\)\s*\{\s*padding:\s*(\d+)px;/.exec(
+        globals(),
+      );
+    const head =
+      /\[data-slot="table-head"\]\[class~="px-2"\]:not\([\s\S]*?\)\s*\{\s*padding-left:\s*(\d+)px;\s*padding-right:\s*(\d+)px;/.exec(
+        globals(),
+      );
+    expect(head, "the header-cell seam declares no padding in globals.css").not.toBeNull();
+    const [, left, right] = head as RegExpExecArray;
+    expect(left).toBe((body as RegExpExecArray)[1]);
+    expect(right).toBe((body as RegExpExecArray)[1]);
+  });
+
+  it("states the padding where the cascade lets it win, with no !important", () => {
+    // Tailwind's utilities arrive in `layer(utilities)`; an unlayered rule beats
+    // a layered one whatever the specificity. Both seams are therefore at top
+    // level, and neither reaches for `!important`, which would take the padding
+    // away from a consumer for good rather than merely stating the default.
+    expect(depthOfRule(BODY_SEAM)).toBe(0);
+    expect(depthOfRule(HEAD_SEAM)).toBe(0);
+    const source = globals();
+    for (const marker of [BODY_SEAM, HEAD_SEAM]) {
+      const rule = source.slice(source.indexOf(marker));
+      expect(rule.slice(0, rule.indexOf("}"))).not.toContain("!important");
+    }
+  });
+
+  it("supplies the primitive's default and nothing else", () => {
+    // The seam matches only a cell that still carries the primitive's OWN
+    // padding token and no directional padding of its own. `cn()` is
+    // tailwind-merge: a call site that states a full `p-*` replaces `p-2`, so
+    // the `[class~="p-2"]` arm already excludes it; a directional utility
+    // leaves `p-2` in place, so every one of them is excluded by name, matched
+    // at a token boundary. That is what keeps the 62 call sites in this product
+    // that pad their own cells — the permissions matrix, the metric-cost
+    // tables, the `py-8` empty-state row — rendering exactly what their class
+    // says.
+    const { cell, head } = renderTable();
+    expect(cell.className.split(/\s+/)).toContain("p-2");
+    expect(head.className.split(/\s+/)).toContain("px-2");
+    const source = globals();
+    for (const token of [
+      "px-",
+      "py-",
+      "pt-",
+      "pr-",
+      "pb-",
+      "pl-",
+      "ps-",
+      "pe-",
+    ]) {
+      expect(
+        source,
+        `the body-cell seam does not exclude a call site's ${token}* utility`,
+      ).toContain(`[class^="${token}"], [class*=" ${token}"]`);
+    }
+  });
+
+  it("excludes the SAME utilities at the head as at the body cell, arm for arm", () => {
+    // THE PAIRING IS THE CLAUSE. A head and the body under it share one column
+    // edge, so the two seams have to hand the column back to the call site on
+    // the same terms. An arm the head omitted put the two out of step by 2px at
+    // a real call site on this head:
+    // packages/metric-usage-api/src/components/token-by-provider-table.tsx
+    // draws heads `pb-2` over cells `py-2` — the cell's `py-` arm handed the
+    // column back and left it at the primitive's 8px, while the head, with no
+    // `pb-` arm, took the seam's 10px. Every arm is on both sides now.
+    const source = globals();
+    const head = source.slice(source.indexOf(HEAD_SEAM));
+    const armList = head.slice(0, head.indexOf(")"));
+    // `px-` is the one arm that is deliberately absent, and its absence is
+    // asserted below rather than left unsaid: the head's OWN token is `px-2`,
+    // so an arm matching it would switch the seam off for every head cell. A
+    // caller's `px-*` is already declined by the `[class~="px-2"]` arm at the
+    // head of the selector, because tailwind-merge removes the primitive's
+    // token when a call site states one of its own.
+    for (const token of [
+      "p-",
+      "py-",
+      "pt-",
+      "pr-",
+      "pb-",
+      "pl-",
+      "ps-",
+      "pe-",
+    ]) {
+      expect(
+        armList,
+        `the header seam does not exclude a call site's ${token}* utility`,
+      ).toContain(`[class^="${token}"], [class*=" ${token}"]`);
+    }
+    expect(
+      armList,
+      "a px- arm would match the head's own px-2 and disable the seam entirely",
+    ).not.toContain('[class*=" px-"]');
+    expect(head).toContain('[class~="px-2"]');
+  });
+
+  it("keeps the checkbox exception at the HEAD too, not only at the body cell", () => {
+    // table.tsx spells `[&:has([role=checkbox])]:pr-0` on the head as well as
+    // on the cell. The head seam is unlayered and outranks that utility, so
+    // without this restatement the header's checkbox column pads 10px on the
+    // right while the body cell beneath it pads 0 — the one thing the pairing
+    // above exists to prevent.
+    const head = readFileSync(
+      join(process.cwd(), "src/components/ui/table.tsx"),
+      "utf8",
+    );
+    expect(head).toContain("[&:has([role=checkbox])]:pr-0");
+    expect(globals()).toMatch(
+      /\[data-slot="table-head"\]\[class~="px-2"\]:has\(\[role="checkbox"\]\)\s*\{\s*padding-right:\s*0;/,
+    );
+  });
+
+  it("keeps the primitive's checkbox exception, which the seam would otherwise outrank", () => {
+    // `[&:has([role=checkbox])]:pr-0` is a layered utility at the same
+    // specificity the seam carries, so the seam has to restate it or a checkbox
+    // column silently grows a trailing pad.
+    expect(globals()).toMatch(
+      /\[data-slot="table-cell"\]\[class~="p-2"\]:has\(\[role="checkbox"\]\)\s*\{\s*padding-right:\s*0;/,
+    );
+  });
+
+  it("leaves the vendored primitive byte-identical to its registry source", () => {
+    // The reason the recipe is a scope and not a class, held as a test: the
+    // moment the padding is spelled in table.tsx, apollo-connector's vendored
+    // copy drifts from it and the provenance gate
+    // (scripts/extensions/vendor-extension-primitives.mjs --check) fails until
+    // that repository has re-vendored and its pin has been raised.
+    const source = readFileSync(
+      join(process.cwd(), "src/components/ui/table.tsx"),
+      "utf8",
+    );
+    expect(source).toContain('"p-2 align-middle');
+    expect(source).toContain("h-10 px-2 text-left");
   });
 });

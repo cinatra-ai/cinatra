@@ -17,17 +17,36 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import { getDashboardsDb, dashboards, dashboardEntityLinks } from "./db";
-import type { ListingScopeKind } from "./schema";
+import type { TenantListingScopeKind } from "./schema";
 
 // Re-export so host code (which imports this module as the flat alias
 // `@cinatra-ai/dashboards/entity-links`) gets the scope-kind type + roster from
 // one place, without needing a separate `store/schema` path alias.
 export { LISTING_SCOPE_KINDS } from "./schema";
-export type { ListingScopeKind } from "./schema";
+export type { ListingScopeKind, TenantListingScopeKind } from "./schema";
 
-/** A scope whose Dashboards tab lists dashboards (the three shared scopes). */
+// The WORKSPACE reference collection (cinatra#2811) rides this same host alias:
+// its store sits beside this one and is re-exported here, so the host reaches
+// both listing relations through one subpath.
+export {
+  addWorkspaceReferenceLink,
+  isWorkspaceReadGranted,
+  listWorkspaceReferenceRows,
+  listWorkspaceReferencedDashboardIds,
+  listUserWorkspaceDashboards,
+  readWorkspaceReferenceLink,
+  removeWorkspaceReferenceLink,
+  setWorkspaceReferenceReadGrant,
+  WORKSPACE_READ_GRANTED_OPERATION,
+  WORKSPACE_READ_REVOKED_OPERATION,
+  type WorkspaceReferenceRow,
+} from "./workspace-links";
+
+/** A TENANT scope whose Dashboards tab lists dashboards (the three shared
+ *  scopes). The workspace collection (cinatra#2811) spans organizations and is
+ *  not a `ListingScope`: it has its own reads in `workspace-links.ts`. */
 export type ListingScope = {
-  readonly kind: ListingScopeKind;
+  readonly kind: TenantListingScopeKind;
   /** team id / org id / project id. */
   readonly scopeId: string;
   /** The scope's tenant — every listing + homed row is tenant-fenced to this. */
@@ -47,11 +66,29 @@ export type ScopeDashboardRow = {
   readonly projectId: string | null;
   readonly entityType: string | null;
   readonly entityId: string | null;
-  readonly organizationId: string;
+  /** The row's tenant: NULL only for a workspace dashboard homed in the
+   *  workspace itself (cinatra#2811). */
+  readonly organizationId: string | null;
   /** 'home' — canonically homed here (no Remove); 'listed' — a secondary listing
    *  (carries Remove). */
   readonly relation: "home" | "listed";
 };
+
+/**
+ * RUNTIME fence for the tenant listing paths (cinatra#2811). The type already
+ * excludes the workspace kind, but a server action's argument is untyped at
+ * runtime: a workspace link reached through these tenant writers would skip the
+ * workspace curation authority and, on removal, the everyone-grant's revocation
+ * record. So a workspace kind is refused here outright; the workspace collection
+ * has its own store (`workspace-links.ts`).
+ */
+function assertTenantListingKind(kind: string): void {
+  if (kind !== "team" && kind !== "organization" && kind !== "project") {
+    throw new Error(
+      `dashboard listings: '${kind}' is not a tenant listing kind; a workspace reference is written through the workspace store`,
+    );
+  }
+}
 
 /** The live (non-archived, non-template) dashboard columns the tab reads. */
 const NOT_ARCHIVED_LIVE = (d: typeof dashboards) =>
@@ -71,6 +108,7 @@ const NOT_ARCHIVED_LIVE = (d: typeof dashboards) =>
 export async function listScopeHomedDashboards(
   scope: ListingScope,
 ): Promise<ScopeDashboardRow[]> {
+  assertTenantListingKind(scope.kind);
   const db = getDashboardsDb();
   const homePredicate =
     scope.kind === "project"
@@ -164,6 +202,7 @@ export async function listUserHomedDashboards(input: {
 export async function listScopeListedDashboards(
   scope: ListingScope,
 ): Promise<ScopeDashboardRow[]> {
+  assertTenantListingKind(scope.kind);
   const db = getDashboardsDb();
   const rows = await db
     .select({
@@ -214,11 +253,12 @@ export async function listScopePresentDashboardIds(
  */
 export async function addDashboardEntityLink(input: {
   dashboardId: string;
-  entityType: ListingScopeKind;
+  entityType: TenantListingScopeKind;
   entityId: string;
   organizationId: string;
   createdBy: string;
 }): Promise<{ created: boolean }> {
+  assertTenantListingKind(input.entityType);
   const db = getDashboardsDb();
   const inserted = await db
     .insert(dashboardEntityLinks)
@@ -249,10 +289,11 @@ export async function addDashboardEntityLink(input: {
  */
 export async function removeDashboardEntityLink(input: {
   dashboardId: string;
-  entityType: ListingScopeKind;
+  entityType: TenantListingScopeKind;
   entityId: string;
   organizationId: string;
 }): Promise<{ removed: boolean }> {
+  assertTenantListingKind(input.entityType);
   const db = getDashboardsDb();
   const deleted = await db
     .delete(dashboardEntityLinks)
