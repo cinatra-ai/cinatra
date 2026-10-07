@@ -1,0 +1,1 @@
+For #3752, the before behavior is documented by the failing unit tests run before the #3963 palette fix; it is not a live before reading. The after reading on current main is pending and will check both palettes at about three seconds and sample a background pixel. Measured outcomes remain pending; detailed readings and proof stay in private storage.
