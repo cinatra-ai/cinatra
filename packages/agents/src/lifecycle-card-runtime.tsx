@@ -1686,13 +1686,15 @@ export function defaultRunReviewSlotReader(runId: string): RunReviewSlotReader {
  * IS THE GATE THIS TICKET NAMES STILL THE PENDING ONE (cinatra#3007, F2)? Asked
  * of the same resolve route the card asks, with the same credential the card
  * would send, so the reader learns nothing the card could not. Any answer but a
- * pending state — a decided gate, a refusal, a failure — is "no".
+ * pending state — a decided gate or a refusal — withdraws the ticket. A
+ * transport failure or an unrecognizable response says nothing about that
+ * authorized reading; it is indeterminate rather than a gate decision.
  */
 async function reviewTicketStillPending(
   ref: string,
   auth: LifecycleCardAuth | null,
   signal: AbortSignal,
-): Promise<boolean> {
+): Promise<"pending" | "withdrawn" | "indeterminate"> {
   try {
     const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
       method: "POST",
@@ -1701,14 +1703,18 @@ async function reviewTicketStillPending(
       credentials: auth?.credentials ?? "same-origin",
       signal,
     });
-    if (!response.ok) return false;
+    // Credential invalidation is authoritative even without a protocol body:
+    // the resolve route answers 401 { error: "Unauthorized" } for that case.
+    if (response.status === 401 || response.status === 403) return "withdrawn";
     const envelope = parseLifecycleResolveEnvelope(
       "artifact_review_gate",
       await response.json(),
     );
-    return envelope?.state?.state === "pending";
+    if (envelope === null) return "indeterminate";
+    if (envelope.state?.state !== "pending") return "withdrawn";
+    return response.ok ? "pending" : "indeterminate";
   } catch {
-    return false;
+    return "indeterminate";
   }
 }
 
@@ -1733,12 +1739,15 @@ async function reviewTicketStillPending(
  * settled card over a run that is about to open a new one.
  */
 export function useRunReviewSlot({
+  runId,
   status,
   initial,
   read,
   liveSignal,
   stepOnFile,
 }: {
+  /** The actual run, not the identity of its replaceable read callback. */
+  runId?: string;
   status: string;
   initial?: RunReviewSlot | null;
   read: RunReviewSlotReader;
@@ -1865,6 +1874,11 @@ export function useRunReviewSlot({
   // The credential the card itself resolves with, for the one question the
   // reader asks of the resolve route (`reviewTicketStillPending`).
   const auth = useContext(LifecycleCardAuthContext);
+  // Only the opaque declaration is compared: no broker token is read or stored
+  // in React state. A new run/credential cannot inherit a previous wait's
+  // authorized ticket, including an answer still in flight for that wait.
+  const [seenRunId, setSeenRunId] = useState(runId);
+  const [seenAuth, setSeenAuth] = useState(auth);
   // WHEN THIS READER LAST LOOKED, and which liveness signal it looked against.
   // Held in refs because they are the schedule's own book-keeping and must never
   // themselves re-key the schedule — see the effect's note on the elapsed-time
@@ -1910,8 +1924,10 @@ export function useRunReviewSlot({
     },
     [],
   );
-  if (seenStatus !== status) {
+  if (seenStatus !== status || seenRunId !== runId || seenAuth !== auth) {
     setSeenStatus(status);
+    setSeenRunId(runId);
+    setSeenAuth(auth);
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
     setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
@@ -2331,18 +2347,25 @@ export function useRunReviewSlot({
                 // an empty detail between them. So while the run stays parked and
                 // the answer differs from the one on file in its ticket ALONE,
                 // the ticket on file is kept for as long as its gate is still
-                // the pending one; a gate that was decided, superseded or cannot
-                // be read any more gives way to the new ticket at once.
+                // the pending one. An indeterminate probe keeps that authorized
+                // identity too; a refusal, non-pending answer or known new gate
+                // gives way to the new ticket and its own authorized resolve.
                 const onlyTheTicketMoved =
                   parkedStatus &&
                   last.ref !== null &&
                   merged.ref !== null &&
                   merged.ref !== last.ref &&
                   merged.awaiting === last.awaiting &&
-                  merged.producedReviewPark === last.producedReviewPark;
+                  merged.producedReviewPark === last.producedReviewPark &&
+                  // Display identity grants no authority, but a different gate
+                  // must resolve its own ticket even if the old gate is pending.
+                  typeof last.reviewTaskId === "string" &&
+                  last.reviewTaskId.trim().length > 0 &&
+                  merged.reviewTaskId === last.reviewTaskId;
                 const keepTheTicketOnFile =
                   onlyTheTicketMoved &&
-                  (await reviewTicketStillPending(last.ref as string, auth, abort.signal));
+                  (await reviewTicketStillPending(last.ref as string, auth, abort.signal)) !==
+                    "withdrawn";
                 if (lookEpochRef.current !== epoch) return;
                 if (!keepTheTicketOnFile) {
                   changed =
