@@ -12,7 +12,7 @@ export function RunStartedRuns({ rows }: { rows: readonly StartedRunRow[] }) {
       <ul className="m-0 grid list-none gap-2 p-0">
         {rows.map(row => (
           <li key={row.id} data-started-run-id={row.id} className="flex flex-wrap items-baseline gap-3 text-reading">
-            <Link href={row.href} data-field="agent-name" data-action="open-started-run" className="text-blue underline underline-offset-[3px]">{row.agentDisplayName}</Link>
+            <Link href={row.href} data-field="agent-name" data-action="open-started-run" className="text-indigo-ink underline underline-offset-[3px]">{row.agentDisplayName}</Link>
             <span data-field="state" data-run-status={row.status} className="text-muted-foreground">{row.status.replaceAll("_", " ").replace(/^./, c => c.toUpperCase())}</span>
           </li>
         ))}

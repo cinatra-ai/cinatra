@@ -33,6 +33,8 @@
  *     src/__tests__/run-page-composition-single-rail.test.tsx
  */
 import React from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
@@ -1331,6 +1333,39 @@ describe("a step the reader selects opens its own card, never a blank run detail
 
 
 describe("the actual run page's independent started-runs list (#3749)", () => {
+  it.each(["light", "dark"] as const)("binds each real started-run link to the drawing's indigo in the %s palette", async palette => {
+    startedRuns.rows = [
+      { id: "color-child", agentDisplayName: "Started agent", status: "failed", href: "/projects/child-project/agents/example/child/color-child" },
+    ];
+    const { container } = await renderRunPage();
+    const link = container.querySelector<HTMLAnchorElement>('[data-conformance-id="run-started-runs"] [data-field="agent-name"]');
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toBe("Started agent");
+    expect(link!.getAttribute("href")).toBe(startedRuns.rows[0].href);
+    expect(link!.closest('li')!.querySelector('[data-field="state"]')!.textContent).toBe("Failed");
+
+    // Resolve the rendered color utility through the actual host's token road.
+    // This is a token-backed native regression, not computed browser paint.
+    const css = readFileSync(path.resolve(__dirname, "../../../../src/app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const declarations = (selector: string) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const body = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+      return new Map(Array.from(body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g), m => [m[1], m[2].trim()]));
+    };
+    const tokens = new Map([...declarations(":root"), ...declarations(".cinatra"), ...(palette === "dark" ? declarations(".dark") : [])]);
+    const theme = declarations("@theme inline");
+    expect(theme.get("--color-indigo-ink")).toBe("var(--indigo-ink)");
+    expect(tokens.get("--indigo-ink")).toBe("#364e81");
+    const colorUtility = Array.from(link!.classList).find(name => name.startsWith("text-"));
+    let color = theme.get(`--color-${colorUtility?.slice(5)}`);
+    for (let depth = 0; depth < 8 && color?.startsWith("var("); depth++) {
+      color = tokens.get(color.slice(4, -1));
+    }
+    expect(color?.toLowerCase()).toBe("#364e81");
+    expect(link!.classList.contains("underline")).toBe(true);
+    expect(link!.classList.contains("underline-offset-[3px]")).toBe(true);
+    expect(link!.getAttribute("data-action")).toBe("open-started-run");
+  });
   it("draws exactly the authorized recorded children beneath the unchanged frame", async () => {
     startedRuns.rows = [
       { id: "scraper-run", agentDisplayName: "First started agent", status: "running", href: "/teams/child-team/agents/example/first-agent/scraper-run" },
