@@ -26,10 +26,9 @@ import {
  * repository's own primitives: no new dependency, the `Popover` the design
  * system already ships, and the same tokens every other control resolves.
  *
- * SINGLE SELECTION ONLY, for now. The roster also describes a range reading
- * ("a date range fills the in-between days"); no surface in the product asks a
- * range yet, and a mode nothing mounts is a mode nothing proves, so it is left
- * for the surface that first needs it rather than shipped unread.
+ * SINGLE SELECTION remains the default. The explicit controlled range mode
+ * adds the drawing's in-between tint: first click starts, second completes the
+ * sorted endpoints, and a third starts again. Both modes name local days.
  *
  * VALUES ARE LOCAL CALENDAR DAYS, never instants: `YYYY-MM-DD`, the same shape
  * the date half of an ISO local date-time carries. A `Date` would drag a
@@ -107,10 +106,22 @@ function daysInMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate()
 }
 
-export type CalendarProps = {
-  /** The selected day, `YYYY-MM-DD`. */
-  value?: string | null
-  onValueChange?: (day: string) => void
+/** Controlled local-day endpoints. `to: null` means the start awaits its end. */
+export type CalendarDayRange = { from: string; to: string | null }
+
+type CalendarSelection =
+  | { mode?: "single"; value?: string | null; onValueChange?: (day: string) => void; range?: never; onRangeChange?: never }
+  | { mode: "range"; range?: CalendarDayRange | null; onRangeChange?: (range: CalendarDayRange) => void; value?: never; onValueChange?: never }
+
+/** Refuse an invalid start, ignore an invalid end, and read valid endpoints in order. */
+function readDayRange(range: CalendarDayRange | null | undefined): CalendarDayRange | null {
+  if (!range || fromDayKey(range.from) === null) return null
+  if (fromDayKey(range.to) === null) return { from: range.from, to: null }
+  const end = range.to as string
+  return range.from <= end ? { from: range.from, to: end } : { from: end, to: range.from }
+}
+
+export type CalendarProps = CalendarSelection & {
   /** Today, injectable so a test can pin the ring without pinning the clock. */
   today?: string
   className?: string
@@ -119,11 +130,16 @@ export type CalendarProps = {
 export function Calendar({
   value,
   onValueChange,
+  mode = "single",
+  range,
+  onRangeChange,
   today,
   className,
 }: CalendarProps) {
+  const selectedRange = mode === "range" ? readDayRange(range) : null
+  const selectedDay = mode === "range" ? selectedRange?.from : value
   const todayKey = today ?? toDayKey(new Date())
-  const anchor = fromDayKey(value ?? null) ?? fromDayKey(todayKey) ?? new Date()
+  const anchor = fromDayKey(selectedDay ?? null) ?? fromDayKey(todayKey) ?? new Date()
   const [month, setMonth] = React.useState(
     () => new Date(anchor.getFullYear(), anchor.getMonth(), 1),
   )
@@ -157,8 +173,8 @@ export function Calendar({
   const firstKey = `${year}-${pad(monthIndex + 1)}-01`
   const tabbableKey = inMonth(focusKey)
     ? (focusKey as string)
-    : inMonth(value)
-      ? (value as string)
+    : inMonth(selectedDay)
+      ? (selectedDay as string)
       : inMonth(todayKey)
         ? todayKey
         : firstKey
@@ -220,6 +236,14 @@ export function Calendar({
     }
   }
 
+  function selectDay(day: string) {
+    if (mode !== "range") { onValueChange?.(day); return }
+    const next = selectedRange !== null && selectedRange.to === null
+      ? readDayRange({ from: selectedRange.from, to: day })!
+      : { from: day, to: null }
+    onRangeChange?.(next)
+  }
+
   return (
     <div data-slot="calendar" className={cn("flex flex-col gap-2", className)}>
       <div className="flex items-center justify-between">
@@ -271,7 +295,11 @@ export function Calendar({
         ))}
         {days.map((day) => {
           const key = `${year}-${pad(monthIndex + 1)}-${pad(day)}`
-          const selected = key === value
+          const rangeStart = mode === "range" && key === selectedRange?.from
+          const rangeEnd = mode === "range" && key === selectedRange?.to
+          const inRange = mode === "range" && selectedRange?.to != null && key > selectedRange.from && key < selectedRange.to
+          const selected = mode === "range" ? rangeStart || rangeEnd : key === value
+          const filled = mode === "range" ? rangeEnd : selected
           const isToday = key === todayKey
           return (
             <button
@@ -280,16 +308,19 @@ export function Calendar({
               data-slot="calendar-day"
               data-day={key}
               data-selected={selected ? "" : undefined}
+              data-range-start={rangeStart ? "" : undefined}
+              data-range-end={rangeEnd ? "" : undefined}
+              data-in-range={inRange ? "" : undefined}
               aria-pressed={selected}
               aria-label={formatDayKey(key)}
               tabIndex={key === tabbableKey ? 0 : -1}
-              onClick={() => onValueChange?.(key)}
+              onClick={() => selectDay(key)}
               className={cn(
                 "flex size-7 items-center justify-center rounded-full text-xs transition-colors",
-                selected
+                filled
                   ? "bg-primary font-semibold text-primary-foreground"
-                  : "text-foreground hover:bg-surface-muted",
-                !selected && isToday && "ring-1 ring-primary",
+                  : inRange ? "rounded-none bg-primary/[0.12] text-foreground" : "text-foreground hover:bg-surface-muted",
+                (rangeStart || (!filled && isToday)) && "ring-1 ring-primary",
               )}
             >
               {day}
@@ -301,10 +332,8 @@ export function Calendar({
   )
 }
 
-export type DatePickerProps = {
+export type DatePickerProps = CalendarSelection & {
   id?: string
-  value?: string | null
-  onValueChange?: (day: string) => void
   placeholder?: string
   disabled?: boolean
   today?: string
@@ -321,6 +350,9 @@ export function DatePicker({
   id,
   value,
   onValueChange,
+  mode = "single",
+  range,
+  onRangeChange,
   placeholder = "Pick a date",
   disabled,
   today,
@@ -328,6 +360,10 @@ export function DatePicker({
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false)
   const chosen = typeof value === "string" && value.length > 0 ? value : null
+  const chosenRange = mode === "range" ? readDayRange(range) : null
+  const label = mode === "range"
+    ? chosenRange ? `${formatDayKey(chosenRange.from)} – ${chosenRange.to ? formatDayKey(chosenRange.to) : "…"}` : null
+    : chosen === null ? null : formatDayKey(chosen)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -342,21 +378,24 @@ export function DatePicker({
             className,
           )}
         >
-          <span className={chosen === null ? "text-muted-foreground" : undefined}>
-            {chosen === null ? placeholder : formatDayKey(chosen)}
+          <span className={label === null ? "text-muted-foreground" : undefined}>
+            {label === null ? placeholder : label}
           </span>
           <CalendarIcon className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-auto">
-        <Calendar
-          value={chosen}
-          today={today}
-          onValueChange={(day) => {
+        {mode === "range" ? (
+          <Calendar mode="range" range={range} today={today} onRangeChange={(next) => {
+            onRangeChange?.(next)
+            if (next.to !== null) setOpen(false)
+          }} />
+        ) : (
+          <Calendar value={chosen} today={today} onValueChange={(day) => {
             onValueChange?.(day)
             setOpen(false)
-          }}
-        />
+          }} />
+        )}
       </PopoverContent>
     </Popover>
   )
