@@ -81,6 +81,30 @@ export type FieldRendererEntry = {
    * `true` against the component's own source.
    */
   credentialSafe?: boolean;
+  /**
+   * DOES THE COMPONENT THIS ENTRY MOUNTS DRAW A SUBMIT CONTROL OF ITS OWN?
+   * (cinatra#3532.)
+   *
+   * `true` is a DECLARATION, read off the component's own source: this entry's
+   * renderer draws the control that passes the field, so a setup surface leaves
+   * the send to it and draws none of its own — which is what the run page has
+   * always done for the schema floor and for the grouped setup form.
+   *
+   * ABSENT MEANS THE ENTRY DECLARES NONE, and the setup surfaces read it that
+   * way: the product's own Continue is drawn beside the field and the renderer
+   * is told through the shared props contract (`hideSubmit`) not to draw one,
+   * so there is exactly one control. That is already what every conversation
+   * host does for every setup renderer (`cardOwnsTheSetupSend`); the reason it
+   * cannot default the other way is the failure that opened #3532 — a pack's
+   * field renderer that draws no control left the Run wizard with no way to
+   * pass the field at all, and "nothing is declared" must never be the reason a
+   * person cannot go on.
+   *
+   * It travels with the ENTRY, never with a predicate over the id, for the same
+   * reason `credentialSafe` does: a binding id says nothing about which
+   * component is mounted.
+   */
+  drawsOwnSubmit?: boolean;
 };
 
 class FieldRendererRegistryImpl {

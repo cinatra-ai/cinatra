@@ -171,6 +171,18 @@ const PUBLIC_EXACT_PATHS = [
 // reason the header-rule entry above is: without it guardAppRoute 307s the
 // unauthenticated harness to /sign-in before the fixture renders, and every
 // assertion then fails on a fixture that never rendered.
+// "/design-fixtures/conformance/upload" (cinatra#3546): the §VIII Upload
+// Extension conformance harness route — the three published Upload surfaces
+// (the screen's own extracted JSX body, the shipped GitHub form and the resolved
+// install panel) on a sub-page of their own, because two of them mount a
+// resolved install panel that takes focus and scrolls a shared page under every
+// other mount on it. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no session, no user data; the two bound server calls are
+// substituted by the mount). It is listed here for the SAME reason the
+// header-rule and overlay-header-band entries above are: without it
+// guardAppRoute 307s the unauthenticated harness to /sign-in under the
+// production-standalone build, and every assertion then fails on a fixture that
+// never rendered.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -182,6 +194,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/extension-settings",
   "/design-fixtures/run-step-rail",
   "/design-fixtures/overlay-header-band",
+  "/design-fixtures/conformance/upload",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;
@@ -537,28 +550,8 @@ export function reviewIslandFramingHeaders(request: NextRequest): {
  * of a credential-phishing surface. An empty document is what every other
  * island denial draws, so this one is not distinguishable from them either.
  */
-/**
- * THE EMPTY ISLAND, AS A DOCUMENT (cinatra#3051).
- *
- * This response and the island page's own `emptyIsland` are the SAME refusal,
- * and they have to be the same DOCUMENT. The review card reads the framed
- * document to tell a frame that PAINTED from one that merely LOADED — an empty
- * document fires `load` exactly like a full one, and treating that as painted is
- * what left the reader in front of a panel naming nothing. A zero-byte body
- * carried no anchor, so the card could not tell this refusal from a target that
- * had arrived, and it is the refusal a genuinely cross-site widget frame with no
- * minted address gets EVERY time.
- *
- * It carries the page's own anchor and nothing else. No reason, no content,
- * nothing that could tell one refusal from another — the generic refusal
- * contract is exactly as closed as it was.
- */
-const EMPTY_ISLAND_DOCUMENT =
-  '<!doctype html><html><head><meta charset="utf-8"></head>' +
-  '<body><div data-conformance-id="review-target-island-empty"></div></body></html>';
-
 function emptyIslandResponse(): NextResponse {
-  return new NextResponse(EMPTY_ISLAND_DOCUMENT, {
+  return new NextResponse("", {
     status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
   });

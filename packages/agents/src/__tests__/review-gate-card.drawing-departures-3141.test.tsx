@@ -66,13 +66,18 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
 }));
 
 // The run's stored exchange is a server action; the window reads it on mount.
+//
+// THE TURN'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): a turn reports the
+// fills it placed and whether it PRESSED a control of the bound card, and the
+// one controller reads both. A mock that omits them lies about the contract.
 vi.mock("../run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
-  sendRunWindowTurn: vi.fn(async () => ({ kind: "ok", entries: [] })),
+  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [], fills: [], acted: false })),
 }));
 
+import { sendRunWindowTurn } from "../run-window-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { ISLAND_BODY_ANCHOR, ReviewGateCard } from "../review-gate-card";
+import { ReviewGateCard } from "../review-gate-card";
 
 afterEach(() => {
   cleanup();
@@ -240,21 +245,67 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     }
   });
 
-  it("a landed change request KEEPS the exchange on screen — the card does not re-resolve it away", async () => {
-    // THE WINDOW'S OWN RULING, in its own words: "A landed changes-request
-    // RESOLVES the base gate, but the EXCHANGE (the typed request + the
-    // repair/lineage reply) must stay visible — so we do NOT blank the surface
-    // to the resolved/blocked state." The decision bar re-resolves the card
-    // after a landed decision; the window must not, or the settled reading
-    // unmounts the pending branch and takes the reader's own words with it.
+  // AMENDED BY THE FORWARD MERGE OF cinatra#2934 (lifecycle-b W5c). This case
+  // used to press the window and assert that the REVIEW'S DECISION ACTION had
+  // been called with `{ disposition: "comment" }` — the direct filing the window
+  // did before any model read the sentence. That road is the one W5c retires,
+  // and the code this case guarded says so in its own words ("kept until #2934
+  // retires it"). What the case is really about survives unchanged and is what
+  // it asserts now: the reader's own exchange is still on screen afterwards.
+  it("the typed request goes to the RUN's assistant — the window files nothing itself", async () => {
     const resolveFetch = mockResolve({ state: "pending", canDecide: true, canComment: true });
     const submitAction = vi.fn(
       async () =>
         ({ kind: "changes-requested", status: "requested", idempotent: false }) as const,
     );
+    // A QUESTION: the turn answered and pressed nothing.
+    vi.mocked(sendRunWindowTurn).mockImplementation(
+      async () => ({ ok: true, entries: [], fills: [], acted: false }) as never,
+    );
     const { container } = render(
       <LifecycleCardSurfaceProvider host="run_card">
         <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+    const resolvesBefore = resolveFetch.mock.calls.length;
+    vi.mocked(sendRunWindowTurn).mockClear();
+
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-testid="review-prompt-send"]')!);
+    });
+
+    // What was typed reached the run's own conversation, word for word …
+    expect(vi.mocked(sendRunWindowTurn)).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-3141", surface: "review", prompt: TYPED_REQUEST }),
+    );
+    // … and the window filed nothing itself. The decision bar keeps the action.
+    expect(submitAction).not.toHaveBeenCalled();
+    // The window — and with it the exchange — is still on screen.
+    expect(promptWindows(container)).toHaveLength(1);
+    expect(
+      container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      "the gate the exchange belongs to is still the reading on screen",
+    ).not.toBeNull();
+    // A turn that only answered moves nothing: no re-read.
+    expect(resolveFetch.mock.calls.length).toBe(resolvesBefore);
+  });
+
+  it("a turn that PRESSED Comment re-reads the card, and the exchange survives it", async () => {
+    // THE OTHER HALF OF THE SAME RULING. The exchange had to stay visible, and
+    // before W5c the only way to keep it was to refuse the re-read, because the
+    // outcome line lived in the window's own state. The exchange is the RUN's
+    // now — stored server side per turn and read back on mount (cinatra#2933) —
+    // so the card CAN show the state the server holds after a landed request
+    // without taking the reader's words off screen. It must: a gate that was
+    // settled by the press would otherwise keep drawing its decision bar.
+    const resolveFetch = mockResolve({ state: "pending", canDecide: true, canComment: true });
+    vi.mocked(sendRunWindowTurn).mockImplementation(
+      async () => ({ ok: true, entries: [], fills: [], acted: true }) as never,
+    );
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard view={VIEW} runId="run-3141" />
       </LifecycleCardSurfaceProvider>,
     );
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
@@ -264,15 +315,8 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
       fireEvent.click(container.querySelector('[data-testid="review-prompt-send"]')!);
     });
 
-    expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: TYPED_REQUEST });
-    // The window — and with it the exchange — is still on screen.
+    await waitFor(() => expect(resolveFetch.mock.calls.length).toBeGreaterThan(resolvesBefore));
     expect(promptWindows(container)).toHaveLength(1);
-    expect(
-      container.querySelector('[data-conformance-id="review-decision-bar"]'),
-      "the gate the exchange belongs to is still the reading on screen",
-    ).not.toBeNull();
-    // And the card did not go back to the server for a settled answer.
-    expect(resolveFetch.mock.calls.length).toBe(resolvesBefore);
   });
 
   it("offered only to a reviewer who may comment — a restricted reader with none gets no window", async () => {
@@ -367,17 +411,6 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
   it("keeps the header once the island has PAINTED, and draws exactly one", async () => {
     const { container } = await renderPending("run_card");
     const frame = container.querySelector("iframe")!;
-    // A PAINTED frame, not merely a loaded one. An island that refused answers
-    // 200 with the EMPTY document and fires `load` exactly like a full one, so
-    // the card reads the framed document's own body anchor before it calls the
-    // preview painted. This fixture therefore writes the island's own body
-    // document, the way a real navigation does, and then reports the load.
-    const doc = frame.contentDocument!;
-    doc.open();
-    doc.write(
-      `<html><body><div data-conformance-id="${ISLAND_BODY_ANCHOR}"></div></body></html>`,
-    );
-    doc.close();
     await act(async () => {
       fireEvent.load(frame);
     });
@@ -397,36 +430,6 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
       h.querySelector("[data-review-target-revision]")?.getAttribute("data-review-target-revision"),
     );
     expect(revisions).toEqual([HEADER_ONE.revisionId, HEADER_TWO.revisionId]);
-  });
-
-  it("names NO package on the floor — not even where every target shares one", async () => {
-    // §V FIXES WHERE THAT NAME MAY COME FROM: "The resolution is host-derived,
-    // never a claim the client or the model can forge." This overlay is the
-    // CARD's, drawn on the client for a frame that has not painted, so no
-    // renderer was reached and no resolution exists to report. Reading the
-    // artifact TYPE's defining package off the type id instead would name a
-    // package that had no part in the failure — the host may have resolved a
-    // runtime renderer from another package entirely — which is exactly the
-    // invented value "never a raw error or manifest value" keeps off this line.
-    // The slot and the reason are true of the reading whatever it holds, so the
-    // line is still drawn: the floor is never a blank.
-    const { container } = await renderPending("run_card", [HEADER_ONE, HEADER_TWO]);
-    const floor = container.querySelector("[data-review-target-floor]")!;
-    expect(floor, "the floor is still drawn").not.toBeNull();
-    expect(floor.getAttribute("data-review-floor-package")).toBe("");
-    expect(floor.textContent).toBe('slot "detail" · reason "preview-loading"');
-    cleanup();
-
-    // Two targets that DO share one type package are named no differently: the
-    // half is dropped because the card cannot know what drew them, not because
-    // the two disagreed.
-    const together = await renderPending("run_card", [
-      HEADER_ONE,
-      { ...HEADER_TWO, objectType: "@cinatra-ai/email:thread" },
-    ]);
-    const shared = together.container.querySelector("[data-review-target-floor]")!;
-    expect(shared.getAttribute("data-review-floor-package")).toBe("");
-    expect(shared.textContent).toBe('slot "detail" · reason "preview-loading"');
   });
 
   it("the conversation's card draws the header in every island state too", async () => {
@@ -479,31 +482,12 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
     ).toBeNull();
   });
 
-  // AMENDED (cinatra#3058, fix leg 8). The half this pin was written for is
-  // unchanged and is measured first: an answer that carried no headers COMPOSES
-  // none, and nothing is invented in their place. What it no longer says is
-  // that the panel is then nameless — §IV opens "EVERY target opens with a
-  // header that names what is under review and fixes it in place", and the
-  // reading measured on the real surface was a reader offered Approve and
-  // Reject for twenty seconds over a panel that named nothing at all. So the
-  // card draws the header's own form with no facts in it, which is the one
-  // reading that invents nothing and names the panel.
-  it("an answer that carries no headers composes none — and names the reading instead", async () => {
+  it("an answer that carries no headers draws none — never an invented one", async () => {
     mockResolve(PENDING);
     const { container } = renderOn("run_card");
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
     );
-    expect(headers(container), "no composed header").toHaveLength(0);
-    const pending = container.querySelector("[data-review-target-header-pending]");
-    expect(pending, "and the panel is named anyway").not.toBeNull();
-    expect(
-      pending!.getAttribute("data-review-target-header-pending"),
-      "openly, as the reading whose facts have not arrived",
-    ).toBe("");
-    // NOT ONE FACT OF THE ARTIFACT: no title, no type, no revision, no pin.
-    expect(pending!.textContent).toBe("Review target");
-    expect(container.querySelector("[data-review-target-revision]")).toBeNull();
-    expect(container.textContent).not.toContain("undefined");
+    expect(headers(container)).toHaveLength(0);
   });
 });

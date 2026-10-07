@@ -131,6 +131,15 @@ export type CinatraManifest = {
    * See `./declared-tables`.
    */
   declaredTables?: DeclaredTableDeclaration[];
+  /**
+   * The modules this extension exposes to the passthrough's ONE generic
+   * dispatch tool (cinatra#3525). Each entry names a tool and the
+   * package-relative module that runs it; the host resolves a caller's asked-for
+   * name against THIS list and nothing else, so core keeps no table of package
+   * names. See `parseDeclaredTools` below for the whole contract: the field
+   * names, the package-relative path constraint, and the callable export.
+   */
+  tools?: DeclaredToolDeclaration[];
   // ---- self-describing card identity (additive) ----
   /**
    * User-facing card label. Falls back to the host catalog when absent.
@@ -527,6 +536,25 @@ export type DeclaredTable = {
   name: string;
   /** The column carrying the organisation every row is bound to. */
   organizationColumn: string;
+  /**
+   * The column carrying the RUN a row belongs to, for a table whose rows are
+   * one run's own (cinatra#3249) — `null` for a table whose rows outlive any
+   * one run. The host binds it exactly as it binds the organisation: it writes
+   * the bound run on an insert, it substitutes the bound run where a caller
+   * asks for this run's rows, and a request may never name the column itself.
+   */
+  runColumn: string | null;
+  /**
+   * The columns carrying the SCOPE the row's run belongs to (cinatra#3249) —
+   * the kind of scope and the id inside it, in the host's own per-scope
+   * vocabulary (the workspace, an organisation, a team, a project, a person's
+   * own scope), both `null` for a table whose rows are bound to no scope.
+   * Declared as a PAIR: a kind names no scope without an id, and an id names
+   * no vocabulary without a kind. The host binds them exactly as it binds the
+   * organisation and the run.
+   */
+  scopeKindColumn: string | null;
+  scopeIdColumn: string | null;
   columns: DeclaredColumn[];
   indexes: DeclaredIndex[];
 };
@@ -747,6 +775,71 @@ export function parseDeclaredTables(raw: unknown, packageName: string): Declared
       );
     }
 
+    // THE HOST-BOUND COLUMNS BESIDE THE ORGANISATION (cinatra#3249): the RUN a
+    // row belongs to, and the SCOPE that run was launched from. Each is
+    // optional, and each is validated in the same shape the organisation
+    // column already is — a binding a caller cannot write is only as good as
+    // the declaration the host reads it from. Every one of them needs a column
+    // of its OWN: two bindings sharing a column is a table that cannot say
+    // which of them a value meant.
+    const boundBy = new Map<string, string>();
+    const boundColumn = (field: string, noun: string, belongs: string): string | null => {
+      const raw = entry[field];
+      if (raw === undefined || raw === null) return null;
+      if (typeof raw !== "string" || !columnNames.has(raw)) {
+        throw new Error(
+          `[declared-tables] ${where}: ${field} ${JSON.stringify(raw)} must name one of ` +
+            `the table's own columns — the host writes the bound ${noun} into that column`,
+        );
+      }
+      if (raw === organizationColumn) {
+        throw new Error(
+          `[declared-tables] ${where}: ${field} "${raw}" is already the organisation column ` +
+            `— a ${noun} and a tenant are two different bindings and need two columns`,
+        );
+      }
+      const taken = boundBy.get(raw);
+      if (taken) {
+        throw new Error(
+          `[declared-tables] ${where}: ${field} "${raw}" is already the ${taken} column ` +
+            `— every host-bound column carries one binding and needs a column of its own`,
+        );
+      }
+      const col = columns.find((c) => c.name === raw);
+      // TEXT AND NOT NULL, exactly as the organisation column above is. The
+      // host writes its OWN values into this column — a run id, and the launch
+      // anchor's scope kind and scope id, all of them text — so a column the
+      // declaration types as anything else is a column the binding could never
+      // write into. Refused at the declaration rather than at the first insert,
+      // where it would surface as a database type error the pack cannot read.
+      if (!col || col.type !== "text" || !col.notNull) {
+        throw new Error(
+          `[declared-tables] ${where}: the ${noun} column "${raw}" must be declared ` +
+            `\`text\` and \`notNull: true\` — the host writes the bound ${noun} into it, and a ` +
+            `nullable ${noun} is a row belonging to no ${belongs}`,
+        );
+      }
+      boundBy.set(raw, noun);
+      return raw;
+    };
+
+    const runColumn = boundColumn("runColumn", "run", "run");
+    // THE SCOPE BINDING IS DECLARED AS A PAIR. The host's per-scope model names
+    // a scope by a KIND and an ID together (the workspace, an organisation, a
+    // team, a project, a person's own scope); a kind alone names no scope and
+    // an id alone names no vocabulary to read it in, so a half-declared binding
+    // is refused rather than half-written.
+    const scopeKindColumn = boundColumn("scopeKindColumn", "scope kind", "scope");
+    const scopeIdColumn = boundColumn("scopeIdColumn", "scope id", "scope");
+    if ((scopeKindColumn === null) !== (scopeIdColumn === null)) {
+      throw new Error(
+        `[declared-tables] ${where}: the scope binding is declared as a PAIR — ` +
+          `"scopeKindColumn" names the kind of scope a row's run belongs to and ` +
+          `"scopeIdColumn" the id inside it; one without the other names no scope the ` +
+          `host could write`,
+      );
+    }
+
     const rawIndexes = entry.indexes;
     const indexes: DeclaredIndex[] = [];
     if (rawIndexes !== undefined && rawIndexes !== null) {
@@ -767,7 +860,15 @@ export function parseDeclaredTables(raw: unknown, packageName: string): Declared
     declaredTablePhysicalName(packageName, name);
     for (const idx of indexes) declaredIndexPhysicalName(packageName, idx.name);
 
-    out.push({ name, organizationColumn, columns, indexes });
+    out.push({
+      name,
+      organizationColumn,
+      runColumn,
+      scopeKindColumn,
+      scopeIdColumn,
+      columns,
+      indexes,
+    });
   }
   return out;
 }
@@ -826,6 +927,147 @@ export type DeclaredIndexDeclaration = {
 export type DeclaredTableDeclaration = {
   name: string;
   organizationColumn: string;
+  /**
+   * The column the host writes the bound run into (cinatra#3249). Optional: a
+   * table that names none binds its rows to no run.
+   */
+  runColumn?: string;
+  /**
+   * The columns the host writes the bound scope into (cinatra#3249) — the kind
+   * of scope the row's run belongs to and the id inside it. Optional, and
+   * declared together: one without the other is refused.
+   */
+  scopeKindColumn?: string;
+  scopeIdColumn?: string;
   columns: DeclaredColumnDeclaration[];
   indexes?: DeclaredIndexDeclaration[];
 };
+
+// ---------------------------------------------------------------------------
+// THE DECLARED-TOOLS CONTRACT (cinatra#3525).
+//
+// The passthrough admits ONE generic dispatch tool. It names no package: the
+// host derives the CALLER and its pinned version from the already-bound run
+// context, and resolves the name the caller asks for against THAT package's own
+// manifest — the list parsed here. Core keeps no table of package names, and a
+// name this list does not carry is refused.
+//
+// THE CONTRACT IS THIS CODE AND THE TESTS BESIDE IT, never a pull request body:
+//
+//   - the list lives at `cinatra.tools`;
+//   - each entry is `{ name, module }`, and nothing else is read;
+//   - `name` is the name the caller passes to the dispatch, in the same
+//     local-identifier vocabulary a declared table's name uses;
+//   - `module` is a PACKAGE-RELATIVE path INSIDE the package's own tree: it
+//     starts `./`, carries no parent-directory segment, is never absolute, and
+//     names a BUILT artifact (`.mjs`/`.cjs`/`.js`) — the same
+//     built-artifacts-only rule `cinatra.serverEntry` already lives under, and
+//     the same no-traversal rule `resolveServerEntryPath` enforces;
+//   - the module's CALLABLE EXPORT is the named export
+//     `EXTENSION_TOOL_MODULE_EXPORT`: one function of ONE argument,
+//     `{ input, ports }`, returning the result (or a promise of it).
+//
+// ADDITIVE, like every field before it: one new key under `cinatra`, no shape
+// change, so the frozen ABI is untouched.
+// ---------------------------------------------------------------------------
+
+/** One raw `cinatra.tools` entry, as an extension author writes it. */
+export type DeclaredToolDeclaration = {
+  /** The name the caller asks the generic dispatch for. */
+  name: string;
+  /** Package-relative path of the module that runs it (`./cinatra/tools/x.mjs`). */
+  module: string;
+};
+
+/** A parsed, validated declared tool. */
+export type DeclaredTool = {
+  name: string;
+  module: string;
+};
+
+/**
+ * The ONE named export a declared tool module exposes. Pinned here so a pack
+ * author and the host read the same name from the same place — the host calls
+ * nothing else, and guesses at no other export.
+ */
+export const EXTENSION_TOOL_MODULE_EXPORT = "extensionTool";
+
+/** Built-artifact extensions a declared module may carry — the `importable`
+ *  class of `classifyServerEntryArtifact`, stated here so this pure parser
+ *  stays free of the loader module. */
+const IMPORTABLE_MODULE_RE = /\.(mjs|cjs|js)$/;
+
+/**
+ * Why one declared module path is refused, or `null` when it is admissible.
+ *
+ * Exported because the HOST applies the identical constraint again when it
+ * resolves the path against the materialized package dir: the declaration gate
+ * and the load gate must never be able to disagree.
+ */
+export function declaredToolModulePathIssue(modulePath: unknown): string | null {
+  if (typeof modulePath !== "string" || modulePath.trim() === "") {
+    return "module must be a non-empty package-relative path";
+  }
+  const raw = modulePath.trim();
+  if (raw.includes("\\")) {
+    return "module must use forward slashes";
+  }
+  if (!raw.startsWith("./")) {
+    return 'module must be package-relative and start with "./"';
+  }
+  const rel = raw.slice(2);
+  if (rel === "") return "module must name a file inside the package";
+  const segments = rel.split("/");
+  if (segments.some((seg) => seg === "..")) {
+    return "module must stay inside the package's own tree — no parent-directory segment";
+  }
+  if (segments.some((seg) => seg === "")) {
+    return "module must not carry an empty path segment";
+  }
+  if (!IMPORTABLE_MODULE_RE.test(rel)) {
+    return "module must name a BUILT artifact (.mjs, .cjs or .js)";
+  }
+  return null;
+}
+
+/**
+ * Parse and validate `cinatra.tools` for one package. Fail-closed, exactly as
+ * `parseDeclaredTables` is: every refusal names what broke, and NOTHING is
+ * dispatchable for a package whose declaration does not parse.
+ *
+ * `undefined` (the common case — an extension that exposes no module) parses to
+ * an empty list, never to an error; a dispatch against an empty list is then
+ * refused by the name check, which is the same answer.
+ */
+export function parseDeclaredTools(raw: unknown, packageName: string): DeclaredTool[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(`[declared-tools] ${packageName}: cinatra.tools must be an array`);
+  }
+  const out: DeclaredTool[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!isPlainObject(entry)) {
+      throw new Error(`[declared-tools] ${packageName}: each declared tool must be an object`);
+    }
+    const name = entry.name;
+    if (typeof name !== "string" || !LOCAL_IDENT_RE.test(name)) {
+      throw new Error(
+        `[declared-tools] ${packageName}: tool name ${JSON.stringify(name)} must match ${LOCAL_IDENT_RE}`,
+      );
+    }
+    if (seen.has(name)) {
+      throw new Error(`[declared-tools] ${packageName}: tool "${name}" is declared twice`);
+    }
+    seen.add(name);
+    const issue = declaredToolModulePathIssue(entry.module);
+    if (issue !== null) {
+      throw new Error(
+        `[declared-tools] ${packageName} tool "${name}": ${issue} ` +
+          `(got ${JSON.stringify(entry.module)})`,
+      );
+    }
+    out.push({ name, module: (entry.module as string).trim() });
+  }
+  return out;
+}

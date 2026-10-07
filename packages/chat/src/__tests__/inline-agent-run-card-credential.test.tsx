@@ -218,6 +218,39 @@ describe("the review-slot reader asks with the host's own credential", () => {
     }
   });
 
+  // cinatra#3046 — and it carries the slot's THIRD fact. Without it the
+  // conversation's card cannot tell a run parked on the review of what it
+  // produced from a run parked on a question, and it drew the question, with a
+  // live Continue on it.
+  it("carries the produced-review park through, on the host's own credential", async () => {
+    render(brokerHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        fetchCalls.push({ url: String(url), init });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ...SEED_BODY,
+            status: "pending_approval",
+            reviewGate: { ref: "lcr-park", awaiting: false, producedReviewPark: true },
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    const read = panelProps.current!.readReviewSlot as () => Promise<unknown>;
+    await expect(read()).resolves.toEqual({
+      ref: "lcr-park",
+      awaiting: false,
+      producedReviewPark: true,
+    });
+  });
+
   it("REFUSED: no reader is handed down, so nothing is ever read", async () => {
     panelProps.current = null;
     render(refusedHost(<InlineAgentRunCard runId={RUN_ID} />));
@@ -226,55 +259,5 @@ describe("the review-slot reader asks with the host's own credential", () => {
     );
     expect(panelProps.current).toBeNull();
     expect(fetchCalls).toHaveLength(0);
-  });
-});
-
-describe("the run's own re-read, after the seed (cinatra#3051)", () => {
-  // The panel keeps the run current on its own tick — that is how a run that
-  // parks for review while the page is open reaches its review without anybody
-  // re-opening the page. That re-read is the SAME route the seed is, so it
-  // travels on the SAME credential, built by the same shared builder.
-  it("is handed down on the broker host, and carries the broker proof", async () => {
-    render(brokerHost(<InlineAgentRunCard runId={RUN_ID} />));
-    await screen.findByTestId("run-panel-stub");
-
-    const read = panelProps.current?.readRunSnapshot as
-      | (() => Promise<unknown>)
-      | undefined;
-    expect(typeof read).toBe("function");
-
-    fetchCalls.length = 0;
-    await read!();
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls[0].url).toBe(SEED_URL);
-    const headers = headersOf(fetchCalls[0].init);
-    expect(headers["authorization"]).toBe("Bearer cit_site");
-    expect(headers["x-cinatra-widget-user-token"]).toBe("cwu_user");
-    expect(fetchCalls[0].init.credentials).toBe("omit");
-  });
-
-  it("is the UNCHANGED first-party request on a cookie host", async () => {
-    render(cookieHost(<InlineAgentRunCard runId={RUN_ID} />));
-    await screen.findByTestId("run-panel-stub");
-
-    const read = panelProps.current?.readRunSnapshot as
-      | (() => Promise<unknown>)
-      | undefined;
-    expect(typeof read).toBe("function");
-
-    fetchCalls.length = 0;
-    await read!();
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls[0].url).toBe(SEED_URL);
-    expect(headersOf(fetchCalls[0].init)["x-cinatra-widget-user-token"]).toBeUndefined();
-    expect(fetchCalls[0].init.credentials).toBeUndefined();
-  });
-
-  it("is never built for a host whose credential was refused", async () => {
-    // The refusal is total: no seed, no re-read, and no panel to hand one to.
-    panelProps.current = null;
-    render(refusedHost(<InlineAgentRunCard runId={RUN_ID} />));
-    await waitFor(() => expect(fetchCalls).toHaveLength(0));
-    expect(panelProps.current).toBeNull();
   });
 });

@@ -254,6 +254,15 @@ export async function importAgentTemplate(
      *  handler, programmatic imports) keep today's explicit-status contract
      *  and land drafts unless they say otherwise. */
     publishAndBind?: boolean;
+    /** cinatra#3493 — require the uploaded package to be MATERIALIZED under the
+     *  agent runtime mount and actually mounted by the runtime before this
+     *  import reports success. Defaults to TRUE: the import screen's File tab
+     *  is the supplied-install road the defect was measured on, and its result
+     *  is registered and flipped live below. A caller that only lands a DRAFT
+     *  on an instance with no runtime configured at all (the MCP ZIP-restore
+     *  primitive) passes false and keeps its previous contract — nothing on
+     *  that road claims the agent is installed and published. */
+    requireRuntimeMount?: boolean;
   },
 ): Promise<{ templateId: string; upserted: boolean; warnings: string[] }> {
   const session = await requireAdminSession();
@@ -261,7 +270,7 @@ export async function importAgentTemplate(
   // the template so /configuration/extensions list views can show "installed by"
   // and supports per-template access-policy gates.
   const creatorId = session.user?.id ?? undefined;
-  const { permissions, publishAndBind, ...coreOptions } = options ?? {};
+  const { permissions, publishAndBind, requireRuntimeMount, ...coreOptions } = options ?? {};
   // cinatra#2616: this admin action is a package-name IDENTITY CLAIM. Thread the
   // session's active organization as the claimant so an import cannot take over
   // a name another organization already holds. A session with no active org
@@ -269,11 +278,32 @@ export async function importAgentTemplate(
   const claimantOrgId =
     (session as { session?: { activeOrganizationId?: string | null } }).session
       ?.activeOrganizationId ?? null;
-  const result = await importAgentTemplateCore(zipBase64, nameOverride, {
+  // cinatra#3493 (convergence round 1) — the supplied install materializes the
+  // runtime files, writes the row and then commits or rolls the mount back.
+  // materialize-agent-package.ts states that a caller of that sequence
+  // serializes it (install-from-package.ts and the boot projection phase both
+  // do); without the lock a concurrent install or upload of the same package
+  // can promote its own directory between this one's materialize and its
+  // rollback, and the rollback then deletes the winner's files. The global
+  // extension-lifecycle lock is re-entrant, so the registration calls further
+  // down that take it again are unaffected.
+  const { withGlobalExtensionLifecycleLock } = await import("./materialize-agent-package");
+  const result = await withGlobalExtensionLifecycleLock(() =>
+    importAgentTemplateCore(zipBase64, nameOverride, {
     ...coreOptions,
     creatorId,
     claimantOrgId,
-  });
+    // cinatra#3493 — THIS action is the supplied-install road: the import
+    // screen's File tab and the `agent_import` primitive both land here with an
+    // archive a person supplied. The uploaded package must be materialized
+    // under the agent runtime mount and actually mounted by the runtime, or the
+    // import fails RIGHT HERE — before the installed-extensions registration
+    // and the go-live flip below could record an agent the runtime cannot
+    // serve, which is exactly what the instance measured: a row claiming
+    // "installed and published" over a runtime with 0 mounted agents.
+    requireRuntimeMount: requireRuntimeMount !== false,
+    }),
+  );
 
   // Record install actor + seed upload-time policy / co-owners via the generic
   // permissions backend. Same shape as the GitHub flow: best-effort, warnings

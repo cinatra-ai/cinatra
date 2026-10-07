@@ -376,6 +376,11 @@ describe("§I — the shipped fallback renderer, drawn inside the region", () =>
       condition: (_f, _s, ctx) => ctx.xRenderer === SHIPPED_GATE.gate.xRenderer,
       renderer: SchemaOnlyFloorRenderer,
       credentialSafe: true,
+      // The SHIPPED entry's own declaration (cinatra#3532): the floor draws its
+      // own Continue, so a page host leaves the send to it — which is what the
+      // run_card case below is about. Mirrored here because this stand-in has
+      // to register what `ensureDefaultFieldRenderersRegistered` registers.
+      drawsOwnSubmit: true,
     });
   }
 
@@ -490,24 +495,11 @@ describe("§I — the shipped fallback renderer, drawn inside the region", () =>
 });
 
 // ---------------------------------------------------------------------------
-// 5. THE MID-RUN GATE — measured against a renderer that HAS a control of its
-//    own, so the arm can actually fail either way.
+// 5. THE MID-RUN GATE IS UNCHANGED — measured against a renderer that HAS a
+//    control of its own, so the arm can actually fail if one is suppressed.
 // ---------------------------------------------------------------------------
-//
-// THIS ARM CHANGED SIDES, and the reason is a measurement (cinatra#3051, fix
-// leg 9). It used to pin the mid-run screen as UNCHANGED on every host, because
-// the setup takeover was the only half of §I this card had moved and the mid-run
-// hole was named in the source rather than closed. The ninth proof round then
-// graded a mid-run selection step answered inside the widget and measured the
-// consequence: the card's own Continue outside the region AND the renderer's own
-// send inside it — two sends in one conversation, the second of them the primary
-// input §I forbids, drawn over the chat box it is supposed to be subordinate to.
-//
-// So the rule now reaches both gate shapes, and the split is by HOST rather than
-// by gate: a conversation host withholds the renderer's own send on a mid-run
-// gate too, and the page hosts — which have no chat box to be subordinate to —
-// keep the shipped screen exactly as it was.
-describe("§I — the mid-run gate's send is the card's inside a conversation", () => {
+
+describe("§I — the mid-run gate keeps the shape it already had, on every host", () => {
   /** A mid-run renderer that draws its own control and reports the props it was
    *  given, so "unchanged" is a measurement rather than a fixture that could not
    *  have noticed. */
@@ -530,45 +522,25 @@ describe("§I — the mid-run gate's send is the card's inside a conversation", 
     });
   }
 
-  async function mountMidRunOn(host: LifecycleCardHost) {
-    registerMidRunWithItsOwnControl();
-    const mounted = mountOn(host);
-    await settle();
-    const card = await waitFor(() => {
-      const found = mounted.container.querySelector<HTMLElement>(
-        '[data-lifecycle-card="agent_hitl_screen"]',
-      );
-      if (!found) throw new Error(`no card on ${host}`);
-      return found;
-    });
-    return { card, region: card.querySelector<HTMLElement>(FIELDS_REGION)! };
-  }
-
-  it.each(SUBORDINATE_HOSTS)(
-    "%s: the renderer's own send is withheld and the card's Continue is the one send",
+  it.each([...SUBORDINATE_HOSTS, ...PRIMARY_HOSTS])(
+    "%s: the renderer keeps its own control and the card keeps its own Continue",
     async (host) => {
-      const { card, region } = await mountMidRunOn(host);
+      registerMidRunWithItsOwnControl();
+      const mounted = mountOn(host);
+      await settle();
+      const card = await waitFor(() => {
+        const found = mounted.container.querySelector<HTMLElement>(
+          '[data-lifecycle-card="agent_hitl_screen"]',
+        );
+        if (!found) throw new Error(`no card on ${host}`);
+        return found;
+      });
+      const region = card.querySelector<HTMLElement>(FIELDS_REGION)!;
+      // NOT SUPPRESSED. The takeover is the SETUP gate's; a mid-run screen is
+      // not this fix's to change, and the prop it receives says so.
       expect(
         region.querySelector('[data-testid="mid-run-body"]')?.getAttribute("data-hide-submit"),
-        "the mid-run renderer is told the card owns the send",
-      ).toBe("true");
-      expect(
-        region.querySelector('[data-testid="renderer-own-control"]'),
-        "no send affordance inside the subordinate field",
-      ).toBeNull();
-      expect(region.getAttribute("data-send-affordance"), "the takeover is declared").toBe("card");
-      expect(card.querySelectorAll(CONTINUE), "the card's own Continue").toHaveLength(1);
-      expect(card.querySelectorAll("button"), "one send on the card, and it is that one").toHaveLength(1);
-    },
-  );
-
-  it.each(PRIMARY_HOSTS)(
-    "%s: with no chat box to be subordinate to, the renderer keeps its own control",
-    async (host) => {
-      const { card, region } = await mountMidRunOn(host);
-      expect(
-        region.querySelector('[data-testid="mid-run-body"]')?.getAttribute("data-hide-submit"),
-        "the page hosts are not reached by the rule",
+        "the mid-run renderer is not told to hide its submit",
       ).toBe("false");
       expect(
         region.querySelector('[data-testid="renderer-own-control"]'),

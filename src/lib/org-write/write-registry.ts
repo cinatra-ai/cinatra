@@ -1149,20 +1149,6 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
   },
   {
     module: "src/lib/widget-user-auth.ts",
-    exportName: "renewUserWidgetToken",
-    capability: "org.settings",
-    orgIdExtractor: "presented token row's org (copied verbatim onto the successor)",
-    storageReferences: ["widget_user_tokens"],
-    cascadeOwnership: "inert-history",
-    importBanned: false,
-    importBanExemption: {
-      issue: 1939,
-      reason:
-        "site-widget login flow: re-issues the browser-held bearer from the stored row it replaces, no app session — needs the connect-surface authority-minting decision",
-    },
-  },
-  {
-    module: "src/lib/widget-user-auth.ts",
     exportName: "consumeUserWidgetToken",
     capability: "org.settings",
     orgIdExtractor: "stored token row's org (validation consume + expiry sweep)",
@@ -1247,6 +1233,27 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     exportName: "bindThreadContainerIfUnbound",
     capability: "content.write",
     orgIdExtractor: "thread row's org_id (container bind, re-asserted in the UPDATE predicate)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
+    // cinatra#2815 S3 (epic #2812): the SET-ONCE assignment-scope freeze. A
+    // conversation's applicable scopes are decided at creation and never
+    // updated; this writer exists because a second creator (the legacy chat
+    // mirror) makes the row without them, so a first turn records what was
+    // missed. The statement admits a NULL column only, so it can never
+    // re-point a live conversation. Same family/axis as its siblings: same
+    // table, same nullable org axis, same 1939 exemption.
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "freezeAssistantThreadAssignmentScopeIfAbsent",
+    capability: "content.write",
+    orgIdExtractor: "caller-supplied org, frozen into the payload (set-once, NULL-only predicate)",
     storageReferences: ["assistant_threads"],
     cascadeOwnership: "inert-history",
     importBanned: false,

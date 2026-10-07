@@ -131,32 +131,8 @@ beforeAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await admin.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (
-      head !== "CREATE" &&
-      head !== "ALTER " &&
-      head !== "DROP T" &&
-      head !== "DROP S"
-    )
-      continue;
-    // Skip the GLOBAL public."user" slug trigger (not schema-local): two
-    // bootstrapping integration tests racing under file-parallelism collide on it.
-    // Safe for the RUN_OWNER seed below: that trigger is AFTER UPDATE OF username,
-    // so a plain INSERT never needs it.
-    if (qy.text.includes("user_slug_move_trg")) continue;
-    try {
-      await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Cross-schema FKs to public."user"/"organization" (Better Auth) are not
-      // provisioned in this app-schema-only fixture — tolerate their absence
-      // ("does not exist"); also tolerate GLOBAL public objects (e.g. the
-      // user_slug_move_trg trigger on public."user") a sibling integration test
-      // already created in this DB ("already exists").
-      if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized =
     true;

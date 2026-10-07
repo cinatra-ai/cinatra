@@ -70,4 +70,67 @@ describe("recordDevVersionForLoadedPackage (dev-watcher version recording)", () 
       ),
     ).resolves.toBeUndefined();
   });
+  // cinatra#3788: the record now REFUSES to rewrite an uploaded or a
+  // registry-installed row's provenance and reports each refusal. The watcher
+  // has to make that visible, at parity with the line a connector refusal
+  // produces, or a skipped record is silent in the scan output.
+  it("logs one skip line per skipped row, naming the package", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    recordDevExtensionVersionMock.mockResolvedValueOnce({
+      ok: true,
+      updated: 0,
+      version: "0.0.0-dev.abc1234",
+      skipped: [
+        {
+          id: "ext-upload",
+          kind: "agent",
+          sourceType: "local",
+          hasContentDigest: true,
+          reason: "the row carries supplied (uploaded) provenance",
+        },
+        {
+          id: "ext-reg",
+          kind: "agent",
+          sourceType: "verdaccio",
+          hasContentDigest: false,
+          reason: "the row carries registry provenance",
+        },
+      ],
+    });
+    await recordDevVersionForLoadedPackage(
+      { kind: "agent", packageName: "@cinatra-ai/foo-agent" },
+      "/tmp/foo",
+    );
+    const lines = info.mock.calls.map((c) => String(c[0]));
+    const skips = lines.filter((l) => l.includes("dev-version record skipped"));
+    expect(skips).toHaveLength(2);
+    for (const line of skips) {
+      expect(line).toContain("@cinatra-ai/foo-agent");
+    }
+    expect(skips[0]).toContain("ext-upload");
+    expect(skips[0]).toContain("supplied");
+    expect(skips[1]).toContain("ext-reg");
+    expect(skips[1]).toContain("registry");
+    info.mockRestore();
+  });
+
+  it("logs nothing extra and still returns when the record skipped no row", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    recordDevExtensionVersionMock.mockResolvedValueOnce({
+      ok: true,
+      updated: 1,
+      version: "0.0.0-dev.abc1234",
+      skipped: [],
+    });
+    await expect(
+      recordDevVersionForLoadedPackage(
+        { kind: "agent", packageName: "@cinatra-ai/foo-agent" },
+        "/tmp/foo",
+      ),
+    ).resolves.toBeUndefined();
+    expect(
+      info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("dev-version record skipped")),
+    ).toEqual([]);
+    info.mockRestore();
+  });
 });

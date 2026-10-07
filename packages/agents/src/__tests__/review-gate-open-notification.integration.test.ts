@@ -50,11 +50,10 @@ import {
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import {
   autoReviewTaskId,
-  batchPartitionReviewTaskId,
   isVerificationReopenTaskId,
   repairSuccessorReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
-import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
+import { sealBatch } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 
@@ -199,17 +198,8 @@ beforeAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await admin.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    if (qy.text.includes("user_slug_move_trg")) continue;
-    try {
-      await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
@@ -255,9 +245,9 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notifies (real store)", () => {
-  it("BATCH: each fresh partition gate notifies EXACTLY once — one per gate, not per target; a re-sweep never re-notifies", async () => {
-    // 60 durable artifacts from ONE producing run → the batch path, partitioned
-    // into ⌈60/50⌉ = 2 gates. Before this change the whole production was silent.
+  it("BATCH: each fresh singleton gate notifies EXACTLY once — one per artifact; a re-sweep never re-notifies", async () => {
+    // Approved review drawing §I.3: 60 artifacts from one production open 60
+    // singleton reviews. Notification identity remains once per actual gate.
     const runId = `run-batch-${randomUUID()}`;
     const N = 60;
     const events: ArtifactProducedEvent[] = [];
@@ -274,8 +264,8 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
     const summary = await orch.sweepReviewOrchestration({ limit: 200 });
     expect(summary.batchesCoalesced).toBe(1);
 
-    // The partition task ids, recomputed from the SAME pure seal + partition the
-    // store uses, are exactly the keys the notifier was driven with.
+    // Seal membership remains complete; each exact produced event owns its
+    // review task rather than sharing an aggregate partition task.
     const sealed = sealBatch({
       kind: "explicit",
       targets: events.map((e) => ({
@@ -284,30 +274,32 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
       })),
     });
     if (!sealed.ok) throw new Error("seal failed");
-    const partitions = partitionBatchTargets(sealed.targets);
-    expect(partitions.length).toBe(Math.ceil(N / MAX_BATCH_PARTITION)); // 2
-    const expectedTaskIds = new Set(partitions.map((p) => batchPartitionReviewTaskId(p)));
+    expect(sealed.targets).toHaveLength(N);
+    const expectedTaskIds = new Set(events.map(e => autoReviewTaskId(e.eventId)));
 
-    // ONE notification per emitted GATE — 2, not 60. This is the assertion the
-    // issue's "one gate can hold up to 50 targets" clause is about.
+    // Every fresh singleton notifies exactly once, with no extra run rows.
     const mine = openedFor(runId);
-    expect(mine.length).toBe(partitions.length);
-    expect(summary.gatesCreated).toBe(partitions.length);
+    expect(mine).toHaveLength(N);
+    expect(summary.gatesCreated).toBe(N);
     expect(new Set(mine.map((o) => o.reviewTaskId))).toEqual(expectedTaskIds);
 
     // The key each open dispatched under IS the gate's own (run, task) — so the
     // resolve-time clear, which is keyed the same way, can find the row.
     const gateRows = await pool(
-      `SELECT id, review_task_id FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
+      `SELECT id, review_task_id, pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
       [runId],
     );
-    const gates = gateRows.rows as Array<{ id: string; review_task_id: string }>;
+    const gates = gateRows.rows as Array<{ id: string; review_task_id: string; pinned_targets: Array<{ artifactId: string; representationRevisionId: string }> }>;
+    expect(gates).toHaveLength(N);
+    for (const event of events) {
+      expect(gates.find(g => g.review_task_id === autoReviewTaskId(event.eventId))?.pinned_targets).toEqual([{ artifactId: event.artifactId, representationRevisionId: event.representationRevisionId }]);
+    }
     expect(new Set(gates.map((g) => g.review_task_id))).toEqual(
       new Set(mine.map((o) => o.reviewTaskId)),
     );
 
-    // IDEMPOTENCY: re-emit every member + re-sweep → the same frozen partitions
-    // re-emit idempotently, so NOT ONE further notification is dispatched.
+    // IDEMPOTENCY: re-emit every member + re-sweep → the same singleton tasks
+    // re-emit idempotently, so no further notification is dispatched.
     const before = opened.length;
     for (const e of events) await outboxStore.emitArtifactProduced(e, dbMod.db);
     const replay = await orch.sweepReviewOrchestration({ limit: 200 });
@@ -315,7 +307,7 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
     expect(opened.length).toBe(before);
   });
 
-  it("BATCH: resolving a partition gate clears the row it opened — same (run, task) key, through a real terminal decision", async () => {
+  it("BATCH: resolving one singleton clears only the row it opened — same (run, task) key, through a real terminal decision", async () => {
     const runId = `run-batch-resolve-${randomUUID()}`;
     const events: ArtifactProducedEvent[] = [];
     for (let i = 0; i < 3; i++) {
@@ -330,7 +322,8 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
     await orch.sweepReviewOrchestration({ limit: 50 });
 
     const mine = openedFor(runId);
-    expect(mine.length).toBe(1); // 3 targets ⇒ ONE partition ⇒ ONE gate ⇒ ONE row
+    expect(mine).toHaveLength(events.length);
+    expect(new Set(mine.map(o => o.reviewTaskId))).toEqual(new Set(events.map(e => autoReviewTaskId(e.eventId))));
     const openKey = mine[0];
 
     // A REAL terminal decision on that gate (not a raw UPDATE), so the
@@ -362,6 +355,13 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
       runId: openKey.runId,
       reviewTaskId: openKey.reviewTaskId,
     });
+    expect(resolved.filter(r => r.runId === runId)).toEqual([openKey]);
+    for (const event of events) {
+      const sibling = await gateStore.readReviewGate(runId, autoReviewTaskId(event.eventId));
+      expect(sibling?.pinnedTargets).toEqual([{ artifactId: event.artifactId, representationRevisionId: event.representationRevisionId }]);
+      expect(sibling?.status).toBe(sibling?.reviewTaskId === openKey.reviewTaskId ? "resolved" : "pending");
+    }
+
   });
 
   it("REPAIR PIN: the successor gate notifies once, AFTER the finalize transaction commits; a re-drive does not re-notify", async () => {

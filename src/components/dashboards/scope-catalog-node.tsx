@@ -26,12 +26,20 @@ import "server-only";
 import type { ReactElement } from "react";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
-import type {
-  CatalogSurface,
-  ScopeCatalogSource,
+import {
+  WORKSPACE_CATALOG_WORDS,
+  type CatalogSurface,
+  type ScopeCatalogSource,
 } from "@/lib/dashboards/installed-catalog-contract";
-import { addInstalledCatalogDashboardAction } from "@/lib/dashboards/installed-catalog-actions";
-import { listInstalledCatalogTemplates } from "@/lib/dashboards/installed-catalog-read";
+import {
+  addInstalledCatalogDashboardAction,
+  addWorkspaceCatalogDashboardAction,
+} from "@/lib/dashboards/installed-catalog-actions";
+import {
+  listInstalledCatalogTemplates,
+  listWorkspaceCatalogTemplates,
+  type WorkspaceCatalogMembership,
+} from "@/lib/dashboards/installed-catalog-read";
 
 import { ScopeCatalogSection } from "./scope-catalog-section";
 
@@ -58,4 +66,40 @@ export async function buildScopeCatalogNode(args: {
     add: addInstalledCatalogDashboardAction.bind(null, args.surface),
   };
   return <ScopeCatalogSection templates={templates} source={source} />;
+}
+
+/**
+ * The WORKSPACE catalog section (cinatra#2811, item 4), or `null` when the
+ * federation yields nothing.
+ *
+ * The same two load-bearing steps as the tenant builder above, with one
+ * difference: there is no scope to bind. The workspace read is a federation over
+ * the viewer's member organizations, and the write re-resolves those
+ * memberships from the live session itself, so the action takes ONLY the opaque
+ * template handle and no bound descriptor exists to replay.
+ *
+ * It renders the SAME `ScopeCatalogSection` the tenant tabs render, and hands it
+ * the amended drawing's words for THIS surface (`WORKSPACE_CATALOG_WORDS`,
+ * §IX.1's third section): the drawn heading, the drawn helper line, and a row
+ * note naming the package and the kind it contributes. The tenant builder above
+ * hands none, so the tenant tabs keep the words they landed with.
+ */
+export async function buildWorkspaceCatalogNode(args: {
+  readonly userId: string;
+  readonly memberships: readonly WorkspaceCatalogMembership[];
+}): Promise<ReactElement | null> {
+  if (!args.userId || args.memberships.length === 0) return null;
+  const templates = await listWorkspaceCatalogTemplates({
+    userId: args.userId,
+    memberships: args.memberships,
+  });
+  if (templates.length === 0) return null;
+  const source: ScopeCatalogSource = { add: addWorkspaceCatalogDashboardAction };
+  return (
+    <ScopeCatalogSection
+      templates={templates}
+      source={source}
+      words={WORKSPACE_CATALOG_WORDS}
+    />
+  );
 }

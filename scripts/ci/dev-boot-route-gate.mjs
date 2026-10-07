@@ -34,10 +34,34 @@
 //      `unrouted` verdict, the #3194 signature and nothing else — it replaces the
 //      poisoned boot with a fresh one, within a small boot budget, and says so.
 //
-// THE BOUND IS NOT WIDENED, HERE OR ANYWHERE. #3194 is explicit that a wider
-// readiness bound would not have turned one of the recorded reds green and would
-// hide the exact signal the bound exists to surface. This process spends the same
-// 120 s and then does something about it.
+// THE BOUND FOR THE `unrouted` VERDICT IS NOT WIDENED, HERE OR ANYWHERE. #3194 is
+// explicit that a wider readiness bound would not have turned one of the reds it
+// recorded green and would hide the exact signal the bound exists to surface, and
+// that is still true of every one of them: in those jobs the probed route was
+// NEVER announced as compiling — the only announcements were `instrumentation
+// Node.js` and `/_not-found/page`, the page tree rendering about three seconds
+// after the first probe request because no handler was routable at that path.
+// A boot of that shape still spends the same 120 s here, still earns the same
+// `unrouted` verdict, and is still replaced.
+//
+// WHAT cinatra#3553 ADDS IS A BOUNDED EXTENSION ONLY AN ANNOUNCED, UNFINISHED
+// COMPILE CAN DRAW, and the readings that separate it from the above come from
+// one job's own logs. On a GREEN boot the probed capabilities route announced
+// `Compiling /api/assistants/chat/capabilities ...` and answered
+// `401 in 37.6s (next.js: 37.5s, ...)` on its FIRST attempt — the gate waited the
+// cold compile out. On the RED boot the same route announced the same compile and
+// its first request was ended at exactly 60.0 s — `404 in 60s (proxy.ts: 3ms)`,
+// with no `next.js:` and no `application-code:` segment, the shape of a request
+// whose client went away — by this file's OWN undeclared transport sub-cap, after
+// which that path served the not-found document for the rest of the process.
+// That sub-cap is gone (see `requestTimeoutMs`), and a route the runtime has
+// announced it is compiling draws ONE further bounded window per boot instead of
+// being called unrouted. An absent announcement buys nothing at all.
+//
+// THE ANNOUNCEMENT IS READ OFF THE CHILD'S OWN STDOUT, which this process already
+// owns and already forwards verbatim — the evidence trail every investigation of
+// this failure has needed is exactly the signal, so nothing new is asked of the
+// development server and its log reaches the job log unchanged.
 //
 // WHY A REBOOT IS THE MITIGATION AND NOT A PATCH. The poisoning is not in this
 // repository's code: the route file is on disk and unchanged, and the same commit
@@ -63,9 +87,23 @@ import {
   ROUTE_READY_BOUND_MS,
   bootProbeFailure,
   parseRouteSpec,
+  parseRuntimeCompileAnnouncement,
   probeRouteUntilAnswered,
   shouldRebootAfter,
 } from "../lib/dev-boot-route-probe.mjs";
+
+/**
+ * THE ONE FURTHER WINDOW A BOOT MAY DRAW, and only for a route the runtime has
+ * announced it is compiling (cinatra#3553).
+ *
+ * PER BOOT, NOT PER ROUTE, and at most once: a boot that spends it on its first
+ * route probes its second on the plain bound. It is sized at the readiness bound
+ * itself because that is the measurement available — the green boot's cold
+ * compile of the same route took 37.6 s and the red one was still running at
+ * 60.0 s, so the honest statement is "roughly another bound", not a number
+ * derived from a compile that never finished.
+ */
+export const BOOT_COMPILE_EXTENSION_MS = 120_000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -169,8 +207,25 @@ async function waitForHealth(url, boundMs, { isChildAlive }) {
   return { ok: false, attempts, reason: `no 200 within ${boundMs}ms` };
 }
 
+/**
+ * ONE ATTEMPT'S TRANSPORT BOUND: WHAT IS LEFT OF THE READINESS BOUND, AND NOTHING
+ * ELSE (cinatra#3553).
+ *
+ * This used to be `Math.min(remainingMs, 60_000)` — a second, tighter bound that
+ * no comment in this file or in the probe module declared, and that contradicted
+ * the probe module's own contract ("THE BOUND IS HANDED TO THE REQUEST"). It is
+ * what ended the recorded red boot's first capabilities request at exactly 60.0 s
+ * while the runtime was still compiling the route it had just announced; every
+ * answer after that abort was the settled not-found document. The floor of 1 is
+ * the only narrowing left, because an abort signal of 0 ms would fire before the
+ * request is made.
+ */
+export function requestTimeoutMs(remainingMs) {
+  return Math.max(1, remainingMs);
+}
+
 /** One route's bounded readiness probe against the real server. */
-async function probeRoute(appUrl, route, boundMs, onAttempt) {
+async function probeRoute(appUrl, route, boundMs, onAttempt, extension = {}) {
   const url = `${appUrl}${route.path}`;
   return probeRouteUntilAnswered(
     async (remainingMs) => {
@@ -184,14 +239,71 @@ async function probeRoute(appUrl, route, boundMs, onAttempt) {
         headers: { "content-type": "application/json", origin: appUrl },
         body: route.method === "GET" || route.method === "HEAD" ? undefined : "{}",
         redirect: "manual",
-        signal: AbortSignal.timeout(Math.max(1, Math.min(remainingMs, 60_000))),
+        signal: AbortSignal.timeout(requestTimeoutMs(remainingMs)),
       });
       const contentType = response.headers.get("content-type");
       await response.arrayBuffer().catch(() => undefined);
       return { status: response.status, contentType };
     },
-    { boundMs, onAttempt },
+    {
+      boundMs,
+      onAttempt,
+      compileAnnounced: extension.compileAnnounced,
+      extensionMs: extension.extensionMs,
+    },
   );
+}
+
+/**
+ * WHAT THE DEVELOPMENT RUNTIME HAS ANNOUNCED IT IS COMPILING, read off the child's
+ * own stdout (cinatra#3553).
+ *
+ * Chunk boundaries are not line boundaries, so a partial trailing line is held
+ * back until the rest of it arrives; a path is remembered once and forever for
+ * the boot that announced it, because the announcement is evidence the route
+ * EXISTS and that does not stop being true while it compiles.
+ *
+ * EACH STREAM IS FRAMED ON ITS OWN. stdout and stderr are two independent
+ * streams whose chunks interleave in this process in an order neither of them
+ * chose, so a single partial-line buffer shared between them would both LOSE a
+ * real announcement split across two stdout chunks with a stderr line in between
+ * and SYNTHESISE one neither stream ever printed — the second of which would
+ * hand an unrouted boot an extension it never earned.
+ *
+ * AND A LINE HAS A CEILING. Progress output that never sends a newline would
+ * otherwise grow this buffer for the life of the boot. A line past the ceiling
+ * cannot be an announcement, so it is discarded — and so is the rest of it, up
+ * to its newline, rather than being re-read as if it were a line of its own.
+ */
+export const COMPILE_READER_MAX_LINE_CHARS = 64 * 1024;
+
+export function createCompileAnnouncementReader() {
+  const announced = new Set();
+  /** The unfinished trailing line of each stream, and whether it is being discarded. */
+  const partials = new Map();
+  const discarding = new Set();
+  return {
+    write(chunk, stream = "stdout") {
+      const lines = ((partials.get(stream) ?? "") + String(chunk)).split(/\r?\n/);
+      const tail = lines.pop() ?? "";
+      for (const line of lines) {
+        if (discarding.has(stream)) {
+          // The tail of a line that was already past the ceiling.
+          discarding.delete(stream);
+          continue;
+        }
+        const path = parseRuntimeCompileAnnouncement(line);
+        if (path) announced.add(path);
+      }
+      if (tail.length > COMPILE_READER_MAX_LINE_CHARS) {
+        partials.set(stream, "");
+        discarding.add(stream);
+        return;
+      }
+      partials.set(stream, tail);
+    },
+    has: (path) => announced.has(path),
+  };
 }
 
 /** Is anything listening on this port right now? */
@@ -403,6 +515,23 @@ async function main() {
     });
     child.stdout?.pipe(process.stdout);
     child.stderr?.pipe(process.stderr);
+    // TEED, NOT INTERCEPTED: the two pipes above are untouched, so what reaches
+    // the job log is byte-identical; these listeners only read the compile
+    // announcements out of the same bytes. BOTH streams are read because the
+    // announcement is the runtime's to place and nothing here should depend on
+    // which one it chose, and `parseRuntimeCompileAnnouncement` is strict enough
+    // that ordinary output on either stream can never be read as one
+    // (cinatra#3553).
+    //
+    // ONE READER PER BOOT, CAPTURED BY THESE LISTENERS: what a replaced boot
+    // announced says nothing about the boot that replaced it, and a listener
+    // still attached to the old child's stream when a late chunk arrives must
+    // write it into the reader of the boot that produced it, never into this
+    // one's.
+    const compileReader = createCompileAnnouncementReader();
+    let bootCompileExtensionLeftMs = BOOT_COMPILE_EXTENSION_MS;
+    child.stdout?.on("data", (chunk) => compileReader.write(chunk, "stdout"));
+    child.stderr?.on("data", (chunk) => compileReader.write(chunk, "stderr"));
     let childExited = false;
     child.on("exit", () => {
       childExited = true;
@@ -425,16 +554,36 @@ async function main() {
     let failure = "";
     for (const route of options.routes) {
       const name = `${route.method} ${route.path}`;
-      const result = await probeRoute(appUrl.origin, route, options.routeBoundMs, (attempt) => {
-        if (attempt.classification === "answered") return;
+      const result = await probeRoute(
+        appUrl.origin,
+        route,
+        options.routeBoundMs,
+        (attempt) => {
+          if (attempt.classification === "answered") return;
+          say(
+            `boot ${bootIndex + 1}: ${name} not routable after ${attempt.attempts} attempt(s) — ` +
+              (attempt.status === null
+                ? `no response (${attempt.lastError ?? "unknown error"})`
+                : `HTTP ${attempt.status}${attempt.contentType ? ` (${attempt.contentType})` : ""}`) +
+              ` [${attempt.classification}]`,
+          );
+        },
+        {
+          // THIS ROUTE'S OWN PATH, never any other. `/_not-found/page` is what the
+          // runtime announces BECAUSE nothing was routable at the probed path — the
+          // #3194 signature itself — so it must buy that path nothing.
+          compileAnnounced: () => compileReader.has(route.path),
+          extensionMs: bootCompileExtensionLeftMs,
+        },
+      );
+      if (result.compileExtensionMs > 0) {
+        bootCompileExtensionLeftMs -= result.compileExtensionMs;
         say(
-          `boot ${bootIndex + 1}: ${name} not routable after ${attempt.attempts} attempt(s) — ` +
-            (attempt.status === null
-              ? `no response (${attempt.lastError ?? "unknown error"})`
-              : `HTTP ${attempt.status}${attempt.contentType ? ` (${attempt.contentType})` : ""}`) +
-            ` [${attempt.classification}]`,
+          `boot ${bootIndex + 1}: ${name} has an ANNOUNCED, UNFINISHED compile — the runtime said ` +
+            `it is compiling this very path, so this boot draws its one ` +
+            `${result.compileExtensionMs}ms extension rather than calling the route unrouted.`,
         );
-      });
+      }
       if (result.answered) {
         say(
           `boot ${bootIndex + 1}: ${name} ready — HTTP ${result.status}` +

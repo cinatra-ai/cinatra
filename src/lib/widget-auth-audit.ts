@@ -26,14 +26,6 @@ export type WidgetAuthAuditEvent =
   | "code_issued"
   | "redeem_success"
   | "redeem_failure"
-  // cinatra#3051 — THE RENEWAL of an already-issued browser-held bearer. Its
-  // OWN pair rather than more of the redeem series, because the two answer
-  // different questions: the redeem trail counts how often somebody SIGNED IN,
-  // and this one counts how long a column stayed OPEN. Folded together, a page
-  // left open all afternoon would read as a burst of sign-ins, and neither
-  // number could be recovered from the other.
-  | "renew_success"
-  | "renew_failure"
   // cinatra#408 stream-side dual-token validation (CHILD 3). The stream route
   // emits exactly one of these per per-user widget request: an AUTHORIZED event
   // when the `cwu_` validates and a per-user OBO override is minted (this marks
@@ -61,6 +53,11 @@ export type WidgetAuthAuditEvent =
   // not authorize a run — the turn's own dual-token decision above is the
   // dispatch record). Reason-coded/scrubbed like its siblings; never a secret.
   | "assistant_chat_capabilities_broker_advertised"
+  // cinatra#3715 — the same READ refused: emitted once at every fail-closed rung
+  // of that broker branch, reason-coded with the refusal point (and, for the two
+  // token consumes, the consume's own reason code) — never a token, a hash or a
+  // header value. The caller still receives the one generic 401.
+  | "assistant_chat_capabilities_broker_rejected"
   // cinatra#2574 (epic #2564 S8a) — the authorization DECISION for a widget
   // LIFECYCLE READ. Emitted by the one actor-construction seam every widget
   // lifecycle read goes through: authorized once the `cwu_` proved the

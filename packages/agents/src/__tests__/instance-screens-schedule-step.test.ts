@@ -167,7 +167,14 @@ describe("runDetailOpensOnSchedule — which step the surface opens on", () => {
 describe("the screen composes THROUGH the step, not beside it", () => {
   it("hands the rail and the run detail to the schedule step, with the first paint it derived", () => {
     expect(SCREEN_SRC).toMatch(/rail=\{railNode\}/);
-    expect(SCREEN_SRC).toMatch(/detail=\{detailNode\}/);
+    // THE NAME MOVED WITH cinatra#3243, AND ONLY THE NAME: the frame is handed
+    // the very node this screen composes, through `runDetailFallback` -- that
+    // node wherever it draws anything, and `null` where its every child is
+    // withheld, so that no row can open onto an empty column. The ratified
+    // drawing, `specs/app-artifact-review.html` section I: "Selecting a step
+    // opens that step's page in the run detail, and the page carries the one
+    // card of the step it belongs to."
+    expect(SCREEN_SRC).toMatch(/detail=\{runDetailFallback\}/);
     // The screen derives its first paint through the whole ladder since
     // cinatra#2790 (S9f) — `runDetailInitialStep`, which composes this
     // predicate — so the pin follows the composition rather than the spelling

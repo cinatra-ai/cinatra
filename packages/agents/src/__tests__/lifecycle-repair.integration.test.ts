@@ -144,6 +144,19 @@ function mkChangesRequested(ev: ArtifactProducedEvent, gateId: string, over: Par
   };
 }
 
+// #3944: preserve the already-minted historical gate and its original pins.
+// The public NEW mint must continue refusing a combined target set.
+async function seedHistoricalGate(runId: string, reviewTaskId: string, targets: BatchTarget[]) {
+  const gateId = randomUUID();
+  await pool(`INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+    (id, run_id, org_id, review_task_id, status, pinned_targets)
+    VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`, [gateId, runId, ORG, reviewTaskId, JSON.stringify(targets)]);
+  const replay = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+  expect(replay).toMatchObject({ gateId, idempotent: true });
+  expect((await gateStore.readReviewGate(runId, reviewTaskId))?.pinnedTargets).toEqual(targets);
+  return replay;
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -154,17 +167,8 @@ beforeAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await admin.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    if (qy.text.includes("user_slug_move_trg")) continue;
-    try {
-      await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
@@ -501,12 +505,7 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     // (events left pending + unlinked — the exact window S1 documented).
     const frozenPartitions = partitionBatchTargets(epoch.membership);
     expect(frozenPartitions).toHaveLength(2); // 50 + 5
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId: batchPartitionReviewTaskId(frozenPartitions[0]),
-      targets: frozenPartitions[0],
-    });
+    const historical = await seedHistoricalGate(runId, batchPartitionReviewTaskId(frozenPartitions[0]), frozenPartitions[0]);
 
     // A NEW revision arrives for the SAME production BEFORE the reconciling sweep.
     const newer1 = await produce("document", { producerRunId: runId, destinationClass: "external_publish", artifactId: `seal-${runId}-new1` });
@@ -516,12 +515,22 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     // NOT the grown pending set (57).
     await orch.sweepReviewOrchestration();
 
-    // Every BATCH gate for the run pins ONLY the frozen membership (no overlap with
-    // the new revisions); exactly ceil(55/50) = 2 partition gates.
+    // Grandfather the already-minted50-target gate, then mint singleton reviews
+    // only for the five unminted frozen members. No new arrival joins this seal.
     const gates = await gatesForRun(runId);
     const batchGates = gates.filter((g) => isBatchAutoReviewTaskId(g.reviewTaskId));
-    expect(batchGates).toHaveLength(2);
-    const pinnedIds = new Set(batchGates.flatMap((g) => g.pinned.map((p) => p.artifactId)));
+    expect(batchGates).toHaveLength(1); // the existing50-pin gate is never split
+    expect(batchGates[0]).toEqual({ id: historical.gateId, reviewTaskId: batchPartitionReviewTaskId(frozenPartitions[0]), pinned: frozenPartitions[0] });
+    expect(gates).toHaveLength(1 + frozenPartitions[1].length);
+    for (const target of frozenPartitions[1]) {
+      const eventId = producedEventId(target.artifactId, target.representationRevisionId);
+      const singleton = gates.find(g => g.reviewTaskId === autoReviewTaskId(eventId));
+      expect(singleton?.pinned).toEqual([target]);
+      expect((await eventRow(eventId))?.continuation_address).toBe(singleton!.id);
+    }
+    expect(gates.flatMap(g => g.pinned)).toHaveLength(N);
+    expect(new Set(gates.flatMap(g => g.pinned.map(t => `${t.artifactId} ${t.representationRevisionId}`)))).toEqual(new Set(members.map(t => `${t.artifactId} ${t.representationRevisionId}`)));
+    const pinnedIds = new Set(gates.flatMap(g => g.pinned.map(p => p.artifactId)));
     expect(pinnedIds.size).toBe(N);
     expect(pinnedIds.has(newer1.artifactId)).toBe(false);
     expect(pinnedIds.has(newer2.artifactId)).toBe(false);
@@ -563,7 +572,7 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     const { epoch } = await repairStore.sealBatchEpoch({ orgId: ORG, producerRunId: runId, candidateMembers: membersM });
     const [partition] = partitionBatchTargets(epoch.membership);
     const partTask = batchPartitionReviewTaskId(partition);
-    const emitted = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: partTask, targets: partition });
+    const emitted = await seedHistoricalGate(runId, partTask, partition);
     await pool(
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET status='processed', continuation_address=$2 WHERE event_id=$1`,
       [a.eventId, emitted.gateId],

@@ -38,27 +38,22 @@
 // outline Button. The four `*/pending-with-suggestions` captures are the only
 // entries that carry a chip, and the ONLY bytes that moved in them are those
 // two class names — the painted colour is unchanged and no other byte of DOM
-// differs. An entry in the fixture is re-taken only when the surface it
-// draws changes; the capture road fills whatever entries are still missing
-// and never overwrites one already committed, so every untouched entry
-// stays its earlier capture, byte for byte.
+// differs. Every other entry is still its earlier capture, byte for byte.
+
+// TWELVE ENTRIES WERE REGENERATED ON PURPOSE (cinatra#3046). §I asks a resolved
+// gate to stay as read-only history that "records how it was settled", and the
+// header said "Review requested" on every settled reading — the request, still
+// present tense, over the outcome written further down the card in a second
+// voice. The header now reads the outcome through `reviewGateHeaderTitle`, the
+// same closed set the settled line reads, so the two cannot drift.
 //
-// TWENTY-EIGHT ENTRIES WERE RE-TAKEN ON PURPOSE (cinatra#3058, fix leg 8). The
-// review drawing's §IV — "EVERY target opens with a header that names what is
-// under review and fixes it in place" — and its §V — "The floor is never a
-// blank … a sanitized, telemetry-safe one-line diagnostic (package · slot ·
-// reason)" — are now drawn by the CARD, in every state that has a target and
-// whatever the answer could name. So an answer that carries no composed header
-// draws the header's own factless form, and a representation that is not on
-// screen draws the floor line above it. Exactly two nodes are inserted and
-// nothing else moves: the `[data-review-target-reading]` marker with the
-// factless header inside it, and the floor line at the head of the island's
-// overlay. The entries that were re-taken are exactly the 28 that draw a target
-// — pending, pending-no-comment, pending-with-suggestions, restricted and the
-// three settled-with-outcome readings, on each of the four hosts. The 16 that
-// draw NO target — loading, settled-without-outcome, advisory and absent — are
-// byte-for-byte their earlier captures, which is the measurement that says this
-// change moved what it meant to move and nothing else.
+// THE REGENERATION DIFF IS THE PROOF, and it is what a change of WORDS should
+// look like: exactly the three outcome-bearing readings — `settled-approved`,
+// `settled-rejected`, `settled-approved-no-decider` — on each of the four hosts,
+// with the only difference in each being the header's own words. The other 32
+// entries, the outcome-LESS `settled` among them, are byte-identical to what was
+// committed: that reading really does still say "Review requested", because it
+// cannot say what the decision was.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -177,8 +172,12 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
     name: "settled-rejected",
     state: { state: "settled", outcome: "rejected", decidedByName: "Ada Lovelace" },
   },
-  // The decider is optional and its absence is quiet: the card states the
-  // outcome alone rather than a dangling "by".
+  // RE-RECORDED again for cinatra#2934 fix leg 12: the three settled captures
+  // held the person-naming decision line ("Approved by Ada Lovelace") over a
+  // per-outcome status glyph, and the drawing leaves one settled reading and no
+  // card naming who decided. The decider is still carried on the state — the
+  // wire records it — and the card must now draw the same marker with it as
+  // without it, which is what these three entries pin together.
   {
     name: "settled-approved-no-decider",
     state: { state: "settled", outcome: "approved" },
@@ -293,7 +292,14 @@ describe("review card render parity across the resolve envelope", () => {
           drawn.chat_thread,
         );
         expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);
-        expect(drawn[host]).toContain("Ada Lovelace");
+        // RE-PINNED (cinatra#2934, fix leg 12). The card used to carry the
+        // decider's name on every host; the drawing gives the settled state one
+        // marker and no card naming who decided (Lifecycle cards §XIII.1,
+        // Artifact review §VI), so what every host must draw identically is the
+        // marker — and none of them may draw the name.
+        expect(drawn[host]).toContain("Continued");
+        expect(drawn[host]).toContain("Decided on the revision above.");
+        expect(drawn[host]).not.toContain("Ada Lovelace");
       }
     }
   });

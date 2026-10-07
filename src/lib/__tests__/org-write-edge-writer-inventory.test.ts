@@ -215,15 +215,13 @@ describe("newly registered stores — writer-set lockstep", () => {
       // parent Better Auth session is DEFINITELY gone, keyed on that one token's
       // hash — the same shape as the expired-row delete beside it. Deliberately
       // re-pinned.
-      // 12 -> 14 (cinatra#3051): renewUserWidgetToken's ONE transaction — the
-      // successor INSERT and the predecessor DELETE, which are two statements
-      // precisely because they must not be two decisions. Deliberately re-pinned.
-      "src/lib/widget-user-auth.ts": 14,
+      "src/lib/widget-user-auth.ts": 12,
       // 8 -> 9 on main (the suggestion-decision CAS write); kept as main has it.
       // 9 -> 10 (cinatra#2650): bindThreadContainerIfUnbound's ONE conditional
       // set-once UPDATE that records a thread's container at its first persist.
       // Deliberately re-pinned.
-      "src/lib/assistant-thread-store.ts": 10,
+      // cinatra#2815 S3: the set-once assignment-scope freeze adds the eleventh.
+      "src/lib/assistant-thread-store.ts": 11,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
       // cinatra#2823 S9j: the truncation tombstone's ONE statement — the whole
       // reason this module exists. A second org-axis statement here is a
@@ -275,9 +273,6 @@ describe("newly registered stores — writer-set lockstep", () => {
       "loadActiveTransaction",
       "recordDisplayedScopesForTransaction",
       "redeemUserAuthCode",
-      // cinatra#3051 — the renewal writes the successor row and deletes the one
-      // it replaces, so it is a raw-DML executor like the redeem it copies from.
-      "renewUserWidgetToken",
     ]);
     expect(registryWriters("src/lib/widget-user-auth.ts")).toEqual(detected);
   });
@@ -294,6 +289,8 @@ describe("newly registered stores — writer-set lockstep", () => {
       "bindThreadContainerIfUnbound",
       "createAssistantThread",
       "ensureThreadSlug",
+      // cinatra#2815 S3: the set-once assignment-scope freeze (registered).
+      "freezeAssistantThreadAssignmentScopeIfAbsent",
       "repairImplicitDefaultThreadBinding",
       "setAssistantThreadPauseParticipant",
       "touchAssistantThread",

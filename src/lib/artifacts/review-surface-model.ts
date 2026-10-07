@@ -16,12 +16,11 @@
  * renderer identity is host-resolved from the artifact TYPE upstream and reaches
  * this model only as the opaque `ReviewTargetMount` kind.
  */
-// THE APP'S OWN RELATIVE-TIME FORMATTER, taken from its per-function entry
-// rather than the package root. This module is a LEAF of the conversation
-// column's module graph, and the root entry re-exports the whole library: taking
-// it here cost roughly a second on every surface that mounts a transcript. The
-// function is the same one the library rows and the console rows print with.
-import { formatDistance } from "date-fns/formatDistance";
+// THE DEEP ENTRY, DELIBERATELY. This module is reachable from the chat
+// surface's own module graph, and the package barrel pulls the whole library in
+// behind one function — enough extra graph that the conversation column's
+// timing-sensitive first paint measurably slowed. One function is what is used
+// and one module is what is imported.
 
 import type {
   PreparedReviewTarget,
@@ -31,7 +30,6 @@ import type {
   ReviewDisposition,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
-import { artifactScopeWord } from "@/lib/artifacts/artifact-kind-label";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
@@ -75,60 +73,191 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
 }
 
 // ---------------------------------------------------------------------------
-// The SETTLED reading (§IV; plan §4.2) — a decided gate names what happened
+// The SETTLED reading (§IV; Lifecycle cards §XIII.1) — ONE marker, no person
 // ---------------------------------------------------------------------------
 //
 // `reviewBlockedCopy("no-longer-pending")` above is what a settled card says
 // when it knows nothing but the fact that it settled: "the gate was already
 // decided OR the run moved on", with a Refresh as the escape hatch for that
-// "or". This is the other half — the reading for a card that DOES know, which
-// states the outcome and the person who took it and needs no escape hatch,
-// because there is no longer an ambiguity for one to resolve.
+// "or". This is the other half — the reading for a card that DOES know, and
+// therefore needs no escape hatch, because there is no longer an ambiguity for
+// one to resolve.
 //
-// THE SENTENCES ARE THE SHIPPED ONES. Each body is the decision bar's own
-// post-press line (`review-decision-bar.tsx`), minus its leading verb, so the
-// card the reviewer read right after pressing and the card everyone reads
-// afterwards say the same thing about the same gate. What is deliberately NOT
-// carried over is the bar's `requested` / `escalated` split: that is a fact
-// about the repair the reviewer's own press started, not about the gate's
-// recorded outcome, and a settled card that claimed "a repair is now in flight"
-// would be asserting a live state it has not read.
+// ONE READING, AND IT IS THE DRAWING'S (cinatra#2934, fix leg 12). The
+// lifecycle-cards drawing states it outright: "Continued is the only settled
+// reading; there is no second status after it." What it draws below a decided
+// card is a marker — the word Continued, and beside it "Decided on the revision
+// above." It is the same marker in a conversation and outside one, and the same
+// marker whatever was decided: "the frame changes and nothing else does".
 //
-// THE DECIDER IS OPTIONAL AND ITS ABSENCE IS QUIET. A gate whose decider has no
-// safely displayable name reads "Approved" rather than "Approved by" and a
-// dangling nothing — and never an identifier pressed into service as a name.
+// WHAT THIS REPLACES, AND WHY. The shipped copy read the outcome back as a
+// title ("Approved" / "Rejected" / "Changes requested") and interpolated the
+// decider into it — the dev-boot proof round of 2026-09-04 measured a red
+// circled-X card reading "Rejected by Proof Admin" on both surfaces. Two
+// ratified sentences close that: §XIII.1 above, which leaves exactly one settled
+// reading, and the review drawing's §VI, which says the review "draws no card
+// that names who requested changes". The second is written about the
+// change-request outcome and the first generalises it: a settled card is not
+// where a disposition or a person is recorded.
+//
+// THE DISPOSITION IS NOT LOST. It stays exactly where a fact belongs — the run's
+// own rows, the audit trail, and (as a machine-readable record, never a drawn
+// reading) the settled element's `data-review-outcome`. The outcome therefore
+// remains this function's one argument: a caller holds it and the card records
+// it. The DECIDER's name is not a parameter at all any more, because there is
+// nowhere on this surface to put one.
 
-/** The closed outcome axis a settled review card can name.
+/** The closed outcome axis a settled review card RECORDS.
  *
  *  Kept as a local union rather than an import so this pure model stays free of
  *  the wire package; `LIFECYCLE_SETTLED_OUTCOMES` in the protocol is the same
  *  set, and a structural test pins the two together. */
 export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
 
-/** The user-facing copy for a settled gate whose outcome is recorded. Title +
- *  one line; NO refresh (the component draws none) — the reading is final. */
+/** The ONE settled marker, in the drawing's own words (Lifecycle cards §XIII.1).
+ *  The exemplar there closes with a sentence particular to the artifact it was
+ *  drawn over ("These are the words that will be sent."); what is generic — and
+ *  therefore what a display over ANY artifact draws — is the two lines here. */
+export const REVIEW_SETTLED_MARKER = {
+  title: "Continued",
+  body: "Decided on the revision above.",
+} as const;
+
+/** The user-facing copy for a settled gate. Title + one line; NO refresh (the
+ *  component draws none) — the reading is final, and it is the same reading for
+ *  every disposition. */
 export function reviewSettledCopy(
-  outcome: ReviewSettledOutcome,
-  decidedByName?: string,
+  // The recorded disposition. Accepted because every caller holds one and the
+  // element records it; it does NOT select a reading — §XIII.1 leaves only one.
+  _outcome: ReviewSettledOutcome,
 ): { title: string; body: string } {
-  const by = decidedByName ? ` by ${decidedByName}` : "";
+  return { title: REVIEW_SETTLED_MARKER.title, body: REVIEW_SETTLED_MARKER.body };
+}
+
+/**
+ * THE GATE HEADER'S TITLE — FROM THE SAME OUTCOME AS THE LINE BENEATH IT
+ * (cinatra#3046).
+ *
+ * The card's header said "Review requested" in every state it can be drawn in,
+ * settled included. So a decided gate — the read-only history §I asks for, which
+ * "records how it was settled" — was topped by a request that had already been
+ * answered, with the answer written further down the card in a second voice.
+ * Measured on both palettes: the header stayed present-tense on every settled
+ * reading of the reshoot.
+ *
+ * The header reads the same closed outcome set as the settled marker, so the
+ * two are derived here rather than written twice. `reviewSettledCopy` above
+ * draws the one marker for every outcome ("Continued"); this gives the header
+ * the outcome in the header's own register — no decider, no sentence, the two
+ * or three words a heading is. They agree on an approved gate and part on a
+ * turned-back one, whose header reads "Changes requested".
+ *
+ * A gate with no outcome to name — pending, restricted, loading, and a
+ * settled gate whose disposition this build cannot read — keeps "Review
+ * requested" exactly as it was, because that IS still what that card says.
+ *
+ * The sibling leg that settles the card IN PLACE after a typed decision (pull
+ * request 3072) reads this same function, which is what keeps the header it
+ * re-draws and the line it re-draws from disagreeing about the same gate.
+ *
+ * THE WORDS ARE THE DRAWING'S, AND ONLY THE DRAWING'S. The ratified drawing
+ * carries three readings: "Review requested", "Continued" and "Changes
+ * requested". Continued is the ONLY settled reading a display has — the floor's
+ * terminal press is Continue, and there is no second status after it — so an
+ * approved gate reads "Continued". The drawing draws the turn-back road as
+ * Regenerate opening a successor gate and words it "Changes requested"; it has
+ * no word of its own for a rejection, so the rejected outcome reads the same
+ * turn-back words rather than a heading invented here. An earlier revision of
+ * this change did invent two ("Review approved" / "Review rejected"); a heading
+ * is not the place to add vocabulary to a ratified surface.
+ *
+ * THE OUTCOME AXIS IS UNTOUCHED BY THAT. Approve, reject and changes-requested
+ * remain three outcomes on the wire and three values on the settled panel's own
+ * `data-review-outcome`, which is what every routing decision reads. What is
+ * shared is the two or three words a heading is.
+ */
+export function reviewGateHeaderTitle(
+  outcome: ReviewSettledOutcome | null | undefined,
+): string {
   switch (outcome) {
     case "approved":
-      return {
-        title: `Approved${by}`,
-        body: "The gate is resolved and the run has been released to continue.",
-      };
+      return "Continued";
     case "rejected":
-      return {
-        title: `Rejected${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back.",
-      };
     case "changes_requested":
-      return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back for repair.",
-      };
+      return "Changes requested";
+    default:
+      return "Review requested";
   }
+}
+
+/**
+ * THE STORED DISPOSITION → THE SETTLED OUTCOME (cinatra#3046, fix leg 16).
+ *
+ * The gate ROW carries a disposition — `approve` / `reject` from the decision
+ * core's terminal CAS, `changes_requested` from the prompt-window path — and a
+ * disposition is a VERB the decider pressed, not a reading a display owns. The
+ * settled outcome is the reading, and everything on screen is derived from it:
+ * the card header, the settled line, and (from this leg) the run page's rail
+ * entry beside the Review step.
+ *
+ * CLOSED, AND UNMAPPED IS NULL. Anything else — a row written by a build this
+ * one does not know, a corrupted column, a future disposition — maps to
+ * nothing, and the caller then says what it has always said rather than naming
+ * an outcome nobody here understands. `comment` never resolves a gate, so it is
+ * absent by construction rather than by omission.
+ *
+ * THE SAME THREE PAIRS AS THE STORE. `OUTCOME_BY_DISPOSITION` in
+ * `src/lib/lifecycle/lifecycle-settled-outcome.ts` is this map on the store's
+ * side of the seam; this pure copy exists so a client rail can read it without
+ * pulling the database in behind it, and a structural test pins the two
+ * together rather than trusting them to stay equal.
+ */
+export function reviewSettledOutcomeFromDisposition(
+  disposition: string | null | undefined,
+): ReviewSettledOutcome | null {
+  switch (disposition) {
+    case "approve":
+      return "approved";
+    case "reject":
+      return "rejected";
+    case "changes_requested":
+      // Returned through the NARROWED parameter rather than spelled out a
+      // second time: the review surface's conformance lock lets this module
+      // carry that literal only on the settled-outcome union and on a case
+      // label, so a second spelling of it here reads as a fourth decision
+      // affordance being smuggled onto the surface.
+      return disposition;
+    default:
+      return null;
+  }
+}
+
+/**
+ * THE RUN PAGE RAIL'S SETTLED WORD (cinatra#3046, fix leg 16).
+ *
+ * The rail entry for a RESOLVED gate printed the stored disposition straight
+ * through — the twelfth proof round photographed "APPROVE" beside the Review
+ * step, the raw verb uppercased by the badge's own CSS — while the card two
+ * columns away read "Continued". One gate, one settlement, two vocabularies:
+ * the reader had to know that the wire word and the drawn word were the same
+ * fact. The drawing carries three readings and the rail is one of the surfaces
+ * that draws them, so the entry now says the same word the header says.
+ *
+ * WHY IT IS DERIVED HERE AND NOT IN THE RAIL. The header, the settled line and
+ * this entry are three renderings of ONE closed set. Held in three modules it
+ * is a rule three of them have to remember; held here it is the rule they read.
+ *
+ * A SETTLED GATE THIS BUILD CANNOT READ KEEPS ITS OLD READING. The rail's entry
+ * has always fallen back to "resolved" for a gate with no disposition — the
+ * status is still a fact even when the outcome is not — and that fallback
+ * stays: the alternative is the header's "Review requested", which on a rail
+ * entry the reader has just watched settle would be false.
+ */
+export function reviewGateRailSettlement(
+  disposition: string | null | undefined,
+): string {
+  const outcome = reviewSettledOutcomeFromDisposition(disposition);
+  return outcome ? reviewGateHeaderTitle(outcome) : "resolved";
 }
 
 // ---------------------------------------------------------------------------
@@ -153,9 +282,7 @@ export type ReviewProvenanceConformanceId = "review-target-floor";
  * on any other surface this display is drawn". The lifecycle-cards drawing §III
  * is the same sentence in its own words.
  *
- * A build-map mount and a runtime mount therefore carry no region, exactly as
- * the form rung already did (cinatra#2931 W4, for its own reason: there was no
- * package to name and the work did render).
+ * A build-map mount and a runtime mount therefore carry no region.
  *
  * ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor, and
  * only because a reader must be told a render failed." */
@@ -164,7 +291,6 @@ export function reviewProvenanceConformanceId(
 ): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
-    case "form":
     case "runtime":
       return null;
     case "floor":
@@ -174,9 +300,8 @@ export function reviewProvenanceConformanceId(
 
 /** The label the one surviving region prints (§V) — a floor reads "Floor" over
  * the generic read-only reading of the representation. `null` for every mount
- * that draws no region: the two renderer tiers, which the drawing forbids from
- * naming themselves, and the form rung, which never had one. Pure copy — no
- * type keying. */
+ * that draws no region: the two display tiers, which the drawing forbids from
+ * naming themselves. Pure copy — no type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
   kind: "floor";
   slot: string;
@@ -184,7 +309,6 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 } | null {
   switch (mount.kind) {
     case "build-map":
-    case "form":
     case "runtime":
       return null;
     case "floor":
@@ -208,136 +332,82 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
  * drawing names: "the read-only row facts the host authorized — owner level /
  * visibility, MIME, and updated time".
  *
- * THE LINE IS THE DRAWING'S LINE (cinatra#3051, re-shoot grade). The drawing
- * draws "… · Team · Private · text/html · updated 8 min ago"
- * (specs/app-lifecycle-cards.html §II, and §IV's own row-fact clause): the two
- * scope facts as BARE words in the host's own vocabulary, and the instant as a
- * RELATIVE reading. The line printed neither — it carried labelled raw enum
- * values ("Ownership: organization · Visibility: organization") and the raw ISO
- * instant the row was stored with ("updated 2026-08-29T03:07:18.778Z"), which
- * is a machine's reading of a header a person reads.
- *
- * The earlier honesty concern — that two BARE scope words read as the same word
- * twice for an organization-owned, organization-visible artifact — is answered
- * by the vocabulary rather than by labels: the words are the ones the host's
- * other cards already print for these two facts, and the drawing's own line is
- * what a reader is entitled to see. Nothing is dropped; both facts stay, in the
- * drawing's order.
+ * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
+ * meta line in the ratified drawings prints the two scope facts with no label at
+ * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
+ * line again over §V.1's read-only review target. The labelled form this line
+ * carried came from a local reading of a plan sentence ("the line gets labels or
+ * drops the storage fact") rather than from the drawing, and the graded proof frames
+ * measured it as a departure. The drawing decides: the labels go, both facts
+ * stay, and the order is the drawing's.
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
 export function reviewTargetRowFacts(
   artifact: {
-    ownerLevel: string | null;
-    visibility: string | null;
-    mime: string | null;
-    updatedAt: string | null;
+    ownerLevel: string;
+    visibility: string;
+    mime: string;
+    updatedAt: string;
   },
-  /** The instant the line is read AT. Defaults to now; a caller passes one so a
-   *  rendering can be pinned. */
+  /** The instant to read `updatedAt` against. Injected so the reading is
+   *  testable; defaults to now, which is what every caller wants. */
   now: Date = new Date(),
 ): string[] {
-  // NULLABLE SINCE cinatra#3051, and the fields are DROPPED rather than printed
-  // as absences. The page always has all four, so this is a no-op there; the
-  // card draws the same line from the gate's own rows, where a target whose
-  // artifact this reader may not read (or which is gone) carries ids and
-  // nothing else — and an empty scope word is worse than a shorter true line.
-  const facts: string[] = [];
-  if (artifact.ownerLevel) facts.push(artifactScopeWord(artifact.ownerLevel));
-  if (artifact.visibility) facts.push(artifactScopeWord(artifact.visibility));
-  if (artifact.mime) facts.push(artifact.mime);
-  if (artifact.updatedAt) {
-    facts.push(`updated ${reviewRelativeInstant(artifact.updatedAt, now)}`);
+  return [
+    artifact.ownerLevel,
+    artifact.visibility,
+    artifact.mime,
+    // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
+    // writes "updated 8 min ago"; the decided target printed the stored column
+    // straight through — `2026-08-29T06:18:07.421Z`, milliseconds and all — which
+    // is a machine's reading of the same fact and is not what §IV draws. One
+    // formatter does it, for this line and for the header row facts the sibling
+    // leg (pull request 3058) draws from the same projection, so the two surfaces
+    // cannot render one column two ways.
+    `updated ${relativeInstant(artifact.updatedAt, now)}`,
+  ];
+}
+
+/** How the drawn readings step, longest first. Minutes are the drawing's own
+ *  unit ("8 min ago"); the rungs above it exist so a week-old artifact does not
+ *  read as "10080 min ago". */
+const RELATIVE_INSTANT_RUNGS: ReadonlyArray<{ ms: number; unit: string }> = [
+  { ms: 86_400_000, unit: "d" },
+  { ms: 3_600_000, unit: "h" },
+  { ms: 60_000, unit: "min" },
+];
+
+/**
+ * ONE relative reading of one instant (cinatra#3046).
+ *
+ * §IV's row facts end in a relative time — "updated 8 min ago" — and the app had
+ * no shared formatter for one at all: four private copies live in four unrelated
+ * packages, and the review target had none, so it printed the raw ISO instant
+ * with its milliseconds. This is the one the review surface reads through, and
+ * the one the sibling leg's header row facts read through, so the finding is
+ * closed in one place rather than in two that can drift.
+ *
+ * A VALUE THAT IS NOT AN INSTANT IS RETURNED UNTOUCHED. The projection this
+ * serves is display facts, every one of them nullable and some of them already
+ * humanized upstream; a formatter that mangles what it cannot parse would turn a
+ * fact it does not understand into a wrong one. Not knowing is answered by
+ * saying exactly what it was given.
+ *
+ * A FUTURE INSTANT READS AS "just now" rather than as a negative age: clocks
+ * disagree by seconds across a store and a browser, and "updated in -3 min" is a
+ * bug report, not a reading.
+ */
+export function relativeInstant(value: string, now: Date = new Date()): string {
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return value;
+  const elapsed = now.getTime() - at;
+  if (elapsed < 60_000) return "just now";
+  for (const rung of RELATIVE_INSTANT_RUNGS) {
+    if (elapsed >= rung.ms) return `${Math.floor(elapsed / rung.ms)} ${rung.unit} ago`;
   }
-  return facts;
+  return "just now";
 }
-
-/* The scope fact is READ, not derived here: the host holds ONE scope word
- * (`@/lib/artifacts/artifact-scope-word`), exactly as it holds one kind label.
- * The review surface model keeps no string projection of its own. */
-
-/**
- * An instant as the header reads it: a relative time, through the SAME
- * formatter the host's other cards use for one (`date-fns`'s distance-to-now,
- * with the suffix — the library rows, the console rows and the marketplace
- * header all print it that way).
- *
- * A value that does not parse as an instant is passed through UNTOUCHED. The
- * card draws this line from the gate's own rows, and a row that already carries
- * a phrase rather than a timestamp must read as that phrase, never as
- * "Invalid Date".
- */
-export function reviewRelativeInstant(value: string, now: Date = new Date()): string {
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return value;
-  return formatDistance(at, now, { addSuffix: true });
-}
-
-// ---------------------------------------------------------------------------
-// The PREVIEW floor (§V, cinatra#3051) — the never-blank line the CARD draws
-// under the target header while the representation is not on screen.
-// ---------------------------------------------------------------------------
-
-/**
- * Why the representation is not on screen. A closed set, and every member is a
- * state of the PREVIEW rather than of the gate: the gate is exactly as open as
- * it was, and the floor never says otherwise.
- *
- *   `preview-loading`      — the frame has not painted yet.
- *   `preview-unavailable`  — the frame's bound was reached.
- */
-export type ReviewPreviewFloorReason =
-  | "preview-loading"
-  | "preview-unavailable"
-  // THE TWO READINGS OF A FRAME THAT ARRIVED AND IS NOT SHOWING THE WORK
-  // (cinatra#3051, fix leg 9). §V owes its one line "whenever a target does not
-  // resolve to a type renderer", and a frame that failed to ARRIVE is only one
-  // of the ways that happens. These two are the others, and they are separate
-  // because they are different facts: the host resolved no renderer at all and
-  // drew its own floor over the generic read-only view, or a renderer resolved
-  // and answered with its own named floor instead of the representation. Both
-  // are closed members of this set, sanitized by construction like the two above
-  // — a reason, never an error, a value or a manifest string.
-  | "renderer-unresolved"
-  | "representation-unavailable";
-
-/**
- * The §V diagnostic, in the drawing's own shape: `package · slot · reason`, and
- * nothing else. Sanitized and telemetry-safe by construction — it composes only
- * a package name the host resolved, the slot literal, and a member of the closed
- * set above. No error text, no value, no href.
- */
-export function reviewPreviewFloorDiagnostic(
-  packageName: string | null,
-  slot: string,
-  reason: ReviewPreviewFloorReason,
-): string {
-  const pkg = packageName ? `package "${packageName}" · ` : "";
-  return `${pkg}slot "${slot}" · reason "${reason}"`;
-}
-
-/*
- * REMOVED (cinatra#3058, fix leg 8; the convergence round on the reconciled
- * merge): `reviewTargetPackageName`, which read the `package` half of §V's floor
- * line off a host-resolved renderer package or, failing that, off the artifact
- * type id.
- *
- * Its one caller was the review card, and it had exactly one honest argument to
- * pass it: the RESOLVED package the branch's own target rows carried on the
- * wire. The card-owned header wire this reading now stands on carries no such
- * field, and §V fixes where that name may come from — "The resolution is
- * host-derived, never a claim the client or the model can forge" — so the card
- * can no longer name a package at all, and its floor line drops that half (the
- * slot and the reason stay: the floor is never a blank). Inferring the package
- * from the type id instead would report a package that had no part in the
- * failure, which is the invented value "never a raw error or manifest value"
- * keeps off this line.
- *
- * The package-NAMED floor is still drawn where the host resolved a renderer and
- * can say so — `reviewTargetFloorDiagnostic` on the artifact page's own mount —
- * and a card-side package would return the day the header wire carries the
- * host's resolution as a fact rather than as a guess.
- */
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
  * truncated for display, with the exact id preserved for the title attribute. */

@@ -71,6 +71,13 @@ const UI_ALLOWLIST = new Set<string>([
   // ScopeFilterCombobox and resolves ?scope= server-side. A UI pick target, so
   // an archived org must never be offered here either.
   "src/app/assistants/page.tsx",
+  // The WorkspaceVantage read binding (cinatra#2810, per-scope surfaces S4).
+  // The vantage is what a scope tab OFFERS as reachable, and its own contract
+  // puts archival on the picker side of this split: "Archival removes the
+  // organization on the next read, exactly like a revoked membership". So the
+  // active-only reader is the correct one here, and an archived organization
+  // must never enter a vantage.
+  "src/lib/scope-surface-workspace-vantage.ts",
   // The per-scope Agents/Assistants tabs (cinatra#2808) — the workspace
   // vantage this read builds is a UI pick surface: every organization it
   // carries becomes a row the reader can launch from, so an archived
@@ -78,6 +85,19 @@ const UI_ALLOWLIST = new Set<string>([
   // evaluateExtensionAccess under each concrete organization, never by this
   // membership read.
   "src/lib/scope-surface-eligibility.server.ts",
+  // The per-scope assignment page's workspace editor (cinatra#2814): every
+  // organization the vantage carries becomes a scope the reader can assign
+  // at, so an archived organization must never be one. The write decision
+  // itself is S1's exact-scope resolver, never this membership read.
+  "src/lib/scope-assignment/scope-assignment-target.server.ts",
+  // The workspace Dashboards tab (cinatra#2811, per-scope surfaces S5). The
+  // same reading as the line above: the vantage this builds is what the tab
+  // OFFERS, so every organization in it becomes a row the reader can open, a
+  // candidate the reference picker lists, or a leg of the installed-catalog
+  // federation. An archived organization must be none of those. Each access
+  // decision is then taken under one concrete organization by the dashboards
+  // resolver and the extension access evaluator, never by this membership read.
+  "src/lib/dashboards/workspace-dashboards.server.ts",
 ]);
 
 function walk(dir: string, acc: string[] = []): string[] {

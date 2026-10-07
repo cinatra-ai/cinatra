@@ -17,6 +17,7 @@
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as cheerio from "cheerio";
 
 import { Button } from "@/components/ui/button";
 import { MarketplaceListingCard } from "../screens/marketplace-listing-card";
@@ -99,13 +100,110 @@ describe("MarketplaceListingCard — footer-meta compat verdict is plain text, n
   it("renders the Unknown state (no declared ABI range) as the same plain anatomy, never green", () => {
     const html = renderCard({ sdkAbiRange: null });
     expect(html).toContain('data-compat-state="unknown"');
-    // The neutral CompatMeta label names its subject ("Compatibility unknown"),
-    // so the row is self-describing without the neighbouring icon/column
-    // (cinatra#1540) — and the bare, ambiguous "Unknown" is gone.
-    expect(html).toContain(">Compatibility unknown<");
+    // The neutral CompatMeta label names its subject ("Compatibility"), so the
+    // row is self-describing without the neighbouring icon/column
+    // (cinatra#1540) — and the bare, ambiguous "Unknown" is gone. The word is
+    // the maintainer's decided reading (cinatra#3521): "Compatibility" alone,
+    // never "Compatibility unknown".
+    expect(html).toContain(">Compatibility<");
     expect(html).not.toContain(">Unknown<");
     expect(html).toContain("text-badge-xs");
     expect(html).not.toContain('data-slot="badge"');
+  });
+});
+
+describe("MarketplaceListingCard — the three compatibility readings (cinatra#3521)", () => {
+  // The maintainer's decided readings (cinatra#3521, 2026-09-16): "the card's
+  // three readings are exactly 'Compatible' with a check icon, 'Incompatible'
+  // with a cross icon, and 'Compatibility' with a question-mark icon (the
+  // third for a package that declares no host range)". The icons come from the
+  // app's own lucide-react set, which stamps every icon with its own
+  // `lucide-{name}` class — so the rendered markup names the icon per state and
+  // an icon swap is provable, not just the word.
+  //
+  // Both readings are taken from the compat ROW alone, never from the whole
+  // card: the card draws other icons (the rating star, the banner marks), so a
+  // whole-markup match could be satisfied by an icon belonging to another row
+  // and hide a wrong or missing compatibility icon (codex convergence).
+
+  /** The `data-slot="extension-card-compat"` span, icon and label included. */
+  function compatRow(html: string): string {
+    const at = html.indexOf('data-slot="extension-card-compat"');
+    expect(at).toBeGreaterThan(-1);
+    const open = html.lastIndexOf("<span", at);
+    const close = html.indexOf("</span>", at);
+    expect(close).toBeGreaterThan(open);
+    return html.slice(open, close + "</span>".length);
+  }
+
+  /**
+   * The row's visible words, read out of the PARSED row — asserted EXACTLY,
+   * never by substring.
+   *
+   * Parsed, never tag-stripped: a single left-to-right strip pass consumes
+   * from each "<" to the FIRST ">", so any ">" that is not a tag's own
+   * closing bracket (one standing inside a quoted attribute value, an
+   * interleaved or malformed tag) makes the pass cut in the wrong place and
+   * leave markup standing in what this helper hands back as "the row's
+   * visible words". `cheerio` is the repository's established parse road for
+   * reading text out of markup (src/lib/artifacts/url-import.ts and its two
+   * siblings) and resolves here by the same upward node_modules walk this
+   * file's own `react-dom/server` import already takes.
+   */
+  function compatLabel(html: string): string {
+    return cheerio.load(compatRow(html), null, false).root().text().trim();
+  }
+
+  /**
+   * The class TOKENS on the row's own icon. Whole-token equality, so
+   * `lucide-x` can never be satisfied by `lucide-x-circle` or any other
+   * icon whose name merely starts with the same letters.
+   */
+  function compatIconTokens(html: string): string[] {
+    const svg = compatRow(html).match(/<svg[^>]*>/)?.[0] ?? "";
+    const className = svg.match(/class="([^"]*)"/)?.[1] ?? "";
+    return className.split(/\s+/).filter(Boolean);
+  }
+
+  it("draws 'Compatible' with the check icon when the declared range is satisfied", () => {
+    const html = renderCard({ sdkAbiRange: "^2" });
+    expect(html).toContain('data-compat-state="compatible"');
+    expect(compatLabel(html)).toBe("Compatible");
+    expect(compatIconTokens(html)).toContain("lucide-check");
+  });
+
+  it("draws 'Incompatible' with the cross icon when the declared range is not satisfied", () => {
+    // "^1" is the established known-unsatisfied fixture range (see
+    // src/lib/__tests__/extension-compat-badge.test.ts) — this host's frozen
+    // SDK-extensions ABI is "^2".
+    const html = renderCard({ sdkAbiRange: "^1" });
+    expect(html).toContain('data-compat-state="incompatible"');
+    expect(compatLabel(html)).toBe("Incompatible");
+    expect(compatIconTokens(html)).toContain("lucide-x");
+    // The warning triangle this line carried before the decision is gone.
+    expect(compatIconTokens(html)).not.toContain("lucide-triangle-alert");
+  });
+
+  it("draws 'Compatibility' — the word alone — with the question-mark icon when no range is declared", () => {
+    const html = renderCard({ sdkAbiRange: null });
+    expect(html).toContain('data-compat-state="unknown"');
+    // Exact equality: "Compatibility unknown" fails this, the word alone passes.
+    expect(compatLabel(html)).toBe("Compatibility");
+    expect(compatIconTokens(html)).toContain("lucide-circle-question-mark");
+  });
+
+  it("reads the row's visible words when an attribute value carries a '>', leaving no markup standing", () => {
+    // A single left-to-right tag-stripping pass consumes from each "<" to the
+    // FIRST ">", so a ">" standing INSIDE a quoted attribute value ends that
+    // match early and leaves the attribute's tail standing in what the helper
+    // hands back as "the row's visible words". The reading has to come from
+    // the PARSED markup, where an attribute value is an attribute and can
+    // never be mistaken for text. Hand-built row markup (not a card render),
+    // because the reading is a property of the helper, not of today's card.
+    const html =
+      '<div class="meta"><span data-slot="extension-card-compat" data-compat-state="compatible"' +
+      ' title="host range >=2"><svg class="lucide lucide-check size-[11px]"></svg>Compatible</span></div>';
+    expect(compatLabel(html)).toBe("Compatible");
   });
 });
 
@@ -400,6 +498,6 @@ describe("MarketplaceListingCard — footer meta cannot be clipped by the card (
     expect(html.slice(column, at)).toContain("shrink-0");
     // The full label survives: a fit strategy that truncated it would satisfy
     // "does not overflow" while still failing the actual requirement.
-    expect(html).toContain(">Compatibility unknown<");
+    expect(html).toContain(">Compatibility<");
   });
 });

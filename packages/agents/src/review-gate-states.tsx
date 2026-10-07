@@ -1,10 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
-import { SpinnerArc } from "@cinatra-ai/sdk-ui";
+import { CircleX } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, Spinner } from "@/components/ui/button";
 import {
   reviewBlockedCopy,
   reviewSettledCopy,
@@ -28,20 +27,6 @@ import {
  * card sitting in a chat transcript must re-resolve ITSELF — refreshing the
  * whole thread route would neither re-authorize the gate nor keep the reader's
  * place. The copy, the anchors and the page behaviour are untouched.
- *
- * cinatra#3238: THE REFRESH IS PHRASING CONTENT, NOT A BLOCK UNDER THE
- * SENTENCE. The drawing writes the second sentence and its way out as one
- * paragraph -- "The gate was already decided or the run moved on. Refresh" --
- * with the two words drawn by the shared link rule (`.btn.link`: the link
- * accent, underlined). It shipped as a sibling `Button` carrying `mt-1`, which
- * opens a line box of its own, and whose underline arrived only on hover, so at
- * rest it read as a plain word. The control now sits INSIDE the paragraph and
- * takes the line's own metrics (`inline h-auto p-0 align-baseline text-xs`)
- * over the design system's link variant, whose `text-primary` is the accent the
- * palette in force calls a link -- with the underline drawn at rest, at the
- * drawing's own `text-underline-offset: 3px` (the same transcription
- * `run-made-step-surface.tsx` already makes of that rule). The copy
- * is untouched, and no new component exists.
  */
 export function ReviewGateBlocked({
   reason,
@@ -80,16 +65,53 @@ export function ReviewGateBlocked({
 }
 
 /**
- * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
- * §4.2). The card that knows what happened says so: "Approved by …" /
- * "Rejected by …" / "Changes requested by …", over the shipped sentence for
- * that outcome, and with the recorded suggestion chips still drawn above it by
- * the caller.
+ * The gate-level SETTLED state — the drawing's ONE marker (cinatra#2934, fix
+ * leg 12; Lifecycle cards §XIII.1).
+ *
+ * WHAT IT DRAWS. "Continued", and beside it "Decided on the revision above." —
+ * the marker §XIII.1 puts below the whole card once it is decided, in a
+ * conversation and outside one alike ("the frame changes and nothing else
+ * does"). One reading, whatever was decided: "Continued is the only settled
+ * reading; there is no second status after it."
+ *
+ * WHAT IT NO LONGER DRAWS, AND WHY. It used to read the outcome back as a title
+ * with the decider interpolated into it — "Approved by …" / "Rejected by …" —
+ * over a per-outcome status glyph and tone (a green check, a red circled-X, an
+ * amber rotate). The dev-boot proof round of 2026-09-04 measured exactly that:
+ * a red circled-X card reading "Rejected by Proof Admin", on both surfaces and
+ * in both palettes. Two ratified sentences close it. §XIII.1 leaves one settled
+ * reading, so the three-way glyph WAS the second status it forbids; and the
+ * review drawing's §VI says the review "draws no card that names who requested
+ * changes", so no settled card on this surface carries a person's name. There is
+ * no `decidedByName` prop any more — not a name this component declines to use,
+ * but no place on the surface to put one.
+ *
+ * THE DISPOSITION IS STILL RECORDED, and that is the distinction the change
+ * turns on: `data-review-outcome` keeps the outcome as a machine-readable fact
+ * for the conformance suites and the audit trail, exactly as the run's own rows
+ * keep it. A record is not a reading.
+ *
+ * AND IT IS THE DRAWN ROW, NOT A CENTRED GLYPH (cinatra#3046, fix leg 17;
+ * cinatra#3294). This was a 36px tinted tile holding a double-check mark, over
+ * two centred lines — a treatment nothing in the drawing gives it. The drawing
+ * draws this marker as ONE ROW, left-aligned with the display it sits under:
+ * `display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+ *  border:1px solid var(--line); border-radius:8px; background:var(--surface);
+ *  padding:9px 12px`, holding a pill — `border-radius:9999px`, a 7px dot, 12px
+ * semibold, in the one success tint every disposition shares — and then the
+ * sentence at 12px in
+ * `var(--muted)`. The thirteenth graded reading measured the centred treatment
+ * on both palettes; this is the row it should have been.
+ *
+ * THE TOKENS ARE THE REGISTERED ONES. The drawing's `--line` is `--line` here,
+ * its `--surface` is `--surface`, its `--muted` is `--muted-foreground`, and its
+ * `--green` on the settled pill is the status palette's `--success`, which is
+ * the token this component's tint already took. Nothing new is registered.
  *
  * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
  * copy cannot say which of two things happened, so a fresh pull is the reader's
  * only way to find out. Here the pull has already answered. A Refresh beside a
- * named outcome would offer to resolve an ambiguity that is not there, and
+ * settled marker would offer to resolve an ambiguity that is not there, and
  * invite the reader to press it as though something might still change.
  *
  * A gate this build cannot read an outcome for never reaches this component:
@@ -99,35 +121,37 @@ export function ReviewGateBlocked({
  */
 export function ReviewGateSettled({
   outcome,
-  decidedByName,
 }: {
+  /** The RECORDED disposition. It is stamped on the element and read by nothing
+   *  on screen — the marker beside it is the same for all three. */
   outcome: ReviewSettledOutcome;
-  /** A SURFACE-SAFE display name. Never an id — the resolver drops a decider it
-   *  cannot name safely, and the copy then states the outcome alone. */
-  decidedByName?: string;
 }) {
-  const copy = reviewSettledCopy(outcome, decidedByName);
-  const Icon =
-    outcome === "approved" ? CheckCheck : outcome === "rejected" ? CircleX : RotateCcw;
-  // The status palette's own tokens (`--success` / `--destructive` / `--warning`),
-  // in the tint-over-token shape the shipped status chips already use.
-  const tone =
-    outcome === "approved"
-      ? "bg-success/10 text-success"
-      : outcome === "rejected"
-        ? "bg-destructive/10 text-destructive"
-        : "bg-warning/10 text-warning";
+  const copy = reviewSettledCopy(outcome);
   return (
     <div
       data-conformance-id="review-gate-settled"
       data-review-outcome={outcome}
-      className="rounded-control border border-line bg-surface-strong px-4 py-5 text-center"
+      // The drawn row: 8px corners, the panel line, the plain surface, 9px/12px
+      // padding, an 8px gap, and wrapping rather than truncating when the
+      // sentence outruns a narrow card.
+      className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-[9px]"
     >
-      <div className={`mx-auto mb-2.5 grid size-9 place-items-center rounded-lg ${tone}`}>
-        <Icon aria-hidden="true" className="size-[18px]" />
-      </div>
-      <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
-      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
+      {/* The marker's pill — the drawing's dot and label, one face for every
+          disposition. Not a status glyph: a status glyph per outcome is the
+          "second status" §XIII.1 says there is not. */}
+      <span
+        data-conformance-id="review-gate-settled-pill"
+        className="inline-flex items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-[3px] font-sans text-xs font-semibold text-success"
+      >
+        <span aria-hidden="true" className="size-[7px] rounded-full bg-success" />
+        {copy.title}
+      </span>
+      <span
+        data-conformance-id="review-gate-settled-sentence"
+        className="text-xs text-muted-foreground"
+      >
+        {copy.body}
+      </span>
     </div>
   );
 }
@@ -160,55 +184,72 @@ export function ReviewGateLoading() {
 
 
 /**
- * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997, redrawn to the
- * ratified drawing in cinatra#3051 after the eighth proof round graded it).
+ * THE RUN CARD'S PLACEHOLDER FOR THE REVIEW SCREEN (cinatra#2997).
  *
- * THE DRAWING IS THE SPECIFICATION, so its sentences are quoted rather than
- * paraphrased — Agent run & review, "the run progress card":
+ * The maintainer's words are the whole specification, so they are quoted rather
+ * than paraphrased:
  *
- *   "While the run works, the detail carries a placeholder. A run that will ask
- *    for a review carries, in the run detail, the run progress card — and while
- *    the run is working that card is a placeholder for the review screen: the
- *    card frame, and a spinning icon, the indigo arc of Components § Skeleton /
- *    Spinner. It names no status, reports no result and draws nothing to press."
+ *   "The 'Agentic Run Progress' card should basically just be a card (maybe even
+ *    an empty review screen) with a spinning icon which is a temporary
+ *    placeholder for the review screen. Once the agent is done and the output
+ *    generated, that 'Agentic Run Progress' card is being automatically replaced
+ *    with the 'Review requested' screen."
  *
- *   "It is replaced, in place, when the output is generated. The placeholder
- *    becomes the Review requested gate above — the same detail, under the same
- *    rail. It happens on its own: there is nothing for the reader to open or
- *    press to bring it."
+ * So this draws A CARD, THE EMPTY REVIEW SCREEN, AND A SPINNING ICON — and
+ * nothing else, under the card's own NAME. The section's worked example draws
+ * that fixed name as the box's first child, so the heading stays; what the prose
+ * forbids is a status word, a result and a control, and a fixed card name is
+ * none of the three. There is no status word, no progress sentence and no step
+ * list, because the words authorize none of those: it is the review screen's own
+ * frame, empty but named, while the screen is still coming.
  *
- * AND THE DRAWN ANATOMY at the anchors `run-progress-placeholder` (Agent run &
- * review) and `run-progress-placeholder-in-thread` (Lifecycle cards § I), which
- * draw the SAME card as each other: the card, a title in the sans face at 14px /
- * weight 700 / ink reading "Agentic Run Progress", then ONE arc — centred, 22px,
- * stroked in the indigo accent, spinning 1s linear — and nothing else.
+ * WHY IT LIVES BESIDE THE REVIEW STATES rather than in the run panel. It is one
+ * of the review screen's states — the one before the gate exists — and it is
+ * built from the piece the review screen is already built from: the same 30px
+ * header tile the gate header draws its clipboard mark in. Keeping it here is
+ * what makes the swap read as one card changing rather than two cards trading
+ * places, and it is why the replacement needs no new geometry of its own: the
+ * placeholder and the screen that replaces it stand in the SAME BOX, the one
+ * the enclosing surface draws. They are not the same HEIGHT and nothing here
+ * claims they are -- no minimum-height contract exists on this slot, and a
+ * placeholder that reserved the finished screen's height would be reporting a
+ * result it does not have.
  *
- * WHAT THIS USED TO DRAW, AND WHY IT WAS WRONG. It drew no title at all, a small
- * ink-toned spinner inside a 30px top-left tile, and the shipped
- * `ReviewGateLoading` five-bar skeleton as a nested panel under it. That reading
- * came from the request that opened cinatra#2997 — "maybe even an empty review
- * screen" — which the drawing has since settled: §IV's loading skeleton is a
- * DIFFERENT state, drawn while the host prepares a target that already exists,
- * and Components § Skeleton / Spinner steers against pairing the two marks in
- * one slot. The eighth proof round read all three back off the pixels in both
- * palettes; they are pinned now in
- * `__tests__/review-gate-placeholder-as-drawn.test.tsx`.
+ * AND IT CARRIES THE CARD'S OWN NAME (cinatra#3044, the eleventh set). The
+ * drawing's placeholder example is markup, and its first child is the heading
+ * "Agentic Run Progress" at weight 700, 14px, `var(--ink)`. The same section's
+ * prose says the placeholder "names no status, reports no result and draws
+ * nothing to press", and an earlier set read that as "no text at all". The two
+ * readings settle once each clause's subject is read: what is forbidden is a
+ * STATUS word, a RESULT and a CONTROL. A fixed card name is none of the three —
+ * it is the name §II itself uses for this card in prose. So the card names
+ * itself and still names no status.
  *
- * THE TITLE BELONGS TO THIS COMPONENT, not to its hosts. All four mounts — the
- * run page's panel, the setup run page's review step, the orchestrator stepper's
- * terminal card and the conversation column inside the site widget — wrap it in
- * a card frame that draws no title of its own, so the card is named once here
- * and every host reads the same drawing.
+ * AND IT DRAWS THE TWO THINGS THE SENTENCE ENUMERATES, NEVER A THIRD
+ * (cinatra#3044). This used to draw the shipped `ReviewGateLoading` bar motif
+ * beneath the tile as well — two bars in a header band over three in a body
+ * band — and a graded set measured them. No sentence gives them: the drawing
+ * says the placeholder is "the card frame, and a spinning icon, the indigo arc
+ * of Components § Skeleton / Spinner", and its own placeholder example draws
+ * the card box with one arc in it and nothing else. Bars beside the arc are a
+ * third thing, and one that reads as content arriving when nothing has. The bar
+ * motif keeps its own job — it is the GATE's loading state, drawn in the target
+ * slots while the host prepares them — and that use is untouched.
  *
- * THE ARC IS THE DESIGN SYSTEM'S. `SpinnerArc` from `@cinatra-ai/sdk-ui` is
- * Components § Skeleton / Spinner drawn once — the ratified path
- * (`M21 12a9 9 0 1 1-6.219-8.56`) with no ring behind it, which is what "the
- * indigo arc" means and what the sibling `LoadingSpinner` (arc over a
- * 25%-opacity track ring) is not.
+ * THE SPINNER IS THE DRAWING'S OWN NODE (cinatra#3046, fix leg 12). It was the
+ * shared `LoadingSpinner` inside a tinted tile. The drawing's placeholder example
+ * puts ONE node in this band — a 22px `viewBox 0 0 24 24` with a single stroked
+ * arc — and the two together drew a 30px `rounded-lg bg-mustard-ink/15` tile
+ * behind it plus, inside the shared component, a full `circle` at
+ * `stroke-opacity 0.25`: the grey track ring the arc runs on. The tenth graded
+ * reading measured both on the parked box, in both palettes, as chrome the
+ * drawing does not give. So this box draws the arc the drawing gives it. The
+ * shared component is untouched — every other surface in the system draws the
+ * tracked spinner, and the drawing does not govern them.
  *
  * AND ITS ARC IS INDIGO, ON A REGISTERED TOKEN (cinatra#3044). The drawing
- * fixes this icon as "the indigo arc"; the spinner paints with `currentColor`,
- * so the arc is whatever colour this wrapper sets. It set `text-mustard-ink`,
+ * fixes this icon as "the indigo arc"; the arc paints with `currentColor`,
+ * so it is whatever colour this wrapper sets. It set `text-mustard-ink`,
  * and no `--color-mustard-ink` is registered in the theme block — so the utility
  * emitted no rule at all and the arc silently took the INHERITED foreground,
  * measured as rgb(21,33,58) in light and rgb(248,250,252) in dark. `text-primary`
@@ -220,32 +261,123 @@ export function ReviewGateLoading() {
  *
  * Conformance anchor: `review-gate-placeholder`.
  */
-const REVIEW_GATE_PLACEHOLDER_TITLE_ID = "review-gate-placeholder-title";
+/**
+ * The short, stable reference a wordless card names its run by. One definition,
+ * so two surfaces drawing the same run cannot name it two different ways.
+ */
+export function shortRunReference(runId: string | null | undefined): string | null {
+  if (typeof runId !== "string") return null;
+  const trimmed = runId.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed.length <= 8 ? trimmed : trimmed.slice(0, 8);
+}
 
-export function ReviewGatePlaceholder() {
+/**
+ * THE PLACEHOLDER NAMES THE RUN IT IS WAITING ON, AND STOPS WHEN THE WAIT DOES
+ * (cinatra#3007, fix leg 7).
+ *
+ * The sixth graded reading took this card on both surfaces and found the same two
+ * things on every frame: "a card frame with a small spinning arc, quiet, but a
+ * large blank inner box and no run identity anywhere in the card; page title
+ * names the agent, not the run", and — on the pair shot after the decision had
+ * committed — "a spinner outliving the run it reports on".
+ *
+ * Neither reading argues with §II. The drawing says this card "names no status,
+ * reports no result and draws nothing to press"; a run REFERENCE is none of the
+ * three — it is not a status word, not a result and not a control — and without
+ * it a reader looking at two runs in one transcript cannot tell which box is
+ * which. And a spinner is a claim that something is still being waited for, so
+ * once the wait is over it is not a quieter drawing, it is a false one: the
+ * frame stays, the spin goes.
+ *
+ * Both are OPTIONAL and default to the drawing as it shipped, so the callers
+ * that have no run to name (the instance screen's generic wait) are unchanged.
+ *
+ * AND THE CARD FRAME, WHERE NOTHING AROUND THE BOX DRAWS IT (cinatra#3007, fix
+ * leg 20). The drawing puts this card's heading and arc inside the run card
+ * (`.runcard`: a 1px line border, a 12px radius, the surface-strong ground and
+ * 18px/20px padding). On the run page the rail draws the frame and the slot's
+ * box gives up its chrome, so the frame goes on this root — never on a wrapper,
+ * which the box's observer would read as the review card having drawn. OFF by
+ * default: every other caller draws exactly what it drew.
+ */
+export function ReviewGatePlaceholder({
+  runRef = null,
+  settled = false,
+  framed = false,
+}: {
+  /** A short, stable reference to the run this box is waiting on. */
+  runRef?: string | null;
+  /** The wait is over — the run left the park, or its gate was decided. */
+  settled?: boolean;
+  /** Draw the run card's frame on this root (the drawing's 12px, not the
+   *  application's 16px `rounded-card`). */
+  framed?: boolean;
+} = {}) {
   return (
     <div
       data-conformance-id="review-gate-placeholder"
-      // A busy REGION, named for a reader who cannot see the spin. The card names
-      // itself on screen now, so the region takes its accessible name FROM THAT
-      // TITLE — `role="status"` is not named from its contents, so the name has
-      // to be pointed at explicitly (convergence round: dropping the old
-      // `aria-label` without this left the region unnamed) rather than carrying a
-      // second, invisible label that could drift from the drawn one.
+      data-review-gate-placeholder-run={runRef ?? undefined}
+      data-review-gate-placeholder-settled={settled ? "true" : undefined}
+      // A busy REGION, named for a reader who cannot see the spin. The label is
+      // not copy on the card — nothing is drawn from it — it is the accessible
+      // name of a region whose only words are the card's own fixed name.
       role="status"
-      aria-busy="true"
-      aria-labelledby={REVIEW_GATE_PLACEHOLDER_TITLE_ID}
-      className="w-full"
+      aria-busy={settled ? "false" : "true"}
+      // AND THE NAME CARRIES THE RUN (convergence). An explicit accessible name
+      // REPLACES the text inside the region, so a box that draws its run beside
+      // the arc and names itself only "Working" hands a reader who cannot see it
+      // strictly less than the box shows.
+      aria-label={
+        runRef
+          ? settled
+            ? `Waiting finished for run ${runRef}`
+            : `Working on run ${runRef}`
+          : settled
+            ? "Waiting finished"
+            : "Working"
+      }
+      className={
+        framed
+          ? "flex w-full flex-col gap-3 rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px]"
+          : "flex w-full flex-col gap-3"
+      }
     >
-      <p
-        id={REVIEW_GATE_PLACEHOLDER_TITLE_ID}
-        data-placeholder-title="agentic-run-progress"
-        className="font-sans text-sm font-bold text-foreground"
-      >
-        Agentic Run Progress
-      </p>
-      <div className="grid w-full place-items-center pb-[22px] pt-[26px]">
-        <SpinnerArc className="size-[22px] text-primary" />
+      {/* THE CARD'S OWN NAME, and it STAYS (re-read at design main for fix leg
+          12, against the reading that this title is off-contract). The drawing's
+          own placeholder example — the one carrying this box's conformance
+          anchor — opens the card with exactly this string before the band with
+          the arc in it, and §II's prose forbids a STATUS, a RESULT and anything
+          to press, none of which a fixed card name is. Removing it would put
+          this box out of conformance with the example it is anchored to. The
+          measured departures on this box were the tile and the track ring, and
+          those are what fix leg 12 removes. The heading the drawn placeholder
+          puts at its head: `font-weight:700; font-size:14px; color:var(--ink)`. It is not
+          a status word and not a result — it is the fixed name §II uses for
+          this card in its own prose ("the run progress card"), identical on
+          every run. The drawing's `--ink` is #15213a, and the token registered
+          at that value here is `--foreground`. */}
+      <div className="text-sm font-bold text-foreground">Agentic Run Progress</div>
+      {/* THE ARC SITS ON THE CARD'S CENTRE. The drawn band is
+          `display:grid; place-items:center; padding:26px 0 22px` — the full
+          width of the card with the arc in the middle of it. It used to be a
+          left-aligned `flex flex-wrap items-center` row, which put the arc hard
+          against the card's leading edge. Nothing else goes in this band: a
+          sibling here pulls the arc off the centre exactly as the row did. */}
+      {/* AND THE WAIT ENDS (cinatra#3007, fix leg 7). The drawn band is the
+          WORKING reading; on a run that has left every state this box waits in
+          the band stays, because the box is still the box the review screen
+          fills, and the arc that claims something is still coming does not. */}
+      <div className="grid w-full place-items-center pt-[26px] pb-[22px]">
+        {settled ? null : (
+          // Use the registered arc, with the drawing's palette-invariant
+          // indigo rather than the action token (near-white in dark mode).
+          <Spinner
+            className="size-[22px] text-indigo-ink"
+            strokeWidth={2.4}
+            aria-hidden="true"
+          />
+        )}
       </div>
     </div>
   );

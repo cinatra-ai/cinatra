@@ -60,10 +60,6 @@ const captured = vi.hoisted(() => ({ fields: [] as Array<Record<string, unknown>
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
-  // The review-gate placeholder draws the design system's own arc, so a TOTAL
-  // factory for this module has to declare it too — an undeclared export is a
-  // mock that no longer stands for the module it replaces.
-  SpinnerArc: () => null,
   PromptField: (props: Record<string, unknown>) => {
     captured.fields.push(props);
     const p = props as CapturedFieldProps;
@@ -294,7 +290,13 @@ const READINGS: Reading[] = [
   {
     name: "the armed-trigger reading (the schedule tab and the rail's schedule step)",
     surface: "armed-trigger",
-    sentence: "Ask Cinatra to change this schedule, or ask about it…",
+    // THE ONE THING READ PER SURFACE (forward resolution, main merged). §X
+    // grants each reading its own sentence in the empty field, and this
+    // reading's sentence is the one graded on the armed-trigger tab through
+    // this slice's proof rounds: "You type into the prompt window under the tab
+    // ('Ask Cinatra to suggest edits to the fields above…')". Nothing else
+    // about this reading changes.
+    sentence: "Ask Cinatra to suggest edits to the fields above…",
     mount: async () => {
       const { SchedulePromptWindow } = await import("../schedule-prompt-window");
       return <SchedulePromptWindow templateId="tmpl-3222" runId="run-3222" canRespondInWindow={true} />;
@@ -308,7 +310,11 @@ const READINGS: Reading[] = [
       const { ReviewGatePromptWindow } = await import("../review-gate-card");
       return (
         <ReviewGatePromptWindow
-          submitAction={vi.fn(async () => ({ ok: true }) as never)}
+          // THE WINDOW FILES THROUGH THE CARD, NOT THROUGH A HANDED-IN ACTION
+          // (cinatra#2934): the review page`s direct comment-submit path is
+          // retired with this slice, so the window takes no `submitAction` any
+          // more and files a typed request for changes through the card`s own
+          // Comment control. Nothing else about this mount changes.
           storageKey="cinatra_review_window_run-3222"
           canComment={true}
           runId="run-3222"

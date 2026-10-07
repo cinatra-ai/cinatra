@@ -13,19 +13,72 @@ import {
   loadRunWindowConversation,
   sendRunWindowTurn,
   type RunWindowEntry,
+  type RunWindowFillEntry,
 } from "./run-window-actions";
 import type { RunWindowSurface } from "./run-window-conversation-store";
+
+/**
+ * What one turn did, as the screen above the window needs to know it
+ * (cinatra#2934, lifecycle-b W5c).
+ *
+ * `fill` — the values the assistant placed in this screen's fields, for the
+ * screen to write into its own fields. Nothing was submitted.
+ * `acted` — the assistant PRESSED a control of the bound card, so the screen
+ * re-reads its state from the server and settles.
+ */
+export type RunWindowTurnEffect = {
+  fill: RunWindowFillEntry | null;
+  acted: boolean;
+};
 
 export type UseRunWindowConversation = {
   /** The stored exchange, oldest first — what the panel draws above the field. */
   entries: RunWindowEntry[];
   /** True while a turn is out. */
   pending: boolean;
-  /** Send one message. Resolves when the exchange has been re-read. */
-  send: (prompt: string) => Promise<void>;
+  /**
+   * Send one message, with any files attached beside it. Resolves when the
+   * exchange has been re-read, with what the turn DID to the screen.
+   */
+  send: (
+    prompt: string,
+    attachments?: readonly Record<string, unknown>[],
+  ) => Promise<RunWindowTurnEffect>;
   /** True once the run's stored exchange has been read on mount. */
   loaded: boolean;
 };
+
+const NOTHING_HAPPENED: RunWindowTurnEffect = { fill: null, acted: false };
+
+// A turn can end after the page moved to the next step, and the window mounted
+// there has read the stored exchange before the reply was stored. The turn's
+// end is the moment the stored rows changed, so every mounted window of that
+// run is told, and re-reads. Kept in this module: both ends are here and the
+// run id travels with the announcement.
+const turnEndListeners = new Map<string, Set<() => void>>();
+
+function listenForTurnEnd(runId: string, listener: () => void): () => void {
+  let set = turnEndListeners.get(runId);
+  if (!set) {
+    set = new Set();
+    turnEndListeners.set(runId, set);
+  }
+  set.add(listener);
+  return () => {
+    const current = turnEndListeners.get(runId);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) turnEndListeners.delete(runId);
+  };
+}
+
+function announceTurnEnd(runId: string, except: (() => void) | null): void {
+  const set = turnEndListeners.get(runId);
+  if (!set) return;
+  for (const listener of [...set]) {
+    if (listener !== except) listener();
+  }
+}
 
 /**
  * `runId` absent ⇒ the window has no run to keep a conversation with (the
@@ -48,6 +101,23 @@ export function useRunWindowConversation(args: {
   boundCardRef.current = args.boundCard;
   // A local id source for the run-less window, which has no stored positions.
   const localIdRef = useRef(0);
+  // THERE IS NO FILL COUNTER HERE, and its absence is the repair (cinatra#2934,
+  // after the picture leg and convergence round 1, finding 1). A turn's own fill
+  // used to be told from the run's by counting how many the run held before and
+  // after — and a count is only as good as its starting point. This one began at
+  // zero on every mount and the load never seeded it, so after ANY page load the
+  // first turn read every fill the run already held as its own: measured on a
+  // reloaded step-by-step screen, a turn that placed NO fill was followed by the
+  // three fields holding an earlier message's values. Seeding it would still
+  // have left the turn sent before the load returned, the load that failed soft
+  // and the second tab filling in between. The SERVER names the turn instead, so
+  // `outcome.fills` is already only this message's rows and there is nothing
+  // here to keep in step.
+
+  // The newest read wins: a read that answers late never overwrites a newer one.
+  const readGenerationRef = useRef(0);
+  // This instance's own re-read, so a turn it sends does not re-read itself.
+  const turnEndListenerRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!runId) {
@@ -55,23 +125,37 @@ export function useRunWindowConversation(args: {
       return;
     }
     let cancelled = false;
+    const read = () => {
+      const generation = ++readGenerationRef.current;
+      return loadRunWindowConversation(runId).then((rows) => {
+        if (cancelled || generation !== readGenerationRef.current) return;
+        // The stored exchange IS the state: what a reload shows is what the run
+        // holds, never a client-side merge of the two.
+        setEntries(rows);
+        setLoaded(true);
+      });
+    };
     setLoaded(false);
-    void loadRunWindowConversation(runId).then((rows) => {
-      if (cancelled) return;
-      // The stored exchange IS the state: what a reload shows is what the run
-      // holds, never a client-side merge of the two.
-      setEntries(rows);
-      setLoaded(true);
-    });
+    void read();
+    const listener = () => {
+      void read().catch(() => {});
+    };
+    turnEndListenerRef.current = listener;
+    const stopListening = listenForTurnEnd(runId, listener);
     return () => {
       cancelled = true;
+      stopListening();
+      turnEndListenerRef.current = null;
     };
   }, [runId]);
 
   const send = useCallback(
-    async (prompt: string) => {
+    async (
+      prompt: string,
+      attachments?: readonly Record<string, unknown>[],
+    ): Promise<RunWindowTurnEffect> => {
       const text = prompt.trim();
-      if (!text) return;
+      if (!text) return NOTHING_HAPPENED;
       if (!runId) {
         // No run, no store: the window still answers nothing on its own, so it
         // shows what was typed and says plainly that it cannot carry it.
@@ -85,8 +169,9 @@ export function useRunWindowConversation(args: {
               "This screen has no run yet, so there is nothing to hold a conversation about. Start the run and the window will answer here.",
           },
         ]);
-        return;
+        return NOTHING_HAPPENED;
       }
+      const ownListener = turnEndListenerRef.current;
       setPending(true);
       // The person's own words appear immediately; the server is what makes
       // them durable, and the re-read below replaces this optimistic row with
@@ -101,17 +186,45 @@ export function useRunWindowConversation(args: {
           surface,
           prompt: text,
           ...(boundCardRef.current ? { boundCard: boundCardRef.current } : {}),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
         });
-        if (outcome.ok) {
-          setEntries(outcome.entries);
-        } else {
+        if (!outcome.ok) {
           setEntries((prev) => [
             ...prev,
             { id: prev.length + 1, role: "assistant", content: outcome.message },
           ]);
+          return NOTHING_HAPPENED;
         }
+        // The turn's own exchange is the newest state: a refresh still out from
+        // another window's turn must not overwrite it.
+        readGenerationRef.current += 1;
+        setEntries(outcome.entries);
+        // THIS TURN'S OWN FILLS, and only those — the server selected them by the
+        // turn's identity. A turn that placed none applies none, so a screen
+        // re-reading the run never re-applies a fill the person has since edited
+        // away.
+        //
+        // EVERY ONE OF THEM, COMPOSED IN ORDER (convergence round 2, finding 1).
+        // A turn that filled the subject and then the body placed TWO rows, and
+        // applying only the last left the subject as it was — while the press
+        // this same message can ask for sends the screen's own values with EVERY
+        // fill of the message over them (`buildScreenSubmitValues`). The two must
+        // agree, or the fields would show one thing and the submit send another.
+        // The composition here is that builder's, key for key: later fills win.
+        const fills = outcome.fills;
+        return {
+          fill:
+            fills.length > 0
+              ? {
+                  ref: fills[fills.length - 1]!.ref,
+                  values: Object.assign({}, ...fills.map((f) => f.values)),
+                }
+              : null,
+          acted: outcome.acted,
+        };
       } finally {
         setPending(false);
+        announceTurnEnd(runId, ownListener);
       }
     },
     [runId, surface],

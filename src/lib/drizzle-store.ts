@@ -4,7 +4,6 @@ import { eq, notInArray } from "drizzle-orm";
 // composition; real pg in extension-destinations-store.ts; enforced by postgres-sync-leaf-imports.test.ts).
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
-import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
 import {
   capabilityOwnershipGrantSchemaQueries,
@@ -1257,6 +1256,19 @@ END $$`,
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboard_entity_links_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (dashboard_id, entity_type, entity_id)` },
     { text: `CREATE INDEX IF NOT EXISTS dashboard_entity_links_scope_idx ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (entity_type, entity_id, organization_id)` },
     { text: `CREATE INDEX IF NOT EXISTS dashboard_entity_links_dashboard_idx ON "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" (dashboard_id)` },
+    // cinatra#2811 workspace dashboards (the fresh-install half of migration core__0108; the same statements, schema-qualified): org-NULL workspace rows + their CHECKs and index twins, workspace references, the everyone-grant.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ALTER COLUMN organization_id DROP NOT NULL` },
+    { text: `DO $$ BEGIN ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD CONSTRAINT dashboards_workspace_entity_org_check CHECK ((organization_id IS NULL) = (entity_type IS NOT DISTINCT FROM 'workspace')); EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
+    { text: `DO $$ BEGIN ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboards" ADD CONSTRAINT dashboards_workspace_entity_shape_check CHECK (entity_type IS DISTINCT FROM 'workspace' OR (entity_id IS NOT DISTINCT FROM '__workspace__' AND owner_level = 'user' AND project_id IS NULL AND is_template = false)); EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
+    { text: `CREATE INDEX IF NOT EXISTS dashboards_workspace_entity_idx ON "${schemaName.replaceAll('"', '""')}"."dashboards" (entity_type, entity_id, owner_level, owner_id) WHERE entity_type IS NOT NULL AND organization_id IS NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_workspace_entity_default_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (entity_type, entity_id, owner_level, owner_id) WHERE is_default = true AND entity_type IS NOT NULL AND organization_id IS NULL` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS dashboards_workspace_entity_name_uniq ON "${schemaName.replaceAll('"', '""')}"."dashboards" (entity_type, entity_id, owner_level, owner_id, name) WHERE entity_type IS NOT NULL AND organization_id IS NULL` },
+    { text: `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = '"${schemaName.replaceAll('"', '""').replaceAll("'", "''")}"."dashboard_entity_links"'::regclass AND c.conname = 'dashboard_entity_links_entity_type_check' AND pg_get_constraintdef(c.oid) LIKE '%workspace%') THEN ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" DROP CONSTRAINT IF EXISTS dashboard_entity_links_entity_type_check; ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" ADD CONSTRAINT dashboard_entity_links_entity_type_check CHECK (entity_type IN ('team','organization','project','workspace')); END IF; END $$` },
+    { text: `DO $$ BEGIN ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" ADD CONSTRAINT dashboard_entity_links_workspace_scope_check CHECK (entity_type <> 'workspace' OR entity_id = '__workspace__'); EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" ADD COLUMN IF NOT EXISTS workspace_read_granted boolean NOT NULL DEFAULT false` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" ADD COLUMN IF NOT EXISTS workspace_read_granted_by text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" ADD COLUMN IF NOT EXISTS workspace_read_granted_at timestamptz` },
+    { text: `DO $$ BEGIN ALTER TABLE "${schemaName.replaceAll('"', '""')}"."dashboard_entity_links" ADD CONSTRAINT dashboard_entity_links_workspace_grant_check CHECK ((workspace_read_granted = false AND workspace_read_granted_by IS NULL AND workspace_read_granted_at IS NULL) OR (workspace_read_granted = true AND entity_type = 'workspace' AND workspace_read_granted_by IS NOT NULL AND workspace_read_granted_at IS NOT NULL)); EXCEPTION WHEN duplicate_object THEN NULL; END $$` },
     // agent_registry_entries, agent_share_bindings, agent_forks for @cinatra/agent-builder registry
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_registry_entries" (
       id text PRIMARY KEY,
@@ -1634,6 +1646,7 @@ END $$`,
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
     // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS delegated_actor_snapshot text` }, ...agentRunAssignmentScopeSchemaQueries(schemaName), // delegated_actor_snapshot: the requesting user's ActorContext, captured at instantiate and replayed at run-start re-authz + mid-run authz checks (nullable JSON text; legacy rows fall back to live-session derivation). assignment_scope_snapshot (cinatra#2813 S1, epic #2812): the IMMUTABLE scopes a run was created under, decided ONCE at creation because the scope a run's assignments come from must not be able to move under it; absent / malformed / unknown-version resolves to workspace plus the durable org and nothing else. Its statement moved into src/lib/assignment-scope.ts — the leaf that already owns this slice's SQL and that this composition already reaches — because THIS module is at its file-size ceiling, which may only ever shrink; the spread rides this line for the same reason as the import, and the leaf carries the reasoning in full. Operator-upgrade twin = migrations/core/core__0100.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS launch_producer text` }, // launch_producer (cinatra#3450, epic #3248): WHAT STARTED THE RUN — the producer key the launch fence received, from the inventory RUN_PRODUCERS records — so a run's record names its origin instead of leaving a child run attested with a task and an attempt only. Stamped ONCE at creation from the key every product road already hands the fence, never inferred from another column, never backfilled and never updated; NULL on a pre-migration row reads as a start nobody wrote down. NOT a trigger record: the ABSENCE of an agent_run_triggers row is the shipped signal for "no schedule chosen yet", so a row written at launch would skip the schedule step for everyone. It takes a LINE OF ITS OWN for the same reason the anchor below does — extending a line that already carries an ADD COLUMN reads to the schema-migration gate as a column REMOVED from the idempotent DDL, and this change removes nothing. The parity suite pins this statement against the drizzle declaration and the migration. Operator-upgrade twin = migrations/core/core__0107.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS launch_scope_anchor jsonb` }, // launch_scope_anchor (cinatra#2809, epic #2806): the IMMUTABLE vantage the run was LAUNCHED from, which decides its ONE canonical address; absent / malformed resolves to unanchored and the flat bare route, with no backfill and no inference from another column. Written INLINE rather than in a shared builder beside the rule: a new leaf module would enter four LOCKED route graphs (every route reaches this DDL owner) whose module counts may only ever shrink. It takes a LINE OF ITS OWN rather than riding the composition line above, because extending a line that already carries an ADD COLUMN reads to the schema-migration gate as a column REMOVED from the idempotent DDL, and this change removes nothing; the file's line ceiling is paid instead by the stray second blank line dropped further down. The parity suite pins this statement against its assistant_threads twin and the migration. Operator-upgrade twin = migrations/core/core__0102.
     // Per-scope role_grant store. Subject
     // is always a user. Scope is one of user/team/organization/
@@ -2175,6 +2188,8 @@ $body$` },
     // persisted on clean RUN_FINISHED by external-sse-proxy. Nullable;
     // legacy rows + internal runs + incomplete externals remain NULL.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS streamed_text text` },
+    // produced_review_park: cinatra#3046 fix leg 12 — the withheld terminal write a produced-review park is holding, as the park's OWN column. It replaces a marker that lived inside the mutable step_results JSON, where any unrelated whole-column write erased it silently, so a parked run read back as not parked. Written and cleared in the same guarded transaction as the parked status and the terminal write. Additive and nullable (the streamed_text precedent on the line above; the schema-migration gate scopes a new nullable column additive, so no numbered migration). Its own NEW line — never appended to a line that already carries DDL and never folded into the CREATE, either of which rewrites deployed schema text.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS produced_review_park text` },
     // a2a_context_id: fasta2a conversation context ID for WayFlow resume.
     // Resume sends a new message into the same context so the flow continues from
     // the input-required checkpoint rather than starting a fresh conversation.
@@ -4268,19 +4283,13 @@ export function buildUpsertJsonRowQuery(
  * those raw columns, so this function emits raw SQL via the QueryInput
  * shape used by `runPostgresQueriesSync`.
  */
-// Import the literal unions from @cinatra-ai/skills so a
-// typo (e.g. "workspaces" instead of "workspace") fails typecheck instead of
-// hitting `skill_pkg_owner_scope_chk` at runtime mid-transaction.
-export type SkillPackageIdentity = {
-  owner_scope: OwnerScope;
-  owner_id: string | null;
-  binding_scope: BindingScope;
-  source_kind: SourceKind;
-  vendor: string | null;
-  package: string | null;
-  agent_template_id: string | null;
-  skill_slug: string;
-};
+export type {
+  ExtensionLifecycleAuditRow,
+  SkillPackageIdentity,
+} from "./drizzle-store-row-shapes";
+
+import type { SkillPackageIdentity } from "./drizzle-store-row-shapes";
+import type { ExtensionLifecycleAuditRow } from "./drizzle-store-row-shapes";
 
 export function buildUpsertSkillPackageQuery(
   schemaName: string,
@@ -4368,19 +4377,6 @@ export function buildDeleteRowsNotInQuery(
 // This function produces a parameterized INSERT that database.ts runs via
 // runPostgresQueriesSync (same pattern as all other write helpers in this file).
 // ---------------------------------------------------------------------------
-export type ExtensionLifecycleAuditRow = {
-  id: string;
-  actorId: string;
-  actorType: string;
-  orgId: string | null;
-  operation: string;
-  packageName: string;
-  packageVersion: string | null;
-  destroyedRowSnapshot: unknown;
-  danglingReferences: unknown;
-  reason: string | null;
-};
-
 export function buildInsertExtensionLifecycleAuditQuery(
   schemaName: string,
   row: ExtensionLifecycleAuditRow,

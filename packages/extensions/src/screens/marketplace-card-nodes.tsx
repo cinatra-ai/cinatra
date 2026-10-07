@@ -154,7 +154,7 @@ export function buildMarketplaceCardNodes({
         // now for a not-installed listing, Update now for an installed-older
         // one whose newer catalog version is incompatible). The
         // pointer-events override keeps the native title tooltip reachable on
-        // a disabled button. The red-triangle Incompatible verdict renders as
+        // a disabled button. The red-cross Incompatible verdict renders as
         // the plain footer-meta row (CompatMeta in marketplace-listing-card.tsx —
         // spec §IV L631 is not a badge).
         <Button
@@ -170,7 +170,28 @@ export function buildMarketplaceCardNodes({
         // when the registry is connected; otherwise a disabled button so
         // we never present an Install that cannot actually install.
         cta.disabled ? (
-          <Button size="sm" disabled title="Connect the package registry to install">
+          // THE GREYED INSTALL OF A CLOSED INSTALL ROAD (cinatra#3494).
+          //
+          // `registryConnected` is resolved from the instance's Verdaccio read
+          // config (src/lib/marketplace-browse.ts), not from the registry URL
+          // the operator set, so an instance whose package registry genuinely
+          // offers the listing can still land here.
+          //
+          // The drawing (design specs/app-extensions.html §I, and the
+          // `extension-listing-card-incompatible` card of §I) greys the install
+          // out and draws NO reason line under the control — the only line it
+          // draws for a greyed card is the Incompatible verdict that "replaces
+          // the compatible check". So the reason travels in the drawn hover
+          // title alone, exactly as the incompatible branch above carries it,
+          // and the same `disabled:pointer-events-auto` override keeps that
+          // title reachable (the Button primitive ships
+          // `disabled:pointer-events-none`, which would swallow the hover).
+          <Button
+            size="sm"
+            disabled
+            className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
+            title="Connect the package registry to install"
+          >
             Install now
           </Button>
         ) : usesInstallPanel ? (

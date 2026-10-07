@@ -33,7 +33,6 @@ import {
   type ChatGateDescriptor,
   type HitlGateContext,
 } from "@cinatra-ai/agents/client-entry";
-import type { RunPollResponse } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   useConversationCredential,
@@ -145,8 +144,11 @@ type SeedData = {
   reviewGate?: {
     ref: string | null;
     awaiting: boolean;
-    /** Whether the gate the ref names is still open (cinatra#3051). */
-    pending?: boolean;
+    /** The run is parked on the review of what it produced (cinatra#3046), so
+     *  the card draws that review where the run is drawn rather than redrawing
+     *  the question the run already moved past. */
+    producedReviewPark?: boolean;
+    reviewTaskId?: string | null;
   } | null;
 };
 
@@ -184,7 +186,8 @@ function reviewSlotReader(
     ) => Promise<{
       ref: string | null;
       awaiting: boolean;
-      pending: boolean;
+      producedReviewPark: boolean;
+      reviewTaskId?: string | null;
     } | null>)
   | undefined {
   const request = seedRequest(credential, runId);
@@ -196,53 +199,37 @@ function reviewSlotReader(
       reviewGate?: {
         ref?: string | null;
         awaiting?: boolean;
-        pending?: boolean;
+        producedReviewPark?: boolean;
+        reviewTaskId?: unknown;
       } | null;
     };
-    if (!data?.reviewGate) return null;
+    if (!data?.reviewGate || typeof data.reviewGate !== "object" || Array.isArray(data.reviewGate)) return null;
     return {
       ref: typeof data.reviewGate.ref === "string" && data.reviewGate.ref.length > 0
         ? data.reviewGate.ref
         : null,
       awaiting: Boolean(data.reviewGate.awaiting),
-      // The widget's own re-read carries the SAME facts the seed does — a
-      // surface that drops one of them cannot draw the reading the other two
-      // hosts draw (cinatra#3051).
-      pending: Boolean(data.reviewGate.pending),
+      // cinatra#3046 — the third fact of the same slot, carried on the SAME
+      // credential as the other two. Without it the conversation's card cannot
+      // tell a run parked on its own review from a run parked on a question, and
+      // it drew the question.
+      producedReviewPark: Boolean(data.reviewGate.producedReviewPark),
+      // The stable display identity accompanies the opaque ticket unchanged;
+      // absent identity never proves that a new seal names the same gate.
+      ...("reviewTaskId" in data.reviewGate ? {
+        reviewTaskId:
+          typeof data.reviewGate.reviewTaskId === "string" && data.reviewGate.reviewTaskId.trim().length > 0
+            ? data.reviewGate.reviewTaskId
+            : null,
+      } : {}),
     };
-  };
-}
-
-/**
- * THE RUN'S OWN RE-READ (cinatra#3051).
- *
- * The panel keeps the run current on its own tick — that is how a run which
- * parks for review while the page is open reaches its review with nobody
- * re-opening the page. Until this change the panel could not use that tick on
- * the widget: its live status came from the app's cookie-session run stream,
- * which cannot carry a broker credential, and the tick's status write stood
- * aside for it. The tick is authoritative on this host now, so the read it makes
- * has to travel on the SAME credential the seed and the slot do — built by the
- * one shared builder, so a widget frame keeps `credentials: "omit"` and never
- * sends an ambient cookie, and a host that cannot say who is asking reads
- * nothing at all.
- */
-function runSnapshotReader(
-  credential: ConversationCredential,
-  runId: string,
-): (() => Promise<RunPollResponse | null>) | undefined {
-  const request = seedRequest(credential, runId);
-  if (!request) return undefined;
-  return async () => {
-    const res = await fetch(request.url, request.init);
-    if (!res.ok) return null;
-    return (await res.json()) as RunPollResponse;
   };
 }
 
 export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
+  onReviewReadingChange,
   recommendationDecided,
 }: {
   runId: string;
@@ -269,6 +256,12 @@ export function InlineAgentRunCard({
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  /**
+   * Forwarded to AgenticRunPanel so the turn that hosts this panel can read
+   * which reading the panel is drawing. Fires with `true` only while that
+   * reading is the review screen, and `false` for every other one.
+   */
+  onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
 }) {
   const [seed, setSeed] = useState<SeedData | null>(null);
   const [loadError, setLoadError] = useState<LoadFailureReason | null>(null);
@@ -282,13 +275,6 @@ export function InlineAgentRunCard({
   // restart the panel's slot reader on every render.
   const slotReader = useMemo(
     () => reviewSlotReader(credential, runId),
-    [credential, runId],
-  );
-  // Memoized on the same two values, and for the same reason: it is a hook
-  // input inside the panel, and a fresh function every render would restart the
-  // panel's tick on every render.
-  const runSnapshot = useMemo(
-    () => runSnapshotReader(credential, runId),
     [credential, runId],
   );
 
@@ -412,11 +398,11 @@ export function InlineAgentRunCard({
         templateId={seed.templateId}
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
+        onReviewReadingChange={onReviewReadingChange}
         recommendationDecided={recommendationDecided}
         surface="chat"
         initialReviewGate={seed.reviewGate ?? null}
         readReviewSlot={slotReader}
-        readRunSnapshot={runSnapshot}
       />
     </div>
   );

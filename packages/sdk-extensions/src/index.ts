@@ -43,6 +43,7 @@ export type {
   HostUiPort,
   HostLoggerPort,
   HostRuntimePort,
+  HostDevInstanceIsolation,
   HostCapabilitiesPort,
   HostTelemetryPort,
   HostUsageEvent,
@@ -853,6 +854,9 @@ export {
   declaredTablePhysicalName,
   declaredIndexPhysicalName,
   parseDeclaredTables,
+  parseDeclaredTools,
+  declaredToolModulePathIssue,
+  EXTENSION_TOOL_MODULE_EXPORT,
   assertNoDeclaredTablePrefixCollision,
 } from "./manifest";
 export type {
@@ -861,6 +865,8 @@ export type {
   DeclaredColumn,
   DeclaredIndex,
   DeclaredTable,
+  DeclaredTool,
+  DeclaredToolDeclaration,
   DeclaredColumnDeclaration,
   DeclaredIndexDeclaration,
   DeclaredTableDeclaration,

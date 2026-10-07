@@ -6,6 +6,7 @@ import {
   ENTITY_METADATA_PORTLET_KIND,
   ENTITY_COUNT_PORTLET_KIND,
   isAnalyticsPortletKind,
+  PORTLET_KINDS_WITH_BUNDLED_COMPONENT,
 } from "../portlets/kinds";
 import {
   getPortletKind,
@@ -22,13 +23,12 @@ const vc = (kind: string, config: Record<string, unknown>, inputs?: Record<strin
 beforeAll(() => registerCorePortletKinds());
 
 describe("core portlet kinds", () => {
-  it("registers all 7 kinds with a session scopePolicy", () => {
+  it("registers all 6 kinds with a session scopePolicy", () => {
     for (const kind of [
       "object-list",
       "object-detail",
       "artifact-list",
       "artifact-edit-text",
-      "artifact-edit-binary-prompt",
       "artifact-version-history",
       "agent-launcher",
     ]) {
@@ -48,13 +48,9 @@ describe("core portlet kinds", () => {
     expect(vc("artifact-edit-text", { refSwapPrimitive: "blog_post_update", parentObjectField: "postArtifactId" })).toEqual([]);
   });
 
-  it("artifact-edit-binary-prompt enforces refSwapMode auto/manual + refSwapPrimitive rule", () => {
-    expect(vc("artifact-edit-binary-prompt", { generationPrimitive: "g", parentObjectField: "imageArtifactId", refSwapMode: "auto" })).toEqual([]);
-    // auto + refSwapPrimitive present → reject
-    expect(vc("artifact-edit-binary-prompt", { generationPrimitive: "g", parentObjectField: "imageArtifactId", refSwapMode: "auto", refSwapPrimitive: "x" }).length).toBeGreaterThan(0);
-    // manual without refSwapPrimitive → reject
-    expect(vc("artifact-edit-binary-prompt", { generationPrimitive: "g", parentObjectField: "imageArtifactId", refSwapMode: "manual" }).length).toBeGreaterThan(0);
-    expect(vc("artifact-edit-binary-prompt", { generationPrimitive: "g", parentObjectField: "imageArtifactId", refSwapMode: "manual", refSwapPrimitive: "x" })).toEqual([]);
+  it("the retired artifact-edit-binary-prompt kind is neither registered nor bundled", () => {
+    expect(getPortletKindDescriptor("artifact-edit-binary-prompt", V)).toBeUndefined();
+    expect(PORTLET_KINDS_WITH_BUNDLED_COMPONENT as readonly string[]).not.toContain("artifact-edit-binary-prompt");
   });
 
   it("agent-launcher requires an agent ref", () => {

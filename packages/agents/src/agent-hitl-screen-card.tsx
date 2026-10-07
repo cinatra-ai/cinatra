@@ -258,7 +258,7 @@ export function hitlGateKey(gate: AgentHitlScreenGate): string {
 }
 
 /**
- * §I "NO SEND" — WHOSE CONTROL THE SEND IS, ON A GATE IN A CONVERSATION.
+ * §I "NO SEND" — WHOSE CONTROL THE SEND IS, ON A SETUP GATE IN A CONVERSATION.
  *
  * The same clause that decides the treatment decides this, because it is one
  * sentence: where the field is drawn SUBORDINATE it gives up "the enclosing
@@ -267,54 +267,47 @@ export function hitlGateKey(gate: AgentHitlScreenGate): string {
  * is the second primary input the rule exists to forbid — it does not stop
  * being one because the component that drew it is a field renderer.
  *
- * So on a conversation host the send is the CARD'S, on both gate shapes it can
- * answer: the card draws its own Continue outside the region, and the renderer's
- * own submit is not drawn inside it.
+ * On a SETUP gate the card drew no Continue of its own, so the renderer's own
+ * button WAS the send and it sat inside the region. That is the shape this
+ * moves: on a conversation host the card draws its own Continue outside the
+ * region, and the renderer's own submit is not drawn inside it.
  *
- * THE MID-RUN HALF IS cinatra#3051, FIX LEG 9, and the hole it closes was named
- * here before it was closed: the setup arm below used to be the whole rule, and
- * a mid-run gate was left with the card's Continue OUTSIDE the region and the
- * renderer's own send INSIDE it — two sends in one card, the second of them
- * drawn over the chat box it is supposed to be subordinate to. The ninth proof
- * round answered a mid-run selection step inside the widget, which is exactly
- * that screen. Nothing about the mid-run ANSWER moves: the renderer still
- * buffers into the card's own Continue on change, and the Continue asks the
- * renderer for its value through the shared flush first, which is the same call
- * the button it no longer draws would have made.
+ * TWO SHAPES ARE DELIBERATELY LEFT ALONE, and both are stated rather than
+ * hidden:
  *
- * ONE SHAPE IS DELIBERATELY LEFT ALONE, and it is stated rather than hidden: a
- * GROUPED-SETUP form owns ONE submit for the whole form and resolves its own
- * children, so the card draws no Continue for it on any host and cannot take the
- * form's over. Giving the card that form's send means the form handing its whole
- * validated value out on demand, which is its own work.
+ *   · a MID-RUN gate, where the card ALREADY draws its own Continue and the
+ *     renderer keeps whatever control it has. Nothing about that screen moves
+ *     here. A mid-run renderer that draws its own send inside the region on a
+ *     conversation host is a §I hole this does not close, and closing it means
+ *     changing a screen this is not measuring;
+ *   · a GROUPED-SETUP form, which owns ONE submit for the whole form and
+ *     resolves its own children, so the card draws no Continue for it on any
+ *     host and cannot take the form's over. Giving the card that form's send
+ *     means the form handing its whole validated value out on demand, which is
+ *     its own work.
  *
- * On the run page and the review page the field is the primary input, the
- * renderer keeps its own control, and nothing here reaches them.
- */
-export function cardOwnsTheSend(
-  host: LifecycleCardHost,
-  gate: AgentHitlScreenGate,
-): boolean {
-  if (hitlFieldPresentationFor(host) !== "subordinate") return false;
-  const { isGroupedSetup } = classifyHitlGate(gate);
-  return !isGroupedSetup;
-}
-
-/**
- * The SETUP half of that rule — the arm that also moves WHERE THE ANSWER GOES.
- *
- * A setup-loop gate submits ON CHANGE, so taking its renderer's button away also
- * means the change must STAGE rather than submit and the card's own Continue
- * must send what was staged. A mid-run gate already buffers into the card's
- * Continue, so its arm moves the BUTTON and nothing else. Two predicates because
- * they answer two different questions about the same rule.
+ * On the run page and the review page the field is the primary input and the
+ * renderer keeps its own control — UNLESS IT HAS NONE (cinatra#3532). A
+ * renderer whose registry entry declares no submit control of its own
+ * (`FieldRendererEntry.drawsOwnSubmit`) leaves the reader nothing to press
+ * there, which is not a hierarchy question at all: it is a field that cannot be
+ * passed. The wizard's second field, drawn by a pack's own renderer, was exactly
+ * that, and no run could be started through it. So on a primary host the card
+ * takes the send for that field and only for that field — the fallback field,
+ * which draws its own Continue, declares one and keeps it.
  */
 export function cardOwnsTheSetupSend(
   host: LifecycleCardHost,
   gate: AgentHitlScreenGate,
+  /** Does the renderer this gate mounts draw a submit control of its own? The
+   *  default is the answer a caller that cannot say leaves behind: on a primary
+   *  host the renderer keeps the send, exactly as before #3532. */
+  rendererDrawsOwnSubmit: boolean = true,
 ): boolean {
-  if (!cardOwnsTheSend(host, gate)) return false;
-  return !classifyHitlGate(gate).isMidRun;
+  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+  if (isMidRun || isGroupedSetup) return false;
+  if (hitlFieldPresentationFor(host) === "subordinate") return true;
+  return !rendererDrawsOwnSubmit;
 }
 
 /** One shared empty buffer, so "nothing typed yet" is one identity rather than
@@ -648,6 +641,20 @@ function gateMountsAnAnsweringRenderer(runId: string, gate: AgentHitlScreenGate)
   return resolveHitlGateEntry(runId, gate) !== null;
 }
 
+/**
+ * DOES THE RENDERER THIS GATE MOUNTS DRAW A SUBMIT CONTROL OF ITS OWN?
+ * (cinatra#3532.) The entry's own declaration, resolved the way the region
+ * resolves it — absent means it declares none, and the card's Continue is then
+ * this field's only way forward. A PRESENTATION HINT draws the card's own
+ * `DispatchRenderer`, which the card hands no `onChange`, so it is reported as
+ * carrying its own control and the takeover does not reach it (the condition it
+ * rides on withholds it anyway).
+ */
+function gateRendererDrawsOwnSubmit(runId: string, gate: AgentHitlScreenGate): boolean {
+  if (presentationHintOf(gate) !== null) return true;
+  return resolveHitlGateEntry(runId, gate)?.drawsOwnSubmit === true;
+}
+
 /** The registry entry this gate resolves to, or null — resolved the way
  *  `AgentHitlScreenFields` resolves it, so the card's decisions and the region's
  *  rendering can never disagree about which component is in question. */
@@ -750,6 +757,15 @@ export function AgentHitlScreenFields({
 
   const presentation = hitlFieldPresentationFor(host);
   const flushKey = gateKey ?? hitlGateKey(gate);
+  // WHAT THE FIELD SHOWS WHILE THE CARD HOLDS ITS ANSWER (cinatra#3532,
+  // convergence finding 1). Where the card owns the send, a setup field's
+  // change is staged rather than sent, and a renderer controlled by `value`
+  // (CtaRenderer's textarea reads it and keeps no state of its own) would
+  // otherwise clear itself after every keystroke. Keyed by the gate, so a
+  // draft never seeds the next question.
+  const [setupDraft, setSetupDraft] = useState<{ key: string; value: unknown } | null>(
+    null,
+  );
   const registerRendererFlush = registerFlush
     ? (fn: () => Promise<void>) => registerFlush(flushKey, fn)
     : undefined;
@@ -786,11 +802,17 @@ export function AgentHitlScreenFields({
           key={`${gate.xRenderer}::${gate.fieldName ?? ""}`}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
-          value={setupFieldRendererValue(
-            { ...gate.currentValues, ...buffered },
-            gate.fieldName ?? undefined,
-            renderSchema,
-          )}
+          value={
+            hideRendererSubmit === true &&
+            setupDraft !== null &&
+            setupDraft.key === flushKey
+              ? setupDraft.value
+              : setupFieldRendererValue(
+                  { ...gate.currentValues, ...buffered },
+                  gate.fieldName ?? undefined,
+                  renderSchema,
+                )
+          }
           onChange={
             isMidRun
               ? async (next: unknown) => {
@@ -818,6 +840,11 @@ export function AgentHitlScreenFields({
                         (renderSchema as { type?: string } | undefined)?.type === "object",
                     },
                   );
+                  // The field goes on showing what the reader put in it while
+                  // the card holds the send (cinatra#3532, finding 1).
+                  if (hideRendererSubmit === true) {
+                    setSetupDraft({ key: flushKey, value: next });
+                  }
                   await onSubmitField(payload, payloadFieldName);
                 }
           }
@@ -871,23 +898,12 @@ function HitlContinueControl({
 export function AgentHitlScreenContinue({
   gate,
   buffered,
-  readBuffered,
   submitting,
   blocked,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
-  /**
-   * WHERE THE CARD OWNS THE SEND (cinatra#3051, fix leg 9), what the reader
-   * typed is asked for at the PRESS rather than read off the last render: the
-   * card asks the renderer for its value through the shared props contract's own
-   * flush — the same call the button the renderer no longer draws would have
-   * made — and hands back the buffer that flush wrote. Absent everywhere the
-   * renderer kept its own control, and the press is then byte-identical to what
-   * it was before this parameter existed.
-   */
-  readBuffered?: () => Promise<Record<string, unknown>>;
   submitting: boolean;
   /** This host has NO identity to answer with — neither a cookie session nor a
    *  declared credential. The control is drawn and inert rather than firing a
@@ -900,9 +916,8 @@ export function AgentHitlScreenContinue({
       submitting={submitting}
       blocked={blocked}
       onPress={async () => {
-        const answered = readBuffered ? await readBuffered() : buffered;
         let payload: Record<string, unknown> = {
-          ...answered,
+          ...buffered,
           approved: true,
           approvedAt: new Date().toISOString(),
         };
@@ -1072,24 +1087,8 @@ export function AgentHitlScreenCard({
     onResolved: onResolvedState,
   });
 
-  // THE BUFFER, ALSO READABLE IN THE PRESS THAT FLUSHED IT (cinatra#3051, fix
-  // leg 9). A flush calls the renderer's `onChange` synchronously, and the state
-  // write it makes is not readable in the same turn — the same reason the staged
-  // setup answer is a ref. So the mid-run buffer is mirrored here and the card's
-  // Continue reads the mirror, never the render's own snapshot.
-  // SEEDED FROM THE BOX TOO (cinatra#3193 x cinatra#3051 fix leg 9). The card's
-  // own Continue reads this mirror rather than the render's snapshot, so a card
-  // that was MOVED mid-answer must seed it from the carry the state is seeded
-  // from — an empty mirror would answer the gate with nothing the moment the
-  // press happened on the relocated instance.
-  const bufferedRef = useRef<Record<string, unknown>>(
-    carriedRef.current?.buffered ?? EMPTY_BUFFER,
-  );
   const onBuffer = useCallback(
-    (next: Record<string, unknown>) => {
-      bufferedRef.current = next;
-      setBuffered(next);
-    },
+    (next: Record<string, unknown>) => setBuffered(next),
     [setBuffered],
   );
 
@@ -1124,7 +1123,6 @@ export function AgentHitlScreenCard({
     bufferedGateRef.current = gateKey;
     writeCarry({ gateKey, buffered: EMPTY_BUFFER });
     setBuffered(EMPTY_BUFFER);
-    bufferedRef.current = EMPTY_BUFFER;
     // THE STAGED SETUP ANSWER BELONGS TO ONE GATE TOO, for exactly the reason
     // the buffer does, and so does the flush that produced it: the renderer is
     // keyed by the gate and re-registers on the new one, and a flush left over
@@ -1185,15 +1183,7 @@ export function AgentHitlScreenCard({
       setSubmitting(false);
       // WHAT WAS TYPED SURVIVES A REFUSAL and is cleared by a landing. A
       // refusal leaves the screen exactly as it was, with the answer in hand.
-      // THE MIRROR IS CLEARED WITH THE BUFFER IT MIRRORS. The card's own
-      // Continue reads `bufferedRef`, not this render's snapshot, so leaving
-      // the ref behind on a landing would let a second press on a gate whose
-      // key has not yet changed re-send what was just answered, over a field
-      // the reader can see is empty.
-      if (landed) {
-        setBuffered(EMPTY_BUFFER);
-        bufferedRef.current = EMPTY_BUFFER;
-      }
+      if (landed) setBuffered(EMPTY_BUFFER);
       // THE CARD RE-READS EITHER WAY (convergence). A landing is
       // obviously a moment the answer changed — but so is a REFUSAL: the most
       // common reason a submit is refused is that the gate was already answered
@@ -1224,19 +1214,6 @@ export function AgentHitlScreenCard({
     },
     [],
   );
-
-  /**
-   * THE CARD'S CONTINUE ON A MID-RUN GATE, where the card now owns the send.
-   * Ask the renderer for its value the way the button it no longer draws would
-   * have asked, then answer with the buffer that flush wrote. A renderer that
-   * registers no flush has already buffered on change, and the mirror below is
-   * exactly what it wrote.
-   */
-  const readMidRunBuffer = useCallback(async (): Promise<Record<string, unknown>> => {
-    const flush = flushRef.current;
-    if (flush !== null && flush.key === gateKey) await flush.fn();
-    return bufferedGateRef.current === gateKey ? bufferedRef.current : EMPTY_BUFFER;
-  }, [gateKey]);
 
   /** Take what is staged, and leave nothing behind for the next press. */
   const takeSetupAnswer = useCallback((): SetupAnswer | null => {
@@ -1315,15 +1292,10 @@ export function AgentHitlScreenCard({
     // answer for — a withheld renderer, a presentation hint, or a gate that
     // resolves to no renderer at all keeps whatever control it has, and the card
     // draws none of its own there.
-    //
-    // AND THE MID-RUN GATE RIDES THE SAME ONE (cinatra#3051, fix leg 9): its
-    // renderer's own send is withheld too, and the card's Continue — which that
-    // screen already draws — asks the renderer for its value first.
-    const cardOwnsSend =
-      cardOwnsTheSend(host, gate) &&
+    const cardOwnsSetupSend =
+      cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate)) &&
       !withholdRenderer &&
       gateMountsAnAnsweringRenderer(runId, gate);
-    const cardOwnsSetupSend = cardOwnsSend && cardOwnsTheSetupSend(host, gate);
     return (
       <>
         <AgentHitlScreenFields
@@ -1336,15 +1308,14 @@ export function AgentHitlScreenCard({
           onSubmitBuffer={onSubmitBuffer}
           withholdRenderer={withholdRenderer}
           rendererContext={rendererContext}
-          hideRendererSubmit={cardOwnsSend}
-          registerFlush={cardOwnsSend ? registerRendererFlush : undefined}
+          hideRendererSubmit={cardOwnsSetupSend}
+          registerFlush={cardOwnsSetupSend ? registerRendererFlush : undefined}
           gateKey={gateKey ?? ""}
         />
         {isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
-            {...(cardOwnsSend ? { readBuffered: readMidRunBuffer } : {})}
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
             onContinue={onContinue}

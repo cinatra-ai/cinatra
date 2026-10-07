@@ -101,6 +101,19 @@ async function snapshotRowsFor(gateId: string) {
   return rows.rows as { id: string; gate_id: string; payload: unknown }[];
 }
 
+// #3944: preserve the already-minted historical gate and its original pins.
+// The public NEW mint must continue refusing a combined target set.
+async function seedHistoricalGate(runId: string, reviewTaskId: string, targets: CoreAnalysisTarget[]) {
+  const gateId = randomUUID();
+  await pool(`INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+    (id, run_id, org_id, review_task_id, status, pinned_targets)
+    VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`, [gateId, runId, ORG, reviewTaskId, JSON.stringify(targets)]);
+  const replay = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+  expect(replay).toMatchObject({ gateId, idempotent: true });
+  expect((await gateStore.readReviewGate(runId, reviewTaskId))?.pinnedTargets).toEqual(targets);
+  return replay;
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -110,17 +123,8 @@ beforeAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await admin.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    if (qy.text.includes("user_slug_move_trg")) continue;
-    try {
-      await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  await replayStoreSchema(admin, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized =
     true;
@@ -288,12 +292,7 @@ describe.skipIf(!HAS_DB)("S4 — the refusals", () => {
       artifactId: `art-${randomUUID()}`,
       representationRevisionId: `rev-${randomUUID()}`,
     };
-    const emitted = await gateStore.emitArtifactReviewGate({
-      runId: `run-${randomUUID()}`,
-      orgId: ORG,
-      reviewTaskId: `task-${randomUUID()}`,
-      targets: [t1, t2],
-    });
+    const emitted = await seedHistoricalGate(`run-${randomUUID()}`, `task-${randomUUID()}`, [t1, t2]);
     const entryFor = (target: CoreAnalysisTarget, lead: string) => ({
       target,
       kind: "@cinatra-ai/text-artifact:text",
