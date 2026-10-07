@@ -35,6 +35,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
+import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
 
 import {
@@ -80,14 +81,16 @@ import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
   useRunReviewSlot,
+  useRunReviewRailRefresh,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
 // panel draws, so a run's terminal card reads the same on both panels.
 // The gate-level BLOCKED state (cinatra#3219) and the review screen's
 // PLACEHOLDER — both are the review surface's own states, drawn from the one
-// shipped component so this panel restates neither markup nor copy.
-import { ReviewGateBlocked, ReviewGatePlaceholder } from "./review-gate-states";
+// shipped component so this panel restates neither markup nor copy;
+// shortRunReference names the run in the muted-stream resolve (cinatra#3007).
+import { ReviewGateBlocked, ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import {
   ReviewGateCard,
@@ -123,10 +126,13 @@ import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field
 // reads, taken from a module this file already imports so the file's module
 // edges are unchanged.
 import {
+  resolveRunSurfaceStatus,
   runStatusBadgeLabel,
   runStatusPillStatus,
+  runStreamMayBeMute,
   type HitlGateContext,
 } from "./run-surface-status";
+import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -197,6 +203,17 @@ export type StepperStep = { index: number; stepNumber: number; label: string; de
 
 export type OrchestratorStepperPanelProps = {
   runId: string;
+  /**
+   * THE LAUNCHER THE SUCCESSOR OPENS (cinatra#3693, cinatra#3786): the run's
+   * canonical base where it has one, and `/personal` for a user-anchored run,
+   * whose own address stays bare. "Start fresh" and "Start new run" open that
+   * launcher, so the next run is stamped with the same vantage. Absent for an
+   * unanchored run, where both keep today's road.
+   *
+   * NOT this panel's address base: the run page keeps that to itself and
+   * hands this one down separately (`successorLaunchBase`).
+   */
+  launchBase?: string | null;
   initialStatus: string;
   initialError: string | null;
   agUiEnabled?: boolean | null;
@@ -206,7 +223,7 @@ export type OrchestratorStepperPanelProps = {
   agentId: string;
   lgThreadId: string | null;
   // Agent template ID forwarded into FieldRendererContext so HITL
-  // renderers can POST to /api/agents/builder/[templateId]/hitl-assist.
+  // renderers can publish supplemental context for the fill road (cinatra#2934).
   templateId: string;
   /** Human-readable template name used as the base for auto-generated run names. */
   templateName?: string;
@@ -773,7 +790,7 @@ function HitlApprovalCard({
   // the bottom prompt — not on every poll tick.
   const [aiSuggestions, setAiSuggestions] = useState<Record<string, unknown> | undefined>(undefined);
   // Live data the active renderer publishes via onHitlContextChange. Merged
-  // into the hitl-assist fetch body (currentValue) so the LLM sees the current
+  // into the fill road's own reading of the screen so the assistant sees the current
   // array (e.g. recipients) rather than the empty interrupt payload that would
   // otherwise be sent.
   const [rendererHitlContext, setRendererHitlContext] = useState<Record<string, unknown>>({});
@@ -847,7 +864,8 @@ function HitlApprovalCard({
     includeSetupFormSuffix: true,
   });
 
-  // Bottom-of-page prompt handler. Posts to hitl-assist, applies result to the
+  // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
+  // the fill that comes back to the
   // buffer (handleApply), and exposes the suggestion payload to the renderer via
   // aiSuggestions so it can sync local state without using `value` (which
   // re-references on every poll).
@@ -865,40 +883,29 @@ function HitlApprovalCard({
       ];
     }
     if (!templateId || !interruptContext.xRenderer) return;
-    void runWindow.send(prompt);
-    // HitlConversationPanel's internal handleSubmit clears the PromptField and
-    // opens the overlay.
+    // THE FILL ROAD (cinatra#2934, lifecycle-b W5c). The plan: "the assistant
+    // returns the filled values, the screen writes them into its own fields, and
+    // nothing is submitted until you press the button." One road: the message
+    // goes to the run's own conversation with the assistant, and what comes back
+    // is what THIS screen writes into ITS fields. The field-assist route and its
+    // second, hidden model are gone with this block — a message reaches one
+    // model now.
     setPromptPending(true);
     try {
-      const res = await fetch(
-        `/api/agents/builder/${encodeURIComponent(templateId)}/hitl-assist`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            xRenderer: interruptContext.xRenderer,
-            // cinatra#2933 - the run the screen belongs to, so the route asks
-            // the RUN's access instead of the platform tier.
-            runId,
-            currentValue: { ...interruptContext.values, ...bufferedHitlValue, ...rendererHitlContext },
-            schemaProperties: Object.keys(
-              (interruptContext.schema as { properties?: Record<string, unknown> })?.properties ?? {},
-            ),
-            lastAssistantMessage: [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
-          }),
-        },
+      const effect = await runWindow.send(
+        prompt,
+        attachments as readonly Record<string, unknown>[] | undefined,
       );
-      if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-      const json = (await res.json()) as { suggestions?: Record<string, unknown>; message?: string | null };
-      const suggestions = json.suggestions ?? {};
-      handleApply(suggestions);          // updates parent buffer
-      setAiSuggestions(suggestions);     // notifies renderers to sync local state
-      if (Object.keys(suggestions).length === 0) {
-        toast.error("No suggestions generated. Try being more specific, e.g. \"Fill in with sample values\".");
+      // A TURN THAT PRESSED WRITES NO FIELDS (cinatra#2934, convergence round 3).
+      // The fill and the press are two calls, and a fill can land after a press
+      // has already sent the form. Nothing is submitted by it — the press reads
+      // only what landed before it — but writing it into fields the run has
+      // moved past would show values that were never sent. "The card is the
+      // visible truth": a turn that pressed makes the screen re-read instead.
+      if (effect.fill && !effect.acted) {
+        handleApply(effect.fill.values);       // updates parent buffer
+        setAiSuggestions(effect.fill.values);  // renderers sync local state
       }
-    } catch (err) {
-      console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
     } finally {
       setPromptPending(false);
     }
@@ -1490,12 +1497,22 @@ function HitlApprovalCard({
 // FailedCard — Failed state
 // ---------------------------------------------------------------------------
 
+/** The launcher "Start fresh" opens: the run's own launch base when it has
+ *  one, which is `/personal` for a user-anchored run (cinatra#3786). */
+function startFreshPath(agentId: string, launchBase?: string | null): string {
+  return launchBase
+    ? buildAgentWorkspacePath(agentId, { scopeBase: launchBase })
+    : `/agents/${agentId}/new`;
+}
+
 function FailedCard({
   agentId,
   errorMessage,
+  launchBase,
 }: {
   agentId: string;
   errorMessage: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   return (
@@ -1511,7 +1528,7 @@ function FailedCard({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push(`/agents/${agentId}/new`)}
+            onClick={() => router.push(startFreshPath(agentId, launchBase))}
           >
             Start fresh
           </Button>
@@ -1529,10 +1546,12 @@ function CancelledCard({
   runId,
   agentId,
   lgThreadId,
+  launchBase,
 }: {
   runId: string;
   agentId: string;
   lgThreadId: string | null;
+  launchBase?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -1561,7 +1580,7 @@ function CancelledCard({
     });
 
   const handleStartFresh = () => {
-    router.push(`/agents/${agentId}/new`);
+    router.push(startFreshPath(agentId, launchBase));
   };
 
   return (
@@ -1995,6 +2014,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     canRespondInWindow,
     inputStepInRail = false,
     railDrawsTheFrame = false,
+    launchBase,
   } = props;
 
   // THE RAIL THIS PANEL DRAWS, AND WHEN IT DOES NOT (cinatra#3478).
@@ -2151,7 +2171,36 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     enabled: streamEnabled,
     initialStatus,
   });
-  const status = stream.status;
+  // THE STATUS THIS PAGE DRAWS (cinatra#3007, fix leg 9).
+  //
+  // It was `stream.status`, raw. cinatra#3046 established why that is wrong for
+  // exactly one shape and wrote the rule that corrects it — a run parked on its
+  // produced output's review announces nothing, so the stream's last word stays
+  // `running` for the whole park — and gave the rule to the conversation's
+  // panel, which had a tick of its own to read the row with. This surface had
+  // none, so it kept the raw reading: it drew a working run through the whole of
+  // a park, and the ONE shared review-slot reader below never took a single
+  // look, because that reader looks only under `completed` or the parked status
+  // and this page reported neither. The eighth graded reading measured it as an
+  // absence with its own window: no run page swapped its review card in, in
+  // either run, across 899 s, while the page followed the run onto its next step.
+  //
+  // So the row is read for exactly the window in which the stream cannot speak,
+  // and the same pure resolver both surfaces already share decides when it may
+  // overrule. Nothing else about this panel's reading of the stream changes.
+  const streamedStatus = stream.status;
+  const { rowStatus, rowProducedReviewPark, heardFromRun } = useRunRowWatch(runId, {
+    enabled: runStreamMayBeMute(streamEnabled, streamedStatus),
+  });
+  const status = resolveRunSurfaceStatus({
+    streamEnabled,
+    streamedStatus,
+    // This surface has no poll-derived status of its own: the stream IS its
+    // fallback, so `resolveStreamFirst` inside the resolver returns exactly the
+    // reading this line had before.
+    polledStatus: streamedStatus,
+    rowStatus,
+  });
   const interruptContext = stream.interruptContext;
   const runError = stream.error ?? _initialError;
 
@@ -2644,11 +2693,83 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // panel is served only on the run page, which is first-party and same-origin,
   // so it takes the default reader.
   const slotReader = useMemo(() => defaultRunReviewSlotReader(runId), [runId]);
-  const { slot: reviewSlot, mayStillOpen: reviewMayStillOpen } = useRunReviewSlot({
+  const {
+    slot: reviewSlot,
+    mayStillOpen: reviewMayStillOpen,
+    stillReading: reviewStillReading,
+  } = useRunReviewSlot({
+    runId,
     status,
     initial: initialReviewGate,
     read: slotReader,
+    // AND NOW THERE IS LIVENESS EVIDENCE TO PASS (cinatra#3007, fix leg 9).
+    //
+    // Leg 6 stated the omission rather than leaving it silent: this panel had no
+    // read of its own to offer, because a frame that never arrives is not
+    // evidence that anything is alive. The row watch above is that read — a look
+    // at this run, on this surface, that ANSWERED — so the reader's failure belt
+    // gets the same way back here that the conversation's panel has always had.
+    liveSignal: heardFromRun,
+    // AND THE EDGE THE STATUS COLUMN CANNOT SHOW, on this surface too. The run
+    // shape this defect was measured on parks onto a row that is already in the
+    // waiting status, so the only edge is the step the person was answering
+    // going away — which on this page is the stream's own interrupt being
+    // retired by its RESUME. Reading it raw, exactly as the conversation's panel
+    // reads its own.
+    stepOnFile: effectiveInterruptContext !== null,
   });
+
+  // IS THIS RUN HELD ON THE REVIEW OF WHAT IT PRODUCED (cinatra#3007, fix leg
+  // 6)? The same reading the agentic panel takes, off the same shared reader,
+  // because it is the same run on the same page: the row's own answer beside
+  // the status, and the two together are what the park is.
+  //
+  // WHY THIS PANEL NEEDED IT. It draws the run page for a flow run, and its
+  // stage card is chosen by a ladder that has no arm for this state. A run
+  // parked on its produced output's review sits in `pending_approval` carrying
+  // the interrupt of the question it ALREADY answered, so the ladder reaches
+  // the approval branch, hands that spent interrupt to the approval card, and
+  // the card - which has nothing live to draw for a gate that is resolved -
+  // draws nothing. The rail beside it says Step 1 and Review; the column says
+  // nothing at all. Photographed on the fifth capture in both themes: "an empty
+  // block with no card, no spinner, no identity, no text".
+  //
+  // AND THE ROW'S OWN WORD IS READ BESIDE THE SLOT'S (cinatra#3046, fix leg 12).
+  // This line took the SLOT's answer alone. The conversation's panel has always
+  // ORed the row's word with it, for the reason its own comment gives: a slot
+  // answer is a second read on its own schedule, and between the park landing
+  // and that reader's next look the slot says nothing. On this surface the gap
+  // is not a gap but the whole window — the tenth graded reading measured the
+  // conversation landing the card 4.3 s and 4.7 s after the gate row while this
+  // page drew no card across 567 one-second polls in either palette. The row
+  // watch above was already reading the route that serves the park and throwing
+  // the field away; it hands it on now, so this reading is the same two halves,
+  // in the same order, that the conversation's panel takes.
+  const parkedOnProducedReview =
+    status === "pending_approval" &&
+    (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+  // Follow the card branch: the produced-output park wins over its spent
+  // interrupt, and only a discovered card carries a stable rail identity.
+  const reviewTaskId = parkedOnProducedReview
+    ? reviewSlot.ref !== null
+      ? reviewSlot.reviewTaskId
+      : null
+    : status === "pending_approval" &&
+    !awaitingNextStep &&
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
+        ? effectiveInterruptContext.values.reviewTaskId
+        : null
+      : status === "completed"
+        ? reviewSlot.reviewTaskId
+        : null;
+  useRunReviewRailRefresh({
+    runId,
+    reviewTaskId,
+    initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    refresh: embedMode ? undefined : router.refresh,
+  });
+
 
   // -------------------------------------------------------------------------
   // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL
@@ -2709,8 +2830,46 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
 
   let stageCard: ReactNode = null;
 
-  if (status === "failed") {
-    stageCard = <FailedCard agentId={agentId} errorMessage={runError} />;
+  if (parkedOnProducedReview && (reviewSlot.ref !== null || reviewStillReading)) {
+    // THE PARK'S OWN ARM, first because every arm below it is about a different
+    // state and two of them would swallow this one. It is the same two halves
+    // the agentic panel draws, in the same order and from the same reader: the
+    // review card once the gate row exists, and until then the quiet
+    // placeholder - "the card frame, and a spinning icon", in the box the
+    // review screen will fill. Never an empty column.
+    //
+    // AND THE PLACEHOLDER HALF CARRIES THE READER'S OWN BOUNDS (cinatra#3007,
+    // fix leg 6, convergence). This panel's only liveness evidence is the row
+    // watch above (fix leg 9), so its failure belt has a way back but its read
+    // ceiling still ends. A spinner drawn on `ref === null` alone would
+    // outlive them: the last answer this reader ever got still says the run is
+    // parked, so the arm would hold a spinning icon for the life of the tab
+    // after the reader had stopped looking for the row that would end it. That
+    // is the spinner nothing can end. So the placeholder half is held only
+    // while someone is still reading for it, and once the bounds are spent the
+    // run page falls back to the ladder below - the rendering it had before
+    // this leg - rather than to a wait with nobody behind it. The card half is
+    // unconditional: a gate row this reader has already seen does not stop
+    // existing because the reader stopped looking.
+    stageCard = reviewSlot.ref ? (
+      <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
+    ) : (
+      <Card data-run-review-slot="working">
+        <CardContent className="p-6">
+          {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
+              reading took this exact box on both themes and found "a large
+              blank inner box and no run identity anywhere in the card". The run
+              page's title names the AGENT; two runs of one agent draw the same
+              page, and this box is the one that says which run is being waited
+              on. The settled reading is false here by construction - this arm is
+              only reached while the run is parked - and is passed explicitly so
+              the reading is stated rather than defaulted. */}
+          <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
+        </CardContent>
+      </Card>
+    );
+  } else if (status === "failed") {
+    stageCard = <FailedCard agentId={agentId} errorMessage={runError} launchBase={launchBase} />;
   } else if (isPaused && status === "stopped") {
     // User explicitly paused — show SpinnerCard in paused state so they can resume inline.
     stageCard = (
@@ -2728,7 +2887,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     );
   } else if (status === "stopped") {
     stageCard = (
-      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} />
+      <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} launchBase={launchBase} />
     );
   } else if (
     status === "pending_approval" &&
@@ -2899,10 +3058,37 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <RunCompletionCard
             runId={runId}
             agentId={agentId}
+            launchBase={launchBase}
             outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
           />
         )
       ) : null;
+  }
+
+  // AND NO PAUSED RUN LEAVES AN EMPTY COLUMN (cinatra#3007, fix leg 6). The
+  // ladder above is a chain of states, and a state it does not recognise leaves
+  // `stageCard` at its initial null - which on this panel is not "draw nothing",
+  // it is a bare rounded region beside a step rail that says the run is waiting
+  // for a review. The park's own arm covers the reading that was measured; this
+  // covers the class, so the next unrecognised pause draws the placeholder
+  // rather than a hole. It holds only while the slot's reader is still looking,
+  // for the same reason every other wordless box on this page does.
+  if (stageCard === null && status === "pending_approval" && reviewStillReading) {
+    stageCard = (
+      <Card data-run-review-slot="working">
+        <CardContent className="p-6">
+          {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
+              reading took this exact box on both themes and found "a large
+              blank inner box and no run identity anywhere in the card". The run
+              page's title names the AGENT; two runs of one agent draw the same
+              page, and this box is the one that says which run is being waited
+              on. The settled reading is false here by construction - this arm is
+              only reached while the run is parked - and is passed explicitly so
+              the reading is stated rather than defaulted. */}
+          <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
+        </CardContent>
+      </Card>
+    );
   }
 
   // Embed mode: render only the stage card. Used by the parent panel's Dev
@@ -2999,7 +3185,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         <span className="text-sm">Starting dev preview…</span>
       </div>
     );
-  } else if (replayStepIndex !== null) {
+  } else if (replayStepIndex !== null && !parkedOnProducedReview) {
     // Read-only HITL replay — read-only replay surface for a completed HITL gate.
     // The effectiveInterruptContext effect clears replayStepIndex when a new
     // interrupt arrives, so replay can coexist with pending_approval status.

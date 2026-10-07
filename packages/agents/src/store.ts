@@ -149,6 +149,15 @@ export {
 } from "./agent-run-serde";
 export type { AgentRunScopeStage, RunScopeRef } from "./agent-run-serde";
 
+import type {
+  AgentForkRecord,
+  CreateAgentForkInput,
+  CreateRegistryEntryInput,
+  CreateShareBindingInput,
+  RegistryEntryRecord,
+  ShareBindingRecord,
+} from "./store-registry-records";
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -317,6 +326,11 @@ export type AgentRunRecord = {
   // external A2A peer text output persisted on clean RUN_FINISHED.
   // NULL for internal runs and for externals that timed out / errored.
   streamedText: string | null;
+  // THE PRODUCED-REVIEW PARK, as the row's own durable word (cinatra#3046, fix
+  // leg 12). JSON-as-text: the withheld terminal write this park is holding, or
+  // NULL when the run is not parked on a produced review. Read by
+  // isParkedOnProducedReview; written and cleared only by the park's own seam.
+  producedReviewPark: string | null;
   // per-run override of the template's agentAuthPolicy. null = inherit.
   // Persisted as JSON-as-text in agent_runs.auth_policy.
   authPolicy: AgentAuthPolicy | null;
@@ -348,7 +362,7 @@ export type AgentRunRecord = {
   // the org-write run mint refuses a claimed attempt that no longer matches
   // this column (stale-worker refusal). NULL pre-dispatch.
   executionAttemptId: string | null;
-  humanPresent: boolean | null; launchScopeAnchor?: unknown; launchProducer?: string | null; // cinatra#3450 — launchProducer is the producer key the launch fence received, surfaced AS STORED so the attestation of a run names what started it; null on a row created before the column. cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless. cinatra#2809 — launchScopeAnchor is the RAW persisted vantage this run was launched from, which decides its ONE canonical address. Surfaced AS STORED and decoded by src/lib/launch-scope-anchor.ts at the surface that addresses the instance, where an unknown version, an unknown kind, a missing id or a workspace arm carrying one all read as UNANCHORED — the flat bare route. Typed `unknown` deliberately: this module is reachable from four locked route graphs whose module counts may only ever shrink, and a decoder is a surface concern, not a store one. It rides this line for the same reason the fields below do: the module is at its line-count ceiling.
+  humanPresent: boolean | null; launchScopeAnchor?: unknown; launchProducer?: string | null; assignmentScopeSnapshot?: unknown; // cinatra#3450 — launchProducer is the producer key the launch fence received, surfaced AS STORED so the attestation of a run names what started it; null on a row created before the column. cinatra#2815 S3 — assignmentScopeSnapshot is the RAW immutable payload the run FROZE at creation, surfaced AS STORED so the delivery chain reads the scopes the run was created under rather than a live column; typed `unknown` and parsed by packages/agents/src/assignment-scope-snapshot.ts, for the same reason as launchScopeAnchor beside it. cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless. cinatra#2809 — launchScopeAnchor is the RAW persisted vantage this run was launched from, which decides its ONE canonical address. Surfaced AS STORED and decoded by src/lib/launch-scope-anchor.ts at the surface that addresses the instance, where an unknown version, an unknown kind, a missing id or a workspace arm carrying one all read as UNANCHORED — the flat bare route. Typed `unknown` deliberately: this module is reachable from four locked route graphs whose module counts may only ever shrink, and a decoder is a surface concern, not a store one. It rides this line for the same reason the fields below do: the module is at its line-count ceiling.
   // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a). Which moment
   // this run is at, which card that moment mounts, and the card's
   // server-checked reference. All three are NULL together for a run at no
@@ -2709,54 +2723,20 @@ export async function readAgentVersionsByTemplate(
 
 // ---------------------------------------------------------------------------
 // Domain types — agent_registry_entries
+//
+// The shapes themselves live in ./store-registry-records (a vertical slice of
+// plain row types); they are re-exported here unchanged, so every caller keeps
+// importing them from the store.
 // ---------------------------------------------------------------------------
 
-export type RegistryEntryRecord = {
-  id: string;
-  templateId: string;
-  versionId: string;
-  orgId: string;
-  publishedBy: string;
-  semver: string;
-  title: string;
-  description: string | null;
-  toolAccess: string[];          // parsed from JSON on read
-  riskLevel: string;
-  hasApprovalGates: boolean;
-  changelog: string | null;
-  status: string;
-  createdAt: Date;
+export type {
+  AgentForkRecord,
+  CreateAgentForkInput,
+  CreateRegistryEntryInput,
+  CreateShareBindingInput,
+  RegistryEntryRecord,
+  ShareBindingRecord,
 };
-
-export type CreateRegistryEntryInput = Omit<RegistryEntryRecord, "id" | "createdAt" | "toolAccess"> & {
-  toolAccess: string[];           // store serializes to JSON
-};
-
-export type ShareBindingRecord = {
-  id: string;
-  registryEntryId: string;
-  subjectType: string;
-  subjectId: string;
-  canView: boolean;
-  canRun: boolean;
-  canEditDraft: boolean;
-  canPublish: boolean;
-  canApprove: boolean;
-  grantedBy: string;
-  createdAt: Date;
-};
-
-export type CreateShareBindingInput = Omit<ShareBindingRecord, "id" | "createdAt">;
-
-export type AgentForkRecord = {
-  id: string;
-  registryEntryId: string;
-  forkedTemplateId: string;
-  forkedBy: string;
-  createdAt: Date;
-};
-
-export type CreateAgentForkInput = Omit<AgentForkRecord, "id" | "createdAt">;
 
 // ---------------------------------------------------------------------------
 // CRUD — agent_registry_entries

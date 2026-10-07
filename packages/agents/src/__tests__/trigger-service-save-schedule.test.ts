@@ -252,6 +252,66 @@ describe("the refusals, all of them before any write", () => {
     );
   });
 
+  it("a one-off saved to a LATER asked time writes that instant in its zone, after the prior scheduler is cancelled", async () => {
+    const armed = armedOneOff();
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(armed);
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: { kind: "scheduled", runAt: "2099-01-15T09:30", timezone: "Europe/Berlin" },
+    });
+
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+    // 09:30 in Europe/Berlin in January is one hour ahead of UTC.
+    const ASKED = new Date("2099-01-15T08:30:00.000Z");
+    // The asked time is LATER than the armed one.
+    expect(ASKED.getTime()).toBeGreaterThan(armed.scheduledAt.getTime());
+    // The prior scheduler is cancelled, by its own id.
+    expect(schedule.cancelTriggerSchedule).toHaveBeenCalledWith({
+      jobSchedulerId: "sched-OLD",
+      triggerType: "scheduled",
+    });
+    // EVERY row write carries the asked instant and its zone — none keeps the
+    // armed time.
+    expect(triggerStore.createOrUpdateRunTrigger).toHaveBeenCalled();
+    for (const [row] of triggerStore.createOrUpdateRunTrigger.mock.calls as unknown as [
+      Record<string, unknown>,
+    ][]) {
+      expect(row).toEqual(
+        expect.objectContaining({
+          runId: RUN_ID,
+          triggerType: "scheduled",
+          scheduledAt: ASKED,
+          timezone: "Europe/Berlin",
+        }),
+      );
+    }
+    // The final row names the new scheduler at the asked instant.
+    expect(triggerStore.createOrUpdateRunTrigger).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scheduledAt: ASKED,
+        timezone: "Europe/Berlin",
+        jobSchedulerId: "sched-NEW",
+      }),
+    );
+    expect(schedule.scheduleTrigger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: RUN_ID,
+        triggerType: "scheduled",
+        scheduledAt: ASKED,
+        timezone: "Europe/Berlin",
+      }),
+    );
+    // Cancel, then the row write, then the new scheduler.
+    const cancelOrder = schedule.cancelTriggerSchedule.mock.invocationCallOrder[0];
+    const writeOrder = triggerStore.createOrUpdateRunTrigger.mock.invocationCallOrder[0];
+    const scheduleOrder = schedule.scheduleTrigger.mock.invocationCallOrder[0];
+    expect(cancelOrder).toBeLessThan(writeOrder);
+    expect(writeOrder).toBeLessThan(scheduleOrder);
+    // A save is not a run: nothing is dispatched now.
+    expect(enqueue.enqueueAgentRun).not.toHaveBeenCalled();
+  });
+
   // THE FIXTURE MOVED FROM RECURRING TO ONE-OFF (cinatra#2972), and that is the
   // finding rather than a convenience: `releasedAt` is the ONE-OFF's and the
   // IMMEDIATE's firing. A recurring tick opens the COPY's gate, never this

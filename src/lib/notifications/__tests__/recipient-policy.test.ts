@@ -48,7 +48,7 @@ describe("topicForRecipient", () => {
 describe("getRecipientForJob", () => {
   it("routes user-launched jobs with initiatorUserId to that user", () => {
     const out = getRecipientForJob({
-      jobName: "blog-post-image-regeneration",
+      jobName: "blog-post-wordpress-draft-creation",
       jobData: { initiatorUserId: "u-7" },
       status: "completed",
     });
@@ -81,13 +81,13 @@ describe("getRecipientForJob", () => {
   it("warns when a user-job without initiator fails (visibility gap signal)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = getRecipientForJob({
-      jobName: "blog-post-image-regeneration",
+      jobName: "blog-post-wordpress-draft-creation",
       jobData: {},
       status: "failed",
     });
     expect(out).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0]![0]).toContain("blog-post-image-regeneration");
+    expect(warnSpy.mock.calls[0]![0]).toContain("blog-post-wordpress-draft-creation");
     warnSpy.mockRestore();
   });
 
@@ -135,7 +135,7 @@ describe("getRecipientForJob", () => {
       "ExternalA2AAgent",
     ]) {
       const out = getRecipientForJob({
-        jobName: "blog-post-image-regeneration",
+        jobName: "blog-post-wordpress-draft-creation",
         jobData: {
           __actorContext: {
             principalType,
@@ -204,7 +204,7 @@ describe("getRecipientForJob", () => {
 
   it("started: user-init job → notify initiator (same as completed)", () => {
     const out = getRecipientForJob({
-      jobName: "blog-post-image-regeneration",
+      jobName: "blog-post-wordpress-draft-creation",
       jobData: { initiatorUserId: "u-7" },
       status: "started",
     });
@@ -214,7 +214,7 @@ describe("getRecipientForJob", () => {
   it("started: user-init job without initiator → null (no warn for started)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = getRecipientForJob({
-      jobName: "blog-post-image-regeneration",
+      jobName: "blog-post-wordpress-draft-creation",
       jobData: {},
       status: "started",
     });

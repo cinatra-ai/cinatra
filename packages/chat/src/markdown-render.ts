@@ -7,7 +7,30 @@
 // prompt-injectable, tool output is remote-controlled, and stored/shared
 // threads replay arbitrary past content — so every interpolation here must
 // escape text and scheme-allowlist URLs.
-import { Marked, type Token, type Tokens } from "marked";
+import { type Tokens } from "marked";
+// THE RENDERER ITSELF MOVED (cinatra#2934, W5c). The per-run prompt window has
+// to draw the same assistant prose /chat draws, and `@cinatra-ai/chat` depends
+// on `@cinatra-ai/agents` — so the shared half lives one package DOWN, where
+// both surfaces may reach it, and /chat supplies the parts only /chat has.
+import {
+  LINK_CLASSES,
+  createCoreMarked,
+  escapeHtml,
+  normalizeCoreMarkdown,
+  safeHref,
+  stripEmptyParagraphs,
+} from "@cinatra-ai/agents/markdown-render-core";
+// THE TABLE'S CELL GRAMMAR MOVED WITH THE RENDERER (cinatra#3230, forward merge
+// of origin/main). The four names below are the deterministic reader that
+// decides a column's alignment; they are defined beside the table renderer that
+// is their only caller, and re-exported here so /chat's own suite reads them
+// where it always has.
+export {
+  cellPlainText,
+  isNumericCellText,
+  isTimestampCellText,
+  resolveColumnRightAligned,
+} from "@cinatra-ai/agents/markdown-render-core";
 import { getHighlightedSync, type ThemeName } from "./syntax-highlight";
 import { preprocessMath, restoreMath } from "./math-render";
 // The chart PAYLOAD schema + validator are host-owned and live in the shared
@@ -18,56 +41,8 @@ import { validateChart, type ChartSpec } from "@cinatra-ai/agent-ui-protocol/ren
 import type { DetectedWidget } from "./widget-runtime";
 
 const APP_ROUTES = "campaigns|content|sources|accounts|contacts|transcript-generators";
-const LINK_CLASSES = "text-muted-foreground underline underline-offset-4 hover:text-foreground";
 
-// Markdown rendered here is injected via dangerouslySetInnerHTML, and the source
-// is untrusted (assistant output is prompt-injectable, tool output is
-// remote-controlled, and stored/shared threads replay arbitrary past content).
-// The custom marked renderer below replaces marked's default renderers, which
-// would otherwise HTML-escape text and scheme-clean URLs — so every text/URL
-// interpolation must re-apply those protections explicitly. escapeHtml mirrors
-// marked's own entity escaping for any value written into element text or an
-// HTML attribute value.
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Allowlist the URL schemes that may appear in a rendered href. Anything not
-// matching is treated as unsafe and dropped (the caller renders link text with
-// no href). This mirrors marked's default cleanUrl behavior, which the custom
-// link renderer below otherwise bypasses. Relative/internal app paths (starting
-// with "/", "./", "../", "#", or "?") and protocol-relative-free fragments are
-// permitted; absolute URLs must be http(s) or mailto. Leading control chars and
-// whitespace are stripped first because browsers ignore them when resolving a
-// scheme (e.g. "java\tscript:").
-function safeHref(href: string): string | null {
-  // Strip ASCII control chars and whitespace anywhere in the URL — browsers
-  // ignore them when resolving the scheme (e.g. "java\tscript:" runs as
-  // "javascript:"), so they must not defeat the scheme allowlist below.
-  // eslint-disable-next-line no-control-regex
-  const trimmed = href.replace(/[\u0000-\u0020\u007f]/g, "");
-  if (trimmed === "") return null;
-  // Protocol-relative URLs resolve to an absolute cross-origin navigation, so
-  // they must NOT slip through as "internal". Browsers normalize a BACKSLASH
-  // leading pair (and mixed slash/backslash) to "//" too — "/\\evil.com",
-  // "\\\\evil", "\\/evil", "/\\/evil" all become protocol-relative — so reject
-  // ANY two leading slash-or-backslash chars, before the root-relative check.
-  if (/^[\\/]{2}/.test(trimmed)) return null;
-  // Relative / internal references — no scheme, cannot execute script.
-  // Root-relative ("/path"), fragment ("#x"), query ("?x"), or dot-relative
-  // ("./", "../") only.
-  if (/^[/#?]/.test(trimmed) || /^\.\.?\//.test(trimmed)) return trimmed;
-  // Absolute URLs: only allow http(s) and mailto.
-  if (/^https?:\/\//i.test(trimmed) || /^mailto:/i.test(trimmed)) return trimmed;
-  return null;
-}
 function createMarkedInstance(theme: ThemeName = "github-light") {
-  let tableIndex = 0;
   const appLinks: { html: string; label: string }[] = [];
 
   function appLinkPlaceholder(href: string, label: string): string {
@@ -84,170 +59,33 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
     return `%%APPLINK_${idx}%%`;
   }
 
-  const md = new Marked({
-    gfm: true,
-    breaks: false,
-    renderer: {
-      heading({ tokens, depth }: Tokens.Heading) {
-        const text = this.parser.parseInline(tokens);
-        if (depth <= 2) return `<h2 class="text-lg font-semibold text-foreground mt-5 mb-2">${text}</h2>`;
-        return `<h3 class="text-base font-semibold text-foreground mt-4 mb-1">${text}</h3>`;
-      },
-      paragraph({ tokens }: Tokens.Paragraph) {
-        return `<p class="my-2 leading-relaxed text-foreground">${this.parser.parseInline(tokens)}</p>`;
-      },
-      strong({ tokens }: Tokens.Strong) {
-        return `<strong class="font-semibold text-foreground">${this.parser.parseInline(tokens)}</strong>`;
-      },
-      em({ tokens }: Tokens.Em) {
-        return `<em class="italic text-foreground">${this.parser.parseInline(tokens)}</em>`;
-      },
-      blockquote({ tokens }: Tokens.Blockquote) {
-        const inner = this.parser.parse(tokens).replace(/^<p[^>]*>([\s\S]*)<\/p>$/, "$1");
-        return `<blockquote class="my-3 border-l-2 border-line pl-4 text-muted-foreground italic">${inner}</blockquote>`;
-      },
-      del({ tokens }: Tokens.Del) {
-        return `<del class="line-through text-muted-foreground">${this.parser.parseInline(tokens)}</del>`;
-      },
-      codespan({ text }: Tokens.Codespan) {
-        // marked stores the RAW codespan text; its default renderer escapes it.
-        // This override must re-escape or inline code like `<img src=x
-        // onerror=alert(1)>` would inject live DOM. (#269)
-        return `<code class="rounded bg-surface-muted px-1.5 py-0.5 text-xs font-mono text-foreground">${escapeHtml(text)}</code>`;
-      },
-      code({ text, lang }: Tokens.Code) {
-        // Escape HTML to prevent XSS — text from LLM is untrusted.
-        const escaped = escapeHtml(text);
-        const safeLang = lang ? lang.replace(/[^a-zA-Z0-9-]/g, "") : "";
+  const md = createCoreMarked({
+    code({ text, lang }: Tokens.Code) {
+      // Escape HTML to prevent XSS — text from LLM is untrusted.
+      const escaped = escapeHtml(text);
+      const safeLang = lang ? lang.replace(/[^a-zA-Z0-9-]/g, "") : "";
 
-        // Copy button SVG — reused on both sync-hit and placeholder paths.
-        // audit-allow: markdown-content
-        const copyBtn = `<button type="button" data-action="copy-code" class="chat-code-copy absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1 text-muted-foreground hover:text-foreground hover:bg-surface-muted" title="Copy code"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5"/></svg></button>`;
+      // Copy button SVG — reused on both sync-hit and placeholder paths.
+      // audit-allow: markdown-content
+      const copyBtn = `<button type="button" data-action="copy-code" class="chat-code-copy absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1 text-muted-foreground hover:text-foreground hover:bg-surface-muted" title="Copy code"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5"/></svg></button>`;
 
-        // Sync cache hit — inject highlighted HTML directly.
-        const cachedHtml = getHighlightedSync(text, safeLang || "text", theme);
-        if (cachedHtml) {
-          return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line">${cachedHtml}${copyBtn}</div>`;
-        }
+      // Sync cache hit — inject highlighted HTML directly.
+      const cachedHtml = getHighlightedSync(text, safeLang || "text", theme);
+      if (cachedHtml) {
+        return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line">${cachedHtml}${copyBtn}</div>`;
+      }
 
-        // Cache miss — emit fallback pre+code block and mark for async hydration.
-        // URL-encode the raw source as the data attribute value (UTF-safe, no btoa needed).
-        const encodedCode = encodeURIComponent(text);
-        return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line" data-shiki-code="${encodedCode}" data-shiki-lang="${safeLang}" data-shiki-theme="${theme}"><pre class="overflow-x-auto whitespace-pre bg-surface-muted p-4 text-[0.8rem] leading-relaxed font-mono text-foreground"><code>${escaped}</code></pre>${copyBtn}</div>`;
-      },
-      link({ href, tokens }: Tokens.Link) {
-        const text = this.parser.parseInline(tokens);
-        // Scheme-allowlist the href; marked's default link renderer cleans URLs
-        // (dropping javascript:/data:/etc.) but this override bypassed it, so an
-        // unsafe scheme would otherwise reach the DOM. (#269)
-        const safe = safeHref(href);
-        if (safe === null) {
-          // Unsafe/unknown scheme — render the link text only, no href.
-          return `<span class="${LINK_CLASSES}">${text}</span>`;
-        }
-        // Escape the (allowlisted) href before writing it into the attribute so
-        // quotes/control chars cannot break out of the attribute context.
-        const safeAttr = escapeHtml(safe);
-        if (/^https?:\/\//i.test(safe)) {
-          return `<a href="${safeAttr}" target="_blank" rel="noreferrer" class="${LINK_CLASSES}">${text}</a>`;
-        }
-        // mailto: or internal app link.
-        return `<a href="${safeAttr}" class="${LINK_CLASSES}">${text}</a>`;
-      },
-      image({ href, title, text }: Tokens.Image) {
-        // marked's `image` renderer is NOT overridden by the other custom
-        // renderers above, so without this override marked's DEFAULT image
-        // renderer runs — and in marked v18 its `cleanUrl` only `encodeURI`s
-        // the src, it no longer scheme-allowlists. That lets `![x](javascript:…)`
-        // and `![x](data:text/html,…)` reach the DOM as a live `<img src>` sink,
-        // bypassing the scheme allowlist the rest of this renderer enforces.
-        // Scheme-allowlist the src with the same safeHref used for links, and
-        // escape every attribute value. (#269)
-        const safe = safeHref(href);
-        const safeAlt = escapeHtml(text);
-        if (safe === null) {
-          // Unsafe/unknown scheme — drop the image, render the alt text only.
-          return safeAlt;
-        }
-        const safeSrc = escapeHtml(safe);
-        const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-        return `<img src="${safeSrc}" alt="${safeAlt}"${titleAttr} class="max-w-full rounded" />`;
-      },
-      // Raw inline/block HTML in untrusted markdown must NOT pass through to the
-      // DOM. marked's default html renderer emits it verbatim; escape it so it
-      // renders as inert text instead of executable markup. (#269)
-      html({ text }: Tokens.HTML | Tokens.Tag) {
-        return escapeHtml(text);
-      },
-      hr() {
-        return '<hr class="my-4 border-line" />';
-      },
-      list(token: Tokens.List) {
-        const items = token.items.map((item, i) => {
-          const content = this.parser.parse(item.tokens);
-          // Strip the first <p> wrapper (loose-list items wrap content in <p class="my-2">,
-          // whose top margin detaches the number/bullet from its text).
-          const inner = content.replace(/^<p[^>]*>([\s\S]*?)<\/p>/, "$1");
-          if (token.ordered) {
-            const num = (typeof token.start === "number" ? token.start : 1) + i;
-            return `<div class="flex gap-2 my-0.5"><span class="text-muted-foreground shrink-0">${num}.</span><span>${inner}</span></div>`;
-          }
-          return `<div class="flex gap-2 my-0.5"><span class="text-muted-foreground shrink-0">&bull;</span><span>${inner}</span></div>`;
-        });
-        return items.join("");
-      },
-      table(token: Tokens.Table) {
-        const tableId = `chat-table-${tableIndex++}`;
-        const headerCells = token.header.map((cell) => this.parser.parseInline(cell.tokens));
-        const bodyRows = token.rows.map((row) => row.map((cell) => this.parser.parseInline(cell.tokens)));
-
-        // Per-column alignment (cinatra#3230) — the ratified drawing's Table:
-        // "never centre body cells; right-align numerics and timestamps". A
-        // column is right-aligned when (a) the delimiter row declares it so,
-        // else (b) every non-empty body cell parses as a number or a timestamp
-        // under the deterministic cell grammar at the foot of this file. The
-        // grammar reads the cell's DISPLAYED text (inline markup such as
-        // `**12**`, `` `12` `` or a linked date stripped via its tokens), not
-        // the raw markdown. A centred delimiter is not honoured: no body cell
-        // ever carries a centre class. The header row keeps the renderer's
-        // fixed `text-left` — the sentence governs body cells only.
-        const rightAligned = token.header.map((_, col) =>
-          resolveColumnRightAligned(
-            token.align[col] ?? null,
-            token.rows.map((row) => cellPlainText(row[col]?.tokens ?? [])),
-          ),
-        );
-
-        // audit-allow: markdown-content
-        const ths = headerCells
-          .map((c) => `<th class="border-b border-line bg-surface px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">${c}</th>`)
-          .join("");
-        const pageSize = 25;
-        const pageCount = Math.ceil(bodyRows.length / pageSize);
-        const shouldPaginate = bodyRows.length > pageSize;
-        const trs = bodyRows
-          .map((cells, rowIndex) => {
-            // audit-allow: markdown-content
-            const tds = cells
-              .map((c, col) => `<td class="border-b border-line px-4 py-3 text-sm text-foreground${rightAligned[col] ? " text-right" : ""}">${c.replace(/([^\n]) • /g, "$1<br>• ")}</td>`)
-              .join("");
-            // audit-allow: markdown-content
-            return `<tr data-chat-table-row="${rowIndex}" class="${rowIndex >= pageSize ? "hidden" : ""}">${tds}</tr>`;
-          })
-          .join("");
-
-        // The frame carries the table's scroll container and, past the page
-        // size, the row-pagination row — nothing else. The drawing's chat
-        // thread gives a table no header bar, and its Table component no copy
-        // or download control (cinatra#3230); the thread's parts "borrow
-        // rather than invent".
-        // audit-allow: markdown-content
-        return `<div class="my-3 overflow-hidden rounded-lg border border-line bg-card" data-chat-table-frame><div class="overflow-x-auto"><table id="${tableId}" class="min-w-full caption-bottom text-sm"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>${shouldPaginate ? `<div class="flex flex-col gap-2 border-t border-line bg-card px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between" data-chat-table-pagination data-page="0" data-page-size="${pageSize}" data-row-count="${bodyRows.length}"><span data-chat-table-range-label>1-${Math.min(pageSize, bodyRows.length)} of ${bodyRows.length}</span><div class="flex items-center gap-2"><span data-chat-table-page-label>Page 1 of ${pageCount}</span><div class="flex items-center gap-1"><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="previous" disabled>Previous</button><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="next" ${pageCount <= 1 ? "disabled" : ""}>Next</button></div></div></div>` : ""}</div>`;
-      },
-      // Suppress default table sub-renderers (we handle everything in table()).
-      tablerow() { return ""; },
-      tablecell() { return ""; },
+      // Cache miss — emit fallback pre+code block and mark for async hydration.
+      // URL-encode the raw source as the data attribute value (UTF-safe, no btoa needed).
+      const encodedCode = encodeURIComponent(text);
+      return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line" data-shiki-code="${encodedCode}" data-shiki-lang="${safeLang}" data-shiki-theme="${theme}"><pre class="overflow-x-auto whitespace-pre bg-surface-muted p-4 text-[0.8rem] leading-relaxed font-mono text-foreground"><code>${escaped}</code></pre>${copyBtn}</div>`;
     },
+    // /chat pages a long table and listens for these buttons; the run window
+    // draws neither, which is why the page size is surface-supplied and not
+    // built in. The table's own header strip, copy and download controls are
+    // GONE with cinatra#3230 — the drawing gives an assistant turn's table no
+    // chrome of its own — so nothing is supplied for them any more.
+    tablePageSize: 25,
   });
 
   return { md, appLinks, appLinkPlaceholder };
@@ -299,31 +137,9 @@ export function renderMarkdown(
   const { text: mathProcessed, placeholders: mathPlaceholders } = preprocessMath(cleaned);
   cleaned = mathProcessed;
 
-  // Convert simplified pipe tables (no separator line) to standard markdown format
-  // so that marked's GFM parser can handle them.
-  cleaned = cleaned.replace(
-    /(?:^|\n)([^\n|]+\|[^\n]+)\n((?:[^\n|]+\|[^\n]+\n?){1,})/g,
-    (match, headerRow: string, bodyRows: string) => {
-      const headerCells = headerRow.split("|").map((c: string) => c.trim()).filter(Boolean);
-      if (headerCells.length < 2) return match;
-      const bodyRowsArr = bodyRows.trim().split("\n").map((row: string) => row.split("|").map((c: string) => c.trim()).filter(Boolean));
-      if (bodyRowsArr.length === 0 || bodyRowsArr.some((r: string[]) => r.length < 2)) return match;
-      // Insert a separator line to make it a standard markdown table.
-      const sep = "| " + headerCells.map(() => "---").join(" | ") + " |";
-      const header = "| " + headerCells.join(" | ") + " |";
-      const rows = bodyRowsArr.map((cells: string[]) => "| " + cells.join(" | ") + " |").join("\n");
-      return `\n${header}\n${sep}\n${rows}`;
-    },
-  );
-
-  // Split inline "• " separated content onto separate lines so list parsing handles each item.
-  cleaned = cleaned.replace(/([^\n]) • /g, "$1\n• ");
-  // Normalize "• " bullet lines to "- " for marked's list parser.
-  cleaned = cleaned.replace(/^• /gm, "- ");
-  // Fix standalone "•" alone on a line followed by content on the next line (no trailing space).
-  cleaned = cleaned.replace(/^•\n(?=[^\n])/gm, "- ");
-  // Fix numbered list marker alone on its own line: "1.\nContent" → "1. Content".
-  cleaned = cleaned.replace(/^(\d+\.)\n(?=[^\n])/gm, "$1 ");
+  // The model-output shape fixes are the same on every surface, so they are
+  // stated once beside the renderer.
+  cleaned = normalizeCoreMarkdown(cleaned);
 
   let html = md.parse(cleaned, { async: false }) as string;
 
@@ -336,7 +152,7 @@ export function renderMarkdown(
   html = restoreMath(html, mathPlaceholders);
 
   // Remove empty paragraphs.
-  html = html.replace(/<p[^>]*>\s*<\/p>/g, "");
+  html = stripEmptyParagraphs(html);
 
   return html;
 }
@@ -467,102 +283,3 @@ export function detectMermaidBlocks(text: string): MermaidSource[] {
   return blocks;
 }
 
-// ---------------------------------------------------------------------------
-// The deterministic cell grammar for the table renderer above (cinatra#3230).
-// It lives in THIS file rather than a sibling module because the chat route
-// carries a locked reachable-module ceiling (scripts/audit/route-graph-ratchet)
-// and the renderer is its only caller.
-// ---------------------------------------------------------------------------
-
-// Deterministic cell grammar for the chat markdown table renderer
-// (cinatra#3230). The ratified drawing's Table component: "never centre body
-// cells; right-align numerics and timestamps." A column's body cells are
-// right-aligned when (a) the markdown delimiter row declares the column
-// right-aligned, else (b) EVERY non-empty body cell in the column parses under
-// this grammar — a number, or a date/time the named parser below accepts.
-// Both helpers are plain regular expressions over the trimmed cell text: no
-// locale, no `Date.parse`, no environment-dependent result.
-
-
-/**
- * The text a cell DISPLAYS: the inline tokens flattened to their plain text,
- * so `**12**`, `` `12` `` or `[Sep 3, 2026](…)` classify by what the reader
- * sees rather than by their markdown markup. HTML and images contribute
- * nothing; a hard break reads as a space.
- */
-export function cellPlainText(tokens: readonly Token[]): string {
-  let out = "";
-  for (const token of tokens) {
-    const nested = (token as { tokens?: Token[] }).tokens;
-    if (nested && nested.length > 0) {
-      out += cellPlainText(nested);
-      continue;
-    }
-    switch (token.type) {
-      case "text":
-      case "codespan":
-      case "escape":
-        out += token.text;
-        break;
-      case "br":
-        out += " ";
-        break;
-      default:
-        break;
-    }
-  }
-  return out;
-}
-
-// A number: optional sign (ASCII or U+2212 minus), optional leading currency
-// symbol, digits with optional thousands separators and an optional decimal
-// part, optional trailing percent.
-const NUMERIC_RE =
-  /^[+\-\u2212]?[$€£¥]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?$/;
-
-const MONTH = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\\.?";
-const TIME =
-  "(?:[01]?\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?(?:\\s?[AaPp][Mm])?(?:\\s?(?:Z|UTC|[+\\-]\\d{2}:?\\d{2}))?";
-const ISO_DATE = "\\d{4}-\\d{2}-\\d{2}";
-const SLASH_DATE = "\\d{1,2}[./]\\d{1,2}[./]\\d{2,4}";
-
-// A date/time, in one of the shapes an assistant turn writes:
-//   2026-09-03 · 2026-09-03T14:05:00Z · 2026-09-03 14:05
-//   Sep 3, 2026 · September 3, 2026 · Sep 3, 2026 14:05
-//   3 Sep 2026 · 03.09.2026 · 9/3/2026
-//   14:05 · 14:05:30 · 2:05 PM
-const TIMESTAMP_RES: readonly RegExp[] = [
-  new RegExp(`^${ISO_DATE}(?:[T ]${TIME})?$`),
-  new RegExp(`^${MONTH} \\d{1,2}(?:st|nd|rd|th)?,? \\d{4}(?:,? ${TIME})?$`, "i"),
-  new RegExp(`^\\d{1,2}(?:st|nd|rd|th)? ${MONTH},? \\d{4}(?:,? ${TIME})?$`, "i"),
-  new RegExp(`^${SLASH_DATE}(?: ${TIME})?$`),
-  new RegExp(`^${TIME}$`),
-];
-
-/** Does the cell text read as a number under the deterministic grammar? */
-export function isNumericCellText(text: string): boolean {
-  const t = text.trim();
-  return t.length > 0 && NUMERIC_RE.test(t);
-}
-
-/** Does the cell text read as a date and/or time under the named shapes above? */
-export function isTimestampCellText(text: string): boolean {
-  const t = text.trim();
-  return t.length > 0 && TIMESTAMP_RES.some((re) => re.test(t));
-}
-
-/**
- * Whether a column's body cells are right-aligned: the delimiter row's own
- * declaration first; otherwise every non-empty cell must be a number or a
- * timestamp. A column with no non-empty cell stays left. A centred delimiter
- * is never honoured — the drawing forbids centring body cells.
- */
-export function resolveColumnRightAligned(
-  declared: "left" | "center" | "right" | null | undefined,
-  cellTexts: readonly string[],
-): boolean {
-  if (declared === "right") return true;
-  const nonEmpty = cellTexts.map((t) => t.trim()).filter((t) => t.length > 0);
-  if (nonEmpty.length === 0) return false;
-  return nonEmpty.every((t) => isNumericCellText(t) || isTimestampCellText(t));
-}

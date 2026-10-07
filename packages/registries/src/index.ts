@@ -29,7 +29,8 @@ export type { PackageId } from "./scope";
 // cinatra#3047 so the agents package's Skills-step pill can print the same
 // byline without closing a dependency cycle). `@cinatra-ai/extensions` keeps
 // its own module path, which re-exports this one.
-export { resolveInstalledVendorName } from "./scope";
+export { resolveInstalledVendorName, declaredVendorNameForScope } from "./scope";
+export type { DeclaredVendorEntry } from "./scope";
 
 export {
   PluginDependencyCycleError,

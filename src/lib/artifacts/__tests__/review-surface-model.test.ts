@@ -24,15 +24,9 @@ import {
   reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
+import type { ReviewSettledOutcome } from "../review-surface-model";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
-
-const form: ReviewTargetMount = {
-  kind: "form",
-  slot: "detail",
-  arm: "first-party",
-  form: "markdown",
-};
 
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
@@ -73,25 +67,12 @@ describe("§V — provenance conformance id from the OPAQUE mount kind", () => {
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
   });
 
-  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): the built-in
-  // markdown / plain-text rendering carries NO label above the reviewed work.
-  // §V of the pinned review spec draws a provenance strip for the two renderer
-  // tiers a PACKAGE supplies and for the floor; the host's own text rendering is
-  // none of those three, and it is not given a fourth strip — it is given none.
-  // The reviewer sees the draft, and nothing above the draft.
-  it("the form rung has NO provenance region at all — no fourth strip, no reused one", () => {
-    expect(reviewProvenanceConformanceId(form)).toBeNull();
-  });
-
   it("only a floor has a label to print — a rendered target names nothing", () => {
     expect(reviewProvenanceLabel(buildMap)).toBeNull();
     expect(reviewProvenanceLabel(runtime)).toBeNull();
     expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
   });
 
-  it("the form rung has no provenance label to print", () => {
-    expect(reviewProvenanceLabel(form)).toBeNull();
-  });
 });
 
 describe("§II — the immutable header projections", () => {
@@ -288,46 +269,36 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
 // §IV — the SETTLED reading (cinatra#2855; plan §4.2)
 // ---------------------------------------------------------------------------
 
-describe("the settled copy names the outcome and its decider", () => {
-  it("is keyed on the SAME closed set the wire carries", () => {
+// RE-PINNED (cinatra#2934, fix leg 12). Everything below used to hold the
+// three-way reading — "Approved by …" / "Rejected by …" / "Changes requested" —
+// which the ratified drawings have since closed on both axes. Lifecycle cards
+// §XIII.1: "Continued is the only settled reading; there is no second status
+// after it", drawn as the marker "Continued" over "Decided on the revision
+// above." Artifact review §VI: the review "draws no card that names who
+// requested changes". The disposition survives as a RECORD (the run's rows, and
+// the element's own `data-review-outcome`); it is no longer a reading, and the
+// decider is no longer a parameter.
+describe("the settled copy is the drawing's one marker", () => {
+  it("the local settled union is the SAME closed set the wire carries", () => {
     // This model deliberately keeps its own local union rather than importing
-    // the wire type, so the two are pinned together HERE. A value added on one
-    // side and not the other fails this, in front of the switch that would
-    // otherwise fall through to nothing.
-    const covered = [...LIFECYCLE_SETTLED_OUTCOMES].map((outcome) =>
-      reviewSettledCopy(outcome),
-    );
-    expect(covered).toHaveLength(3);
-    for (const copy of covered) {
-      expect(copy.title.length).toBeGreaterThan(0);
-      expect(copy.body.length).toBeGreaterThan(0);
-    }
+    // the wire type, so the two are pinned together HERE. The exhaustive record
+    // fails to compile if a member is added on one side, and the comparison
+    // fails at runtime if one is added on the other.
+    const local: Record<ReviewSettledOutcome, true> = {
+      approved: true,
+      rejected: true,
+      changes_requested: true,
+    };
+    expect(Object.keys(local).sort()).toEqual([...LIFECYCLE_SETTLED_OUTCOMES].sort());
   });
 
-  it("names the decider when there is one to name", () => {
-    expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
-      title: "Approved by Dana Okonkwo",
-      body: "The gate is resolved and the run has been released to continue.",
-    });
-    expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
-      "Rejected by Dana Okonkwo",
-    );
-    expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
-      "Changes requested by Dana Okonkwo",
-    );
-  });
-
-  it("reads as a finished sentence with no decider at all", () => {
-    // The resolver drops a decider it cannot name safely, so the copy must not
-    // depend on one: never "Approved by" and a dangling nothing.
+  it("reads the drawing's marker for every disposition", () => {
     for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
-      const { title } = reviewSettledCopy(outcome);
-      expect(title.endsWith(" by")).toBe(false);
-      expect(title.includes(" by ")).toBe(false);
+      expect(reviewSettledCopy(outcome)).toEqual({
+        title: "Continued",
+        body: "Decided on the revision above.",
+      });
     }
-    expect(reviewSettledCopy("approved").title).toBe("Approved");
-    expect(reviewSettledCopy("rejected").title).toBe("Rejected");
-    expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
   });
 
   it("does NOT claim a live repair the way the post-press notice does", () => {
@@ -335,9 +306,13 @@ describe("the settled copy names the outcome and its decider", () => {
     // fact about what the reviewer's own press started. A settled card has not
     // read that, so it may not assert it.
     expect(reviewSettledCopy("changes_requested").body).toBe(
-      "The gate is resolved and the reviewed work has been turned back for repair.",
+      "Decided on the revision above.",
     );
     expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
+  });
+
+  it("takes no decider at all — there is nowhere on this surface to put one", () => {
+    expect(reviewSettledCopy.length).toBe(1);
   });
 
   it("is a DIFFERENT reading from the generic blocked copy it replaces", () => {
@@ -371,7 +346,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("organization · organization · text/markdown · updated 8 minutes ago");
+    expect(line).toBe("organization · organization · text/markdown · updated 8 min ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -386,7 +361,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
   });
 
   // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
@@ -403,7 +378,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts[3]).toBe("updated 8 minutes ago");
+    expect(facts[3]).toBe("updated 8 min ago");
     expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
   });
 
@@ -418,7 +393,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 minutes ago"]);
+    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
   });
 
   it("falls back to the value it was handed when that value is not a readable instant", () => {

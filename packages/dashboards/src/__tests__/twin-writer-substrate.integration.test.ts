@@ -40,7 +40,8 @@ if (RUN && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(RAW_SCHEMA)) {
 const SCHEMA = RAW_SCHEMA;
 const d = RUN ? describe : describe.skip;
 
-const actor: DashboardActor = {
+// A tenant actor: its organization is always set (a workspace actor may carry none, cinatra#2811).
+const actor: DashboardActor & { readonly organizationId: string } = {
   userId: "u-1894",
   organizationId: "org-1894",
   teamIds: ["team-1894"],

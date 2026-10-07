@@ -235,7 +235,12 @@ describe("E4 — the window's world is the chat composer's, on every screen", ()
       turns.length = 0;
       stored.length = 0;
       await runWindow.runWindowTurn({ runId: "run-3487", surface, prompt: UNRELATED });
-      shapes[surface] = Object.keys(turns[0].args).sort();
+      // Current main admits the focused card only on the surfaces that lend
+      // it. That optional claim is additive, as the adjacent exact-config and
+      // non-narrowing assertions prove; it is the exception this title names.
+      const args = turns[0].args;
+      if ("boundCard" in args) expect(args.boundCard).toMatchObject({ candidateRefs: expect.any(Array) });
+      shapes[surface] = Object.keys(args).filter((key) => key !== "boundCard").sort();
     }
     const first = shapes[SCREENS[0]];
     for (const surface of SCREENS) expect(shapes[surface]).toEqual(first);

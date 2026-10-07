@@ -457,8 +457,17 @@ export function RunSurfaceRail({
   // The rows that HEAD the rail, and the one that CLOSES it — see
   // `RunSurfaceRailStep.tail`. The selection reads `steps` whole, so splitting
   // the ROWS moves nothing about what can be opened.
-  const headSteps = steps.filter((step) => !step.tail);
-  const tailSteps = steps.filter((step) => step.tail);
+  // AND A STEP WHOSE ROW THE RAIL ALREADY DRAWS CONTRIBUTES NO SECOND ROW
+  // (cinatra#3693). A run's review gates and their audits are entries the rail
+  // draws itself, from the run's own gate list (`run-step-rail-extra-entry`),
+  // and they are ALSO selections with a surface of their own. The screen hands
+  // them here for the selection and the surface, with no row -- so the row is
+  // drawn once, where it always was, and the mark between two entries still
+  // counts only the rows a reader can see. Counting a rowless step would draw a
+  // separator over nothing, which is a gap in the rail's rhythm and an entry a
+  // capture cannot address.
+  const headSteps = steps.filter((step) => !step.tail && runSurfaceNodeExists(step.row));
+  const tailSteps = steps.filter((step) => step.tail && runSurfaceNodeExists(step.row));
 
   // THE ONE PLACE A SELECTION CHANGES, so it is the one place that can refuse
   // one (cinatra#2970). A row drawn by any module reaches this; a key naming a

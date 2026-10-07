@@ -195,7 +195,7 @@ describe("E2 — one request builder, carrying no narrowing parameter", () => {
     // The screen's context is ADDITIVE and named: the surface it is, the run it
     // belongs to, the card it sits under. Nothing else may be added here
     // without this literal moving, which is a high-risk path.
-    expect(fields.sort()).toEqual(["boundCard", "prompt", "runId", "surface"]);
+    expect(fields.sort()).toEqual(["attachments", "boundCard", "prompt", "runId", "surface"]);
   });
 
   it("there is exactly one client bridge that sends a window turn", () => {

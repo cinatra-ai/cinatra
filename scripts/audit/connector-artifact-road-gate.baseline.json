@@ -1,0 +1,97 @@
+{
+  "note": "Connector artifact roads (cinatra#3821): a road from a module that faces connectors (the connector handler, a capability the application publishes under its own provider identity) to a module that creates an artifact. `capabilities` declares every published capability: createsArtifact, and the entries that bind a globalThis slot its impl reads. `roads` is the floor; each road names the item that removes it. SHRINK-ONLY: regenerate with `node scripts/audit/connector-artifact-road-gate.mjs --write-baseline` (it refuses growth). See scripts/audit/extension-coupling-gates.md.",
+  "capabilities": {
+    "@cinatra-ai/host:anthropic-connection": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:anthropic-skill-config": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:blog-routing": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:cms-review": {
+      "createsArtifact": true,
+      "entries": [
+        "src/lib/register-cms-review-host-seam-runtime.ts"
+      ]
+    },
+    "@cinatra-ai/host:connector-config": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:connector-instance-invoker": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:content-editor-dispatch": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:drupal-mcp": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:email-routing": {
+      "createsArtifact": true
+    },
+    "@cinatra-ai/host:extension-action-guard": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:external-mcp-registry": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:google-oauth": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:instance-connection-gate": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:instance-identity": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:instance-write-authority": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:mcp-pagination": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:mcp-self-client": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:notifications": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:objects-integration": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:openai-connection": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:runtime-mode": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:secrets-codec": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:skills-catalog": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:wordpress-mcp": {
+      "createsArtifact": false
+    },
+    "@cinatra-ai/host:youtube-connection": {
+      "createsArtifact": false
+    },
+    "nango-connection-materializer": {
+      "createsArtifact": false
+    }
+  },
+  "roads": {
+    "@cinatra-ai/host:cms-review :: src/lib/artifacts/cms-content-snapshot-capture.ts": {
+      "removedBy": "cinatra#3821's follow-up"
+    },
+    "@cinatra-ai/host:cms-review :: src/lib/artifacts/cms-preview-capture-store.ts": {
+      "removedBy": "cinatra#3821's follow-up"
+    },
+    "@cinatra-ai/host:email-routing :: src/lib/register-email-providers.ts": {
+      "removedBy": "cinatra#3821's follow-up"
+    }
+  }
+}

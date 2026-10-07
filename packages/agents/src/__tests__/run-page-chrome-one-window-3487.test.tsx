@@ -89,7 +89,7 @@ vi.mock("../run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
   sendRunWindowTurn: vi.fn(async (input: Record<string, unknown>) => {
     sent.turns.push(input);
-    return { ok: true, entries: [] };
+    return { ok: true, entries: [], fills: [], acted: false };
   }),
 }));
 
@@ -106,6 +106,7 @@ vi.mock("../orchestrator-actions", () => ({
   resumeStoppedOrchestratorAction: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("../run-actions", () => ({
+  setRunTrigger: vi.fn(async () => ({ ok: true })),
   startDevChildPreviewRun: vi.fn(async () => ({ ok: false })),
   buildSubmissionMapByStepIndex: vi.fn(async () => []),
   createAndTriggerRun: vi.fn(async () => ({ ok: true, runId: "run-next" })),
@@ -148,6 +149,7 @@ vi.mock("../trigger-actions", () => ({
 }));
 
 /** A run parked on a gate with a form — the state the setup screen exists for. */
+const selectedGate = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const OPEN_GATE = {
   schema: {
     type: "object",
@@ -168,21 +170,28 @@ vi.mock("../use-ag-ui-run-stream", () => ({
     messages: [],
     dataPartFrames: [],
     lifecycleInterrupt: null,
-    interruptContext: OPEN_GATE,
+    interruptContext: selectedGate.current,
     streamedText: "",
   }),
 }));
 
 import { RunPageChrome } from "../run-page-chrome";
+import { sendRunWindowTurn } from "../run-window-actions";
+import { approveReviewTask } from "../hitl-actions";
 import { useRunWindowScreen } from "../run-window-screen-context";
 
 beforeEach(() => {
+  selectedGate.current = OPEN_GATE;
   cleanup();
   document.body.innerHTML = "";
   document.body.appendChild(document.createElement("main"));
   promptField.submit = null;
   promptField.count = 0;
   sent.turns = [];
+  vi.mocked(sendRunWindowTurn).mockImplementation(async (input) => {
+    sent.turns.push(input);
+    return { ok: true, entries: [], fills: [], acted: false };
+  });
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => ({
@@ -388,6 +397,21 @@ describe("acceptance (a)–(c) — the page's window drives the screen's own roa
         };
       }),
     );
+    selectedGate.current = { ...OPEN_GATE, xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID, fieldName: "subject", currentValues: { subject: "" } };
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    fieldRendererRegistry.register({
+      id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      priority: 100,
+      condition: (_fieldName, schema) => (schema as { "x-renderer"?: string })["x-renderer"] === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      // Only the field-renderer port is a double. The real panel applies the
+      // returned fill to its real staged buffer before passing this value.
+      renderer: ({ value }) => <div data-testid="setup-buffer-value">{JSON.stringify(value)}</div>,
+      drawsOwnSubmit: true,
+    });
+    vi.mocked(sendRunWindowTurn).mockImplementation(async (input) => {
+      sent.turns.push(input);
+      return { ok: true, entries: [], fills: [{ ref: "setup", values: { subject: "Q3 re-engagement" } }], acted: false };
+    });
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(
       <RunPageChrome>
@@ -407,12 +431,12 @@ describe("acceptance (a)–(c) — the page's window drives the screen's own roa
       await promptField.submit?.("make the subject about Q3 re-engagement");
     });
     await settle();
-    const fill = calls.find((c) => c.url.includes("/hitl-assist"));
-    expect(fill, "the page's window reached the setup screen's own fill road").toBeDefined();
-    // It is the SCREEN's road, carrying the SCREEN's own fields — not a new one.
-    expect(fill!.body.schemaProperties).toEqual(["subject"]);
-    expect(fill!.body.runId).toBe("run-3487");
-    expect(fill!.body.prompt).toBe("make the subject about Q3 re-engagement");
+    expect(sent.turns).toHaveLength(1);
+    expect(sent.turns[0]).toMatchObject({ runId: "run-3487", surface: "run-page", prompt: "make the subject about Q3 re-engagement" });
+    expect(calls.filter((c) => c.url.includes("/hitl-assist"))).toEqual([]);
+    // The server's returned fill reaches the real setup form; it does not press.
+    expect(vi.mocked(approveReviewTask)).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByTestId("setup-buffer-value").textContent).toContain("Q3 re-engagement"));
   });
 
   it("(b) the window sets the schedule on the schedule screen", async () => {
@@ -429,6 +453,10 @@ describe("acceptance (a)–(c) — the page's window drives the screen's own roa
         };
       }),
     );
+    vi.mocked(sendRunWindowTurn).mockImplementation(async (input) => {
+      sent.turns.push(input);
+      return { ok: true, entries: [], fills: [{ ref: "schedule", values: { triggerType: "recurring", timezone: "Europe/Berlin" } }], acted: false };
+    });
     const { TriggerScreenClient } = await import("../trigger-screen-client");
     render(
       <RunPageChrome>
@@ -447,39 +475,26 @@ describe("acceptance (a)–(c) — the page's window drives the screen's own roa
       await promptField.submit?.("every weekday at 9, Berlin time");
     });
     await settle();
-    const fill = calls.find((c) => c.url.includes("/hitl-assist"));
-    expect(fill, "the page's window reached the schedule screen's own set road").toBeDefined();
-    expect(fill!.body.schemaProperties).toEqual([
-      "triggerType",
-      "scheduledAt",
-      "timezone",
-      "cronExpression",
-    ]);
-    // AND THE SCHEDULE IS SET, not merely answered about: the screen re-read its
-    // own state, so the NEXT request it composes carries the value the window
-    // put there. Read off the screen's own form state rather than off a control,
-    // because which control draws the timezone is the scheduler's business.
-    await act(async () => {
-      await promptField.submit?.("and confirm that");
-    });
-    await settle();
-    const second = calls.filter((c) => c.url.includes("/hitl-assist")).at(-1);
-    expect(second).toBeDefined();
-    expect((second!.body.currentValue as { timezone?: string }).timezone).toBe(
-      "Europe/Berlin",
-    );
+    expect(sent.turns).toHaveLength(1);
+    expect(sent.turns[0]).toMatchObject({ runId: "run-3487", surface: "schedule", prompt: "every weekday at 9, Berlin time" });
+    expect(calls.filter((c) => c.url.includes("/hitl-assist"))).toEqual([]);
+    // The same actual form reflects the returned fill, without submitting.
+    await waitFor(() => expect(screen.getAllByText("Europe/Berlin").length).toBeGreaterThan(0));
+    const { setRunTrigger } = await import("../run-actions");
+    expect(vi.mocked(setRunTrigger)).not.toHaveBeenCalled();
   });
 
   it("(c) a request for changes on the review screen reaches the one comment road", async () => {
-    const submitAction = vi.fn(async () => ({
-      kind: "changes-requested" as const,
-      status: "requested" as const,
-    }));
+    const onGateMoved = vi.fn();
+    vi.mocked(sendRunWindowTurn).mockImplementation(async (input) => {
+      sent.turns.push(input);
+      return { ok: true, entries: [], fills: [], acted: true };
+    });
     const { ReviewGatePromptWindow } = await import("../review-gate-card");
     const { container } = render(
       <RunPageChrome>
         <ReviewGatePromptWindow
-          submitAction={submitAction as never}
+          onGateMoved={onGateMoved}
           storageKey="cinatra_review_prompt_ref-3487"
           canComment={true}
           runId="run-3487"
@@ -495,12 +510,11 @@ describe("acceptance (a)–(c) — the page's window drives the screen's own roa
       await promptField.submit?.("shorten the intro and drop the second CTA");
     });
     await settle();
-    // THE ONE ROAD, never a parallel endpoint: the existing comment path.
-    expect(submitAction).toHaveBeenCalledTimes(1);
-    expect(submitAction).toHaveBeenCalledWith({
-      disposition: "comment",
-      comment: "shorten the intro and drop the second CTA",
-    });
+    // The existing runtime turn performs the comment; its acted receipt re-reads
+    // the gate. The retired direct submitAction road is not reinstated.
+    expect(sent.turns).toHaveLength(1);
+    expect(sent.turns[0]).toMatchObject({ runId: "run-3487", surface: "review", prompt: "shorten the intro and drop the second CTA", boundCard: { candidateRefs: ["ref-3487"], focusedRef: "ref-3487" } });
+    expect(onGateMoved).toHaveBeenCalledTimes(1);
   });
 
   it("(c) a reader who may not comment is offered no window", async () => {
@@ -508,7 +522,7 @@ describe("acceptance (a)–(c) — the page's window drives the screen's own roa
     const { container } = render(
       <RunPageChrome>
         <ReviewGatePromptWindow
-          submitAction={vi.fn() as never}
+          onGateMoved={vi.fn()}
           storageKey="cinatra_review_prompt_ref-3487"
           canComment={false}
           runId="run-3487"
@@ -546,7 +560,9 @@ describe("E4 (client half) — the request carries screen context and nothing na
         storageKey: "k",
         conversation: run.entries,
         promptPending: run.pending,
-        onSubmit: run.send,
+        onSubmit: async (prompt, attachments) => {
+          await run.send(prompt, attachments as readonly Record<string, unknown>[] | undefined);
+        },
       });
       return null;
     }

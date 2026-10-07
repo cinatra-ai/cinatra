@@ -17,7 +17,7 @@
       "title": "Button",
       "description": "Cinatra design-system button.",
       "files": [{ "path": "src/components/ui/button.tsx", "type": "registry:ui" }],
-      "dependencies": ["radix-ui", "class-variance-authority"],
+      "dependencies": ["radix-ui", "class-variance-authority", "lucide-react"],
       "registryDependencies": ["@cinatra-ai/utils"]
     },
     {

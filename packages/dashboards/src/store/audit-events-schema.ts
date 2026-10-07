@@ -7,6 +7,11 @@
  * This file mirrors the current DDL exactly. Only the dashboards mutation
  * service is allowed to write through it — the rg/AST regression gate verifies
  * no other writer references this module.
+ *
+ * One sanctioned second writer (cinatra#2811): `workspace-links.ts` records the
+ * workspace everyone-grant's two events (`dashboard.workspace_read_granted`,
+ * `dashboard.workspace_read_revoked`) in the same transaction as the link row
+ * they describe, and nothing else.
  */
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 

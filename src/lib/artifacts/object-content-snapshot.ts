@@ -751,8 +751,7 @@ SELECT
 // ---------------------------------------------------------------------------
 
 import { buildOwnershipFilter } from "@/lib/derived-store-ownership";
-import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { ensureArtifactTypesRegistered } from "./ensure-artifact-registry";
+import { readAdmissibleArtifactTypeIdsForOrg } from "./resolve-bound-artifact-type";
 // NOTE the RAW `postgresSchema` at every call site: this builder escapes its own
 // identifier (the binding-write-path convention), and the local `schema` const is
 // ALREADY escaped — passing it would double-escape an embedded quote.
@@ -908,8 +907,10 @@ export async function captureSnapshotsForContextSlot(input: {
   // added to the snapshot arm, whose predicate is the shipped, ratified one: the
   // same queue-lag window is part of that arm's contract and narrowing it is a
   // change to claimed-row pinning as a whole, not a detail of this one.
-  ensureArtifactTypesRegistered();
-  const packTypesPh = ph(objectTypeRegistry.listArtifacts().map((d) => d.type));
+  // cinatra#3603: the ADMISSIBLE set for this organisation — the registered
+  // artifact types PLUS its live, artifact-safe claim winners (the writer's own
+  // set). The helper performs the registry warm this line used to do.
+  const packTypesPh = ph(readAdmissibleArtifactTypeIdsForOrg(orgId));
   const scopeOrder = (a: string) => `(CASE
      WHEN ${a}.project_id IS NOT NULL THEN 0
      WHEN ${a}.owner_level = 'user' THEN 1
