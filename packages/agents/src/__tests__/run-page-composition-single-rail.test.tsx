@@ -88,6 +88,15 @@ vi.mock("@/lib/generated/field-renderer-components", () => ({
 
 const RUN_ID = "run-3478";
 
+const capturedSubmissions = vi.hoisted(() => ({
+  rows: [] as Array<[number, {
+    submittedValues: Record<string, unknown> | null;
+    schemaSnapshot: Record<string, unknown> | null;
+    stepKey: string;
+  }]>,
+}));
+
+
 const artifactReads = vi.hoisted(() => ({ live: vi.fn(), historical: vi.fn() }));
 vi.mock("@/lib/artifacts/artifact-service", () => ({
   readArtifactForDetail: artifactReads.live,
@@ -125,6 +134,7 @@ const row = vi.hoisted(() => ({
     unknown
   >,
   producedReviewPark: null as string | null,
+  policyLabels: null as string[] | null,
 }));
 
 /**
@@ -244,7 +254,9 @@ function makeTemplate() {
   return {
     ...TEMPLATE,
     type: row.templateType,
-    approvalPolicy: row.templateType === "agent" ? null : TEMPLATE.approvalPolicy,
+    approvalPolicy: row.templateType === "agent" ? null : row.policyLabels
+      ? { steps: row.policyLabels.map((name, index) => ({ stepNumber: index + 1, xRenderer: "cinatra/review", name })) }
+      : TEMPLATE.approvalPolicy,
     inputSchema: {
       ...TEMPLATE.inputSchema,
       properties: row.properties,
@@ -375,7 +387,7 @@ vi.mock("../hitl-context", () => ({
 
 vi.mock("../run-actions", () => ({
   createAndTriggerRunWithContext: vi.fn(async () => ({ ok: false })),
-  buildSubmissionMapByStepIndex: vi.fn(async () => []),
+  buildSubmissionMapByStepIndex: vi.fn(async () => capturedSubmissions.rows),
   createAndTriggerRun: vi.fn(async () => ({ ok: false })),
   readRunOutputEvidence: vi.fn(async () => ({ hasOutput: false, hasArtifacts: false })),
 }));
@@ -450,6 +462,8 @@ beforeEach(() => {
   };
   row.inputParams = { idea: "a post about rails", audience: "developers" };
   row.producedReviewPark = null;
+  row.policyLabels = null;
+  capturedSubmissions.rows = [];
   recommendationPark.row = null;
   recommendationPark.holdState = { state: "none" };
   reviewSlot.awaiting = false;
@@ -1432,4 +1446,41 @@ describe("forecast Schedule keeps its fixed place ahead of input work (#3679)", 
     expect(words.some((text) => text === "3Review")).toBe(true);
     if (!answered) expect(words.some((text) => text === "2Scrape setup")).toBe(true);
   });
+});
+
+
+it("keeps the round's schema policy row third when its answer is captured and the list step follows (#3679)", async () => {
+  // Exact label/state progression read in App round16: schema gate, then list.
+  // This uses the real policy projection and submission merge. A captured HITL
+  // answer can exist before stepResults or messages; no output is invented.
+  row.policyLabels = ["Review the scrape schema", "Approve the list"];
+  row.status = "pending_approval";
+  row.lifecycleMoment = null;
+  row.lifecycleCardKind = null;
+  row.lifecycleCardRef = null;
+  row.hitlContext = null;
+  row.required = ["idea"];
+  row.inputParams = { idea: "the supplied scrape setup" };
+  triggerRow.row = firedImmediateTrigger();
+  const view = await renderRunPage();
+  const beforeColumn = railColumns(view.container)[0];
+  const before = railEntryLabels(beforeColumn);
+  expect(before).toEqual(["Schedule", "Setup", "Review the scrape schema", "Approve the list", "Review"]);
+  const schemaBefore = Array.from(beforeColumn.querySelectorAll<HTMLElement>('[data-rail-status]'))
+    .find((entry) => entry.textContent?.includes("Review the scrape schema"));
+  expect(schemaBefore!.getAttribute("data-rail-status")).toBe("upcoming");
+  capturedSubmissions.rows = [[1, {
+    submittedValues: { approved: true }, schemaSnapshot: null, stepKey: "schema-step",
+  }]];
+  const snapshot = structuredClone(capturedSubmissions.rows);
+  const tree = await SetupScreen({ agentId: "blog-idea-generator", instanceId: RUN_ID });
+  view.rerender(tree as React.ReactElement);
+  const afterColumn = railColumns(view.container)[0];
+  const after = railEntryLabels(afterColumn);
+  expect(after).toEqual(before);
+  const schemaAfter = Array.from(afterColumn.querySelectorAll<HTMLElement>('[data-rail-status]'))
+    .find((entry) => entry.textContent?.includes("Review the scrape schema"));
+  expect(schemaAfter!.getAttribute("data-rail-status")).toBe("completed");
+  expect(railEntries(afterColumn)).toContain("4Approve the list");
+  expect(capturedSubmissions.rows).toEqual(snapshot);
 });
