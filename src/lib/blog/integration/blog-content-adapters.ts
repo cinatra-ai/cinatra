@@ -16,8 +16,6 @@ import {
   stopBlogPostIdeaGeneration,
   startBlogPostDraftGeneration,
   stopBlogPostDraftGeneration,
-  startBlogPostImageRegeneration,
-  stopBlogPostImageRegeneration,
   startWordPressDraftCreation,
   stopWordPressDraftCreation,
   deleteWordPressDraft,
@@ -30,7 +28,6 @@ import type {
   BlogProjectPort,
   BlogIdeaGenerationPort,
   BlogDraftGenerationPort,
-  BlogImageGenerationPort,
   BlogPublishingPort,
   BlogMediaPort,
 } from "../ports/blog-content";
@@ -77,18 +74,6 @@ export function createBlogDraftGenerationPort(): BlogDraftGenerationPort {
     updateDraftRefs: async (input) => {
       await updateBlogPostDraftRefs(input);
     },
-  };
-}
-
-export function createBlogImageGenerationPort(): BlogImageGenerationPort {
-  return {
-    startImageRegeneration: (input) =>
-      startBlogPostImageRegeneration({
-        projectId: input.projectId,
-        postId: input.postId,
-        customPrompt: input.prompt,
-      }) as any,
-    stopImageRegeneration: async (projectId) => (await stopBlogPostImageRegeneration(projectId)) as any,
   };
 }
 
