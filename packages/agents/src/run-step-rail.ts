@@ -172,6 +172,9 @@ export interface RailGate {
   reviewTaskId: string;
   status: "pending" | "resolved";
   disposition: string | null;
+  /** The actual title of the gate's one pinned artifact, authorized for this
+   * reader. Absent on historical inputs and when the target cannot be named. */
+  artifactName?: string | null;
   /** Creation time — the gate-ordering key. ISO string or epoch ms. */
   createdAt: string | number | Date;
 }
@@ -408,7 +411,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         key,
         ordinal: maxOrdinal + 1 + i,
         kind: "gate",
-        label: "Review",
+        label: g.artifactName?.trim() ? `Review · ${g.artifactName.trim()}` : "Review",
         status: g.status === "resolved" ? "resolved" : "pending",
         gate: {
           gateId: g.gateId,

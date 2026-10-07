@@ -26,7 +26,7 @@ import {
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
-import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
+import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor, buildActorContextFromPrimitive } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
 import {
@@ -35,9 +35,11 @@ import {
   isParkedOnProducedReview,
   readRunReviewSlot,
   readVerificationRecordsForGates,
+  type ReviewGateRow,
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
-import { buildRunStepRail, type RailMessage } from "./run-step-rail";
+import { buildRunStepRail, type RailGate, type RailMessage } from "./run-step-rail";
+import { reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 // WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
@@ -1425,6 +1427,45 @@ async function launchOrganizationFor(
   return activeOrganizationId;
 }
 
+/** The rail names the same actor-readable artifact the review header names.
+ * The gate's own frozen target identifies it; no run output, type or object ID
+ * is invented as a title. Multi-target legacy gates keep their existing label:
+ * the approved rail draws one reviewed target and defines no aggregate name. */
+export async function readRunReviewRailGates(
+  gates: readonly Pick<ReviewGateRow, "id" | "orgId" | "reviewTaskId" | "status" | "disposition" | "createdAt" | "pinnedTargets">[],
+  ctx: { orgId: string | null; actor: PrimitiveActorContext; roleHints?: ActorRoleHints },
+): Promise<RailGate[]> {
+  const rows: RailGate[] = gates.map((gate) => ({
+    gateId: gate.id, reviewTaskId: gate.reviewTaskId, status: gate.status,
+    disposition: gate.disposition, createdAt: gate.createdAt,
+  }));
+  const named = gates.map((gate, index) => ({ gate, index })).filter(({ gate }) =>
+    gate.orgId === ctx.orgId && gate.pinnedTargets?.length === 1 &&
+    (gate.status === "pending" || reviewSettledOutcomeFromDisposition(gate.disposition) !== null),
+  );
+  if (named.length === 0) return rows;
+  // These are the review header's existing readers: both enforce ownership and
+  // object.read, and only the settled reading allows a tombstoned pinned target.
+  // Keep registration and its stores off the page's no-gate path.
+  const readers = await import("@/lib/artifacts/artifact-service").catch(() => null);
+  if (!readers) return rows;
+  const actor = buildActorContextFromPrimitive(ctx.actor, ctx.orgId, ctx.roleHints);
+  for (const { gate, index } of named) {
+    try {
+      const read = gate.status === "resolved"
+        ? readers.readArtifactForSettledReview
+        : readers.readArtifactForDetail;
+      const access = read({ artifactId: gate.pinnedTargets[0].artifactId, orgId: ctx.orgId, actor });
+      if (access.kind === "ok" && access.artifact.title?.trim()) {
+        rows[index].artifactName = access.artifact.title;
+      }
+    } catch {
+      // A lost/denied title never loses the gate's historical generic row.
+    }
+  }
+  return rows;
+}
+
 export async function SetupScreen({
   agentId,
   instanceId,
@@ -1850,6 +1891,9 @@ export async function SetupScreen({
   // history. Access is already enforced above (readAgentRunById with the actor);
   // `listReviewGatesForRun` is a plain run-scoped read behind that door.
   const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  const reviewRailGates = run
+    ? await readRunReviewRailGates(railGates, { orgId: run.orgId, actor: setupActor, roleHints: setupRoles })
+    : [];
   // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
   // produced-event outbox rows. A fired decision already renders as its gate above;
   // a SKIPPED one had no rendering at all before this — so an org-forbidden /
@@ -1893,13 +1937,7 @@ export async function SetupScreen({
         })),
         messages: railMessages,
         stepResults: railStepResults,
-        gates: railGates.map((g) => ({
-          gateId: g.id,
-          reviewTaskId: g.reviewTaskId,
-          status: g.status,
-          disposition: g.disposition,
-          createdAt: g.createdAt,
-        })),
+        gates: reviewRailGates,
         verifications: railVerifications
           .filter((v) => gateTaskById.has(v.gateId))
           .map((v) => ({

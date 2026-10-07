@@ -103,6 +103,15 @@ vi.mock("../wayflow-run-token-carrier", () => ({
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(async () => []),
   markResumeIntentDelivered: vi.fn(async () => true),
+  // This delivery follows the resolved legacy gate; its complete inventory
+  // must authorize the resume before this suite exercises terminal recovery.
+  listReviewGatesForRun: vi.fn(async () => [{
+    runId: "run-1",
+    orgId: "org-1",
+    reviewTaskId: "wayflow-task-1",
+    status: "resolved",
+    pinnedTargets: [{ artifactId: "reviewed-artifact", representationRevisionId: "reviewed-revision" }],
+  }]),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
 
