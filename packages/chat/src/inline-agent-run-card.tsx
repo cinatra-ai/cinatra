@@ -194,9 +194,13 @@ function reviewSlotReader(
       reviewTaskId?: string | null;
     } | null>)
   | undefined {
-  const request = seedRequest(credential, runId);
-  if (!request) return undefined;
+  if (credential.kind === "refused") return undefined;
   return async (signal) => {
+    // The request is built at EACH read, never once when the reader is made: the
+    // widget's credential renews in place and the server deletes the old token,
+    // so a request built once would ask with a deleted token (cinatra#3051).
+    const request = seedRequest(credential, runId);
+    if (!request) return null;
     const res = await fetch(request.url, { ...request.init, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
@@ -253,9 +257,12 @@ function runSnapshotReader(
   credential: ConversationCredential,
   runId: string,
 ): (() => Promise<RunPollResponse | null>) | undefined {
-  const request = seedRequest(credential, runId);
-  if (!request) return undefined;
+  if (credential.kind === "refused") return undefined;
   return async () => {
+    // Built at EACH read, for the reason the slot reader above gives: the
+    // widget's credential renews in place (cinatra#3051).
+    const request = seedRequest(credential, runId);
+    if (!request) return null;
     const res = await fetch(request.url, request.init);
     if (!res.ok) return null;
     return (await res.json()) as RunPollResponse;

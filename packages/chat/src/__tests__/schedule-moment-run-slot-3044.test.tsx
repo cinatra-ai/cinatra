@@ -120,6 +120,7 @@ import {
   installWidgetServiceStub,
   mountRefusedSurface,
   mountSurface,
+  WIDGET_LIFECYCLE_SURFACE,
 } from "./conversation-column-harness";
 
 // ---------------------------------------------------------------------------
@@ -605,6 +606,48 @@ describe("the run read carries the surface's own credential", () => {
         Authorization: expect.any(String),
       });
     }
+  }, 30_000);
+
+  // The frame renews its sign-in pair in place (cinatra#3051). The harness's
+  // auth object is the object the column reads (the harness's
+  // WIDGET_LIFECYCLE_SURFACE, handed down by the column as its lifecycle
+  // surface), so replacing its `headers` is the renewal as the column sees it.
+  it("a run read after the frame renews its credential carries the renewed token", async () => {
+    runReading.current = RUN_AT_SCHEDULE;
+    const stub = installWidgetServiceStub({
+      lifecycle: () => scheduleEnvelope(),
+      runSeed: () => runReading.current,
+    });
+    widgetStub = stub;
+    const { container } = await mountSurface("widget", {
+      messages: dispatchTurn(false),
+    });
+
+    await waitFor(() => {
+      if (!container.querySelector(CARD)) throw new Error("no schedule card drawn");
+    });
+    const tokenOf = (call: { init: RequestInit }) =>
+      (call.init.headers as Record<string, string> | undefined)?.["X-Cinatra-Widget-User-Token"];
+    const runReads = () => stub.calls.filter((c) => c.url.startsWith("/api/agents/runs/"));
+    expect(runReads().length).toBeGreaterThan(0);
+    expect(runReads().every((c) => tokenOf(c) === "cwu_user")).toBe(true);
+
+    const before = runReads().length;
+    const renewed = {
+      ...WIDGET_LIFECYCLE_SURFACE.auth.headers(),
+      "X-Cinatra-Widget-User-Token": "cwu_renewed",
+    };
+    vi.spyOn(WIDGET_LIFECYCLE_SURFACE.auth, "headers").mockReturnValue(renewed);
+
+    await waitFor(
+      () => {
+        if (!runReads().slice(before).some((c) => tokenOf(c) === "cwu_renewed")) {
+          throw new Error("no run read after the renewal carried the renewed token");
+        }
+      },
+      { timeout: 10_000 },
+    );
+    expect(runReads().slice(before).every((c) => c.init.credentials === "omit")).toBe(true);
   }, 30_000);
 
   it("a run that cannot be read leaves ONE reading — the run's own", async () => {

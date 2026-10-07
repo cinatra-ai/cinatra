@@ -354,11 +354,15 @@ function AgentRunTurnSlot({
   // live, and the card mount here with no reload.
   const credential = useConversationCredential();
   const momentReader = useMemo<RunMomentCardReader | null>(() => {
-    const request = runSeedRequest(credential, runId);
     // A host that cannot say who is asking reads NOTHING, and the turn keeps
     // exactly the reading it drew before this rule existed.
-    if (!request) return null;
+    if (credential.kind === "refused") return null;
     return async (signal) => {
+      // The request is built at EACH read, never once when the reader is made:
+      // the widget's credential renews in place and the server deletes the old
+      // token, so a request built once would ask with a deleted token (cinatra#3051).
+      const request = runSeedRequest(credential, runId);
+      if (!request) return null;
       const response = await fetch(request.url, { ...request.init, signal });
       if (!response.ok) return null;
       return parseRunMomentCard(await response.json());

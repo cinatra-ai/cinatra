@@ -312,3 +312,65 @@ describe("the run's own re-read, after the seed (cinatra#3051)", () => {
     expect(panelProps.current).toBeNull();
   });
 });
+
+// The widget renews its sign-in pair in place, two thirds of the way through
+// each life, and the server deletes the old token in the same step. The auth
+// object stays the SAME object for the life of the column: its `headers()`
+// reads the frame's ref at call time (cinatra#3051). So a re-read made after a
+// renewal must ask with the renewed token, never the one the panel was made with.
+describe("the panel's re-reads ask with the credential as it stands at each read", () => {
+  let userToken = "cwu_user";
+  const rotatingAuth = {
+    headers: () => ({
+      Authorization: "Bearer cit_site",
+      "X-Cinatra-Widget-User-Token": userToken,
+      "X-Cinatra-Widget-Assistant": "wordpress",
+      "X-Cinatra-Widget-Origin": "https://blog.example.com",
+    }),
+    credentials: "omit" as const,
+  };
+  const rotatingHost = (children: ReactNode) => (
+    <LifecycleCardSurfaceProvider host="site_widget" auth={rotatingAuth} frame={BROKER_FRAME}>
+      {children}
+    </LifecycleCardSurfaceProvider>
+  );
+
+  beforeEach(() => {
+    userToken = "cwu_user";
+    panelProps.current = null;
+  });
+
+  it("the review-slot read after a renewal carries the renewed token", async () => {
+    render(rotatingHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+    expect(headersOf(fetchCalls[0].init)["x-cinatra-widget-user-token"]).toBe("cwu_user");
+
+    userToken = "cwu_renewed";
+    fetchCalls = [];
+    await (panelProps.current!.readReviewSlot as (signal: AbortSignal) => Promise<unknown>)(
+      new AbortController().signal,
+    );
+
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0].url).toBe(SEED_URL);
+    expect(headersOf(fetchCalls[0].init)["x-cinatra-widget-user-token"]).toBe("cwu_renewed");
+    expect(fetchCalls[0].init.credentials).toBe("omit");
+  });
+
+  it("the run's own re-read after a renewal carries the renewed token", async () => {
+    render(rotatingHost(<InlineAgentRunCard runId={RUN_ID} />));
+    await screen.findByTestId("run-panel-stub");
+    await waitFor(() => expect(panelProps.current).not.toBeNull());
+    expect(headersOf(fetchCalls[0].init)["x-cinatra-widget-user-token"]).toBe("cwu_user");
+
+    userToken = "cwu_renewed";
+    fetchCalls = [];
+    await (panelProps.current!.readRunSnapshot as () => Promise<unknown>)();
+
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0].url).toBe(SEED_URL);
+    expect(headersOf(fetchCalls[0].init)["x-cinatra-widget-user-token"]).toBe("cwu_renewed");
+    expect(fetchCalls[0].init.credentials).toBe("omit");
+  });
+});
