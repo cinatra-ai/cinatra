@@ -113,6 +113,12 @@ BOUND_NAMES.sort();
 STEP_NAMES.push("readAddress", "readOptions");
 BOUND_NAMES.push("ADDRESS_BOUND_MS", "ADDRESS_POLL_MS", "ADDRESS_SETTLE_MS");
 BOUND_NAMES.sort();
+// frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow: their
+// steps and their bounds join the lists in this one place, and the bounds stay
+// in order. pressWithoutName takes the bounds of press, listed above already.
+STEP_NAMES.push("frameOf", "openPageOfOrigin", "pressWithoutName", "signInThroughWindow");
+BOUND_NAMES.push("FRAME_SCOPE_BOUND_MS", "OTHER_ORIGIN_BOUND_MS", "WINDOW_OPEN_BOUND_MS", "WINDOW_RETURN_BOUND_MS");
+BOUND_NAMES.sort();
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {

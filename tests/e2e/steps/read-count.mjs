@@ -9,7 +9,7 @@
 // once it has held still for a whole settle window.
 //
 // It counts what is ATTACHED to the page, visible or not, as a locator counts.
-import { errorClass, pathOf, pause, refuse, requireMs, requireRecord } from "./step-kit.mjs";
+import { errorClass, pathOf, pause, refuse, refuseStaleScope, requireMs, requireRecord } from "./step-kit.mjs";
 
 const STEP = "readCount";
 
@@ -46,6 +46,7 @@ export async function readCount(
   requireMs(STEP, record, "settleMs", settleMs, nothing);
   requireMs(STEP, record, "pollMs", pollMs, nothing);
   requireMs(STEP, record, "bound", bound, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const named = selector.replace(/\s+/g, " ").trim();
 
   const count = async () => {

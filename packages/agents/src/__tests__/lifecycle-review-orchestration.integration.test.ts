@@ -32,7 +32,6 @@ import {
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import {
   autoReviewTaskId,
-  batchPartitionReviewTaskId,
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { sealBatch, partitionBatchTargets, MAX_BATCH_PARTITION } from "@/lib/lifecycle/lifecycle-batch";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
@@ -817,70 +816,41 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     }>;
   }
 
-  it("EXPIRY (batch, external_publish): a batch review of outward artifacts stays pending past its waiting time until a person decides", async () => {
-    const runId = `run-${randomUUID()}`;
-    await produce("outward-expiry-batch-doc", {
-      destinationClass: "external_publish",
-      originKind: "agent_produced",
-      artifactId: `art-${randomUUID()}`,
-      producerRunId: runId,
-    });
-    await produce("outward-expiry-batch-doc", {
-      destinationClass: "external_publish",
-      originKind: "agent_produced",
-      artifactId: `art-${randomUUID()}`,
-      producerRunId: runId,
-    });
-    await orch.sweepReviewOrchestration();
+  // Approved review drawing §I.3/#3944: every frozen revision has its own
+  // gate. Exact run/task/pin equality rejects foreign, duplicated or latest pins.
+  async function expectSingletonGates(runId: string, events: ArtifactProducedEvent[]) {
     const gates = await readRunGate(runId);
-    expect(gates.length).toBe(1);
-    expect(gates[0].pinned_targets?.length).toBe(2);
-    expect(gates[0].status).toBe("pending");
+    expect(gates).toHaveLength(events.length);
+    expect(new Set(gates.map(g => g.review_task_id))).toEqual(new Set(events.map(e => autoReviewTaskId(e.eventId))));
+    for (const e of events) {
+      const gate = gates.find(g => g.review_task_id === autoReviewTaskId(e.eventId));
+      expect(gate?.pinned_targets).toEqual([{ artifactId: e.artifactId, representationRevisionId: e.representationRevisionId }]);
+      expect((await readEventRow(e.eventId))?.continuation_address).toBe(gate!.id);
+    }
+    return gates;
+  }
 
-    await pool(
-      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET expires_at = now() - interval '1 hour' WHERE id = $1`,
-      [gates[0].id],
-    );
-    const maint = await orch.sweepLifecycleGateMaintenance();
-    expect(maint.requiredExpiredBlocked).toBeGreaterThanOrEqual(1);
-
-    const [after] = await readRunGate(runId);
-    expect(after.status).toBe("pending");
-    expect(after.disposition).toBeNull();
-    expect(after.fingerprint).toBeNull();
-  });
-
-  it("EXPIRY (batch, none): a batch review of artifacts that stay inside the product lapses at the end of its waiting time", async () => {
+  it.each(["external_publish", "none"] as const)("EXPIRY (batch, %s): each singleton retains its own requiredness and frozen pin", async destinationClass => {
     const runId = `run-${randomUUID()}`;
-    await produce("inside-expiry-batch-doc", {
-      destinationClass: "none",
-      originKind: "agent_produced",
-      artifactId: `art-${randomUUID()}`,
-      producerRunId: runId,
-    });
-    await produce("inside-expiry-batch-doc", {
-      destinationClass: "none",
-      originKind: "agent_produced",
-      artifactId: `art-${randomUUID()}`,
-      producerRunId: runId,
-    });
+    const events: ArtifactProducedEvent[] = [];
+    for (let i = 0; i < 2; i++) events.push(await produce(destinationClass === "none" ? "inside-expiry-batch-doc" : "outward-expiry-batch-doc", {
+      destinationClass, originKind: "agent_produced", producerRunId: runId,
+    }));
     await orch.sweepReviewOrchestration();
-    const gates = await readRunGate(runId);
-    expect(gates.length).toBe(1);
-    expect(gates[0].pinned_targets?.length).toBe(2);
-    expect(gates[0].status).toBe("pending");
-
-    await pool(
-      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET expires_at = now() - interval '1 hour' WHERE id = $1`,
-      [gates[0].id],
-    );
-    const maint = await orch.sweepLifecycleGateMaintenance();
-    expect(maint.optionalExpired).toBeGreaterThanOrEqual(1);
-
-    const [after] = await readRunGate(runId);
-    expect(after.status).toBe("resolved");
-    expect(after.disposition).toBe("approve");
-    expect(after.fingerprint).toBe(`expiry:${gates[0].id}`);
+    const gates = await expectSingletonGates(runId, events);
+    for (const gate of gates) {
+      expect(gate.status).toBe("pending");
+      await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET expires_at = now() - interval '1 hour' WHERE id = $1`, [gate.id]);
+    }
+    await orch.sweepLifecycleGateMaintenance();
+    const after = await expectSingletonGates(runId, events);
+    for (const gate of after) {
+      expect(gate.status).toBe(destinationClass === "none" ? "resolved" : "pending");
+      expect(gate.disposition).toBe(destinationClass === "none" ? "approve" : null);
+      expect(gate.fingerprint).toBe(destinationClass === "none" ? `expiry:${gate.id}` : null);
+    }
+    await orch.sweepLifecycleGateMaintenance();
+    expect(await expectSingletonGates(runId, events)).toEqual(after);
   });
 
   // -------------------------------------------------------------------------
@@ -1016,11 +986,9 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     expect((disp.rows[0] as { applied_at: Date | null }).applied_at).not.toBeNull();
   });
 
-  it("BATCH: a >50-target production COALESCES → sealed membership → deterministic ≤50 partitions → one aggregate gate per partition", async () => {
-    // A single production (ONE producerRunId) emits 120 durable agent-produced
-    // artifacts with an EXTERNAL effect — a >50-target production the S0 batch
-    // contract must partition, each partition holding its members' external effect
-    // until the aggregate decision.
+  it("BATCH: a >50-target production seals exact membership and opens one frozen singleton per artifact", async () => {
+    // Approved §I.3: one production emits 120 frozen revisions; each gets one
+    // review and holds only its own external effect until its decision.
     const runId = `run-batch-${randomUUID()}`;
     const N = 120;
     const events: ArtifactProducedEvent[] = [];
@@ -1039,10 +1007,9 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     const summary = await orch.sweepReviewOrchestration({ limit: 200 });
     expect(summary.batchesCoalesced).toBe(1);
 
-    // PROVABLE SEAL + deterministic partitioning: the fired membership seals to
-    // exactly the 120 targets and partitions into ⌈120/50⌉ = 3 stable partitions
-    // (50, 50, 20). We recompute the SAME pure seal+partition and assert the gates
-    // the store created carry byte-identical partition task ids.
+    // Retain the original seal and historical partition-bound controls. New
+    // gate identity is per event; durable and actual gate pins must equal this
+    // exact membership, including revisions, with no foreign outputs.
     const sealed = sealBatch({
       kind: "explicit",
       targets: events.map((e) => ({
@@ -1056,8 +1023,15 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     const partitions = partitionBatchTargets(sealed.targets);
     expect(partitions.length).toBe(Math.ceil(N / MAX_BATCH_PARTITION)); // 3
     for (const p of partitions) expect(p.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
-    const expectedTaskIds = new Set(partitions.map((p) => batchPartitionReviewTaskId(p)));
-    expect(summary.gatesCreated).toBe(partitions.length); // one aggregate gate per partition
+    const expectedTaskIds = new Set(events.map(e => autoReviewTaskId(e.eventId)));
+    expect(summary.gatesCreated).toBe(N); // §I.3: one review per artifact
+    await expectSingletonGates(runId, events);
+    const epochs = await pool(`SELECT target_count, membership FROM "${q(TEST_SCHEMA)}"."lifecycle_batch_epoch" WHERE org_id=$1 AND producer_run_id=$2`, [ORG, runId]);
+    expect(epochs.rows).toHaveLength(1);
+    expect(epochs.rows[0].target_count).toBe(N);
+    expect(epochs.rows[0].membership).toHaveLength(N);
+    expect(new Set(epochs.rows[0].membership.map((t: { artifactId: string; representationRevisionId: string }) => `${t.artifactId} ${t.representationRevisionId}`))).toEqual(new Set(events.map(e => `${e.artifactId} ${e.representationRevisionId}`)));
+
 
     // The gates the store actually created for this run.
     const gateRows = await pool(
@@ -1070,16 +1044,15 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       pinned_targets: Array<{ artifactId: string; representationRevisionId: string }>;
       expires_at: Date | null;
     }>;
-    expect(gates.length).toBe(partitions.length);
-    // Every gate's task id is one of the deterministically-derived partition ids.
+    expect(gates.length).toBe(N);
+    // Every gate task names exactly its frozen produced event.
     expect(new Set(gates.map((g) => g.review_task_id))).toEqual(expectedTaskIds);
 
-    // Each partition gate is a SINGLE aggregate commit unit: ≤50 pinned targets,
-    // an auto-gate expiry, and together the partitions cover EXACTLY the 120
-    // distinct targets (disjoint, complete).
+    // Every gate has one frozen pin and an expiry; all 120 exact revisions are
+    // covered once, disjoint and complete.
     const coveredKeys = new Set<string>();
     for (const g of gates) {
-      expect(g.pinned_targets.length).toBeLessThanOrEqual(MAX_BATCH_PARTITION);
+      expect(g.pinned_targets).toHaveLength(1);
       expect(g.expires_at).not.toBeNull();
       for (const t of g.pinned_targets) coveredKeys.add(`${t.artifactId} ${t.representationRevisionId}`);
     }
@@ -1088,8 +1061,8 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       expect(coveredKeys.has(`${e.artifactId} ${e.representationRevisionId}`)).toBe(true);
     }
 
-    // Every member event is processed AND linked to one of the three partition
-    // gates (the effects-gating join).
+    // Every member is processed and linked to its own gate; the exact task/pin
+    // mapping above forbids an event being linked to another artifact's gate.
     const gateIds = new Set(gates.map((g) => g.id));
     for (const e of events) {
       const row = await readEventRow(e.eventId);
@@ -1108,7 +1081,7 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       `SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1`,
       [runId],
     );
-    expect((gateCountAfter.rows[0] as { n: number }).n).toBe(partitions.length);
+    expect((gateCountAfter.rows[0] as { n: number }).n).toBe(N);
 
     // Before any decision EVERY member's external effect is HELD by its (pending)
     // partition gate.
@@ -1120,8 +1093,8 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       expect(v.held).toBe(true);
     }
 
-    // SINGLE AGGREGATE COMMIT: resolving ONE partition gate releases exactly its
-    // members' effects in one shot; the OTHER partitions' effects stay held.
+    // Resolving ONE singleton releases only its frozen revision. Every sibling
+    // remains held, as the one-artifact review contract requires.
     const first = gates[0];
     const firstKeys = new Set(
       first.pinned_targets.map((t) => `${t.artifactId} ${t.representationRevisionId}`),
@@ -1133,8 +1106,7 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
         artifactId: e.artifactId,
         representationRevisionId: e.representationRevisionId,
       });
-      // A member of the resolved partition is RELEASED; a member of a still-pending
-      // partition stays HELD — the aggregate commit is per-partition-atomic.
+      // Only the decided target releases; no sibling's decision is implied.
       expect(v.held).toBe(firstKeys.has(key) ? false : true);
     }
   });
@@ -1142,8 +1114,8 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
   it("BATCH: a >50 CHECKPOINTED production seals COMPLETELY even at limit=1 (per-production budget), and parks every member", async () => {
     // 55 checkpointed revisions from ONE run. The pass budget is PRODUCTIONS, not
     // raw events: even limit=1 fetches this production's COMPLETE pending membership
-    // (55) and seals it whole → deterministic ⌈55/50⌉ = 2 partitions (50, 5). This
-    // is the property that makes the seal independent of the fetch window.
+    // (55) and seals it whole, with one review per frozen revision. The seal
+    // remains independent of the fetch window.
     const runId = `run-cp-batch-${randomUUID()}`;
     const N = 55;
     const events: ArtifactProducedEvent[] = [];
@@ -1153,7 +1125,14 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
 
     const summary = await orch.sweepReviewOrchestration({ limit: 1 });
     expect(summary.batchesCoalesced).toBe(1);
-    expect(summary.gatesCreated).toBe(2); // 50 + 5
+    expect(summary.gatesCreated).toBe(N); // exact 55 singleton reviews
+    await expectSingletonGates(runId, events);
+    const epochs = await pool(`SELECT target_count, membership FROM "${q(TEST_SCHEMA)}"."lifecycle_batch_epoch" WHERE org_id=$1 AND producer_run_id=$2`, [ORG, runId]);
+    expect(epochs.rows).toHaveLength(1);
+    expect(epochs.rows[0].target_count).toBe(N);
+    expect(epochs.rows[0].membership).toHaveLength(N);
+    expect(new Set(epochs.rows[0].membership.map((t: { artifactId: string; representationRevisionId: string }) => `${t.artifactId} ${t.representationRevisionId}`))).toEqual(new Set(events.map(e => `${e.artifactId} ${e.representationRevisionId}`)));
+
 
     // Every member PARKS on its partition gate (the checkpointed continuation) and
     // is linked — proving park precedes the atomic link.
@@ -1171,13 +1150,13 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       expect(p?.policy_decision_id).toBe(row!.continuation_address);
     }
 
-    // The two partition gates cover exactly the 55 distinct targets.
+    // The 55 singleton gates cover exactly the frozen revisions.
     const gateRows = await pool(
       `SELECT id, pinned_targets FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id=$1`,
       [runId],
     );
     const gates = gateRows.rows as Array<{ id: string; pinned_targets: Array<{ artifactId: string }> }>;
-    expect(gates.length).toBe(2);
+    expect(gates.length).toBe(N);
     const total = gates.reduce((n, g) => n + g.pinned_targets.length, 0);
     expect(total).toBe(N);
   });
