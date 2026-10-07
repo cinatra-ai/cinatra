@@ -33,6 +33,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { CARD_KINDS } from "../lib/capture-record-contract.mjs";
 import { MANIFEST_PATH } from "../../audit/chat-hitl-acceptance-gate.mjs";
 import {
   anchorDigestInputs,
@@ -83,6 +84,226 @@ const anchor = (selector, kind = "artifact_review_gate", origin = "ownerAnchors"
   kind,
   origin,
   selector,
+});
+
+// The decided passive capture markers. Visible cards, fields and controls are
+// deliberately absent: they still need to resolve against a governed drawing.
+const PASSIVE_CAPTURE_SELECTORS = [
+  ".cw-frame",
+  "[data-conversation-list]",
+  '[data-embed-assistant][data-phase="active"]',
+  '[data-lifecycle-card-host="chat_thread"]',
+  '[data-lifecycle-card-host="page_gate_region"]',
+  '[data-lifecycle-card-host="run_card"]',
+  '[data-lifecycle-card-host="site_widget"]',
+  "[data-lifecycle-card-state]",
+  '[data-lifecycle-card="agent_hitl_screen"]',
+  '[data-lifecycle-card="artifact_review_gate"]',
+  '[data-lifecycle-card="recommendation_hold"]',
+];
+
+describe("serialized capture assertions retain selector and observation provenance", () => {
+  const emptyDrawing = [{ path: "specs/one.html", text: "<main>empty</main>" }];
+  const retired = ['[data-skill-action="confirm"]', '[data-skill-action="adjust"]', '[data-skill-action="skip"]'];
+  const within = '[data-lifecycle-card="recommendation_hold"]';
+  const captured = (entries, cell = "recommendation_hold|pending", host = "run_card") =>
+    collectRecordedAnchors({ anchorContract: {}, captureAnchors: { [host]: { [cell]: entries } } });
+  const checked = (anchors) => checkAnchorResolution({ pin: pin(), anchors, governed: emptyDrawing });
+
+  it.each([
+    ['[data-action="confirm-schedule -> scheduled"]', "trigger_schedule_proposal"],
+    ['[data-action="continue -> selection-saved"]', "recommendation_hold"],
+  ])("passes the intact quoted selector %s from the collector into the real matcher", (selector, kind) => {
+    const anchors = captured([`${selector} root present [data-lifecycle-card="${kind}"] canonical`], `${kind}|pending`);
+    expect(anchors.map((a) => a.selector)).toEqual([selector]);
+    const report = checkAnchorResolution({ pin: pin(), anchors, governed: [{ path: "specs/one.html", text: drawingWith(selector) }] });
+    expect(report.refused).toHaveLength(0);
+    expect(report.results[0].status).toBe("resolved");
+  });
+
+  it("preserves all capture claims including different scope, state, host and polarity", () => {
+    const selector = retired[0];
+    const captureAnchors = {
+      run_card: {
+        "recommendation_hold|pending": [`${selector} root absent ${within} canonical`],
+        "recommendation_hold|decided": [`${selector} frame present  audit`],
+      },
+      chat_thread: { "recommendation_hold|pending": [`${selector} root absent ${within} canonical`] },
+    };
+    const before = JSON.stringify(captureAnchors);
+    const anchors = collectRecordedAnchors({ anchorContract: {}, captureAnchors });
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0].captureAssertions).toEqual([
+      { host: "run_card", cell: "recommendation_hold|pending", scope: "root", expect: "absent", within, tier: "canonical" },
+      { host: "run_card", cell: "recommendation_hold|decided", scope: "frame", expect: "present", within: "", tier: "audit" },
+      { host: "chat_thread", cell: "recommendation_hold|pending", scope: "root", expect: "absent", within, tier: "canonical" },
+    ]);
+    expect(JSON.stringify(captureAnchors)).toBe(before);
+    const report = checked(anchors);
+    expect(report.captureAbsences ?? []).toHaveLength(0);
+    expect(report.unresolved.map((a) => a.selector)).toEqual([selector]);
+  });
+
+  it("keeps the current three controls and their absences as drawing claims", () => {
+    const captureAnchors = captureAnchorExpectations();
+    const before = JSON.stringify(captureAnchors);
+    const inputs = anchorDigestInputs({ specCommit: manifest().specCommit, domExpectations: contract().domExpectations, captureAnchors });
+    const digestBefore = computeAnchorDigest(inputs);
+    const report = checked(collectRecordedAnchors({ anchorContract: contract(), captureAnchors }));
+    expect(CARD_KINDS.recommendation_hold.retiredDecisionControls).toBeUndefined();
+    expect(report.results.filter((a) => retired.includes(a.selector)).map((a) => a.selector).sort()).toEqual([...retired].sort());
+    expect(report.results.filter((a) => retired.includes(a.selector)).every((a) => a.captureAssertions.some((claim) => claim.expect === "present"))).toBe(true);
+    expect(JSON.stringify(captureAnchors)).toBe(before);
+    expect(computeAnchorDigest(inputs)).toBe(digestBefore);
+  });
+
+  it.each(["present", "absent"])("keeps even canonical %s control observations inside the drawing check", (expectation) => {
+    const report = checked(captured(retired.map((selector) => `${selector} root ${expectation} ${within} canonical`)));
+    expect(report.unresolved.map((a) => a.selector).sort()).toEqual([...retired].sort());
+    expect(report.unresolved.every((a) => a.captureAssertions[0].expect === expectation)).toBe(true);
+    expect(decide({ event: "push-main", report, touchedPinIds: [] }).exitCode).toBe(1);
+  });
+
+  it("keeps both owner and capture claims for the same control", () => {
+    const selector = retired[0];
+    const report = checked(collectRecordedAnchors({
+      anchorContract: { domExpectations: { carriage: { recommendation_hold: { ownerAnchors: [selector] } } } },
+      captureAnchors: { run_card: { "recommendation_hold|pending": [`${selector} root absent ${within} canonical`] } },
+    }));
+    expect(report.unresolved.map((a) => [a.origin, a.selector])).toEqual([["ownerAnchors", selector], ["capture", selector]]);
+  });
+
+  it.each([true, false])("never deduplicates a positive assertion behind an absence (absent first: %s)", (absentFirst) => {
+    const selector = retired[1];
+    const entries = [`${selector} root absent ${within} canonical`, `${selector} root present ${within} canonical`];
+    if (!absentFirst) entries.reverse();
+    const report = checked(captured(entries));
+    expect(report.captureAbsences ?? []).toHaveLength(0);
+    expect(report.unresolved.map((a) => a.selector)).toEqual([selector]);
+    expect(report.unresolved[0].captureAssertions.map((a) => a.expect)).toEqual(absentFirst ? ["absent", "present"] : ["present", "absent"]);
+  });
+
+  it.each([
+    ['[data-skill-action="unknown"] root absent [data-lifecycle-card="recommendation_hold"] canonical', "recommendation_hold|pending", "run_card"],
+    ['[data-skill-action="confirm"] frame absent  canonical', "recommendation_hold|pending", "run_card"],
+    ['[data-skill-action="confirm"] root absent [data-lifecycle-card="recommendation_hold"] audit', "recommendation_hold|pending", "run_card"],
+    ['[data-skill-action="confirm"] root absent [data-lifecycle-card="artifact_review_gate"] canonical', "recommendation_hold|pending", "run_card"],
+    ['[data-skill-action="confirm"] root absent [data-lifecycle-card="recommendation_hold"] canonical', "recommendation_hold|unknown", "run_card"],
+    ['[data-skill-action="confirm"] root absent [data-lifecycle-card="recommendation_hold"] canonical', "artifact_review_gate|pending", "run_card"],
+    ['[data-skill-action="confirm"] root absent [data-lifecycle-card="recommendation_hold"] canonical', "recommendation_hold|pending", "unknown_host"],
+  ])("does not excuse an unknown or noncanonical absence %s / %s / %s", (entry, cell, host) => {
+    const report = checked(captured([entry], cell, host));
+    expect(report.captureAbsences ?? []).toHaveLength(0);
+    expect(report.unresolved).toHaveLength(1);
+  });
+
+  it.each([
+    '[data-skill-action^="confirm"] root absent [data-lifecycle-card="recommendation_hold"] canonical',
+    '[data-skill-action=confirm] root absent [data-lifecycle-card="recommendation_hold"] canonical',
+  ])("still refuses unsupported selector forms rather than accounting an absence: %s", (entry) => {
+    const report = checked(captured([entry]));
+    expect(report.captureAbsences ?? []).toHaveLength(0);
+    expect(report.refused).toHaveLength(1);
+  });
+
+  it.each([
+    null,
+    '[data-skill-action="confirm"]',
+    '[data-skill-action="confirm"] root unknown [data-lifecycle-card="recommendation_hold"] canonical',
+    '[data-skill-action="confirm"] root absent [data-lifecycle-card="recommendation_hold"] unknown',
+    '[data-skill-action="confirm"] [data-other] root absent [data-lifecycle-card="recommendation_hold"] canonical',
+    '[data-skill-action="confirm] root absent [data-lifecycle-card="recommendation_hold"] canonical',
+  ])("refuses malformed serialized capture data before it can waive a drawing claim: %s", (entry) => {
+    expect(() => captured([entry])).toThrow(UnsupportedSelectorError);
+  });
+
+});
+
+describe("passive capture markers are accounted for separately from drawn parts", () => {
+  const emptyDrawing = [{ path: "specs/one.html", text: "<!doctype html><main>empty</main>" }];
+
+  it("classifies all eleven live markers without changing their capture requirements", () => {
+    const captureAnchors = captureAnchorExpectations();
+    const before = JSON.stringify(captureAnchors);
+    const anchors = collectRecordedAnchors({ anchorContract: contract(), captureAnchors });
+    const report = checkAnchorResolution({ pin: pin(), anchors, governed: emptyDrawing });
+    expect(report.results.some((a) => PASSIVE_CAPTURE_SELECTORS.includes(a.selector))).toBe(false);
+    expect([...new Set(report.captureHooks.map((a) => a.selector))].sort()).toEqual(
+      [...PASSIVE_CAPTURE_SELECTORS].sort(),
+    );
+    expect(report.results.filter((a) => a.origin === "ownerAnchors")).toHaveLength(5);
+    expect(report.unresolved.some((a) => a.selector === '[data-conformance-id="agent-hitl-screen-card"]')).toBe(true);
+    expect(JSON.stringify(captureAnchors)).toBe(before);
+  });
+
+  it("reports a retained capture requirement without calling it resolved in a drawing", () => {
+    const report = checkAnchorResolution({
+      pin: pin(), anchors: [anchor(".cw-frame", "site_widget", "capture")], governed: emptyDrawing,
+    });
+    expect(report.unresolved).toHaveLength(0);
+    expect(report.captureHooks).toHaveLength(1);
+    expect(report.results).toHaveLength(0);
+    const text = formatReport(report);
+    expect(text).toContain(".cw-frame");
+    expect(text).toContain("capture requirement — not a drawn part");
+    expect(text).not.toContain("resolved in governed drawing");
+  });
+
+  it("keeps owner anchors, unknown markers and visible controls inside the drawing check", () => {
+    const selectors = [
+      ".cw-frame",
+      '[data-lifecycle-card-host="unknown_host"]',
+      '[data-lifecycle-card="unknown_card"]',
+      '[data-embed-assistant][data-phase="starting"]',
+      '[data-conformance-id="hitl-screen-fields"]',
+      '[data-action="confirm-schedule-proposal"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
+    ];
+    const anchors = selectors.map((s, i) => ({
+      ...anchor(s, "k", i === 0 ? "ownerAnchors" : "capture"),
+      // A caller cannot supply the classification to get out of the check.
+      anchorClass: "capture-hook",
+    }));
+    const report = checkAnchorResolution({ pin: pin(), anchors, governed: emptyDrawing });
+    expect(report.unresolved.map((a) => a.selector)).toEqual(selectors);
+    expect(report.refused).toHaveLength(0);
+    expect(decide({ event: "push-main", report, touchedPinIds: [] }).exitCode).toBe(1);
+  });
+
+  it("still refuses an unsupported selector that contains a passive marker", () => {
+    const selector = '.cw-frame [data-conformance-id="review-gate-card"]';
+    const report = checkAnchorResolution({
+      pin: pin(), anchors: [anchor(selector, "k", "capture")], governed: emptyDrawing,
+    });
+    expect(report.refused.map((a) => a.selector)).toEqual([selector]);
+  });
+
+  it("prints only unresolved drawn parts and refuses the unchanged stale recorded array", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "design-capture-class-"));
+    mkdirSync(join(dir, "specs"));
+    writeFileSync(join(dir, "specs", "one.html"), emptyDrawing[0].text);
+    const selectors = [".cw-frame", '[data-conformance-id="agent-hitl-screen-card"]'];
+    const anchors = selectors.map((s) => anchor(s, "k", "capture"));
+    const out = [];
+    const err = [];
+    const options = {
+      env: { DESIGN_DRAWINGS_DIR: dir }, pins: [pin()], anchors,
+      runGit: () => "", log: (l) => out.push(String(l)), logError: (l) => err.push(String(l)),
+    };
+    expect(await runCli({ ...options, argv: ["--print-unresolved"] })).toBe(0);
+    expect(JSON.parse(out.join("\n"))).toEqual([selectors[1]]);
+    out.length = 0;
+    expect(await runCli({ ...options, argv: ["--event=push-main"], recordedUnresolved: selectors })).toBe(1);
+    expect(err.join("\n")).toContain("recorded and not unresolved: .cw-frame");
+    out.length = 0;
+    expect(await runCli({
+      ...options, argv: ["--event=push-main"], anchors: [anchors[0]], recordedUnresolved: [],
+    })).toBe(0);
+    expect(out.join("\n")).not.toContain("every recorded anchor resolves");
+    expect(out.join("\n")).toContain("capture requirement — not a drawn part");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -285,8 +506,10 @@ describe("the decidable set did not grow beyond those two forms", () => {
     const report = checkAnchorResolution({
       pin: pin(),
       anchors: [
-        anchor(".cw-frame", "site_widget", "capture"),
-        anchor('[data-embed-assistant][data-phase="active"]', "site_widget", "capture"),
+        // As drawn anchors, these still exercise the matcher forms. Capture
+        // origin is tested separately against the passive-marker class.
+        anchor(".cw-frame", "site_widget"),
+        anchor('[data-embed-assistant][data-phase="active"]', "site_widget"),
       ],
       governed: [
         {
@@ -396,15 +619,16 @@ describe("the report", () => {
       governed: [{ path: "specs/one.html", text: "<!doctype html><main>a drawing</main>" }],
       others: [],
     });
-    // Measured, not assumed: the frame-wide requirements carry a class
-    // selector and a compound attribute predicate, and both are now DECIDED
-    // against the drawing rather than refused. A form outside the decidable
+    // The decided passive capture markers have their own accounting; visible
+    // parts still resolve against the drawing. A form outside the decidable
     // set is still refused by name — the suite above holds that half.
     expect(report.refused).toHaveLength(0);
     expect(report.unresolved.length).toBeGreaterThan(0);
     const selectors = report.unresolved.map((r) => r.selector);
-    expect(selectors).toContain(".cw-frame");
-    expect(selectors).toContain('[data-embed-assistant][data-phase="active"]');
+    expect(selectors).not.toContain(".cw-frame");
+    expect(selectors).not.toContain('[data-embed-assistant][data-phase="active"]');
+    expect(report.captureHooks.map((r) => r.selector)).toContain(".cw-frame");
+    expect(report.captureHooks.map((r) => r.selector)).toContain('[data-embed-assistant][data-phase="active"]');
     expect(formatReport(report)).toContain("UNRESOLVED");
   });
 });
@@ -772,8 +996,10 @@ describe("the adoption road refuses to answer while a selector is refused", () =
     const r = await printUnresolved({
       dir,
       anchors: [
-        anchor(".cw-frame", "site_widget", "capture"),
-        anchor('[data-embed-assistant][data-phase="active"]', "site_widget", "capture"),
+        // A drawn claim still uses the matcher even for a selector which the
+        // capture recorder uses separately as a passive marker.
+        anchor(".cw-frame", "site_widget"),
+        anchor('[data-embed-assistant][data-phase="active"]', "site_widget"),
       ],
     });
     expect(r.code).toBe(0);

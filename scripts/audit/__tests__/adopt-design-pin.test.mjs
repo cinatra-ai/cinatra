@@ -398,11 +398,10 @@ describe("the resolution subprocess is the real one, and the transaction survive
     return { result, err: err.join("\n"), files };
   }
 
-  it("completes and records what the re-examination found, both recorded forms decided", () => {
-    // The drawing draws the widget frame class, and carries the embed
-    // declaration WITHOUT the active phase on the same element. So the class
-    // selector resolves, the compound predicate does not, and both are
-    // DECIDED — which is what lets this transaction finish at all.
+  it("records drawn parts while retaining the decided widget markers as capture requirements", () => {
+    // #3555's recorded decision classifies these two widget markers as passive
+    // capture requirements. Drawing or omitting their attributes cannot turn
+    // either one into an unresolved drawn part. Visible HITL parts still are.
     const dir = copyDrawing(
       '<!doctype html><html><body><div class="cw-frame">' +
         "<span data-embed-assistant>the widget</span></div></body></html>",
@@ -412,19 +411,23 @@ describe("the resolution subprocess is the real one, and the transaction survive
     expect(result.exitCode).toBe(0);
     expect(Array.isArray(result.unresolved)).toBe(true);
     expect(result.unresolved).not.toContain(".cw-frame");
-    expect(result.unresolved).toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).not.toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).toContain('[data-conformance-id="agent-hitl-screen-card"]');
+    expect(result.unresolved).toContain('[data-conformance-id="hitl-screen-fields"]');
     const contract = JSON.parse(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json")));
     expect(contract.specCommit).toBe(`design@${NEW} specs/app-lifecycle-cards.html`);
     expect(contract.anchorsUnresolvedAtPin).toEqual(result.unresolved);
     expect(contract.digest).toBe(DIGEST_NEW);
   });
 
-  it("records the class selector as unresolved when the drawing draws no such frame", () => {
+  it("keeps absent passive markers out of drawing records without hiding absent HITL parts", () => {
     const dir = copyDrawing("<!doctype html><html><body><main>a drawing</main></body></html>");
     const { result } = adoptAgainst(dir);
     expect(result.exitCode).toBe(0);
-    expect(result.unresolved).toContain(".cw-frame");
-    expect(result.unresolved).toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).not.toContain(".cw-frame");
+    expect(result.unresolved).not.toContain('[data-embed-assistant][data-phase="active"]');
+    expect(result.unresolved).toContain('[data-conformance-id="agent-hitl-screen-card"]');
+    expect(result.unresolved).toContain('[data-conformance-id="hitl-screen-fields"]');
   });
 
   it("still rolls the tree back when the subprocess itself cannot run", () => {
