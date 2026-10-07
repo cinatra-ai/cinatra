@@ -22,7 +22,7 @@
 // conversation) the gate itself is read: the run has left once the gate reads a
 // decided state (GATE_LEFT_STATES) or is no longer drawn.
 import { listed, pickCandidate, quoted } from "./control-kit.mjs";
-import { elapsedSince, errorClass, pathOf, pollUntilSettled, readBounds, refuse, requireRecord } from "./step-kit.mjs";
+import { elapsedSince, errorClass, pathOf, pollUntilSettled, readBounds, refuse, refuseFrameScope, requireRecord } from "./step-kit.mjs";
 import { RUN_STATUS_SELECTOR, RUN_SURFACE_SELECTOR } from "./watch-run.mjs";
 
 const STEP = "decideGate";
@@ -166,6 +166,7 @@ const normal = (value) => value.replace(/\s+/g, " ").trim();
  * @returns {Promise<{ gate: string, decision: string, state: string, elapsedMs: number, path: string }>}
  */
 export async function decideGate(page, { gate, decision, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was pressed");
   requireRecord(STEP, record);
   const nothing = "nothing was pressed";
   if (typeof gate !== "string" || normal(gate) === "") {
