@@ -42,6 +42,32 @@ for (const backend of BACKENDS) {
       });
     }
 
+    for (const path of ["/composer/inline-run", "/composer/inline-run-after-old", "/composer/inline-run-new-thread"]) {
+      it(`returns the new run ID from a chat card without waiting for a run panel (${path})`, async () => {
+        await scene(backend, { secrets: [PROMPT] }, async ({ app, page, record, lines }) => {
+          const sendInComposer = await open(page, app, path);
+          const result = await sendInComposer(page, { prompt: PROMPT, composer: COMPOSER_NAME, expect: "run", record, bounds: BOUNDS });
+          const threadPath = path.endsWith("new-thread") ? "/chat/fixture-created-thread" : path;
+          expect(result).toEqual({ composer: COMPOSER_NAME, runId: "fixture-run-new", threadPath, elapsedMs: expect.any(Number) });
+          expect((await thread(page)).at(-2)).toBe(PROMPT);
+          expect(lines).toEqual([`sendInComposer: the message sent through the composer ${NAMED} on ${path} started run "fixture-run-new" on ${threadPath} after ${result.elapsedMs} ms`]);
+        });
+      });
+    }
+
+    for (const path of ["/composer/card", "/composer/notify", "/composer/inline-old-only", "/composer/inline-hidden", "/composer/inline-unnamed", "/composer/error"]) {
+      it(`refuses an expected run without a new visible concrete ID within the bound (${path})`, async () => {
+        await scene(backend, { secrets: [PROMPT] }, async ({ app, page, record, lines }) => {
+          const sendInComposer = await open(page, app, path);
+          const error = await refusal(sendInComposer(page, { prompt: PROMPT, composer: COMPOSER_NAME, expect: "run", record, bounds: SHORT }));
+          expect(error.kind).toBe("no-run");
+          expect(error.message).toContain("no new run ID within 700 ms");
+          if (path === "/composer/error") expect(error.message).toContain("The assistant could not answer.");
+          expect(lines).toEqual([error.message]);
+        });
+      });
+    }
+
     it("sends the prompt alone in place of a draft, and counts only a card the conversation did not show before", async () => {
       await scene(backend, { secrets: [PROMPT] }, async ({ app, page, record }) => {
         const sendInComposer = await open(page, app, "/composer/thread");
@@ -114,6 +140,7 @@ for (const backend of BACKENDS) {
           ],
           [{ record, prompt: PROMPT }, `name the composer, such as ${COMPOSER_NAME} — ${nothing}`],
           [{ record, prompt: PROMPT, composer: "" }, `name the composer, such as ${COMPOSER_NAME} — ${nothing}`],
+          [{ record, prompt: PROMPT, composer: COMPOSER_NAME, expect: "guess", bounds: SHORT }, `expect must be card or run — ${nothing}`],
           [{ record, prompt: PROMPT, composer: COMPOSER_NAME, bounds: { cardMs: -1 } }, `cardMs must be a positive number of milliseconds — ${nothing}`],
           [{ record, prompt: PROMPT, composer: COMPOSER_NAME, bounds: { runMs: 5 } }, `there is no bound named runMs — ${nothing}`],
         ];

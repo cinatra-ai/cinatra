@@ -71,6 +71,21 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+// This page fixture supplies its store and card answers; extension discovery
+// never contributes to its rail. Keep unused package registration at the data
+// boundary, while the actual page, panels, frame and rail rows stay real.
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: {}, STATIC_EXTENSION_RECORDS: [],
+  GENERATED_EXTENSION_SERVER_ENTRIES: {}, GENERATED_CONNECTOR_ENTRY_MODULES: {},
+  GENERATED_CONNECTOR_MCP_MODULES: {}, GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: {},
+  GENERATED_EXTERNAL_MCP_TOOLBOXES: {}, GENERATED_WIDGET_STREAM_AGENTS: {},
+  GENERATED_CHAT_WIDGET_MODULES: {}, GENERATED_CHAT_WIDGET_MANIFEST_MODULES: {},
+  GENERATED_DEV_SETUP_MODULES: {},
+}));
+vi.mock("@/lib/generated/field-renderer-components", () => ({
+  GENERATED_FIELD_RENDERER_COMPONENTS: {},
+}));
+
 const RUN_ID = "run-3478";
 const startedRuns = vi.hoisted(() => ({
   rows: [] as Array<{ id: string; agentDisplayName: string; status: string; href: string }>,
@@ -80,11 +95,18 @@ vi.mock("../visible-started-runs", () => ({
   readVisibleStartedRuns: async (...args: unknown[]) => { startedRuns.read(...args); return startedRuns.rows; },
 }));
 
+const artifactReads = vi.hoisted(() => ({ live: vi.fn(), historical: vi.fn() }));
+vi.mock("@/lib/artifacts/artifact-service", () => ({
+  readArtifactForDetail: artifactReads.live,
+  readArtifactForSettledReview: artifactReads.historical,
+}));
+
 /**
  * THE RUN, AS THE STORE HOLDS IT — one row, mutated per reading, because the
  * two readings below are the SAME run at two moments of its life.
  */
 const row = vi.hoisted(() => ({
+  templateType: "orchestrator" as "orchestrator" | "agent",
   status: "pending_approval" as string,
   lifecycleMoment: "hitl" as string | null,
   lifecycleCardKind: "agent_hitl_screen" as string | null,
@@ -143,6 +165,8 @@ const reviewSlot = vi.hoisted(() => ({
 const reviewGates = vi.hoisted(() => ({
   rows: [] as Array<{
     id: string;
+    orgId: string;
+    pinnedTargets: Array<{ artifactId: string; representationRevisionId: string }>;
     reviewTaskId: string;
     status: "pending" | "resolved";
     disposition: string | null;
@@ -170,6 +194,8 @@ function firedImmediateTrigger() {
 function gateRow(status: "pending" | "resolved") {
   return {
     id: "gate-1",
+    orgId: "org-1",
+    pinnedTargets: [] as Array<{ artifactId: string; representationRevisionId: string }>,
     reviewTaskId: "task-review-1",
     status,
     disposition: status === "resolved" ? "approved" : null,
@@ -224,6 +250,8 @@ const TEMPLATE = {
 function makeTemplate() {
   return {
     ...TEMPLATE,
+    type: row.templateType,
+    approvalPolicy: row.templateType === "agent" ? null : TEMPLATE.approvalPolicy,
     inputSchema: {
       ...TEMPLATE.inputSchema,
       properties: row.properties,
@@ -299,7 +327,10 @@ vi.mock("../store", () => ({
   readRunCoOwners: vi.fn(async () => []),
 }));
 
-vi.mock("../auth-policy", () => ({
+vi.mock("../auth-policy", async () => ({
+  buildActorContextFromPrimitive: (await vi.importActual<typeof import("@/lib/authz/build-actor-context")>(
+    "@/lib/authz/build-actor-context",
+  )).buildActorContextFromPrimitive,
   resolveEffectivePolicy: vi.fn(() => ({ runDataVisibility: "owner" })),
   buildScopeReason: vi.fn(() => null),
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
@@ -388,7 +419,7 @@ vi.mock("../run-recommendation-core", () => ({
   resolveRecommendationHoldStateForActor: vi.fn(async () => null),
 }));
 
-import { SetupScreen } from "../instance-screens";
+import { SetupScreen, readRunReviewRailGates } from "../instance-screens";
 
 /**
  * The run panel opens the run's event stream on mount. jsdom carries no
@@ -415,6 +446,7 @@ beforeEach(() => {
   startedRuns.rows = [];
   startedRuns.read.mockClear();
   vi.stubGlobal("EventSource", StubEventSource);
+  row.templateType = "orchestrator";
   row.status = "pending_approval";
   row.lifecycleMoment = "hitl";
   row.lifecycleCardKind = "agent_hitl_screen";
@@ -433,6 +465,8 @@ beforeEach(() => {
   reviewSlot.reviewTaskId = null;
   reviewGates.rows = [];
   triggerRow.row = null;
+  artifactReads.live.mockReset().mockReturnValue({ kind: "not-found" });
+  artifactReads.historical.mockReset().mockReturnValue({ kind: "not-found" });
 });
 
 afterEach(() => {
@@ -495,7 +529,105 @@ function railEntryLabels(column: HTMLElement): string[] {
   return railEntries(column).map((text) => text.replace(/^\d+/, ""));
 }
 
+describe("the rail title read uses the gate's frozen target and existing artifact authority", () => {
+  const ctx = { orgId: "org-1", actor: { actorType: "human" as const, source: "ui" as const, userId: "user-1" } };
+  const target = { artifactId: "artifact-post", representationRevisionId: "revision-reviewed" };
+  const namedGate = (status: "pending" | "resolved" = "resolved") => ({
+    ...gateRow(status), disposition: status === "resolved" ? "approve" : null,
+    pinnedTargets: [{ ...target }],
+  });
+
+  it.each(["pending", "resolved"] as const)("uses the %s gate's own target without changing its frozen revision", async (status) => {
+    const source = namedGate(status);
+    const before = structuredClone(source);
+    const read = status === "resolved" ? artifactReads.historical : artifactReads.live;
+    read.mockReturnValue({ kind: "ok", artifact: { title: "The authored post title" } });
+    const gates = await readRunReviewRailGates([source], ctx);
+    expect(gates[0].artifactName).toBe("The authored post title");
+    expect(read).toHaveBeenCalledExactlyOnceWith({
+      artifactId: target.artifactId, orgId: "org-1",
+      actor: expect.objectContaining({ principalId: "user-1", authSource: "ui" }),
+    });
+    expect(source).toEqual(before);
+    expect(gates[0].gateId).toBe(source.id);
+    expect(gates[0].reviewTaskId).toBe(source.reviewTaskId);
+    expect(status === "resolved" ? artifactReads.live : artifactReads.historical).not.toHaveBeenCalled();
+  });
+
+  it.each(["denied", "not-found"] as const)("keeps the generic historical row when the title read is %s", async (kind) => {
+    artifactReads.historical.mockReturnValue({ kind });
+    const gates = await readRunReviewRailGates([namedGate()], ctx);
+    expect(gates[0].artifactName).toBeUndefined();
+    expect(gates[0].status).toBe("resolved");
+    expect(gates[0].disposition).toBe("approve");
+  });
+
+  it.each([null, "", "   "])("does not invent a name from target ID or type when title is %s", async (title) => {
+    artifactReads.historical.mockReturnValue({ kind: "ok", artifact: { title, artifactId: target.artifactId, objectType: "@cinatra-ai/blog-post-artifact:post" } });
+    expect((await readRunReviewRailGates([namedGate()], ctx))[0].artifactName).toBeUndefined();
+  });
+
+  it("keeps a lost metadata read from losing the review row", async () => {
+    artifactReads.historical.mockImplementation(() => { throw new Error("metadata unavailable"); });
+    const gates = await readRunReviewRailGates([namedGate()], ctx);
+    expect(gates).toHaveLength(1);
+    expect(gates[0].artifactName).toBeUndefined();
+  });
+
+  it.each([null, "future-outcome"])("withholds the target name when the settled header cannot read outcome %s", async (disposition) => {
+    expect((await readRunReviewRailGates([{ ...namedGate(), disposition }], ctx))[0].artifactName).toBeUndefined();
+    expect(artifactReads.historical).not.toHaveBeenCalled();
+    expect(artifactReads.live).not.toHaveBeenCalled();
+  });
+
+  it("does not read a gate target from another organization", async () => {
+    expect((await readRunReviewRailGates([{ ...namedGate(), orgId: "other-org" }], ctx))[0].artifactName).toBeUndefined();
+    expect(artifactReads.historical).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { pinnedTargets: [] },
+    { pinnedTargets: [target, { artifactId: "other-artifact", representationRevisionId: "other-revision" }] },
+  ])(
+    "preserves the generic label for a gate without exactly one drawn target", async ({ pinnedTargets }) => {
+      expect((await readRunReviewRailGates([{ ...namedGate(), pinnedTargets }], ctx))[0].artifactName).toBeUndefined();
+      expect(artifactReads.historical).not.toHaveBeenCalled();
+      expect(artifactReads.live).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("the run page draws exactly one step rail (cinatra#3478)", () => {
+  it.each([
+    ["orchestrator", "pending"], ["orchestrator", "resolved"],
+    ["agent", "pending"], ["agent", "resolved"],
+  ] as const)("propagates the pinned artifact's authorized title into the real %s %s run rail", async (templateType, status) => {
+    row.templateType = templateType;
+    row.status = status === "resolved" ? "completed" : "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    reviewGates.rows = [{
+      ...gateRow(status), disposition: status === "resolved" ? "approve" : null,
+      pinnedTargets: [{ artifactId: "artifact-post", representationRevisionId: "revision-reviewed" }],
+    }];
+    const read = status === "resolved" ? artifactReads.historical : artifactReads.live;
+    read.mockReturnValue({ kind: "ok", artifact: { title: "Why migrations are the hardest part" } });
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    expect(railEntries(columns[0]).some((label) => label.includes("Review · Why migrations are the hardest part"))).toBe(true);
+    expect(read).toHaveBeenCalledExactlyOnceWith({
+      artifactId: "artifact-post", orgId: "org-1",
+      actor: expect.objectContaining({ principalId: "user-1", authSource: "ui" }),
+    });
+    expect(status === "resolved" ? artifactReads.live : artifactReads.historical).not.toHaveBeenCalled();
+    if (status === "resolved") expect(container.querySelector('[data-rail-gate-settlement="Continued"]')).not.toBeNull();
+    else expect(container.querySelector('[data-rail-gate-settlement]')).toBeNull();
+  });
+
   it("draws ONE rail column for a run parked at a gate on the stepper branch", async () => {
     const { container } = await renderRunPage();
 
