@@ -61,10 +61,7 @@ import { useRunWindowConversation } from "./use-run-window-conversation";
  * server's own table, right above this line — so the two say one thing between
  * them rather than the same thing twice.
  */
-export const SCHEDULE_WINDOW_OVER_NOTICE =
-  "This schedule can no longer be changed — the form above shows it as it " +
-  "stands, and nothing typed here would change it. Start a new run to " +
-  "schedule it again.";
+export { SCHEDULE_WINDOW_OVER_NOTICE } from "./run-window-screen-context";
 
 export function SchedulePromptWindow({
   templateId,
@@ -175,13 +172,14 @@ export function SchedulePromptWindow({
   );
 
   // Current stored-turn/callback semantics, through the carrier's existing
-  // page registration. The approved noninteractive over-state notice below
-  // remains exact main; moving it is a separately reviewed follow-up.
+  // page registration. The approved noninteractive over-state notice
+  // is handed to the page chrome through the explicit local closed reading.
   useRunWindowScreen({
     surface: "armed-trigger",
     runId: runId ?? null,
     stepId: "schedule",
     canManipulate: !readOnly && canRespondInWindow !== false && !!templateId,
+    ...(readOnly ? { readOnlyNotice: "schedule-over" as const } : {}),
     storageKey: `cinatra_schedule_assist_${templateId}_step`,
     conversation: runWindow.entries,
     promptPending: promptPending || runWindow.pending,
@@ -203,33 +201,8 @@ export function SchedulePromptWindow({
   // answer instead of a composer. Nothing can be typed into it: it is a region,
   // not a control, and it is marked disabled for a reader who is not looking at
   // the pixels. This is now the ONLY place this state says anything, which is
-  // what §7.2's "the same form and nothing else" leaves room for.
-  if (readOnly) {
-    return (
-      <div
-        data-conformance-id="schedule-prompt-window"
-        data-schedule-prompt-window=""
-      >
-        <div data-run-window-placement="floating" className="px-5 pb-4 pt-6">
-          <div className="mx-auto max-w-3xl">
-            <div
-              data-run-window-field=""
-              aria-disabled="true"
-              className="rounded-panel border border-line bg-surface px-3 py-2.5 shadow-lg"
-            >
-              <p
-                data-conformance-id="schedule-window-over"
-                role="status"
-                className="text-sm text-muted-foreground"
-              >
-                {SCHEDULE_WINDOW_OVER_NOTICE}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // what §7.2's "the same form and nothing else" leaves room for. The page
+  // chrome owns that block; this schedule controller owns no markup.
 
   return null;
 }

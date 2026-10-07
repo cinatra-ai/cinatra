@@ -41,6 +41,7 @@ import { HitlConversationPanel } from "./hitl-conversation-panel";
 import {
   RunWindowScreenProvider,
   createRunWindowScreenStore,
+  SCHEDULE_WINDOW_OVER_NOTICE,
 } from "./run-window-screen-context";
 
 /**
@@ -71,7 +72,7 @@ export function RunPageChrome({ children }: { children: ReactNode }) {
       NonNullable<ReturnType<typeof store.read>>["onSubmit"]
     >[1]) => {
       const current = store.read();
-      if (!current) return;
+      if (!current || !current.canManipulate || current.readOnlyNotice) return;
       if (attachments && attachments.length > 0) await current.onSubmit(prompt, attachments);
       else await current.onSubmit(prompt);
     },
@@ -93,21 +94,46 @@ export function RunPageChrome({ children }: { children: ReactNode }) {
           and draws no node. */}
       {screen ? (
         <div {...{ [RUN_WINDOW_HOST_ATTRIBUTE]: RUN_WINDOW_HOST_VALUE }} ref={setMount}>
-          <HitlConversationPanel
-            portalTarget={mount}
-            // SHOWN ONLY WHILE THE SCREEN HOLDS SOMETHING TO MANIPULATE. A step
-            // whose screen has nothing — and a run that would refuse this
-            // person's message — draws no window at all, rather than a control
-            // that fails on press.
-            visible={!!mount && screen.canManipulate}
-            surface={screen.surface}
-            conversation={screen.conversation}
-            promptPending={screen.promptPending}
-            storageKey={screen.storageKey}
-            onSubmit={submit}
-            {...(screen.enableAttachments ? { enableAttachments: true } : {})}
-            {...(screen.resetSignal === undefined ? {} : { resetSignal: screen.resetSignal })}
-          />
+          {screen.readOnlyNotice === "schedule-over" ? (
+            <div
+              data-conformance-id="schedule-prompt-window"
+              data-schedule-prompt-window=""
+            >
+              <div data-run-window-placement="floating" className="px-5 pb-4 pt-6">
+                <div className="mx-auto max-w-3xl">
+                  <div
+                    data-run-window-field=""
+                    aria-disabled="true"
+                    className="rounded-panel border border-line bg-surface px-3 py-2.5 shadow-lg"
+                  >
+                    <p
+                      data-conformance-id="schedule-window-over"
+                      role="status"
+                      className="text-sm text-muted-foreground"
+                    >
+                      {SCHEDULE_WINDOW_OVER_NOTICE}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <HitlConversationPanel
+              portalTarget={mount}
+              // SHOWN ONLY WHILE THE SCREEN HOLDS SOMETHING TO MANIPULATE. A step
+              // whose screen has nothing — and a run that would refuse this
+              // person's message — draws no window at all, rather than a control
+              // that fails on press.
+              visible={!!mount && screen.canManipulate}
+              surface={screen.surface}
+              conversation={screen.conversation}
+              promptPending={screen.promptPending}
+              storageKey={screen.storageKey}
+              onSubmit={submit}
+              {...(screen.enableAttachments ? { enableAttachments: true } : {})}
+              {...(screen.resetSignal === undefined ? {} : { resetSignal: screen.resetSignal })}
+            />
+          )}
         </div>
       ) : null}
     </RunWindowScreenProvider>

@@ -41,6 +41,11 @@ import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
 import type { RunWindowSurface } from "./run-window-conversation-store";
 
+export const SCHEDULE_WINDOW_OVER_NOTICE =
+  "This schedule can no longer be changed — the form above shows it as it " +
+  "stands, and nothing typed here would change it. Start a new run to " +
+  "schedule it again.";
+
 /**
  * One entry of the window's exchange, in the shape the window draws.
  *
@@ -78,6 +83,8 @@ export type RunWindowScreenRegistration = {
    * this person's message — publishes `false`, and the page draws no window.
    */
   canManipulate: boolean;
+  /** The existing immutable schedule answer; page chrome owns its exact block. */
+  readOnlyNotice?: "schedule-over";
   /** The draft's own key, so an unsent request survives a reload. */
   storageKey: string;
   /** The exchange the screen is showing, oldest first. */
@@ -134,6 +141,7 @@ function drawnSignature(r: RunWindowScreenRegistration): string {
     r.stepId ?? null,
     r.gateRef ?? null,
     r.canManipulate,
+    r.readOnlyNotice ?? null,
     r.storageKey,
     r.promptPending,
     r.enableAttachments ?? false,
@@ -171,18 +179,20 @@ export function createRunWindowScreenStore(): RunWindowScreenStore {
   // while a reopened page — where the card is the only registrant — showed one.
   //
   // SO THE RULE IS PRECEDENCE, NOT ARRIVAL ORDER: a registration that lends
-  // NOTHING never displaces one that lends SOMETHING for the same run, and a
+  // NOTHING never displaces an interactive screen or a closed schedule notice
+  // for the same run, and a
   // screen may always replace its own. Nothing else about the hand-over moves:
   // the record is still one, the window is still the page's, and a screen with
-  // nothing to manipulate still draws no window when it is the only one there.
+  // nothing to manipulate still draws no window when it is the only one there,
+  // unless it publishes the approved noninteractive schedule notice.
   const select = () => {
     const entries = [...records.entries()];
     let chosen: [ScreenToken, RunWindowScreenRegistration] | null =
       entries.length > 0 ? entries[entries.length - 1] : null;
-    if (chosen !== null && !chosen[1].canManipulate) {
+    if (chosen !== null && !chosen[1].canManipulate && !chosen[1].readOnlyNotice) {
       for (let i = entries.length - 2; i >= 0; i -= 1) {
         const entry = entries[i];
-        if (entry[1].canManipulate && entry[1].runId === chosen[1].runId) {
+        if ((entry[1].canManipulate || entry[1].readOnlyNotice) && entry[1].runId === chosen[1].runId) {
           chosen = entry;
           break;
         }

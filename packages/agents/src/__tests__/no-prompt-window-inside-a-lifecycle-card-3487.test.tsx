@@ -7,8 +7,8 @@
  * INSIDE A LIFECYCLE CARD, IN ANY HOST." And the enforcement it names: "rendered
  * tests per host (chat thread, run page, review page, the third-party island):
  * every lifecycle card mounted in review, setup, schedule and blocked states
- * carries no prompt field, no textarea and no send control inside its card
- * root".
+ * carries no prompt component or send control inside its card root. Ordinary
+ * form fields and the approved subordinate rationale are not prompt components".
  *
  * THE CARD ROOT is the node the card publishes its host on —
  * `[data-lifecycle-card-host]` — which is the same node on all four hosts, so
@@ -37,7 +37,8 @@ vi.mock("next/navigation", () => ({
 //
 // THE FIELD IS THE SHADCN WRAPPER, never a raw element: the design-system
 // boundary admits no exemption for a test file, and the wrapper renders the very
-// `textarea` node this invariant counts, so the reading is unchanged. The factory
+// `textarea` node, while the prompt-specific send marker makes its purpose
+// positively identifiable. The factory
 // is async so the wrapper is imported where the mock actually runs — a hoisted
 // factory cannot close over a module-level import.
 vi.mock("@cinatra-ai/sdk-ui", async () => {
@@ -90,39 +91,28 @@ function mockResolve(state: LifecycleCardState): void {
 type Host = "chat_thread" | "run_card" | "page_gate_region" | "site_widget";
 const HOSTS: Host[] = ["chat_thread", "run_card", "page_gate_region", "site_widget"];
 
-/**
- * THE READING: what counts as a prompt window inside a card root.
- *
- * THE DECISION FLOOR'S OWN NOTE FIELD IS NOT ONE, and is excluded here by name.
- * The ratified drawing puts it inside the card: `app-lifecycle-cards.html` §II
- * — "Three affordances, weighted apart: Comment quiet at the left, Regenerate
- * in the outline treatment and Continue primary at the right, over the one note
- * field" — and `app-artifact-review.html` §I — "Both readings end in the same
- * floor — Comment, Regenerate, Continue, over the one Note field the person's
- * words go in". So a card root legitimately carries exactly one textarea, and
- * what this test measures is every OTHER prompt affordance: the window's field,
- * its send control, its anchor, and any textarea that is not the floor's note.
- */
+/** Positive markers of prompt components, never a generic textarea exemption. */
+const PROMPT_MARKERS = {
+  anchors: '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"], [data-conformance-id="schedule-window-over"]',
+  fields: '[data-run-window-field], [data-conformance-id="chat-composer-primary"], [data-conversation-composer], [data-testid="chat-prompt-input"], [role="textbox"][aria-label="Apply AI suggestion"]',
+  sendControls: 'button[aria-label="Apply AI suggestion"], [role="button"][aria-label="Apply AI suggestion"]',
+} as const;
+
 function windowPartsInside(root: ParentNode): {
   fields: number;
-  textareas: number;
   sendControls: number;
   anchors: number;
 } {
   const cards = root.querySelectorAll("[data-lifecycle-card-host]");
   let fields = 0;
-  let textareas = 0;
   let sendControls = 0;
   let anchors = 0;
   for (const card of cards) {
-    fields += card.querySelectorAll('[data-testid="prompt-field"]').length;
-    textareas += [...card.querySelectorAll("textarea")].filter(
-      (t) => t.closest('[data-conformance-id="review-note-field-subordinate"]') === null,
-    ).length;
-    sendControls += card.querySelectorAll("[data-send-control]").length;
-    anchors += card.querySelectorAll('[data-conformance-id="review-prompt-window"]').length;
+    fields += card.querySelectorAll(PROMPT_MARKERS.fields).length;
+    sendControls += card.querySelectorAll(PROMPT_MARKERS.sendControls).length;
+    anchors += card.querySelectorAll(PROMPT_MARKERS.anchors).length;
   }
-  return { fields, textareas, sendControls, anchors };
+  return { fields, sendControls, anchors };
 }
 
 /** The floor the drawing DOES put inside the card, so its absence is a defect too. */
@@ -152,7 +142,7 @@ const STATES: Array<[string, LifecycleCardState]> = [
 describe("E3 — a lifecycle card carries no prompt window, on any host", () => {
   for (const host of HOSTS) {
     for (const [label, state] of STATES) {
-      it(`${host} / ${label}: no prompt field, no textarea, no send control inside the card root`, async () => {
+      it(`${host} / ${label}: no prompt component or send control inside the card root`, async () => {
         mockResolve(state);
         const { container } = render(
           <LifecycleCardSurfaceProvider
@@ -168,7 +158,7 @@ describe("E3 — a lifecycle card carries no prompt window, on any host", () => 
         // Give any window the card would mount the commits it needs to appear.
         await waitFor(() => expect(container.firstChild).not.toBeNull());
         const parts = windowPartsInside(container);
-        expect(parts).toEqual({ fields: 0, textareas: 0, sendControls: 0, anchors: 0 });
+        expect(parts).toEqual({ fields: 0, sendControls: 0, anchors: 0 });
         // And the floor the drawing DOES draw is untouched by the removal: on
         // the reading that carries a note field it is still there.
         if (label === "review") expect(noteFieldsInside(container)).toBe(1);
@@ -190,5 +180,33 @@ describe("E3 — a lifecycle card carries no prompt window, on any host", () => 
     expect(
       container.querySelectorAll('[data-conformance-id="review-prompt-window"]').length,
     ).toBe(0);
+  });
+});
+
+
+describe("3487 positive prompt-marker controls", () => {
+  it.each([
+    ['panel', '<div data-conformance-id="review-prompt-window"></div>'],
+    ['closed schedule window', '<div data-conformance-id="schedule-prompt-window"></div>'],
+    ['closed schedule answer', '<p data-conformance-id="schedule-window-over"></p>'],
+    ['window field', '<div data-run-window-field></div>'],
+    ['primary composer', '<div data-conformance-id="chat-composer-primary"></div>'],
+    ['thread composer', '<div data-conversation-composer></div>'],
+    ['chat editor', '<div data-testid="chat-prompt-input"></div>'],
+    ['prompt editor', '<div role="textbox" aria-label="Apply AI suggestion"></div>'],
+    ['prompt send', '<button aria-label="Apply AI suggestion"></button>'],
+  ])('identifies %s inside any actual card root, including beside the approved rationale', (_name, html) => {
+    const root = document.createElement('section');
+    root.innerHTML = '<section data-lifecycle-card-host="page_gate_region"><div data-conformance-id="review-note-field-subordinate"><textarea></textarea></div>' + html + '</section>';
+    const parts = windowPartsInside(root);
+    expect(parts.fields + parts.sendControls + parts.anchors).toBeGreaterThan(0);
+    expect(noteFieldsInside(root)).toBe(1);
+  });
+
+  it('does not identify the approved note or a native setup form field as a prompt', () => {
+    const root = document.createElement('section');
+    root.innerHTML = '<section data-lifecycle-card-host="run_card"><div data-conformance-id="review-note-field-subordinate"><textarea></textarea></div><textarea name="native-setup-value"></textarea><button aria-label="Comment"></button></section>';
+    expect(windowPartsInside(root)).toEqual({ fields: 0, sendControls: 0, anchors: 0 });
+    expect(noteFieldsInside(root)).toBe(1);
   });
 });

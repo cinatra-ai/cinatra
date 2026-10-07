@@ -3305,7 +3305,9 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
     ).toHaveCount(1);
     // And never inside a lifecycle card, nor inside the step's own screen.
     await expect(
-      root.locator('[data-lifecycle-card-host] [data-conformance-id="review-prompt-window"]'),
+      root.locator('[data-lifecycle-card-host]').locator(
+        '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"], [data-run-window-field], [data-conformance-id="chat-composer-primary"], [data-conversation-composer], [data-testid="chat-prompt-input"], [aria-label="Apply AI suggestion"]',
+      ),
     ).toHaveCount(0);
     await expect(panel.locator('[data-conformance-id="review-prompt-window"]')).toHaveCount(0);
   },
@@ -5951,7 +5953,9 @@ const REVIEW_DECISION_FLOOR_EXTRAS: Record<
         root.locator('[data-run-window-host="page-chrome"] [data-conformance-id="review-prompt-window"]'),
       ).toHaveCount(1);
       await expect(
-        root.locator('[data-lifecycle-card-host] [data-conformance-id="review-prompt-window"]'),
+        root.locator('[data-lifecycle-card-host]').locator(
+        '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"], [data-run-window-field], [data-conformance-id="chat-composer-primary"], [data-conversation-composer], [data-testid="chat-prompt-input"], [aria-label="Apply AI suggestion"]',
+      ),
       ).toHaveCount(0);
     },
   }),

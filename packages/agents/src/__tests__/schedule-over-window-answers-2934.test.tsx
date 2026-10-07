@@ -33,6 +33,8 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
+import { RunPageChrome } from "../run-page-chrome";
+
 import { RunScheduleTab } from "../run-schedule-tab";
 import { ScheduleStepSurface } from "../schedule-rail-step";
 import { SCHEDULE_WINDOW_OVER_NOTICE } from "../schedule-prompt-window";
@@ -135,7 +137,7 @@ const saveButton = (root: HTMLElement) =>
   root.querySelector('[data-action="save-schedule-changes"]') as HTMLButtonElement | null;
 /** The box a person types in — the panel's own field, not its mount. */
 const composer = (root: HTMLElement) =>
-  root.querySelector('[data-schedule-prompt-window=""] [contenteditable="true"]');
+  root.querySelector('[data-run-window-host="page-chrome"] [contenteditable="true"]');
 const windowMount = (root: HTMLElement) =>
   root.querySelector('[data-conformance-id="schedule-prompt-window"]');
 /** The window's OWN block — the same chrome the live window draws. */
@@ -151,7 +153,7 @@ describe("a fired one-off carries no floor at all", () => {
   it("draws the locked form and nothing else — no floor, no button, no status line", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome><RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} /></RunPageChrome>,
     );
     await waitFor(() => expect(card(container)).toBeTruthy());
     expect(floor(container)).toBeNull();
@@ -164,7 +166,7 @@ describe("a fired one-off carries no floor at all", () => {
   it("keeps the window, present and disabled, drawn as the window's own block", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome><RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} /></RunPageChrome>,
     );
     await waitFor(() => expect(windowAnswer(container)).toBeTruthy());
     // THE WINDOW'S OWN CHROME, not a paragraph on the page ground.
@@ -183,7 +185,7 @@ describe("a fired one-off carries no floor at all", () => {
   it("the run page's schedule step reads it exactly the same way", async () => {
     mockResolve(FIRED_ONE_OFF);
     const { container } = render(
-      <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome><ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} /></RunPageChrome>,
     );
     await waitFor(() => expect(windowAnswer(container)).toBeTruthy());
     expect(floor(container)).toBeNull();
@@ -196,7 +198,7 @@ describe("a recurring schedule stopped after a fire is drawn the same way", () =
   it("carries no floor, and the window says it in the window's own block", async () => {
     mockResolve(STOPPED_RECURRING);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome><RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} /></RunPageChrome>,
     );
     await waitFor(() => expect(windowAnswer(container)).toBeTruthy());
     expect(floor(container)).toBeNull();
@@ -209,7 +211,7 @@ describe("a schedule that can still be changed is untouched by any of this", () 
   it("draws a live floor, no over-notice, and a composer to type in", async () => {
     mockResolve(LIVE_RECURRING);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome><RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} /></RunPageChrome>,
     );
     await waitFor(() => expect(floor(container)).toBeTruthy());
     expect(windowAnswer(container)).toBeNull();
@@ -229,7 +231,7 @@ describe("a card this person may see but not act on", () => {
   it("keeps the floor whole, draws Save changes dead, and puts the reason on it", async () => {
     mockResolve(NOT_THIS_PERSONS);
     const { container } = render(
-      <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
+      <RunPageChrome><RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} /></RunPageChrome>,
     );
     await waitFor(() => expect(floor(container)).toBeTruthy());
     // The card is drawn IN FULL — this schedule is not over, and saying so
