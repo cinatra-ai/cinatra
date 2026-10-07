@@ -17,16 +17,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { triggerAgentRun } from "./run-actions";
 
-/**
- * Encodes a template slug for use as a URL path segment, preserving any
- * forward slashes as path separators. A slug such as "vendor/package" becomes
- * "vendor/package" in the path (each segment individually percent-encoded),
- * not "vendor%2Fpackage" which would break the [vendor]/[packageName] routing.
- */
-function encodeSlug(slug: string): string {
-  return slug.split("/").map(encodeURIComponent).join("/");
-}
-
 type RunAgentButtonProps = {
   runId: string;
   templateSlug: string;
@@ -39,8 +29,18 @@ type RunAgentButtonProps = {
    * reject anyway, so we hide the button to keep the UI honest.
    */
   runStatus: string;
-  /** After triggering, navigate here instead of the default /data route. */
-  redirectTo?: string;
+  /**
+   * Where the reader goes once the run is triggered.
+   *
+   * REQUIRED, AND DELIBERATELY (cinatra#3693). This used to be optional over a
+   * bare `/agents/<slug>/<run>/data` fallback, which is an address with no scope
+   * in it: a run launched from a team, a project or an organization would have
+   * left its scope the moment it started, with nothing said. The one caller has
+   * always passed a scoped destination, so the fallback was unreachable — and a
+   * second caller added without one would have escaped a scope silently. The
+   * caller that knows the scope is the caller that must name the destination.
+   */
+  redirectTo: string;
 };
 
 export function RunAgentButton({
@@ -69,10 +69,9 @@ export function RunAgentButton({
           setOpen(false);
           return;
         }
-        // Success: navigate to caller-specified route or Results tab
-        router.push(
-          redirectTo ?? `/agents/${encodeSlug(templateSlug)}/${encodeURIComponent(runId)}/data`,
-        );
+        // Success: the caller's own destination, which carries the scope the run
+        // was launched from (cinatra#3693).
+        router.push(redirectTo);
       } catch {
         toast.error("Couldn't start the agent. Try again.");
         setOpen(false);

@@ -1,53 +1,13 @@
 // @vitest-environment jsdom
+// Source utility/state contract for #3240. Render the actual three title sites
+// and resolve their declared state utilities through the stylesheet's palette
+// tokens. jsdom does not compile Tailwind or measure a browser cascade. These
+// assertions require explicit active ink and inactive/completed muted rules;
+// an active title without its own utility can still compute an inherited color
+// in a browser. This suite does not establish the cause or cure of the reported
+// all-ink painting. The separate Playwright computed-color spec checks actual
+// browser colors; its execution and real run-page proof remain separate.
 //
-// ---------------------------------------------------------------------------
-// ONE ENTRY READS INK, EVERY OTHER ENTRY READS MUTED (cinatra#3240).
-// ---------------------------------------------------------------------------
-// The ratified drawing, agent run and review surface §I: "The step the run is
-// paused on is highlighted; steps already passed sit above it, steps still to
-// come below", and the rule itself, literally:
-//
-//   ".rail .step { color: var(--muted) }"    with ink reserved for
-//   ".rail .step.active"
-//
-// WHAT THE MEASUREMENT FOUND, before a line of product code was written. One
-// rail was rendered carrying a settled entry, the active entry and an upcoming
-// entry together, and every title element was read:
-//
-//   settled  -> data-state="completed", utilities
-//               data-[state=inactive]:text-muted-foreground
-//               data-[state=completed]:text-muted-foreground
-//   active   -> data-state="active",   the SAME two utilities
-//   upcoming -> data-state="inactive", the SAME two utilities
-//
-// So the rows carry three distinct, correct states, and the two utilities are
-// really emitted. What the rail never states is the OTHER half of the drawing's
-// rule: at `data-state="active"` neither utility applies, and
-// `src/components/reui/stepper.tsx` renders `StepperTitle` with no colour of its
-// own, so the entry the reader is standing on computes no colour at all. It
-// reads ink only by INHERITING the unlayered `body { color: var(--foreground) }`
-// of `src/app/globals.css`, which is a colour the rail does not own: any
-// container that states a text colour takes it, and the one distinction the
-// drawing asks the rail to draw is left to the frame around it. The rail's
-// fourth module already states both halves -- `runSurfaceRailTitleClass` in
-// `run-surface-rail.tsx` returns `text-foreground` for the row the reader is on
-// and `text-muted-foreground` for every other -- so this arm holds the three
-// rows drawn through the vendored stepper to the same reading.
-//
-// WHY THIS READS THE STYLESHEET RATHER THAN A BROWSER. jsdom implements neither
-// Tailwind's utility generation nor custom-property substitution, so no
-// `getComputedStyle` in this environment can tell a wrong colour from NO
-// declaration at all (the reason `schedule-card-chosen-row-indigo-3279.test.tsx`
-// reads the same two halves, and the shape this file is written in). This file
-// computes each entry's colour the way the cascade does: it takes the colour
-// UTILITY that applies AT THAT ENTRY'S OWN `data-state`, maps it through the
-// `@theme inline` registration, and resolves the token inside the palette block
-// -- light and dark -- to the literal the browser would paint.
-//
-// Run:
-//   pnpm --filter @cinatra-ai/agents exec vitest run \
-//     src/__tests__/run-page-rail-muted-entries-3240.test.tsx
-
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -270,7 +230,7 @@ const PALETTE = {
 type Palette = keyof typeof PALETTE;
 
 /** Resolve a token to a literal by walking `var(...)` inside one palette block,
- *  falling back to `:root` the way the cascade does for a value the block does
+ *  falling back to the declared `:root` value when the palette block does
  *  not re-declare. */
 function resolve(
   tokens: Map<string, string>,
@@ -285,7 +245,7 @@ function resolve(
   return m ? resolve(tokens, m[1]!, seen) : raw;
 }
 
-/** `#15213a` -> `rgb(21, 33, 58)`; anything the browser would paint as it
+/** `#15213a` -> `rgb(21, 33, 58)`; any other declared literal as it
  *  stands (an `oklch(...)`, a keyword) is handed back untouched, so a wrong
  *  colour is REPORTED rather than silently coerced. */
 function asRgb(literal: string): string {
@@ -295,12 +255,12 @@ function asRgb(literal: string): string {
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
 }
 
-/** The literal one palette paints for a token the rail asks for by name. */
+/** Resolve the declared palette literal; this does not measure browser paint. */
 function tokenLiteral(palette: Palette, token: string): string {
   return asRgb(resolve(PALETTE[palette], token));
 }
 
-/** The literal a colour utility paints in one palette -- the registration in
+/** The declared literal for a colour utility in one palette -- the registration in
  *  `@theme inline` followed by the token chain inside that palette's block. */
 function paints(token: string, palette: Palette): string {
   const registered = THEME.get(`--color-${token}`);
@@ -324,7 +284,7 @@ function colourToken(cls: string, prefix = ""): string | null {
 }
 
 /**
- * THE COLOUR ONE ELEMENT COMPUTES IN ONE OF ITS STATES.
+ * THE COLOUR UTILITY ONE ELEMENT DECLARES IN ONE OF ITS STATES.
  *
  * A rail title's class list is the same string in every state -- the state is a
  * `data-state` attribute the state-scoped utilities key off -- so reading the
@@ -440,7 +400,7 @@ function panelRows(entries: RunStepRailEntry[], activeOrdinal: number): Map<stri
   return railRowsIn(container);
 }
 
-/** What one row of a rendered rail paints in one palette. */
+/** Resolve one rendered row's utility/token contract, not its computed style. */
 function rowPaints(rows: Map<string, RailRow>, key: string, palette: Palette): string {
   const row = rows.get(key);
   expect(row, `no ${key} row on the rendered rail`).toBeDefined();

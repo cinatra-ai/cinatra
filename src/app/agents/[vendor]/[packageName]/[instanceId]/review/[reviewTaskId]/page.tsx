@@ -27,8 +27,8 @@
  * renderer, no edit affordance, no client-supplied renderer id.
  */
 import "server-only";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { Lock } from "lucide-react";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
@@ -40,9 +40,13 @@ import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-veri
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
-import { PageHeader } from "@/components/page-header";
+import { CrumbContributions } from "@/components/crumb-contributions";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import {
+  agentInstancePathname,
+  resolveAgentInstanceMetadata,
+} from "@/lib/agent-instance-tab-title";
 
 import {
   loadPinnedCapturePair,
@@ -75,10 +79,30 @@ import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
+import { RunNotAuthorizedPanel } from "@cinatra-ai/agents/run-not-authorized-panel";
 import { ReviewRunSurface } from "./review-run-surface";
 import { VerificationView } from "./verification-view";
+import {
+  reviewAddressRedirect,
+  reviewPageScopeCrumbs,
+  type ReviewPageScopeProps,
+} from "./review-page-body";
 
 export const dynamic = "force-dynamic";
+
+// THE TAB MIRRORS THE TRAIL (cinatra#2934, fix leg 9). This route exported no
+// metadata at all, so the tab fell back to the product name alone while the
+// trail above the page read "Agents > <the run> > Review". It now derives its
+// title from the same trail every id-bearing route under the run derives from.
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { vendor, packageName, instanceId } = await params;
+  return resolveAgentInstanceMetadata({
+    vendor,
+    packageName,
+    instanceId,
+    subRoute: "review",
+  });
+}
 
 type PageProps = {
   params: Promise<{
@@ -127,18 +151,106 @@ async function loadRunStepsContext(
   return { steps, activeStep: reviewIndex, templateId };
 }
 
-export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
-  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+/**
+ * THE RUN'S OWN NAME, FOR THE TRAIL ABOVE THIS PAGE (cinatra#2934, fix leg 10).
+ *
+ * The ratified components drawing gives a review no trail of its own — it is
+ * read on its run's route, under that run's trail — so the crumb above this page
+ * must name the RUN: "Agents > Blog Draft Writer Agent (1)". This route
+ * published nothing over the one crumb channel, so the trail fell through to the
+ * fixed label a genuinely unresolvable run gets, and read "Agents > Agent run >
+ * Review". Both halves of that were wrong.
+ *
+ * The identity is the run screen's own precedence, minus its write: the run's
+ * editable title, else the template's name. It is read as pure context AFTER the
+ * surface's own access checks — the same standing the step list beside it is
+ * read under — and `null` on anything at all, in which case the trail keeps the
+ * drawing's placeholder rather than guessing.
+ */
+async function readRunCrumbLabel(
+  runId: string,
+  prefix: string,
+): Promise<{ prefix: string; label: string } | null> {
+  try {
+    const run = await readAgentRunById(runId);
+    if (!run) return null;
+    const template = run.templateId
+      ? await readAgentTemplateById(run.templateId)
+      : null;
+    const label = run.title?.trim() || template?.name?.trim() || null;
+    return label ? { prefix, label } : null;
+  } catch {
+    return null;
+  }
+}
+
+export default async function AgentRunReviewPage({
+  params,
+  searchParams,
+  scopeBase,
+  launchScope,
+  scopeTitle,
+}: PageProps & ReviewPageScopeProps) {
+  const {
+    vendor,
+    packageName,
+    instanceId: rawInstanceId,
+    reviewTaskId: rawTaskId,
+  } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
+  // The RUN's own crumb path — the prefix a contribution targets. Built by the
+  // same helper the tab title builds its path with, so the two cannot drift.
+  const runCrumbPrefix = agentInstancePathname({
+    vendor,
+    packageName,
+    instanceId: rawInstanceId,
+  });
   const sp = (await searchParams) ?? {};
   const isVerificationView = sp.view === "verification";
+  // THE SCOPE THIS ROUTE WAS MOUNTED UNDER IS NO LONGER PART OF THE ANSWER
+  // (cinatra#3693). It used to decide whether the reader was already at the
+  // review's canonical address; now every reading is sent to the RUN's own home,
+  // whatever base it was read under, so the base decides nothing. The prop stays
+  // because the scoped shell passes the same three values to every screen it
+  // mounts, and dropping one from this one alone would be a second shape for the
+  // shell to remember.
+  void scopeBase;
 
   const session = await getAuthSession();
   if (!session) redirect(await signInRedirectTarget());
   const actorCtx = await resolveReviewActorContext();
   if (!actorCtx) redirect(await signInRedirectTarget());
+
+  // THE REVIEW READS IN THE RUN, AFTER THE ACCESS DOOR (cinatra#3693).
+  //
+  // The owner retired the standalone review page and the drawings give the review
+  // no page of its own: "a pending review renders the review gate in the run
+  // detail, under the same rail, never as a standalone document", and "there is
+  // no review page view outside the run's route". So EVERY reading of this route
+  // — a pending gate, a settled one, and the audit view — is sent to the run's
+  // own address with the gate's rail selection named on it, and the run detail
+  // opens on that step at first render.
+  //
+  // THE ROUTE STILL ANSWERS so that a notification already sent, and a bookmark
+  // already taken, keep working: they land where the reading now lives.
+  //
+  // AND ONLY ONCE THE READER HAS CLEARED THE DOOR BELOW, because the address
+  // names the run's home scope and a refused reader may not be told it. The
+  // scope's own crumbs stay for the readings that still draw chrome (a refusal,
+  // a gate the loader cannot show).
+  const sendReaderToTheRun = async () => {
+    const runAddress = await reviewAddressRedirect({
+      agentId: `${vendor}/${packageName}`,
+      rawInstanceId,
+      rawTaskId,
+      runId,
+      verificationView: isVerificationView,
+    });
+    if (runAddress) redirect(runAddress);
+  };
+  const scopeCrumbs = reviewPageScopeCrumbs({ launchScope, scopeTitle });
 
   // S4 (cinatra#2042): the run rail's "Audit" entry deep-links here with
   // `?view=verification` — the before/after field diff of a repaired revision. It
@@ -148,10 +260,12 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   if (isVerificationView) {
     const access = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
     if (!access.ok) return <ReviewNotAuthorizedPanel />;
+    await sendReaderToTheRun();
+    const runCrumb = await readRunCrumbLabel(runId, runCrumbPrefix);
     const gate = await readReviewGate(runId, reviewTaskId);
     if (!gate) {
       return (
-        <ReviewShell>
+        <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
           <ReviewGateBlocked reason="no-longer-pending" />
         </ReviewShell>
       );
@@ -185,7 +299,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     // gate by route params and has no envelope to read.
     const verificationCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
     return (
-      <ReviewShell>
+      <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
         {record ? (
           <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
         ) : (
@@ -210,6 +324,11 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   if (surface.kind === "not-authorized") {
     return <ReviewNotAuthorizedPanel />;
   }
+  await sendReaderToTheRun();
+
+  // Published only from here down: the reader has cleared the surface's own read
+  // gate, and a crumb carries an entity's name.
+  const runCrumb = await readRunCrumbLabel(runId, runCrumbPrefix);
 
   // The generic blocked panel is still the page's answer for a gate it cannot
   // show: `targets-mismatch` (a stale or tampered view) and the `unavailable`
@@ -218,7 +337,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // (cinatra#2904, AC 4 + AC 5).
   if (surface.kind === "blocked") {
     return (
-      <ReviewShell>
+      <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
         <ReviewGateBlocked reason={surface.reason} />
       </ReviewShell>
     );
@@ -347,7 +466,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   });
 
   return (
-    <ReviewShell>
+    <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
       <div className="flex items-start gap-6" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
@@ -466,9 +585,23 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
  * with no page title on the bus). Both are kept here with zero drawn pixels: an
  * `sr-only` heading and the same title broadcast the removed header mounted.
  */
-function ReviewShell({ children }: { children: React.ReactNode }) {
+function ReviewShell({
+  children,
+  crumbs,
+  runCrumb,
+}: {
+  children: React.ReactNode;
+  crumbs?: React.ReactNode;
+  /** The RUN's crumb — its own name, published over the one crumb channel so the
+   *  trail above this page reads "Agents > <the run>" and the review adds no
+   *  crumb of its own (cinatra#2934, fix leg 10). Absent on a reading that could
+   *  not name the run, where the trail keeps the drawing's placeholder. */
+  runCrumb?: { prefix: string; label: string } | null;
+}) {
   return (
     <Main className="min-h-screen">
+      {crumbs}
+      {runCrumb ? <CrumbContributions entries={[runCrumb]} /> : null}
       <h1 className="sr-only">Review</h1>
       <PageHeaderTitleSync title="Review" />
       <PageContent className="flex flex-col gap-4 pt-6 pb-10" data-surface="artifact-review">
@@ -479,28 +612,15 @@ function ReviewShell({ children }: { children: React.ReactNode }) {
 }
 
 /** The standard not-authorized panel (§V) — a viewer with no run access never
- * reaches the targets. */
+ * reaches the targets.
+ *
+ * ONE PANEL FOR EVERY RUN SURFACE (cinatra#2934, the fifth graded proof set).
+ * This surface had the drawing's answer already and the run page and the
+ * schedule surface did not; rather than copy it a third time, the panel moved
+ * beside the screens that share it and this reading is now the same component,
+ * carrying this surface's own word and its own pinned anchor. Two panels would
+ * drift, and a difference between them would read to the person as a difference
+ * in what happened. */
 function ReviewNotAuthorizedPanel() {
-  return (
-    <Main className="min-h-screen">
-      <PageHeader label="Agent run" title="Review" description="Not authorized" divider />
-      <PageContent className="flex flex-col gap-6 pb-8">
-        <div
-          className="flex flex-col items-center gap-3 rounded-lg border border-line bg-surface-strong px-5 py-14 text-center"
-          data-conformance-id="review-not-authorized"
-          data-state="error"
-        >
-          <div className="grid size-10 place-items-center rounded-lg bg-surface-muted text-muted-foreground">
-            <Lock aria-hidden="true" className="size-5" />
-          </div>
-          <p className="text-sm font-semibold text-foreground">
-            You don&apos;t have access to this review
-          </p>
-          <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
-            This review belongs to an agent run you&apos;re not authorized to see.
-          </p>
-        </div>
-      </PageContent>
-    </Main>
-  );
+  return <RunNotAuthorizedPanel surface="Review" conformanceId="review-not-authorized" />;
 }

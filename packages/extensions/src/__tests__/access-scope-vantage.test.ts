@@ -46,7 +46,12 @@ const project: AccessScopeVantage = {
   scopeId: PROJECT,
 };
 
-const SHARED_VANTAGES = [team, organization, project] as const;
+const workspace: AccessScopeVantage = { kind: "workspace", orgId: ORG };
+
+/** The vantages that are STRUCTURAL projections: every one of them is read
+ *  token by token, unlike `personal`, which is admitted by all of them.
+ *  `workspace` joined the union with cinatra#2811. */
+const SHARED_VANTAGES = [team, organization, project, workspace] as const;
 
 describe("visibilityAdmitsScopeVantage — the token × vantage matrix", () => {
   it("org-wide tokens admit every well-formed vantage", () => {
@@ -85,6 +90,27 @@ describe("visibilityAdmitsScopeVantage — the token × vantage matrix", () => {
     expect(
       visibilityAdmitsScopeVantage(`project:${PROJECT}`, organization),
     ).toBe(false);
+  });
+
+  it("the WORKSPACE vantage reads as a generic member of its tenant", () => {
+    // Admitted by the tenant-wide grants, and by its OWN organization's grant.
+    expect(visibilityAdmitsScopeVantage("workspace", workspace)).toBe(true);
+    expect(visibilityAdmitsScopeVantage("org", workspace)).toBe(true);
+    expect(visibilityAdmitsScopeVantage(`org:${ORG}`, workspace)).toBe(true);
+    expect(visibilityAdmitsScopeVantage(`org:${OTHER_ORG}`, workspace)).toBe(false);
+    // NOT by a grant to one team or one project: a generic member of the
+    // tenant is in no particular team and holds no particular project grant.
+    expect(visibilityAdmitsScopeVantage(`team:${TEAM}`, workspace)).toBe(false);
+    expect(visibilityAdmitsScopeVantage(`project:${PROJECT}`, workspace)).toBe(false);
+    // And it is NOT the permissive `personal` reading, which admits everything.
+    expect(visibilityAdmitsScopeVantage(`team:${TEAM}`, personal)).toBe(true);
+  });
+
+  it("the WORKSPACE vantage carries no scope id, and fails closed without an org", () => {
+    // Like `personal`, the workspace is ONE scope, so it needs no scope id and
+    // must not be refused for lacking one.
+    expect(visibilityAdmitsScopeVantage("org", { kind: "workspace", orgId: ORG })).toBe(true);
+    expect(visibilityAdmitsScopeVantage("org", { kind: "workspace", orgId: "" })).toBe(false);
   });
 
   it("`admin` and `owner` admit NO shared vantage — a scope holds no standing", () => {

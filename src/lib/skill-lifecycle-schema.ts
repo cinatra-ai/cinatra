@@ -450,15 +450,25 @@ $body$` },
 //                                               -- both land, even if the
 //                                               -- advisory lock were bypassed.
 //
+// cinatra#2813 S1 widened that shape to scope: the scope tuple (scope_kind,
+// scope_id) joins the key and the position slot, `source` records who chose the
+// skill, and `origin_run_id` points at the run a recommendation came from.
+// core__0089 still creates the narrow shape above (a migration is history);
+// core__0100 widens it.
+//
 // `position` is a Postgres unreserved-but-function-shadowing keyword, so it is
 // QUOTED at every use site here and in the store.
 //
-// This is the FRESH-INSTALL half. Its operator-upgrade twin is
-// `migrations/core/core__0089_agent-assigned-skills.mjs`; the two ship in the
-// same PR and are pinned against each other by
-// `src/lib/__tests__/agent-assigned-skills-schema.test.ts` (the core__0085 /
-// core__0086 precedent). Every statement is idempotent, so the bootstrap can
-// run after the migration and vice versa.
+// This is the FRESH-INSTALL half. It has two operator-upgrade twins:
+// `migrations/core/core__0089_agent-assigned-skills.mjs` creates the narrow
+// table and `migrations/core/core__0100_per-scope-assignment-stores.mjs` widens
+// it. The bootstrap creates the CURRENT (wide) shape; over a table core__0089
+// alone left narrow it adds the four new columns with core__0100's own first
+// statement (the additive half, cinatra#3649), so its indexes still build, and
+// core__0100 does the rest when the chain runs after it. The three are pinned
+// against each other by `src/lib/__tests__/agent-assigned-skills-schema.test.ts`
+// (the core__0085 / core__0086 precedent). Every statement is idempotent, so
+// the bootstrap can run before or after the migration chain.
 //
 // It lives in THIS leaf rather than a module of its own for the same reason the
 // other skill-domain bootstrap DDL does: `drizzle-store.ts` is reachable from
@@ -520,6 +530,28 @@ export function agentAssignedSkillsSchemaQueries(schemaName: string): Array<{ te
       CONSTRAINT ${AGENT_ASSIGNED_SKILLS_TABLE}_source_chk CHECK (${assignmentSourceCheckSql()}),
       ${assignmentScopeConstraintsSql(AGENT_ASSIGNED_SKILLS_TABLE)}
     )`,
+    },
+    // A table that already exists NARROW (cinatra#3649). The CREATE above is
+    // `IF NOT EXISTS`, so it shapes only a table it creates. Over the five
+    // columns core__0089 creates it is a no-op, and the scope index below then
+    // failed with `column "scope_kind" does not exist`. The boot and the CLI's
+    // setup both run this bootstrap BEFORE the versioned chain, so core__0100,
+    // which widens that table, was never reached.
+    //
+    // This is core__0100's own first statement with the schema named: the four
+    // columns, nullable. A no-op on a table the CREATE made wide; on a narrow
+    // table it lets the indexes build. The backfill, NOT NULL, the wider key,
+    // the checks, the foreign key and the position-index swap stay in
+    // core__0100. That is destructive operational SQL, which belongs in the
+    // migration and not in the bootstrap (migrations/README.md). Every database
+    // the product's own roads left narrow has not recorded core__0100 yet, so
+    // the chain applies it right after this bootstrap.
+    {
+      text: `ALTER TABLE ${s}.${quoteIdent(AGENT_ASSIGNED_SKILLS_TABLE)}
+      ADD COLUMN IF NOT EXISTS scope_kind text,
+      ADD COLUMN IF NOT EXISTS scope_id text,
+      ADD COLUMN IF NOT EXISTS source text,
+      ADD COLUMN IF NOT EXISTS origin_run_id text`,
     },
     {
       text: `CREATE UNIQUE INDEX IF NOT EXISTS ${AGENT_ASSIGNED_SKILLS_POSITION_INDEX} ON ${s}.${quoteIdent(

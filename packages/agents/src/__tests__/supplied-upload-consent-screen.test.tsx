@@ -48,7 +48,7 @@ const toastState = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning
 vi.mock("@/lib/cinatra-toast", () => ({ toast: toastState }));
 
 import { ImportAgentForm } from "../import-form";
-import { ImportPackageFromGitHubForm } from "../import-skill-from-github-form";
+import { ImportPackageFromGitHubForm } from "../upload-repository-link-form";
 
 const INSTALL_SCOPE = {
   installTargets: [

@@ -278,7 +278,11 @@ describe("§I — the chat box is the one primary input, on every host (#2865)",
 
       // §I: the primary input KEEPS the three things a subordinate field gives
       // up — its own box, the raised ground and the send affordance.
-      expect(classes).toContain("rounded-control");
+      // Its box takes "the 8px radius the prompt window already gives a
+      // conversational input" (§I, drawn `.composer { border-radius: 8px }`):
+      // the shared `--r-chip` token, never the 10px control radius.
+      expect(classes, "the composer's 8px radius").toContain("rounded-chip");
+      expect(classes, "the 10px control radius must be gone").not.toContain("rounded-control");
       expect(classes).toContain("border");
       expect(classes).toContain("bg-surface-strong");
       expect(

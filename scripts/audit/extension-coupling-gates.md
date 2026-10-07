@@ -34,6 +34,9 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `required-extensions-cover-host-imports.mjs` | the prod bootable DECLARATION vs the live code surface | packages | live-derived (no baseline) + the **declaration equality guard** |
 | `identity-coupling-gate.mjs` | IDENTITY surface — auth-route-guard public-route exemptions naming a concrete extension; host `src/` re-declaring an SDK-owned capability id literal | dangerous-class findings | **stateless** (no baseline; every finding is a hard fail) |
 | `vendor-token-core-gate.mjs` | VENDOR tokens in core (`src/` + `packages/`) — vendor-named file/route path segments and import specifiers, independent of any extension package lexeme | `file :: path :: token` / `file :: import :: specifier` occurrences | `vendor-token-core-gate.baseline.json` — **shrink-only residual floor** (cinatra#973, epic cinatra-ai/cinatra#978; see the dedicated section below) |
+| `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
+| `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
+| `extension-rendering-gate.mjs` | an artifact extension that claims an artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **shrink-only floor**, WARN mode (cinatra#3871; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -315,6 +318,394 @@ As the epic waves (#974–#977, #979) evict each cluster into its owning
 extension, the floor ratchets toward the sanctioned-surface set; the baseline
 file is the authoritative current count.
 
+## Application border gates — the shrink-only floors (cinatra#3821)
+
+**The rule.** The application offers the same roads to every extension. What
+an artifact holds is the work of the agent extension whose flow creates it. A
+connector gives an agent its connection and its tools, and it never creates an
+artifact. An artifact extension declares the type and draws it from its
+content. The application gains no function for one artifact type, one agent or
+one connector. The lexeme, identity and vendor gates above do not see that
+line; these two gates hold it.
+
+### What they refuse
+
+`application-border-gate.mjs` scans application code (`src/` and every
+`packages/*/src`; `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`)
+with the TypeScript compiler API and refuses a new occurrence of:
+
+1. **Class 1 (`types`)** — a string literal (or a template literal without
+   substitutions) whose text equals an object type id an extension claims, or
+   has the id shape `<namespace>:<local>` under a namespace a claim declares, in
+   any position — for example as the type of an artifact the application
+   itself creates. Key `file :: type :: id`, with its count.
+2. **Class 2 (`names`)** — a module whose path carries a word of the frozen
+   domain set (`appointment`, `blog`, `campaign`, `campaigns`, `cms`, `crm`,
+   `email`, `icp`, `mail`, `newsletter`, `outreach`, `playbook`, `podcast`,
+   `portfolio`, `prospecting`, `social`) as a whole sub-token of a directory or
+   file segment (split on non-alphanumerics and camelCase, as the vendor gate
+   splits). The segments read are those after `src/`; for a package, its
+   directory name plus those after `packages/<name>/src/`. Key
+   `file :: name :: token`, with the number of segments. The set is frozen and
+   reviewed, not derived from the package names of the locks: derived words
+   (`client`, `mcp`, `server`, `list`, ...) read mostly generic modules, and a
+   derived set would move with every lock change, so a pin advance could turn
+   `main` red with no code change. Vendor words stay the vendor gate's, so one
+   path segment is counted by one gate.
+3. **Class 3 (`ceilings`)** — growth of a module already on the class 1 or
+   class 2 floor. Each such module carries a ceiling: its count of top-level
+   value declarations (the names of top-level functions, classes and
+   variables, exported or not). A count above the ceiling is refused; a count
+   below it is a stale entry. A new top-level function that stores the
+   published words of a CMS page in `src/lib/artifacts/cms-content-snapshot-capture.ts`
+   is refused; a fix inside an existing declaration adds no name, so a listed
+   module stays maintainable while its surface cannot widen.
+
+`connector-artifact-road-gate.mjs` refuses a new **class 6 road**: from a
+module that faces connectors to a module that creates an artifact.
+
+- The connector-facing modules are `packages/extensions/src/connector-handler.ts`
+  and every capability the application publishes: a
+  `registerCapabilityProvider` call (or a call of a local wrapper that forwards
+  its first parameter to it) in a module under `src/` whose provider identity
+  is the application's own (`HOST_PROVIDER_PACKAGE`). Its capability id is
+  resolved from an inline literal, a same-module constant, a member of
+  `HOST_CONNECTOR_SERVICE_CAPABILITIES` or an imported SDK constant; an id the
+  gate cannot resolve, and a direct call whose options are neither an object
+  literal nor a constant bound to one, is a scanner error (exit 2), never a
+  pass. A
+  capability's roots are the modules that define its impl members, plus the
+  modules its declaration names as `entries`.
+- A creating module calls a builder of `src/lib/artifacts/artifact-writer-witness.ts`
+  (the witness every host writer that mints an artifact emits), also through a
+  module that re-exports it, or passes a claimed type id as the value of a
+  `typeHint` property.
+- The reach follows value-import edges only (static imports and re-exports,
+  side-effect imports, literal dynamic `import()`, `require()`; `import type`
+  and `export type` are skipped), resolved through `@/`, relative paths and
+  workspace packages by their `exports` or `src/<subpath>`. A package root
+  barrel (`packages/<name>/src/index.*`) is not traversed, and a road is at
+  most six edges long: through the barrels every root reaches the whole run
+  machinery, which is no truthful floor.
+- **The declaration** (the `capabilities` section of the baseline) is the one
+  place the gate reads whether a capability can create an artifact: every
+  published id with `createsArtifact` (true or false) and, where the impl
+  reaches its work through a `globalThis` slot, `entries` (the modules that
+  bind the slot). A published id missing from it, a declared id no longer
+  published, a `createsArtifact` that disagrees with the reach, and an impl
+  that reads a `globalThis` property with no `entries` each fail. The review
+  seam for staged CMS writes (`@cinatra-ai/host:cms-review`) reaches its
+  capture only through such a slot, which
+  `src/lib/register-cms-review-host-seam-runtime.ts` binds; no import edge
+  leads there from the registration, so the declaration names it.
+- When `packages/sdk-extensions/src/artifact-contract.ts` exports
+  `ARTIFACT_CREATING_ROADS`, its members under the application's provider
+  identity must equal the ids declared `createsArtifact: true`; while it is
+  absent the OK line says `SDK roads list absent` and the declaration governs.
+
+### The vocabulary is derived, never typed
+
+`scripts/audit/lib/claimed-type-vocabulary.mjs` reads the well-formed
+`cinatra.artifact.objectTypes[].type` claims of the extension packages the two
+locks name from the materialized tree (`extensions/<scope>/<name>`, with the
+produces gate's own `discoverExtensionDirs` and `readArtifactClaimIds`). It
+names no extension package. An absent tree, fewer packages than
+`cinatra.devExtensions` declares, a package whose manifest is unreadable or
+names no package, or a tree that claims no id throws a named
+error, which each gate maps to exit 2 (scanner error, never a vacuous pass).
+The namespaces of the claims matter as much as the ids: five claimed
+namespaces (the email artifacts pack's `@cinatra-ai/email` among them) are no
+package name, so the instance-coupling ban cannot see them.
+
+### Count once beside the display boundary gate
+
+`artifact-ui-boundary-gate.mjs` (G1) reads a type id only in a `.tsx` module
+and only in a keying position; class 1 reads every other position of every
+module. Class 1 imports G1's own `classifyIdentity` and `keyingKindOf` and
+skips exactly a literal G1 classifies as an object type in a keying position,
+so the partition is G1's definition and cannot drift from it. Nothing on G1's
+floor enters this floor, and a literal G1 counts is still refused by G1.
+
+### Exemptions, each with its reason
+
+| Exemption | Classes | Why |
+| --- | --- | --- |
+| the generator-emitted files (`PERMANENT_EXEMPT_FILES`, an explicit list) | all | generator output from the manifests, byte-pinned by `generate-extension-manifest.mjs --check`; a hand-added file under `src/lib/generated/` is still counted |
+| tests and specs, `__tests__/`, `__fixtures__/`, `__mocks__/` (the test doubles), `test/` and `tests/`, stories, `.d.ts` declarations | all | the surfaces that police the boundary or declare types only |
+| documents (`*.md`) | all | they document the boundary |
+| the owner-ruled `DATA_CONTRACT_ID_ALLOWLIST` ids | class 1 | the one place owner rulings on such ids live; reported apart exactly as the instance-coupling ban reports them, never a second exception list |
+| `SANCTIONED_MODULES`: `src/lib/org-invitation-email.ts` | class 2 | the platform's own member-invitation mail, written for no type, agent or connector; the set grows only by a reviewed change to the gate |
+
+### How the floors move
+
+Both floors only shrink, with the mechanics of the vendor gate:
+
+- a new key or a grown count fails; a key whose count fell is **stale** and
+  fails until `--write-baseline` ratchets the floor down;
+- `--write-baseline` refuses to write a grown floor;
+- the base guards (`APPLICATION_BORDER_BASE`, `CONNECTOR_ARTIFACT_ROAD_BASE`)
+  fail closed on a flag-like or unresolvable reference and refuse a committed
+  floor that grew against the base (no constraint when the base holds no
+  floor);
+- one growth of the class 1 floor is admitted, by `--write-baseline` run with
+  `APPLICATION_BORDER_BASE` set and by the base guard: a new class 1 key (and
+  the new ceiling its module then needs) whose file is byte-identical at the
+  base reference — the code did not change, only the vocabulary did (an
+  extension newly claiming an id the application already spells); a key
+  already on the floor never grows this way, and a count that is not a
+  non-negative integer fails;
+- every entry of the application border floor names its `owner`, the
+  extension that will own the code, and every road names `removedBy`, the item
+  that removes it; `--write-baseline` writes a new entry as `UNASSIGNED`, and
+  the check fails on an `UNASSIGNED` or empty value.
+
+At introduction the application border floor holds 28 class 1 entries in 8
+files, 85 class 2 entries in 84 files and 89 ceilings; the road floor holds
+four roads (`@cinatra-ai/host:cms-review` to the CMS snapshot capture and to
+the preview capture store, `@cinatra-ai/host:blog-routing` to the artifact
+creation module, `@cinatra-ai/host:email-routing` to its own registering
+module), and the connector handler reaches no creating module. The items that
+empty the floors are filed apart. The baseline files are the authoritative
+current count.
+
+**Enforcement.** The tests of record in
+`scripts/audit/__tests__/application-border-gate.test.mjs` and
+`scripts/audit/__tests__/connector-artifact-road-gate.test.mjs` run each gate's
+own scan and diff over the whole tree in the root suite (`pnpm test:root`), so
+every pull request of the application runs them beside the sibling gates; they
+fail, never skip, when the extension tree is not cloned back. A change that
+adds a violation and adds its entry to the committed floor in the same pull
+request stays green until the base-branch guard of the floors runs in CI,
+which is a later change; the floor file's diff shows such an entry to the
+reviewer.
+
+### What they cannot see
+
+- a type id assembled at run time or passed in a variable;
+- an id outside the vocabulary, such as one the application registers under
+  its own namespace (`@cinatra-ai/objects:cms-content-snapshot`);
+- a module whose path holds no word of the frozen set;
+- growth inside an existing declaration, a nested function, a new branch, an
+  interface or a type alias;
+- a road through a package root barrel, a registry or a slot that is not
+  declared (a slot is looked for in the registering module only: in the impl
+  it registers and the same-module functions that impl names), or a road
+  longer than six edges;
+- an artifact-typed row written through the generic objects write with a type
+  chosen at run time (the `@cinatra-ai/host:objects-integration` capability
+  hands a connector the objects provider; a run-time refusal is outside these
+  gates);
+- an application MCP tool a connector calls.
+
+The connector's own side, classes 4 and 5, belongs to the conformance checker
+(`scripts/extensions/lib/conformance-rules.mjs`), not to these gates: its rules
+for a package of kind connector refuse a declared produced type or a claimed
+object type (class 4), and connector code that calls a road that creates an
+artifact (class 5). Those rules are the sibling change of cinatra#3821 and run
+in each connector's repository and over the materialized tree on the
+application's pull requests.
+
+## The rendering gate — warn mode (cinatra#3871)
+
+`extension-rendering-gate.mjs` is the rendering gate of cinatra#3036's
+acceptance row 2. Its rule: "The rendering gate: every kind of work draws
+itself, the binary base included, whose display is the download card."
+
+**The unit is the extension.** A CLAIMING extension is an artifact extension of
+the materialized tree (a directory named `*-artifact` or `*-artifacts` at the
+root of `extensions/` or one vendor level below it, whose manifest says
+`cinatra.kind === "artifact"`) that declares at least one artifact-writable
+claim in `cinatra.artifact.objectTypes[]`: a claim with a well-formed type id
+that is either self-namespaced (the bridge registers it as an artifact type) or
+declares `dispositions.projection === "artifact-safe"` (a claim-backed host
+type). A claiming extension that is not drawn is a finding. It is drawn in one
+of two ways, read in this order. By its own display: the build map's entry
+`<package>::detail` in `GENERATED_ARTIFACT_RENDERERS`
+(`src/lib/generated/artifact-renderers.ts`), read with the floor gate's own
+fail-closed reader; the build map, never a manifest's `ui` block, is the
+authority. Or by a content-type display (cinatra#3092): the extension's
+`cinatra.artifact.accepts` declares at least one form, names no key the SDK's
+contract does not name (`file`, `connectorRef`, `dashboard`), and every
+declared form is served — the form is in the application's preview-inline MIME
+allowlist (`src/lib/artifacts/artifact-read.ts`) and a build-map entry of
+`resolution: "required"` in the `detail` slot declares a representation that
+matches it exactly or by type wildcard, which is what the runtime binds as a
+system representation provider for every organization. The report prints each
+such extension on a `drawn by a content-type display` line with every form and
+the display that serves it. The gate reads the allowlist, the dashboard MIME
+and the build map through the floor gate's own readers, and names no
+extension and no type in code.
+
+**Outside the gate by construction.** An artifact extension that declares no
+writable claim (no `objectTypes`, or only malformed claims or claims of
+projection `none` on a foreign namespace) is printed on every run and never
+counted: the chart extension claims no type and is shown outside the gate
+(cinatra#3092, row 7).
+
+**Nothing is counted twice.** `host-display-floor-gate.mjs` counts the
+application's own displays and reads no extension tree.
+`artifact-review-floor-gate.mjs` counts artifact TYPES whose review lands on
+the metadata floor. An extension whose every declared form is drawn by a
+required content-type display is drawn and off this gate's deficit; a form
+drawn only by the host's handler, a catch-all (`*/*`), an optional
+(`guardedOptional`) display, another slot or the generic fallback is not, and
+its extension stays in this gate's deficit. The two gates report different
+units side by side.
+
+**The mode is warn** (`GATE_MODE = "warn"`). A finding above the floor is
+printed as a warning and passes. A floor entry that no longer applies is
+printed as a warning and passes as well, so that an open pull request which
+gives an extension its display does not turn red when it meets the gate; the
+floor is shrunk by the gate's own writer afterwards. A floor that grew against
+the base, an unreadable base on a pull request, and a scanner error fail. Exit
+codes: 0 clean or warn only; 1 a grown floor or an unreadable base on a pull
+request's run; 2 a scanner error (no artifact extension, a partial fleet
+against the two clone-back locks, an unreadable manifest, an unparseable build
+map, an absent or unparseable allowlist or dashboard MIME source, an absent or
+unreadable floor file).
+
+**The flip** is cinatra#3092 (row 1: "every artifact-writable claiming type
+resolves a display its own extension owns and no review can land on the
+fallback", "with no exception list"): one constant, `GATE_MODE = "blocking"`,
+and an empty floor. In blocking mode every live finding fails, every stale
+floor entry fails, and the floor must be empty. There is no exception list.
+
+**The introducing rule.** The floor is compared with the base branch through
+the shared helper below. The change that introduces the gate has a base that
+holds neither `extension-rendering-gate.baseline.json` nor
+`extension-rendering-gate.mjs`; that one case passes with one line saying so.
+A base that holds the gate script but not its floor fails closed.
+
+**How the floor moves.** The floor holds today's deficit and only shrinks. It
+was written by the gate's own `node scripts/audit/extension-rendering-gate.mjs
+--write-baseline` on the materialized tree. With a committed floor the writer
+removes the entries that no longer apply and never adds one; an extension that
+gains its own detail display is removed from the floor by the writer in a
+change of its own, and so is an extension the content-type rule resolves: the
+change that resolves it leaves the floor as it is (its entry reads as a stale
+warning in warn mode), and the writer's own change removes the entry
+afterwards. A new entry fails against the base branch.
+
+## Floors compared with the base branch (cinatra#3832)
+
+A ratchet gate compares a live count or list with a committed floor and fails
+on growth. If the floor is read only from the pull request's own checkout, the
+change that adds an occurrence can add it to the floor as well and pass. The
+guarded gates therefore also compare the committed floor with the copy of the
+same file on the base branch; the `VENDOR_TOKEN_BASE` guard above is the
+pattern. The gates below use ONE shared helper,
+`scripts/audit/lib/floor-base-guard.mjs`, and each names what "growth" means
+for its floor:
+
+| Gate | Floor compared with the base | Growth (fails) | Own base variable |
+| --- | --- | --- | --- |
+| `scripts/extensions/self-rendering-extensions-border-gate.mjs` | `self-rendering-extensions-border.baseline.json` | a new (package, path) copy | `SELF_RENDERING_BORDER_BASE` |
+| `extension-fs-import-ban.mjs` | `extension-fs-import-ban.baseline.json` | a new (extension, file) hit | `EXTENSION_FS_IMPORT_BAN_BASE` |
+| `ci-pinned-tests-exist.mjs` | `package-suite-runner-exceptions.json` and `root-tier-runner-exceptions.json` | a new item in either file | `CI_PINNED_TESTS_BASE` |
+| `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
+| `route-graph-ratchet.mjs` | `route-graph-ratchet.baseline.json` | a raised ceiling without a record that matches it; a stale, orphan or altered record | `ROUTE_GRAPH_RATCHET_BASE` (set by the workflow) |
+| `required-extensions-cover-host-imports.mjs` | `cinatra.systemExtensions` in the root `package.json` (a register: see the record road below) | a new package in the set without its record | `REQUIRED_EXTENSIONS_COVER_BASE` |
+| `org-write-table-sweep.mjs` | `org-write-table-sweep.baseline.json` | a new file or a raised count of raw org-axis writes | `ORG_WRITE_TABLE_SWEEP_BASE` |
+| `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
+| `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
+| `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
+
+The rules the helper holds for every gate:
+
+- **Where the base comes from**, in this order: the gate's own variable when
+  the workflow sets one (a git revision: the remote base branch on a pull
+  request, the previous tip on a push); else the platform's variable for a pull
+  request's base branch (`GITHUB_BASE_REF`), read as the remote branch of that
+  name (`origin/main` for `main`). A job whose checkout holds the base branch
+  (`fetch-depth: 0`) reads it there, and nothing is fetched.
+- **A checkout of one commit**: when the base comes from the pull request's
+  base branch and is not in the checkout, the helper fetches that branch
+  itself, one commit deep, from the checkout's own remote `origin`
+  (for the base branch `main`: `git fetch --depth=1 --no-tags origin
+  +refs/heads/main:refs/floor-base-guard/main`), into a reference of its own,
+  never into a branch of the checkout, and reads the floor there. The
+  branch name must have the form of a branch name (letters, digits, dot, dash,
+  underscore and slash; no leading dash; no `..`) before it reaches git; a name
+  of another form fails the gate. One attempt with a timeout of 30 seconds, one
+  more after a failure, and no other network call. The repository is public:
+  the helper adds no credential and reads none. The fetch is anonymous
+  whatever the checkout left in its configuration: the helper's own call
+  passes an empty credential helper, an empty askpass program, an empty
+  `http.extraheader` and an empty value for every address-scoped
+  `http.ADDRESS.extraheader` key it finds, with `GIT_TERMINAL_PROMPT=0`, so a
+  job token that a checkout stored as a header is never sent. A remote address that holds a user part is never printed; the
+  remote is then named by its name only. A fetch that fails fails the gate with
+  its reason. A base named by the gate's own variable is a revision the
+  workflow chose, and it is never fetched. `FLOOR_BASE_FETCH=0` switches the
+  fetch off, so a missing base fails closed without it; the tests that run a
+  gate in the real checkout set it, so they never reach the network.
+- **No pull request, no base**: on a run that is no pull request (a push to the
+  default branch, a local run) and no base is named, the guard says so in one
+  line and passes; the gate's own check against the tree still runs.
+- **Fail closed**: on a pull request's run a base that cannot be read fails the
+  gate with a line that names the reason — a flag-like or malformed reference,
+  a reference that does not resolve, a floor file that is not on the base, a
+  base copy that does not parse. The guard never passes in silence.
+- **Shrinking passes**: a lowered count, a removed stale item or a removed
+  package is never growth.
+- **A route-graph ceiling rises with its record** (cinatra#3848): a raise
+  passes in the pull request that carries an `absorbs` record matching it
+  exactly (`from` the base's ceiling, `to` the committed one), and the gate
+  prints a notice for it. A ceiling measures the graph a route reaches and
+  real growth raises it, so the record with its notice makes the raise
+  visible; a floor that lists faults only shrinks.
+- A package added to the system set passes only with its record in the same
+  pull request (the record road below); without it, it fails against the base.
+  The equality `extensions == systemExtensions == lock` is still checked on the
+  tree.
+
+`org-archive-bypass-scan.mjs` has no workflow step of its own: the root suite
+runs it through its test ("exits 0 against the repo as checked out"), which
+inherits the run's environment and so compares with the base on a pull
+request's run. The tests that run a gate on a SYNTHETIC floor drop the base
+variables, so a synthetic floor is never compared with the real base branch.
+
+The org-write boundary workflow runs `org-write-table-sweep.mjs` and
+`system-writer-manifest-gate.mjs`, and the skill packaging workflow runs
+`skill-packaging-gate.mjs`; their checkouts take one commit, so these three
+gates get their base through the fetch above. The root suite also runs
+`system-writer-manifest-gate.mjs` and `skill-packaging-gate.mjs` through their
+tests against the repository as checked out, with the run's environment.
+
+Not guarded yet: the other gates that cinatra#3832 lists, which need a
+workflow change or a floor moved into a file of its own.
+
+### The record road for registers
+
+Two guarded lists are registers of things allowed after a review, not floors
+of faults: the system writers' manifest and the set of system extensions. A
+row added to either passes in the pull request that carries it, WITH ITS
+RECORD in the register's permits file, in the same change:
+
+- `scripts/audit/system-writer-manifest.permits.json` for the manifest (a
+  record per row, by file and reference; a raised count needs its record
+  written or updated in the change);
+- `scripts/audit/required-extensions-cover-host-imports.permits.json` for the
+  set (a record per package name).
+
+A record is `{ "list", "row", "reason", "pr" }`: the register's name, the exact
+row, a reason that is a sentence (at least six words of three letters or more,
+at least four of them different) and the number of the pull request. The gate
+prints one NOTICE line for every addition it absorbs, naming the row, the
+reason and the pull request. A row added without its record fails, and the
+refusal names the permits file and the record's form. A record for a row the
+register does not hold is an orphan and fails. A record is carried forward
+unchanged while its row stands (an altered or deleted record with its row
+still on the register fails), and it goes when its row goes. A permits file
+that does not parse fails the gate on a pull request's run; an absent one
+holds no records. The shared helper holds the reader and the rules once
+(`parsePermits`, `checkPermits` in `scripts/audit/lib/floor-base-guard.mjs`).
+
+The other guarded floors list tolerated faults (a raw write outside the
+registry, an embedded skill, a forbidden import): they have no record road
+and only shrink. The route graph's ceilings are no such floor: a raise passes
+with its `absorbs` record in its own pull request, as described above.
+
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
 | Gate | Pinned floor | Direction |
@@ -450,6 +841,15 @@ CORE_EXT_BAN_BASE=origin/main node scripts/audit/core-extension-import-ban.mjs
 DISCOVERY_BYPASS_BASE=origin/main node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 IMPORT_BAN_BASE=origin/main node scripts/audit/extension-import-ban.mjs --strict-sdk-only
 VENDOR_TOKEN_BASE=origin/main node scripts/audit/vendor-token-core-gate.mjs
+REQUIRED_EXTENSIONS_COVER_BASE=origin/main node scripts/audit/required-extensions-cover-host-imports.mjs
+
+# the floors compared with the base branch (cinatra#3832; on a pull request's
+# run GITHUB_BASE_REF=main names the base without these variables)
+SELF_RENDERING_BORDER_BASE=origin/main node scripts/extensions/self-rendering-extensions-border-gate.mjs
+EXTENSION_FS_IMPORT_BAN_BASE=origin/main node scripts/audit/extension-fs-import-ban.mjs
+CI_PINNED_TESTS_BASE=origin/main node scripts/audit/ci-pinned-tests-exist.mjs
+ORG_ARCHIVE_BYPASS_BASE=origin/main node scripts/audit/org-archive-bypass-scan.mjs
+ROUTE_GRAPH_RATCHET_BASE=origin/main node scripts/audit/route-graph-ratchet.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline

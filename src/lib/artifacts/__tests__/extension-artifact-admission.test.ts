@@ -13,6 +13,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { ArbitrableClaim } from "@cinatra-ai/objects/claims";
+
 import {
   admitsArtifactType,
   admittedArtifactTypes,
@@ -21,12 +23,44 @@ import {
 } from "@/lib/artifacts/extension-artifact-admission";
 
 const CALLER = "@cinatra-ai/blog-pipeline-agent";
+const ORG = "org-w7-admission";
 
 const manifest = (deps: unknown) => ({ dependencies: deps }) as Record<string, unknown>;
+
+/**
+ * The REGISTRATIONS these declarations resolve against (cinatra#3597): the
+ * owner of a type is the extensionPackage of its winning claim, so the two packages
+ * these cases talk about carry one active claim each. Injected, so the suite
+ * still needs no database.
+ */
+const CLAIMS: readonly ArbitrableClaim[] = [
+  {
+    id: "claim-idea",
+    scope: "platform",
+    objectTypeId: "@cinatra-ai/blog-idea-artifact:idea",
+    claimKind: "dedicated",
+    status: "active",
+    extensionPackage: "@cinatra-ai/blog-idea-artifact",
+    extensionVersion: "1.0.0",
+    generation: 1,
+  },
+  {
+    id: "claim-post",
+    scope: "platform",
+    objectTypeId: "@cinatra-ai/blog-post-artifact:post",
+    claimKind: "dedicated",
+    status: "active",
+    extensionPackage: "@cinatra-ai/blog-post-artifact",
+    extensionVersion: "1.0.0",
+    generation: 1,
+  },
+];
 
 const ADMISSION = resolveArtifactDependencyAdmission({
   packageName: CALLER,
   packageVersion: "1.4.0",
+  orgId: ORG,
+  readClaims: () => CLAIMS,
   cinatra: manifest([
     {
       packageName: "@cinatra-ai/blog-idea-artifact",
@@ -76,6 +110,8 @@ describe("what the declaration admits", () => {
     const none = resolveArtifactDependencyAdmission({
       packageName: CALLER,
       packageVersion: "1.4.0",
+      orgId: ORG,
+      readClaims: () => CLAIMS,
       cinatra: {},
     });
     expect(none.admittedPackages).toEqual([]);
@@ -86,6 +122,8 @@ describe("what the declaration admits", () => {
     const wild = resolveArtifactDependencyAdmission({
       packageName: CALLER,
       packageVersion: "1.4.0",
+      orgId: ORG,
+      readClaims: () => CLAIMS,
       cinatra: manifest([
         { packageName: "*", kind: "artifact", edgeType: "runtime", requirement: "required" },
         { packageName: "@cinatra-ai/*", kind: "artifact", edgeType: "runtime", requirement: "required" },
@@ -111,6 +149,8 @@ describe("the admission is bound to the declaration AND the version", () => {
     const other = resolveArtifactDependencyAdmission({
       packageName: CALLER,
       packageVersion: "1.5.0",
+      orgId: ORG,
+      readClaims: () => CLAIMS,
       cinatra: manifest([
         {
           packageName: "@cinatra-ai/blog-idea-artifact",
@@ -128,6 +168,8 @@ describe("the admission is bound to the declaration AND the version", () => {
     const widened = resolveArtifactDependencyAdmission({
       packageName: CALLER,
       packageVersion: "1.4.0",
+      orgId: ORG,
+      readClaims: () => CLAIMS,
       cinatra: manifest([
         {
           packageName: "@cinatra-ai/blog-idea-artifact",
@@ -145,6 +187,8 @@ describe("the admission is bound to the declaration AND the version", () => {
     const reordered = resolveArtifactDependencyAdmission({
       packageName: CALLER,
       packageVersion: "1.4.0",
+      orgId: ORG,
+      readClaims: () => CLAIMS,
       cinatra: manifest([
         {
           packageName: "@cinatra-ai/email-connector",

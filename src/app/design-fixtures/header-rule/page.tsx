@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { TimezoneControlFixture } from "./run-controls-fixture";
+
 import { PageHeader } from "@/components/page-header";
 import {
   Tabs,
@@ -43,7 +45,31 @@ export const metadata: Metadata = {
  * conformance route) so the committed pixel baselines stay untouched; coverage
  * here is computed-style assertion, not snapshot.
  */
-export default function HeaderRuleFixturePage() {
+export default async function HeaderRuleFixturePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ controls?: string; condition?: string }>;
+}) {
+  const query = await searchParams;
+  if (query.controls === "timezones") {
+    const condition = query.condition === "degraded" || query.condition === "blank"
+      ? query.condition : "ordinary";
+    return <TimezoneControlFixture condition={condition} />;
+  }
+  if (query.controls === "header") {
+    return (
+      <main className="px-8 pb-[160vh]">
+        <div data-testid="fixture-blank-run" className="h-[140vh]" />
+        <div data-testid="fixture-probe">
+          {Array.from({ length: 14 }, (_, i) => (
+            <p key={i} className="text-4xl leading-tight font-bold tracking-tight text-foreground">
+              HEADER-BLEED-PROBE
+            </p>
+          ))}
+        </div>
+      </main>
+    );
+  }
   return (
     <main className="min-h-screen bg-paper px-8 py-10">
       {/* 1 — page-header rule: PageHeader's own etched divider (divider on). */}

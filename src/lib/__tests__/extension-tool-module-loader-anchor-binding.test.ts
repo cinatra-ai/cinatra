@@ -11,7 +11,7 @@
  *
  *   pnpm vitest run src/lib/__tests__/extension-tool-module-loader-anchor-binding.test.ts
  */
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -30,9 +30,13 @@ type StoreRecord = {
   declaredDigest?: string;
 };
 
+/** A generated static-manifest record, in the two fields this road reads. */
+type GeneratedRecord = { version: string | null; sourceDir: string };
+
 const storeRecords: StoreRecord[] = [];
 const anchors: { version: string | null; digest: string | null; kind: string | null }[] = [];
 const anchorResolverCalls: (string | null)[] = [];
+const generatedManifest: Record<string, GeneratedRecord> = {};
 
 vi.mock("@/lib/extension-data-root", () => ({
   resolveExtensionDataRoot: () => "/unused-by-this-test",
@@ -50,6 +54,13 @@ vi.mock("@/lib/extension-install-anchor", () => ({
     anchorResolverCalls.push(orgId);
     return async () => anchors;
   },
+}));
+
+// The GENERATED static manifest, substituted like the three collaborators
+// above: the arms below drive the record's own fields (its pinned version and
+// the source directory it records) rather than the committed file's contents.
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: generatedManifest,
 }));
 
 /**
@@ -98,6 +109,53 @@ async function twoDigestStore() {
     });
   }
   return dataRoot;
+}
+
+/**
+ * A package lying in the SOURCE TREE, the way a development installation has
+ * it: its own package.json and the declared module beside it, and no store
+ * record anywhere. `sourceDir` is recorded the way a generated record records
+ * one — relative to the process's own working directory.
+ */
+async function sourceTreePackage(
+  options: { name?: string; version?: string; moduleEscapesTheTree?: boolean } = {},
+) {
+  const root = await mkdtemp(path.join(tmpdir(), "cinatra-3602-source-"));
+  const dir = path.join(root, "fixture-tool-pack");
+  const toolsDir = path.join(dir, "cinatra", "tools");
+  await mkdir(toolsDir, { recursive: true });
+  await writeFile(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: options.name ?? PACK, version: options.version ?? PINNED }),
+  );
+  if (options.moduleEscapesTheTree) {
+    // A link lying INSIDE the source directory whose real path is outside it:
+    // the string-level gate passes and only the realpath containment refuses.
+    const outside = path.join(root, "outside-the-tree.mjs");
+    await writeFile(outside, FIXTURE_TOOL_MODULE_SOURCE);
+    await symlink(outside, path.join(toolsDir, "fixture-tool.mjs"));
+  } else {
+    await writeFile(path.join(toolsDir, "fixture-tool.mjs"), FIXTURE_TOOL_MODULE_SOURCE);
+  }
+  return { dir, sourceDir: path.relative(process.cwd(), dir) };
+}
+
+/** The generated manifest holds this one record for the fixture package. */
+function generatedRecord(record: GeneratedRecord) {
+  for (const key of Object.keys(generatedManifest)) delete generatedManifest[key];
+  generatedManifest[PACK] = record;
+}
+
+/** Run one arm under an explicit runtime mode, restoring the process after. */
+async function withRuntimeMode<T>(mode: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.CINATRA_RUNTIME_MODE;
+  process.env.CINATRA_RUNTIME_MODE = mode;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env.CINATRA_RUNTIME_MODE;
+    else process.env.CINATRA_RUNTIME_MODE = previous;
+  }
 }
 
 async function load(importModule?: (absPath: string) => Promise<unknown>) {
@@ -166,5 +224,128 @@ describe("the declared-module load road binds the trusted install anchor", () =>
     await expect(load(async () => ({ extensionTool: () => ({}) }))).rejects.toThrow(
       /not materialized at the pinned version/,
     );
+  });
+});
+
+/**
+ * THE SECOND ROAD (cinatra#3602): a package that lies in the source tree and
+ * was never materialized into the writable store. It is consulted ONLY when
+ * the store holds NO record for that package at all, only on a development
+ * installation, and only while the generated record's own version and the
+ * package.json lying on disk both carry the version the run is pinned to. The
+ * two path gates are the ones the store road passes, unchanged.
+ *
+ * The shared setup above builds a two-digest store, so every arm that reads
+ * the in-tree road empties it as its own first line; the arm that proves the
+ * store still wins deliberately keeps it.
+ */
+describe("the declared-module load road reads the source directory the generated manifest pins", () => {
+  it("an in-tree package whose store record is absent and whose generated version matches the pin loads its declared module", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage();
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    const seen: string[] = [];
+    await withRuntimeMode("development", () =>
+      load(async (absPath) => {
+        seen.push(absPath);
+        return { extensionTool: () => ({ ok: true }) };
+      }),
+    );
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain(path.join("fixture-tool-pack", "cinatra", "tools", "fixture-tool.mjs"));
+  });
+
+  it("a declared path that escapes the source directory is refused", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage({ moduleEscapesTheTree: true });
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    const seen: string[] = [];
+    await expect(
+      withRuntimeMode("development", () =>
+        load(async (absPath) => {
+          seen.push(absPath);
+          return { extensionTool: () => ({}) };
+        }),
+      ),
+    ).rejects.toThrow(/resolves outside the calling extension's own tree/);
+    expect(seen).toEqual([]);
+  });
+
+  it("a generated version that is not the pinned version is refused", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage();
+    generatedRecord({ version: "9.9.9", sourceDir: pack.sourceDir });
+    await expect(
+      withRuntimeMode("development", () => load(async () => ({ extensionTool: () => ({}) }))),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+  });
+
+  it("a generated record with no version is refused", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage();
+    generatedRecord({ version: null, sourceDir: pack.sourceDir });
+    await expect(
+      withRuntimeMode("development", () => load(async () => ({ extensionTool: () => ({}) }))),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+  });
+
+  it("a generated version padded with whitespace is not the pinned version and is refused", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage();
+    generatedRecord({ version: ` ${PINNED} `, sourceDir: pack.sourceDir });
+    await expect(
+      withRuntimeMode("development", () => load(async () => ({ extensionTool: () => ({}) }))),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+  });
+
+  it("an on-disk package.json whose name differs is refused", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage({ name: "@fixture-scope/another-fixture-pack" });
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    await expect(
+      withRuntimeMode("development", () => load(async () => ({ extensionTool: () => ({}) }))),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+  });
+
+  it("an on-disk package.json whose version differs is refused", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage({ version: "9.9.9" });
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    await expect(
+      withRuntimeMode("development", () => load(async () => ({ extensionTool: () => ({}) }))),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+  });
+
+  it("a present store record remains the only road", async () => {
+    // The shared two-digest store STANDS, and the anchor binds neither digest.
+    const pack = await sourceTreePackage();
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    anchors.push({ version: PINNED, digest: "cccccccccccc", kind: "agent" });
+    const seen: string[] = [];
+    await expect(
+      withRuntimeMode("development", () =>
+        load(async (absPath) => {
+          seen.push(absPath);
+          return { extensionTool: () => ({}) };
+        }),
+      ),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+    expect(seen).toEqual([]);
+  });
+
+  it("outside a development installation the in-tree road is not consulted", async () => {
+    storeRecords.length = 0;
+    const pack = await sourceTreePackage();
+    generatedRecord({ version: PINNED, sourceDir: pack.sourceDir });
+    const seen: string[] = [];
+    await expect(
+      withRuntimeMode("production", () =>
+        load(async (absPath) => {
+          seen.push(absPath);
+          return { extensionTool: () => ({}) };
+        }),
+      ),
+    ).rejects.toThrow(/not materialized at the pinned version/);
+    expect(seen).toEqual([]);
   });
 });

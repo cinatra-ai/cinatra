@@ -37,6 +37,7 @@ import {
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
 import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
+import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
 import {
   ArtifactAdmissionRefusal,
   resolveArtifactDependencyAdmission,
@@ -177,6 +178,9 @@ async function runDataTool(
  * the types it declares as dependencies, the review-gate filing, and the clock.
  * The run's identity rides in the envelope and in those bindings, never into
  * the module's input — `dispatchExtensionTool` refuses a call that tries to.
+ * The fifth port, `objects` (cinatra#3089), reads the objects of this run's own
+ * lineage and saves records of the types the caller's declared artifact
+ * dependencies own, through the host's own objects save, the run bound here.
  */
 async function runExtensionTool(
   context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
@@ -203,6 +207,13 @@ async function runExtensionTool(
         runArtifactRead(context, { ...input, tool: "artifact_content_read", input: request }),
     },
     clock: { now: () => new Date() },
+    objects: createExtensionObjectsPort({
+      packageName: context.packageName,
+      packageVersion: context.packageVersion,
+      cinatra: context.cinatra,
+      run: input.run,
+      actor: input.actor,
+    }),
   };
   return dispatchExtensionTool({
     packageName: context.packageName,
@@ -222,6 +233,7 @@ async function runArtifactRead(
     packageName: context.packageName,
     packageVersion: context.packageVersion,
     cinatra: context.cinatra,
+    orgId: input.run.orgId,
   });
   const ctx = {
     admission,
