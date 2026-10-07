@@ -1899,6 +1899,24 @@ function ReviewTargetIsland({
   }
 
   const frame = useRef<HTMLIFrameElement | null>(null);
+  const palette = useLifecycleCardColorScheme();
+  const previousPalette = useRef(palette);
+  const announcePalette = useCallback(() => {
+    const current = frame.current;
+    if (!current?.contentWindow || palette === null) return;
+    // Kept beside the sender, like the height message above; the DOM tests pin
+    // this fixed shape to the island listener. No selector or grant crosses.
+    current.contentWindow.postMessage(
+      { type: "cinatra.review-island.palette", scheme: palette },
+      new URL(current.src).origin,
+    );
+  }, [palette]);
+  useEffect(() => {
+    if (previousPalette.current === palette) return;
+    previousPalette.current = palette;
+    announcePalette();
+  }, [palette, announcePalette]);
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       // ONLY THIS FRAME'S OWN DOCUMENT. The island is same-origin, so the origin
@@ -1980,6 +1998,7 @@ function ReviewTargetIsland({
         }`}
         style={{ height }}
         onLoad={(event) => {
+          announcePalette();
           const reading = islandReading(event.currentTarget);
           setLoad((current) =>
             current.identity === identity

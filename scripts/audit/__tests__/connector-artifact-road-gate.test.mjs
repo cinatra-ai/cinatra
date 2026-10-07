@@ -389,8 +389,12 @@ describe("test of record: the connector artifact roads over the real tree", () =
     expect(removedByProblems(committed)).toEqual([]);
   });
 
-  it("exactly the four roads of today", () => {
-    expect(Object.keys(live.roads)).toHaveLength(4);
+  it("exactly the three roads of today", () => {
+    expect(Object.keys(live.roads)).toHaveLength(3);
+  });
+
+  it("the blog-routing capability reaches no creating module", () => {
+    expect(Object.keys(live.roads).filter((k) => k.includes(":blog-routing ::"))).toEqual([]);
   });
 
   it("the connector handler reaches no creating module", () => {

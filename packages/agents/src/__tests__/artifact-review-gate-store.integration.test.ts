@@ -212,28 +212,38 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // PIN — the emitting gate.
   // -------------------------------------------------------------------------
-  it("PIN: emits a pending gate with the canonical frozen target set", async () => {
+  it("PIN: emits a pending singleton gate and deduplicates identical pins", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    const a1 = `art-${randomUUID()}`;
     const a2 = `art-${randomUUID()}`;
-    // Deliberately UNSORTED + duplicated on input — emit canonicalizes + dedupes.
+    // Repeated identical pins describe one artifact revision, not another target.
     const emit = await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,
       reviewTaskId,
       targets: [
         { artifactId: a2, representationRevisionId: "rev-2" },
-        { artifactId: a1, representationRevisionId: "rev-1" },
         { artifactId: a2, representationRevisionId: "rev-2" },
       ],
     });
     expect(emit.idempotent).toBe(false);
-    expect(emit.targets).toHaveLength(2); // deduped
+    expect(emit.targets).toEqual([{ artifactId: a2, representationRevisionId: "rev-2" }]);
 
     const pinned = await gateStore.readGatePinnedTargets(runId, reviewTaskId);
     expect(pinned.status).toBe("pending");
     const state = await gateStore.readReviewGateState(runId, reviewTaskId);
     expect(state.status).toBe("pending");
+  });
+
+  it("PIN: refuses a new combined gate without storing a partial singleton", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    await expect(gateStore.emitArtifactReviewGate({
+      runId, orgId: ORG, reviewTaskId,
+      targets: [
+        { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" },
+        { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" },
+      ],
+    })).rejects.toMatchObject({ code: "invalid-targets" });
+    expect(await gateStore.readReviewGate(runId, reviewTaskId)).toBeNull();
   });
 
   it("PIN: re-emit of the SAME set is idempotent; a DIFFERENT set fails closed", async () => {
@@ -273,7 +283,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // DECIDE → CAS → AUDIT → RESUME-INTENT (the full path, real commit).
   // -------------------------------------------------------------------------
-  it("APPROVE: resolves the gate (CAS), writes audit rows with provenance, and enqueues ONE approve resume intent", async () => {
+  it("LEGACY APPROVE: a grandfathered combined gate settles as minted with both audits and one resume intent", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const aBuild = `art-${randomUUID()}`;
     const aRuntime = `art-${randomUUID()}`;
@@ -281,7 +291,18 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       { artifactId: aBuild, representationRevisionId: "rev-b" },
       { artifactId: aRuntime, representationRevisionId: "rev-r" },
     ];
+    // Historical gates remain valid decisions over their original whole set.
+    // Seed that already-minted row, rather than creating a new combined review.
+    const historicalGateId = randomUUID();
+    await client.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+         (id, run_id, org_id, review_task_id, status, pinned_targets)
+       VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`,
+      [historicalGateId, runId, ORG, reviewTaskId, JSON.stringify(targets)],
+    );
     const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+    expect(emit.idempotent).toBe(true);
+    expect(emit.gateId).toBe(historicalGateId);
 
     const ports = makeDecidePorts({
       provenance: {

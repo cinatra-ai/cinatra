@@ -151,6 +151,7 @@ type SeedData = {
      *  the card draws that review where the run is drawn rather than redrawing
      *  the question the run already moved past. */
     producedReviewPark?: boolean;
+    reviewTaskId?: string | null;
   } | null;
 };
 
@@ -190,6 +191,7 @@ function reviewSlotReader(
       awaiting: boolean;
       pending: boolean;
       producedReviewPark: boolean;
+      reviewTaskId?: string | null;
     } | null>)
   | undefined {
   const request = seedRequest(credential, runId);
@@ -203,9 +205,10 @@ function reviewSlotReader(
         awaiting?: boolean;
         pending?: boolean;
         producedReviewPark?: boolean;
+        reviewTaskId?: unknown;
       } | null;
     };
-    if (!data?.reviewGate) return null;
+    if (!data?.reviewGate || typeof data.reviewGate !== "object" || Array.isArray(data.reviewGate)) return null;
     return {
       ref: typeof data.reviewGate.ref === "string" && data.reviewGate.ref.length > 0
         ? data.reviewGate.ref
@@ -220,6 +223,14 @@ function reviewSlotReader(
       // tell a run parked on its own review from a run parked on a question, and
       // it drew the question.
       producedReviewPark: Boolean(data.reviewGate.producedReviewPark),
+      // The stable display identity accompanies the opaque ticket unchanged;
+      // absent identity never proves that a new seal names the same gate.
+      ...("reviewTaskId" in data.reviewGate ? {
+        reviewTaskId:
+          typeof data.reviewGate.reviewTaskId === "string" && data.reviewGate.reviewTaskId.trim().length > 0
+            ? data.reviewGate.reviewTaskId
+            : null,
+      } : {}),
     };
   };
 }

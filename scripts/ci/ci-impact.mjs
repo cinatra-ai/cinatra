@@ -3,14 +3,32 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+/**
+ * What the step tests in a real browser read: anything under tests/e2e/steps/
+ * but its Markdown, and the workflow file that runs them, so that editing the
+ * job runs it. A pull request that changes none of these skips the job.
+ */
+export const STEPS_BROWSER_WORKFLOW = ".github/workflows/build-image.yml";
+export const readsStepsBrowser = (path) =>
+  (path.startsWith("tests/e2e/steps/") && !path.endsWith(".md")) || path === STEPS_BROWSER_WORKFLOW;
+
 export function selectCiImpact({ event, draft = false, files }) {
   const all = { unit: true, runtime: true, notifications: true, agents: true };
   const none = { unit: false, runtime: false, notifications: false, agents: false };
   let selected = { ...all };
   let reason = "non-PR events always retain every gate";
+  // The step tests in a real browser follow their own inputs, never the
+  // full-gates fallback below: most pull requests select every other gate.
+  let stepsBrowser = true;
+  let stepsBrowserReason = reason;
   if (event === "pull_request" && Array.isArray(files) && files.length > 0 && files.every((p) => typeof p === "string" && p.length > 0)) {
     selected = { ...none };
     reason = "only documented test or documentation paths changed";
+    const stepsInput = files.find(readsStepsBrowser);
+    stepsBrowser = stepsInput !== undefined;
+    stepsBrowserReason = stepsBrowser
+      ? `${stepsInput} changed`
+      : `no change under tests/e2e/steps/ (Markdown aside) or to ${STEPS_BROWSER_WORKFLOW}`;
     for (const path of files) {
       if (path.startsWith("docs/") || path.endsWith(".md")) continue;
       // These suites are independently wired, and are absent from the runtime
@@ -25,6 +43,7 @@ export function selectCiImpact({ event, draft = false, files }) {
     }
   } else if (event === "pull_request") {
     reason = "changed-file inventory missing or malformed; full gates";
+    stepsBrowserReason = reason;
   }
   return {
     skip: event === "pull_request" && (draft || !Object.values(selected).some(Boolean)),
@@ -33,7 +52,13 @@ export function selectCiImpact({ event, draft = false, files }) {
     skip_runtime: event === "pull_request" && (draft || !selected.runtime),
     skip_notifications: event === "pull_request" && (draft || !selected.notifications),
     skip_agents: !selected.agents,
+    skip_steps_browser: event === "pull_request" && (draft || !stepsBrowser),
     reason,
+    // Names why the step tests in a real browser run or skip. Like `reason`,
+    // it stays out of the job outputs: it can carry a changed file's name.
+    steps_browser_reason: event === "pull_request" && draft
+      ? "a draft pull request; the job runs once it is ready for review"
+      : stepsBrowserReason,
   };
 }
 
@@ -84,7 +109,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   const plan = selectCiImpact({ event: process.env.GITHUB_EVENT_NAME, draft: process.env.CI_PR_DRAFT === "true", files });
   for (const [key, value] of Object.entries(plan)) {
-    if (key !== "reason" && process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+    if (!key.endsWith("reason") && process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   }
   console.log(JSON.stringify(plan));
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `CI selection: ${JSON.stringify(plan)}\n`);

@@ -374,7 +374,9 @@ describe("the mount the suppression leans on", () => {
     const PAUSE_PLACEHOLDER_HOST = 'const conversationHostedPanel = ambientLifecycleHost === "chat_thread";';
     const PAUSE_PLACEHOLDER_USE = "conversationHostedPanel && pauseWithNothingToDraw && reviewStillReading;";
     const decisionLines = decision.split("\n");
-    const decided = decisionLines.filter((line) => line.trim() !== PAUSE_PLACEHOLDER_HOST).join("\n");
+    // Main's run-page rail refresh (#3943) is withheld inside the site widget: that one argument of its useRunReviewRailRefresh call is set aside by its exact text. It decides whether the page around the panel recomposes its rail, never the slot's ref, and any other reading of the host still turns this red.
+    const RAIL_REFRESH_HOST = 'refresh: ambientLifecycleHost === "site_widget" ? undefined : refreshReviewRail,';
+    const decided = decisionLines.filter((line) => line.trim() !== PAUSE_PLACEHOLDER_HOST && line.trim() !== RAIL_REFRESH_HOST).join("\n");
     expect(decided).not.toContain("site_widget");
     expect(decided).not.toContain("chat_thread");
     expect(decided).not.toContain("ambientLifecycleHost");

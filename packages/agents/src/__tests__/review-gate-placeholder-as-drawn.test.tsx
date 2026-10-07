@@ -90,10 +90,10 @@ describe("the working placeholder draws the ratified drawing's own reading", () 
     // ink token over an unspecified grey track ring".
     expect(arc.querySelectorAll("circle").length).toBe(0);
 
-    // Indigo, and spinning 1s linear — the accent token, not the ink or mustard
+    // Indigo, and spinning 1s linear — main's palette-invariant indigo-ink (#3950), not the ink or mustard
     // one the placeholder used to wear.
     const arcCls = arc.getAttribute("class") ?? "";
-    expect(arcCls).toContain("text-primary");
+    expect(arcCls).toMatch(/\btext-indigo-ink\b/);
     expect(arcCls).toContain("animate-spin");
     expect(arcCls).not.toContain("mustard");
 
