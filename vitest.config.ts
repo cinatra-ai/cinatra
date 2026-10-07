@@ -503,7 +503,7 @@ export default defineConfig({
       // database, `server-only` or Playwright import so these arms run in the
       // ordinary node unit tier, and so a reader can re-run the coverage this
       // suite claims. Everything under tests/e2e/ stays out of the tier except
-      // this glob and the one below it.
+      // this glob and the two below it.
       "tests/e2e/chat-hitl-held-turn/__tests__/**/*.test.ts",
       // `tests/e2e/open-registration.ts` is the shared step every harness runs
       // before it mints a second account, now that a fresh instance keeps
@@ -512,6 +512,13 @@ export default defineConfig({
       // suite runs on, so its arms run here in the ordinary node unit tier
       // (`pg` is mocked; no live database is involved).
       "tests/e2e/__tests__/**/*.test.ts",
+      // `tests/e2e/steps/` holds the maintained steps the suites and the picture
+      // rounds drive the product through: signing in through the page, the island
+      // wait, the run watch, the count reading and navigation. Each step's arms run
+      // here against a page double over a local fixture app, so no browser and no
+      // live stack is needed (`E2E_STEPS_UNIT_BROWSER=1` drives a real browser over
+      // the same fixture pages as well).
+      "tests/e2e/steps/__tests__/**/*.test.mjs",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a
@@ -546,6 +553,8 @@ export default defineConfig({
       "scripts/audit/__tests__/wordpress-fixture-pins-gate.test.mjs",
       "scripts/audit/__tests__/wp-gateway-capture-freshness.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
+      // Dependency-free detector/fan-in feedback is run by the same dedicated node:test CI step.
+      "scripts/ci/__tests__/ci-impact.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
       "scripts/audit/__tests__/workspace-deps-resolve.test.mjs",

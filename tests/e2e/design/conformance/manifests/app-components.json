@@ -1,8 +1,28 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-components.html",
-  "contentHash": "sha256:a265d1b3e7a7e24681604659d88f91d503a65dad8e028f2069ab65d728b6acaf",
+  "contentHash": "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c",
   "surfaces": [
+    {
+      "id": "toast",
+      "fields": [
+        {
+          "field": "message",
+          "source": "toast.message"
+        }
+      ],
+      "actions": [
+        {
+          "action": "copy-message",
+          "outcome": "message-copied"
+        },
+        {
+          "action": "close-toast",
+          "outcome": "toast-dismissed"
+        }
+      ],
+      "states": []
+    },
     {
       "id": "breadcrumb-entity-resolution",
       "fields": [

@@ -60,6 +60,21 @@
 //        correspondingly smaller than it was first written to be.
 //    The edit was reverted after the reading; badge.tsx is byte-identical to
 //    the base commit in this leg's diff.
+//
+// 3. LEG 2 RE-MEASURED THAT COUNT, and it has moved. The same throwaway edit,
+//    run on THIS head, drifts SIX vendored copies rather than five: the
+//    vendoring provenance gate
+//    (`node scripts/extensions/vendor-extension-primitives.mjs --check`)
+//    answers PROVENANCE DRIFT and names six `badge.tsx` copies under
+//    `/extensions/`. Leg 1's reading is left above in its own words rather
+//    than rewritten, because it was correct when it was taken; six is the
+//    number this leg builds against, and it is the number the seam recipe at
+//    the end of src/app/globals.css states. The boundary the count measures
+//    did not change — it only got wider, which is the direction that makes
+//    the seam MORE necessary, not less.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
@@ -73,6 +88,31 @@ function renderBadge(
 ) {
   const { container } = render(<Badge variant={variant}>{children}</Badge>);
   return container.querySelector('[data-slot="badge"]') as HTMLElement;
+}
+
+// Resolved from the vitest root (the repository root), not from
+// import.meta.url: the file is transformed, so its module URL is not a file URL
+// and cannot be turned into a path.
+function globals(): string {
+  return readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+}
+
+/**
+ * The brace depth a rule opens at, counted over the whole file with comments
+ * stripped. Depth 0 is top level — outside every `@layer` — which is what makes
+ * an unlayered rule beat Tailwind's `layer(utilities)` import without an
+ * `!important`.
+ */
+function depthOfRule(marker: string): number {
+  const source = globals().replace(/\/\*[\s\S]*?\*\//g, "");
+  const index = source.indexOf(marker);
+  if (index === -1) return -1;
+  let depth = 0;
+  for (const character of source.slice(0, index)) {
+    if (character === "{") depth += 1;
+    else if (character === "}") depth -= 1;
+  }
+  return depth;
 }
 
 describe('clause: "9999px radius"', () => {
@@ -131,47 +171,114 @@ describe('clause: "icon-led"', () => {
   });
 });
 
-describe('RECORDED DEPARTURE (cross-repository follow-up): clause "line border"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (cross-repository follow-up): draws the neutral chip with the hairline stroke the chrome line names — clause "line border"', () => {
-    // RECORDED DEPARTURE — recorded, not fixed, and NOT because the clause is
-    // in doubt. See correction 2 in this file's header: `badge.tsx` is vendored
-    // into five separate repositories, and two standing guards fail the moment
-    // the host copy drifts from them. Editing it here would break
-    // `pnpm test:root` on a lane whose brief forbids writing under
-    // `/extensions/`, so the repair cannot be completed inside this leg's
-    // boundary.
-    //
-    // MEASURED: the base is `border border-transparent` — a 1px border box is
-    // reserved, but no variant except `outline` ever gives it a colour, so the
-    // `default`, `secondary`, `ghost` and `link` chips render with no visible
-    // stroke at all. The chrome line states "line border" for the family.
-    //
-    // FOLLOW-UP (leg 2, as a coordinated cross-repository change, NOT a host
-    // edit): give `secondary` the `border-line` hairline, then re-run
-    // scripts/extensions/vendor-extension-primitives.mjs to re-vendor the packs
-    // in their own repositories and land each of those changes there before the
-    // host edit merges — the provenance case named in this file's header is the
-    // one gate that fails, and it fails for exactly as long as a consumer is
-    // still pinned at the pre-change copy. The cinatra#1014 guard in
-    // packages/connectors/src/__tests__/connector-badge.test.ts is NOT part of
-    // that follow-up: it was measured green against this very edit, because it
-    // pins the success and destructive strings and this clause changes neither.
-    const el = renderBadge("secondary");
-    expect(el.className).toMatch(/(^|\s)border-line(\s|$)/);
+describe('clause: "line border"', () => {
+  // FIXED ON THE DOM SEAM, not in `badge.tsx`, for the boundary reason
+  // correction 2 in this file's header measures: the primitive is vendored into
+  // six extension packages in their own repositories behind a provenance gate
+  // that fails the moment the host copy drifts. A scope on the DOM seam at the
+  // end of src/app/globals.css reaches the host copy and every vendored copy
+  // alike, by containment, and changes no file that gate reads. It is the same
+  // road leg 1 took for the card corner, in the same file.
+  //
+  // MEASURED BEFORE: the base is `border border-transparent` — a 1px border box
+  // is reserved, but no variant except `outline` ever gives it a colour, so the
+  // neutral chip the chrome line describes rendered with no visible stroke at
+  // all. The fix is therefore a colour and not a reflow.
+  it("strokes the neutral chip with the hairline the chrome line names", () => {
+    expect(globals()).toMatch(
+      /\[data-slot="badge"\]\[data-variant="secondary"\]\[class~="border-transparent"\]\s*\{\s*border-color:\s*var\(--line\);/,
+    );
   });
 
-  it("reserves the border box on every variant, so the follow-up is a colour and not a layout change", () => {
-    // Passes today. Recorded alongside the failure above because it is the
-    // reason that fix cannot reflow the chip: the 1px box is already there.
+  it("supplies the primitive's default stroke and never overrides a call site's own", () => {
+    // THE SEAM IS UNLAYERED, so it beats a call site's own `border-*` utility
+    // unless it declines to match. `border-transparent` is the token the base
+    // recipe spells, and `cn()` is tailwind-merge: a caller that states a
+    // border colour is in the same conflict group, so the primitive's token is
+    // REMOVED and only the caller's colour is left on the element. Requiring
+    // the token to still be present is therefore an exact reading of "this chip
+    // asked for no stroke of its own" — the same discriminator the table seam
+    // uses for padding.
+    //
+    // MEASURED, at a real call site on this head:
+    // packages/objects/src/screens/sync-adapter-settings-tab.tsx draws its
+    // Enabled chip `variant="secondary" className="border-success/30 ..."`.
+    // Without this arm the seam repainted that success stroke neutral.
+    expect(globals()).toContain(
+      '[data-slot="badge"][data-variant="secondary"][class~="border-transparent"]',
+    );
+    const plain = renderBadge("secondary").className.split(/\s+/);
+    expect(plain, "the untouched chip still carries the primitive's token").toContain(
+      "border-transparent",
+    );
+    cleanup();
+    const { container } = render(
+      <Badge variant="secondary" className="border-success/30 bg-success/10">
+        Enabled
+      </Badge>,
+    );
+    const overridden = (
+      container.querySelector('[data-slot="badge"]') as HTMLElement
+    ).className.split(/\s+/);
+    expect(
+      overridden,
+      "a caller's own border colour must drop the token, so the seam declines",
+    ).not.toContain("border-transparent");
+    expect(overridden).toContain("border-success/30");
+  });
+
+  it("scopes the stroke to the chip the chrome line describes", () => {
+    // `--secondary` resolves to the surface-muted the same line names, so
+    // `secondary` IS that chip. The `default` chip is a solid indigo fill and
+    // the `ghost` and `link` chips are chromeless by their own recipes; the
+    // status variants take their stroke from their own status colour under the
+    // V section, which is the StatusPill primitive's clause and is graded there.
+    const source = globals();
+    expect(source).toContain(
+      '[data-slot="badge"][data-variant="secondary"][class~="border-transparent"]',
+    );
+    for (const variant of ["default", "ghost", "link"]) {
+      expect(
+        source,
+        `the seam strokes the ${variant} chip, which the chrome line does not draw`,
+      ).not.toContain(`[data-slot="badge"][data-variant="${variant}"]`);
+    }
+    expect(renderBadge("secondary").getAttribute("data-variant")).toBe("secondary");
+  });
+
+  it("states the stroke where the cascade lets it win, with no !important", () => {
+    expect(depthOfRule('[data-slot="badge"][data-variant="secondary"]')).toBe(0);
+    const source = globals();
+    const rule = source.slice(
+      source.indexOf('[data-slot="badge"][data-variant="secondary"]'),
+    );
+    expect(rule.slice(0, rule.indexOf("}"))).not.toContain("!important");
+  });
+
+  it("reserves the border box on every variant, so the seam is a colour and not a layout change", () => {
+    // The 1px box is already there on every variant, which is why stating the
+    // colour cannot reflow a chip by a pixel.
     for (const variant of ["default", "secondary", "ghost", "link"] as const) {
       expect(renderBadge(variant).className).toContain("border border-transparent");
       cleanup();
     }
+  });
+
+  it("leaves the vendored primitive byte-identical to its registry source", () => {
+    // The reason the recipe is a scope and not a class, held as a test: the
+    // moment `border-line` is spelled in badge.tsx, six extension repositories
+    // drift from it and the provenance gate
+    // (scripts/extensions/vendor-extension-primitives.mjs --check) fails until
+    // every one of them has re-vendored and its pin has been raised. The
+    // cinatra#1014 guard in
+    // packages/connectors/src/__tests__/connector-badge.test.ts pins the
+    // success and destructive strings, which this clause does not touch either.
+    const source = readFileSync(
+      join(process.cwd(), "src/components/ui/badge.tsx"),
+      "utf8",
+    );
+    expect(source).toContain("border border-transparent");
+    expect(source).not.toContain("border-line");
   });
 });
 

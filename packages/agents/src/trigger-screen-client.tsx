@@ -26,7 +26,21 @@ import { format } from "date-fns";
 import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
+import { buildAgentPackageBasePath } from "@/lib/agent-url";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+// THE TIMEZONE FIELD'S ONE RESOLUTION (cinatra#3142). The value and the option
+// list used to be resolved here, independently, with nothing tying them
+// together — which is how both Timezone controls came to draw empty. The
+// invariant (the bound value is always a member of the list beneath it), the
+// non-silent degrade, and the drawing's "~8" size rule for the select family
+// all live in that one module now, so neither call site below can restate them
+// differently.
+import {
+  readBrowserTimezone,
+  readSupportedTimezones,
+  resolveTimezoneField,
+} from "./trigger-timezone";
+import { TimezoneField } from "./timezone-field";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
@@ -45,6 +59,30 @@ import {
   type RecurringConfig,
   type RecurringFrequency,
 } from "./trigger-recurrence";
+
+/**
+ * The repeat rows this form draws, by the names `RecurringConfig` gives them
+ * (cinatra#2934, repaired after the picture leg).
+ *
+ * §VI: "There is no raw cron field: the builder's selections are what the reader
+ * sees and confirms." So a described repeat lands in these selections — the ones
+ * the person can see and correct — and the cron is derived from them by the same
+ * `buildCron` the form's own controls use. The list is exported so the bound
+ * screen's row descriptor and this form cannot drift apart under a test.
+ */
+export const SCHEDULE_RECURRENCE_ROWS = [
+  "frequency",
+  "interval",
+  "weekdays",
+  "dayOfMonth",
+  "monthlyMode",
+  "nthWeek",
+  "monthlyWeekday",
+  "quarterAnchor",
+  "yearlyMonth",
+  "hour",
+  "minute",
+] as const;
 
 // -----------------------------------------------------------------------------
 // Schema
@@ -232,6 +270,12 @@ export function scheduleFormDefaults(
 export type TriggerScreenClientProps = {
   agentId: string;
   instanceId: string;
+  /**
+   * The scope base the run is read under (cinatra#3693), so the return to the
+   * run after **Run right after setup** stays in the run's scope. Absent on
+   * the bare route.
+   */
+  scopeBase?: string | null;
   templateId: string;
   isAdmin?: boolean;
   /** The run this screen's schedule belongs to, when one exists (cinatra#2933). */
@@ -287,7 +331,7 @@ export type TriggerScreenClientProps = {
   /**
    * THE READ-ONLY READING (cinatra#2980).
    *
-   * design@fe2182547d4a `specs/app-components.html` § "Standard scheduling
+   * design@c73c68f5e39e `specs/app-components.html` § "Standard scheduling
    * step", the "Configured schedule step" reading: "Once a *Run right after
    * setup* or *Schedule for later* schedule has fired it cannot be changed any
    * more: the form stays as a **read-only** reading with no controls at all."
@@ -340,21 +384,11 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
 
-  const browserTz = useMemo(() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    } catch {
-      return "UTC";
-    }
-  }, []);
+  const browserTz = useMemo(() => readBrowserTimezone(), []);
 
-  const allTimezones = useMemo(() => {
-    try {
-      return Intl.supportedValuesOf("timeZone") as string[];
-    } catch {
-      return ["UTC"];
-    }
-  }, []);
+  // `null` — not a one-entry list — when the platform told us nothing, so the
+  // render can say so instead of degrading in silence.
+  const supportedTimezones = useMemo(() => readSupportedTimezones(), []);
 
   // THE ROW THIS FORM OPENS ON (cinatra#2936). Not a default of this form's:
   // the two inputs go to the runner's own decision and the answer comes back as
@@ -393,6 +427,55 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
 
   const triggerType = watch("triggerType");
   const timezone = watch("timezone");
+
+  // ONE resolution for both Timezone controls (cinatra#3142). The value handed
+  // to a control is always a member of the list rendered beneath it — including
+  // when the platform's zone list could not be read, and including a bound
+  // value of the empty string, which `??` never coalesced.
+  const timezoneField = useMemo(
+    () =>
+      resolveTimezoneField({
+        bound: timezone,
+        browserTimezone: browserTz,
+        supported: supportedTimezones,
+      }),
+    [timezone, browserTz, supportedTimezones],
+  );
+
+  // THE FIELD HOLDS WHAT THE CONTROL DRAWS (cinatra#3142). The resolution above
+  // decides what a reader SEES; this writes that same zone back into the form,
+  // so what is submitted cannot differ from what was read before Continue. It
+  // matters twice over: a bound empty string (which an applied suggestion can
+  // set) draws the browser's zone while the schema's min(1) refuses the submit,
+  // and a bound run of spaces draws the browser's zone while passing that check
+  // and persisting the blank. The write converges in one pass -- the resolved
+  // value is non-blank, so re-resolving it returns itself -- and it never
+  // overwrites a zone the person chose, because a chosen zone already resolves
+  // to itself.
+  useEffect(() => {
+    if (timezone === timezoneField.value) return;
+    setValue("timezone", timezoneField.value);
+  }, [timezone, timezoneField.value, setValue]);
+
+  /**
+   * The Timezone control, drawn once for the scheduled block and once for the
+   * recurring one. What it draws lives in `TimezoneField` — one render for both
+   * call sites, and the same render a conformance fixture mounts — and what it
+   * commits is this form's business: the zone, and the block that owns it.
+   */
+  const renderTimezoneControl = (
+    controlId: "timezone-scheduled" | "timezone-recurring",
+    selects: "scheduled" | "recurring",
+  ) => (
+    <TimezoneField
+      id={controlId}
+      field={timezoneField}
+      onValueChange={(v) => {
+        setValue("timezone", v);
+        setValue("triggerType", selects);
+      }}
+    />
+  );
   const scheduledAtValue = (watch as (n: string) => string)("scheduledAt") ?? "";
 
   // THE "RUN AT" FIELD, ON THE APP'S OWN CHROME (cinatra#3182 item 6). The
@@ -452,25 +535,54 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // here too. Standalone use (props.embeddedAsRenderer not set) ignores this
   // path entirely; the local handlePromptSubmit is the only setValue source.
   const aiSuggestions = props.aiSuggestions;
+  // ONE APPLICATION, TWO SOURCES (cinatra#2934, lifecycle-b W5c). The parent's
+  // `aiSuggestions` prop and this screen's own window write the same fields the
+  // same way, so a described change lands identically whichever road it took.
+  // No fork: the two callers share this function rather than each writing the
+  // form themselves.
+  const applyScheduleValues = useCallback(
+    (values: Record<string, unknown>) => {
+      const sv = setValue as (field: string, value: string) => void;
+      if (typeof values.triggerType === "string") {
+        setValue("triggerType", values.triggerType as FormValues["triggerType"]);
+      }
+      if (typeof values.scheduledAt === "string") {
+        // Normalize to YYYY-MM-DDTHH:mm (strip seconds/timezone that may be appended).
+        const normalized = values.scheduledAt.replace(" ", "T").substring(0, 16);
+        sv("scheduledAt", normalized);
+      }
+      if (typeof values.timezone === "string") {
+        sv("timezone", values.timezone);
+      }
+      if (typeof values.cronExpression === "string") {
+        sv("cronExpression", values.cronExpression);
+        const parsed = parseCronToRecurring(values.cronExpression);
+        if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+      }
+      // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
+      // (`updateRecurring`): the selections move and the cron is rebuilt from
+      // them, so what is armed later is what the person can read now.
+      const patch: Record<string, unknown> = {};
+      for (const row of SCHEDULE_RECURRENCE_ROWS) {
+        if (values[row] !== undefined) patch[row] = values[row];
+      }
+      if (Object.keys(patch).length > 0) {
+        setRecurring((prev) => {
+          const next = { ...prev, ...(patch as Partial<RecurringConfig>) };
+          setValue("cronExpression" as never, buildCron(next) as never);
+          return next;
+        });
+        // A repeat described without naming the kind IS the recurring row; a
+        // message that named one keeps the one it named.
+        if (typeof values.triggerType !== "string") setValue("triggerType", "recurring");
+      }
+    },
+    [setValue],
+  );
   useEffect(() => {
     if (!props.embeddedAsRenderer || !aiSuggestions) return;
-    const sv = setValue as (field: string, value: string) => void;
-    if (typeof aiSuggestions.triggerType === "string") {
-      setValue("triggerType", aiSuggestions.triggerType as FormValues["triggerType"]);
-    }
-    if (typeof aiSuggestions.scheduledAt === "string") {
-      const normalized = aiSuggestions.scheduledAt.replace(" ", "T").substring(0, 16);
-      sv("scheduledAt", normalized);
-    }
-    if (typeof aiSuggestions.timezone === "string") {
-      sv("timezone", aiSuggestions.timezone);
-    }
-    if (typeof aiSuggestions.cronExpression === "string") {
-      sv("cronExpression", aiSuggestions.cronExpression);
-      const parsed = parseCronToRecurring(aiSuggestions.cronExpression);
-      if (parsed) setRecurring(prev => ({ ...prev, ...parsed }));
-    }
-  }, [aiSuggestions, props.embeddedAsRenderer, setValue]);
+    applyScheduleValues(aiSuggestions);
+  }, [aiSuggestions, props.embeddedAsRenderer, applyScheduleValues]);
 
   // Initialize cronExpression on mount so it's valid before the user touches any recurring field.
   useEffect(() => {
@@ -480,67 +592,21 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
 
   const handlePromptSubmit = useCallback(async (prompt: string) => {
     if (!props.templateId) return;
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    void runWindow.send(prompt);
+    // THE FILL ROAD (cinatra#2934, lifecycle-b W5c). The plan: "The same lent
+    // fill control: the assistant fills the fields you can see with what you
+    // asked for, and you still press the screen's own button." The field-assist
+    // route and its second, hidden model are gone; the values come back from the
+    // run's own conversation with the assistant and are written into THIS form.
     setPromptPending(true);
     try {
-      const res = await fetch(
-        `/api/agents/builder/${encodeURIComponent(props.templateId)}/hitl-assist`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: ctrl.signal,
-          body: JSON.stringify({
-            prompt,
-            xRenderer: "trigger-config",
-            // cinatra#2933 - the run the screen belongs to, so the route asks
-            // the RUN's access instead of the platform tier.
-            ...(props.runId ? { runId: props.runId } : {}),
-            currentValue: {
-              triggerType: watch("triggerType"),
-              scheduledAt: (watch as (n: string) => string)("scheduledAt") ?? null,
-              timezone: watch("timezone"),
-              cronExpression: (watch as (n: string) => string)("cronExpression") ?? null,
-              now: new Date().toISOString(),
-            },
-            schemaProperties: ["triggerType", "scheduledAt", "timezone", "cronExpression"],
-            lastAssistantMessage:
-              [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
-          }),
-        },
-      );
-      if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-      const json = (await res.json()) as {
-        suggestions?: Record<string, unknown>;
-        message?: string | null;
-      };
-      const suggestions = json.suggestions ?? {};
-      // Immediately call setValue() on RHF fields — no preview step (by design).
-      const sv = setValue as (field: string, value: string) => void;
-      if (typeof suggestions.triggerType === "string") setValue("triggerType", suggestions.triggerType as FormValues["triggerType"]);
-      if (typeof suggestions.scheduledAt === "string") {
-        // Normalize to YYYY-MM-DDTHH:mm (strip seconds/timezone that LLM may append).
-        const normalized = suggestions.scheduledAt.replace(" ", "T").substring(0, 16);
-        sv("scheduledAt", normalized);
-      }
-      if (typeof suggestions.timezone === "string") sv("timezone", suggestions.timezone);
-      if (typeof suggestions.cronExpression === "string") {
-        sv("cronExpression", suggestions.cronExpression);
-        // Also sync the recurring UI controls so the dropdowns reflect the new schedule.
-        const parsed = parseCronToRecurring(suggestions.cronExpression);
-        if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
-      }
-      if (Object.keys(suggestions).length === 0) {
-        toast.error("No suggestions generated. Try describing the schedule you want, e.g. \"Every Monday at 9am\".");
-      }
-    } catch (err) {
-      console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
+      const effect = await runWindow.send(prompt);
+      // A turn that PRESSED writes no fields — see the note on the run page's
+      // own handler (cinatra#2934, convergence round 3).
+      if (effect.fill && !effect.acted) applyScheduleValues(effect.fill.values);
     } finally {
       setPromptPending(false);
     }
-  }, [props.templateId, runWindow, watch, setValue]);
+  }, [props.templateId, runWindow, applyScheduleValues]);
 
   function updateRecurring(patch: Partial<RecurringConfig>) {
     setValue("triggerType", "recurring");
@@ -606,7 +672,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         router.refresh();
         return;
       }
-      router.push(`/agents/${props.agentId}/${encodeURIComponent(props.instanceId)}`);
+      router.push(
+        `${buildAgentPackageBasePath(props.agentId, { scopeBase: props.scopeBase ?? null })}/${encodeURIComponent(props.instanceId)}`,
+      );
     });
   };
 
@@ -742,22 +810,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="timezone-scheduled" className="font-normal">Timezone</Label>
-                    <Select
-                      value={timezone ?? browserTz}
-                      onValueChange={(v) => {
-                        setValue("timezone", v);
-                        setValue("triggerType", "scheduled");
-                      }}
-                    >
-                      <SelectTrigger id="timezone-scheduled" className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allTimezones.map((tz) => (
-                          <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {renderTimezoneControl("timezone-scheduled", "scheduled")}
                   </div>
                 </div>
                 )}
@@ -984,22 +1037,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="timezone-recurring" className="font-normal">Timezone</Label>
-                    <Select
-                      value={timezone ?? browserTz}
-                      onValueChange={(v) => {
-                        setValue("timezone", v);
-                        setValue("triggerType", "recurring");
-                      }}
-                    >
-                      <SelectTrigger id="timezone-recurring" className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allTimezones.map((tz) => (
-                          <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {renderTimezoneControl("timezone-recurring", "recurring")}
                   </div>
                   <Input type="hidden" {...register("cronExpression" as never)} />
                   {errorBag.cronExpression?.message && (

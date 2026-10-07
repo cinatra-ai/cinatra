@@ -43,6 +43,7 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import type { ActorRoleHints } from "./auth-policy";
 import { deriveRunHitlContext } from "./hitl-context";
+import { isParkedOnProducedReview } from "./run-produced-review-hold";
 import { readAgentRunById, type AgentRunRecord } from "./store";
 import {
   AGENT_HITL_SCREEN_NONE,
@@ -106,6 +107,24 @@ export async function agentHitlScreenStateForRun(
   if (context.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) {
     return AGENT_HITL_SCREEN_NONE;
   }
+  // …AND SO DOES THE PANEL'S OTHER EXCLUSION (cinatra#3007). The condition above
+  // says the card's condition IS the panel's condition, and the panel grew a
+  // second exclusion this reader did not: a run held for the review of what it
+  // PRODUCED is parked in the same status while carrying the last question it
+  // was asked — a question the person already answered and the run already moved
+  // past. `deriveRunHitlContext` answers with that dead question, because the
+  // interrupt log is where it lives and nothing there says it was answered; the
+  // panel drops it from its own reading off the run's own row, and this reader
+  // did not, so the conversation kept drawing the answered ask above the run's
+  // slot as still asking, with a live forward control on it, for as long as the
+  // park lasted. Measured on the third capture: the screen still recorded
+  // `asking` 66 to 84 s after the run's review gate had been minted.
+  //
+  // THE ROW IS THE ANSWER, and it is the same row-grounded reading the park is
+  // written with — one function, beside the writer of the marker it reads, so
+  // the panel and this reader cannot drift into two ideas of what a park is. It
+  // costs no read: the record is already in hand.
+  if (isParkedOnProducedReview(run)) return AGENT_HITL_SCREEN_NONE;
   return {
     state: "asking",
     runId: run.id,

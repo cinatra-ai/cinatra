@@ -204,6 +204,13 @@ export default defineConfig({
       "@/components/ui/button": path.join(__dirname, "../../src/components/ui/button.tsx"),
       "@/lib/extension-accent": path.join(__dirname, "../../src/lib/extension-accent.ts"),
       "@/lib/extension-compat-badge": path.join(__dirname, "../../src/lib/extension-compat-badge.ts"),
+      // The card description plain-text projection (cinatra#3570) — a pure
+      // leaf module, mapped to real source so the package suites that mount the
+      // installed card resolve it.
+      "@/lib/extension-description-text": path.join(
+        __dirname,
+        "../../src/lib/extension-description-text.ts",
+      ),
       "@/lib/marketplace-detail-view": path.join(__dirname, "../../src/lib/marketplace-detail-view.ts"),
       // Pure vendor-byline resolver (cinatra#1528) — a leaf module (no heavy
       // deps), mapped to real source so the §I/§II byline tests exercise it.

@@ -19,8 +19,10 @@
 //   "padding 8px 12px 4px"
 //   "Always above its group, never indented to match its children."
 //
-// ONE DEPARTURE RECORDED, NOT FIXED — sidebar is beyond the first ten rows of
-// the issue's table. See the `RECORDED DEPARTURE` block. One conflict BETWEEN
+// LEG 2 (this file's current state). Leg 1 recorded one departure here as a
+// documented expected failure — the 56px rail. Leg 2 FIXES it in the primitive
+// and retires the record: the assertion is unchanged and now runs as a plain
+// regression test. See the `FIXED IN LEG 2` block. One conflict BETWEEN
 // the two sections is also recorded, in the last block.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
@@ -212,14 +214,16 @@ describe('clause: "brand head: fedora + wordmark"', () => {
   );
 });
 
-describe('RECORDED DEPARTURE (leg 2 follow-up): clause "collapses to 56px rail"', () => {
-  // DOCUMENTED EXPECTED FAILURE. The assertion below is unchanged and still
-  // runs: `it.fails` reports a pass only while the body throws, so the
-  // departure stays measured and the checklist stays green. The day the
-  // follow-up this departure names lands, this case stops throwing, the suite
-  // goes red, and the record must be retired with it.
-  it.fails('RECORDED DEPARTURE (leg 2 follow-up): collapses to the stated 56px rail — clause "collapses to 56px rail"', () => {
-    // RECORDED DEPARTURE — beyond the first ten rows of issue #3189's table.
+describe('FIXED IN LEG 2: clause "collapses to 56px rail"', () => {
+  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
+  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
+  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
+  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
+  // as a plain regression test: it fails on leg 1's head and passes here, and
+  // that is what retires the record. Leg 1's own reading is kept verbatim below
+  // so the checklist still says what was wrong and why the value is this one.
+  it('FIXED IN LEG 2: collapses to the stated 56px rail — clause "collapses to 56px rail"', () => {
+    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table.
     //
     // MEASURED: SIDEBAR_WIDTH_ICON is "3rem" = 48px, eight pixels under the
     // 56px the clause names. 56px is `3.5rem`, an exact step, so this is a

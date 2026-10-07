@@ -214,7 +214,7 @@ export async function insertNangoConnection(input: {
   connectorKey: string;
   connectionId: string;
   ownerUserId: string;
-}): Promise<NangoConnectionIdentity> {
+}): Promise<NangoConnectionIdentity & { created: boolean }> {
   const pool = await getPool();
   const inserted = await pool.query<RawRow>(
     `INSERT INTO ${TABLE}
@@ -231,7 +231,13 @@ export async function insertNangoConnection(input: {
       input.ownerUserId,
     ],
   );
-  if (inserted.rows[0]) return toIdentity(inserted.rows[0]);
+  // `created` tells the caller what THIS statement did (cinatra#3485 fix leg
+  // 5). The insert is atomic against the live-unique index, so a returned row
+  // is one this call put there and a conflict is one that was already
+  // standing. A caller that has to compensate for what it installed cannot
+  // read that off an earlier lookup: another request can insert between the
+  // two, and the caller would then take away a row it never wrote.
+  if (inserted.rows[0]) return { ...toIdentity(inserted.rows[0]), created: true };
   // Conflict path: return the existing live row.
   const existing = await pool.query<RawRow>(
     `SELECT ${COLUMNS} FROM ${TABLE}
@@ -245,12 +251,26 @@ export async function insertNangoConnection(input: {
         `but no live row found — concurrent soft-delete race; retry the connect flow.`,
     );
   }
-  return toIdentity(existingRow);
+  return { ...toIdentity(existingRow), created: false };
 }
 
-/** Soft-delete an identity row (next-resolution revocation reads live rows only). */
-export async function softDeleteNangoConnection(id: string): Promise<void> {
+/**
+ * Soft-delete an identity row (next-resolution revocation reads live rows only).
+ *
+ * `onlyWhile` is asked ONE LAST TIME with the query already prepared, and the
+ * row is left alone when it answers false (cinatra#3485 fix leg 5). A caller
+ * whose right to retire depends on state it does not own has to ask as late as
+ * it can: the pool is resolved before the question, so nothing else of this
+ * process runs between the answer and the write. What remains is the store's
+ * own window, which only a guard inside this one statement could close, and
+ * that would put the caller's own tables inside this file.
+ */
+export async function softDeleteNangoConnection(
+  id: string,
+  onlyWhile?: () => boolean,
+): Promise<void> {
   const pool = await getPool();
+  if (onlyWhile !== undefined && !onlyWhile()) return;
   await pool.query(
     `UPDATE ${TABLE} SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`,
     [id],

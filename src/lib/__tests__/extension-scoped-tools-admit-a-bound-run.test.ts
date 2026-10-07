@@ -1,12 +1,21 @@
 /**
  * THE PASSTHROUGH ADMITS THE CALLING EXTENSION'S OWN DECLARED TOOL
- * (cinatra#3525, the Cinatra half of the extension tool road).
+ * (cinatra#3525, the Cinatra half of the extension tool road) AND A RUN OF A
+ * PACKAGE-BOUND TEMPLATE (cinatra#2960, #3035).
  *
  * The allowlist carries the HOST's own generic names and no extension's: a
  * fixed step that has to run the calling extension's own decision code asks for
  * ONE generic name, and the host derives the calling extension and its pinned
  * version from the already-bound run context — never from a request field —
  * then resolves the asked-for name against THAT extension's own manifest.
+ *
+ * The seam one layer above `resolveRunExtensionContext`: the passthrough hands
+ * `dispatchExtensionScopedTool` the run row exactly as the creation primitives
+ * wrote it — `package_version` empty on every road but the request-time one —
+ * and the dispatch refused every packaged tool with "no one declaration to
+ * admit this call under". The last cases hold the dispatch to the run's
+ * TEMPLATE binding instead, and hold the refusal in place for a template bound
+ * to no package at all.
  *
  * The extension under test is a FIXTURE one: a fixture scope, never a real
  * organisation's slug, so nothing here names an extension, a table, a type or a
@@ -31,6 +40,14 @@ vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} })
 vi.mock("@cinatra-ai/registries", () => ({
   getAgentPackage: (...a: unknown[]) => getAgentPackage(...a),
 }));
+// THE DECLARATION PROBE. The dispatch reads the CALLER'S OWN declaration before
+// it reaches the host's generic names, so this file stubs the probe the way the
+// other passthrough suites do: the fixture pack below is not an installed one,
+// it therefore declares no passthrough tool of its own, and the generic
+// `extension_tool` arm is the one that answers these cases.
+vi.mock("@cinatra-ai/agents/installed-oas-path", () => ({
+  probeInstalledOasPathForRead: () => ({ path: null }),
+}));
 vi.mock("@/lib/verdaccio-config", () => ({ loadVerdaccioConfigForReads: async () => ({}) }));
 // Only the LOAD road is stubbed: the declaration parse, the name resolution,
 // the envelope rule and the port wiring below are the real ones. The refusal
@@ -47,6 +64,15 @@ const RUN = {
   runBy: "user-1",
   templateId: "tmpl-1",
   packageVersion: "1.2.3",
+};
+
+/** The run row as the creation primitives write it: no package version of its own. */
+const RUN_NO_OWN_VERSION = {
+  id: "run-1",
+  orgId: "org-1",
+  runBy: "user-1",
+  templateId: "tmpl-1",
+  packageVersion: null,
 };
 
 const REFUSED_UNRESOLVED = /resolves to no extension package at a pinned version/;
@@ -129,7 +155,16 @@ describe("dispatchExtensionScopedTool — extension_tool", () => {
     );
     expect(seen).toHaveLength(1);
     // EVERY PORT, and only the ports.
-    expect(Object.keys(seen[0]!.ports).sort()).toEqual(["artifacts", "clock", "data", "review"]);
+    expect(Object.keys(seen[0]!.ports).sort()).toEqual([
+      "artifacts",
+      "clock",
+      "data",
+      "objects",
+      "review",
+    ]);
+    const objects = seen[0]!.ports.objects as Record<string, unknown>;
+    expect(typeof objects.read).toBe("function");
+    expect(typeof objects.save).toBe("function");
     // THE RUN IDENTITY IS NOT A MODULE INPUT.
     expect(seen[0]!.input).toEqual({ kind: "one" });
     const values = Object.values(seen[0]!.input);
@@ -180,5 +215,130 @@ describe("dispatchExtensionScopedTool — extension_tool", () => {
     if (outcome.ok) return;
     expect(outcome.status).toBe(403);
     expect(outcome.error).toMatch(REFUSED_UNRESOLVED);
+  });
+
+  it("refuses the objects port to a module of a package that is no agent", async () => {
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: { kind: "connector", tools: [DECLARED] } } });
+    loadDeclaredToolModule.mockResolvedValue({
+      extensionTool: async (invocation: { ports: { objects: { save(r: unknown): unknown } } }) =>
+        invocation.ports.objects.save({ type: "@fixture-scope/fixture-artifacts:record", data: {} }),
+    });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    const outcome = await dispatchExtensionScopedTool({
+      tool: "extension_tool",
+      input: { name: "fixture_tool", input: {} },
+      run: RUN,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(403);
+    expect(outcome.error).toMatch(/^extension_tool: objects\.save: .* is no agent package/);
+  });
+});
+
+describe("dispatchExtensionScopedTool — whose declaration admits the call", () => {
+  beforeEach(() => {
+    query.mockReset();
+    getAgentPackage.mockReset();
+    // A manifest that declares NO tables: the admission is proven by the call
+    // reaching the extension-data tool's own refusal instead of the seam's.
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: {} } });
+  });
+
+  it("admits a run whose OWN column is empty but whose template is package-bound", async () => {
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    query.mockResolvedValue({
+      rows: [{ package_name: "@cinatra-ai/pipeline", package_version: "0.2.0" }],
+    });
+    const outcome = await dispatchExtensionScopedTool({
+      tool: "extension_data",
+      input: { table: "ext_pipeline_rows", operation: "select" },
+      run: RUN_NO_OWN_VERSION,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).not.toMatch(REFUSED_UNRESOLVED);
+    expect(outcome.error).toMatch(/declares no tables/);
+    // The manifest was read AT the template's bound version, never floating.
+    expect(getAgentPackage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        packageName: "@cinatra-ai/pipeline",
+        packageVersion: "0.2.0",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("still refuses a run whose template is bound to no package", async () => {
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    query.mockResolvedValue({ rows: [{ package_name: null, package_version: null }] });
+    const outcome = await dispatchExtensionScopedTool({
+      tool: "extension_data",
+      input: { table: "ext_pipeline_rows", operation: "select" },
+      run: RUN_NO_OWN_VERSION,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(403);
+    expect(outcome.error).toMatch(REFUSED_UNRESOLVED);
+    expect(getAgentPackage).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchExtensionScopedTool — a module's own refusal (cinatra#3847)", () => {
+  const PACK = "@fixture-scope/fixture-tool-pack";
+  const DECLARED = { name: "fixture_tool", module: "./cinatra/tools/fixture-tool.mjs" };
+  const SENTENCE = "fixture refusal: this module does not serve the kind the call names";
+
+  beforeEach(() => {
+    query.mockReset();
+    getAgentPackage.mockReset();
+    loadDeclaredToolModule.mockReset();
+    query.mockResolvedValue({ rows: [{ package_name: PACK }] });
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: { tools: [DECLARED] } } });
+  });
+
+  /** The declared module throws `thrown` from its own call. */
+  async function dispatchThrowing(thrown: unknown) {
+    loadDeclaredToolModule.mockResolvedValue({
+      extensionTool: async () => {
+        throw thrown;
+      },
+    });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    return dispatchExtensionScopedTool({
+      tool: "extension_tool",
+      input: { name: "fixture_tool", input: {} },
+      run: RUN,
+    });
+  }
+
+  it("answers a module's named refusal with the refusal status and the module's sentence", async () => {
+    const outcome = await dispatchThrowing(
+      Object.assign(new Error(SENTENCE), { name: "ExtensionToolCallRefusal" }),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      status: 403,
+      error: "extension_tool: `fixture_tool` refused the call: " + SENTENCE,
+    });
+  });
+
+  it("still answers a module that fails without refusing as a server error", async () => {
+    const outcome = await dispatchThrowing(new Error("fixture failure"));
+    expect(outcome).toEqual({ ok: false, status: 500, error: "fixture failure" });
+  });
+
+  it("answers a named refusal whose sentence breaks a bound as a server error, without the sentence", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sentence = "fixture refusal\nat the second line";
+    const outcome = await dispatchThrowing(
+      Object.assign(new Error(sentence), { name: "ExtensionToolCallRefusal" }),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(500);
+    expect(outcome.error).not.toContain(sentence);
+    expect(outcome.error).not.toContain("at the second line");
   });
 });

@@ -2,8 +2,8 @@
  * email-delivery-agent OAS — send-confirmation gated shape (cinatra#1961).
  *
  * Per the owner ruling 2026-07-22 (groganz), EVERY campaign send pauses at a
- * confirmation gate. The flow is start → prepare → confirmation_gate → send →
- * end: a read-only prepare step summarizes the pending send from the real
+ * confirmation gate. The flow is start → prepare → approval_gate → send →
+ * delivery_summary → end: a read-only prepare step summarizes the pending send from the real
  * campaign data, an InputMessageNode approval gate surfaces that summary, and
  * the send node (the unchanged #1946 primitive path) runs ONLY after the
  * operator approves. Trigger/wait components remain absent (TriggerWaitNode is
@@ -37,27 +37,29 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
     expect(errors).toEqual([]);
   });
 
-  it("control flow is start → prepare → confirmation_gate → send → end", () => {
+  it("control flow is start → prepare → approval_gate → send → delivery_summary → end", () => {
     const edges = (oas.control_flow_connections as Array<{
       from_node: { $component_ref: string };
       to_node: { $component_ref: string };
     }>).map((e) => `${e.from_node.$component_ref}->${e.to_node.$component_ref}`);
     expect(edges).toEqual([
       "start->prepare",
-      "prepare->confirmation_gate",
-      "confirmation_gate->send",
-      "send->end",
+      "prepare->approval_gate",
+      "approval_gate->send",
+      "send->delivery_summary",
+      "delivery_summary->end",
     ]);
   });
 
-  it("nodes is exactly [start, prepare, confirmation_gate, send, end]", () => {
+  it("nodes is exactly [start, prepare, approval_gate, send, delivery_summary, end]", () => {
     const nodes = (oas.nodes as Array<{ $component_ref: string }>).map(
       (n) => n.$component_ref,
     );
-    expect(nodes).toEqual(["start", "prepare", "confirmation_gate", "send", "end"]);
+    expect(nodes).toEqual(["start", "prepare", "approval_gate", "send", "delivery_summary", "end"]);
     const refs = Object.keys(oas.$referenced_components as Record<string, unknown>);
     expect(refs.sort()).toEqual([
-      "confirmation_gate",
+      "approval_gate",
+      "delivery_summary",
       "end",
       "prepare",
       "send",
@@ -65,7 +67,7 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
     ]);
   });
 
-  it("RESUME CANNOT SKIP THE GATE: the only control-flow edge into `send` is from confirmation_gate", () => {
+  it("RESUME CANNOT SKIP THE GATE: the only control-flow edge into `send` is from approval_gate", () => {
     // The owner ruling requires that the send never runs without an approval.
     // Structurally that means the gate is the sole predecessor of `send` — no
     // start->send / prepare->send bypass edge exists, so a resume lands at the
@@ -75,12 +77,12 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
       to_node: { $component_ref: string };
     }>;
     const intoSend = edges.filter((e) => e.to_node.$component_ref === "send");
-    expect(intoSend.map((e) => e.from_node.$component_ref)).toEqual(["confirmation_gate"]);
+    expect(intoSend.map((e) => e.from_node.$component_ref)).toEqual(["approval_gate"]);
   });
 
-  it("confirmation_gate is an InputMessageNode approval gate (requiresApproval + surfaceGateInputs + self-namespaced renderer)", () => {
+  it("approval_gate is an InputMessageNode approval gate (requiresApproval + surfaceGateInputs + self-namespaced renderer)", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
-    const gate = refs.confirmation_gate;
+    const gate = refs.approval_gate;
     expect(gate.component_type).toBe("InputMessageNode");
     const cin = ((gate.metadata as Record<string, unknown>).cinatra) as Record<string, unknown>;
     expect(cin.requiresApproval).toBe(true);
@@ -121,20 +123,20 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
       (e) =>
         (e.source_node as Record<string, unknown>)?.$component_ref === "prepare" &&
         e.source_output === "summary" &&
-        (e.destination_node as Record<string, unknown>)?.$component_ref === "confirmation_gate" &&
+        (e.destination_node as Record<string, unknown>)?.$component_ref === "approval_gate" &&
         e.destination_input === "summary",
     );
     expect(edge).toBeDefined();
   });
 
-  it("send ApiNode targets {{CINATRA_BASE_URL}}/api/llm-bridge with agent_id='email-delivery-agent' and max_steps=10", () => {
+  it("send ApiNode targets {{CINATRA_BASE_URL}}/api/llm-bridge with agent_id='email-delivery' and max_steps=10", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const send = refs.send;
     expect(send.component_type).toBe("ApiNode");
     expect(send.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
     expect(send.http_method).toBe("POST");
     const data = send.data as Record<string, unknown>;
-    expect(data.agent_id).toBe("email-delivery-agent");
+    expect(data.agent_id).toBe("email-delivery");
     expect(data.max_steps).toBe(10);
   });
 
@@ -192,7 +194,7 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
       return (
         dest === "end" &&
         e.destination_input === "userResponse" &&
-        (e.source_node as Record<string, unknown>)?.$component_ref === "confirmation_gate"
+        (e.source_node as Record<string, unknown>)?.$component_ref === "approval_gate"
       );
     });
     expect(userResponseEdge).toBeDefined();
@@ -216,13 +218,13 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
     ]);
   });
 
-  it("no FlowNode / TriggerWaitNode components remain; only Start/Api/InputMessage/End", () => {
+  it("no FlowNode / TriggerWaitNode components remain; only Start/Api/InputMessage/OutputMessage/End", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     for (const value of Object.values(refs)) {
       const ct = value.component_type as string;
       expect(ct).not.toBe("FlowNode");
       expect(ct).not.toBe("TriggerWaitNode");
-      expect(["StartNode", "ApiNode", "InputMessageNode", "EndNode"]).toContain(ct);
+      expect(["StartNode", "ApiNode", "InputMessageNode", "OutputMessageNode", "EndNode"]).toContain(ct);
     }
   });
 });

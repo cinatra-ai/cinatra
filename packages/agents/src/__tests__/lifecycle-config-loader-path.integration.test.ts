@@ -437,10 +437,34 @@ describe.skipIf(!HAS_DB)(
       // RECORD too and this case would stop isolating the lifecycle_config
       // projection it is about. Seed the record through the canonical primitive
       // so the ONLY drift under test is the NULL column below.
-      const { installExtensionManifest } = await import(
+      const { installExtensionManifest, transitionExtensionLifecycle } = await import(
         "@cinatra-ai/extensions/lifecycle-primitive"
       );
+      const { readInstalledExtensionsByPackageName } = await import(
+        "@cinatra-ai/extensions/canonical-store"
+      );
       const { randomUUID } = await import("node:crypto");
+      // …and the case makes THAT RECORD premise true on its own, whatever ran
+      // before it (cinatra#3589). It does not make the case standalone: the
+      // template id it asserts above is still the one the first case installs,
+      // exactly as it has always been. What changes here is only the canonical
+      // install record — the first case's real loader install now leaves a
+      // live canonical install record for this very package, and that record
+      // occupies the one identity slot the store keeps unique per
+      // (owner_level, owner_id, package_name), so the seed below would collide
+      // with it. Clear whatever canonical record this package already has in
+      // THIS suite's own schema first — through the store's own lifecycle
+      // primitive, never a hand-written statement, so the canonical
+      // reachability gate stays green — and then seed exactly as before, with
+      // the same arguments, so every reading after the seed is unchanged.
+      for (const priorRecord of await readInstalledExtensionsByPackageName(
+        WORDPRESS_AGENT_PACKAGE,
+      )) {
+        await transitionExtensionLifecycle(priorRecord.id, "uninstall", {
+          actor: { source: "worker" },
+          reason: "integration fixture — clear the prior canonical record before seeding the premise",
+        });
+      }
       await installExtensionManifest(
         {
           id: `iext_${randomUUID().slice(0, 12)}`,

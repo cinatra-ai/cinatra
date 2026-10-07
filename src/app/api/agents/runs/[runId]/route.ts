@@ -14,7 +14,10 @@ import {
 // the only consumer here — see the barrel's own note on why it is not
 // re-exported. The read runs AFTER the run has been authorized below, so it is
 // a plain run-scoped read behind this route's own door.
-import { readRunReviewSlot } from "@cinatra-ai/agents/artifact-review-gate-store";
+import {
+  isParkedOnProducedReview,
+  readRunReviewSlot,
+} from "@cinatra-ai/agents/artifact-review-gate-store";
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   authenticateWidgetConversationRequest,
@@ -128,7 +131,8 @@ async function seedResponse(
   // The card is a placeholder for the review screen while the agent works and
   // becomes that screen when the work opens one, so the run's own seed has to
   // carry the answer — the card must not have to ask a model, and a person must
-  // not have to ask for it in a new turn. Two values and nothing else:
+  // not have to ask for it in a new turn. The same read also carries the
+  // stable task identity used to refresh the run page's server-built rail:
   //
   //   `ref`      — the SERVER-MINTED opaque ticket for this run's own review
   //                gate, minted here exactly as the run screen mints it, from
@@ -139,6 +143,10 @@ async function seedResponse(
   //   `awaiting` — the run produced something whose review question is still
   //                open in the outbox. It is what holds the placeholder up
   //                between `completed` and the gate row existing.
+  //
+  //   `reviewTaskId` — stable display-refresh identity (#3942). A ref has a
+  //                    fresh nonce on every read; this id dedupes those reads.
+  //                    It is not an action reference or an authority token.
   //
   // An instance with no app secret cannot mint a ref; the field is then null and
   // the card draws its terminal rendering, which is the same answer this route
@@ -152,7 +160,21 @@ async function seedResponse(
   const reviewSlot = await readRunReviewSlot(run.id).catch(() => ({
     reviewTaskId: null,
     awaiting: false,
+    parkedOnProducedReview: false,
   }));
+  // AND THE PARK IS READ OFF THE RUN ROW THIS RESPONSE IS ABOUT (cinatra#3046).
+  //
+  // NOT from the slot, though the slot answers it too, and the difference is a
+  // real seam rather than a preference. This body serves ONE snapshot of the run
+  // — its `status` and its gate context come from the row read above — and the
+  // slot is a SECOND read taken a moment later. A run released in between would
+  // be serialized with the parked status and the answered gate from the first
+  // read beside "not parked" from the second, which is the exact combination that
+  // puts a live Continue back on a question the run has moved past.
+  //
+  // It also means a slot read that THREW costs the card the two gate facts (which
+  // is the fail-soft this route always had) and none of this one.
+  const producedReviewPark = isParkedOnProducedReview(run);
   const reviewGateRef = reviewSlot.reviewTaskId
     ? encodeLifecycleGateRef({ runId: run.id, reviewTaskId: reviewSlot.reviewTaskId })
     : null;
@@ -210,7 +232,22 @@ async function seedResponse(
       createdAt: m.createdAt.toISOString(),
     })),
     hitlContext,
-    reviewGate: { ref: reviewGateRef, awaiting: reviewSlot.awaiting },
+    reviewGate: {
+      ref: reviewGateRef,
+      awaiting: reviewSlot.awaiting,
+      // THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). A third fact about the
+      // same slot, and the one that says the pause belongs to the review rather
+      // than to a question: a run whose output opened a review does not reach a
+      // terminal status until that review is decided, so while it waits its
+      // status reads `pending_approval` and it carries no gate interrupt of its
+      // own. Without this the card cannot tell that pause from an unanswered
+      // setup field, so it redrew the field the run had already moved past and
+      // drew no review at all. Row-grounded and fail-soft with the two beside it:
+      // a slot read that throws answers `false`, which is the reading this route
+      // gave before the field existed.
+      producedReviewPark,
+      reviewTaskId: reviewSlot.reviewTaskId,
+    },
   });
 }
 

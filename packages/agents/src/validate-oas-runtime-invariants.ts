@@ -1564,6 +1564,9 @@ export function scanOasForArtifactParityFindings(
      *  the second half of "neither declares nor depends on" (enabler 0.16).
      *  Null/undefined ⇒ unknown. */
     dependsOn?: readonly string[] | null;
+    /** The registered OWNER of a scanned type id (cinatra#3597) — threaded to
+     *  `scanOasForUndeclaredTypeSaves`; null/undefined ⇒ the id's own reading. */
+    resolveTypeOwner?: ((typeId: string) => string | null) | null;
   },
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
@@ -1630,6 +1633,7 @@ export function scanOasForArtifactParityFindings(
     ...scanOasForUndeclaredTypeSaves(parsed, {
       produces,
       dependsOn: opts?.dependsOn ?? null,
+      resolveTypeOwner: opts?.resolveTypeOwner ?? null,
     }),
   );
 
@@ -1840,7 +1844,23 @@ function isDynamicNamespaceTypeId(typeId: string): boolean {
  */
 export function scanOasForUndeclaredTypeSaves(
   parsed: Record<string, unknown>,
-  opts?: { produces?: readonly string[] | null; dependsOn?: readonly string[] | null },
+  opts?: {
+    produces?: readonly string[] | null;
+    dependsOn?: readonly string[] | null;
+    /**
+     * The OWNER of a scanned type id, from its registration (cinatra#3597). An
+     * artifact type id LOOKS like `@vendor/package:type`, but five shipped packs
+     * register types whose id namespace is not their package name, so this
+     * scanner would otherwise advise the author of such a pack's consumer to
+     * declare a package that does not exist. When this resolver names an owner,
+     * THAT owner is measured against the declarations and the id's namespace is
+     * not consulted; when it names none — an author's machine where nothing is
+     * installed — the reading is the id's own, because this surface is
+     * warning-only and must not start flagging every type whose owner it cannot
+     * see. Passed IN: the scanner stays free of the objects package's graph.
+     */
+    resolveTypeOwner?: ((typeId: string) => string | null) | null;
+  },
 ): ReviewFinding[] {
   const produces = opts?.produces ?? null;
   const dependsOn = opts?.dependsOn ?? null;
@@ -1865,7 +1885,7 @@ export function scanOasForUndeclaredTypeSaves(
           const typeId = m[0];
           if (seen.has(typeId)) continue;
           seen.add(typeId);
-          const definer = definerOfTypeId(typeId);
+          const definer = opts?.resolveTypeOwner?.(typeId) ?? definerOfTypeId(typeId);
           if (definer !== null && declared.has(definer)) continue;
           const reason = isDynamicNamespaceTypeId(typeId)
             ? "dynamic-namespace"
