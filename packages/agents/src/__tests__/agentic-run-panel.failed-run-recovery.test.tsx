@@ -113,9 +113,10 @@ vi.mock("../run-completion-affordances", async (importOriginal) => {
 type ResetAgentRunResult = { ok: true } | { ok: false; error: string };
 type CreateRunResult = { ok: true; runId: string } | { ok: false; error: string };
 const createAndTriggerRunMock = vi.fn(
-  async (_args: { templateSlug: string }): Promise<CreateRunResult> => ({
-    ok: true, runId: "new/run 2734",
-  }),
+  async (args: { templateSlug: string }): Promise<CreateRunResult> => {
+    void args;
+    return { ok: true, runId: "new/run 2734" };
+  },
 );
 const resetAgentRunMock = vi.fn(
   async (_args: { runId: string }): Promise<ResetAgentRunResult> => ({ ok: true }),
