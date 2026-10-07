@@ -122,7 +122,6 @@ describe("AGENTS_NAV never escapes the scope it renders in", () => {
     expect(agentsNavFor().map((i) => i.href)).toEqual([
       "/agents",
       "/agents/executions",
-      "/agents/reviews",
     ]);
   });
 
@@ -133,7 +132,6 @@ describe("AGENTS_NAV never escapes the scope it renders in", () => {
       expect(items.map((i) => i.href)).toEqual([
         `${base}/agents`,
         `${base}/agents/executions`,
-        `${base}/agents/reviews`,
       ]);
       // ROOT ESCAPE: not one href may leave the scope base.
       for (const item of items) {

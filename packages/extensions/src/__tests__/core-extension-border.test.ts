@@ -1,20 +1,37 @@
-// THE CORE/EXTENSION BORDER, ASSERTED BY THE REQUIRED SUITE.
+// THE CORE/EXTENSION BORDER: WHAT THIS SUITE CHECKS AND WHAT THE STEP CHECKS.
 //
 // This file lives in packages/extensions/src/__tests__/ on purpose: the
 // `Canonical extension invariants` job runs the WHOLE package
-// (`cd packages/extensions && pnpm test`), so a border regression fails a
-// REQUIRED check without any workflow edit.
+// (`cd packages/extensions && pnpm test`), so a border regression fails that
+// job without any workflow edit. That job is not one of the checks the
+// protection of main requires.
 //
-// Two halves:
+// WHAT THIS SUITE CHECKS:
 //   1. FIXTURES — a synthetic snippet per crossing class, proving the scanner
 //      catches the class rather than one file that happens to be on main.
 //   2. THE REPOSITORY — the same scanner over the real tree, proving the
-//      committed baseline covers exactly the standing debt and nothing new.
+//      committed ledger covers exactly the standing debt and nothing new. It
+//      compares the code with the ledger of the checkout ITSELF, so it cannot
+//      see a pull request that adds a crossing together with its ledger entry.
+//   3. THE BASE GUARD'S LOGIC — against temporary git repositories: a ledger
+//      that grew against the base branch fails, one that shrank passes, a base
+//      that cannot be read fails with its reason, and a stale entry fails.
+//
+// WHAT THE STEP CHECKS: the step `Core/extension border — base guard` of the
+// job `gates-pnpm` in .github/workflows/gates.yml runs
+// scripts/ci/core-extension-border-gate.mjs with CORE_EXTENSION_BORDER_BASE set
+// to the pull request's base. The gate compares the committed ledger with the
+// copy on that base (a new entry, a new recorded file or a raised count fails),
+// fails closed on a base it cannot read, fails on any crossing outside the
+// ledger and fails on a stale entry.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
 const GATE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs");
@@ -62,6 +79,21 @@ type GateModule = {
     violations: Finding[];
     stale: string[];
   };
+  shrinkPackShapedEntries: (
+    repoRoot: string,
+    previousEntries: { rule: string; key: string; reason: string; files?: Record<string, number> }[],
+  ) => {
+    entries: { rule: string; key: string; reason: string; files: Record<string, number> }[];
+    refused: string[];
+  };
+  FLOOR_BASE_VAR: string;
+  FLOOR_FILE: string;
+  checkFloorAgainstBase: (input?: {
+    repoRoot?: string;
+    env?: Record<string, string | undefined>;
+    headFloor?: unknown;
+  }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
+  staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -477,4 +509,213 @@ describe("core/extension border — the pack universe is durable", () => {
     ]);
     expect(packs.has("@cinatra-ai/not-in-any-lock-agent")).toBe(true);
   });
+});
+
+describe("core/extension border — the writer drops a spent entry", () => {
+  const REASON = "standing debt recorded in a fixture, kept file by file";
+  const exampleEntry = () => ({
+    rule: "pack-shaped-core-domain",
+    key: "src/lib/example-module",
+    reason: REASON,
+    files: { "src/lib/example-module/a.ts": 3, "src/lib/example-module/b.ts": 2 },
+  });
+  const otherEntry = () => ({
+    rule: "pack-shaped-core-domain",
+    key: "src/lib/other-module",
+    reason: REASON,
+    files: { "src/lib/other-module/c.ts": 4 },
+  });
+
+  // Each arm builds its own temporary tree and removes it, whatever the arm reads.
+  function inTree(files: Record<string, number>, read: (dir: string) => void) {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-writer-"));
+    try {
+      for (const [rel, lines] of Object.entries(files)) {
+        const abs = path.join(dir, rel);
+        mkdirSync(path.dirname(abs), { recursive: true });
+        writeFileSync(abs, Array.from({ length: lines }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n");
+      }
+      read(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("leaves out an entry whose module is gone", () => {
+    inTree({ "src/lib/other-module/c.ts": 4 }, (dir) => {
+      const { entries, refused } = gate.shrinkPackShapedEntries(dir, [exampleEntry(), otherEntry()]);
+      expect(entries).toEqual([{ ...otherEntry(), files: { "src/lib/other-module/c.ts": 4 } }]);
+      expect(refused).toEqual([]);
+    });
+  });
+
+  it("leaves out a single-file entry whose file is gone", () => {
+    inTree({}, (dir) => {
+      const { entries } = gate.shrinkPackShapedEntries(dir, [
+        {
+          rule: "pack-shaped-core-domain",
+          key: "src/lib/example-module/one.ts",
+          reason: REASON,
+          files: { "src/lib/example-module/one.ts": 5 },
+        },
+      ]);
+      expect(entries).toEqual([]);
+    });
+  });
+
+  it("keeps the files that remain when only some are gone", () => {
+    inTree({ "src/lib/example-module/a.ts": 3 }, (dir) => {
+      const { entries, refused } = gate.shrinkPackShapedEntries(dir, [exampleEntry()]);
+      expect(entries).toEqual([{ ...exampleEntry(), files: { "src/lib/example-module/a.ts": 3 } }]);
+      expect(refused).toEqual([]);
+    });
+  });
+
+  it("keeps the entry of a module that lost its files but gained a new one, and refuses the growth", () => {
+    inTree({ "src/lib/example-module/z.ts": 1 }, (dir) => {
+      const { entries, refused } = gate.shrinkPackShapedEntries(dir, [exampleEntry()]);
+      expect(entries).toEqual([{ ...exampleEntry(), files: {} }]);
+      expect(refused).toEqual(["src/lib/example-module :: src/lib/example-module/z.ts is a NEW file"]);
+    });
+  });
+
+  it("names an entry with an empty line map as stale", () => {
+    const defects = gate.baselineDefects({
+      entries: [{ rule: "pack-shaped-core-domain", key: "src/lib/example-module", reason: REASON, files: {} }],
+    });
+    const stale = defects.filter(
+      (d) => d.includes("stale entry") && d.includes("pack-shaped-core-domain::src/lib/example-module"),
+    );
+    expect(stale).toHaveLength(1);
+  });
+
+  it("finds no defect in a live entry", () => {
+    expect(
+      gate.baselineDefects({
+        entries: [
+          {
+            rule: "pack-shaped-core-domain",
+            key: "src/lib/example-module",
+            reason: REASON,
+            files: { "src/lib/example-module/a.ts": 3 },
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+});
+
+// cinatra#3831: the committed ledger is compared with the copy on the base
+// branch, entry by entry and count by count, so a pull request cannot admit a
+// crossing by writing its entry into the ledger in the same change. The git
+// fixture is the one the sibling floor gates use; every call passes its
+// environment explicitly, so a CI run's own base variables never reach a case.
+type FloorFixture = {
+  makeFloorRepo: (input: { base: Record<string, unknown>; head: Record<string, unknown> }) => {
+    root: string;
+    cleanup: () => void;
+  };
+  PULL_REQUEST_RUN: Record<string, string>;
+  UNREADABLE_BASE_RUN: Record<string, string>;
+  envWithoutBase: (env?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+};
+
+const floorFixture: FloorFixture = (await import(
+  pathToFileURL(path.join(REPO_ROOT, "scripts", "audit", "__tests__", "floor-base-fixture.mjs")).href
+)) as unknown as FloorFixture;
+
+describe("core/extension border — the floor is compared with the base branch", () => {
+  const FLOOR = "config/core-extension-border-baseline.json";
+  const KEY = "src/lib/example-module.ts::@cinatra-ai/web-research-agent:finding";
+  const REASON = "a crossing recorded in a fixture ledger, with its reason";
+  const typeEntry = () => ({ rule: "pack-type-id-in-core", key: KEY, reason: REASON });
+  const domainEntry = (lines: number) => ({
+    rule: "pack-shaped-core-domain",
+    key: "src/lib/example-module",
+    reason: REASON,
+    files: { "src/lib/example-module/a.ts": lines },
+  });
+  const ledger = (entries: unknown[]) => ({ entries });
+
+  const fixtures: { cleanup: () => void }[] = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop()?.cleanup();
+  });
+  function repo(base: Record<string, unknown>, head: Record<string, unknown>): string {
+    const f = floorFixture.makeFloorRepo({ base, head });
+    fixtures.push(f);
+    return f.root;
+  }
+
+  it("a ledger that gained an entry FAILS against the base", () => {
+    const root = repo({ [FLOOR]: ledger([domainEntry(3)]) }, { [FLOOR]: ledger([domainEntry(3), typeEntry()]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("grew");
+    expect(r.growth).toEqual([`new entry: pack-type-id-in-core::${KEY}`]);
+  });
+
+  it("a ledger that lost an entry and lowered a count PASSES", () => {
+    const root = repo({ [FLOOR]: ledger([domainEntry(3), typeEntry()]) }, { [FLOOR]: ledger([domainEntry(2)]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("held");
+  });
+
+  it.each([
+    ["a flag-like base", { CORE_EXTENSION_BORDER_BASE: "-x" }, true, "is flag-like"],
+    ["a base that does not resolve", { CORE_EXTENSION_BORDER_BASE: "example-org-no-such-ref" }, true, "did not resolve"],
+    ["a base commit that holds no ledger", { GITHUB_EVENT_NAME: "pull_request", GITHUB_BASE_REF: "main" }, false, "is not on the base"],
+    ["a pull request's run with no base branch", { GITHUB_EVENT_NAME: "pull_request" }, true, "GITHUB_BASE_REF is empty"],
+  ])("%s FAILS closed with its reason", (_name, env, ledgerOnBase, reason) => {
+    const root = ledgerOnBase
+      ? repo({ [FLOOR]: ledger([typeEntry()]) }, {})
+      : repo({ "README.md": "a base commit without the ledger\n" }, { [FLOOR]: ledger([typeEntry()]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toContain("cannot be compared with the base");
+    expect(r.lines[0]).toContain(reason);
+  });
+
+  it("a stale entry FAILS, and no stale entry passes", () => {
+    const staleKey = `pack-type-id-in-core::${KEY}`;
+    const r = gate.staleVerdict([staleKey]);
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toBe(
+      "[core-extension-border] FAIL — 1 baseline entry is gone; run --write-baseline to shrink the ratchet:",
+    );
+    expect(r.lines).toContain(`  - ${staleKey}`);
+    expect(gate.staleVerdict([])).toEqual({ ok: true, lines: [] });
+  });
+
+  it("a raised line count of a pack-shaped module FAILS against the base", () => {
+    const root = repo({ [FLOOR]: ledger([domainEntry(3)]) }, { [FLOOR]: ledger([domainEntry(5)]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([
+      "raised allowance under pack-shaped-core-domain::src/lib/example-module: src/lib/example-module/a.ts 3 -> 5",
+    ]);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [GATE_PATH], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...floorFixture.envWithoutBase(process.env), ...floorFixture.UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain("cannot be compared with the base");
+    expect(res.stderr).toContain("did not resolve");
+  }, 120_000);
+
+  it("the gate itself compares the ledger with a named base", () => {
+    const res = spawnSync(process.execPath, [GATE_PATH], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...floorFixture.envWithoutBase(process.env), CORE_EXTENSION_BORDER_BASE: "HEAD" },
+    });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('does not grow against the base "HEAD"');
+  }, 120_000);
 });

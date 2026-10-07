@@ -15,9 +15,22 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  FLOOR_BASE_VAR,
+  FLOOR_FILE,
+  checkFloorAgainstBase,
+} from "../self-rendering-extensions-border-gate.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "../../audit/__tests__/floor-base-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GATE = join(__dirname, "..", "self-rendering-extensions-border-gate.mjs");
+const REPO_ROOT = join(__dirname, "..", "..", "..");
 
 const temps = [];
 afterEach(() => {
@@ -57,8 +70,10 @@ function makeTree(packages, baseline) {
 function runGate({ extRoot, baselinePath }, args = []) {
   const res = spawnSync(process.execPath, [GATE, ...args], {
     encoding: "utf8",
+    // A synthetic floor is never compared with the real base branch: the
+    // base variables of a pull request's run are dropped for these cases.
     env: {
-      ...process.env,
+      ...envWithoutBase(process.env),
       SELF_RENDERING_BORDER_EXT_ROOT: extRoot,
       SELF_RENDERING_BORDER_BASELINE: baselinePath,
     },
@@ -360,5 +375,56 @@ describe("self-rendering-extensions border gate", () => {
     const { status, stderr } = runGate(tree, ["--write-baseline"]);
     expect(status).not.toBe(0);
     expect(stderr).toContain("shrink-only");
+  });
+});
+
+// cinatra#3832: the committed floor is compared with the copy on the base
+// branch, so a pull request cannot add a copy to the floor in its own change.
+describe("self-rendering-extensions border gate — floor compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const floor = (copies) => ({ note: "fixture", copies });
+  function repo(baseCopies, headCopies) {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: floor(baseCopies) }, head: { [FLOOR_FILE]: floor(headCopies) } });
+    fixtures.push(f);
+    return f.root;
+  }
+
+  it("a raised floor (a new copy in the baseline) FAILS against the base", () => {
+    const root = repo({ demo: ["src/components/ui/a.tsx"] }, { demo: ["src/components/ui/a.tsx", "src/components/ui/b.tsx"] });
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual(["demo :: src/components/ui/b.tsx"]);
+  });
+
+  it("a lowered floor (a removed copy) PASSES", () => {
+    const root = repo({ demo: ["src/components/ui/a.tsx", "src/components/ui/b.tsx"] }, { demo: ["src/components/ui/a.tsx"] });
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo({}, {});
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/did not resolve/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo({}, { demo: ["src/components/ui/a.tsx"] });
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [GATE], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
   });
 });

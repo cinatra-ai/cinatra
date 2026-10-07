@@ -60,6 +60,26 @@ vi.mock("../agent-runtime-mount", () => ({
   writeAgentInstallPath: () => {},
 }));
 
+// cinatra#3493 — the import half of this round trip is a SUPPLIED INSTALL, so
+// it now materializes into the mount above and asks the runtime to mount it.
+// There is no runtime in this suite (and an unstubbed client would POST at
+// whatever `WAYFLOW_BASE_URL` the environment happens to carry), so the reload
+// is a seam here: it answers "mounted", and the round trip keeps asserting what
+// it is about — the export/compile/upsert path.
+vi.mock("../wayflow-reload-client", () => ({
+  triggerWayflowReload: async () => ({
+    ok: true,
+    report: {
+      added: [],
+      changed: [],
+      removed: [],
+      failed: [],
+      agents: 1,
+      last_reload_at: null,
+    },
+  }),
+}));
+
 vi.mock("../store", () => ({
   readAgentTemplateById: vi.fn(async (id: string) => state.templatesById.get(id) ?? null),
   readAgentTemplateByPackageName: vi.fn(

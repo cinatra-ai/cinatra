@@ -399,3 +399,88 @@ describe("HitlConversationPanel paperclip + attachments", () => {
     expect(onSubmitMock.mock.calls[0].length).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE WINDOW DRAWS THE ASSISTANT'S PROSE (the graded picture leg, A).
+//
+// The leg photographed four cells in which the window printed the assistant's
+// markdown raw — `**idea**` with its asterisks, a pipe table as a wall of
+// pipes. The window shows the same assistant /chat shows, so it draws it the
+// same way; the person's own line is quoted back untouched, because what they
+// typed is not markup.
+// ---------------------------------------------------------------------------
+describe("HitlConversationPanel — the assistant's line is drawn, the person's is quoted", () => {
+  const TABLE = ["| Region | Revenue |", "| --- | --- |", "| EMEA | 1200 |"].join("\n");
+  const MARKUP = `The **idea** field.\n\n${TABLE}`;
+
+  const draw = (conversation: { id: number; role: "user" | "assistant"; content: string }[]) =>
+    render(
+      <HitlConversationPanel
+        surface="run-page"
+        portalTarget={document.body}
+        visible={true}
+        conversation={conversation}
+        promptPending={false}
+        storageKey="k"
+        onSubmit={onSubmitMock}
+      />,
+    );
+
+  const bubble = (who: "assistant" | "person") =>
+    document.querySelector(`[data-run-window-entry="${who}"]`);
+
+  it("renders **bold** as bold and a pipe table as a table in an assistant line", async () => {
+    draw([{ id: 1, role: "assistant", content: MARKUP }]);
+    await waitFor(() => expect(bubble("assistant")).not.toBeNull());
+    const el = bubble("assistant")!;
+
+    // Bold is an element, not four characters of punctuation.
+    const strong = el.querySelector("strong");
+    expect(strong?.textContent).toBe("idea");
+    expect(el.textContent).not.toContain("**");
+
+    // The pipe table is a table, with its own header and body cells.
+    const table = el.querySelector("table");
+    expect(table).not.toBeNull();
+    expect(Array.from(table!.querySelectorAll("th")).map((c) => c.textContent)).toEqual([
+      "Region",
+      "Revenue",
+    ]);
+    expect(Array.from(table!.querySelectorAll("tbody td")).map((c) => c.textContent)).toEqual([
+      "EMEA",
+      "1200",
+    ]);
+    expect(el.textContent).not.toContain("|");
+  });
+
+  it("leaves the SAME text literal in the person's own line", async () => {
+    draw([{ id: 1, role: "user", content: MARKUP }]);
+    await waitFor(() => expect(bubble("person")).not.toBeNull());
+    const el = bubble("person")!;
+
+    expect(el.querySelector("strong")).toBeNull();
+    expect(el.querySelector("table")).toBeNull();
+    // Character for character, asterisks and pipes included.
+    expect(el.textContent).toBe(MARKUP);
+    // And the line keeps its own newlines, which is what pre-wrap is for.
+    expect(el.className).toContain("whitespace-pre-wrap");
+  });
+
+  it("does not let a model's markup reach the DOM as live markup", async () => {
+    // The assistant's text is untrusted and is injected as HTML, so the
+    // renderer's escaping is part of this surface's contract, not an
+    // implementation detail of another package.
+    draw([
+      {
+        id: 1,
+        role: "assistant",
+        content: '<img src=x onerror="alert(1)"> and [x](javascript:alert(1))',
+      },
+    ]);
+    await waitFor(() => expect(bubble("assistant")).not.toBeNull());
+    const el = bubble("assistant")!;
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.innerHTML).not.toContain("onerror");
+    expect(el.querySelector("a[href^='javascript']")).toBeNull();
+  });
+});

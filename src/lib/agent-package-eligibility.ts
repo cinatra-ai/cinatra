@@ -26,6 +26,7 @@ import "server-only";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { jsonb, pgSchema, text } from "drizzle-orm/pg-core";
 
+import { BUILTIN_ASSISTANT_ALIAS } from "@/lib/assistant-registry-schema";
 import { betterAuthDb } from "@/lib/better-auth-db";
 
 const CORE_STORE_SCHEMA = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
@@ -52,26 +53,142 @@ type ReaderDb = Pick<typeof betterAuthDb, "select">;
 const LIVE_STATUSES = ["active", "locked"] as const;
 
 /**
+ * What the `installed_extension` rows say about a package's kind. The three
+ * states are kept apart because a FALLBACK reader may answer for one of them
+ * and must never answer for the others:
+ *
+ *   * `absent`: the package has no install row at all.
+ *   * `named`: the considered rows name exactly one kind.
+ *   * `unreadable`: rows exist but name no single kind, either because they
+ *     disagree or because none of them carries a kind at all.
+ *
+ * Collapsing `unreadable` into `absent` is what lets a fallback answer over the
+ * top of a row that is present and contradictory, which is the opposite of
+ * failing closed.
+ */
+export type PackageKindReading =
+  | { state: "absent" }
+  | { state: "named"; kind: string }
+  | { state: "unreadable" };
+
+/**
+ * The `installed_extension` rows' verdict on a package's kind. Prefers the LIVE
+ * rows; falls back to any row so an archived agent still reads as an agent (the
+ * assignability predicate, not the kind gate, is what refuses an archived
+ * target).
+ */
+async function readCanonicalPackageKindReading(
+  packageName: string,
+  db: ReaderDb,
+): Promise<PackageKindReading> {
+  if (!packageName) return { state: "absent" };
+  const rows = await db
+    .select({ kind: installedExtension.kind, status: installedExtension.status })
+    .from(installedExtension)
+    .where(eq(installedExtension.packageName, packageName));
+  if (rows.length === 0) return { state: "absent" };
+  const live = rows.filter((r) => LIVE_STATUSES.includes(r.status as (typeof LIVE_STATUSES)[number]));
+  const considered = live.length > 0 ? live : rows;
+  const kinds = [...new Set(considered.map((r) => r.kind).filter((k): k is string => Boolean(k)))];
+  return kinds.length === 1 ? { state: "named", kind: kinds[0]! } : { state: "unreadable" };
+}
+
+/**
  * The canonical `cinatra.kind` for a package, from its `installed_extension`
- * rows. Prefers the LIVE rows; falls back to any row so an archived agent still
- * reads as an agent (the assignability predicate, not the kind gate, is what
- * refuses an archived target). `null` when there is no row, or when live rows
- * disagree — an ambiguous kind fails closed at the caller.
+ * rows. `null` when there is no row, or when the rows name no single kind. An
+ * ambiguous kind fails closed at the caller.
  */
 export async function readCanonicalPackageKind(
   packageName: string,
   db: ReaderDb = betterAuthDb,
 ): Promise<string | null> {
-  if (!packageName) return null;
+  const reading = await readCanonicalPackageKindReading(packageName, db);
+  return reading.state === "named" ? reading.kind : null;
+}
+
+/**
+ * The kind of the BUILT-IN PLATFORM ASSISTANT.
+ *
+ * It is the one package that has neither of the two things the reader above and
+ * the on-disk scan look at: no `installed_extension` row is ever written for it,
+ * and no package of its name ships in the extension tree. Its identity is the
+ * boot-seeded `agent_templates` row with the reserved package name and
+ * `agent_kind = 'assistant'`: exactly the row the assistant registry reader
+ * unions its descriptor in from, unconditionally, on every read surface.
+ *
+ * So the write road reads its kind from that same row, and the two roads admit
+ * the same package: the Assistants tab offers the built-in everywhere, and the
+ * page behind its Settings link can now be written. The kind returned is `agent`
+ * because that is the kind an assistant descriptor carries (the registry
+ * reader's installed arm joins on `installed_extension.kind = 'agent'`); its
+ * ASSISTANT standing is the `agent_kind` column, which `isAssistantPackageName`
+ * below already reads.
+ *
+ * Any other package name returns null WITHOUT a query: this arm widens nothing
+ * but the one reserved identity.
+ */
+export async function readBuiltInAssistantPackageKind(
+  packageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<string | null> {
+  if (packageName !== BUILTIN_ASSISTANT_ALIAS.packageName) return null;
   const rows = await db
-    .select({ kind: installedExtension.kind, status: installedExtension.status })
-    .from(installedExtension)
-    .where(eq(installedExtension.packageName, packageName));
-  if (rows.length === 0) return null;
-  const live = rows.filter((r) => LIVE_STATUSES.includes(r.status as (typeof LIVE_STATUSES)[number]));
-  const considered = live.length > 0 ? live : rows;
-  const kinds = [...new Set(considered.map((r) => r.kind).filter((k): k is string => Boolean(k)))];
-  return kinds.length === 1 ? kinds[0]! : null;
+    .select({ id: agentTemplates.id })
+    .from(agentTemplates)
+    .where(
+      and(
+        eq(agentTemplates.packageName, packageName),
+        eq(agentTemplates.agentKind, "assistant"),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0 ? "agent" : null;
+}
+
+/**
+ * The kind the WRITE GATE decides on: the canonical install row first, the
+ * built-in platform assistant's own row second. The order keeps every other
+ * package's answer byte-identical (an installed package of the reserved name
+ * would still answer from its row), and a package with neither stays null, so
+ * the gate keeps failing closed on it.
+ *
+ * The built-in's arm is reached only where the package has NO install row,
+ * because that is the state the built-in is actually in: the platform writes no
+ * row for it. Rows that exist and name no single kind are an UNREADABLE install
+ * record, and an unreadable record refuses. The package-name read is not
+ * narrowed by organization, owner or version, so one package name legitimately
+ * carries many rows, and two of them disagreeing is a real answer about a real
+ * install rather than the absence the fallback speaks for.
+ *
+ * The verdict is reported as a READING, not as a kind, because the refusal has
+ * to survive one more arm. The assignment slice's seam asks a package's on-disk
+ * descriptor after this reader, and a two-state answer cannot tell it which of
+ * the two refusals it received: "no record anywhere", which the descriptor may
+ * still answer for, or "a record that cannot be read", which nothing may answer
+ * over the top of.
+ */
+export async function readWritablePackageKindReading(
+  packageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<PackageKindReading> {
+  const reading = await readCanonicalPackageKindReading(packageName, db);
+  if (reading.state !== "absent") return reading;
+  const builtIn = await readBuiltInAssistantPackageKind(packageName, db);
+  return builtIn === null ? { state: "absent" } : { state: "named", kind: builtIn };
+}
+
+/**
+ * The same verdict as a plain kind, for the callers that only need to know
+ * whether the gate could read one. `null` covers both refusals: the caller that
+ * has a SECOND source to try must read the reading above instead, so that an
+ * unreadable install record refuses there too.
+ */
+export async function readWritablePackageKind(
+  packageName: string,
+  db: ReaderDb = betterAuthDb,
+): Promise<string | null> {
+  const reading = await readWritablePackageKindReading(packageName, db);
+  return reading.state === "named" ? reading.kind : null;
 }
 
 /**

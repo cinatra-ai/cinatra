@@ -104,6 +104,25 @@ export type InjectionResolverPorts = {
   resolveAssistantRequiredSkills?(input: {
     agentId: string;
   }): Promise<readonly InjectionSkillRef[]>;
+  /**
+   * The assistant's SCOPED ASSIGNED skills (cinatra#2815 S3, epic #2812) — the
+   * per-scope assignment store, read through the THREAD's immutable
+   * assignment-scope snapshot and the effective-5 chain, under this contract's
+   * unchanged ceiling of 8. Recommendation rank: the same rank the agent-run
+   * path's assignments ride, because the assistant seam introduces no
+   * privileged rank.
+   *
+   * The port is handed the SESSION, never a thread's mutable project column: a
+   * conversation moved into another project must not silently re-point at
+   * skills it was never given.
+   *
+   * Optional like every other derivation port — a surface that supplies none
+   * delivers no assignments, which is strictly less, never more.
+   */
+  resolveAssistantAssignedSkills?(input: {
+    agentId: string;
+    sessionId: string;
+  }): Promise<readonly InjectionSkillRef[]>;
   /** The authoring surface's own skill set. */
   resolveAuthoringSkills?(input: {
     agentSpecRef: string;

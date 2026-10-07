@@ -34,7 +34,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -212,20 +212,87 @@ describe("the gate's card stands alone in the run detail", () => {
     const framed = render(
       <AgenticRunPanel {...agenticProps({ railDrawsTheFrame: true })} />,
     );
-    const box = framed.container.querySelector<HTMLElement>("[data-run-progress-panel]");
-    expect(box).not.toBeNull();
-    expect(box!.className).not.toContain("soft-panel");
-    expect(box!.className).not.toContain("rounded-card");
+    // THE BOX IS READ AT THE DRAWING'S SETTLED MOMENT (fix leg 14). A run
+    // parked at `pending_approval` holds the review SLOT up on its first look —
+    // `specs/app-lifecycle-cards.html` section II: "Before the card, the slot
+    // holds its placeholder ... while the run is working that card is a
+    // placeholder for the review screen" — and that placeholder stands down
+    // "on its own" the moment the look answers with no card to bring. The
+    // progress box this test pins is the reading on the far side of that look,
+    // so the read waits for it rather than racing the placeholder. Every
+    // assertion below is the one this test has always made.
+    const box = await waitFor(() => {
+      const found = framed.container.querySelector<HTMLElement>("[data-run-progress-panel]");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(box.className).not.toContain("soft-panel");
+    expect(box.className).not.toContain("rounded-card");
     expect(framed.queryByText(/Agentic Run Progress/i)).toBeNull();
   });
 
   it("keeps that plate a card for every host the rail does not frame", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     const plain = render(<AgenticRunPanel {...agenticProps()} />);
-    const box = plain.container.querySelector<HTMLElement>("[data-run-progress-panel]");
-    expect(box).not.toBeNull();
-    expect(box!.className).toContain("soft-panel");
-    expect(box!.className).toContain("rounded-card");
+    // THE BOX IS READ AT THE DRAWING'S SETTLED MOMENT (fix leg 14). A run
+    // parked at `pending_approval` holds the review SLOT up on its first look —
+    // `specs/app-lifecycle-cards.html` section II: "Before the card, the slot
+    // holds its placeholder ... while the run is working that card is a
+    // placeholder for the review screen" — and that placeholder stands down
+    // "on its own" the moment the look answers with no card to bring. The
+    // progress box this test pins is the reading on the far side of that look,
+    // so the read waits for it rather than racing the placeholder. Every
+    // assertion below is the one this test has always made.
+    const box = await waitFor(() => {
+      const found = plain.container.querySelector<HTMLElement>("[data-run-progress-panel]");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(box.className).toContain("soft-panel");
+    expect(box.className).toContain("rounded-card");
+  });
+
+  // ---------------------------------------------------------------------------
+  // AND THE PARK'S OWN BOX OBEYS THE SAME CHROME RULE (cinatra#3007, fix leg
+  // 14). This panel has a SECOND box: the review slot the park holds up while a
+  // run that will ask for a review has not had its card land yet. The ratified
+  // drawing, `specs/app-lifecycle-cards.html` section II:
+  //
+  //   "Before the card, the slot holds its placeholder. A run that will ask for
+  //    a review carries, in the slot the review card will fill, the run
+  //    progress card - and while the run is working that card is a placeholder
+  //    for the review screen ... It names no status, reports no result and
+  //    draws nothing to press."
+  //
+  // That slot is drawn in the SAME run detail as the gate card, so section I's
+  // "two cards are never stacked in one detail" governs it exactly as it
+  // governs the progress plate above: whoever draws the frame owns the chrome.
+  // The slot never learned the rule, so inside the frame it wrapped the gate's
+  // own card in a second one.
+  // ---------------------------------------------------------------------------
+  it("stacks no card around the park's own box inside the frame either", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const framed = render(
+      <AgenticRunPanel {...agenticProps({ railDrawsTheFrame: true })} />,
+    );
+    const slot = framed.container.querySelector<HTMLElement>("[data-run-review-slot]");
+    expect(slot).not.toBeNull();
+    expect(slot!.className).not.toContain("soft-panel");
+    expect(slot!.className).not.toContain("rounded-card");
+  });
+
+  // AND THE GROUND cinatra#3044 MEASURED IS UNTOUCHED off the frame. The eleventh
+  // set graded this box on the run page, where the rail draws no frame, and
+  // ruled its ground the drawn card frame - `border-line` over `surface-strong`,
+  // one token darker than `.soft-panel`. The rule above must not reach it.
+  it("keeps the park's measured ground for every host the rail does not frame", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const plain = render(<AgenticRunPanel {...agenticProps()} />);
+    const slot = plain.container.querySelector<HTMLElement>("[data-run-review-slot]");
+    expect(slot).not.toBeNull();
+    expect(slot!.getAttribute("data-run-review-slot")).toBe("working");
+    expect(slot!.className).toContain("rounded-card");
+    expect(slot!.className).toContain("bg-surface-strong");
   });
 
   it("leaves the input-step reading cinatra#3113 shipped exactly as it was", async () => {

@@ -198,7 +198,9 @@ vi.mock("../auth-policy", () => ({
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
 }));
 
-vi.mock("../artifact-review-gate-store", () => ({
+vi.mock("../artifact-review-gate-store", async () => ({
+  // Retain the real pure park predicate exported by the current store; only storage reads are ports.
+  isParkedOnProducedReview: (await import("../run-produced-review-hold")).isParkedOnProducedReview,
   listReviewGatesForRun: vi.fn(async () => []),
   readReviewGate: vi.fn(async () => null),
   readRunReviewSlot: vi.fn(async () => ({ reviewTaskId: null, awaiting: false })),
@@ -681,8 +683,16 @@ describe("cinatra#3246 -- the gate the run stops at after its trigger row is a w
 });
 
 describe("the pure arms", () => {
-  const order = (keys: readonly string[]) =>
-    instanceScreens.orderRunRailSteps(keys.map((key) => ({ key }))).map((step) => step.key);
+  const order = (keys: readonly string[]) => {
+    const rows = keys.map((key) => ({ key }));
+    // Current-main before the helper preserves insertion order. Read that
+    // behavior when absent so the counterfactual fails an order assertion,
+    // rather than throwing a missing-function apparatus error.
+    const orderRows = (instanceScreens as unknown as {
+      orderRunRailSteps?: (steps: typeof rows) => typeof rows;
+    }).orderRunRailSteps;
+    return (orderRows ? orderRows(rows) : rows).map((step) => step.key);
+  };
 
   it("orders Skills, Schedule, the settled input, the gate and Review into the drawn order", () => {
     expect(order(["review", "gate", "input:0", "schedule", "recommendation"])).toEqual([

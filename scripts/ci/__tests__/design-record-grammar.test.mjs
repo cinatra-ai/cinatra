@@ -19,12 +19,18 @@
 //      each of the six levels, a section terminated by a same-level and by a
 //      higher-level heading, a bolded non-heading line that is NOT a section,
 //      and a prose sentence containing the words "fix leg" that is NOT one.
+//
+// cinatra#3670 adds the superseded reading — a section graded under an OLDER
+// revision of the same design, under a later section that names the pin — and
+// its suites sit at the foot of this file, against a design history the suite
+// builds itself.
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   checkBody,
@@ -415,5 +421,362 @@ describe("a body this gate could not read is not a body it passed", () => {
       logError: (l) => out.push(String(l)),
     });
     expect(code).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3670: a grade under an OLDER revision of the same design
+// ---------------------------------------------------------------------------
+//
+// A pull request that adopts a newer design pin after its earlier rounds were
+// graded keeps those rounds in its body, under the pins they were truly graded
+// against. Such a section reads as superseded when the design history shows
+// its value as an older revision of the branch's pin AND a later section names
+// the pin itself. The newest graded section still owes the pin, and every road
+// that cannot prove the ancestry stays red, with its reason.
+
+describe("a grade under an older revision of the same design (cinatra#3670)", () => {
+  const made = [];
+  const scratch = (prefix) => {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    made.push(dir);
+    return dir;
+  };
+  // A value no revision of the fixture history carries.
+  const UNKNOWN = "b".repeat(40);
+  let design;
+  let OLDER;
+  let CURRENT;
+  let NEWER;
+  // Copies that each lack something the ancestor test needs.
+  let plainFolder;
+  let shallowAtPin;
+  let copyWithoutPin;
+
+  beforeAll(() => {
+    // One line of history: OLDER, then CURRENT (the branch's pin), then NEWER.
+    design = scratch("record-grammar-design-");
+    const noHooks = join(design, ".no-hooks");
+    const git = (...args) => execFileSync("git", args, { cwd: design, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("config", "user.email", "t@example.invalid");
+    git("config", "user.name", "t");
+    git("config", "commit.gpgsign", "false");
+    // A FIXTURE, not the product tree: a machine-wide hooks path stays off it.
+    git("config", "core.hooksPath", noHooks);
+    const draw = (message) => {
+      git("commit", "-q", "--allow-empty", "-m", message);
+      return git("rev-parse", "HEAD");
+    };
+    OLDER = draw("an older drawing");
+    CURRENT = draw("the drawing the branch pins");
+    NEWER = draw("a drawing after the pin");
+    git("branch", "older", OLDER);
+    git("branch", "pinned", CURRENT);
+
+    const copy = (branch, extra) => {
+      const dir = scratch("record-grammar-copy-");
+      execFileSync("git", [
+        "-c",
+        `core.hooksPath=${noHooks}`,
+        "clone",
+        "-q",
+        "--no-checkout",
+        "--single-branch",
+        "--branch",
+        branch,
+        ...extra,
+        `file://${design}`,
+        dir,
+      ]);
+      return dir;
+    };
+    plainFolder = scratch("record-grammar-plain-");
+    shallowAtPin = copy("pinned", ["--depth", "1"]);
+    copyWithoutPin = copy("older", []);
+  });
+
+  afterAll(() => {
+    for (const dir of made) rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function run(body, { dir, argv = [] } = {}) {
+    const file = join(scratch("record-grammar-event-"), "event.json");
+    writeFileSync(file, JSON.stringify({ pull_request: { number: 1, body } }), "utf8");
+    const out = [];
+    const err = [];
+    const code = await runCli({
+      argv,
+      env: {
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: file,
+        DESIGN_PIN_DRIFT_DIFF_BASE: "base",
+        ...(dir === undefined ? {} : { DESIGN_DRAWINGS_DIR: dir }),
+      },
+      pins: [{ ...pin(), revision: CURRENT }],
+      runGit: (args) => (args[0] === "diff" ? "scripts/audit/chat-hitl-anchor-contract.json" : ""),
+      log: (l) => out.push(String(l)),
+      logError: (l) => err.push(String(l)),
+    });
+    return { code, out, err, all: [...out, ...err].join("\n") };
+  }
+
+  const whyLine = (all) => all.split("\n").find((l) => l.includes("not read as superseded"));
+
+  // (a)
+  it("reads an older section under a newest section at the pin as superseded, with a notice naming the older value", async () => {
+    const body = [`## Fix leg 1`, `graded under design@${OLDER}`, `## Fix leg 2`, `graded under design@${CURRENT}`].join(
+      "\n",
+    );
+    const r = await run(body, { dir: design, argv: ["--github-annotations"] });
+    expect(r.code).toBe(0);
+    const notice = [
+      `NOTICE — the section "Fix leg 1" was graded under design@${OLDER} — superseded.`,
+      `  that value is an older revision of the pin this branch grades against: design@${CURRENT}`,
+      `  the later section "Fix leg 2" names that pin, so the older grade stays in the body as history.`,
+    ].join("\n");
+    expect(r.out).toEqual([
+      `read 2 graded section(s): "Fix leg 1", "Fix leg 2"`,
+      notice,
+      `::notice title=design-record-grammar::${notice.replace(/\n/g, "%0A")}`,
+      "ok: every graded section names the pin this branch grades against, or an older revision of it that a later section supersedes.",
+    ]);
+    expect(r.err).toEqual([]);
+  });
+
+  it("reads EVERY older section under the one newest section at the pin as superseded", async () => {
+    const body = [
+      `## Fix leg 1`,
+      `design@${OLDER}`,
+      `## Capture — graded, the first round`,
+      `design@${OLDER}`,
+      `## Fix leg 2`,
+      `design@${OLDER}`,
+      `## Capture — graded, at the pin`,
+      `design@${CURRENT}`,
+    ].join("\n");
+    const r = await run(body, { dir: design });
+    expect(r.code).toBe(0);
+    expect(r.out.filter((l) => l.startsWith("NOTICE — "))).toHaveLength(3);
+    expect(r.all).not.toContain("MISMATCH");
+  });
+
+  // (b)
+  it("keeps the newest graded section to the pin: an older value there fails exactly as before", async () => {
+    const body = [`## Fix leg 1`, `design@${CURRENT}`, `## Fix leg 2`, `design@${OLDER}`].join("\n");
+    const r = await run(body, { dir: design });
+    expect(r.code).toBe(1);
+    expect(r.err).toEqual([
+      "ERROR: a graded record does not carry the design pin it was graded against.",
+      "",
+      [
+        `MISMATCH — the section "Fix leg 2" names a design pin this branch does not carry.`,
+        `  the body says:              design@${OLDER}`,
+        `  this branch grades against: design@${CURRENT}`,
+        "  a record may not be graded against a drawing the branch does not pin.",
+      ].join("\n"),
+    ]);
+    expect(r.all).not.toContain("NOTICE");
+  });
+
+  it("does not let a body pass on an old grade alone", async () => {
+    const r = await run(`## Fix leg 1\n\ndesign@${OLDER}`, { dir: design });
+    expect(r.code).toBe(1);
+    expect(r.all).toContain(`MISMATCH — the section "Fix leg 1" names a design pin this branch does not carry.`);
+    expect(r.all).not.toContain("NOTICE");
+  });
+
+  // (c)
+  it("keeps a value the design history does not know as a mismatch, and says why", async () => {
+    const body = [`## Fix leg 1`, `design@${UNKNOWN}`, `## Fix leg 2`, `design@${CURRENT}`].join("\n");
+    const r = await run(body, { dir: design });
+    expect(r.code).toBe(1);
+    expect(r.all).toContain(`MISMATCH — the section "Fix leg 1" names a design pin this branch does not carry.`);
+    expect(whyLine(r.all)).toBe(
+      "  not read as superseded: the design history does not show that value as an older revision of this branch's pin.",
+    );
+    expect(r.all).not.toContain("NOTICE");
+  });
+
+  // (d)
+  it("keeps a NEWER revision than the pin as a mismatch, and says why", async () => {
+    const body = [`## Fix leg 1`, `design@${NEWER}`, `## Fix leg 2`, `design@${CURRENT}`].join("\n");
+    const r = await run(body, { dir: design });
+    expect(r.code).toBe(1);
+    expect(r.all).toContain(`MISMATCH — the section "Fix leg 1" names a design pin this branch does not carry.`);
+    expect(whyLine(r.all)).toBe(
+      "  not read as superseded: the design history does not show that value as an older revision of this branch's pin.",
+    );
+    expect(r.all).not.toContain("NOTICE");
+  });
+
+  // (e)
+  for (const [road, dirOf, reason] of [
+    ["no copy of the history at all", () => undefined, "no copy of the design history is at hand for this check"],
+    ["a folder that is no repository", () => plainFolder, "the design history at hand could not be read"],
+    [
+      "a shallow copy that does not carry the older value",
+      () => shallowAtPin,
+      "the design history at hand is shallow and cannot show whether the value is an older revision",
+    ],
+    [
+      "a copy that does not carry the branch's own pin",
+      () => copyWithoutPin,
+      "the design history at hand does not carry this branch's pin",
+    ],
+  ]) {
+    it(`refuses on ${road}: the section stays a mismatch, with the reason printed`, async () => {
+      const body = [`## Fix leg 1`, `design@${OLDER}`, `## Fix leg 2`, `design@${CURRENT}`].join("\n");
+      const r = await run(body, { dir: dirOf() });
+      expect(r.code).toBe(1);
+      expect(r.all).toContain(`MISMATCH — the section "Fix leg 1" names a design pin this branch does not carry.`);
+      expect(r.all).not.toContain("NOTICE");
+      const why = whyLine(r.all);
+      expect(why).toBe(`  not read as superseded: the ancestor test refused, because ${reason}.`);
+      // Closed text, like the shared reader's vocabulary: no digit, and not the
+      // word this repository's public gate output avoids.
+      expect(why).not.toMatch(/\d/);
+      expect(why.toLowerCase()).not.toContain("commit");
+    });
+  }
+
+  // (f)
+  it("counts a later Visual proof section that names the pin as the later section", async () => {
+    // The newest graded section names no pin, so the body stays red — and the
+    // older section reads as superseded under the Visual proof section, not as
+    // a mismatch. In a body that passes, the newest graded section is itself
+    // the later section, so this is where the Visual proof road decides.
+    const body = [
+      `## Fix leg 1`,
+      `graded under design@${OLDER}`,
+      `## Visual proof — the round at the pin`,
+      `design@${CURRENT}`,
+      `## Fix leg 2`,
+      `graded by eye`,
+    ].join("\n");
+    const r = await run(body, { dir: design });
+    expect(r.code).toBe(1);
+    expect(r.all).toContain(`NOTICE — the section "Fix leg 1" was graded under design@${OLDER} — superseded.`);
+    expect(r.all).toContain(
+      `  the later section "Visual proof — the round at the pin" names that pin, so the older grade stays in the body as history.`,
+    );
+    expect(r.all).toContain(`MISSING — the section "Fix leg 2" grades a capture and names no design pin.`);
+    expect(r.all).not.toContain("MISMATCH");
+  });
+
+  it("does not count a Visual proof section that sits ABOVE the older section, nor a missing one", async () => {
+    for (const body of [
+      [`## Visual proof — the round at the pin`, `design@${CURRENT}`, `## Fix leg 1`, `design@${OLDER}`, `## Fix leg 2`, `by eye`],
+      [`## Fix leg 1`, `design@${OLDER}`, `## Fix leg 2`, `by eye`],
+    ]) {
+      const r = await run(body.join("\n"), { dir: design });
+      expect(r.code).toBe(1);
+      expect(r.all).toContain(`MISMATCH — the section "Fix leg 1" names a design pin this branch does not carry.`);
+      expect(whyLine(r.all)).toBe(
+        "  not read as superseded: no later graded section or Visual proof section names this branch's pin alone.",
+      );
+      expect(r.all).not.toContain("NOTICE");
+    }
+  });
+
+  // (g)
+  it("leaves a body whose every section names the pin exactly as before", async () => {
+    const body = [`## Fix leg 1`, `design@${CURRENT}`, `## Capture — graded`, `design@${CURRENT}`].join("\n");
+    const r = await run(body, { dir: design, argv: ["--github-annotations"] });
+    expect(r.code).toBe(0);
+    expect(r.out).toEqual([
+      `read 2 graded section(s): "Fix leg 1", "Capture — graded"`,
+      "ok: every graded section names the pin this branch grades against.",
+    ]);
+    expect(r.err).toEqual([]);
+  });
+
+  it("leaves a section with no pin MISSING, exactly as before", async () => {
+    const body = [`## Fix leg 1`, `design@${CURRENT}`, `## Fix leg 2`, `graded by eye`].join("\n");
+    const r = await run(body, { dir: design, argv: ["--github-annotations"] });
+    expect(r.code).toBe(1);
+    const missing = [
+      `MISSING — the section "Fix leg 2" grades a capture and names no design pin.`,
+      `  this branch grades against: design@${CURRENT}`,
+      "  add that literal to the section, so a later ratification can invalidate the grade.",
+    ].join("\n");
+    expect(r.err).toEqual(["ERROR: a graded record does not carry the design pin it was graded against.", "", missing]);
+    expect(r.out).toEqual([
+      `read 2 graded section(s): "Fix leg 1", "Fix leg 2"`,
+      `::error title=design-record-grammar::${missing.replace(/\n/g, "%0A")}`,
+    ]);
+  });
+});
+
+describe("the superseded reading, driven through checkBody (cinatra#3670)", () => {
+  const THIRD = "c".repeat(40);
+  const answering = (ancestor) => ({ isAncestor: () => ({ refused: false, ancestor }) });
+
+  it("lists a superseded section with its older value and the later section that names the pin", () => {
+    const body = [`## Fix leg 1`, `design@${OTHER}`, `## Fix leg 2`, `design@${PIN}`].join("\n");
+    const result = checkBody({ body, specCommit, history: answering(true) });
+    expect(result.findings).toEqual([]);
+    expect(result.superseded).toEqual([{ heading: "Fix leg 1", older: OTHER, carrier: "Fix leg 2" }]);
+  });
+
+  it("refuses the ancestor test when no design history is handed in at all", () => {
+    const body = [`## Fix leg 1`, `design@${OTHER}`, `## Fix leg 2`, `design@${PIN}`].join("\n");
+    const { findings } = checkBody({ body, specCommit });
+    expect(findings.map((f) => [f.heading, f.kind])).toEqual([["Fix leg 1", "mismatch"]]);
+    expect(formatFindings(findings, specCommit)).toContain(
+      "  not read as superseded: the ancestor test refused, because no copy of the design history is at hand for this check.",
+    );
+  });
+
+  it("never asks the history about the newest graded section", () => {
+    const history = {
+      isAncestor: () => {
+        throw new Error("the newest graded section consulted the history");
+      },
+    };
+    const body = [`## Fix leg 1`, `design@${PIN}`, `## Fix leg 2`, `design@${OTHER}`].join("\n");
+    expect(checkBody({ body, specCommit, history }).findings).toEqual([
+      { heading: "Fix leg 2", kind: "mismatch", found: [OTHER] },
+    ]);
+  });
+
+  it("never reads a section that names two values as superseded, whatever the history says", () => {
+    for (const values of [`design@${OTHER} and design@${THIRD}`, `design@${OTHER} and design@${PIN}`]) {
+      const body = [`## Fix leg 1`, values, `## Fix leg 2`, `design@${PIN}`].join("\n");
+      const result = checkBody({ body, specCommit, history: answering(true) });
+      expect(result.findings.map((f) => [f.heading, f.kind]), values).toEqual([["Fix leg 1", "mismatch"]]);
+      expect(result.superseded ?? [], values).toEqual([]);
+    }
+  });
+
+  it("does not take a later section that names the pin AND another value as the later section", () => {
+    for (const later of [`## Visual proof — round 2`, `## Fix leg 2`]) {
+      const body = [`## Fix leg 1`, `design@${OTHER}`, later, `design@${PIN}, after design@${THIRD}`, `## Fix leg 3`, `by eye`].join(
+        "\n",
+      );
+      const result = checkBody({ body, specCommit, history: answering(true) });
+      expect(result.findings.find((f) => f.heading === "Fix leg 1")?.kind, later).toBe("mismatch");
+      expect(result.superseded ?? [], later).toEqual([]);
+    }
+  });
+
+  it("reads a Visual proof heading by its opening words, as the graded grammar reads its own", () => {
+    for (const heading of [
+      "## Visual proof",
+      "## Visual proof: picture round 2",
+      "## visual proof — round 1 at the pin",
+      "# Visual proof (the frames)",
+    ]) {
+      const body = [`## Fix leg 1`, `design@${OTHER}`, heading, `design@${PIN}`, `## Fix leg 2`, `by eye`].join("\n");
+      const result = checkBody({ body, specCommit, history: answering(true) });
+      expect(result.superseded, heading).toEqual([
+        { heading: "Fix leg 1", older: OTHER, carrier: heading.replace(/^#+\s+/, "") },
+      ]);
+    }
+    for (const heading of ["## Notes on the visual proof", "**Visual proof**", "## Visual proofs"]) {
+      const body = [`## Fix leg 1`, `design@${OTHER}`, heading, `design@${PIN}`, `## Fix leg 2`, `by eye`].join("\n");
+      const result = checkBody({ body, specCommit, history: answering(true) });
+      expect(result.superseded ?? [], heading).toEqual([]);
+    }
   });
 });

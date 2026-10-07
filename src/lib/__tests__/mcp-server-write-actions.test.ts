@@ -34,7 +34,29 @@ type Row = {
   // cinatra#1407 defect 1: the stored connection id (apiKeyConfigured is derived
   // connector-side as `nangoConnectionId != null`).
   nangoConnectionId?: string | null;
+  // cinatra#3485 fix leg 2: the stamps a real store keeps. A row hand-placed by
+  // a case starts without them, exactly as a legacy row reaches the store.
+  createdAt?: string;
+  updatedAt?: string;
 };
+
+// The store clock. Every write reads it once, so two writes are two instants
+// and a case never depends on a wall clock.
+let storeClock = 0;
+function nextStamp(): string {
+  storeClock += 1;
+  return new Date(Date.UTC(2026, 0, 1, 0, 0, storeClock)).toISOString();
+}
+// A row a case places by hand is a row that was ALREADY THERE when the case
+// began. The columns are NOT NULL in the store, so such a row carries stamps
+// too, and they are older than anything this case writes.
+const PLACED_BEFORE = "2025-12-31T00:00:00.000Z";
+function stampsOf(row: Row | undefined): { createdAt: string; updatedAt: string } {
+  return {
+    createdAt: row?.createdAt ?? PLACED_BEFORE,
+    updatedAt: row?.updatedAt ?? PLACED_BEFORE,
+  };
+}
 // The REAL backing store (what the guarded compare-and-write checks against).
 const servers = new Map<string, Row>();
 // The AUTHZ view the FRESH read returns. Defaults to mirroring `servers`; a test
@@ -48,6 +70,16 @@ const authzOverride = new Map<string, Row | null>();
 // asserts anything a real log would leak beyond the key the TEST itself supplies.
 const importedApiKeys: { connectionId: string; apiKey: string; identity: unknown }[] = [];
 const revokedConnections: string[] = [];
+// cinatra#3485 (codex convergence finding 4): the KEYLESS identity road is
+// identity-only, so its retirements are recorded apart from the credential
+// revokes above — a keyed delete must still make exactly ONE credential call.
+const retiredKeylessIdentities: string[] = [];
+// The derived ids the keyless road actually registered. The fix leg guards the
+// registration on the row it describes, so "nothing was registered" is itself an
+// outcome a case has to be able to read.
+const registeredKeylessIdentities: string[] = [];
+// Whose live keyless identity the reconciling roads find, or null for none.
+let keylessIdentityOwner: string | null = "u1";
 let apiKeyImportShouldFail = false;
 
 class ExternalMcpServerWriteConflictError extends Error {
@@ -95,20 +127,40 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   // through this helper; mirror the real closed-vocabulary coercion.
   normalizeExternalMcpTransport: (value: unknown) =>
     value === "streamable-http" || value === "sse" ? value : "unknown",
-  getExternalMcpServerByIdFresh: (id: string) =>
-    authzOverride.has(id) ? authzOverride.get(id) : servers.get(id) ?? null,
+  getExternalMcpServerByIdFresh: (id: string) => {
+    const row = authzOverride.has(id) ? authzOverride.get(id) : servers.get(id) ?? null;
+    return row ? { ...row, ...stampsOf(row) } : row;
+  },
+  // cinatra#3485 fix leg 2: one reading of a stamp, for both sides of a
+  // comparison, mirroring the real helper.
+  normalizeExternalMcpRowStamp: (value: unknown) => {
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value !== "string" || value.trim() === "") return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  },
+  // The guarded writes STAMP the row and hand their stamps back, as the real
+  // ones do: an INSERT mints a creation instant, an UPDATE leaves it standing
+  // and mints a new update instant. That is what tells the row a save wrote
+  // apart from a replacement created at the same id.
   insertExternalMcpServerStrict: (input: Row) => {
     if (servers.has(input.id)) throw new ExternalMcpServerWriteConflictError("id exists");
-    servers.set(input.id, input);
+    const stamp = nextStamp();
+    servers.set(input.id, { ...input, createdAt: stamp, updatedAt: stamp });
+    return { createdAt: stamp, updatedAt: stamp };
   },
   updateExternalMcpServerGuarded: (
     input: Row,
     expected: { scope: string; userId: string | null; nangoConnectionId?: string | null },
   ) => {
-    if (!guardMatches(servers.get(input.id), expected)) {
+    const real = servers.get(input.id);
+    if (!guardMatches(real, expected)) {
       throw new ExternalMcpServerWriteConflictError("guard miss");
     }
-    servers.set(input.id, input);
+    const { createdAt } = stampsOf(real);
+    const updatedAt = nextStamp();
+    servers.set(input.id, { ...input, createdAt, updatedAt });
+    return { createdAt, updatedAt };
   },
   deleteExternalMcpServerGuarded: (
     id: string,
@@ -135,6 +187,38 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   revokeExternalMcpApiKeyConnection: async (connectionId: string | null | undefined) => {
     if (connectionId) revokedConnections.push(connectionId);
   },
+  // cinatra#3485 — the KEYLESS identity road. A row that lands with NO stored
+  // credential still registers its `externalMcp` connection IDENTITY, and the
+  // delete road derives the SAME id to retire it. The derivation mirrors the real
+  // helper’s own namespace so the revoke recorder above reads exactly the string
+  // production writes; the registration has no credential half to record at all
+  // (its identity write is proved over the REAL seam in
+  // `mcp-server-connection-workspace-share.test.ts`).
+  externalMcpKeylessConnectionId: (serverId: string) => `external-mcp-keyless-${serverId}`,
+  registerExternalMcpKeylessConnectionIdentity: async (connectionId: string) => {
+    registeredKeylessIdentities.push(connectionId);
+  },
+  // The live identity the derived id addresses. This file holds no identity
+  // store, so nothing is ever registered here; the owner/workspace
+  // reconciliation itself is measured over the REAL seam in
+  // `mcp-server-connection-workspace-share.test.ts`.
+  // A live identity row for every derived id, so the reconciling roads have
+  // something to witness. The row id carries the connection id it belongs to,
+  // which is what the recorder reads back. `keylessIdentityOwner` decides whose
+  // it is; set it to null for a row that has no identity at all.
+  readExternalMcpKeylessConnectionIdentity: async (connectionId: string) =>
+    keylessIdentityOwner === null
+      ? null
+      : { id: `identity:${connectionId}`, ownerUserId: keylessIdentityOwner, organizationId: null },
+  // cinatra#3485 fix leg 5: the caller's own condition travels down to the
+  // write, so the store asks it once more before it retires anything.
+  retireExternalMcpKeylessConnectionIdentityRow: async (
+    identityId: string,
+    onlyWhile?: () => boolean,
+  ) => {
+    if (onlyWhile !== undefined && !onlyWhile()) return;
+    retiredKeylessIdentities.push(identityId.replace(/^identity:/, ""));
+  },
 }));
 
 // Import AFTER the mocks are registered.
@@ -146,8 +230,12 @@ beforeEach(() => {
   sessionActiveOrganizationId = null;
   servers.clear();
   authzOverride.clear();
+  storeClock = 0;
   importedApiKeys.length = 0;
   revokedConnections.length = 0;
+  retiredKeylessIdentities.length = 0;
+  registeredKeylessIdentities.length = 0;
+  keylessIdentityOwner = "u1";
   apiKeyImportShouldFail = false;
 });
 
@@ -344,6 +432,80 @@ describe("createServerHandler API key persistence (cinatra#1407 defect 1)", () =
     expect(revokedConnections).toContain("external-mcp-old");
   });
 
+  it("EVERY keyed save reconciles the row's keyless identity, not only its first upgrade", async () => {
+    // A row that already carries a credential: the first upgrade is long past,
+    // so a keyless identity still live here is one an earlier retire failed to
+    // take away. The save has to retire it anyway.
+    servers.set("k1", {
+      id: "k1",
+      scope: "user",
+      userId: "u1",
+      label: "K",
+      serverUrl: "https://k",
+      nangoConnectionId: "external-mcp-old",
+    });
+    await createServerHandler({ id: "k1", label: "K", serverUrl: "https://k", scope: "user", apiKey: "sk-new" });
+    expect(retiredKeylessIdentities).toEqual(["external-mcp-keyless-k1"]);
+    // IDENTITY-ONLY: a keyless id never reaches the credential service, on this
+    // road or any other. The only credential call is the prior key's revoke.
+    expect(revokedConnections).toEqual(["external-mcp-old"]);
+    expect(registeredKeylessIdentities).toEqual([]);
+  });
+
+  it("a keyless save whose row is GONE by the time the identity is registered registers nothing", async () => {
+    // The row lands, then the other request deletes it: the fresh re-read the
+    // registration is guarded on no longer finds it.
+    authzOverride.set("gone-1", null);
+    await createServerHandler({ id: "gone-1", label: "G", serverUrl: "https://g", scope: "user" });
+    expect(registeredKeylessIdentities).toEqual([]);
+  });
+
+  it("an ordinary keyless save registers exactly ONE identity for the row it wrote", async () => {
+    // The witness the two cases below rest on must not be one that refuses
+    // everything: a plain save of a plain row still gets its identity.
+    await createServerHandler({ id: "plain-1", label: "P", serverUrl: "https://p", scope: "user" });
+    expect(registeredKeylessIdentities).toEqual(["external-mcp-keyless-plain-1"]);
+    expect(revokedConnections).toEqual([]);
+  });
+
+  it("a keyless save whose row was REPLACED at the same id registers nothing and retires nothing", async () => {
+    // cinatra#3485 fix leg 2. The row the fresh read hands back has the same
+    // scope, the same absent owner and no key, and it is still not this save's
+    // row: it was created at a different instant, which is what a delete and a
+    // fresh registration at the same id leave behind. Scope, owner and the
+    // missing key cannot tell the two apart, so without the stamps this save
+    // would retire the replacement's identity and register its own over it.
+    platformAdmin = true;
+    servers.set("g9", {
+      id: "g9",
+      scope: "global",
+      userId: null,
+      label: "G",
+      serverUrl: "https://g",
+      nangoConnectionId: null,
+      createdAt: "2026-01-01T00:00:10.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+    });
+    // What every fresh read of this id returns: the replacement, with the
+    // stamps of a row this save never wrote.
+    authzOverride.set("g9", {
+      id: "g9",
+      scope: "global",
+      userId: null,
+      label: "G",
+      serverUrl: "https://g",
+      nangoConnectionId: null,
+      createdAt: "2026-02-02T00:00:00.000Z",
+      updatedAt: "2026-02-02T00:00:00.000Z",
+    });
+    // The identity the replacement's own registration left behind, owned by the
+    // person who registered it.
+    keylessIdentityOwner = "other-admin";
+    await createServerHandler({ id: "g9", label: "G", serverUrl: "https://g", scope: "global" });
+    expect(registeredKeylessIdentities).toEqual([]);
+    expect(retiredKeylessIdentities).toEqual([]);
+  });
+
   it("rolls back the just-imported credential when the guarded write CONFLICTS (TOCTOU)", async () => {
     // Real row is global; authz view says the actor owns a user row → per-op authz
     // passes, guarded UPDATE conflicts. The imported credential must be revoked and
@@ -482,12 +644,27 @@ describe("deleteServerHandler authz", () => {
     const r = await deleteServerHandler({ id: "k1" });
     expect(r.banner).toBe("deleted");
     expect(revokedConnections).toContain("external-mcp-x");
+    // The keyed delete road is UNCHANGED at the credential store: exactly the
+    // row's own stored connection, and no request for the derived keyless id
+    // (codex convergence finding 4).
+    expect(revokedConnections).toEqual(["external-mcp-x"]);
+    expect(retiredKeylessIdentities).toEqual(["external-mcp-keyless-k1"]);
   });
 
-  it("a KEYLESS row delete revokes nothing", async () => {
+  it("a KEYLESS row delete retires its own identity and revokes NOTHING at the credential store", async () => {
     servers.set("k2", { id: "k2", scope: "user", userId: "u1", label: "K2", serverUrl: "https://k2" });
     await deleteServerHandler({ id: "k2" });
-    expect(revokedConnections).toHaveLength(0);
+    // cinatra#3485 CHANGED this case’s expectation. A keyless row now carries an
+    // `externalMcp` connection identity of its own (addressed by the id derived
+    // from the row, not by a credential pointer), so the delete takes the same
+    // identity-first road to soft-delete it — previously it revoked nothing at
+    // all and the identity would have outlived the server on the Sharing tab.
+    // The row still stores no credential, so no credential connection id is
+    // revoked: the credential road is not travelled at all, and the identity is
+    // retired identity-ONLY (codex convergence finding 4 changed this from a
+    // credential-road revoke of the derived id).
+    expect(revokedConnections).toEqual([]);
+    expect(retiredKeylessIdentities).toEqual(["external-mcp-keyless-k2"]);
   });
 
   it("delete guard CONFLICTS when the row was re-keyed under the actor (keeps the live connection)", async () => {

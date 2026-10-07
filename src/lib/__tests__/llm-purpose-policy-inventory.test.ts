@@ -55,6 +55,9 @@ const IMPLICIT_RESOLVERS = [
   "resolveBoundDefaultAdapter",
   "resolveFirstAvailableAdapter",
   "resolveDefaultImageAdapter",
+  // The provider-returning form of `resolveDefaultImageAdapter`: it takes the
+  // operator's stored image default too, so it is an implicit site as well.
+  "resolveDefaultImageProvider",
   "hasConfiguredLlmRuntime",
   // cinatra#2094 F10 — the provider-NAMING counterpart of `hasConfiguredLlmRuntime`.
   // It walks the SAME implicit order (resolveImplicitGlobalProviderOrder) and is

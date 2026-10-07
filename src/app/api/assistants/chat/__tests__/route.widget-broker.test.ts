@@ -582,3 +582,59 @@ describe("the thread container is taken from the VERIFIED principal, never from 
     });
   });
 });
+
+// cinatra#3715 — the turn endpoint's own `cit_` consume is the SAME shared
+// consume the capabilities check calls, so a site connected through the
+// handshake only (its `connect_sites` row, no connector instance) is answered by
+// the consume's configured-site re-check, not by anything in this route. The
+// consume's matrix is proven in widget-token-broker.test.ts; here the route half:
+// the consume is asked with the entry's own auth (its connect client) and the
+// unified aud, the re-pin asks the handshake's one rule, and a refusal starts no turn.
+describe("cinatra#3715 — a handshake-connected site's turn rides the shared consume", () => {
+  const OWN_INSTANCE_ID = "33333333-3333-4333-8333-333333333333";
+
+  beforeEach(() => {
+    consumeUserWidgetToken.mockReturnValue({
+      ok: true,
+      claims: {
+        userId: "user-7",
+        orgId: "org-3",
+        siteId: "site-1",
+        client: "wordpress",
+        siteOrigin: ORIGIN,
+        agentSlug: "wordpress-content-editor",
+        instanceId: OWN_INSTANCE_ID,
+        jti: "u1",
+      },
+    });
+    resolveCanonicalInstanceForOrigin.mockReturnValue(OWN_INSTANCE_ID);
+  });
+
+  it("starts the turn when the shared consume accepts the site's connect-site-bound token", async () => {
+    const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+    expect(res.status).toBe(200);
+    expect(consumeWidgetStreamToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auth: WP_ENTRY.entry.auth,
+        routePath: "/api/assistants/chat",
+        requestOrigin: ORIGIN,
+      }),
+    );
+    expect(resolveCanonicalInstanceForOrigin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        claimedInstanceId: OWN_INSTANCE_ID,
+        connectSiteFallbackClient: "wordpress",
+      }),
+    );
+    expect(streamAgUiChatTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts NO turn when the shared consume refuses the site's token (origin_unconfigured)", async () => {
+    consumeWidgetStreamToken.mockReturnValue({ ok: false, reason: "origin_unconfigured" });
+    const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+    expect(res.status).toBe(401);
+    expect(consumeUserWidgetToken).not.toHaveBeenCalled();
+    expect(streamAgUiChatTurn).not.toHaveBeenCalled();
+    expect(runAssistantTurn).not.toHaveBeenCalled();
+  });
+});

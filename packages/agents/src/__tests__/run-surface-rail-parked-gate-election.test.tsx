@@ -492,9 +492,13 @@ describe("the run screen reads the parked gate ONCE and hands it to both halves"
     // AND THE SCHEDULING PARK IS COUNTED IN THE SAME ANSWER (cinatra#3221, fix
     // leg 8): a run stopped at its schedule mounts the rail on its own too, and
     // the frame the panels are handed is one answer, not one per gate class.
+    // AND A REVIEW ROW THAT OPENS IN PLACE IS IN THE SAME ANSWER (cinatra#3693):
+    // the settled-gate and Audit rows select a step of the run detail, and the
+    // selection only exists inside the frame.
     expect(SCREEN_SRC).toMatch(
-      /const railFramesTheRunDetail =\s*\n\s*inputStepsInRail \|\|\s*\n\s*hasRecommendationStep \|\|\s*\n\s*scheduleRailRef !== null \|\|\s*\n\s*parkedScheduleStep \|\|\s*\n\s*parkedGateStep;/,
+      /const railFramesTheRunDetail =\s*\n\s*inputStepsInRail \|\|\s*\n\s*hasRecommendationStep \|\|\s*\n\s*scheduleRailRef !== null \|\|\s*\n\s*parkedScheduleStep \|\|\s*\n\s*parkedGateStep \|\|/,
     );
+    expect(SCREEN_SRC).toMatch(/reviewSelectionSteps\.length > 0;/);
     const factAt = SCREEN_SRC.indexOf("const parkedGateStep = runParkedAtTrailingGate({");
     const frameAt = SCREEN_SRC.indexOf("const railFramesTheRunDetail =");
     expect(factAt).toBeGreaterThan(-1);

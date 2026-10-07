@@ -381,3 +381,24 @@ describe("cinatra#3328 — the handshake identity resolves through connect_sites
     expect(listActiveConnectSiteOriginsMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3715 — the sign-in now asks the gate's handshake rule too, so the one
+// case the rule leaves to the connector road is pinned here: a connector row
+// that carries the application's own id answers by the connector road, and the
+// handshake road is never consulted for it.
+// ---------------------------------------------------------------------------
+describe("cinatra#3715 — the handshake road answers only when the connector holds no row for the id", () => {
+  it("a single connector row carrying the application's own id answers by the connector road", () => {
+    readConnectorConfigMock.mockReturnValue({
+      instances: [{ id: HANDSHAKE_ID, siteUrl: "https://elsewhere.example/wp-admin" }],
+    });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://blog.example"]);
+    readInstanceIdentityMock.mockReturnValue({ instanceId: HANDSHAKE_ID });
+    expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: HANDSHAKE_ID })).toBe(
+      "https://elsewhere.example",
+    );
+    expect(listActiveConnectSiteOriginsMock).not.toHaveBeenCalled();
+    expect(readInstanceIdentityMock).not.toHaveBeenCalled();
+  });
+});

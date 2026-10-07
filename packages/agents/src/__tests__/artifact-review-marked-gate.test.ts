@@ -1,3 +1,4 @@
+import { planPerArtifactReviewGates } from "@/lib/artifacts/artifact-review-target";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // cinatra#1796 (epic #1620 S13) — the execution.ts MARKED artifact-review gate.
@@ -54,7 +55,7 @@ const storeMock = vi.hoisted(() => ({
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
-  transitionRunStatus: vi.fn(async () => undefined),
+  transitionRunStatus: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
   RunTransitionError: class RunTransitionError extends Error {
     code: string;
     constructor(code: string, msg: string) {
@@ -96,6 +97,18 @@ import { handleWayflowTaskState } from "../execution";
 const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 import type { AgentRunRecord } from "../store";
 
+// Observe real inventory readings from the actual caller. The implementation
+// itself remains real; the spy retains both the input and the exact reading.
+const { inventorySpy } = vi.hoisted(() => ({ inventorySpy: vi.fn() }));
+vi.mock("@/lib/artifacts/artifact-review-target", async (orig) => {
+  const actual = await orig<typeof import("@/lib/artifacts/artifact-review-target")>();
+  return { ...actual, inventoryReviewTargets: (value: unknown) => {
+    const reading = actual.inventoryReviewTargets(value);
+    inventorySpy(value, reading);
+    return reading;
+  } };
+});
+
 // The boot-bound gate seam execution.ts reads off globalThis. Spied per test.
 type EmitResult =
   | { ok: true }
@@ -109,12 +122,27 @@ const emitSpy = vi.fn<
   }) => Promise<EmitResult>
 >(async () => ({ ok: true }));
 const readGateSpy = vi.fn<
-  (runId: string, reviewTaskId: string) => Promise<{ orgId: string; status: string } | null>
+  (runId: string, reviewTaskId: string) => Promise<{ orgId: string; status: string; targets?: unknown } | null>
 >(async () => null);
+// cinatra#3035 (epic #3023 W11): the seam also lists the run's own gates, so a
+// review that opens one per artifact can route to the first still unread.
+const listGatesSpy = vi.fn<
+  (runId: string) => Promise<Array<{ reviewTaskId: string; status: string }>>
+>(async () => []);
+const decideSpy = vi.fn(async (input: { targets: unknown }) => ({ review: true, targets: input.targets, reason: "review the declared work" }));
 function bindSeam() {
   (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
+    decideDeclaredReview: decideSpy,
     emit: emitSpy,
+    emitFamily: async (input: { runId: string; orgId: string; reviewTaskId: string; targets: unknown }) => {
+      for (const leg of planPerArtifactReviewGates(input)) {
+        const result = await emitSpy({ ...input, reviewTaskId: leg.reviewTaskId, targets: leg.targets });
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    },
     readGate: readGateSpy,
+    listGates: listGatesSpy,
   };
 }
 function unbindSeam() {
@@ -220,6 +248,8 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     storeMock.updateAgentRunA2AContextId.mockResolvedValue(undefined);
     emitSpy.mockResolvedValue({ ok: true });
     readGateSpy.mockResolvedValue(null);
+    listGatesSpy.mockResolvedValue([]);
+    decideSpy.mockImplementation(async (input: { targets: unknown }) => ({ review: true, targets: input.targets, reason: "review the declared work" }));
     bindSeam();
   });
   afterEach(() => unbindSeam());
@@ -237,12 +267,21 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     });
 
     // (1) Pinned with the run's immutable targets under the wayflow reviewTaskId.
-    expect(emitSpy).toHaveBeenCalledTimes(1);
-    expect(emitSpy).toHaveBeenCalledWith({
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy).toHaveBeenNthCalledWith(1, {
       runId: "run-rev-1",
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
-      targets: TARGETS,
+      targets: [TARGETS[0]],
+    });
+    expect(emitSpy).toHaveBeenNthCalledWith(2, {
+      runId: "run-rev-1",
+      orgId: "org-rev",
+      reviewTaskId: "wayflow-task-rev-1#2",
+      targets: [TARGETS[1]],
     });
 
     // (2) Routed via the redirect renderer id — NOT the legacy reviewer envelope.
@@ -251,14 +290,19 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
     expect(invocationId).toBe("wayflow-task-rev-1");
     const v = values as Record<string, unknown>;
-    // Owner ruling 2026-07-25 (3): the review surface lives UNDER the agent run.
-    // The template packageName (@cinatra-ai/web-research-agent) → the run base
-    // /agents/cinatra-ai/web-research-agent/run-rev-1, then the review sub-path.
+    // Owner ruling 2026-07-25 (3): the review reads UNDER the agent run — and
+    // since cinatra#3693 it reads IN it, with no page of its own. The template
+    // packageName (@cinatra-ai/web-research-agent) gives the run base
+    // /agents/cinatra-ai/web-research-agent/run-rev-1, and the gate travels as
+    // the run detail's own rail selection rather than as a sub-path.
     expect(v.reviewSurfaceUrl).toBe(
-      "/agents/cinatra-ai/web-research-agent/run-rev-1/review/wayflow-task-rev-1",
+      "/agents/cinatra-ai/web-research-agent/run-rev-1?step=review%3Awayflow-task-rev-1",
     );
+    expect(v.reviewSurfaceUrl).not.toContain("/review/");
     expect(v.reviewTaskId).toBe("wayflow-task-rev-1");
-    expect(v.targetCount).toBe(2);
+    // cinatra#3035 (epic #3023 W11): the surface a person lands on shows ONE
+    // artifact — the first of the two the set named.
+    expect(v.targetCount).toBe(1);
     expect(v.agentSummary).toBe("Two items ready for your review.");
     // cinatra#1796: the host synthesizes no review envelope at all any more —
     // the synthesis was deleted with the reviewer rendering teardown. These stay
@@ -294,27 +338,14 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect(xRenderer).not.toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
   });
 
-  it("unbound seam fails CLOSED — routes to the review surface, never a dual path", async () => {
-    // Boot has not bound the seam (a near-impossible degraded state). We cannot
-    // pin nor read the gate, so we must NOT also emit the legacy gate (a prior
-    // execution may already have pinned this gate → dual path). Route to the
-    // review surface instead (fail-closed).
+  it("App163: an unbound seam cannot read policy or authorize a new decision path", async () => {
     unbindSeam();
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
-
-    await handleWayflowTaskState({
-      authority: TEST_AUTHORITY,
-      runId: run.id,
-      run,
-      fromStatus: "running",
-      task: inputRequiredTask("summary"),
-    });
-
+    await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("summary") })).rejects.toThrow();
     expect(emitSpy).not.toHaveBeenCalled();
-    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
-    const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
-    expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 
   it("pin-conflict on a USABLE same-org pending gate routes to it (single decision path)", async () => {
@@ -423,8 +454,323 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       task: inputRequiredTask("summary"),
     });
 
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
+
+  it("pins the target set the gate's own surfaced message carries, which is the only road on the pinned runtime (cinatra#3035)", async () => {
+    // The pinned runtime never writes task.metadata on an interrupt: a flagged
+    // gate hands its inputs over only as its own message, a JSON object whose
+    // marked value is itself a JSON string. The run's start default (an empty
+    // set) must not shadow it.
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: [] });
+
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY,
+      runId: run.id,
+      run,
+      fromStatus: "running",
+      task: inputRequiredTask(JSON.stringify({ reviewTargets: JSON.stringify([TARGETS[0]]) })),
+    });
+
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith({
+      runId: "run-rev-1",
+      orgId: "org-rev",
+      reviewTaskId: "wayflow-task-rev-1",
+      targets: [TARGETS[0]],
+    });
+    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+    const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
+    expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+  });
+
+  it.each(["pending", "resolved"] as const)("grandfathered %s combined pause replays as minted without scalar siblings", async (status) => {
+    const originalId = "wayflow-task-rev-1";
+    const original = { orgId: "org-rev", status, targets: [...TARGETS], disposition: status === "resolved" ? "reject" : null, fingerprint: "original-fingerprint" };
+    const before = JSON.stringify(original);
+    const rows = new Map([[originalId, original]]);
+    readGateSpy.mockImplementation(async (_runId, id) => rows.get(id) ?? null);
+    listGatesSpy.mockImplementation(async () => [...rows.entries()].map(([reviewTaskId, row]) => ({ reviewTaskId, status: row.status })));
+    emitSpy.mockImplementation(async (input) => {
+      const existing = rows.get(input.reviewTaskId);
+      if (existing) {
+        return JSON.stringify(input.targets) === JSON.stringify(existing.targets) && input.orgId === existing.orgId
+          ? { ok: true }
+          : { ok: false, code: "pin-conflict", message: "the original pins are immutable" };
+      }
+      const targets = input.targets as typeof TARGETS;
+      if (targets.length !== 1) return { ok: false, code: "invalid-targets", message: "new gates must be singleton" };
+      rows.set(input.reviewTaskId, { orgId: input.orgId, status: "pending", targets, disposition: null, fingerprint: "new" });
+      return { ok: true };
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("original combined review") });
+    expect([...rows.keys()]).toEqual([originalId]);
+    expect(JSON.stringify(rows.get(originalId))).toBe(before);
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith({ runId: run.id, orgId: run.orgId, reviewTaskId: originalId, targets: TARGETS });
+    const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;
+    expect(renderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+    expect(routedId).toBe(originalId);
+    expect((values as Record<string, unknown>).targetCount).toBe(2);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  for (const fromStatus of ["running", "pending_approval"] as const) {
+    it.each(["missing", "foreign", "resolved", "unreadable", "list-unreadable"] as const)(
+      `a failed inventory or later %s refusal cannot authorize a second decision (${fromStatus})`,
+      async (recovery) => {
+        const originalId = "wayflow-task-rev-1";
+        const rows = new Map<string, { orgId: string; status: string; targets: typeof TARGETS }>();
+        emitSpy.mockImplementation(async (input) => {
+          if (input.reviewTaskId === originalId) {
+            rows.set(originalId, { orgId: input.orgId, status: "pending", targets: input.targets as typeof TARGETS });
+            return { ok: true };
+          }
+          return { ok: false, code: "invalid-targets", message: "later artifact could not be pinned" };
+        });
+        readGateSpy.mockImplementation(async (_runId, id) => {
+          if (id === originalId) return rows.get(id) ?? null;
+          if (recovery === "unreadable") throw new Error("later gate unreadable");
+          if (recovery === "foreign") return { orgId: "org-OTHER", status: "pending", targets: [TARGETS[1]] };
+          if (recovery === "resolved") return { orgId: "org-rev", status: "resolved", targets: [TARGETS[1]] };
+          return null;
+        });
+        listGatesSpy.mockImplementation(async () => {
+          if (recovery === "list-unreadable") throw new Error("gate list unavailable");
+          return [...rows.entries()].map(([reviewTaskId, row]) => ({ reviewTaskId, status: row.status }));
+        });
+        storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+        const run = makeRun({ reviewTargets: TARGETS });
+        const attempt = handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus, task: inputRequiredTask("partial review mint") });
+        if (recovery === "list-unreadable") {
+          // App160 supersedes the old post-mint fallback: the initial read
+          // refuses before any gate or second decision can be created.
+          await expect(attempt).rejects.toThrow("gate list unavailable");
+          expect(emitSpy).not.toHaveBeenCalled();
+          expect([...rows.keys()]).toEqual([]);
+          expect(onInterruptSpy).not.toHaveBeenCalled();
+          expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+          return;
+        }
+        await expect(attempt).rejects.toThrow("Declared review family could not be pinned");
+        expect(listGatesSpy).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledTimes(2);
+        expect([...rows.keys()]).toEqual([originalId]);
+        expect(rows.get(originalId)?.status).toBe("pending");
+        // The storage-boundary fake above is scalar; the real atomic port's
+        // rollback is covered in artifact-review-single-target-mint.test.ts.
+        // The caller never exposes its failed family as a new decision path.
+        expect(onInterruptSpy).not.toHaveBeenCalled();
+        expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+      },
+    );
+  }
+
+  it("a combined gate appearing after the preflight read cannot acquire a scalar sibling", async () => {
+    const originalId = "wayflow-task-rev-1";
+    const original = { orgId: "org-rev", status: "pending", targets: [...TARGETS], disposition: null, fingerprint: "race-original" };
+    const before = JSON.stringify(original);
+    const rows = new Map<string, typeof original>();
+    readGateSpy.mockImplementation(async (_runId, id) => rows.get(id) ?? null);
+    listGatesSpy.mockImplementation(async () => [...rows.entries()].map(([reviewTaskId, row]) => ({ reviewTaskId, status: row.status })));
+    emitSpy.mockImplementation(async (input) => {
+      if (input.reviewTaskId === originalId) {
+        // Another execution minted the historical gate after the null preflight.
+        rows.set(originalId, original);
+        if (JSON.stringify(input.targets) === JSON.stringify(original.targets)) return { ok: true };
+        return { ok: false, code: "pin-conflict", message: "the existing complete pins differ" };
+      }
+      rows.set(input.reviewTaskId, { orgId: input.orgId, status: "pending", targets: input.targets as typeof TARGETS, disposition: null, fingerprint: "new" });
+      return { ok: true };
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("preflight race") });
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect([...rows.keys()]).toEqual([originalId]);
+    expect(JSON.stringify(rows.get(originalId))).toBe(before);
+    const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;
+    expect(renderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+    expect(routedId).toBe(originalId);
+    expect((values as Record<string, unknown>).targetCount).toBe(2);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a mismatched caller set cannot fork or replace an original combined review", async () => {
+    const originalId = "wayflow-task-rev-1";
+    const originalTargets = [...TARGETS, { artifactId: "art-original-3", representationRevisionId: "rev-original-3" }];
+    const original = { orgId: "org-rev", status: "pending", targets: originalTargets };
+    readGateSpy.mockResolvedValue(original);
+    emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "the complete original set differs" });
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("mismatched caller") });
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith({ runId: run.id, orgId: run.orgId, reviewTaskId: originalId, targets: TARGETS });
+    expect(original.targets).toEqual(originalTargets);
+    const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;
+    expect(renderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+    expect(routedId).toBe(originalId);
+    expect((values as Record<string, unknown>).targetCount).toBe(3);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a foreign original combined gate creates no scalar sibling and never redirects to that gate", async () => {
+    readGateSpy.mockResolvedValue({ orgId: "org-OTHER", status: "pending", targets: TARGETS });
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("foreign original") });
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy.mock.calls[0]![1]).not.toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+  });
+
+  it("an unreadable original-gate lookup cannot authorize scalar siblings", async () => {
+    readGateSpy.mockRejectedValue(new Error("original gate read unavailable"));
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("unavailable original") });
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy.mock.calls[0]![1]).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+  });
+
+  it("a prior gate without readable pins cannot authorize a new sibling", async () => {
+    readGateSpy.mockResolvedValue({ orgId: "org-rev", status: "pending" });
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("unreadable original pins") });
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy.mock.calls[0]![1]).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+    expect((onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>).targetCount).toBeNull();
+  });
+
+  it.each(["running", "pending_approval"] as const)("App160: an unavailable gate list blocks mint and new interrupt from %s", async (status) => {
+    const failure = new Error("existing gate list unavailable");
+    listGatesSpy.mockRejectedValue(failure);
+    const original = { orgId: "org-rev", status: "pending", targets: [...TARGETS], fingerprint: "immutable-before-read-failure" };
+    const before = JSON.stringify(original);
+    readGateSpy.mockResolvedValue(original);
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: status, task: inputRequiredTask("existing marked review") })).rejects.toBe(failure);
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(original)).toBe(before);
+  });
+
+  it.each(["running", "pending_approval"] as const)("App161: a differing revision cannot reuse the first leg or proceed from %s", async (fromStatus) => {
+    const originalId = "wayflow-task-rev-1";
+    const original = { orgId: "org-rev", status: "pending", targets: [TARGETS[0]], fingerprint: "immutable-v1" };
+    const before = JSON.stringify(original);
+    const newer = { artifactId: TARGETS[0].artifactId, representationRevisionId: "rev-NEW" };
+    const request = [TARGETS[0], newer, TARGETS[1]];
+    readGateSpy.mockResolvedValue(original);
+    listGatesSpy.mockResolvedValue([{ reviewTaskId: originalId, status: "pending" }]);
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: request });
+    const dispatch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No newer-revision action may dispatch from a held step"));
+    try {
+      await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus, task: inputRequiredTask("revision mismatch") });
+      expect(emitSpy).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(JSON.stringify(original)).toBe(before);
+      expect(run.inputParams?.reviewTargets).toEqual(request);
+      expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+      expect(onInterruptSpy.mock.calls[0]?.[1]).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+      expect(onInterruptSpy.mock.calls[0]?.[3]).toBe(originalId);
+      expect((onInterruptSpy.mock.calls[0]?.[2] as Record<string, unknown>).targetCount).toBe(1);
+      if (fromStatus === "running") expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", undefined, TEST_AUTHORITY);
+      else expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+      expect(storeMock.transitionRunStatus.mock.calls.every((call) => call[2] !== "running" && call[2] !== "completed")).toBe(true);
+    } finally { dispatch.mockRestore(); }
+  });
+
+  it.each([null, { artifactId: "unknown" }, "unknown-pin"])("App160: malformed caller pins %j cannot mint a valid subset beside an existing gate", async (invalid) => {
+    const original = { orgId: "org-rev", status: "pending", targets: [TARGETS[0]], fingerprint: "preserved-v1" };
+    const before = JSON.stringify(original);
+    readGateSpy.mockResolvedValue(original);
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: [TARGETS[0], invalid, invalid, TARGETS[1]] });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("unknown pins") });
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(original)).toBe(before);
+    expect(onInterruptSpy.mock.calls[0]?.[3]).toBe("wayflow-task-rev-1");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(["only-ambiguous", "other-after", "other-before"])("App162: without an original, %s refuses the whole ambiguous set and parks before any action", async (variation) => {
+    const newer = { artifactId: TARGETS[0].artifactId, representationRevisionId: "rev-NEW" };
+    const request = variation === "only-ambiguous" ? [TARGETS[0], newer] : variation === "other-after" ? [TARGETS[0], newer, TARGETS[1]] : [TARGETS[1], TARGETS[0], newer];
+    const before = JSON.stringify(request);
+    readGateSpy.mockResolvedValue(null);
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: request });
+    // Test a core-approved set as well as the existing resolver-fault controls:
+    // the executor must not turn two distinct revisions into two artifact gates.
+    const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> }).__cinatraArtifactReviewGateSeam!;
+    seam.decideDeclaredReview = vi.fn(async () => ({ review: true, reason: "review this declared work", targets: request }));
+    const dispatch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No ambiguous artifact action may dispatch from a held step"));
+    try {
+      await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("ambiguous revisions") });
+      expect(emitSpy).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(JSON.stringify(request)).toBe(before);
+      expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+      expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", undefined, TEST_AUTHORITY);
+      expect(storeMock.transitionRunStatus.mock.calls.every((call) => call[2] !== "running" && call[2] !== "completed")).toBe(true);
+    } finally { dispatch.mockRestore(); }
+  });
+
+  it.each(["exclude-A", "keep-one-A", "keep-two-A"])("App163: %s retains raw inventory and respects the successful policy result", async (policy) => {
+    const newer = { artifactId: TARGETS[0].artifactId, representationRevisionId: "rev-NEW" };
+    const raw = [TARGETS[0], newer, TARGETS[1]];
+    const before = JSON.stringify(raw);
+    const kept = policy === "exclude-A" ? [TARGETS[1]] : policy === "keep-one-A" ? [TARGETS[0], TARGETS[1]] : [TARGETS[0], newer];
+    decideSpy.mockResolvedValue({ review: true, targets: kept, reason: "approved existing policy result" });
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: raw });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("policy filtered review") });
+    expect(inventorySpy.mock.calls[0]?.[0]).toBe(raw);
+    expect(inventorySpy.mock.calls[0]?.[1]).toMatchObject({ rawTargetCount: 3, distinctValidPairCount: 3, validOccurrenceCount: 3, invalidOccurrenceCount: 0, validPairs: raw });
+    expect(inventorySpy.mock.calls.some(([value]) => value === kept)).toBe(true);
+    expect(JSON.stringify(raw)).toBe(before);
+    if (policy === "keep-two-A") expect(emitSpy).not.toHaveBeenCalled();
+    else {
+      expect(emitSpy).toHaveBeenCalledTimes(kept.length);
+      expect(emitSpy.mock.calls.map(([input]) => input.targets)).toEqual(kept.map((target) => [target]));
+      expect(emitSpy.mock.calls.flatMap(([input]) => input.targets as typeof raw)).not.toContainEqual(newer);
+    }
+    expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(run.id, "running", "pending_approval", undefined, TEST_AUTHORITY);
+  });
+
+  it.each(["throws", "missing"])("App163: a policy core that %s cannot authorize mint or action", async (mode) => {
+    const failure = new Error("policy core unavailable");
+    if (mode === "throws") decideSpy.mockRejectedValue(failure);
+    else delete (globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> }).__cinatraArtifactReviewGateSeam!.decideDeclaredReview;
+    const original = { orgId: "org-rev", status: "pending", targets: [TARGETS[0]], fingerprint: "immutable-before-core-fault" };
+    const before = JSON.stringify(original);
+    readGateSpy.mockResolvedValue(original);
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    const dispatch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No action may dispatch after a policy fault"));
+    try {
+      const result = handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("policy fault") });
+      if (mode === "throws") await expect(result).rejects.toBe(failure);
+      else await expect(result).rejects.toThrow();
+      expect(emitSpy).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(onInterruptSpy).not.toHaveBeenCalled();
+      expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+      expect(JSON.stringify(original)).toBe(before);
+    } finally { dispatch.mockRestore(); }
+  });
+
 });

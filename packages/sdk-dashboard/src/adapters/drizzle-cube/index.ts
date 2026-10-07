@@ -19,6 +19,11 @@ export type { RegisteredCube, CinatraCubeBuildSql } from "./types";
 export {
   createAgentRunsCube,
   AGENT_RUNS_CUBE_DESCRIPTOR,
+  // The copied halves of the host's launch-scope rule (cinatra#3693). Exported
+  // so the host can pin that the copy still agrees with its own constants.
+  AGENT_RUNS_LAUNCH_SCOPE_ANCHOR_VERSION,
+  AGENT_RUNS_LAUNCH_SCOPE_ID_KINDS,
+  AGENT_RUNS_LAUNCH_SCOPE_WORKSPACE_SENTINEL,
   type AgentRunsTable,
   type AgentRunsSecurityContext,
 } from "./cubes/agent-runs";

@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
 
 describe("AccessCombobox multi-select search clear button (cinatra#1607 / #1014)", () => {
   it("imports the lucide X icon (alongside the single-mode Check/ChevronDown/Lock)", () => {

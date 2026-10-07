@@ -68,6 +68,16 @@ vi.mock("../store/db", async () => {
     dashboards: {},
     getDashboardsDb: () => ({
       transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      // The write-tenancy pre-read (cinatra#2811): updateDashboard reads the
+      // row's organization before choosing the organization or workspace guard.
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () =>
+              state.row ? [{ organizationId: state.row.organizationId ?? null }] : [],
+          }),
+        }),
+      }),
     }),
   };
 });

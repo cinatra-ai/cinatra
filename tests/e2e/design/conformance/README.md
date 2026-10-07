@@ -242,6 +242,26 @@ entry to aspects, and removing entries/aspects, always passes. To cover a
 surface (or aspect): add the driver + harness mount + testid contract, and
 REMOVE the corresponding exemption in the same PR.
 
+## Workers per family (cinatra#3770)
+
+The functional-acceptance family (`functional-acceptance.spec.ts`) runs with
+four workers inside the design job, in its own Playwright project
+(`design-functional-acceptance`); every other family keeps one worker and runs
+its tests in order, so the pixel comparisons stay serial. The measured reason:
+over thirty design jobs on 2026-09-28 the suite took 35.6 to 47.7 minutes per
+job (median 39.7), and this family held 448 of its 762 tests and 31.1 to 35.4 of
+those minutes, while a separate job per family would build the app again each
+time (median 8.9 minutes and about 26 GB of memory per build). So the family
+shares the one build and the one server, and a worker measured about 2 GB during
+the suite phase, about 8 GB for four. It is split per surface (one surface's
+tests in order on one worker); its only shared state, the seeded namespace, is
+converged once by the configuration's global setup
+(`tests/e2e/design/seed-setup.ts`) before any worker starts, after which a
+provisioning call writes nothing. The number is one constant in
+`tests/e2e/config/design-workers.mjs`; the job prints the workers per family
+under its suite summary, and `tests/e2e/__tests__/design-workers.test.ts` holds
+the configuration to the rule.
+
 ## Running locally
 
 ```sh

@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 
 import { ScopeSurfacePage } from "@/components/scope-surface-page";
 import { ScopeAssistantsTab } from "@/components/scope-surfaces/scope-assistants-tab";
-import { readScopeSurfaceAssistantRows } from "@/lib/scope-surface-eligibility.server";
+import { scopeSurfaceTabBody } from "@/components/scope-surfaces/scope-surface-tab-body";
+import { readScopeSurfaceAssistantTab } from "@/lib/scope-surface-eligibility.server";
 import { requireAuthSession } from "@/lib/auth-session";
 
 export const metadata: Metadata = { title: "Assistants" };
@@ -17,19 +18,22 @@ export const metadata: Metadata = { title: "Assistants" };
 // about it at all; the tab's contents and their authorization arrive with the
 // slice that fills this tab.
 // cinatra#2808 (per-scope surfaces S2) fills this tab: the eligibility loader
-// decides what this scope reaches, and the tab body draws it. An empty read
-// keeps S1's honest placeholder — the shell never claims the scope holds
-// nothing on a read it did not take.
+// decides what this scope reaches, and the tab body draws it. A read that
+// answered with no rows draws the tab's own empty reading (cinatra#3707); only
+// a read that could not be taken passes no body, so the shell's placeholder is
+// left to a tab that reads nothing at all.
 export default async function WorkspaceAssistantsPage() {
   await requireAuthSession();
   const scope = { kind: "workspace" } as const;
-  const rows = await readScopeSurfaceAssistantRows(scope);
+  const assistants = await readScopeSurfaceAssistantTab(scope);
   return (
     <ScopeSurfacePage
       scope={scope}
       tab="assistants"
       title="Workspace"
-      body={rows.length > 0 ? <ScopeAssistantsTab rows={rows} /> : undefined}
+      body={scopeSurfaceTabBody("assistants", assistants, (rows) => (
+        <ScopeAssistantsTab rows={rows} />
+      ))}
     />
   );
 }

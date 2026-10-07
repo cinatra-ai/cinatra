@@ -7,7 +7,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { writeFile, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { redirect } from "next/navigation";
 import {
@@ -42,6 +42,15 @@ import {
   LicenseDetectionRejectedError,
   LicenseAcknowledgementRequiredError,
 } from "@cinatra-ai/extensions/license-detection";
+// cinatra#3493 — TYPE-ONLY imports of the runtime-mount collaborators. The
+// modules themselves are pulled in with `await import(...)` on the
+// supplied-install branch only (see `requireRuntimeMount`): this file is
+// deliberately importable from `instrumentation.node.ts` and the other
+// server-startup paths, and those paths must not gain the runtime mount's
+// extension-data-root -> database edge just to seed an agent at boot. A type
+// import is erased, so the module graph of every existing caller is unchanged.
+import type { MaterializeResult } from "./materialize-agent-package";
+import type { ReloadResult } from "./wayflow-reload-client";
 
 // agent.json is a compact OAS Flow document. Per-step approval policy,
 // inputSchema, outputSchema, prompt, and
@@ -118,6 +127,28 @@ export async function importAgentTemplateCore(
      *  session's active organization; boot seeding has none and claims as the
      *  instance operator. Defaults to `orgId` when omitted. */
     claimantOrgId?: string | null;
+    /** cinatra#3493 — mark this import as a SUPPLIED INSTALL: a package a
+     *  person uploaded through the import screen's File tab (or `agent_import`),
+     *  which must be RUNNABLE the moment the screen says it is installed.
+     *
+     *  This path used to write the template row and report success while
+     *  writing NOTHING to the agent runtime mount — it never called
+     *  `materializeAgentPackageToDisk` and never called `triggerWayflowReload`.
+     *  On a production instance the runtime therefore mounted nothing, the
+     *  agent card answered 404 and the run could not start, while the screen
+     *  reported "installed and published".
+     *
+     *  With this flag the import MATERIALIZES the uploaded package under
+     *  `<extension-data-root>/.agent-mount/<vendor>/<slug>/` — the deploy-owned
+     *  tree every runtime reader scans — BEFORE the template row is written,
+     *  RELOADS the runtime after the row commits, and REFUSES to report success
+     *  when either step leaves the agent unmounted.
+     *
+     *  The startup seeding callers (`ensureAgentPackage`,
+     *  `ensureAgentPackageFromGitFile`) leave it unset and are byte-identical to
+     *  before: they run before the runtime is necessarily reachable, and the
+     *  `agent-mount-projection` boot phase owns their projection. */
+    requireRuntimeMount?: boolean;
   },
 ): Promise<{ templateId: string; upserted: boolean }> {
   // cinatra#2616 — WHO is claiming the package name this import writes.
@@ -216,10 +247,40 @@ export async function importAgentTemplateCore(
   const tmpRoot = join(tmpdir(), `oas-import-${randomUUID()}`);
   const cinatraDir = join(tmpRoot, "agents", slug, "cinatra");
   await mkdir(cinatraDir, { recursive: true });
-  const tmpAgentJson = join(cinatraDir, "agent.json");
-  await writeFile(tmpAgentJson, agentRaw, "utf8");
+  // cinatra#3493 — the staged document is named `cinatra/oas.json`, THE one
+  // name the runtime mount is keyed by: `installed-oas-path.ts` resolves
+  // `<root>/<vendor>/<slug>/cinatra/oas.json` and deliberately offers no
+  // `agent.json` fallback, and `materializeAgentPackageToDisk` refuses a source
+  // directory that lacks it. The compiler is handed this path explicitly, so it
+  // reads exactly the bytes it always did; the rename is what lets this very
+  // staging directory be materialized into the mount below.
+  const tmpOasJson = join(cinatraDir, "oas.json");
+  await writeFile(tmpOasJson, agentRaw, "utf8");
   if (siblingPkgRaw) {
     await writeFile(join(tmpRoot, "agents", slug, "package.json"), siblingPkgRaw, "utf8");
+  }
+  // cinatra#3493 (convergence round 1) — stage the archive's REMAINING members
+  // at their own relative paths. The materializer copies an allowlist out of
+  // this directory (`cinatra/` whole, `skills/`, README, NOTICE, the declared
+  // logo — materialize-agent-package.ts `_copyRuntimeFiles`) and atomically
+  // REPLACES the mounted directory with the result, so anything the archive
+  // carried that was never staged here would simply be absent from the mount.
+  // Staging only `agent.json` + `package.json` would have materialized a
+  // three-file reduction of the uploaded package. Entries whose path escapes
+  // the package directory are refused rather than written.
+  const stagedAgentRoot = join(tmpRoot, "agents", slug);
+  for (const [entryName, entryContent] of files) {
+    if (entryName === "agent.json" || entryName === "package.json") continue;
+    if (entryName.endsWith("/")) continue;
+    const stagedPath = join(stagedAgentRoot, entryName);
+    if (isAbsolute(entryName) || !stagedPath.startsWith(stagedAgentRoot + sep)) {
+      await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      throw new Error(
+        `Invalid archive: entry ${JSON.stringify(entryName)} escapes the package directory.`,
+      );
+    }
+    await mkdir(dirname(stagedPath), { recursive: true });
+    await writeFile(stagedPath, entryContent, "utf8");
   }
 
   // SPDX license detection gate.
@@ -250,7 +311,7 @@ export async function importAgentTemplateCore(
       packageName:
         siblingPkgName ??
         `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`,
-      oasSourcePath: tmpAgentJson,
+      oasSourcePath: tmpOasJson,
     });
     if (!compileResult.ok) {
       throw new Error(
@@ -258,9 +319,14 @@ export async function importAgentTemplateCore(
       );
     }
     compiled = compileResult.value;
-  } finally {
-    // Cleanup temp directory regardless of compile outcome.
+  } catch (compileErr) {
+    // cinatra#3493 — the staging directory used to be removed on EVERY compile
+    // outcome, which is precisely why there was never anything left to
+    // materialize. It now survives a SUCCESSFUL compile and is cleaned up by
+    // the `finally` of the transaction below, once the runtime files have been
+    // copied out of it.
     await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+    throw compileErr;
   }
 
   // Install-time dynamic object-type minting is RETIRED (cinatra#1788, epic
@@ -281,7 +347,109 @@ export async function importAgentTemplateCore(
   };
   const effectiveType = compiled.type;
 
+  // cinatra#3493 — the supplied-install transaction state. `materializeResult`
+  // stays null on every other caller, and every branch below is then exactly
+  // what it was.
+  const requireRuntimeMount = options?.requireRuntimeMount === true;
+  let materializeResult: MaterializeResult | null = null;
+  let materializeCommitted = false;
+
+  /** cinatra#3493 — the LAST durable step of a supplied install: finalize the
+   *  materialize (drop the prior-version backup) and tell the runtime to mount
+   *  what was just written, then REFUSE to report success unless the runtime
+   *  actually mounted it. Every other install road in this repository reloads
+   *  here too — after the durable writes, exactly once per operation
+   *  (`wayflow-reload-client.ts`'s caller contract). The difference is that
+   *  those roads report a failed reload as `installed_pending_reload`; a person
+   *  who just uploaded an archive gets an honest failure instead, because an
+   *  unmounted agent is not an installed one. */
+  const finalizeRuntimeMount = async (): Promise<void> => {
+    if (!materializeResult || !materializeResult.materialized) return;
+    const { triggerWayflowReload } = await import("./wayflow-reload-client");
+    const reload = await triggerWayflowReload();
+    const unmounted = runtimeMountFailureReason(
+      reload,
+      effectivePackageName,
+      materializeResult.wasReinstall,
+    );
+    if (unmounted) {
+      // cinatra#3493 (convergence round 1) — the reload verdict is read BEFORE
+      // the materialize is committed. Committing first dropped the prior
+      // version's backup, so a RE-import whose reload failed left the new files
+      // on disk with no way back to the version the runtime is still serving.
+      // Throwing here with the commit NOT taken lets the catch below restore
+      // exactly what the mount held before this import.
+      throw new Error(
+        `[importAgentTemplateCore] '${effectivePackageName}' was written to the agent runtime ` +
+          `mount, but the runtime did not mount it (${unmounted}). The agent is NOT installed and ` +
+          "cannot run — upload the archive again once the runtime is reachable.",
+      );
+    }
+    const { commitMaterialize } = await import("./materialize-agent-package");
+    await commitMaterialize(materializeResult);
+    materializeCommitted = true;
+  };
+
+  /** cinatra#3493 (convergence round 1) — write the uploaded package into the
+   *  agent runtime mount.
+   *
+   *  Called AFTER the package name's identity claim has been resolved and
+   *  BEFORE the first durable write of either branch.
+   *  `resolveAgentTemplateIdentityClaim` refuses a name held by another
+   *  organization by THROWING, and agent-template-identity.ts states the
+   *  doctrine that refusal must land in the INERT window — before the disk
+   *  materialize. Materializing ahead of it would let an upload from another
+   *  organization replace an owned package's runtime files (and a concurrent
+   *  reload mount those bytes) before the refusal, with a rollback that cannot
+   *  unmount them again.
+   *
+   *  Idempotent: the second call on a path that already materialized is a
+   *  no-op. */
+  const ensureRuntimeMaterialized = async (): Promise<void> => {
+    if (!requireRuntimeMount || materializeResult) return;
+    if (!effectivePackageName) return;
+    const { materializeAgentPackageToDisk } = await import("./materialize-agent-package");
+    const { resolveAgentRuntimeMountDir } = await import("./agent-runtime-mount");
+    materializeResult = await materializeAgentPackageToDisk({
+      extractedTempDir: tmpAgentDir,
+      packageName: effectivePackageName,
+      agentInstallDir: resolveAgentRuntimeMountDir(),
+    });
+    if (!materializeResult.materialized) {
+      throw new Error(
+        `[importAgentTemplateCore] '${effectivePackageName}' could not be materialized under the ` +
+          `agent runtime mount (${materializeResult.reason}), so the runtime could never mount it. ` +
+          "The agent is NOT installed.",
+      );
+    }
+  };
+
   try {
+    // cinatra#3493 — MATERIALIZE BEFORE THE DB WRITE, the same ordering
+    // `installAgentFromPackage` uses (install-from-package.ts): the runtime
+    // files are the prerequisite for the reload, and a refusal here mutates
+    // nothing, so a package that can never be mounted leaves no row behind
+    // claiming it was installed. On a DB failure the catch below rolls the
+    // materialize back; on success `finalizeRuntimeMount` commits it.
+    //
+    // This does NOT go through `resolvePublishDestination` /
+    // `loadDeploymentRegistryConfig`: a LOCAL upload writes its own runtime
+    // files and needs no registry identity to do it, so the loader's
+    // fail-closed throw on a production build without registry env is not on
+    // this road's critical path at all. The origin-persistence block further
+    // down still calls the resolver and still degrades to a warning — that is
+    // best-effort package-coordinate METADATA, and nothing about the install
+    // reads through it.
+    if (requireRuntimeMount && !effectivePackageName) {
+      // Inert refusal: nothing has been written yet, and a package with no
+      // `@vendor/slug` name has no mount path the runtime could ever read.
+      throw new Error(
+        "[importAgentTemplateCore] this archive declares no package name, so it could not be " +
+          "materialized under the agent runtime mount and the runtime could never mount it. Add a " +
+          "`package.json` carrying a scoped `@vendor/slug` name to the archive and upload it again.",
+      );
+    }
+
     // --- Upsert path: if packageName is present, check for an existing template ---
     if (effectivePackageName) {
       // cinatra#2616 — resolve the claim instead of a bare name lookup: a name
@@ -294,6 +462,10 @@ export async function importAgentTemplateCore(
       if (existing) {
         // The claim rides the WRITE — the authoritative guard, as on the
         // install path.
+        // cinatra#3493 — the claim above resolved; the runtime files go in
+        // before the first durable write of this branch.
+        await ensureRuntimeMaterialized();
+
         const updated = await updateAgentTemplate(existing.id, {
           name: importedName,
           // compiledPlan is always [] for OAS flows — never overwrite existing DB value.
@@ -399,6 +571,9 @@ export async function importAgentTemplateCore(
           }
         }
 
+        // cinatra#3493 — mount and reload before this import can claim success.
+        await finalizeRuntimeMount();
+
         if (options?.redirect !== false) {
           redirect("/agents");
         }
@@ -408,6 +583,11 @@ export async function importAgentTemplateCore(
 
     // --- Create path ---
     const newId = randomUUID();
+
+    // cinatra#3493 — the claim (when this archive carries a package name) was
+    // resolved above; the runtime files go in before the first durable write of
+    // this branch.
+    await ensureRuntimeMaterialized();
 
     await createAgentTemplate({
       id: newId,
@@ -497,11 +677,24 @@ export async function importAgentTemplateCore(
       }
     }
 
+    // cinatra#3493 — mount and reload before this import can claim success.
+    await finalizeRuntimeMount();
+
     if (options?.redirect !== false) {
       redirect("/agents");
     }
     return { templateId: newId, upserted: false };
   } catch (err: unknown) {
+    // cinatra#3493 — a failure anywhere after the materialize would leave the
+    // runtime mount holding files no template row points at, so roll it back
+    // (restoring any prior version) unless the install already committed.
+    // `redirect()` raises its own control-flow error from INSIDE this block on
+    // the success path, which is exactly why the guard is the commit flag and
+    // not the presence of an error.
+    if (materializeResult && !materializeCommitted) {
+      const { rollbackMaterialize } = await import("./materialize-agent-package");
+      await rollbackMaterialize(materializeResult);
+    }
     if (
       err instanceof Error &&
       err.message.includes("agent_templates_package_name_idx")
@@ -511,5 +704,69 @@ export async function importAgentTemplateCore(
       );
     }
     throw err;
+  } finally {
+    // cinatra#3493 — the staging directory the compiler read and the
+    // materializer copied out of. Removed on every outcome, including the
+    // `redirect()` control-flow throw.
+    await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * cinatra#3493 — did a runtime reload leave THIS package unmounted?
+ *
+ * The reload report (docker/wayflow/agent_loader.py) carries what CHANGED —
+ * `added` / `changed` / `removed` / `failed`, each label `<vendor>/<slug>` —
+ * plus `agents`, the total the runtime has mounted. It does NOT enumerate the
+ * labels that were already mounted and unchanged, so a re-import of an
+ * identical package is named by neither `added` nor `changed`. This predicate
+ * therefore reports only what it can actually SEE to be a failure and never
+ * guesses at the rest:
+ *
+ *   - the reload did not happen at all (no runtime configured, HTTP, timeout,
+ *     network) — nothing confirms a mount;
+ *   - the runtime tried this very label and FAILED it;
+ *   - the runtime finished with ZERO agents mounted — the symptom measured on
+ *     the instance in #3493 — so this one is certainly not among them.
+ *
+ * Returns the reason to report to the person, or null when the runtime reports
+ * the package as mounted.
+ */
+function runtimeMountFailureReason(
+  reload: ReloadResult,
+  packageName: string | null,
+  wasReinstall: boolean,
+): string | null {
+  if (!reload.ok) {
+    return `the runtime reload did not succeed: ${reload.reason}${
+      reload.detail ? ` — ${reload.detail}` : ""
+    }`;
+  }
+  // The mount label is the package name without its leading `@`: the mount is
+  // `<mount>/<vendor>/<slug>` and the loader labels it `<vendor>/<slug>`.
+  const label = packageName?.startsWith("@") ? packageName.slice(1) : packageName;
+  const failedHere = label
+    ? reload.report.failed.find((entry) => entry.label === label)
+    : undefined;
+  if (failedHere) {
+    return `the runtime refused to mount ${label}: ${failedHere.error}`;
+  }
+  if (label && reload.report.removed.includes(label)) {
+    return `the runtime UNMOUNTED ${label} on this reload`;
+  }
+  if (reload.report.agents === 0) {
+    return "the runtime reports 0 mounted agents";
+  }
+  // cinatra#3493 (convergence round 1) — POSITIVE confirmation where the report
+  // can give it. A FRESH mount (nothing was there before this import) is new to
+  // the runtime, so the loader must name it in `added`; a non-zero total that
+  // never names this label means the runtime is serving OTHER agents and not
+  // this one — the aggregate count alone proves nothing about this package. A
+  // RE-install cannot be held to that bar: the report enumerates what changed,
+  // and a re-import of byte-identical content is named by neither `added` nor
+  // `changed`, so there the checks above are all the report can support.
+  if (!wasReinstall && label && !reload.report.added.includes(label)) {
+    return `the runtime did not report ${label} among the agents it mounted`;
+  }
+  return null;
 }

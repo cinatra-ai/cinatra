@@ -76,6 +76,7 @@ vi.mock("../recommendation-hold", () => ({
 }));
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
+  getActorContext: vi.fn(async () => undefined),
 }));
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),

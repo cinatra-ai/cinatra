@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Tabs, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
-import { AGENTS_NAV, type AgentsTabValue } from "@/lib/agents-nav";
+import { agentsNavFor, type AgentsTabValue } from "@/lib/agents-nav";
 
 type AgentsTabNavProps = {
   activeTab: AgentsTabValue;
@@ -14,9 +14,15 @@ type AgentsTabNavProps = {
    * keeps its tabs and stops drawing its trailing rule; the toolbar takes the
    * position directly under it. Both the All Agents list and the Executions
    * dashboard mount a toolbar and pass this; a view with no toolbar (the All
-   * Agents empty state, the Reviews tab) keeps the rule.
+   * Agents empty state, a scope's Agents tab) keeps the rule.
    */
   toolbarBelow?: boolean;
+  /**
+   * cinatra#3693 — the scope base the strip is drawn under (`/teams/<id>`, …).
+   * The drawing: "The Agents tab of every scope carries its own strip, All
+   * Agents | Executions". Absent or null, the strip is the bare one at the root.
+   */
+  scopeBase?: string | null;
 };
 
 // Route-based tab bar shown on BOTH /agents (All Agents) and
@@ -27,12 +33,12 @@ type AgentsTabNavProps = {
 // rule replaces the section rule a bare <PageHeader> would otherwise draw —
 // pair with `<PageHeader divider={false}>` on both routes (design-system.html
 // §Dividers; same pairing MetricApiNav already uses on /analytics/llm*).
-export function AgentsTabNav({ activeTab, toolbarBelow = false }: AgentsTabNavProps) {
+export function AgentsTabNav({ activeTab, toolbarBelow = false, scopeBase = null }: AgentsTabNavProps) {
   return (
     <div data-slot="agents-tab-nav" className="mx-auto mb-4 w-full max-w-7xl px-5 sm:px-8 lg:px-0">
       <Tabs value={activeTab}>
         <TabsListRow trailingRule={!toolbarBelow}>
-          {AGENTS_NAV.map((item) => (
+          {agentsNavFor(scopeBase).map((item) => (
             <TabsTrigger key={item.value} value={item.value} asChild>
               <Link href={item.href}>{item.label}</Link>
             </TabsTrigger>

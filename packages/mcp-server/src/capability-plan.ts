@@ -288,6 +288,24 @@ const CORE_PROPOSAL_OVERRIDE = {
   // frame carries a server-minted, signed, SINGLE-USE grant naming the person,
   // the message, the one bound card and the one control.
   lifecycle_bound_card_decide: "dispatch",
+  // cinatra#2934 (lifecycle-b W5c) — THE FILL, re-derived here for the same
+  // reason its sibling above is: the interim declaration shim this branch was
+  // written against has been deleted, and its header's own obligation was that
+  // the classes be RE-DERIVED at the host's real declaration table rather than
+  // inherited from a list. Without this line the primitive would be admitted by
+  // name and carry no declaration at all, which the ordered decision reads as
+  // "unexposed" — the feature would be silently withdrawn from chat while it
+  // stayed on the widget perimeter, the parity break
+  // `lifecycle-no-decide-primitives` catches.
+  //
+  // `dispatch` for the same reason, and with LESS authority than any other
+  // member: the fill resolves nothing — it places values in the fields of the
+  // one screen the person's own message was bound to and submits nothing. It
+  // sits in the OVERRIDE literal because it is admitted beside the lent action
+  // it belongs to, and admission is still not permission: the handler refuses
+  // unless the frame carries a verified grant naming the person, the
+  // organization and that card.
+  lifecycle_bound_screen_fill: "dispatch",
 } as const;
 /**
  * Every core/bundled primitive the host declares for, and the class it declares.

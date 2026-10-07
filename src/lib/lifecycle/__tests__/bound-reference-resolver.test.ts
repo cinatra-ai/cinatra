@@ -186,7 +186,11 @@ describe("a card that offers no decision lends none", () => {
     ]);
   });
 
-  it("a HITL screen lends Submit", () => {
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). W5a asserted `["submit"]`
+  // because the fill road did not exist yet; the plan's "fill and submit where
+  // fields wait" is now both, and they are deliberately different in kind — a
+  // fill presses nothing and spends no grant, a submit is the button.
+  it("a HITL screen lends Fill and Submit", () => {
     expect(
       controlsLentBy({
         kind: "hitl_screen",
@@ -195,7 +199,7 @@ describe("a card that offers no decision lends none", () => {
         xRenderer: "r",
         form: { schema: {}, values: {} },
       }),
-    ).toEqual(["submit"]);
+    ).toEqual(["fill", "submit"]);
   });
 
   it("an absent binding lends NOTHING", () => {

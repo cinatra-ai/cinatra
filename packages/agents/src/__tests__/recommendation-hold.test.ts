@@ -237,12 +237,19 @@ describe("resolveRecommendationCandidateSkillIds (cinatra#2148 finding 1)", () =
       sourceType: "agent_builder",
       dependentInstallId: null,
     });
-    expect(getAssignedSkillIdsForAgent).toHaveBeenCalledWith("@vendor/agent", {
-      principalId: "user-1",
-      teamIds: ["team-a"],
-      projectIds: ["proj-a"],
-      organizationId: "org-1",
-    });
+    // The run's own FROZEN scopes ride the read too (cinatra#2815 S3): without
+    // them the resolution takes the sole legacy fallback and the run's project,
+    // team and personal assignments never reach the candidate set.
+    expect(getAssignedSkillIdsForAgent).toHaveBeenCalledWith(
+      "@vendor/agent",
+      {
+        principalId: "user-1",
+        teamIds: ["team-a"],
+        projectIds: ["proj-a"],
+        organizationId: "org-1",
+      },
+      { snapshot: undefined, durableOrgId: "org-1" },
+    );
   });
 
   it("DROPS platformRole — the candidate set never rides the platform-admin bypass", async () => {
@@ -267,8 +274,14 @@ describe("resolveRecommendationCandidateSkillIds (cinatra#2148 finding 1)", () =
       packageName: "@vendor/agent",
     });
     expect(ids).toEqual(["s1"]);
-    expect(getAssignedSkillIdsForAgent).toHaveBeenCalledWith("@vendor/agent");
-    expect(getAssignedSkillIdsForAgent.mock.calls[0]).toHaveLength(1);
+    // ACTOR-free, still. The run's own frozen scopes ride along (cinatra#2815
+    // S3): they belong to the RUN, so an unresolvable actor narrows the actor
+    // axes and never the run's.
+    expect(getAssignedSkillIdsForAgent).toHaveBeenCalledWith("@vendor/agent", undefined, {
+      snapshot: undefined,
+      durableOrgId: "org-1",
+    });
+    expect(getAssignedSkillIdsForAgent.mock.calls[0][1]).toBeUndefined();
   });
 
   it("a THROWING actor resolver still resolves (degrades to the actor-free call)", async () => {
@@ -279,7 +292,7 @@ describe("resolveRecommendationCandidateSkillIds (cinatra#2148 finding 1)", () =
       packageName: "@vendor/agent",
     });
     expect(ids).toEqual(["s1"]);
-    expect(getAssignedSkillIdsForAgent.mock.calls[0]).toHaveLength(1);
+    expect(getAssignedSkillIdsForAgent.mock.calls[0][1]).toBeUndefined();
   });
 
   it("a THROWING catalog read degrades to [] (a recommendation read never fails a run)", async () => {
@@ -344,6 +357,7 @@ describe("resolveRecommendationCandidateSkillIds (cinatra#2148 finding 1)", () =
     expect(getAssignedSkillIdsForAgent).toHaveBeenCalledWith(
       "@vendor/agent",
       expect.objectContaining({ organizationId: "org-1" }),
+      expect.objectContaining({ durableOrgId: "org-1" }),
     );
     // The scorer is bounded by the actor-scoped set, so an org-scoped assignment
     // is a candidate the chip-row can offer.

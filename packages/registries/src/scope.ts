@@ -218,13 +218,21 @@ export function dependencyScopePrefixesFor(rootPackageName: string): string[] {
  * existing caller and every existing test is unchanged, and there is still only
  * one implementation.
  *
- * THE CHAIN, UNCHANGED. The hydration is manifest/registry metadata only:
+ * THE CHAIN. The hydration is manifest/registry metadata only:
  *
  *   1. the extension's SELF-DECLARED vendor identity name (`cinatra.vendor`
  *      from the generated static extension manifest — the value the
  *      marketplace publish gate verified);
  *   2. the registry summary's npm `author` (packument manifest metadata);
- *   3. null — the byline renders with no "by".
+ *   3. the vendor identity the package's OWN SCOPE declares elsewhere in that
+ *      same manifest — see {@link declaredVendorNameForScope} (cinatra#3447:
+ *      no agent entry of the shipped manifest declares a `cinatra.vendor` of
+ *      its own, so the §V settings header of every installed agent dropped its
+ *      "by {Vendor}" clause while the connectors of the very same scope
+ *      declared `{"key":"cinatra-ai","name":"Cinatra"}`);
+ *   4. null — the byline renders with no "by".
+ *
+ * Steps 1 and 2 are unchanged, and each step reads DECLARED data.
  *
  * The raw npm scope segment NEVER renders as the vendor (the shipped
  * `vendorFor` fell back to it — "Agent by cinatra-ai" — which the reopen
@@ -235,10 +243,58 @@ export function resolveInstalledVendorName(input: {
   manifestVendorName: string | null | undefined;
   /** Registry summary `author` (npm packument author, already length-capped). */
   author: string | null | undefined;
+  /**
+   * The name the package's own vendor scope DECLARES elsewhere in the same
+   * manifest ({@link declaredVendorNameForScope}), cinatra#3447. Optional: a
+   * caller with no manifest to consult keeps the two-step chain verbatim.
+   */
+  scopeVendorName?: string | null;
 }): string | null {
   const manifest = normalizeVendorName(input.manifestVendorName);
   if (manifest) return manifest;
-  return normalizeVendorName(input.author);
+  const author = normalizeVendorName(input.author);
+  if (author) return author;
+  return normalizeVendorName(input.scopeVendorName);
+}
+
+/** A manifest entry, reduced to the vendor identity it declares. */
+export interface DeclaredVendorEntry {
+  vendor?: { key?: unknown; name?: unknown } | null;
+}
+
+/**
+ * The HUMAN vendor name a package's own scope declares (cinatra#3447) — step 3
+ * of {@link resolveInstalledVendorName}.
+ *
+ * A vendor's packages carry ONE vendor identity (`{ key, name }`, the
+ * marketplace publish gate's own shape), and the key is that vendor's scope.
+ * So a package whose own entry declares none still has a DECLARED name to
+ * print whenever a sibling of its scope declares it: the name is read from
+ * declared data, never composed from the package name.
+ *
+ * Two refusals keep that honest:
+ *   • no entry of the scope declares a name → null (the byline drops the "by"),
+ *     because the raw npm scope segment NEVER renders as the vendor;
+ *   • the scope's entries disagree → null; a byline is not a guess.
+ */
+export function declaredVendorNameForScope(
+  entries: Iterable<DeclaredVendorEntry | null | undefined>,
+  packageName: string,
+): string | null {
+  const scope = vendorScopeOfPackage(packageName);
+  if (!scope) return null;
+  // The declared vendor KEY is the scope without npm's "@" — it is matched
+  // against declared data, never rendered.
+  const key = scope.slice(1);
+  const names = new Set<string>();
+  for (const entry of entries) {
+    const vendor = entry?.vendor;
+    if (!vendor || typeof vendor !== "object") continue;
+    if (vendor.key !== key) continue;
+    const name = typeof vendor.name === "string" ? normalizeVendorName(vendor.name) : null;
+    if (name) names.add(name);
+  }
+  return names.size === 1 ? [...names][0]! : null;
 }
 
 function normalizeVendorName(value: string | null | undefined): string | null {

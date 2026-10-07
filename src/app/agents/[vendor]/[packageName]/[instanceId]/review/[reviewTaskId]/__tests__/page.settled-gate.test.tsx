@@ -280,21 +280,43 @@ describe("a DECIDED gate composes the one card on the review page (cinatra#2904)
   });
 });
 
-describe("the run-step rail beside the review reads the run's own record (cinatra#3226)", () => {
-  it("hands the run's stepResults to buildRunStepperSteps, exactly as the run page does", async () => {
-    // `run-stepper-steps.ts` is ONE projection for both surfaces so the step
-    // list is identical on the run page and here. The run page names a step
-    // whose declaration names nothing by the run's record of it; this route
-    // must hand the same record over, or the same step reads blank here.
-    mocks.loadReviewGateSurface.mockResolvedValue(READY);
+describe("a readable run's review reads in the run, not here (cinatra#3693, leg 2)", () => {
+  it("redirects every reading to the run's own address with the gate selected", async () => {
+    // The rail this route used to draw beside a decided gate is gone with the
+    // reading: the drawings give the review no page — "a pending review renders
+    // the review gate in the run detail, under the same rail, never as a
+    // standalone document", and "there is no review page view outside the run's
+    // route" — so a run this build can read sends its reader to the run.
+    //
+    // WHERE THE PROJECTION CLAIM LIVES NOW. `run-stepper-steps.ts` is one
+    // projection and the run page is its one rail surface; it is pinned at the
+    // projection itself in
+    // `packages/agents/src/__tests__/run-rail-named-by-work.test.tsx`.
+    mocks.loadReviewGateSurface.mockResolvedValue({ kind: "settled" });
     const stepResults = [{ output_data: { title: "Fetched Q3 cohort" } }];
-    mocks.readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tmpl-1", stepResults } as never);
-    const steps = [{ stepNumber: 1, xRenderer: "r" }];
-    mocks.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", approvalPolicy: { steps } } as never);
+    mocks.readAgentRunById.mockResolvedValue({
+      id: "run-1",
+      templateId: "tmpl-1",
+      stepResults,
+      launchScopeAnchor: null,
+    } as never);
 
-    await renderPage();
+    let thrown: string | null = null;
+    try {
+      await renderPage();
+    } catch (err) {
+      thrown = err instanceof Error ? err.message : String(err);
+    } finally {
+      // The readable run is this case's own; every case around it composes the
+      // page, which needs a run the store cannot read.
+      mocks.readAgentRunById.mockResolvedValue(null);
+      mocks.readAgentTemplateById.mockResolvedValue(null);
+    }
 
-    expect(mocks.buildRunStepperSteps).toHaveBeenCalledWith(steps, { stepResults });
+    expect(thrown).toBe(
+      "REDIRECT:/agents/cinatra-ai/blog-draft-writer-agent/run-1?step=review%3Atask-1",
+    );
+    expect(thrown).not.toContain("/review/");
   });
 });
 

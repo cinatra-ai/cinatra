@@ -393,29 +393,19 @@
       "line": 28
     },
     {
-      "primitiveName": "blog_image_generate_cancel",
-      "file": "src/lib/blog/mcp/registry.ts",
-      "line": 62
-    },
-    {
-      "primitiveName": "blog_image_generate_start",
-      "file": "src/lib/blog/mcp/registry.ts",
-      "line": 58
-    },
-    {
       "primitiveName": "blog_media_image_save",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 103
+      "line": 95
     },
     {
       "primitiveName": "blog_media_list",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 107
+      "line": 99
     },
     {
       "primitiveName": "blog_personal_skill_create",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 111
+      "line": 103
     },
     {
       "primitiveName": "blog_post_generate_cancel",
@@ -440,47 +430,47 @@
     {
       "primitiveName": "blog_post_publish_linkedin_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 86
+      "line": 78
     },
     {
       "primitiveName": "blog_post_publish_linkedin_publish",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 95
+      "line": 87
     },
     {
       "primitiveName": "blog_post_publish_linkedin_publish_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 99
+      "line": 91
     },
     {
       "primitiveName": "blog_post_publish_linkedin_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 82
+      "line": 74
     },
     {
       "primitiveName": "blog_post_publish_linkedin_update",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 90
+      "line": 82
     },
     {
       "primitiveName": "blog_post_publish_wordpress_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 70
+      "line": 62
     },
     {
       "primitiveName": "blog_post_publish_wordpress_delete",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 74
+      "line": 66
     },
     {
       "primitiveName": "blog_post_publish_wordpress_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 66
+      "line": 58
     },
     {
       "primitiveName": "blog_post_publish_wordpress_status",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 78
+      "line": 70
     },
     {
       "primitiveName": "blog_post_update",
@@ -505,12 +495,12 @@
     {
       "primitiveName": "blog_transcripts_list",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 115
+      "line": 107
     },
     {
       "primitiveName": "blog_wordpress_content_convert",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 119
+      "line": 111
     },
     {
       "primitiveName": "change_set_eligibility_get",
@@ -835,7 +825,12 @@
     {
       "primitiveName": "lifecycle_bound_card_decide",
       "file": "src/lib/lifecycle/lent-action-mcp.ts",
-      "line": 339
+      "line": 881
+    },
+    {
+      "primitiveName": "lifecycle_bound_screen_fill",
+      "file": "src/lib/lifecycle/bound-screen-fill-mcp.ts",
+      "line": 279
     },
     {
       "primitiveName": "linkedin_accounts_list",

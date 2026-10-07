@@ -6,11 +6,10 @@ import "server-only";
 // Transport-registration cutover: this module no longer imports the blog facade package. The
 // blog facade extension configures ITSELF at activation (its `serverEntry`
 // `register(ctx)` calls its own `configureBlogSystem` + registers the generic
-// default connector), resolving the two HOST-side impls this module publishes
+// default connector), resolving the HOST-side impl this module publishes
 // under the `@cinatra-ai/host:blog-routing` capability:
 //
-//   1. the blog-image artifact materializer,
-//   2. the blog project store.
+//   - the blog project store.
 //
 // This module also keeps the SDK blog-connector provider slot bound, routing a
 // site connector's `registerBlogConnectorViaProvider(...)` into the generic
@@ -21,7 +20,6 @@ import "server-only";
 
 import { setBlogConnectorProvider } from "@cinatra-ai/sdk-extensions";
 import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
-import { materializeBlogImageArtifact } from "@/lib/blog-image-materializer";
 import { createBlogProjectStore } from "@/lib/blog-project-store";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 
@@ -34,7 +32,6 @@ export function registerBlogProviders(): void {
   registerCapabilityProvider(HOST_CONNECTOR_SERVICE_CAPABILITIES.blogRouting, {
     packageName: "@cinatra-ai/host",
     impl: {
-      materializeBlogImage: materializeBlogImageArtifact,
       projectStore: createBlogProjectStore(),
     },
   });

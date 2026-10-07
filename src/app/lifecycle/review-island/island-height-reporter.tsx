@@ -17,6 +17,8 @@ import { useEffect, useRef } from "react";
 import type { ReactElement } from "react";
 
 import { islandContentHeight, reviewIslandHeightMessage } from "./island-height-report";
+import { islandPaletteClass } from "./island-color-scheme";
+import { parseReviewIslandPalette } from "./island-palette-message";
 
 export function IslandHeightReporter(): ReactElement {
   const marker = useRef<HTMLSpanElement>(null);
@@ -27,6 +29,20 @@ export function IslandHeightReporter(): ReactElement {
     const view = container?.ownerDocument?.defaultView ?? null;
     // Not framed — the island opened directly. There is nobody to tell.
     if (!container || !view || view.parent === view) return;
+
+    // Repaint the current work while a palette-address navigation is arriving.
+    // Neither another frame nor a foreign origin may repaint this island.
+    const onPalette = (event: MessageEvent) => {
+      if (event.origin !== view.location.origin || event.source !== view.parent) return;
+      const scheme = parseReviewIslandPalette(event.data);
+      if (scheme === null) return;
+      container.classList.remove("cinatra", "dark");
+      container.classList.add(islandPaletteClass(scheme), "min-h-dvh", "text-foreground");
+      container.dataset.islandColorScheme = scheme;
+      container.style.colorScheme = scheme;
+      container.ownerDocument.documentElement.style.colorScheme = scheme;
+    };
+    view.addEventListener("message", onPalette);
 
     let last = -1;
     const report = () => {
@@ -71,6 +87,7 @@ export function IslandHeightReporter(): ReactElement {
       sizes?.disconnect();
       children?.disconnect();
       view.removeEventListener("load", onLoad);
+      view.removeEventListener("message", onPalette);
     };
   }, []);
 

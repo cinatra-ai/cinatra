@@ -220,7 +220,8 @@ describe("newly registered stores — writer-set lockstep", () => {
       // 9 -> 10 (cinatra#2650): bindThreadContainerIfUnbound's ONE conditional
       // set-once UPDATE that records a thread's container at its first persist.
       // Deliberately re-pinned.
-      "src/lib/assistant-thread-store.ts": 10,
+      // cinatra#2815 S3: the set-once assignment-scope freeze adds the eleventh.
+      "src/lib/assistant-thread-store.ts": 11,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
       // cinatra#2823 S9j: the truncation tombstone's ONE statement — the whole
       // reason this module exists. A second org-axis statement here is a
@@ -288,6 +289,8 @@ describe("newly registered stores — writer-set lockstep", () => {
       "bindThreadContainerIfUnbound",
       "createAssistantThread",
       "ensureThreadSlug",
+      // cinatra#2815 S3: the set-once assignment-scope freeze (registered).
+      "freezeAssistantThreadAssignmentScopeIfAbsent",
       "repairImplicitDefaultThreadBinding",
       "setAssistantThreadPauseParticipant",
       "touchAssistantThread",

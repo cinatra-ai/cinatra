@@ -120,6 +120,27 @@ describe("the default road — the pickup over end-node outputs", () => {
     expect(id).toContain(":");
   });
 
+  it.each([
+    ["The fixture agent", "The fixture agent"],
+    [null, "Agent"],
+  ])("names untitled outputs by their producing agent (%s) and output name", async (agentName, titlePrefix) => {
+    const d = deps({ readRunTitleParts: async () => ({ agentName }) });
+    await pickUpDefaultRoadOutputs(
+      { ...base, endNodeOutputs: { report: MARKDOWN, cohort: STRUCTURED } },
+      d,
+    );
+
+    expect(d.write).toHaveBeenCalledTimes(2);
+    expect(d.write).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      outputId: defaultRoadLedgerOutputId("report"),
+      title: `${titlePrefix} — report`,
+    }));
+    expect(d.write).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      outputId: defaultRoadLedgerOutputId("cohort"),
+      title: `${titlePrefix} — cohort`,
+    }));
+  });
+
   it("acceptance item 2: a datum below the floor takes no road", async () => {
     const d = deps();
     const outcomes = await pickUpDefaultRoadOutputs(
@@ -364,5 +385,55 @@ describe("cinatra#3476 — an output whose members were filed as artifacts takes
     const write = d.write as ReturnType<typeof vi.fn>;
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0][0].outputId).toBe(defaultRoadLedgerOutputId("report"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3732 — the member-field fan-out beside the default road. "An output
+// whose members were filed through a fan-out binding is BOUND, so the bare key
+// takes no road" holds for object members exactly as for text members, and an
+// empty feed — "an empty list is a normal result for a feed and must not fail
+// the materialization" — reports no member id and files nothing here either.
+// ---------------------------------------------------------------------------
+
+const EPISODE = (n: number) => ({
+  title: `Episode ${n}: a feed entry`,
+  audioUrl: `https://example.test/feed/${n}.mp3`,
+  notes: "Show notes long enough to stand as a document of their own. ".repeat(40),
+});
+
+describe("cinatra#3732 — object members filed through a fan-out take no second road", () => {
+  it("a list whose object members were filed (episodes[0], episodes[1]) is not filed again as one more artifact", async () => {
+    const d = deps();
+    const outcomes = await pickUpDefaultRoadOutputs(
+      {
+        ...base,
+        boundOutputIds: ["episodes[0]", "episodes[1]"],
+        endNodeOutputs: { episodes: [EPISODE(1), EPISODE(2)] },
+      },
+      d,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].outputId).toBe("episodes");
+    expect(outcomes[0].ok).toBe(false);
+    expect(outcomes[0].skipped).toBe("bound");
+    expect(d.write).not.toHaveBeenCalled();
+  });
+
+  it("an empty list with no member ids is not filed by the default road", async () => {
+    const d = deps();
+    const outcomes = await pickUpDefaultRoadOutputs(
+      {
+        ...base,
+        boundOutputIds: [],
+        endNodeOutputs: { episodes: [] },
+      },
+      d,
+    );
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].outputId).toBe("episodes");
+    expect(outcomes[0].ok).toBe(false);
+    expect(outcomes[0].skipped).toBe("below_floor");
+    expect(d.write).not.toHaveBeenCalled();
   });
 });

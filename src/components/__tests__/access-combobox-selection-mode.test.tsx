@@ -49,7 +49,7 @@ const FLAT_SCOPES: AccessComboboxProps["availableScopes"] = {
   workspaceExposed: true,
 };
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
 
 afterEach(() => cleanup());
 

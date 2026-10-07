@@ -24,7 +24,7 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import * as AccessComboboxMod from "@/components/access-combobox";
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
 
 describe("AccessCombobox disabledScopes", () => {
   it("module loads and exports AccessCombobox + AccessComboboxProps + resolveAccessLabel", () => {

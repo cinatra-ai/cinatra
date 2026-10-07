@@ -42,3 +42,29 @@ export async function addInstalledCatalogDashboardAction(
   if (!actor) return { ok: false, reason: "ineligible" };
   return addInstalledCatalogDashboard({ actor, surface, templateId });
 }
+
+/**
+ * Copy one installed-catalog dashboard into the acting user's own WORKSPACE
+ * collection (cinatra#2811, item 4).
+ *
+ * The workspace has no single tenant, so nothing about a scope is bound here at
+ * all: the client sends one opaque template handle, and the memberships the
+ * gates run under are re-resolved from the LIVE session on this request. A
+ * bound reference therefore carries no authority whatsoever, and a membership
+ * revoked since the list was rendered simply is not in the set.
+ */
+export async function addWorkspaceCatalogDashboardAction(
+  templateId: string,
+): Promise<CatalogAddResult> {
+  const { addWorkspaceCatalogDashboard } = await import("./installed-catalog-write");
+  const { buildWorkspaceCatalogMemberships } = await import(
+    "./workspace-dashboards.server"
+  );
+  const memberships = await buildWorkspaceCatalogMemberships();
+  if (!memberships) return { ok: false, reason: "ineligible" };
+  return addWorkspaceCatalogDashboard({
+    userId: memberships.userId,
+    memberships: memberships.memberships,
+    templateId,
+  });
+}

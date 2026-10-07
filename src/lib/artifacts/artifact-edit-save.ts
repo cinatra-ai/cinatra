@@ -29,6 +29,8 @@
 // ---------------------------------------------------------------------------
 
 import {
+  ARTIFACT_EDIT_CHANNEL_MIN_VERSION,
+  ARTIFACT_EDIT_CHANNEL_VERSION,
   ARTIFACT_EDIT_TEXT_CAP_BYTES,
   type ArtifactEditOutcome,
 } from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
@@ -67,7 +69,9 @@ export interface ArtifactEditSavePorts {
     mime: string;
     actor: string | null;
   }): Promise<{ resourceId: string }>;
-  /** The compare-and-set append, with the edit's ledger rows in its transaction. */
+  /** The compare-and-set append, with the edit's ledger rows in its transaction.
+   *  `title` is carried by a title change alone (cinatra#3814): the row's title
+   *  then moves in the same transaction as the revision. */
   appendWithBase(input: {
     orgId: string;
     artifactId: string;
@@ -75,9 +79,18 @@ export interface ArtifactEditSavePorts {
     baseRevision: number;
     resourceId: string;
     actor: string | null;
+    title?: string;
   }): Promise<
     { kind: "appended"; revisionId: string; revision: number } | { kind: "stale" } | { kind: "unknown-base" }
   >;
+}
+
+/**
+ * The ports a TITLE change needs (cinatra#3814): every port a text change has,
+ * and the read of the artifact's current title — row metadata, never a revision.
+ */
+export interface ArtifactTitleEditSavePorts extends ArtifactEditSavePorts {
+  readTitle(input: { orgId: string; artifactId: string }): Promise<string | null>;
 }
 
 export interface ArtifactEditSaveInput {
@@ -90,13 +103,64 @@ export interface ArtifactEditSaveInput {
   actor: string | null;
 }
 
+/** A title change: the title the editor now holds, against the same base. */
+export interface ArtifactTitleEditSaveInput {
+  orgId: string;
+  artifactId: string;
+  /** The revision the editor opened. */
+  baseRevisionId: string;
+  title: string;
+  actor: string | null;
+}
+
+/** The change set the save route admits, one of the two fields, or nothing. */
+export type ArtifactEditChangeSet =
+  | { field: "text"; baseRevisionId: string; text: string }
+  | { field: "title"; baseRevisionId: string; title: string };
+
+/** The channel version at which a request may select the title field. */
+const TITLE_FIELD_CHANNEL_VERSION = 2;
+
+/**
+ * READ A CHANGE SET, validated before it is believed (cinatra#3814). PURE.
+ *
+ * A request without a field selector, or with `"text"`, is the whole-document
+ * text exactly as before; `"title"` carries a string title and no text, and only
+ * from version 2. A channel version outside the window this host speaks, an
+ * unknown field, and a missing or non-string value are all nothing — the route
+ * answers them as a malformed change set.
+ */
+export function readArtifactEditChangeSet(body: unknown): ArtifactEditChangeSet | null {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
+  const b = body as Record<string, unknown>;
+  if (
+    typeof b.channelVersion !== "number" ||
+    !Number.isInteger(b.channelVersion) ||
+    b.channelVersion < ARTIFACT_EDIT_CHANNEL_MIN_VERSION ||
+    b.channelVersion > ARTIFACT_EDIT_CHANNEL_VERSION
+  ) {
+    return null;
+  }
+  if (typeof b.baseRevisionId !== "string" || b.baseRevisionId.length === 0) return null;
+  if (b.field === undefined || b.field === "text") {
+    if (typeof b.text !== "string") return null;
+    return { field: "text", baseRevisionId: b.baseRevisionId, text: b.text };
+  }
+  if (b.field === "title") {
+    if (b.channelVersion < TITLE_FIELD_CHANNEL_VERSION) return null;
+    if (typeof b.title !== "string" || b.text !== undefined) return null;
+    return { field: "title", baseRevisionId: b.baseRevisionId, title: b.title };
+  }
+  return null;
+}
+
 function byteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
 /** The refusal that answers with the newer revision, so the editor reloads. */
 async function staleWithLatest(
-  input: ArtifactEditSaveInput,
+  input: { orgId: string; artifactId: string },
   latest: ArtifactEditLatest,
   ports: ArtifactEditSavePorts,
 ): Promise<ArtifactEditOutcome> {
@@ -117,6 +181,18 @@ async function staleWithLatest(
     text: newer.text,
     truncated: newer.truncated,
   };
+}
+
+/** The stale refusal of a TITLE change: the newer revision and the current title. */
+async function staleWithLatestAndTitle(
+  input: ArtifactTitleEditSaveInput,
+  latest: ArtifactEditLatest,
+  ports: ArtifactTitleEditSavePorts,
+): Promise<ArtifactEditOutcome> {
+  const stale = await staleWithLatest(input, latest, ports);
+  if (stale.outcome !== "stale") return stale;
+  const title = await ports.readTitle({ orgId: input.orgId, artifactId: input.artifactId });
+  return { ...stale, title };
 }
 
 /**
@@ -206,4 +282,76 @@ export async function saveArtifactMarkdownEdit(
   const now = await ports.readLatest({ orgId: input.orgId, artifactId: input.artifactId });
   if (!now) return { outcome: "failed", reason: "server" };
   return staleWithLatest(input, now, ports);
+}
+
+/**
+ * SAVE ONE TITLE CHANGE (cinatra#3814): "The artifact page's save route stores a
+ * title change as a new revision under the same rules as a text change: the base
+ * revision is checked, the actor's write access is checked, and a stale base is
+ * refused by name."
+ *
+ * THE SAME ORDER AS A TEXT CHANGE, decision for decision: write rights first,
+ * the cap, the latest revision, the form, THE BASE, a truncated base. Then an
+ * unchanged title writes nothing, and a changed one appends ONE revision that
+ * points at the latest revision's OWN resource — the text is untouched by
+ * construction, no byte is written — with the title moving in the append's own
+ * transaction. The index-refused race is re-read and answered stale, as a text
+ * change's is. Total, like the text save: nothing here throws at a display.
+ */
+export async function saveArtifactTitleEdit(
+  input: ArtifactTitleEditSaveInput,
+  ports: ArtifactTitleEditSavePorts,
+): Promise<ArtifactEditOutcome> {
+  if (!(await ports.mayWrite())) {
+    return { outcome: "refused", reason: "no-write-rights" };
+  }
+
+  if (byteLength(input.title) > ARTIFACT_EDIT_TEXT_CAP_BYTES) {
+    return { outcome: "refused", reason: "over-cap" };
+  }
+
+  const latest = await ports.readLatest({ orgId: input.orgId, artifactId: input.artifactId });
+  if (!latest) return { outcome: "refused", reason: "no-representation" };
+
+  if (latest.form !== "file" || !EDITABLE_MIMES.has(latest.mime.toLowerCase().split(";")[0].trim())) {
+    return { outcome: "refused", reason: "unsupported-form" };
+  }
+
+  if (latest.revisionId !== input.baseRevisionId) {
+    return staleWithLatestAndTitle(input, latest, ports);
+  }
+
+  const base = await ports.readText({
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    representationRevisionId: input.baseRevisionId,
+  });
+  if (!base) return { outcome: "refused", reason: "unknown-base" };
+  if (base.truncated) return { outcome: "refused", reason: "over-cap" };
+
+  const current = await ports.readTitle({ orgId: input.orgId, artifactId: input.artifactId });
+  if ((current ?? "") === input.title) {
+    return { outcome: "unchanged", revisionId: input.baseRevisionId };
+  }
+
+  const appended = await ports.appendWithBase({
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    baseRevisionId: input.baseRevisionId,
+    baseRevision: latest.revision,
+    resourceId: latest.resourceId,
+    actor: input.actor,
+    title: input.title,
+  });
+
+  if (appended.kind === "appended") {
+    return { outcome: "saved", revisionId: appended.revisionId, revision: appended.revision };
+  }
+  if (appended.kind === "unknown-base") {
+    return { outcome: "refused", reason: "unknown-base" };
+  }
+
+  const now = await ports.readLatest({ orgId: input.orgId, artifactId: input.artifactId });
+  if (!now) return { outcome: "failed", reason: "server" };
+  return staleWithLatestAndTitle(input, now, ports);
 }

@@ -4,10 +4,24 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
 import { CrumbContributionsClear } from "@/components/crumb-contributions";
+import { resolveNotAuthorizedDescription } from "@/lib/not-authorized-reason";
 
 export const metadata: Metadata = { title: "Not Authorized" };
 
-export default function NotAuthorizedPage() {
+/**
+ * The refusal page. An optional `reason` (cinatra#3787) lets a refusing surface
+ * say what is actually missing; the closed set and every sentence live in
+ * `@/lib/not-authorized-reason`, and anything outside it reads the default
+ * platform-admin sentence exactly as before.
+ */
+export default async function NotAuthorizedPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const description = resolveNotAuthorizedDescription(
+    (await searchParams)?.reason,
+  );
   return (
     <Main className="min-h-screen">
       {/* Negative crumb clearing (cinatra#1737): a previously-authorized
@@ -15,7 +29,7 @@ export default function NotAuthorizedPage() {
       <CrumbContributionsClear />
       <PageHeader
         title="Not authorized"
-        description="This area is limited to platform admins. Sign in with the admin account or ask an admin to grant your user the admin role."
+        description={description}
       />
       <PageContent className="pb-8">
         <div className="soft-panel rounded-card px-6 py-6">

@@ -9,6 +9,18 @@
  * from auth-policy.ts on the server side need no changes.
  */
 import { z } from "zod";
+// The token vocabulary and its canonicalisation rule live beside the access
+// picker that draws them (@cinatra-ai/sdk-ui, already a dependency of this
+// package). They are re-exported here under this module's own names, so every
+// caller of auth-policy-types is unchanged. The policy SHAPE, its schema and
+// every authorization decision stay here.
+import {
+  normalizeVisibilitySelection,
+  type AccessVisibility,
+  type AccessVisibilitySelection,
+} from "@cinatra-ai/sdk-ui/lib/access-visibility";
+
+export { normalizeVisibilitySelection };
 
 // ---------------------------------------------------------------------------
 // Widened token union. Backward-compatible superset of the original
@@ -20,14 +32,7 @@ import { z } from "zod";
 // grants) — see AgentAuthPolicyVisibilitySelection below.
 // ---------------------------------------------------------------------------
 
-export type AgentAuthPolicyVisibility =
-  | "owner"
-  | "org"
-  | `org:${string}`
-  | "admin"
-  | "workspace"
-  | `team:${string}`
-  | `project:${string}`;
+export type AgentAuthPolicyVisibility = AccessVisibility;
 
 /**
  * A visibility SELECTION: a NON-EMPTY array of visibility tokens. Multi-scope
@@ -39,10 +44,7 @@ export type AgentAuthPolicyVisibility =
  * structurally unrepresentable. Every write is an array; stored scalar
  * policies coerce to a one-element array at parse time (see the schema).
  */
-export type AgentAuthPolicyVisibilitySelection = [
-  AgentAuthPolicyVisibility,
-  ...AgentAuthPolicyVisibility[],
-];
+export type AgentAuthPolicyVisibilitySelection = AccessVisibilitySelection;
 
 export type AgentAuthPolicy = {
   runListVisibility: AgentAuthPolicyVisibilitySelection;
@@ -153,51 +155,9 @@ export const AgentAuthPolicySchema: z.ZodType<AgentAuthPolicy> = z.object({
 
 // ---------------------------------------------------------------------------
 // Selection helpers — shared by the access picker and every server write path.
+// `normalizeVisibilitySelection` is re-exported at the top of this file from
+// the package that owns the picker; the helpers below stay here.
 // ---------------------------------------------------------------------------
-
-/**
- * Canonicalize a visibility selection to its stored form.
- *
- * Invariants (#1069 / #1070):
- *   - dedupe, preserving first-seen order
- *   - `workspace` present  ⇒  the selection is exactly `["workspace"]`
- *     (workspace = "everyone in the workspace"; any narrower token is subsumed)
- *   - `owner` mixed with ANY other token is stripped — the owner always retains
- *     access, so listing `owner` alongside a wider grant is redundant. `owner`
- *     alone stays `["owner"]`.
- *   - `admin` IS mixable (an owner-aware positive grant, e.g. `admin + team:X`
- *     is a meaningful union) and is never stripped.
- *   - NO upward collapse: an explicit set of team/project tokens is never
- *     rewritten to `org:<id>`; org-implied team tokens are never stripped.
- *   - the result is ALWAYS non-empty (an all-`owner` or empty input yields
- *     `["owner"]`).
- *
- * This does NOT validate token shape — callers pass already-typed tokens (the
- * schema owns shape validation). It canonicalizes the SET only.
- */
-export function normalizeVisibilitySelection(
-  input: readonly AgentAuthPolicyVisibility[],
-): AgentAuthPolicyVisibilitySelection {
-  // Dedupe, preserving first-seen order.
-  const deduped: AgentAuthPolicyVisibility[] = [];
-  for (const tok of input) {
-    if (!deduped.includes(tok)) deduped.push(tok);
-  }
-
-  // `workspace` subsumes every narrower token — collapse to exactly workspace.
-  if (deduped.includes("workspace")) return ["workspace"];
-
-  // Strip `owner` when mixed with any other token (the owner always retains
-  // access). `owner` alone is preserved. `admin` and every scoped token stay —
-  // no upward collapse, no implied-token stripping.
-  const hasOther = deduped.some((t) => t !== "owner");
-  const result = hasOther ? deduped.filter((t) => t !== "owner") : deduped;
-
-  // Non-empty guarantee: an all-`owner` selection (or an empty input) is
-  // `["owner"]`.
-  if (result.length === 0) return ["owner"];
-  return result as AgentAuthPolicyVisibilitySelection;
-}
 
 /**
  * True iff the selection is exactly the single `owner` token. Replaces the

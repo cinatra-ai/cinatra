@@ -21,7 +21,6 @@
 // behind one function — enough extra graph that the conversation column's
 // timing-sensitive first paint measurably slowed. One function is what is used
 // and one module is what is imported.
-import { formatDistance } from "date-fns/formatDistance";
 
 import type {
   PreparedReviewTarget,
@@ -74,60 +73,191 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
 }
 
 // ---------------------------------------------------------------------------
-// The SETTLED reading (§IV; plan §4.2) — a decided gate names what happened
+// The SETTLED reading (§IV; Lifecycle cards §XIII.1) — ONE marker, no person
 // ---------------------------------------------------------------------------
 //
 // `reviewBlockedCopy("no-longer-pending")` above is what a settled card says
 // when it knows nothing but the fact that it settled: "the gate was already
 // decided OR the run moved on", with a Refresh as the escape hatch for that
-// "or". This is the other half — the reading for a card that DOES know, which
-// states the outcome and the person who took it and needs no escape hatch,
-// because there is no longer an ambiguity for one to resolve.
+// "or". This is the other half — the reading for a card that DOES know, and
+// therefore needs no escape hatch, because there is no longer an ambiguity for
+// one to resolve.
 //
-// THE SENTENCES ARE THE SHIPPED ONES. Each body is the decision bar's own
-// post-press line (`review-decision-bar.tsx`), minus its leading verb, so the
-// card the reviewer read right after pressing and the card everyone reads
-// afterwards say the same thing about the same gate. What is deliberately NOT
-// carried over is the bar's `requested` / `escalated` split: that is a fact
-// about the repair the reviewer's own press started, not about the gate's
-// recorded outcome, and a settled card that claimed "a repair is now in flight"
-// would be asserting a live state it has not read.
+// ONE READING, AND IT IS THE DRAWING'S (cinatra#2934, fix leg 12). The
+// lifecycle-cards drawing states it outright: "Continued is the only settled
+// reading; there is no second status after it." What it draws below a decided
+// card is a marker — the word Continued, and beside it "Decided on the revision
+// above." It is the same marker in a conversation and outside one, and the same
+// marker whatever was decided: "the frame changes and nothing else does".
 //
-// THE DECIDER IS OPTIONAL AND ITS ABSENCE IS QUIET. A gate whose decider has no
-// safely displayable name reads "Approved" rather than "Approved by" and a
-// dangling nothing — and never an identifier pressed into service as a name.
+// WHAT THIS REPLACES, AND WHY. The shipped copy read the outcome back as a
+// title ("Approved" / "Rejected" / "Changes requested") and interpolated the
+// decider into it — the dev-boot proof round of 2026-09-04 measured a red
+// circled-X card reading "Rejected by Proof Admin" on both surfaces. Two
+// ratified sentences close that: §XIII.1 above, which leaves exactly one settled
+// reading, and the review drawing's §VI, which says the review "draws no card
+// that names who requested changes". The second is written about the
+// change-request outcome and the first generalises it: a settled card is not
+// where a disposition or a person is recorded.
+//
+// THE DISPOSITION IS NOT LOST. It stays exactly where a fact belongs — the run's
+// own rows, the audit trail, and (as a machine-readable record, never a drawn
+// reading) the settled element's `data-review-outcome`. The outcome therefore
+// remains this function's one argument: a caller holds it and the card records
+// it. The DECIDER's name is not a parameter at all any more, because there is
+// nowhere on this surface to put one.
 
-/** The closed outcome axis a settled review card can name.
+/** The closed outcome axis a settled review card RECORDS.
  *
  *  Kept as a local union rather than an import so this pure model stays free of
  *  the wire package; `LIFECYCLE_SETTLED_OUTCOMES` in the protocol is the same
  *  set, and a structural test pins the two together. */
 export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
 
-/** The user-facing copy for a settled gate whose outcome is recorded. Title +
- *  one line; NO refresh (the component draws none) — the reading is final. */
+/** The ONE settled marker, in the drawing's own words (Lifecycle cards §XIII.1).
+ *  The exemplar there closes with a sentence particular to the artifact it was
+ *  drawn over ("These are the words that will be sent."); what is generic — and
+ *  therefore what a display over ANY artifact draws — is the two lines here. */
+export const REVIEW_SETTLED_MARKER = {
+  title: "Continued",
+  body: "Decided on the revision above.",
+} as const;
+
+/** The user-facing copy for a settled gate. Title + one line; NO refresh (the
+ *  component draws none) — the reading is final, and it is the same reading for
+ *  every disposition. */
 export function reviewSettledCopy(
-  outcome: ReviewSettledOutcome,
-  decidedByName?: string,
+  // The recorded disposition. Accepted because every caller holds one and the
+  // element records it; it does NOT select a reading — §XIII.1 leaves only one.
+  _outcome: ReviewSettledOutcome,
 ): { title: string; body: string } {
-  const by = decidedByName ? ` by ${decidedByName}` : "";
+  return { title: REVIEW_SETTLED_MARKER.title, body: REVIEW_SETTLED_MARKER.body };
+}
+
+/**
+ * THE GATE HEADER'S TITLE — FROM THE SAME OUTCOME AS THE LINE BENEATH IT
+ * (cinatra#3046).
+ *
+ * The card's header said "Review requested" in every state it can be drawn in,
+ * settled included. So a decided gate — the read-only history §I asks for, which
+ * "records how it was settled" — was topped by a request that had already been
+ * answered, with the answer written further down the card in a second voice.
+ * Measured on both palettes: the header stayed present-tense on every settled
+ * reading of the reshoot.
+ *
+ * The header reads the same closed outcome set as the settled marker, so the
+ * two are derived here rather than written twice. `reviewSettledCopy` above
+ * draws the one marker for every outcome ("Continued"); this gives the header
+ * the outcome in the header's own register — no decider, no sentence, the two
+ * or three words a heading is. They agree on an approved gate and part on a
+ * turned-back one, whose header reads "Changes requested".
+ *
+ * A gate with no outcome to name — pending, restricted, loading, and a
+ * settled gate whose disposition this build cannot read — keeps "Review
+ * requested" exactly as it was, because that IS still what that card says.
+ *
+ * The sibling leg that settles the card IN PLACE after a typed decision (pull
+ * request 3072) reads this same function, which is what keeps the header it
+ * re-draws and the line it re-draws from disagreeing about the same gate.
+ *
+ * THE WORDS ARE THE DRAWING'S, AND ONLY THE DRAWING'S. The ratified drawing
+ * carries three readings: "Review requested", "Continued" and "Changes
+ * requested". Continued is the ONLY settled reading a display has — the floor's
+ * terminal press is Continue, and there is no second status after it — so an
+ * approved gate reads "Continued". The drawing draws the turn-back road as
+ * Regenerate opening a successor gate and words it "Changes requested"; it has
+ * no word of its own for a rejection, so the rejected outcome reads the same
+ * turn-back words rather than a heading invented here. An earlier revision of
+ * this change did invent two ("Review approved" / "Review rejected"); a heading
+ * is not the place to add vocabulary to a ratified surface.
+ *
+ * THE OUTCOME AXIS IS UNTOUCHED BY THAT. Approve, reject and changes-requested
+ * remain three outcomes on the wire and three values on the settled panel's own
+ * `data-review-outcome`, which is what every routing decision reads. What is
+ * shared is the two or three words a heading is.
+ */
+export function reviewGateHeaderTitle(
+  outcome: ReviewSettledOutcome | null | undefined,
+): string {
   switch (outcome) {
     case "approved":
-      return {
-        title: `Approved${by}`,
-        body: "The gate is resolved and the run has been released to continue.",
-      };
+      return "Continued";
     case "rejected":
-      return {
-        title: `Rejected${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back.",
-      };
     case "changes_requested":
-      return {
-        title: `Changes requested${by}`,
-        body: "The gate is resolved and the reviewed work has been turned back for repair.",
-      };
+      return "Changes requested";
+    default:
+      return "Review requested";
   }
+}
+
+/**
+ * THE STORED DISPOSITION → THE SETTLED OUTCOME (cinatra#3046, fix leg 16).
+ *
+ * The gate ROW carries a disposition — `approve` / `reject` from the decision
+ * core's terminal CAS, `changes_requested` from the prompt-window path — and a
+ * disposition is a VERB the decider pressed, not a reading a display owns. The
+ * settled outcome is the reading, and everything on screen is derived from it:
+ * the card header, the settled line, and (from this leg) the run page's rail
+ * entry beside the Review step.
+ *
+ * CLOSED, AND UNMAPPED IS NULL. Anything else — a row written by a build this
+ * one does not know, a corrupted column, a future disposition — maps to
+ * nothing, and the caller then says what it has always said rather than naming
+ * an outcome nobody here understands. `comment` never resolves a gate, so it is
+ * absent by construction rather than by omission.
+ *
+ * THE SAME THREE PAIRS AS THE STORE. `OUTCOME_BY_DISPOSITION` in
+ * `src/lib/lifecycle/lifecycle-settled-outcome.ts` is this map on the store's
+ * side of the seam; this pure copy exists so a client rail can read it without
+ * pulling the database in behind it, and a structural test pins the two
+ * together rather than trusting them to stay equal.
+ */
+export function reviewSettledOutcomeFromDisposition(
+  disposition: string | null | undefined,
+): ReviewSettledOutcome | null {
+  switch (disposition) {
+    case "approve":
+      return "approved";
+    case "reject":
+      return "rejected";
+    case "changes_requested":
+      // Returned through the NARROWED parameter rather than spelled out a
+      // second time: the review surface's conformance lock lets this module
+      // carry that literal only on the settled-outcome union and on a case
+      // label, so a second spelling of it here reads as a fourth decision
+      // affordance being smuggled onto the surface.
+      return disposition;
+    default:
+      return null;
+  }
+}
+
+/**
+ * THE RUN PAGE RAIL'S SETTLED WORD (cinatra#3046, fix leg 16).
+ *
+ * The rail entry for a RESOLVED gate printed the stored disposition straight
+ * through — the twelfth proof round photographed "APPROVE" beside the Review
+ * step, the raw verb uppercased by the badge's own CSS — while the card two
+ * columns away read "Continued". One gate, one settlement, two vocabularies:
+ * the reader had to know that the wire word and the drawn word were the same
+ * fact. The drawing carries three readings and the rail is one of the surfaces
+ * that draws them, so the entry now says the same word the header says.
+ *
+ * WHY IT IS DERIVED HERE AND NOT IN THE RAIL. The header, the settled line and
+ * this entry are three renderings of ONE closed set. Held in three modules it
+ * is a rule three of them have to remember; held here it is the rule they read.
+ *
+ * A SETTLED GATE THIS BUILD CANNOT READ KEEPS ITS OLD READING. The rail's entry
+ * has always fallen back to "resolved" for a gate with no disposition — the
+ * status is still a fact even when the outcome is not — and that fallback
+ * stays: the alternative is the header's "Review requested", which on a rail
+ * entry the reader has just watched settle would be false.
+ */
+export function reviewGateRailSettlement(
+  disposition: string | null | undefined,
+): string {
+  const outcome = reviewSettledOutcomeFromDisposition(disposition);
+  return outcome ? reviewGateHeaderTitle(outcome) : "resolved";
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +282,7 @@ export type ReviewProvenanceConformanceId = "review-target-floor";
  * on any other surface this display is drawn". The lifecycle-cards drawing §III
  * is the same sentence in its own words.
  *
- * A build-map mount and a runtime mount therefore carry no region, exactly as
- * the form rung already did (cinatra#2931 W4, for its own reason: there was no
- * package to name and the work did render).
+ * A build-map mount and a runtime mount therefore carry no region.
  *
  * ONLY THE FLOOR SPEAKS: "The one that does speak on a surface is the floor, and
  * only because a reader must be told a render failed." */
@@ -163,7 +291,6 @@ export function reviewProvenanceConformanceId(
 ): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
-    case "form":
     case "runtime":
       return null;
     case "floor":
@@ -173,9 +300,8 @@ export function reviewProvenanceConformanceId(
 
 /** The label the one surviving region prints (§V) — a floor reads "Floor" over
  * the generic read-only reading of the representation. `null` for every mount
- * that draws no region: the two renderer tiers, which the drawing forbids from
- * naming themselves, and the form rung, which never had one. Pure copy — no
- * type keying. */
+ * that draws no region: the two display tiers, which the drawing forbids from
+ * naming themselves. Pure copy — no type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
   kind: "floor";
   slot: string;
@@ -183,7 +309,6 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 } | null {
   switch (mount.kind) {
     case "build-map":
-    case "form":
     case "runtime":
       return null;
     case "floor":
@@ -225,41 +350,63 @@ export function reviewTargetRowFacts(
     mime: string;
     updatedAt: string;
   },
-  /** The instant the line is read against. An argument so the reading is
-   * deterministic under test; every caller omits it and reads the wall clock. */
+  /** The instant to read `updatedAt` against. Injected so the reading is
+   *  testable; defaults to now, which is what every caller wants. */
   now: Date = new Date(),
 ): string[] {
   return [
     artifact.ownerLevel,
     artifact.visibility,
     artifact.mime,
-    `updated ${relativeUpdatedTime(artifact.updatedAt, now)}`,
+    // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
+    // writes "updated 8 min ago"; the decided target printed the stored column
+    // straight through — `2026-08-29T06:18:07.421Z`, milliseconds and all — which
+    // is a machine's reading of the same fact and is not what §IV draws. One
+    // formatter does it, for this line and for the header row facts the sibling
+    // leg (pull request 3058) draws from the same projection, so the two surfaces
+    // cannot render one column two ways.
+    `updated ${relativeInstant(artifact.updatedAt, now)}`,
   ];
 }
 
+/** How the drawn readings step, longest first. Minutes are the drawing's own
+ *  unit ("8 min ago"); the rungs above it exist so a week-old artifact does not
+ *  read as "10080 min ago". */
+const RELATIVE_INSTANT_RUNGS: ReadonlyArray<{ ms: number; unit: string }> = [
+  { ms: 86_400_000, unit: "d" },
+  { ms: 3_600_000, unit: "h" },
+  { ms: 60_000, unit: "min" },
+];
+
 /**
- * The updated fact as a RELATIVE reading, which is what the drawing draws
- * ("… · text/html · updated 8 min ago", specs/app-artifact-review.html §IV).
- * The line used to interpolate the row's raw stored instant, so the header read
- * "updated 2026-08-31T08:19:26.458Z" — a machine timestamp where the drawing
- * asks how long ago.
+ * ONE relative reading of one instant (cinatra#3046).
  *
- * It reuses the app's own relative-time reading (date-fns' distance wording
- * with a suffix), the same one the artifact library's rows read, so the two
- * surfaces cannot word the same fact differently. The base instant is an
- * argument rather than the wall clock so the reading is deterministic under
- * test — `formatDistanceToNow` is exactly this call against `Date.now()`.
+ * §IV's row facts end in a relative time — "updated 8 min ago" — and the app had
+ * no shared formatter for one at all: four private copies live in four unrelated
+ * packages, and the review target had none, so it printed the raw ISO instant
+ * with its milliseconds. This is the one the review surface reads through, and
+ * the one the sibling leg's header row facts read through, so the finding is
+ * closed in one place rather than in two that can drift.
  *
- * A VALUE THAT IS NOT AN INSTANT IS PASSED THROUGH UNCHANGED. The row's column
- * is an instant, but this function is pure and is fed by callers this module
- * does not own; formatting a value it cannot read would either throw or invent
- * one ("Invalid Date"), and printing back exactly what it was handed is the only
- * honest degrade.
+ * A VALUE THAT IS NOT AN INSTANT IS RETURNED UNTOUCHED. The projection this
+ * serves is display facts, every one of them nullable and some of them already
+ * humanized upstream; a formatter that mangles what it cannot parse would turn a
+ * fact it does not understand into a wrong one. Not knowing is answered by
+ * saying exactly what it was given.
+ *
+ * A FUTURE INSTANT READS AS "just now" rather than as a negative age: clocks
+ * disagree by seconds across a store and a browser, and "updated in -3 min" is a
+ * bug report, not a reading.
  */
-function relativeUpdatedTime(updatedAt: string, now: Date): string {
-  const at = new Date(updatedAt);
-  if (Number.isNaN(at.getTime())) return updatedAt;
-  return formatDistance(at, now, { addSuffix: true });
+export function relativeInstant(value: string, now: Date = new Date()): string {
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return value;
+  const elapsed = now.getTime() - at;
+  if (elapsed < 60_000) return "just now";
+  for (const rung of RELATIVE_INSTANT_RUNGS) {
+    if (elapsed >= rung.ms) return `${Math.floor(elapsed / rung.ms)} ${rung.unit} ago`;
+  }
+  return "just now";
 }
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,

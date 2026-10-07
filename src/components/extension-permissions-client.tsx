@@ -73,6 +73,8 @@ export type ExtensionPermissionsClientProps = {
   accessDisabledScopes?: string[];
   accessDisabledReasons?: Record<string, string>;
   accessScopeNote?: string;
+  /** cinatra#3454: `locked` draws the lock in front of the note; forwarded verbatim. */
+  accessScopeNoteKind?: "locked" | "recommended";
 };
 
 export function ExtensionPermissionsClient({
@@ -94,6 +96,7 @@ export function ExtensionPermissionsClient({
   accessDisabledScopes,
   accessDisabledReasons,
   accessScopeNote,
+  accessScopeNoteKind,
 }: ExtensionPermissionsClientProps) {
   return (
     <PermissionsForm
@@ -113,6 +116,7 @@ export function ExtensionPermissionsClient({
       accessDisabledScopes={accessDisabledScopes}
       accessDisabledReasons={accessDisabledReasons}
       accessScopeNote={accessScopeNote}
+      accessScopeNoteKind={accessScopeNoteKind}
       actions={{
         savePolicy: (policy) =>
           saveExtensionAccessPolicy(kind, resourceId, policy),

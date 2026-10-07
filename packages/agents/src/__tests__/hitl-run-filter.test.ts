@@ -65,6 +65,57 @@ describe("templateHasOwnHitl", () => {
 });
 
 describe("selectHitlRunVisibleTemplates", () => {
+  it("keeps an agent whose declared output is reviewed by the application", () => {
+    const outputProducer = {
+      ...template({ id: "producer", packageName: "@example/producer" }),
+      hasArtifactBindings: true,
+    };
+    const noReview = {
+      ...template({ id: "no-review", packageName: "@example/no-review" }),
+      hasArtifactBindings: false,
+    };
+
+    expect(templateHasOwnHitl(outputProducer)).toBe(false);
+    expect(selectHitlRunVisibleTemplates([outputProducer, noReview])).toEqual([
+      outputProducer,
+    ]);
+  });
+
+  it("does not infer output review when the installed declaration is unknown", () => {
+    const unknown = {
+      ...template({ id: "unknown", packageName: "@example/unknown" }),
+      hasArtifactBindings: null,
+    };
+    const legacy = template({ id: "legacy", packageName: "@example/legacy" });
+
+    expect(selectHitlRunVisibleTemplates([unknown, legacy])).toEqual([]);
+  });
+
+  it("keeps transitive sub-agents of an output producer without a declared gate", () => {
+    const producer = {
+      ...template({
+        id: "producer",
+        packageName: "@example/producer",
+        agentDependencies: { "@example/child": "^1.0.0" },
+      }),
+      hasArtifactBindings: true,
+    };
+    const child = template({
+      id: "child",
+      packageName: "@example/child",
+      agentDependencies: { "@example/grandchild": "^1.0.0" },
+    });
+    const grandchild = template({
+      id: "grandchild",
+      packageName: "@example/grandchild",
+      agentDependencies: { "@example/producer": "^1.0.0" },
+    });
+    const unrelated = template({ id: "unrelated", packageName: "@example/other" });
+
+    expect(selectHitlRunVisibleTemplates([child, producer, unrelated, grandchild]))
+      .toEqual([child, producer, grandchild]);
+  });
+
   it("keeps templates with their own HITL signal", () => {
     const hitl = template({
       id: "hitl",

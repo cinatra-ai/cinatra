@@ -281,9 +281,15 @@ describe("widget-chat-resume-token verify — TTL / reconnect window", () => {
   });
 
   it("rejects a token AT its exp second (exp <= now, RFC 7519)", () => {
-    const t = now();
-    expect(verify(signClaims(baseClaims({ iat: t - 600, exp: t })))).toBeNull();
-    expect(verify(signClaims(baseClaims({ iat: t - 599, exp: t + 1 })))).not.toBeNull();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-19T01:10:00Z"));
+      const t = now();
+      expect(verify(signClaims(baseClaims({ iat: t - 600, exp: t })))).toBeNull();
+      expect(verify(signClaims(baseClaims({ iat: t - 599, exp: t + 1 })))).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("carries the per-run `jti` onto the resolved actor", () => {

@@ -37,6 +37,7 @@ import {
   DESTRUCTIVE_OPS,
   LOCKED_REJECTED_OPS,
   isResolvedConnectorAccessDeclaration,
+  isSuppliedDigestSource,
   validateExtensionSource,
   type ExtensionDependency,
   type ExtensionLifecycleStatus,
@@ -812,6 +813,13 @@ export async function deleteNonFinalizedCanonicalRow(rowId: string): Promise<voi
 }
 
 /**
+ * The actor sources of the DEVELOPMENT version record (cinatra#3788): the dev
+ * compile step and the live-reload watcher. Every other caller is unaffected by
+ * the provenance defence in `sourceSwitchExtension`.
+ */
+const DEV_RECORD_ACTOR_SOURCES: ReadonlySet<string> = new Set(["dev-compile", "dev-watcher"]);
+
+/**
  * Source-switch — explicit reinstall-with-provenance.
  * Identity (package name + scope) preserved; lifecycle status preserved;
  * provenance replaced.
@@ -894,6 +902,46 @@ export async function sourceSwitchExtension(
           ownerId: ext.ownerId,
           organizationId: ext.organizationId,
           newSourceType: (newSource as { type?: string } | null)?.type ?? null,
+        },
+      );
+    }
+  }
+  // DEVELOPMENT-RECORD provenance defence (cinatra#3788), a second layer under
+  // the guard the development version record applies for itself.
+  //
+  // The development record exists for in-tree edits: the live-reload watcher
+  // sees a folder under the extension scan root and records that folder as the
+  // package's source. When an upload materializes INTO that scan root, the
+  // watcher sees it too, and a switch to a digest-less checkout source erases
+  // the one fact the install road needs back (`contentDigest` for a supplied
+  // install, the registry identity for a marketplace one). The next upload of
+  // the package is then refused and no control repairs the row.
+  //
+  // The refusal reads the ACTOR, so it binds the development road alone: the
+  // install pipeline's own provenance write (`recordProvenance`, actor
+  // `runtime-installer`) keeps its road byte for byte, and so does every other
+  // caller. Nothing here widens what a source-switch may do.
+  if (DEV_RECORD_ACTOR_SOURCES.has(opts.actor.source)) {
+    const currentIsSupplied = isSuppliedDigestSource(ext.source);
+    const currentIsRegistry = (ext.source as { type?: string } | null)?.type === "verdaccio";
+    const newIsCheckout =
+      (newSource.type === "local" || newSource.type === "github") &&
+      !isSuppliedDigestSource(newSource);
+    if ((currentIsSupplied || currentIsRegistry) && newIsCheckout) {
+      throw new LifecycleTransitionError(
+        "INVALID_INPUT",
+        `the development version record may not rewrite this row's provenance: extension ` +
+          `'${id}' (${ext.packageName}, kind='${ext.kind}') currently carries ` +
+          `${currentIsSupplied ? "supplied (uploaded)" : "registry"} provenance ` +
+          `(source.type='${(ext.source as { type?: string } | null)?.type ?? "null"}'), and a ` +
+          `development record only ever records a source checkout or a static bundle; ` +
+          `actor.source='${opts.actor.source}'`,
+        {
+          id,
+          kind: ext.kind,
+          currentSourceType: (ext.source as { type?: string } | null)?.type ?? null,
+          newSourceType: (newSource as { type?: string } | null)?.type ?? null,
+          actorSource: opts.actor.source,
         },
       );
     }

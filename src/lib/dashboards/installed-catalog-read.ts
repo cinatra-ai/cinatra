@@ -167,7 +167,21 @@ export type AdmittedCatalogTemplate = {
 /** The tenant + destination fences (gates 1-2), resolved together because the
  *  destination IS derived from the actor the tenant fence just checked. */
 export type CatalogDestination = {
+  /**
+   * The organization the ELIGIBILITY gates run under: the template pool, the
+   * liveness oracle and the install rows are all read for it. On a tenant
+   * surface it is also the destination's tenant; on the workspace it is the one
+   * member organization this leg of the federation is fenced to.
+   */
   readonly orgId: string;
+  /**
+   * The tenant of the DESTINATION COLLECTION, which is `null` for the
+   * organization-free workspace collection (cinatra#2811). Kept apart from
+   * `orgId` on purpose: the name-collision read must ask about the collection
+   * the copy lands in, and for the workspace that collection belongs to no
+   * organization even though the gates above it ran under one.
+   */
+  readonly collectionOrgId: string | null;
   readonly actorUserId: string;
   readonly ref: DashboardEntityRef;
 };
@@ -209,7 +223,10 @@ export function resolveCatalogDestination(
   // belt to that braces (codex convergence r1).
   const ref = destinationRefForSurface(surface, actorUserId);
   if (!ref || !destinationIsActorOwned(ref, actorUserId)) return null;
-  return { orgId, actorUserId, ref };
+  // The workspace collection is organization-free; every other destination
+  // lives in the tenant the gates just ran under.
+  const collectionOrgId = surface.kind === "workspace" ? null : orgId;
+  return { orgId, collectionOrgId, actorUserId, ref };
 }
 
 /**
@@ -337,7 +354,7 @@ async function readCatalog({
   // ── 8. Name collision against the destination collection ─────────────────
   const existingNames = await readDestinationNames(
     destination.ref,
-    destination.orgId,
+    destination.collectionOrgId,
   );
   if (existingNames === null) {
     warn("destination collection unreadable; rendering no catalog");
@@ -453,9 +470,12 @@ async function actorMayUseExtension(args: {
  */
 export async function readDestinationNames(
   ref: DashboardEntityRef,
-  organizationId: string,
+  organizationId: string | null,
 ): Promise<ReadonlySet<string> | null> {
   if (!ref.entityType || !ref.entityId) return null;
+  // `null` is the WORKSPACE collection and a legitimate answer; `undefined`
+  // would be a caller that never resolved one, and reads nothing.
+  if (organizationId === undefined) return null;
   try {
     const names = await listEntityCollectionNames({
       organizationId,
@@ -469,4 +489,162 @@ export async function readDestinationNames(
     warn("destination collection read failed", e);
     return null;
   }
+}
+
+/**
+ * One member organization of the viewer's workspace vantage, with the actor
+ * context AS RESOLVED FOR IT (cinatra#2811, item 4).
+ *
+ * The caller resolves these; this module never widens one. That is what makes
+ * the tenant fence structural rather than remembered: a federated read can only
+ * reach an organization the caller put in this list, and the caller builds the
+ * list from the viewer's own current memberships, so an organization the viewer
+ * does not belong to has no entry and therefore no leg.
+ */
+export type WorkspaceCatalogMembership = {
+  readonly orgId: string;
+  /** The viewer's real standing in `orgId`: role, teams and project grants as
+   *  that organization resolved them. Never a synthesized or borrowed actor. */
+  readonly actor: ActorContext;
+};
+
+export type ListWorkspaceCatalogInput = {
+  readonly userId: string;
+  readonly memberships: readonly WorkspaceCatalogMembership[];
+};
+
+/**
+ * THE CROSS-ORGANIZATION FEDERATION behind the workspace Dashboards tab's
+ * installed-catalog section (cinatra#2811, item 4).
+ *
+ * The workspace sits above every organization, so there is no single tenant to
+ * read under. Instead the landed gates are run ONCE PER MEMBER ORGANIZATION,
+ * each with that organization's own actor context, and the admitted sets are
+ * folded into one list. Nothing here relaxes a gate: every row in the result
+ * passed gates 1 to 7 for some organization the viewer genuinely belongs to.
+ *
+ *   - PER-MEMBERSHIP TENANT FENCE. Each leg builds a `workspace` surface for one
+ *     member organization and resolves the destination for it, so a leg whose
+ *     actor is not of that organization is refused before any store read. The
+ *     active organization of the session plays no part: a viewer sees the same
+ *     union whichever one is active, which is what makes this tab stable.
+ *   - ORG-NULL ANCHORS ADMITTED ONCE. A system install row carries no
+ *     organization and is addressable from every member organization, so the
+ *     same anchor would otherwise be admitted once per membership. The dedupe
+ *     below collapses those to one row.
+ *   - PACKAGE-LEVEL DEDUPE. Two organizations that both install a package each
+ *     materialize their own template row for it. They are the same offer to the
+ *     viewer, and a copy of either lands the same dashboard in the same
+ *     collection, so the catalog shows ONE row per package. The surviving row is
+ *     the first in the catalog's own deterministic order, so the choice does not
+ *     drift between two reads of the same state.
+ *   - ONE COLLISION CHECK. Every leg resolves the SAME destination (the viewer's
+ *     organization-free workspace collection), so the name check is taken once,
+ *     against that collection, not once per organization.
+ *
+ * Empty on any refusal or failure, exactly as the tenant read is.
+ */
+export async function listWorkspaceCatalogTemplates(
+  input: ListWorkspaceCatalogInput,
+): Promise<readonly CatalogTemplateView[]> {
+  try {
+    return await readWorkspaceCatalog(input);
+  } catch (e) {
+    warn("workspace catalog read failed; rendering no catalog", e);
+    return [];
+  }
+}
+
+/**
+ * The admitted templates for ONE leg of the federation, with the destination
+ * that leg resolved. Exported so the workspace WRITE re-authorizes by running
+ * the same legs rather than restating them.
+ */
+export async function resolveWorkspaceAdmitted(
+  input: ListWorkspaceCatalogInput,
+): Promise<
+  readonly {
+    readonly orgId: string;
+    readonly destination: CatalogDestination;
+    readonly admitted: readonly AdmittedCatalogTemplate[];
+  }[]
+> {
+  const { userId, memberships } = input;
+  if (!userId || !Array.isArray(memberships) || memberships.length === 0) return [];
+  const legs: {
+    orgId: string;
+    destination: CatalogDestination;
+    admitted: readonly AdmittedCatalogTemplate[];
+  }[] = [];
+  const seenOrgs = new Set<string>();
+  for (const membership of memberships) {
+    const orgId = membership?.orgId;
+    if (typeof orgId !== "string" || orgId.length === 0) continue;
+    // A duplicate membership row must not double the read (or the dedupe's
+    // input); the vantage builder already dedupes, and this is the belt.
+    if (seenOrgs.has(orgId)) continue;
+    seenOrgs.add(orgId);
+    const surface: CatalogSurface = { kind: "workspace", orgId, userId };
+    // GATES 1-2, for THIS organization's actor. An actor resolved for another
+    // tenant, a non-human principal, or a descriptor naming another user's
+    // collection are all refused here.
+    const destination = resolveCatalogDestination(membership.actor, surface);
+    if (!destination) continue;
+    // GATES 3-7, unchanged, under this organization.
+    const admitted = await resolveAdmittedTemplates(
+      membership.actor,
+      surface,
+      destination,
+    );
+    if (admitted.length === 0) continue;
+    legs.push({ orgId, destination, admitted });
+  }
+  return legs;
+}
+
+async function readWorkspaceCatalog({
+  userId,
+  memberships,
+}: ListWorkspaceCatalogInput): Promise<readonly CatalogTemplateView[]> {
+  const legs = await resolveWorkspaceAdmitted({ userId, memberships });
+  if (legs.length === 0) return [];
+
+  const rows: CatalogTemplateView[] = legs.flatMap((leg) =>
+    leg.admitted.map((a) => ({
+      templateId: a.row.id,
+      name: a.row.name,
+      packageName: a.packageName,
+    })),
+  );
+
+  // ONE collision check, against the organization-free workspace collection
+  // every leg resolved. `legs[0]` is as good as any: the destination does not
+  // depend on the leg (see `destinationRefForSurface`'s workspace arm).
+  const existingNames = await readDestinationNames(
+    legs[0]!.destination.ref,
+    legs[0]!.destination.collectionOrgId,
+  );
+  if (existingNames === null) {
+    warn("workspace destination collection unreadable; rendering no catalog");
+    return [];
+  }
+
+  // COLLISION FIRST, THEN DEDUPE. The order matters: two organizations can
+  // carry DIFFERENTLY NAMED rows for one package, and deduplicating first could
+  // pick the one whose name is already taken here and drop the addable one,
+  // withdrawing the whole package over a name the viewer never has to use.
+  // Filtering first means the surviving representative is one that can actually
+  // be added.
+  const addable = rows.filter((t) =>
+    isAddableWithoutNameCollision(t.name, existingNames),
+  );
+
+  // ONE row per package, in the catalog's own order, so an anchor visible from
+  // several organizations is admitted once and two organizations' copies of one
+  // package are one offer.
+  const byPackage = new Map<string, CatalogTemplateView>();
+  for (const row of addable.sort(compareCatalogRows)) {
+    if (!byPackage.has(row.packageName)) byPackage.set(row.packageName, row);
+  }
+  return [...byPackage.values()].sort(compareCatalogRows).slice(0, MAX_CATALOG_ROWS);
 }

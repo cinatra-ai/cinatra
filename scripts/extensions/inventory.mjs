@@ -25,7 +25,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // builder, which leaves it external as a host peer — cinatra#3471/#3477). Never
 // re-declared here: one id, one definition. The builder is import-side-effect-free
 // (its CLI is `isMain`-guarded) and pulls in no bundler at import time.
-import { HOST_DESIGN_PRIMITIVES_MODULE } from "./build-client-renderer-bundle.mjs";
+import {
+  HOST_DASHBOARD_COMPOSITION_MODULE,
+  HOST_DESIGN_PRIMITIVES_MODULE,
+} from "./build-client-renderer-bundle.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -204,8 +207,26 @@ export const SDK_PACKAGES = new Set([
 // on NO extraction-blocking coupling: nothing is extracted with it, there is no
 // package to carve out. They are therefore ALLOWED first-party deps, reported
 // under their own class rather than as SDK-only violations. A subpath collapses
-// to the base package, exactly as in the SDK class.
-export const HOST_SERVED_PACKAGES = new Set([HOST_DESIGN_PRIMITIVES_MODULE]);
+// to the base package, exactly as in the SDK class — EXCEPT for an EXACT
+// host-served specifier (below), which is admitted as itself and never collapsed.
+//
+// THE READ-ONLY DASHBOARD COMPOSITION (cinatra#3092): "the dashboard extension
+// lives outside this repository and cannot import the host's composition". The
+// host serves the ONE module that exports the two promoted read-only views, at
+// its EXACT specifier. It is a mirror of the (specifier, export) pairs the SDK
+// register `PROMOTED_READ_ONLY_COMPOSITIONS` admits, pinned equal to it by a
+// test (this script imports no TypeScript). Its base package
+// `@cinatra-ai/sdk-dashboard` and every other subpath stay violations: the
+// admission is the specifier, never the package.
+export const HOST_SERVED_READ_ONLY_COMPOSITIONS = Object.freeze([
+  Object.freeze({ specifier: HOST_DASHBOARD_COMPOSITION_MODULE, exportName: "ReadOnlyComposedDashboard" }),
+  Object.freeze({ specifier: HOST_DASHBOARD_COMPOSITION_MODULE, exportName: "ReadOnlySinglePortlet" }),
+]);
+
+export const HOST_SERVED_PACKAGES = new Set([
+  HOST_DESIGN_PRIMITIVES_MODULE,
+  ...HOST_SERVED_READ_ONLY_COMPOSITIONS.map((c) => c.specifier),
+]);
 
 // First-party scopes whose non-SDK packages are extraction-blocking coupling.
 // `@cinatra-ai` is the host scope; each in-tree `extensions/<scope>/` is a
@@ -257,12 +278,23 @@ export function basePackageOf(spec) {
   return spec.split("/")[0];
 }
 
+/** The REPORTING UNIT of a specifier: an EXACT host-served specifier stays whole
+ * (so its base package and its sibling subpaths are never admitted with it);
+ * every other specifier collapses to its base package. */
+function reportingUnitOf(spec) {
+  if (HOST_SERVED_PACKAGES.has(spec)) return spec;
+  return basePackageOf(spec);
+}
+
 /** True when `spec` is a first-party (host scope or an in-tree sibling-extension
  * scope) code coupling that is neither an SDK package nor a HOST-SERVED one — the
  * SDK-only violation predicate. SDK packages and host-served packages (and their
- * subpaths) are allowed; everything outside the first-party scopes is ignored.
+ * subpaths) are allowed, and so is an EXACT host-served specifier (checked before
+ * the base-package collapse, so its base package is not admitted with it);
+ * everything outside the first-party scopes is ignored.
  * `firstPartyScopes` defaults to the on-disk-derived set (injectable for tests). */
 export function isSdkOnlyViolation(spec, firstPartyScopes = FIRST_PARTY_SCOPES) {
+  if (HOST_SERVED_PACKAGES.has(spec)) return false; // an exact host-served specifier
   const base = basePackageOf(spec);
   if (!base) return false;
   const scope = base.startsWith("@") ? base.split("/")[0] : null;
@@ -285,7 +317,8 @@ export function scanSdkOnlyImportsInText(rawText, selfName, firstPartyScopes = F
 }
 
 /** Distinct scoped base packages IMPORTED in `rawText` (comments stripped, self
- * excluded) — the shared scan both first-party classifications read. */
+ * excluded) — the shared scan both first-party classifications read. An EXACT
+ * host-served specifier is returned whole rather than as its base package. */
 function importedScopedBasePackages(rawText, selfName) {
   const text = stripComments(rawText);
   const bases = new Set();
@@ -295,16 +328,18 @@ function importedScopedBasePackages(rawText, selfName) {
   const re = /(?:from|import|require)\s*\(?\s*["'`](@[^"'`]+\/[^"'`]+)["'`]/g;
   let m;
   while ((m = re.exec(text))) {
-    const base = basePackageOf(m[1]);
-    if (!base || base === selfName) continue;
-    bases.add(base);
+    // An EXACT host-served specifier stays whole (see `reportingUnitOf`).
+    const unit = reportingUnitOf(m[1]);
+    if (!unit || basePackageOf(unit) === selfName) continue;
+    bases.add(unit);
   }
   return bases;
 }
 
 /** Distinct HOST-SERVED base packages IMPORTED in `rawText` — the allowed
  * first-party class, reported rather than flagged. Subpaths collapse to the base
- * package, so the reporting unit matches the ratchet unit. */
+ * package, so the reporting unit matches the ratchet unit; an EXACT host-served
+ * specifier is reported as itself. */
 export function scanHostServedImportsInText(rawText, selfName) {
   const hits = new Set();
   for (const base of importedScopedBasePackages(rawText, selfName)) {
@@ -342,11 +377,12 @@ export function hostServedManifestDeps(pkg, selfName) {
   };
   for (const key of Object.keys(decl)) {
     if (key === selfName) continue;
-    // Collapse through `basePackageOf` exactly as the violation path does, so a
-    // key the predicate EXEMPTS as a host-served subpath is also REPORTED here
-    // (an exempted-but-invisible dep would be a hole in the classification).
-    const base = basePackageOf(key);
-    if (base && HOST_SERVED_PACKAGES.has(base)) hits.add(base);
+    // Collapse through `reportingUnitOf` exactly as the violation path does, so
+    // a key the predicate EXEMPTS as a host-served subpath (or as an exact
+    // host-served specifier) is also REPORTED here (an exempted-but-invisible dep
+    // would be a hole in the classification).
+    const unit = reportingUnitOf(key);
+    if (unit && HOST_SERVED_PACKAGES.has(unit)) hits.add(unit);
   }
   return hits;
 }

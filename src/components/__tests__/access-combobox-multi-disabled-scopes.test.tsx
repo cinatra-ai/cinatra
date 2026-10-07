@@ -23,7 +23,7 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import * as Mod from "@/components/access-combobox";
 
-const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const SOURCE = readFileSync("packages/sdk-ui/src/access-combobox.tsx", "utf-8");
 
 describe("AccessCombobox multi-select disabledScopes (cinatra#1607)", () => {
   it("module loads and exports the unified AccessCombobox", () => {

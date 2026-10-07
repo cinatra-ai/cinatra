@@ -1,10 +1,16 @@
 /**
- * getAssignedSkillIdsForAgent filters custom_skill_assignments rows by
- * ActorContext (principalId, teamIds, organizationId) and unions the result
- * with the existing system globals + agent self-match set.
+ * getAssignedSkillIdsForAgent unions custom_skill_assignments rows with the
+ * existing system globals + agent self-match set.
+ *
+ * WHICH of those rows a resolution receives is decided by the run's FROZEN
+ * assignment scopes (cinatra#2815 S3, epic #2812), not by the calling actor's
+ * live memberships: the custom-assignment road reads the same snapshot chain as
+ * the per-scope store. An actor is still required, because a resolution with
+ * none consults the assignment table at all, but the actor no longer selects the
+ * layers.
  *
  * The read path must consume readCustomSkillAssignmentsForAgent so custom
- * assignments respect the caller's actor scope.
+ * assignments reach the union.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -62,65 +68,75 @@ beforeEach(() => {
   readSystemGlobalSkillIdsForAgentMock.mockClear();
 });
 
-describe("getAssignedSkillIdsForAgent ActorContext filter", () => {
-  it("team member sees team-owned rows but not other-user or different-org rows", async () => {
-    const actor: ActorContext = {
-      principalId: "u1",
-      teamIds: ["t1"],
-      organizationId: "orgX",
-    };
-    // Call through the ActorContext-aware overload shape used by the implementation.
-    const ids = await (getAssignedSkillIdsForAgent as unknown as (
-      agentId: string,
-      actor: ActorContext,
-    ) => Promise<string[]>)("a1", actor);
+type RunScope = { snapshot?: unknown; durableOrgId?: string | null };
+
+function snapshot(input: {
+  orgId?: string;
+  teamIds?: string[];
+  originatingHumanUserId?: string;
+}) {
+  return {
+    v: 1 as const,
+    orgId: input.orgId ?? "org1",
+    teamIds: input.teamIds ?? [],
+    ...(input.originatingHumanUserId
+      ? { originatingHumanUserId: input.originatingHumanUserId }
+      : {}),
+  };
+}
+
+const resolve = getAssignedSkillIdsForAgent as unknown as (
+  agentId: string,
+  actor: ActorContext,
+  runScope?: RunScope,
+) => Promise<string[]>;
+
+describe("getAssignedSkillIdsForAgent: the scopes the run froze", () => {
+  it("a run whose snapshot names team t1 sees the team row, and neither the other organization's nor another person's", async () => {
+    const actor: ActorContext = { principalId: "u1", teamIds: ["t1"], organizationId: "orgX" };
+    const ids = await resolve("a1", actor, {
+      snapshot: snapshot({ orgId: "orgX", teamIds: ["t1"] }),
+    });
     expect(ids).toContain("s1");
     expect(ids).not.toContain("s2");
     expect(ids).not.toContain("s3");
   });
 
-  it("org member sees org-owned rows", async () => {
+  it("a run whose snapshot names org1 sees the organization row", async () => {
     const actor: ActorContext = { principalId: "u1", organizationId: "org1" };
-    const ids = await (getAssignedSkillIdsForAgent as unknown as (
-      agentId: string,
-      actor: ActorContext,
-    ) => Promise<string[]>)("a1", actor);
+    const ids = await resolve("a1", actor, { snapshot: snapshot({ orgId: "org1" }) });
     expect(ids).toContain("s2");
   });
 
-  it("owner sees their own user-row", async () => {
+  it("a run whose snapshot names u-other as the originating human sees that person's row", async () => {
     const actor: ActorContext = { principalId: "u-other" };
-    const ids = await (getAssignedSkillIdsForAgent as unknown as (
-      agentId: string,
-      actor: ActorContext,
-    ) => Promise<string[]>)("a1", actor);
+    const ids = await resolve("a1", actor, {
+      snapshot: snapshot({ originatingHumanUserId: "u-other" }),
+    });
     expect(ids).toContain("s3");
   });
 
-  it("undefined teamIds/projectIds coerce to [] without crashing", async () => {
-    const actor: ActorContext = { principalId: "u1" }; // no teamIds, no organizationId
-    const ids = await (getAssignedSkillIdsForAgent as unknown as (
-      agentId: string,
-      actor: ActorContext,
-    ) => Promise<string[]>)("a1", actor);
+  it("a HEADLESS run does not see the personal row, even for the actor that owns it", async () => {
+    const actor: ActorContext = { principalId: "u-other" };
+    const ids = await resolve("a1", actor, { snapshot: snapshot({}) });
+    expect(ids).not.toContain("s3");
+  });
+
+  it("no snapshot and no teams coerce to the sole legacy fallback without crashing", async () => {
+    const actor: ActorContext = { principalId: "u1" };
+    const ids = await resolve("a1", actor);
     expect(Array.isArray(ids)).toBe(true);
-    // No team-row matches and no crash:
+    // The fallback holds no team layer.
     expect(ids).not.toContain("s1");
   });
 
-  it("result is a union with system globals + agent self-match (additive branch)", async () => {
+  it("the result is still a union with system globals + agent self-match", async () => {
     readSystemGlobalSkillIdsForAgentMock.mockResolvedValueOnce(["sys-1"]);
-    const actor: ActorContext = {
-      principalId: "u1",
-      teamIds: ["t1"],
-      organizationId: "org1",
-    };
-    const ids = await (getAssignedSkillIdsForAgent as unknown as (
-      agentId: string,
-      actor: ActorContext,
-    ) => Promise<string[]>)("a1", actor);
+    const actor: ActorContext = { principalId: "u1", teamIds: ["t1"], organizationId: "org1" };
+    const ids = await resolve("a1", actor, {
+      snapshot: snapshot({ orgId: "org1", teamIds: ["t1"] }),
+    });
     expect(ids).toContain("sys-1");
-    // and the new branch is still additive
     expect(ids).toContain("s1");
     expect(ids).toContain("s2");
   });

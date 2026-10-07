@@ -23,6 +23,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { LifecycleOneOffFixtures } from "../lifecycle-one-off-fixtures";
+import { ReviewGateSettled } from "@cinatra-ai/agents/review-gate-states";
 import {
   LIFECYCLE_READER_STATES,
   LIFECYCLE_REVIEW_TARGET_FIXTURE,
@@ -42,6 +43,29 @@ const populated = (container: HTMLElement, surface: string) =>
   container.querySelector(`[data-surface-id="${surface}"][data-variant="populated"]`);
 
 describe("the harness mounts for the drawing's one-off surfaces", () => {
+  it.each(["approved", "rejected", "changes_requested"] as const)(
+    "mounts the real inert settled marker for %s without naming its reading",
+    (outcome) => {
+      const container = mount();
+      const fixture = container.querySelector(`[data-review-settled-fixture="${outcome}"]`);
+      expect(fixture, "each recorded outcome has a mount for browser style readings").not.toBeNull();
+      const marker = fixture!.querySelector('[data-conformance-id="review-gate-settled"]');
+      expect(marker).not.toBeNull();
+      expect(marker!.getAttribute("data-review-outcome")).toBe(outcome);
+      expect(marker!.children.length).toBe(2);
+      expect(marker!.children[0].getAttribute("data-conformance-id")).toBe("review-gate-settled-pill");
+      expect(marker!.children[1].getAttribute("data-conformance-id")).toBe("review-gate-settled-sentence");
+      expect(marker!.children[0].textContent).toBe("Continued");
+      expect(marker!.children[1].textContent).toBe("Decided on the revision above.");
+      expect(marker!.querySelectorAll("button, a, svg").length).toBe(0);
+
+      // This fixture contributes only the outcome prop. Compare against the
+      // real export so authored look-alike markup or fixture restyling is red.
+      const shipped = render(<ReviewGateSettled outcome={outcome} />).container.firstElementChild;
+      expect(marker!.outerHTML).toBe(shipped!.outerHTML);
+    },
+  );
+
   it("draws the SHIPPED review-target header, with the type label the PRODUCT derives", () => {
     const root = populated(mount(), "review-target-in-thread");
     expect(root, "the review target mount is drawn").not.toBeNull();

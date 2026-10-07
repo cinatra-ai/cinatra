@@ -319,11 +319,15 @@ vi.mock("@/lib/extension-discovery-scope", () => ({
 // rows, not the registry), its two page budgets, and the REAL pure vendor-name
 // resolver the byline resolves through.
 vi.mock("@cinatra-ai/registries", async () => {
-  const scope = await vi.importActual<{ resolveInstalledVendorName: unknown }>(
+  const scope = await vi.importActual<{
+    resolveInstalledVendorName: unknown;
+    declaredVendorNameForScope: unknown;
+  }>(
     "../../../../../packages/registries/src/scope",
   );
   return {
     resolveInstalledVendorName: scope.resolveInstalledVendorName,
+    declaredVendorNameForScope: scope.declaredVendorNameForScope,
     listExtensionPackages: vi.fn(async () => fixture.registryPackages),
     CATALOG_PACKUMENT_TIMEOUT_MS: 8_000,
     CATALOG_HYDRATION_BUDGET_MS: 12_000,

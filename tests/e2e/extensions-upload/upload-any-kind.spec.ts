@@ -29,7 +29,7 @@
  * Both palettes are walked: the page is rendered once in light and once in dark,
  * and the assertions are made in each.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { deflateRawSync } from "node:zlib";
 
 const SHOT_DIR = process.env.E2E_UPLOAD_SHOT_DIR ?? null;
@@ -202,6 +202,20 @@ function packageName(
   return `@acme/upload-walk-${tag}-${kind}`;
 }
 
+// THE WALK'S OWN SKILL, NAMED. The catalog stores a skill's name as the
+// frontmatter name split on hyphens and title-cased, so the name a card offers
+// is derived here exactly as the catalog derives it rather than guessed.
+function walkSkillSlug(tag: string): string {
+  return `upload-walk-${tag}-note`;
+}
+
+function walkSkillCatalogName(tag: string): string {
+  return walkSkillSlug(tag)
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function packageZip(
   kind: "agent" | "skill" | "connector" | "artifact",
   tag: string = RUN_TAG,
@@ -233,9 +247,15 @@ function packageZip(
     // A REAL skill package: the packaging contract the product enforces on
     // every road requires a description in the frontmatter, and a fixture that
     // omits it measures the refusal rather than the install.
+    //
+    // The skill's own SLUG carries the run tag. A cell that reads the skill by
+    // the name the package gives it needs a name no other package on the
+    // instance carries, and `one` is a word half the catalog could hold.
     files.push({
-      name: "skills/one/SKILL.md",
-      content: "---\nname: one\ndescription: A skill supplied by the upload walk.\n---\nbody",
+      name: `skills/${walkSkillSlug(tag)}/SKILL.md`,
+      content: `---\nname: ${walkSkillSlug(
+        tag,
+      )}\ndescription: A skill supplied by the upload walk.\n---\nbody`,
     });
   if (kind === "connector") {
     // A connector declares its access scope in `cinatra/config.json`, and the
@@ -388,6 +408,19 @@ async function readToastSurface(
     insideViewport,
     geometry: `toast=${JSON.stringify(box)} viewport=${JSON.stringify(viewport)}`,
   };
+}
+
+/** An attribute a client component sets after mount, waited for rather than
+ *  read once. */
+async function pollAttribute(locator: Locator, name: string): Promise<string> {
+  let value: string | null = null;
+  await expect
+    .poll(async () => {
+      value = await locator.getAttribute(name);
+      return value ?? "";
+    }, { timeout: 30_000 })
+    .not.toBe("");
+  return value ?? "";
 }
 
 async function supply(page: Page, zip: Buffer, fileName: string): Promise<void> {
@@ -720,9 +753,10 @@ async function installThroughUpload(
   kind: "agent" | "skill" | "connector" | "artifact",
   palette: (typeof PALETTES)[number],
   landing: RegExp,
+  tag: string = DEEP_TAG,
 ): Promise<void> {
   await openUpload(page, palette);
-  await supply(page, packageZip(kind, DEEP_TAG), `${kind}.zip`);
+  await supply(page, packageZip(kind, tag), `${kind}.zip`);
   await expect(page.getByTestId("upload-resolved-kind")).toHaveText(
     kind.charAt(0).toUpperCase() + kind.slice(1),
   );
@@ -732,36 +766,274 @@ async function installThroughUpload(
 
 for (const palette of PALETTES) {
   test.describe(`upload screen — the installed kind on the surface the cell names — ${palette}`, () => {
-    // THE SKILL'S DEEPER OBSERVABLE IS DEFERRED, NOT SILENTLY DROPPED.
+    // THE SKILL'S DEEPER OBSERVABLE, WALKED (cinatra#3607).
     //
     // cinatra#3204 criterion 34 asks for "a skill listed on a card that
     // declares it", and criterion 21's skill sentence for the skill "offered
-    // on a card that depends on it". The only surface that ever offered an
-    // installed skill on a package's own card was the extension-settings
-    // Skills section, and that section is RETIRED on main — cinatra#3406,
-    // commit 2f1432c9f, "Retire the Skills section from extension settings"
-    // (cinatra#2702). Its retirement gate — the test file
-    // `src/__tests__/agent-skill-assignment-actions-retired.test.ts` — keeps
-    // the section, its client and its four assignment actions out of the tree.
-    // This walk therefore asserts no locator of it.
+    // on a card that depends on it". The maintainer deferred both halves to
+    // epic cinatra#2812 on 2026-09-19, because the only surface that had ever
+    // offered an installed skill on a package's own card was the retired
+    // extension-settings Skills section. That epic has since landed the
+    // surface, so the OFFER half is walked here rather than deferred again:
+    // the cell reads the uploaded skill in the card's own chooser and then
+    // chooses it, so the card both offers it and carries it.
     //
-    // The surface that replaces it is the per-agent assignment page the design
-    // spec app-extensions.html §VII draws — "Where skills and context
-    // artifacts are assigned to a package — one scope at a time" — addressed
-    // at {scope-base}/agents/{vendor}/{slug}/settings?tab=skills. That page is
-    // not built on main (no route and no component answers that address), and
-    // it is epic cinatra#2812's per-scope assignment pages. The clause waits
-    // for it there rather than for a locator no page renders.
+    // Two halves of those sentences are deliberately NOT claimed. Criterion
+    // 21's catalog half, the skill being queryable in the CATALOG by package
+    // name, is not this file's: the catalog's own search lives in
+    // packages/skills (plugin-pages.tsx filters rows on skill.packageName) and
+    // a walk of it belongs with that surface. And "declares" is read here as
+    // what an administrator does on the card, not as a manifest edge: the two
+    // packages this cell supplies are independent, so what it proves is that
+    // the card offers the skill and takes it, never that the agent's manifest
+    // names it.
     //
-    // What survives of criterion 21's skill sentence is its CATALOG half, and
-    // only as far as the cell above actually walks it: the CELL4 skill cell
-    // lands the uploaded package at /skills and reads the package name on that
-    // listing, so the skill is proven VISIBLE in the catalog by package name.
-    // It does not type that name into the catalog's own search, so the
-    // "queryable" reading of the sentence is not walked by this file; the
-    // catalog's package-name filtering lives in packages/skills
-    // (plugin-pages.tsx filters rows on skill.packageName), and a walk of that
-    // search belongs with that surface, not with this upload cell.
+    // WHY THIS SURFACE. The per-scope assignment page (cinatra#2814, landed by
+    // pull request 3640) is the page of ONE package, addressed at
+    // `<scope-base>/agents/<vendor>/<package>/settings?tab=skills`. Under a
+    // scope base it carries that scope alone; under the WORKSPACE base, the
+    // one this cell uses, it is the cross-scope editor and draws one section
+    // per scope of the reader's vantage, so the cell binds to the workspace
+    // section by its own key. Its
+    // Skills pane holds the chooser that offers installed skills to that
+    // package. It is the card's own page: the card's Settings control is the
+    // only link to it, and the cell below reaches it that way. The chooser's
+    // population is `listAssignableSkillCandidates()` through
+    // `searchScopeSkillCandidates` (src/lib/scope-assignment/
+    // scope-assignment-reads.server.ts), so what the cell reads is the
+    // product's own offer, not a listing that merely proves the row exists.
+    //
+    // WHICH SCOPE THE NEGATIVE USES, AND WHY. The Upload screen installs at
+    // the scope its own panel is preselected to, `Workspace: All`, which the
+    // product persists as a row with no owning organization. The scope reach
+    // rule of the per-scope surfaces epic (src/lib/scope-surface-eligibility.ts,
+    // `installReachesScope`) admits such a row at the workspace tier and at a
+    // personal scope, and refuses it at an ORGANIZATION scope in so many
+    // words: "An org-NULL row is NOT an organization's install; it belongs to
+    // the workspace tier and surfaces there." The organization is therefore
+    // the smallest scope a platform administrator can reach on a fresh
+    // instance that is blind to this install, and it is the negative below.
+    //
+    // WHAT THE NEGATIVE ASSERTS, AND WHAT IT DOES NOT. The organization scope
+    // resolves at its own address and the package the install anchored at the
+    // workspace has no card on its Agents tab. An absence there needs two
+    // controls, because the tab's read answers with no rows when it FAILS as
+    // well as when the scope truly reaches nothing, and the route draws the
+    // same honest placeholder either way:
+    //
+    //   1. THE SCOPE ANSWERS. The organization's ASSISTANTS tab renders. That
+    //      tab is fail-closed on a read that could not be TAKEN (`if (!ok)
+    //      return []`) and consults the directory only on a read that
+    //      completed, so an unresolvable anchor or a failed membership read
+    //      for this scope and this reader would leave it empty. Those are the
+    //      deterministic ways the eligibility read fails, and this rules them
+    //      out.
+    //   2. THE READ ANSWERS FOR THIS INSTALL. The PERSONAL scope's Agents tab,
+    //      drawn by the same function, carries the uploaded card, because the
+    //      personal arm admits an install with no owning organization.
+    //
+    // What neither control rules out is a transient failure of the
+    // organization Agents request itself, which is a separate request from
+    // both. That residue is the ordinary flake surface every assertion in this
+    // file stands on, not a second reading of the sentence.
+    //
+    // The cell asserts the CARD's absence. It does NOT open a chooser at that
+    // scope and read the uploaded skill out of it, and it makes no claim about
+    // what any other card of that organization offers.
+    //
+    // The reason it stops at the card is that the chooser's
+    // population carries no install-scope fence on main: an extension's
+    // catalog rows are written at the workspace level
+    // (packages/skills/src/skills-store.ts), the assignability predicate
+    // admits exactly the workspace-visible rows
+    // (packages/skills/src/agent-skill-assignability.ts,
+    // `isGloballyVisibleCatalogRow`), and the population reads the catalog
+    // snapshot with no scope argument. Among the candidates that predicate
+    // admits, what narrows a chooser today is the typed query, the exclusion
+    // of a package whose install rows are all archived, and the subtraction of
+    // the skills that exact scope already chose. The install's own scope
+    // narrows nothing. Fencing the offer to it is a product decision for the
+    // assignment epic, and this walk states where the fence is today rather
+    // than asserting one that is not there.
+
+    test(`CELL4 ${palette}: the uploaded skill is offered on the card at the scope the install chose, and that card is absent from a scope blind to the install`, async ({
+      page,
+    }) => {
+      // This cell supplies TWO packages through the screen and then walks four
+      // surfaces, and on a development server the assignment route pays its
+      // first compile inside the cell. The suite's own budget is written for a
+      // cell that supplies one package, so this one asks for the longer one.
+      test.slow();
+      // This cell's OWN tag, one per palette: it installs an agent package
+      // (the card) and a skill package (the offer), and the walk's tagging
+      // rule forbids re-installing over a row another cell or the other
+      // palette already wrote.
+      const tag = `${RUN_TAG}c${palette.charAt(0)}`;
+      const agentSlug = packageName("agent", tag).split("/")[1] as string;
+      const skillName = walkSkillCatalogName(tag);
+
+      // THE CARD. An assignment page is the page of a package, so the cell
+      // supplies its own agent package at the scope the panel chooses.
+      await installThroughUpload(page, "agent", palette, /\/agents\/?(?:[?#].*)?$/, tag);
+      // THE OFFER. The same screen, the same road, the same chosen scope.
+      await installThroughUpload(page, "skill", palette, /\/skills\/?(?:[?#].*)?$/, tag);
+
+      // ---------------------------------------------------------------------
+      // THE POSITIVE READING.
+      // ---------------------------------------------------------------------
+      // Reached the way an admin reaches it: the scope's own landing, the tab
+      // strip that page draws, then the card's own Settings link.
+      await page.goto("/workspace");
+      await applyPalette(page, palette);
+      await page.getByRole("tab", { name: "Agents" }).click();
+      await page.waitForURL(/\/workspace\/agents\/?(?:[?#].*)?$/, { timeout: 60_000 });
+      await applyPalette(page, palette);
+
+      // The scope drew its card list, and the uploaded package is on it. The
+      // card is read by the address its controls carry, because the card's
+      // title is the flow's own declared name rather than the package name.
+      await expect(page.getByTestId("scope-agents-list")).toBeVisible({ timeout: 60_000 });
+      const settingsLink = page.locator(
+        `a[href="/workspace/agents/acme/${agentSlug}/settings?tab=skills"]`,
+      );
+      await expect(settingsLink).toHaveCount(1, { timeout: 30_000 });
+      await settingsLink.click();
+      await page.waitForURL(
+        new RegExp(`/workspace/agents/acme/${agentSlug}/settings\\?(?:.*&)?tab=skills(?:[&#]|$)`),
+        { timeout: 60_000 },
+      );
+      await applyPalette(page, palette);
+
+      // The card's own page, with its Skills pane and a live chooser. The
+      // workspace page is the CROSS-SCOPE editor, so it draws one section per
+      // scope of the reader's vantage; the cell binds to the workspace
+      // section by its own key rather than to whichever section is drawn
+      // first, or it would read and write at a scope it never named.
+      await expect(page.getByTestId("scope-assignment-page")).toBeVisible({ timeout: 30_000 });
+      const pane = page.locator('[data-slot="scope-assignment-skills-pane"]');
+      await expect(pane).toBeVisible({ timeout: 30_000 });
+      const section = pane.locator(
+        '[data-slot="scope-assignment-section"][data-scope-key="workspace"]',
+      );
+      await expect(section).toHaveCount(1, { timeout: 30_000 });
+      const chooser = section.locator('input[role="combobox"]');
+      await expect(chooser).toBeVisible({ timeout: 30_000 });
+
+      // THE SENTENCE ITSELF: the uploaded skill is OFFERED, by the name the
+      // package gives it, on the chooser's OWN list. The option is read inside
+      // the list the chooser opened rather than anywhere on the page, and it
+      // has to carry the uploaded PACKAGE's name beside the skill's. Both
+      // reads are substring reads, so what they rule out is a row of some
+      // OTHER package and a row of some other skill of the same package; the
+      // fixture supplies exactly one skill in a package named for this run, so
+      // on this instance one row can satisfy them.
+      await chooser.fill(skillName);
+      // The list this chooser opened, named by the chooser itself: the input
+      // publishes its popup's id as `aria-controls`, so the option below is
+      // read out of THAT list rather than out of whatever listbox the page
+      // happens to hold.
+      const listId = await pollAttribute(chooser, "aria-controls");
+      const list = page.locator(`[id="${listId.replaceAll('"', '\\"')}"]`);
+      await expect(list).toBeVisible({ timeout: 60_000 });
+      const offered = list.getByRole("option").filter({ hasText: skillName });
+      await expect(offered).toHaveCount(1, { timeout: 60_000 });
+      await expect(offered.first()).toBeVisible();
+      await expect(offered.first()).toContainText(packageName("skill", tag));
+      await shot(page, `cell4-skill-offered-${palette}`);
+
+      // …and the card TAKES it: choosing the offered row leaves the skill on
+      // the card as a chosen row of its own, saved and active. An offer the
+      // card cannot accept would stop here.
+      await offered.first().click();
+      const chosen = section.locator(
+        '[data-slot="scope-skills-row"]:not([data-status="saving"])',
+      );
+      await expect(chosen).toHaveCount(1, { timeout: 60_000 });
+      await expect(chosen).toHaveAttribute("data-status", "ok");
+      await expect(chosen).toContainText(skillName);
+      await expect(section.locator('[data-slot="scope-skills-error"]')).toHaveCount(0);
+      await shot(page, `cell4-skill-chosen-${palette}`);
+
+      // ---------------------------------------------------------------------
+      // THE NEGATIVE READING.
+      // ---------------------------------------------------------------------
+      // The organization this reader belongs to, read off the product's own
+      // page rather than guessed: the workspace page is the cross-scope
+      // editor, and it labels one section per scope of the reader's vantage.
+      const orgSections = page.locator(
+        '[data-slot="scope-assignment-section"][data-scope-key^="organization:"]',
+      );
+      // At least one: the reader belongs to the organization the auth setup
+      // minted, and the same setup may add a second membership when the
+      // database already holds an organization with a usable GitHub
+      // connection. Any organization the reader belongs to is blind to an
+      // install anchored at the workspace under the scope reach rule, so the
+      // first section names a scope that serves the negative reading; the id
+      // is still read off the page, never guessed.
+      await expect(orgSections.first()).toBeVisible({ timeout: 30_000 });
+      const orgKey = (await orgSections.first().getAttribute("data-scope-key")) ?? "";
+      const orgId = encodeURIComponent(orgKey.slice("organization:".length));
+      expect(orgId.length).toBeGreaterThan(0);
+
+      // THE SCOPE'S OWN ELIGIBILITY READ, PROVEN TO HAVE COMPLETED. An empty
+      // Agents tab alone would prove nothing: that read is caught and answered
+      // with no rows when it FAILS
+      // (src/lib/scope-surface-eligibility.server.ts), and the route draws the
+      // same honest placeholder for a failed read as for a scope that reaches
+      // nothing. The ASSISTANTS tab of the same scope is where the two come
+      // apart, in that module's own words: a read that could not be taken
+      // renders nothing there, while a read that COMPLETED consults the
+      // directory and surfaces the built-in platform assistant, which is no
+      // install row at all. So the cell reads the assistants tab first, and
+      // only a scope whose fence actually ran can show it.
+      await page.goto(`/organizations/${orgId}/assistants`);
+      await applyPalette(page, palette);
+      await expect(page).toHaveURL(
+        new RegExp(`/organizations/${orgId}/assistants(?:[?#]|$)`),
+      );
+      await expect(page.getByTestId("scope-assistants-list")).toBeVisible({ timeout: 60_000 });
+
+      // THE SAME READER, THE SAME READ, AT A SCOPE THAT IS NOT BLIND. The
+      // personal scope admits an install with no owning organization
+      // (`installReachesScope`, the personal arm), and its Agents tab is drawn
+      // by the very function the organization's Agents tab is drawn by. Taking
+      // it here shows that function answering with the uploaded card for this
+      // reader, moments before the organization's tab is read, so the absence
+      // below stands against a working read rather than against nothing.
+      await page.goto("/personal/agents");
+      await applyPalette(page, palette);
+      await expect(
+        page.locator(`a[href^="/personal/agents/acme/${agentSlug}/"]`).first(),
+      ).toBeVisible({ timeout: 60_000 });
+
+      // Back to the organization, and on through the scope's own tab strip as
+      // an admin goes: the Agents tab of THIS organization, not a typed
+      // address.
+      await page.goto(`/organizations/${orgId}/assistants`);
+      await applyPalette(page, palette);
+      await expect(page.getByTestId("scope-assistants-list")).toBeVisible({ timeout: 60_000 });
+      await page.getByRole("tab", { name: "Agents" }).click();
+      await page.waitForURL(new RegExp(`/organizations/${orgId}/agents(?:[?#]|$)`), {
+        timeout: 60_000,
+      });
+      await applyPalette(page, palette);
+
+      // The page resolved to this scope and drew its body: the card list, or
+      // the honest placeholder. The absence is read only once one of the two
+      // is on the screen, so an empty list cannot be a list that had not
+      // arrived yet.
+      await expect(page.getByRole("tab", { name: "Agents" })).toBeVisible({ timeout: 60_000 });
+      const orgList = page.getByTestId("scope-agents-list");
+      const orgEmpty = page.getByTestId("scope-agents-empty");
+      await expect(orgList.or(orgEmpty)).toBeVisible({ timeout: 60_000 });
+
+      // THE SENTENCE'S OTHER HALF: the package the install anchored at the
+      // workspace has no card at this scope.
+      await expect(
+        page.locator(`a[href^="/organizations/${orgId}/agents/acme/${agentSlug}/"]`),
+      ).toHaveCount(0);
+      await shot(page, `cell4-skill-not-offered-${palette}`);
+    });
 
     test(`CELL4 ${palette}: an object made in the artifacts area files under the pack's declared type, and the type filter offers it`, async ({
       page,

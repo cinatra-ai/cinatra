@@ -21,26 +21,17 @@ import "server-only";
 
 import { getAuthSession, requireActorContext } from "@/lib/auth-session";
 import { readArtifactForDetail } from "@/lib/artifacts/artifact-service";
-import { saveArtifactMarkdownEdit } from "@/lib/artifacts/artifact-edit-save";
+import {
+  readArtifactEditChangeSet,
+  saveArtifactMarkdownEdit,
+  saveArtifactTitleEdit,
+} from "@/lib/artifacts/artifact-edit-save";
 import { artifactEditSavePorts } from "@/lib/artifacts/artifact-edit-save-ports";
-import { ARTIFACT_EDIT_CHANNEL_VERSION } from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ artifactId: string }> };
-
-/** The change set, validated before it is believed. */
-function readChangeSet(
-  body: unknown,
-): { baseRevisionId: string; text: string } | null {
-  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
-  const b = body as Record<string, unknown>;
-  if (b.channelVersion !== ARTIFACT_EDIT_CHANNEL_VERSION) return null;
-  if (typeof b.baseRevisionId !== "string" || b.baseRevisionId.length === 0) return null;
-  if (typeof b.text !== "string") return null;
-  return { baseRevisionId: b.baseRevisionId, text: b.text };
-}
 
 export async function POST(request: Request, { params }: Params): Promise<Response> {
   const session = await getAuthSession();
@@ -71,21 +62,36 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
   } catch {
     return Response.json({ outcome: "refused", reason: "malformed" }, { status: 200 });
   }
-  const changeSet = readChangeSet(parsed);
+  // The change set, validated before it is believed: the text, or (cinatra#3814)
+  // the title as its own field — both under the same save rules.
+  const changeSet = readArtifactEditChangeSet(parsed);
   if (!changeSet) {
     return Response.json({ outcome: "refused", reason: "malformed" }, { status: 200 });
   }
 
-  const outcome = await saveArtifactMarkdownEdit(
-    {
-      orgId,
-      artifactId,
-      baseRevisionId: changeSet.baseRevisionId,
-      text: changeSet.text,
-      actor: session.user?.id ?? null,
-    },
-    artifactEditSavePorts({ actor, orgId, artifactId }),
-  );
+  const ports = artifactEditSavePorts({ actor, orgId, artifactId });
+  const outcome =
+    changeSet.field === "title"
+      ? await saveArtifactTitleEdit(
+          {
+            orgId,
+            artifactId,
+            baseRevisionId: changeSet.baseRevisionId,
+            title: changeSet.title,
+            actor: session.user?.id ?? null,
+          },
+          ports,
+        )
+      : await saveArtifactMarkdownEdit(
+          {
+            orgId,
+            artifactId,
+            baseRevisionId: changeSet.baseRevisionId,
+            text: changeSet.text,
+            actor: session.user?.id ?? null,
+          },
+          ports,
+        );
 
   return Response.json(outcome, {
     status: 200,

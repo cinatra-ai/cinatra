@@ -21,7 +21,10 @@ import {
 } from "../inventory.mjs";
 // The host-SERVED design-primitives module id comes from its ONE definition (the
 // bundle builder's `HOST_DESIGN_PRIMITIVES_MODULE`) — the test never re-types it.
-import { HOST_DESIGN_PRIMITIVES_MODULE } from "../build-client-renderer-bundle.mjs";
+import {
+  HOST_DASHBOARD_COMPOSITION_MODULE,
+  HOST_DESIGN_PRIMITIVES_MODULE,
+} from "../build-client-renderer-bundle.mjs";
 // These live `buildInventory()` calls scan the SHARED `extensions/` tree. The
 // import-ban gate tests that prove the gate detects a scratch `@/` edge now write
 // that fixture into a PRIVATE per-test clone (CINATRA_INVENTORY_EXT_ROOT) instead
@@ -465,7 +468,8 @@ describe("isSdkOnlyViolation / basePackageOf (predicate edges)", () => {
     expect(isSdkOnlyViolation(`${HOST_DESIGN_PRIMITIVES_MODULE}/button`)).toBe(false);
   });
   it("the host-served class is DISTINCT from the SDK class and holds exactly the host-served module", () => {
-    expect([...HOST_SERVED_PACKAGES]).toEqual([HOST_DESIGN_PRIMITIVES_MODULE]);
+    // cinatra#3092: extended by the one exact composition specifier, and nothing else.
+    expect([...HOST_SERVED_PACKAGES]).toEqual([HOST_DESIGN_PRIMITIVES_MODULE, HOST_DASHBOARD_COMPOSITION_MODULE]);
     expect(SDK_PACKAGES.has(HOST_DESIGN_PRIMITIVES_MODULE)).toBe(false);
     for (const sdk of SDK_PACKAGES) expect(HOST_SERVED_PACKAGES.has(sdk)).toBe(false);
   });

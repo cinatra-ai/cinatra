@@ -25,9 +25,11 @@ export type AddMatchSkillOption = {
  */
 export function AddMatchSkillSelector({
   agentId,
+  agentName,
   skills,
 }: {
   agentId: string;
+  agentName: string;
   skills: AddMatchSkillOption[];
 }) {
   const router = useRouter();
@@ -79,7 +81,7 @@ export function AddMatchSkillSelector({
   return (
     <div className="flex min-w-[280px] flex-wrap items-center gap-3">
       <Select value={skillId} onValueChange={setSkillId} disabled={pending || skills.length === 0}>
-        <SelectTrigger className="min-w-[240px] flex-1">
+        <SelectTrigger className="min-w-[240px] flex-1" aria-label={`Skill for ${agentName}`}>
           <SelectValue placeholder={skills.length === 0 ? "No skills available" : "Add a skill…"} />
         </SelectTrigger>
         <SelectContent>
@@ -90,7 +92,13 @@ export function AddMatchSkillSelector({
           ))}
         </SelectContent>
       </Select>
-      <Button type="button" variant="outline" onClick={submit} disabled={pending || !skillId}>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={submit}
+        disabled={pending || !skillId}
+        aria-label={`Add skill to ${agentName}`}
+      >
         {pending ? "Adding…" : "Add skill"}
       </Button>
     </div>

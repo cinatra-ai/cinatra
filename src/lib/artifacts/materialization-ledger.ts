@@ -47,7 +47,10 @@ export type MaterializationPath =
   // cinatra#3029 (epic #3023 W5): THE DEFAULT ROAD — one row per end-node
   // output at or above the document floor that no binding names, carrying the
   // detection ladder's deciding rung.
-  | "default_road";
+  | "default_road"
+  // cinatra#3089 (epic #3087 W1): the email fan-out's own path — one markdown
+  // revision per draft item of a send, `output_id` = the message identity.
+  | "email_fanout";
 
 /** The detection ladder's recorded verdict, journalled on the row that write
  *  produced (cinatra#3029 item 0.18: "the verdict, model and rung recorded on
@@ -319,6 +322,132 @@ export async function findFinalizedDeclarativeMaterialization(input: {
     artifactId: row.artifact_id,
     representationRevisionId: row.representation_revision_id,
   };
+}
+
+/**
+ * The finalized MID-RUN materialization of this run + extension + content
+ * hash, or null (cinatra#3089). A mid-run row — the `artifact_materialize`
+ * tool (`materialize_tool`) or a declared binding (`end_node_binding`) — is the
+ * drafting step's own filing of a body; the email fan-out resolves to it
+ * instead of writing a second artifact of the same bytes. Its `output_id` is
+ * the node id or the output name, never the fan-out's message identity, so the
+ * run + extension + content hash is the key both rows share. A mid-run artifact
+ * already bound to a message of this run (a finalized `email_fanout` row) is
+ * never handed to a second message: two messages with the same bytes keep one
+ * body each.
+ */
+export async function findFinalizedMidRunMaterialization(input: {
+  orgId: string;
+  runId: string;
+  extension: string;
+  contentHash: string;
+}): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT m.artifact_id, m.representation_revision_id
+   FROM "${s}"."artifact_materializations" m
+  WHERE m.run_id = $1 AND m.extension = $2 AND m.content_hash = $3
+    AND m.org_id = $4 AND m.path IN ('materialize_tool', 'end_node_binding')
+    AND m.phase = 'finalized'
+    AND NOT EXISTS (
+      SELECT 1 FROM "${s}"."artifact_materializations" f
+       WHERE f.run_id = $1 AND f.org_id = $4 AND f.path = 'email_fanout'
+         AND f.artifact_id = m.artifact_id
+    )
+  ORDER BY m.created_at ASC
+  LIMIT 1`,
+    [input.runId, input.extension, input.contentHash, input.orgId],
+  );
+  const row = res.rows[0] as
+    | { artifact_id: string | null; representation_revision_id: string | null }
+    | undefined;
+  if (
+    !row ||
+    typeof row.artifact_id !== "string" ||
+    typeof row.representation_revision_id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    artifactId: row.artifact_id,
+    representationRevisionId: row.representation_revision_id,
+  };
+}
+
+/**
+ * The finalized `email_fanout` row of ONE message of a send (cinatra#3089):
+ * the message identity + extension + content hash, or null. A retried message
+ * resolves to its own mapping before any mid-run lookup, so its artifact never
+ * changes between drives.
+ */
+export async function findFinalizedFanoutMessageMaterialization(input: {
+  orgId: string;
+  runId: string;
+  outputId: string;
+  extension: string;
+  contentHash: string;
+}): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT artifact_id, representation_revision_id
+   FROM "${s}"."artifact_materializations"
+  WHERE run_id = $1 AND output_id = $2 AND extension = $3 AND content_hash = $4
+    AND org_id = $5 AND path = 'email_fanout' AND phase = 'finalized'
+  LIMIT 1`,
+    [input.runId, input.outputId, input.extension, input.contentHash, input.orgId],
+  );
+  const row = res.rows[0] as
+    | { artifact_id: string | null; representation_revision_id: string | null }
+    | undefined;
+  if (
+    !row ||
+    typeof row.artifact_id !== "string" ||
+    typeof row.representation_revision_id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    artifactId: row.artifact_id,
+    representationRevisionId: row.representation_revision_id,
+  };
+}
+
+/**
+ * Bind a mid-run body the fan-out reused to its message (cinatra#3089): a
+ * finalized `email_fanout` row under the message identity pointing at the
+ * drafting step's artifact. The retry then reads it as the message's own
+ * mapping, and no other message of the run is handed the same artifact.
+ */
+export async function recordFanoutReuseMaterialization(input: {
+  orgId: string;
+  runId: string;
+  outputId: string;
+  extension: string;
+  contentHash: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<void> {
+  ensurePostgresSchema();
+  const s = schema();
+  await pool().query(
+    `INSERT INTO "${s}"."artifact_materializations"
+   (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+    artifact_id, representation_revision_id, phase)
+ VALUES ($1, $2, $3, $4, NULL, 'email_fanout', $5, $6, $7, $8, 'finalized')
+ ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING`,
+    [
+      randomUUID(),
+      input.orgId,
+      input.runId,
+      input.outputId,
+      input.extension,
+      input.contentHash,
+      input.artifactId,
+      input.representationRevisionId,
+    ],
+  );
 }
 
 /**

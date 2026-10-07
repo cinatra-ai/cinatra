@@ -1,0 +1,104 @@
+# The files-hold status. See docs/internals/workflows/files-hold.md.
+#
+# A pull request whose verification is complete at its head and that waits for
+# review carries the label holds-files: it holds its files. This workflow sets
+# the commit status files-hold on the heads of the open pull requests. The
+# status fails when the pull request changes a file that a labelled pull
+# request changes too, and names that pull request and the first shared paths.
+# A push to a labelled pull request ends its hold: the first job takes the
+# label off and says so in one comment. The script is
+# scripts/ci/files-hold.mjs; it reads the platform's listings only.
+#
+# An event that changes no holder evaluates its own pull request alone; an
+# event that changes the holders, and a run by hand, evaluate every open pull
+# request. The script decides which, and also takes in any head whose status
+# is missing or no longer fits the holders.
+#
+# Why pull_request_target: the status goes on every open head, the heads of
+# pull requests from forks too, on the events of any pull request, and that
+# takes a token that can write statuses. On this event the workflow file comes
+# from the default branch and the jobs check out the default branch, never a
+# pull request, so no code of a pull request runs here. Keep it that way:
+# never check out, fetch or run a pull request's head or merge ref in this
+# workflow, and never put a value of the event into a run: step (the script
+# reads the event from the file the runner writes). A change to this file
+# takes effect only once it is on the default branch.
+
+name: files-hold
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled, closed]
+  # A maintainer renews every status by hand.
+  workflow_dispatch:
+
+# Everything the two jobs need together; each job below keeps the least of it.
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  # On a push, before the evaluation: the label of a pushed labelled pull
+  # request comes off, with one comment. One group per pull request, never
+  # cancelled, so that no other pull request's event takes its place; a
+  # waiting job can only give way to a newer push to the same pull request,
+  # whose job takes the label off instead. The script makes no request when
+  # the pushed pull request did not carry the label.
+  files-hold-end-hold:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: ${{ github.workflow }}-end-hold-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      # The default branch only, the branch this workflow file is read from.
+      # Never a pull request's head or merge ref.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Take the label off a pushed labelled pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/files-hold.mjs end-hold
+
+  # The evaluation, after the job above whatever it did (or when it was
+  # skipped), so that it reads the labels as that job left them. One
+  # evaluation at a time for the whole repository, never cancelled, so that
+  # two events never write opposite statuses; a newer event takes the place of
+  # one still waiting, and the script finds what that one would have renewed.
+  # The job is named apart from the status: a check named files-hold is then
+  # the status alone.
+  files-hold-evaluation:
+    needs: files-hold-end-hold
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    concurrency:
+      group: ${{ github.workflow }}-evaluation
+      cancel-in-progress: false
+    steps:
+      # The default branch only, as above.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Set files-hold on the heads this event concerns
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/files-hold.mjs evaluate

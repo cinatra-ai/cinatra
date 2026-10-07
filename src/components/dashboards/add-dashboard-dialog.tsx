@@ -27,8 +27,20 @@
  * The dialog is presentation only. It owns no scope, no actor and no capability
  * — every section is driven by what the server-rendered landing chose to hand
  * down, and every action it can reach re-authorizes server-side.
+ *
+ * ── THE WORDS BELONG TO THE SURFACE (cinatra#2811 fix leg 4) ───────────────
+ * The sentences below are the TENANT tabs'. The amended drawing draws this popup
+ * once on the workspace landing (§IX.1, surface `workspace-dashboards-add-popup`)
+ * and gives it a title, an opening line, section names and helper lines of its
+ * own, so a caller may hand down a `words` object; a caller that hands none keeps
+ * the landed words exactly. Two things move with the words:
+ *
+ *   - each section's ARIA-LABEL becomes its drawn name, so a test finds the
+ *     section by the name the drawing gives it;
+ *   - a HELPER line sits BELOW its section's controls, where the drawing puts it,
+ *     while the tenant tabs' caption stays above them, where they landed it.
  */
-import { useRef, useTransition, type ReactElement } from "react";
+import { useRef, useTransition, type ReactElement, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
@@ -43,8 +55,34 @@ import {
 } from "@/components/ui/dialog";
 
 import { CatalogAddOutcomeProvider } from "./catalog-add-outcome";
-import { ScopeReferenceSection } from "./scope-reference-section";
+import {
+  ScopeReferenceSection,
+  type ReferenceAddWords,
+} from "./scope-reference-section";
 import type { ScopeReferenceSource } from "./scope-dashboards-contract";
+
+/**
+ * One surface's own words for this popup (cinatra#2811 fix leg 4). Every field is
+ * a sentence the amended drawing draws; nothing here decides anything.
+ */
+export type AddDashboardDialogWords = {
+  /** The popup's title. */
+  readonly title: string;
+  /** The line under the title. */
+  readonly opening: ReactNode;
+  /** The Create section's name: its heading and its aria-label. */
+  readonly createTitle: string;
+  /** The line below the Create control. */
+  readonly createHelper: ReactNode;
+  /** The Create control's own label. */
+  readonly createButton: string;
+  /** The Reference section's name: its heading and its aria-label. */
+  readonly referenceTitle: string;
+  /** The line below the candidate rows. */
+  readonly referenceHelper: ReactNode;
+  /** The word an addable candidate's control carries on this surface. */
+  readonly referenceAdd: ReferenceAddWords;
+};
 
 export type AddDashboardDialogProps = {
   readonly open: boolean;
@@ -68,6 +106,8 @@ export type AddDashboardDialogProps = {
   /** A catalog copy landed (cinatra#2474 PR5) — the owner closes the popup and
    *  adopts the new dashboard into the shell's list. */
   readonly onCatalogAdded: (dashboard: EntityDashboardSummary) => void;
+  /** This surface's own words (see the header). Absent keeps the landed ones. */
+  readonly words?: AddDashboardDialogWords;
 };
 
 export function AddDashboardDialog({
@@ -80,6 +120,7 @@ export function AddDashboardDialog({
   catalog,
   onReferenceAdded,
   onCatalogAdded,
+  words,
 }: AddDashboardDialogProps) {
   // Set for exactly one close: the Create hand-off. See `onCloseAutoFocus`.
   const handingOff = useRef(false);
@@ -107,12 +148,16 @@ export function AddDashboardDialog({
       >
         <DialogHeader>
           <DialogTitle>
-            {scopeLabel ? `Add a dashboard to ${scopeLabel}` : "Add a dashboard"}
+            {words?.title ??
+              (scopeLabel
+                ? `Add a dashboard to ${scopeLabel}`
+                : "Add a dashboard")}
           </DialogTitle>
           <DialogDescription>
-            {reference
-              ? "Create a new dashboard, or list one that already exists — a referenced dashboard’s canonical home does not move."
-              : "Choose how to add a dashboard here."}
+            {words?.opening ??
+              (reference
+                ? "Create a new dashboard, or list one that already exists — a referenced dashboard’s canonical home does not move."
+                : "Choose how to add a dashboard here.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -123,53 +168,68 @@ export function AddDashboardDialog({
         <div data-slot="add-dashboard-sections" className="flex flex-col gap-5">
           {canCreate ? (
             <section
-              aria-label="Create a new dashboard"
-              className="flex flex-wrap items-center gap-2.5"
+              aria-label={words ? words.createTitle : "Create a new dashboard"}
+              className="flex flex-col gap-2.5"
             >
-              <span className="min-w-0 flex-1">
-                <span className="block text-xs font-semibold text-foreground">
-                  Create new
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-foreground">
+                    {words?.createTitle ?? "Create new"}
+                  </span>
+                  {words ? null : (
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      A blank dashboard you name. It is YOURS on this page — it
+                      joins the dashboard list above, not the scope&rsquo;s
+                      collection.
+                    </span>
+                  )}
                 </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  A blank dashboard you name. It is YOURS on this page — it
-                  joins the dashboard list above, not the scope&rsquo;s
-                  collection.
+                <Button
+                  type="button"
+                  size="sm"
+                  className="flex-none"
+                  onClick={() => {
+                    handingOff.current = true;
+                    onChooseCreate();
+                  }}
+                >
+                  <Plus data-icon="inline-start" aria-hidden />
+                  {words?.createButton ?? "Create…"}
+                </Button>
+              </div>
+              {/* The drawn helper sits BELOW the control, where §IX.1 puts it. */}
+              {words ? (
+                <span className="text-xs text-muted-foreground">
+                  {words.createHelper}
                 </span>
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                className="flex-none"
-                onClick={() => {
-                  handingOff.current = true;
-                  onChooseCreate();
-                }}
-              >
-                <Plus data-icon="inline-start" aria-hidden />
-                Create…
-              </Button>
+              ) : null}
             </section>
           ) : null}
 
           {reference ? (
             <section
-              aria-label="Reference an existing dashboard"
+              aria-label={
+                words ? words.referenceTitle : "Reference an existing dashboard"
+              }
               className="flex flex-col gap-2.5"
             >
               <span>
                 <span className="block text-xs font-semibold text-foreground">
-                  Reference an existing dashboard
+                  {words?.referenceTitle ?? "Reference an existing dashboard"}
                 </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Lists it here as a reference — its{" "}
-                  <b className="font-semibold text-foreground">
-                    canonical home does not move
-                  </b>
-                  . Only dashboards this scope can already see are listable.
-                </span>
+                {words ? null : (
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Lists it here as a reference — its{" "}
+                    <b className="font-semibold text-foreground">
+                      canonical home does not move
+                    </b>
+                    . Only dashboards this scope can already see are listable.
+                  </span>
+                )}
               </span>
               <ScopeReferenceSection
                 source={reference}
+                addWords={words?.referenceAdd}
                 // The listing landed: close (the candidate pool the section is
                 // showing no longer holds — the added dashboard has left it)
                 // and re-render the server tree so the collection panel below
@@ -179,6 +239,12 @@ export function AddDashboardDialog({
                   startTransition(() => router.refresh());
                 }}
               />
+              {/* The drawn helper sits BELOW the rows, where §IX.1 puts it. */}
+              {words ? (
+                <span className="text-xs text-muted-foreground">
+                  {words.referenceHelper}
+                </span>
+              ) : null}
             </section>
           ) : null}
 

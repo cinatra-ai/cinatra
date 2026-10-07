@@ -3,7 +3,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
-import { CrumbContributionsClear } from "@/components/crumb-contributions";
+import { PageNotFoundCrumb } from "@/components/crumb-contributions";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 
 export const metadata: Metadata = { title: "Page not found" };
@@ -17,8 +17,11 @@ export default async function NotFoundPage() {
   return (
     <Main className="min-h-screen">
       {/* Negative crumb clearing (cinatra#1737): a previously-authorized
-          entity label must never survive into an unauthorized/404 visit. */}
-      <CrumbContributionsClear />
+          entity label must never survive into an unauthorized/404 visit — and
+          the trail itself (cinatra#2934, fix leg 10): a page that is not found
+          has no hierarchy, so its breadcrumb reads "Page not found" and nothing
+          else. This island does both. */}
+      <PageNotFoundCrumb />
       <PageHeader
         title="404 — Page not found"
         description="The page you're looking for doesn't exist or may have moved."

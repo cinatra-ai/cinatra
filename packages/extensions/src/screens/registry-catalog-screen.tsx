@@ -44,6 +44,7 @@ import {
   InstalledExtensionCard,
   InstalledStatusIndicator,
   UpdateAvailableChip,
+  type InstalledExtensionCardProps,
 } from "@/components/extensions/installed-extension-card";
 import {
   extensionKindEmblem,
@@ -51,8 +52,6 @@ import {
 } from "@/components/extension-kind-emblem";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { resolveVendorPresentation } from "@/lib/vendor-presentation";
-// §VI byline source indicator (cinatra#1572): the pure provenance classifier.
-import { classifyExtensionSource } from "./extension-source-label";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 // §III per-extension update-available chip (cinatra#1041 outcome 3): the
@@ -122,7 +121,6 @@ export async function RegistryCatalogScreen({
     active: activeRows,
     archived: archivedRows,
     scope,
-    registryIdentities,
   } = await loadInstalledCardRows(session, { query });
 
   // Recent dependency-install batches (cinatra #209 item 2, surfaces 2 & 3):
@@ -372,52 +370,13 @@ export async function RegistryCatalogScreen({
     }
   };
 
-  const renderCard = (row: InstalledCardRow, isArchived: boolean) => (
-    <InstalledExtensionCard
-      // Key includes status: the loader deliberately surfaces the SAME
-      // kind/packageName once live and once archived when a package is live under
-      // one visible install identity and archived under another (installed-rows.ts
-      // "live wins is per-IDENTITY"). The All view (cinatra#1571) renders both in
-      // one list, so keying by kind/packageName alone would collide — status
-      // disambiguates the two cards. Per-tab views are unaffected (one status each).
-      key={`${rowKey(row.kind, row.packageName)}::${row.status}`}
-      name={row.displayName}
-      accentColor={deriveExtensionAccent(row.packageName)}
-      emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
-      kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
-      kindLabel={KIND_LABEL[row.kind]}
-      // §III byline (cinatra#1528): resolve the manifest/registry vendor name
-      // (already free of any package scope) through the single resolver — an
-      // absent name renders the explicit missing-vendor placeholder, never a
-      // silently dropped "by" clause.
-      vendor={resolveVendorPresentation(
-        { name: row.vendor },
-        { surface: "registry-catalog-screen", ref: row.packageName },
-      )}
-      // §VI source indicator (cinatra#1572): classify each row's provenance from
-      // its canonical source + the configured registry identities, rendered as
-      // an independent byline element alongside the resolved vendor presentation.
-      // A null canonical or a verdaccio matching neither configured identity
-      // resolves to the neutral "source unknown".
-      source={classifyExtensionSource(row.canonical, registryIdentities)}
-      description={row.description}
-      version={row.versionLabel}
-      status={renderStatus(row)}
-      {...updateAffordanceFor(row, isArchived)}
-      actions={renderCardActions(row, isArchived)}
-      // Archived extensions render the fully-greyed §VI card (cinatra#957):
-      // category ground → light grey, muted logo tile, all text/status/actions
-      // muted. Active cards keep their category colour.
-      archived={isArchived}
-      // Post-install "needs configuration" (cinatra#1057): an active agent with
-      // unconfigured required connectors wears the same greyed treatment + a
-      // needs-review strip. Only active rows carry it — an archived card is
-      // already greyed and unrunnable.
-      configurationNeeds={
-        isArchived ? undefined : configurationNeedsByPackage[row.packageName]?.needs
-      }
-    />
-  );
+  const renderCard = (row: InstalledCardRow, isArchived: boolean) =>
+    renderInstalledRowCard(row, isArchived, {
+      renderStatus,
+      updateAffordanceFor,
+      renderCardActions,
+      configurationNeedsByPackage,
+    });
 
   // §VI status-filter partition (cinatra#1571). The loader's `activeRows` is the
   // LIVE set (status active OR locked); split it by status so Locked gets its
@@ -505,5 +464,82 @@ export async function RegistryCatalogScreen({
         </div>
       </PageContent>
     </Main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// One installed row's §III card, exactly as the list composes it: the card
+// `renderCard` returns, with the screen's own per-row helpers passed in. It
+// lives beside the screen so a unit render reads the SAME card the list draws
+// (the screen is an async server component wired to auth + the canonical
+// store, so it cannot be rendered at the unit tier) — cinatra#3682.
+// ---------------------------------------------------------------------------
+
+type InstalledRowCardScope = {
+  renderStatus: (row: InstalledCardRow) => InstalledExtensionCardProps["status"];
+  updateAffordanceFor: (
+    row: InstalledCardRow,
+    isArchived: boolean,
+  ) => Pick<InstalledExtensionCardProps, "updateChip" | "specLineMuted">;
+  renderCardActions: (
+    row: InstalledCardRow,
+    isArchived: boolean,
+  ) => InstalledExtensionCardProps["actions"];
+  configurationNeedsByPackage: Readonly<
+    Record<string, { needs?: InstalledExtensionCardProps["configurationNeeds"] } | undefined>
+  >;
+};
+
+export function renderInstalledRowCard(
+  row: InstalledCardRow,
+  isArchived: boolean,
+  {
+    renderStatus,
+    updateAffordanceFor,
+    renderCardActions,
+    configurationNeedsByPackage,
+  }: InstalledRowCardScope,
+) {
+  return (
+    <InstalledExtensionCard
+      // Key includes status: the loader deliberately surfaces the SAME
+      // kind/packageName once live and once archived when a package is live under
+      // one visible install identity and archived under another (installed-rows.ts
+      // "live wins is per-IDENTITY"). The All view (cinatra#1571) renders both in
+      // one list, so keying by kind/packageName alone would collide — status
+      // disambiguates the two cards. Per-tab views are unaffected (one status each).
+      key={`${rowKey(row.kind, row.packageName)}::${row.status}`}
+      name={row.displayName}
+      accentColor={deriveExtensionAccent(row.packageName)}
+      emblem={extensionKindEmblem(row.kind as ExtensionEmblemKind)}
+      kindIcon={extensionKindEmblem(row.kind as ExtensionEmblemKind, "size-3.5")}
+      kindLabel={KIND_LABEL[row.kind]}
+      // §III byline (cinatra#1528): resolve the manifest/registry vendor name
+      // (already free of any package scope) through the single resolver — an
+      // absent name renders the explicit missing-vendor placeholder, never a
+      // silently dropped "by" clause.
+      vendor={resolveVendorPresentation(
+        { name: row.vendor },
+        { surface: "registry-catalog-screen", ref: row.packageName },
+      )}
+      // §III draws the byline as "{Type} by {Vendor}" and nothing after it
+      // (cinatra#3682): the list passes no source label to the card.
+      description={row.description}
+      version={row.versionLabel}
+      status={renderStatus(row)}
+      {...updateAffordanceFor(row, isArchived)}
+      actions={renderCardActions(row, isArchived)}
+      // Archived extensions render the fully-greyed §VI card (cinatra#957):
+      // category ground → light grey, muted logo tile, all text/status/actions
+      // muted. Active cards keep their category colour.
+      archived={isArchived}
+      // Post-install "needs configuration" (cinatra#1057): an active agent with
+      // unconfigured required connectors wears the same greyed treatment + a
+      // needs-review strip. Only active rows carry it — an archived card is
+      // already greyed and unrunnable.
+      configurationNeeds={
+        isArchived ? undefined : configurationNeedsByPackage[row.packageName]?.needs
+      }
+    />
   );
 }

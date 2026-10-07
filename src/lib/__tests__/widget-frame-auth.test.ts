@@ -100,6 +100,9 @@ describe("deriveFrameBinding — the happy path derives everything from the serv
       instancesConfigKey: CLIENT,
       origin: SITE_ORIGIN,
       claimedInstanceId: "inst-1",
+      // cinatra#3715 — the sign-in opts into the handshake road with the client
+      // the CLOSED table named, exactly as the frame gate does.
+      connectSiteFallbackClient: CLIENT,
     });
   });
 });
@@ -320,5 +323,152 @@ describe("resolveFrameRequestOrigin — the canonical-origin allowlist gate", ()
     getTrustedTokenOrigins.mockReturnValue(["not a url", PUBLIC_ORIGIN]);
     expect(resolveFrameRequestOrigin(req({ Origin: PUBLIC_ORIGIN })).ok).toBe(true);
     expect(resolveFrameRequestOrigin(req({ Origin: "not a url" })).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3715 — THE SIGN-IN ACCEPTS THE IDENTITY THE HANDSHAKE GAVE THE SITE.
+//
+// A site connected through the handshake holds THIS APPLICATION'S OWN instance
+// identity and puts it into the widget's embed address. The frame gate accepts
+// that identity (cinatra#3328); the sign-in behind the same frame looked only at
+// the connector's instances and refused it with `instance_unresolved`. The two
+// resolvers are stubbed here as the stores they read would answer for such a
+// site: the connector holds NO row for the presented id, so only a caller that
+// opts into the handshake road (`connectSiteFallbackClient`, the client the
+// CLOSED host table named) gets an answer — the gate's own rule, in one helper.
+// ---------------------------------------------------------------------------
+describe("cinatra#3715 — the frame's sign-in on a site connected through the handshake", () => {
+  const OWN_ID = "11111111-2222-4333-8444-555555555555";
+  const HANDSHAKE_INPUT = { assistant: "wordpress", instanceId: OWN_ID };
+
+  beforeEach(() => {
+    // The frame gate's road: zero connector rows for the id, so only the opt-in
+    // handshake road answers — and only for the application's own identity.
+    resolveInstanceFrameAncestor.mockImplementation(
+      (input: { instanceId: string; connectSiteFallbackClient?: string | null }) =>
+        input.connectSiteFallbackClient === CLIENT && input.instanceId === OWN_ID
+          ? SITE_ORIGIN
+          : null,
+    );
+    // The authoritative origin -> instance road, with the same opt-in.
+    resolveCanonicalInstanceForOrigin.mockImplementation(
+      (input: {
+        origin: string;
+        claimedInstanceId?: string | null;
+        connectSiteFallbackClient?: string | null;
+      }) =>
+        input.connectSiteFallbackClient === CLIENT &&
+        input.origin === SITE_ORIGIN &&
+        input.claimedInstanceId === OWN_ID
+          ? OWN_ID
+          : null,
+    );
+  });
+
+  it("derives the binding for a site that holds only its connect_sites row (was instance_unresolved)", () => {
+    const r = deriveFrameBinding(HANDSHAKE_INPUT);
+    expect(r).toEqual({
+      ok: true,
+      binding: {
+        site: {
+          siteId: "site-1",
+          client: CLIENT,
+          orgId: "org-A",
+          siteOrigin: SITE_ORIGIN,
+          credentialVersion: 3,
+        },
+        instanceId: OWN_ID,
+        agentSlug: AGENT_SLUG,
+        instancesConfigKey: CLIENT,
+      },
+    });
+    // Both roads were asked with the client the CLOSED table named — never a
+    // caller value — and the site was looked up by the origin the gate derived.
+    expect(resolveInstanceFrameAncestor).toHaveBeenCalledWith({
+      instancesConfigKey: CLIENT,
+      instanceId: OWN_ID,
+      connectSiteFallbackClient: CLIENT,
+    });
+    expect(listActiveConnectSitesForClientOrigin).toHaveBeenCalledWith({
+      client: CLIENT,
+      widgetOrigin: SITE_ORIGIN,
+    });
+    expect(resolveCanonicalInstanceForOrigin).toHaveBeenCalledWith({
+      instancesConfigKey: CLIENT,
+      origin: SITE_ORIGIN,
+      claimedInstanceId: OWN_ID,
+      connectSiteFallbackClient: CLIENT,
+    });
+  });
+
+  it("the same site after it was added under the connector, presenting the connector's id, binds exactly as before", () => {
+    resolveInstanceFrameAncestor.mockReturnValue(SITE_ORIGIN);
+    resolveCanonicalInstanceForOrigin.mockReturnValue("connector-minted-id");
+    const r = deriveFrameBinding({ assistant: "wordpress", instanceId: "connector-minted-id" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.binding.instanceId).toBe("connector-minted-id");
+    expect(r.binding.site.siteId).toBe("site-1");
+  });
+
+  it("REFUSES an assistant outside the closed table (unknown_assistant)", () => {
+    resolveAssistantWidgetBinding.mockReturnValue(null);
+    expect(deriveFrameBinding({ ...HANDSHAKE_INPUT, assistant: "shopify" })).toEqual({
+      ok: false,
+      reason: "unknown_assistant",
+    });
+  });
+
+  it("REFUSES a forged or foreign id — the handshake road answers only for the application's own identity", () => {
+    expect(deriveFrameBinding({ ...HANDSHAKE_INPUT, instanceId: "forged-id" })).toEqual({
+      ok: false,
+      reason: "instance_unresolved",
+    });
+    expect(listActiveConnectSitesForClientOrigin).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES when the gate's rule refuses (zero or several active origins for the client)", () => {
+    resolveInstanceFrameAncestor.mockReturnValue(null);
+    expect(deriveFrameBinding(HANDSHAKE_INPUT)).toEqual({
+      ok: false,
+      reason: "instance_unresolved",
+    });
+  });
+
+  it("REFUSES zero active sites for the client and origin (site_unresolved)", () => {
+    listActiveConnectSitesForClientOrigin.mockReturnValue([]);
+    expect(deriveFrameBinding(HANDSHAKE_INPUT)).toEqual({ ok: false, reason: "site_unresolved" });
+  });
+
+  it("REFUSES several active sites for the client and origin (site_ambiguous)", () => {
+    listActiveConnectSitesForClientOrigin.mockReturnValue([
+      SITE_ROW,
+      { ...SITE_ROW, siteId: "site-2", orgId: "org-B" },
+    ]);
+    expect(deriveFrameBinding(HANDSHAKE_INPUT)).toEqual({ ok: false, reason: "site_ambiguous" });
+  });
+
+  it("REFUSES a site without an organization (site_unbound)", () => {
+    listActiveConnectSitesForClientOrigin.mockReturnValue([{ ...SITE_ROW, orgId: null }]);
+    expect(deriveFrameBinding(HANDSHAKE_INPUT)).toEqual({ ok: false, reason: "site_unbound" });
+  });
+
+  it("REFUSES a claimed site id or origin that disagrees (selector_mismatch)", () => {
+    expect(deriveFrameBinding({ ...HANDSHAKE_INPUT, claimedSiteId: "site-999" })).toEqual({
+      ok: false,
+      reason: "selector_mismatch",
+    });
+    expect(
+      deriveFrameBinding({ ...HANDSHAKE_INPUT, claimedOrigin: "https://attacker.example" }),
+    ).toEqual({ ok: false, reason: "selector_mismatch" });
+  });
+
+  it("REFUSES when the authoritative re-derivation does not close the loop (instance_mismatch)", () => {
+    resolveCanonicalInstanceForOrigin.mockReturnValue(null);
+    expect(deriveFrameBinding(HANDSHAKE_INPUT)).toEqual({
+      ok: false,
+      reason: "instance_mismatch",
+    });
   });
 });

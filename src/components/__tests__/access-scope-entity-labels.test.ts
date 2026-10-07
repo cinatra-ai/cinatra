@@ -1,9 +1,9 @@
 // Unknown-entity fallback — the ONE shared helper (cinatra#1509 §4.0-a). These
 // pure tests assert the "Unknown <kind>" contract (§3.2) BOTH directly AND
 // THROUGH the two consumers that used to carry their own `id.slice(-6)` copy:
-//   - the hierarchical `resolveAccessParts` (src/components/access-scope.ts), and
+//   - the hierarchical `resolveAccessParts` (packages/sdk-ui/src/access/scope.ts), and
 //   - the flat picker's local `resolveAccessLabel`
-//     (src/components/access-combobox.tsx).
+//     (packages/sdk-ui/src/access-combobox.tsx).
 // A single definition means the two can never drift again (the root of
 // cinatra#1508's `Team: 288b9a`). Pure (no React) — sits next to
 // access-scope-summary.test.ts.

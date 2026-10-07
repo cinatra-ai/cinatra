@@ -121,12 +121,19 @@ const ANCHOR_SOURCE = (pkg: string) =>
 describe("core__0004 demotion artifact shape (no DB needed)", () => {
   it("freezes exactly the 17 packages the shrink removed — disjoint from the live declaration", () => {
     expect(DEMOTED_PACKAGES).toHaveLength(17);
+    // re-promoted to system extensions by the 2026-10-01 class change
+    const REPROMOTED = ["@cinatra-ai/email-connector", "@cinatra-ai/resend-connector"];
+    for (const pkg of REPROMOTED) {
+      expect(DEMOTED_PACKAGES).toContain(pkg);
+      expect(systemNames).toContain(pkg);
+      expect(requiredNames).toContain(pkg);
+    }
     for (const pkg of DEMOTED_PACKAGES) {
       expect(pkg).toMatch(/^@cinatra-ai\/[a-z0-9-]+$/);
-      expect(requiredNames).not.toContain(pkg);
+      if (!REPROMOTED.includes(pkg)) expect(requiredNames).not.toContain(pkg);
     }
-    // no demoted system package, ever
-    for (const sys of systemNames) expect(DEMOTED_PACKAGES).not.toContain(sys);
+    // no other demoted system package
+    for (const sys of systemNames) if (!REPROMOTED.includes(sys)) expect(DEMOTED_PACKAGES).not.toContain(sys);
   });
 
   it("up() demotes flag+lock only for required rows of the frozen list; down() re-promotes and re-locks live rows", () => {

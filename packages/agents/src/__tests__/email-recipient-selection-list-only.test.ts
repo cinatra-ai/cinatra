@@ -6,8 +6,7 @@
  *
  * This test pins the SKILL.md / system-prompt contract: the prompt instructs
  * the LLM to ONLY support type='list', to fail/block on excess recipients
- * without silently truncating, and to defer cooldown filtering to the recipient
- * HITL.
+ * without silently truncating.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -50,17 +49,10 @@ describe("email-recipient-selection-agent - list-only scope", () => {
 
   it("system prompt enforces maxRecipients cap with fail/block (not truncate)", () => {
     const system = findApiNodeSystemPrompt();
-    expect(system).toContain("CAP ENFORCEMENT");
     expect(system).toContain("MUST NOT exceed");
     expect(system).toContain("maxRecipients");
     expect(system).toContain("Do NOT silently truncate");
     expect(system).toContain("default 200");
-  });
-
-  it("system prompt defers cooldown filter to the recipient HITL", () => {
-    const system = findApiNodeSystemPrompt();
-    expect(system).toContain("email_send_events cooldown filter");
-    expect(system).toContain("HITL");
   });
 
   it("system prompt instructs crm_list_get + crm_list_members_get + crm_contact_get pipeline only", () => {

@@ -38,6 +38,25 @@ const msg = (
 ): RailMessage => ({ id, sequence, role, messageType, text });
 
 describe("buildRunStepRail merge contract", () => {
+  it.each(["pending", "resolved"] as const)("names the actual reviewed artifact on a %s gate", (status) => {
+    const rail = buildRunStepRail({
+      gates: [{
+        ...gate("named", status, "2026-10-05T00:00:00Z", status === "resolved" ? "approve" : null),
+        artifactName: "Why migrations are the hardest part",
+      }],
+    });
+    expect(rail.entries[0].label).toBe("Review · Why migrations are the hardest part");
+    expect(rail.entries[0].key).toBe("gate:named");
+    expect(rail.entries[0].gate?.disposition).toBe(status === "resolved" ? "approve" : null);
+  });
+
+  it.each([undefined, null, "", "   "])("retains the historical generic label without a real artifact name: %s", (artifactName) => {
+    const rail = buildRunStepRail({
+      gates: [{ ...gate("unnamed", "resolved", "2026-10-05T00:00:00Z", "approve"), artifactName }],
+    });
+    expect(rail.entries[0].label).toBe("Review");
+  });
+
   it("orchestrator run: template steps form the spine, gates trail in createdAt order", () => {
     const rail = buildRunStepRail({
       templateSteps: [tstep(1, 10, "Draft"), tstep(2, 20, "Refine")],

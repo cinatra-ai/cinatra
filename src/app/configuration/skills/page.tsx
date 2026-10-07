@@ -490,7 +490,7 @@ async function MatchesTabContent({ searchParams }: { searchParams: Record<string
       ) : null}
 
       <div className="grid gap-4">
-        {agents.map((agent) => {
+        {agents.map((agent, index) => {
           const assignments = matchState.matches.filter((match) => match.agentId === agent.id);
           // Exclude skills bundled with or authored for a specific agent
           // (level=agent OR agentId set), then dedup by display name.
@@ -507,14 +507,21 @@ async function MatchesTabContent({ searchParams }: { searchParams: Record<string
               }),
           ).sort((left, right) => left.name.localeCompare(right.name));
           return (
-            <section key={agent.id} className="soft-panel rounded-panel px-5 py-5">
+            <section
+              key={agent.id}
+              aria-labelledby={`matches-agent-${index}-name`}
+              className="soft-panel rounded-panel px-5 py-5"
+            >
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <p className="text-lg font-semibold text-foreground">{agent.humanReadableName}</p>
+                  <p id={`matches-agent-${index}-name`} className="text-lg font-semibold text-foreground">
+                    {agent.humanReadableName}
+                  </p>
                   <p className="mt-1 text-sm text-muted-foreground">{agent.identifier}</p>
                 </div>
                 <AddMatchSkillSelector
                   agentId={agent.id}
+                  agentName={agent.humanReadableName}
                   skills={availableSkills.map((skill) => ({
                     id: skill.id,
                     name: skill.name,

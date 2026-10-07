@@ -67,14 +67,19 @@ export const ANCHOR_RESOLUTION_CHECKER_PATH = "scripts/ci/design-anchor-resoluti
 export const RECORD_GRAMMAR_CHECKER_PATH = "scripts/ci/design-record-grammar.mjs";
 export const PIN_LIB_PATH = "scripts/ci/lib/design-pin.mjs";
 export const MAP_PATH = "scripts/ci/design-pin-gates.paths.json";
+// The workflows that run the gates. gates.yml runs design-pin-freshness and
+// design-anchor-resolution; design-record-grammar runs in a file of its own,
+// so that it can also run when the pull request is edited (cinatra#3727).
 export const WORKFLOW_PATH = ".github/workflows/gates.yml";
+export const RECORD_GRAMMAR_WORKFLOW_PATH = ".github/workflows/design-record-grammar.yml";
 
 /**
  * The paths that change what these gates decide. Touching one of them touches
  * EVERY pin id: after a change to a checker, to this shared library, to the map
- * or to the workflow, no pin's silence is trustworthy any more. The three gates
- * share ONE set and ONE map because they share one rule — a set per gate would
- * let a change to the rule look untouched from two of the three.
+ * or to a workflow that runs them, no pin's silence is trustworthy any more.
+ * The three gates share ONE set and ONE map because they share one rule — a
+ * set per gate would let a change to the rule look untouched from two of the
+ * three.
  */
 export const GLOBAL_PATHS = Object.freeze([
   FRESHNESS_CHECKER_PATH,
@@ -83,6 +88,7 @@ export const GLOBAL_PATHS = Object.freeze([
   PIN_LIB_PATH,
   MAP_PATH,
   WORKFLOW_PATH,
+  RECORD_GRAMMAR_WORKFLOW_PATH,
 ]);
 
 const REVISION_RE = /^[0-9a-f]{40}$/;

@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,7 +84,16 @@ import {
   PACKAGE_EXCEPTIONS_FILE,
   AUDIT_TEST_DIR,
   REPO_ROOT,
+  LEDGER_BASE_VAR,
+  checkLedgersAgainstBase,
 } from "../ci-pinned-tests-exist.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 
 describe("ci-pinned-tests-exist — run-block extraction", () => {
   it("extracts inline, block-literal (|) and folded (>-) run scripts", () => {
@@ -2837,5 +2847,86 @@ describe("direction 5 — the LIVE repo", () => {
 
   it("…and a gate no step runs is NOT credited, so the green above is not vacuous", () => {
     expect(auditGateIsEnforced("scripts/audit/__no-such-gate__.mjs")).toBe(false);
+  });
+});
+
+// cinatra#3832: the two exception files are compared with their copies on the
+// base branch, so a pull request cannot excuse its own unrun suite or tier.
+describe("ci-pinned-tests-exist — exception files compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const issue = "https://github.com/cinatra-ai/cinatra/issues/1";
+  const pkgItem = (file) => ({ file, kind: "quarantine", issue, reason: "a written reason of twenty chars" });
+  const tierItem = (config) => ({ config, slice: issue, reason: "a written reason of twenty chars" });
+  const ledgers = (pkgFiles, tierConfigs) => ({
+    [PACKAGE_EXCEPTIONS_FILE]: { exceptions: pkgFiles.map(pkgItem) },
+    [ROOT_TIER_EXCEPTIONS_FILE]: { exceptions: tierConfigs.map(tierItem) },
+  });
+  function repo(base, head) {
+    const f = makeFloorRepo({ base: ledgers(...base), head: ledgers(...head) });
+    fixtures.push(f);
+    return f.root;
+  }
+  const byFile = (results) => Object.fromEntries(results.map((r) => [r.lines[0].includes(ROOT_TIER_EXCEPTIONS_FILE) ? "tier" : "pkg", r]));
+
+  it("a raised floor (a new item in either file) FAILS against the base", () => {
+    const root = repo(
+      [["packages/a/src/x.test.ts"], ["vitest/integration/1.config.ts"]],
+      [["packages/a/src/x.test.ts", "packages/a/src/y.test.ts"], ["vitest/integration/1.config.ts", "vitest/integration/2.config.ts"]],
+    );
+    const r = byFile(checkLedgersAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN }));
+    expect(r.pkg.ok).toBe(false);
+    expect(r.pkg.growth).toEqual(["packages/a/src/y.test.ts"]);
+    expect(r.tier.ok).toBe(false);
+    expect(r.tier.growth).toEqual(["vitest/integration/2.config.ts"]);
+  });
+
+  it("a lowered floor (a retired item) PASSES", () => {
+    const root = repo(
+      [["packages/a/src/x.test.ts"], ["vitest/integration/1.config.ts"]],
+      [[], []],
+    );
+    const results = checkLedgersAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(results).toHaveLength(2);
+    for (const r of results) expect(r).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo([[], []], [[], []]);
+    for (const r of checkLedgersAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN })) {
+      expect(r.ok).toBe(false);
+      expect(r.lines[0]).toMatch(/did not resolve/);
+    }
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo([[], []], [["packages/a/src/x.test.ts"], []]);
+    for (const r of checkLedgersAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN })) {
+      expect(r).toMatchObject({ ok: true, status: "no-base" });
+      expect(r.lines[0]).toContain(LEDGER_BASE_VAR);
+    }
+  });
+
+  it("a malformed exception file in the checkout FAILS the guard with its reason", () => {
+    const f = makeFloorRepo({
+      base: ledgers([], []),
+      head: { [PACKAGE_EXCEPTIONS_FILE]: "{ not json" },
+    });
+    fixtures.push(f);
+    const r = byFile(checkLedgersAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN }));
+    expect(r.pkg.ok).toBe(false);
+    expect(r.pkg.lines[0]).toMatch(/not valid JSON/);
+  });
+
+  it("the gate itself runs the guard: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "audit", "ci-pinned-tests-exist.mjs")], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
   });
 });

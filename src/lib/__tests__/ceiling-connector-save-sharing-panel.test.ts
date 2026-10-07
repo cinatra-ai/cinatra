@@ -155,7 +155,7 @@ const stubs = vi.hoisted(() => ({
   ConnectionRowStub: () => null,
   ConnectionsListStub: ({ children }: { children?: unknown }) => children as never,
   ConnectionsStatusCardStub: () => null,
-  ExtensionPermissionsClientStub: () => null,
+  PermissionsPanelStub: () => null,
 }));
 vi.mock("@cinatra-ai/sdk-ui/connections-list", () => ({
   ConnectionsList: stubs.ConnectionsListStub,
@@ -164,8 +164,11 @@ vi.mock("@cinatra-ai/sdk-ui/connections-list", () => ({
 vi.mock("@cinatra-ai/sdk-ui/connection-status-card", () => ({
   ConnectionsStatusCard: stubs.ConnectionsStatusCardStub,
 }));
-vi.mock("@/components/extension-permissions-client", () => ({
-  ExtensionPermissionsClient: stubs.ExtensionPermissionsClientStub,
+// The shared permissions panel the tab body now draws itself: stubbed as a
+// leaf so the panel list stays countable, while the body that composes it
+// stays REAL.
+vi.mock("@cinatra-ai/sdk-ui/permissions-panel", () => ({
+  PermissionsPanel: stubs.PermissionsPanelStub,
 }));
 
 import { createExtensionHostContext } from "@/lib/extension-host-context";
@@ -178,7 +181,7 @@ import { ConnectionSharingSection } from "@/components/extensions/connection-sha
 import {
   ConnectorSharingPanels,
   type ConnectorSharingPanelsProps,
-} from "@/components/extensions/connector-sharing-panels";
+} from "@cinatra-ai/sdk-ui/connector-sharing-panels";
 
 /** The pointer records the fake gateway persisted (the pre-#3460 behaviour). */
 const savedPointerRecords: Array<{ connectorKey: string; connectionId: string }> = [];
@@ -375,16 +378,20 @@ describe("a ceiling connector's own save road registers the connection identity 
     // no roll-up card sits above a single connection.
     expect(countElementsOfType(body, stubs.ConnectionRowStub)).toBe(1);
     expect(countElementsOfType(body, stubs.ConnectionsStatusCardStub)).toBe(0);
-    expect(countElementsOfType(body, stubs.ExtensionPermissionsClientStub)).toBe(1);
+    expect(countElementsOfType(body, stubs.PermissionsPanelStub)).toBe(1);
   });
 
   it("the panel's picker is LOCKED on the connector's ceiling", async () => {
     await saveThroughTheConnectorsOwnRoad();
     const { panelViews, body } = await renderSharingTab();
     expect(panelViews?.[0]?.scopeConstraint).toBe("locked");
-    const pickers = collectPropsOfType(body, stubs.ExtensionPermissionsClientStub);
+    const pickers = collectPropsOfType(body, stubs.PermissionsPanelStub);
     expect(pickers).toHaveLength(1);
-    expect(pickers[0].kind).toBe("connection");
+    // The four bindings are addressed to THIS connection: the same audited
+    // road as before the extraction, now stated as data the shared panel calls.
+    expect(typeof (pickers[0].actions as Record<string, unknown>).savePolicy).toBe(
+      "function",
+    );
     expect(pickers[0].accessDisabledScopes).toBeDefined();
     expect(pickers[0].accessScopeNote).toContain('only:"admin"');
   });

@@ -25,7 +25,7 @@
 // that repaints may not rewrite an address whose grant has already been spent.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 
 import {
   LIFECYCLE_CARD_HOSTS,
@@ -347,6 +347,70 @@ describe("a repaint never replays a spent island grant", () => {
     const settled = srcIn(container);
     expect(paramOf(settled, "ic")).toBe("grant-three");
     expect(schemeOf(settled)).toBe("dark");
+  });
+});
+
+describe("the current frame receives the palette without a remount", () => {
+  it.each(HOSTS)("posts once per change and on each load on %s", async (host) => {
+    mockResolve();
+    paintHost("light");
+    const { container } = mountCard(host);
+    await settle();
+    const frame = container.querySelector("iframe")!;
+    const frameWindow = frame.contentWindow!;
+    // Browsers preserve the WindowProxy during navigation; jsdom replaces it.
+    vi.spyOn(frame, "contentWindow", "get").mockReturnValue(frameWindow);
+    const post = vi.spyOn(frameWindow, "postMessage").mockImplementation(() => {});
+    const origin = new URL(frame.src).origin;
+
+    fireEvent.load(frame);
+    expect(post.mock.calls).toEqual([[{ type: "cinatra.review-island.palette", scheme: "light" }, origin]]);
+    post.mockClear();
+    await act(async () => { paintHost("dark"); });
+    await settle();
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(post.mock.calls).toEqual([[{ type: "cinatra.review-island.palette", scheme: "dark" }, origin]]);
+
+    post.mockClear();
+    // An unrelated root-class mutation does not announce the same palette again.
+    await act(async () => { document.documentElement.classList.add("unrelated"); });
+    await settle();
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.load(frame);
+    expect(post.mock.calls).toEqual([[{ type: "cinatra.review-island.palette", scheme: "dark" }, origin]]);
+
+    post.mockClear();
+    await act(async () => { paintHost("light"); });
+    await settle();
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(post.mock.calls).toEqual([[{ type: "cinatra.review-island.palette", scheme: "light" }, origin]]);
+  });
+
+  it("updates a credentialed frame while its address remains on the spent grant", async () => {
+    mockResolveSequence([served("grant-one"), null]);
+    paintHost("light");
+    const { container } = mountCard("site_widget");
+    await settle();
+    const frame = container.querySelector("iframe")!;
+    const originalSrc = frame.src;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    await act(async () => { paintHost("dark"); });
+    await settle();
+    await settle();
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(frame.src).toBe(originalSrc);
+    expect(post.mock.calls).toEqual([[{ type: "cinatra.review-island.palette", scheme: "dark" }, new URL(originalSrc).origin]]);
+  });
+
+  it("does not invent a message when the host names no palette", async () => {
+    mockResolve();
+    paintHost("none");
+    const { container } = mountCard("run_card");
+    await settle();
+    const frame = container.querySelector("iframe")!;
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    fireEvent.load(frame);
+    expect(post).not.toHaveBeenCalled();
   });
 });
 

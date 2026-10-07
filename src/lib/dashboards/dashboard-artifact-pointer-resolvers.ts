@@ -28,6 +28,14 @@ import {
   type DashboardArtifactPointer,
 } from "@/lib/dashboards/dashboard-artifact-surface";
 
+/** A dashboard row that belongs to an organization. Only such rows have an
+ *  artifact twin; a workspace dashboard (org-NULL, cinatra#2811) never does. */
+function hasTenant<T extends { readonly organizationId: string | null }>(
+  row: T,
+): row is T & { readonly organizationId: string } {
+  return row.organizationId !== null;
+}
+
 /**
  * Resolve §VIII pointers for the dashboard-typed artifact ids on a library page,
  * applying liveness/template selection over the object-gated ids. Returns the
@@ -52,7 +60,7 @@ export async function resolveLibraryDashboardPointers(
       resolveLiveExtensionPredicate(orgId),
     ]);
     return selectReadableDashboardArtifactPointers({
-      rows,
+      rows: rows.filter(hasTenant),
       artifactIds: new Set(artifactIds),
       isPackageLive,
     });
@@ -102,6 +110,9 @@ export async function resolveDashboardArtifactPointer(
   // canonical route 404s it.)
   const row = await readDashboardRowById(dashboardId);
   if (!row) return { access: "not-found" };
+  // A WORKSPACE dashboard (cinatra#2811) is org-NULL and has no artifact twin,
+  // so it is never an artifact pointer: not found, like an absent row.
+  if (!hasTenant(row)) return { access: "not-found" };
   if (isProjectTemplate(row)) return { access: "not-found" };
   const isPackageLive = await resolveLiveExtensionPredicate(row.organizationId);
   if (!isDashboardRowRenderable(row, isPackageLive)) {

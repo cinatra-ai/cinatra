@@ -5,9 +5,11 @@
 // check -> PASS with a report line; the queue event with a moved head -> FAIL.
 
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   DEADLINE_MINUTES,
@@ -970,5 +972,381 @@ describe("branch filters match the base as GitHub matches them (#3653)", () => {
     const notAMap = inventory();
     notAMap.triggers = [];
     expect(validateInventory(notAMap).problems.join("\n")).toMatch(/'triggers'/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * cinatra#3673: each workflow is read from its latest run at the head
+ * ------------------------------------------------------------------ */
+
+// A draft pull request marked ready seconds after it was opened runs a
+// workflow twice at one head. Concurrency cancels the first run: its jobs end
+// cancelled, or failed when killed mid-way, while the second run has not yet
+// created every job. The fixtures are API-shaped listings of one head: its
+// check runs and its workflow runs.
+const GATES = ".github/workflows/gates.yml";
+const LEAK = ".github/workflows/source-leak-gate.yml";
+const DESIGN = ".github/workflows/design-visual-verify.yml";
+const TEST_MERGE = "e".repeat(40);
+
+/** One entry of the head's workflow runs listing. */
+const workflowRun = (id, suite, workflowPath, status = "completed", conclusion = status === "completed" ? "success" : null) =>
+  ({ id, check_suite_id: suite, path: workflowPath, head_sha: HEAD, event: "pull_request", status, conclusion });
+
+/** One entry of the head's check-runs listing, as the API returns it. */
+const checkRun = (id, suite, runId, name, status = "completed", conclusion = status === "completed" ? "success" : null) => ({
+  id,
+  name,
+  status,
+  conclusion,
+  completed_at: status === "completed" ? "2026-09-25T10:00:00Z" : null,
+  app: { slug: "github-actions" },
+  check_suite: { id: suite },
+  html_url: `https://github.com/octo-org/octo-repo/actions/runs/${runId}/job/${id}`,
+});
+
+const listing = (runs) => ({ total_count: runs.length, workflow_runs: runs });
+
+/** The leak and design gates: one green run each, on every head below. */
+const otherRuns = () => [workflowRun(300, 3000, LEAK), workflowRun(400, 4000, DESIGN)];
+const otherChecks = () => [
+  checkRun(3001, 3000, 300, "source-leak-gate / source-leak-gate"),
+  checkRun(4001, 4000, 400, "design-visual-verify"),
+];
+
+/** Heads with ONE run per workflow: the cases cinatra#3673 leaves unchanged. */
+const singleBatch = () => [
+  {
+    name: "every context green",
+    checkRuns: [checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES), ...otherRuns()],
+  },
+  {
+    name: "one context failed",
+    checkRuns: [checkRun(1001, 1000, 100, "build", "completed", "failure"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES, "completed", "failure"), ...otherRuns()],
+  },
+  {
+    name: "the only run cancelled",
+    checkRuns: [checkRun(1001, 1000, 100, "build", "completed", "cancelled"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES, "completed", "cancelled"), ...otherRuns()],
+  },
+  {
+    name: "one context still queued",
+    checkRuns: [checkRun(1001, 1000, 100, "build", "queued"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES, "in_progress"), ...otherRuns()],
+    waitedMinutes: 12,
+  },
+  {
+    name: "one context missing",
+    checkRuns: otherChecks(),
+    runs: [workflowRun(100, 1000, GATES), ...otherRuns()],
+  },
+  {
+    name: "a re-run inside one run",
+    checkRuns: [
+      checkRun(1002, 1000, 100, "build"),
+      checkRun(1001, 1000, 100, "build", "completed", "failure"),
+      ...otherChecks(),
+    ],
+    runs: [workflowRun(100, 1000, GATES), ...otherRuns()],
+  },
+  {
+    name: "unknown checks beside the expected set",
+    checkRuns: [
+      checkRun(1001, 1000, 100, "build"),
+      checkRun(1003, 1000, 100, "Detect CI impact"),
+      checkRun(5001, 5000, 500, "merge-readiness / merge-readiness", "in_progress"),
+      { ...checkRun(9001, 9000, 0, "CodeQL"), app: { slug: "code-scanning" }, html_url: "https://github.com/octo-org/octo-repo/runs/9001" },
+      ...otherChecks(),
+    ],
+    runs: [
+      workflowRun(100, 1000, GATES),
+      workflowRun(500, 5000, ".github/workflows/merge-readiness.yml", "in_progress"),
+      ...otherRuns(),
+    ],
+  },
+  {
+    name: "two workflows report one context",
+    checkRuns: [checkRun(6001, 6000, 600, "build"), checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+    runs: [workflowRun(100, 1000, GATES), workflowRun(600, 6000, ".github/workflows/gates-copy.yml"), ...otherRuns()],
+  },
+];
+
+/** What the CLI does with one poll's two listings. */
+const judgeListings = (checkRuns, runs, { waitedMinutes, baseRef = null } = {}) => {
+  const checks = readiness.resolveLatestRuns(
+    checkRuns.map(readiness.checkRunFromApi),
+    readiness.readWorkflowRuns(listing(runs), HEAD),
+  );
+  const args = { inventory: inventory(), checks, changedPaths: ["src/app/page.tsx"], baseRef };
+  const result = evaluateReadiness({ ...args, eventName: "pull_request", waitedMinutes });
+  return { result, settled: isSettled(args), readFrom: readiness.renderReadFrom(result).split("\n") };
+};
+
+// Run 100 (check suite 1000) is the first run of gates.yml at the head; run
+// 200 (check suite 2000) is the second.
+const cancelledFirstRun = () => workflowRun(100, 1000, GATES, "completed", "cancelled");
+const killedBuild = () => checkRun(1001, 1000, 100, "build", "completed", "failure");
+const SUPERSEDED = `superseded run ignored: run 100 of ${GATES} — run 200 is the latest of that workflow at the head`;
+
+describe("each workflow is read from its latest run at the head (cinatra#3673)", () => {
+  it("reads ready when the older run was cancelled with a failed job and the newer run is green", () => {
+    const { result, settled, readFrom } = judgeListings(
+      [checkRun(2001, 2000, 200, "build"), killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES), ...otherRuns()],
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.pending).toEqual([]);
+    expect(result.verdict).toBe("PASS");
+    expect(settled).toBe(true);
+    expect(result.reports).toEqual([SUPERSEDED]);
+    expect(readFrom).toContain(`  read 'build' from run 200 of ${GATES}`);
+  });
+
+  it("is pending, not failed, while the newer run still runs the job", () => {
+    const { result, settled } = judgeListings(
+      [checkRun(2001, 2000, 200, "build", "in_progress"), killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES, "in_progress"), ...otherRuns()],
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.verdict).toBe("PENDING");
+    expect(result.pending).toEqual(["pending: 'build' is still 'in_progress' after 90 minutes — not a failure"]);
+    expect(settled).toBe(false);
+  });
+
+  it("keeps a cancelled run a failure when it is the latest run of its workflow", () => {
+    const only = judgeListings(
+      [checkRun(1001, 1000, 100, "build", "completed", "cancelled"), ...otherChecks()],
+      [cancelledFirstRun(), ...otherRuns()],
+    );
+    expect(only.result.verdict).toBe("FAIL");
+    expect(only.result.failures).toEqual(["cancelled: 'build'"]);
+    expect(only.result.reports).toEqual([]);
+    expect(only.readFrom).toContain(`  read 'build' from run 100 of ${GATES}`);
+
+    // A newer run cancelled in its turn is read; the older green run does not stand in for it.
+    const newerCancelled = judgeListings(
+      [checkRun(2001, 2000, 200, "build", "completed", "cancelled"), checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+      [workflowRun(100, 1000, GATES), workflowRun(200, 2000, GATES, "completed", "cancelled"), ...otherRuns()],
+    );
+    expect(newerCancelled.result.verdict).toBe("FAIL");
+    expect(newerCancelled.result.failures).toEqual(["cancelled: 'build'"]);
+
+    // A newer run cancelled before it created the job leaves that job missing.
+    const cancelledEarly = judgeListings(
+      [checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+      [workflowRun(100, 1000, GATES), workflowRun(200, 2000, GATES, "completed", "cancelled"), ...otherRuns()],
+    );
+    expect(cancelledEarly.result.verdict).toBe("FAIL");
+    expect(cancelledEarly.result.failures).toEqual([
+      `missing: no check run named 'build' in the latest run 200 of ${GATES}, which concluded 'cancelled' (a superseded run's check run is ignored)`,
+    ]);
+  });
+
+  it("keeps a job only the older run reported pending until the newer run ends, then reads it from the newer run", () => {
+    // The measured shape: the newer run is running and has not created 'build' yet.
+    const during = judgeListings(
+      [killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES, "in_progress"), ...otherRuns()],
+      { waitedMinutes: 3 },
+    );
+    expect(during.result.failures).toEqual([]);
+    expect(during.result.verdict).toBe("PENDING");
+    expect(during.result.pending).toEqual([
+      `pending: 'build' is not yet reported by the latest run 200 of ${GATES} (still 'in_progress') after 3 minutes — not a failure`,
+    ]);
+    expect(during.result.reports).toEqual([SUPERSEDED]);
+    expect(during.settled).toBe(false);
+    expect(during.readFrom.join("\n")).not.toContain("'build'");
+
+    const after = judgeListings(
+      [checkRun(2001, 2000, 200, "build"), killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES), ...otherRuns()],
+    );
+    expect(after.result.verdict).toBe("PASS");
+    expect(after.settled).toBe(true);
+    expect(after.readFrom).toContain(`  read 'build' from run 200 of ${GATES}`);
+
+    // A newer run that ended without the job leaves it missing, never passed on the older run's word.
+    const ended = judgeListings(
+      [killedBuild(), ...otherChecks()],
+      [cancelledFirstRun(), workflowRun(200, 2000, GATES, "completed", "failure"), ...otherRuns()],
+    );
+    expect(ended.result.verdict).toBe("FAIL");
+    expect(ended.result.failures).toEqual([
+      `missing: no check run named 'build' in the latest run 200 of ${GATES}, which concluded 'failure' (a superseded run's check run is ignored)`,
+    ]);
+  });
+
+  it("refuses a runs listing it cannot read, and names the reason", () => {
+    const run = cancelledFirstRun;
+    const other = "f".repeat(40);
+    for (const [value, reason] of [
+      [null, "the listing is not an object"],
+      [{ total_count: 1 }, "'workflow_runs' is not an array"],
+      [{ total_count: "1", workflow_runs: [run()] }, "'total_count' is not a count"],
+      [{ total_count: 3, workflow_runs: [run()] }, "the listing holds 1 of 3 runs"],
+      [listing([{ ...run(), id: "100" }]), "run #1 has no run id"],
+      [listing([run(), run()]), "run 100 is listed twice"],
+      [listing([{ ...run(), check_suite_id: null }]), "run 100 has no check suite id"],
+      [listing([run(), { ...run(), id: 101 }]), "run 101 shares check suite 1000 with another run"],
+      [listing([{ ...run(), path: "" }]), "run 100 names no workflow path"],
+      [listing([{ ...run(), status: null }]), "run 100 has no status"],
+      [listing([{ ...run(), conclusion: 1 }]), "run 100 has a malformed conclusion"],
+      [listing([{ ...run(), head_sha: other }]), `run 100 belongs to head ${other}`],
+    ]) {
+      expect(() => readiness.readWorkflowRuns(value, HEAD)).toThrow(
+        `cannot read the workflow runs of ${HEAD} (${reason}) — refusing`,
+      );
+    }
+  });
+
+  it("renders a head with one run per workflow byte-identically to the evaluator before cinatra#3673", () => {
+    // Captured from the unchanged evaluator on the same listings (its own
+    // check-run mapping, suite index and summary).
+    const head = (verdict) => [
+      `merge-readiness: ${verdict}`,
+      "  event: pull_request",
+      `  candidate: ${TEST_MERGE}`,
+      `  checks read from: ${HEAD} (the head that carries the runs; the candidate above is the tree under evaluation)`,
+      "  base: main",
+      "  expected set for base 'main': 3 context(s) from 3 workflow(s)",
+      "    expected: build (from .github/workflows/gates.yml)",
+      "    expected: source-leak-gate / source-leak-gate (from .github/workflows/source-leak-gate.yml)",
+      "    expected: design-visual-verify (from .github/workflows/design-visual-verify.yml)",
+      "  waited on 3 expected context(s)",
+    ];
+    const unknown = "  report: unknown check (not in .github/merge-readiness.json; reported, not waited on):";
+    const golden = {
+      "every context green": head("PASS"),
+      "one context failed": [...head("FAIL"), "  FAIL: failed: 'build'"],
+      "the only run cancelled": [...head("FAIL"), "  FAIL: cancelled: 'build'"],
+      "one context still queued": [...head("PENDING"), "  pending: 'build' is still 'queued' after 12 minutes — not a failure"],
+      "one context missing": [
+        ...head("FAIL"),
+        "  FAIL: missing: no check run named 'build' reported on the candidate (expected from .github/workflows/gates.yml)",
+      ],
+      "a re-run inside one run": [...head("PASS"), "  report: re-run (the latest of 2 runs from one source decides): 'build'"],
+      "unknown checks beside the expected set": [...head("PASS"), `${unknown} Detect CI impact`, `${unknown} CodeQL`],
+      "two workflows report one context": [
+        ...head("FAIL"),
+        "  FAIL: duplicate-source: 'build' was reported 2 times from 2 source(s) [github-actions:.github/workflows/gates-copy.yml, github-actions:.github/workflows/gates.yml] — which run branch protection would match is ambiguous",
+      ],
+    };
+    const cases = singleBatch();
+    expect(cases.map((s) => s.name)).toEqual(Object.keys(golden));
+    for (const s of cases) {
+      const { result } = judgeListings(s.checkRuns, s.runs, { waitedMinutes: s.waitedMinutes, baseRef: "main" });
+      const summary = readiness.renderSummary({ candidateSha: TEST_MERGE, lookupSha: HEAD, eventName: "pull_request", result });
+      expect(summary, s.name).toBe(golden[s.name].join("\n"));
+    }
+  });
+});
+
+describe("the evaluator waits for the latest run of each workflow before it judges (cinatra#3673)", () => {
+  const SCRIPT = path.resolve(import.meta.dirname, "../merge-readiness.mjs");
+  // Stands in for fetch in the evaluator's own process: every read of the
+  // check runs starts the next poll of the fixture, and the runs listing
+  // answers from that same poll.
+  const FETCH_STANDIN = `
+import fs from "node:fs";
+const fixture = JSON.parse(fs.readFileSync(process.env.READINESS_FIXTURE, "utf8"));
+let poll = 0;
+const current = () => fixture.polls[Math.min(Math.max(poll, 1), fixture.polls.length) - 1];
+const reply = (status, body) =>
+  ({ ok: status === 200, status, statusText: { 200: "OK", 403: "Forbidden" }[status] ?? "Not Found", json: async () => body });
+globalThis.fetch = async (url) => {
+  const { pathname, searchParams } = new URL(url);
+  if (pathname.endsWith("/check-runs")) {
+    if (searchParams.get("page") === "1") poll += 1;
+    return reply(200, { total_count: current().checkRuns.length, check_runs: current().checkRuns });
+  }
+  if (pathname.endsWith("/actions/runs")) return current().runsStatus ? reply(current().runsStatus, { message: "refused" }) : reply(200, current().runs);
+  if (pathname.endsWith("/files")) return reply(200, [{ filename: "src/app/page.tsx" }]);
+  return reply(404, { message: "not in the fixture" });
+};
+`;
+  const cliInventory = () => {
+    const inv = inventory();
+    inv.expected.push({ context: "Create GitHub Release", app: "github-actions", workflow: GATES, paths: ["**"] });
+    return inv;
+  };
+
+  function runEvaluator(polls) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-cli-"));
+    try {
+      fs.mkdirSync(path.join(dir, ".github"));
+      fs.writeFileSync(path.join(dir, ".github", "merge-readiness.json"), JSON.stringify(cliInventory()));
+      fs.writeFileSync(path.join(dir, "event.json"), JSON.stringify({ pull_request: { number: 7, base: { ref: "main" } } }));
+      fs.writeFileSync(path.join(dir, "fixture.json"), JSON.stringify({ polls }));
+      fs.writeFileSync(path.join(dir, "fetch-standin.mjs"), FETCH_STANDIN);
+      const run = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(dir, "fetch-standin.mjs")).href, SCRIPT], {
+        encoding: "utf8",
+        timeout: 60_000,
+        env: {
+          GITHUB_REPOSITORY: "octo-org/octo-repo",
+          GITHUB_TOKEN: "fixture-token",
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_EVENT_PATH: path.join(dir, "event.json"),
+          GITHUB_WORKSPACE: dir,
+          MERGE_READINESS_CANDIDATE_SHA: TEST_MERGE,
+          MERGE_READINESS_HEAD_SHA: HEAD,
+          MERGE_READINESS_POLL_MS: "1",
+          READINESS_FIXTURE: path.join(dir, "fixture.json"),
+        },
+      });
+      return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const releaseCancelled = () => checkRun(1002, 1000, 100, "Create GitHub Release", "completed", "cancelled");
+
+  it("passes a draft pull request made ready seconds later once the newer run is green", () => {
+    const { status, stdout, stderr } = runEvaluator([
+      // Poll 1: the first run of gates.yml was cancelled, its build killed;
+      // the second run has not created either job yet.
+      {
+        checkRuns: [releaseCancelled(), killedBuild(), ...otherChecks()],
+        runs: listing([cancelledFirstRun(), workflowRun(200, 2000, GATES, "in_progress"), ...otherRuns()]),
+      },
+      // Poll 2: the second run is green.
+      {
+        checkRuns: [
+          checkRun(2002, 2000, 200, "Create GitHub Release"),
+          checkRun(2001, 2000, 200, "build"),
+          releaseCancelled(),
+          killedBuild(),
+          ...otherChecks(),
+        ],
+        runs: listing([cancelledFirstRun(), workflowRun(200, 2000, GATES), ...otherRuns()]),
+      },
+    ]);
+    expect(stdout).toContain("merge-readiness: PASS");
+    expect(stdout).not.toContain("FAIL:");
+    expect(stdout).toContain(`  report: ${SUPERSEDED}`);
+    expect(stdout).toContain(`  read 'build' from run 200 of ${GATES}`);
+    expect(stdout).toContain(`  read 'Create GitHub Release' from run 200 of ${GATES}`);
+    expect(stderr).not.toContain("::error::");
+    expect(status).toBe(0);
+  });
+
+  it("refuses, non-zero and with the reason, when the runs listing cannot be read", () => {
+    const green = {
+      checkRuns: [checkRun(1002, 1000, 100, "Create GitHub Release"), checkRun(1001, 1000, 100, "build"), ...otherChecks()],
+    };
+    const page = `/repos/octo-org/octo-repo/actions/runs?head_sha=${HEAD}&per_page=100&page=1`;
+    for (const [poll, reason] of [
+      [{ ...green, runs: { message: "Server Error" } }, "a page carries no 'workflow_runs' array"],
+      [{ ...green, runsStatus: 403 }, `GET ${page} -> 403 Forbidden`],
+    ]) {
+      const { status, stdout, stderr } = runEvaluator([poll]);
+      expect(stderr).toContain(`cannot read the workflow runs of ${HEAD} (${reason}) — refusing`);
+      expect(stderr).toContain("::error::");
+      expect(stdout).not.toContain("merge-readiness: PASS");
+      expect(status).toBe(1);
+    }
   });
 });

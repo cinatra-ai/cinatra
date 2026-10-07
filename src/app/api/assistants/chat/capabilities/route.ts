@@ -143,12 +143,19 @@ export async function GET(request: Request) {
 // subsequent turn against the already-broker-capable turn endpoint still works.
 // ---------------------------------------------------------------------------
 async function serveBrokerAdvertisement(request: Request, citToken: string): Promise<Response> {
-  const unauthorized = () => Response.json({ error: "Unauthorized" }, { status: 401 });
+  // cinatra#3715 — EVERY refusal below writes ONE audit line naming its refusal
+  // point (and, for the two consumes, the consume's own reason code) with the
+  // server-resolved agent when there is one. No token, hash or header value is
+  // ever passed. The caller's answer stays the one generic 401.
+  const unauthorized = (reason: string, agentSlug?: string) => {
+    emitWidgetAuthAudit("assistant_chat_capabilities_broker_rejected", { agentSlug, reason });
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  };
 
   // The per-user cwu_ token is REQUIRED on the interactive broker surface (no
   // anonymous/install fallback — same posture as the turn endpoint).
   const userToken = request.headers.get(USER_TOKEN_HEADER)?.trim() ?? "";
-  if (!userToken) return unauthorized();
+  if (!userToken) return unauthorized("user_token_missing");
 
   // The embed-forwarded parent origin (validated against the token binding
   // below). Absent → the consume's origin re-check fails closed.
@@ -160,12 +167,12 @@ async function serveBrokerAdvertisement(request: Request, citToken: string): Pro
   // selector; the cit_ consume re-checks `agent_slug` so a forged handle fails.
   const handle = request.headers.get(WIDGET_ASSISTANT_HEADER)?.trim().toLowerCase() ?? "";
   const binding = resolveAssistantWidgetBinding(handle);
-  if (!binding) return unauthorized();
+  if (!binding) return unauthorized("widget_binding_unresolved");
 
   const resolved = await resolveWidgetStreamAgentUnion(binding.agentSlug, undefined, {
     requestSource: widgetStreamRequestSource(request),
   });
-  if (!resolved) return unauthorized();
+  if (!resolved) return unauthorized("agent_unresolved", binding.agentSlug);
   const entry = resolved.entry;
 
   // cit_ site transport token — origin/aud/scope/expiry + live rotation re-check
@@ -180,7 +187,9 @@ async function serveBrokerAdvertisement(request: Request, citToken: string): Pro
     routePath: WIDGET_BROKER_ROUTE_PATH,
     requestOrigin: forwardedOrigin,
   });
-  if (!consumed.ok) return unauthorized();
+  if (!consumed.ok) {
+    return unauthorized(`transport_token_rejected:${consumed.reason}`, binding.agentSlug);
+  }
   const verifiedOrigin = consumed.origin;
 
   // cwu_ per-user token — the authenticated end user, re-checked live (not
@@ -192,7 +201,9 @@ async function serveBrokerAdvertisement(request: Request, citToken: string): Pro
     routePath: WIDGET_BROKER_ROUTE_PATH,
     requestOrigin: forwardedOrigin,
   });
-  if (!consumedUser.ok) return unauthorized();
+  if (!consumedUser.ok) {
+    return unauthorized(`user_token_rejected:${consumedUser.reason}`, binding.agentSlug);
+  }
 
   // TWO-TOKEN AGREEMENT — the cit_-derived verified origin MUST equal the
   // cwu_-bound site origin, so a valid user token for site A cannot ride a site
@@ -202,7 +213,7 @@ async function serveBrokerAdvertisement(request: Request, citToken: string): Pro
     normalizeOriginStrict(verifiedOrigin) !==
     normalizeOriginStrict(consumedUser.claims.siteOrigin)
   ) {
-    return unauthorized();
+    return unauthorized("origin_disagreement", binding.agentSlug);
   }
 
   emitWidgetAuthAudit("assistant_chat_capabilities_broker_advertised", {

@@ -172,9 +172,24 @@ export async function recordDevVersionForLoadedPackage(
     const { recordDevExtensionVersion } = await import(
       "@cinatra-ai/extensions/dev-version"
     );
-    await recordDevExtensionVersion(res.packageName, pkgDir, {
+    const result = await recordDevExtensionVersion(res.packageName, pkgDir, {
       actorSource: "dev-watcher",
     });
+    // Say what the record left alone (cinatra#3788). A row whose provenance is
+    // an upload or a registry install is not the watcher's to rewrite, so the
+    // record skips it and names the reason. One line per skipped row, at the
+    // wording parity of the refusal line below, so a scan reader sees a skip
+    // whichever of the two roads produced it. `console.info` rather than
+    // `console.warn`: a skip is the correct outcome here, not a failure.
+    if (result?.ok && result.skipped?.length) {
+      for (const skip of result.skipped) {
+        console.info(
+          `[cinatra:extensions] dev-version record skipped (${res.packageName}): row ${skip.id} ` +
+            `(kind=${skip.kind}, source=${skip.sourceType}, contentDigest=` +
+            `${skip.hasContentDigest ? "present" : "absent"}): ${skip.reason}`,
+        );
+      }
+    }
   } catch (err) {
     console.warn(
       `[cinatra:extensions] dev-version record skipped (${res.packageName}):`,

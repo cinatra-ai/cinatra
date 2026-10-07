@@ -27,6 +27,17 @@ export type ScopeDashboardTabRow = {
   /** Server-derived: may THIS viewer remove this listing? (listed AND manager).
    *  A Home row is never removable (its home is its identity, §IX). */
   readonly canRemove: boolean;
+  /**
+   * The §IX.4 "visible to everyone" mark, present ONLY on a WORKSPACE reference
+   * (cinatra#2811). `granted` is the link's live grant; `canSet` is true for a
+   * platform administrator alone. Everyone else reads the mark and a muted,
+   * disabled control with its reason, the drawing's one stated exception to
+   * suppression, because the mark is information a member may read.
+   */
+  readonly everyone?: {
+    readonly granted: boolean;
+    readonly canSet: boolean;
+  };
 };
 
 /** The tab's data + whether the viewer manages the scope (§IX.2 write gate).
@@ -61,7 +72,10 @@ export type ScopeDashboardsTabScopeKind =
 export function scopeOffersAddToScope(
   kind: ScopeDashboardsTabScopeKind,
 ): boolean {
-  return kind !== "personal" && kind !== "workspace";
+  // AMENDED by cinatra#2811 (the drawing's §IX.1): "the reference half of Add
+  // dashboard is the three shared scopes and the workspace". Personal alone
+  // keeps its landed shape with no add-to-scope.
+  return kind !== "personal";
 }
 
 export type ScopeDashboardsTabData = {
@@ -158,6 +172,12 @@ export type ScopeReferenceSource = {
   readonly requestPromotion: (
     dashboardId: string,
   ) => Promise<ScopeListingMutation>;
+};
+
+/** The workspace everyone-grant's one mutation (§IX.4), handed ONLY to a
+ *  platform administrator (cinatra#2811). */
+export type WorkspaceEveryoneGrantSource = {
+  readonly setGrant: (dashboardId: string, granted: boolean) => Promise<ScopeListingMutation>;
 };
 
 /** The listing panel's only mutation (§IX row Remove; §IX.2 manager-only). */

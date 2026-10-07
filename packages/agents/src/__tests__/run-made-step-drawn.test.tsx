@@ -46,7 +46,7 @@ const wrote = (over: Partial<RunMadeArtifactRow> = {}): RunMadeArtifactRow => ({
   artifactId: "art_1",
   title: "Why migrations are the hardest part",
   href: "/artifacts/art_1",
-  extension: "@cinatra-ai/blog:post",
+  extension: "@cinatra-ai/blog-post-artifact:post",
   typeLabel: "Blog post",
   revision: 1,
   mime: "text/markdown",
@@ -60,7 +60,7 @@ const usedRow = (over: Partial<RunMadeArtifactRow> = {}): RunMadeArtifactRow =>
     artifactId: "art_idea",
     title: "Why migrations are the hardest part of self-hosting",
     href: "/artifacts/art_idea",
-    extension: "@cinatra-ai/blog:idea",
+    extension: "@cinatra-ai/blog-idea-artifact:blog-idea",
     typeLabel: "Blog idea",
     revision: 3,
     mime: "text/markdown",
@@ -82,7 +82,7 @@ describe("§I.2 — every row carries the four things the drawing names", () => 
     );
     expect(row.querySelector("[data-run-made-row-type]")?.textContent).toBe("Blog post");
     const meta = row.querySelector("[data-run-made-row-revision]")?.textContent ?? "";
-    expect(meta).toContain("@cinatra-ai/blog:post");
+    expect(meta).toContain("@cinatra-ai/blog-post-artifact:post");
     expect(meta).toContain("revision 1");
     expect(meta).toContain("text/markdown");
     const open = row.querySelector("[data-run-made-open]") as HTMLAnchorElement | null;
@@ -123,6 +123,9 @@ describe("§I.2 — every row carries the four things the drawing names", () => 
     expect(consumed.className).not.toContain("border-line-strong");
     // "that artifact too, marked used" -- the drawing's own tag beside its type.
     expect(consumed.querySelector("[data-run-made-used-tag]")?.textContent).toBe("Used");
+    expect(consumed.querySelector("[data-run-made-row-revision]")?.textContent).toContain(
+      "@cinatra-ai/blog-idea-artifact:blog-idea",
+    );
     expect(written.querySelector("[data-run-made-used-tag]")).toBeNull();
   });
 

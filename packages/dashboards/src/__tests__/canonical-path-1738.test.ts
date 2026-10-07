@@ -33,6 +33,16 @@ describe("canonicalDashboardPath (#1738)", () => {
     ).toBe("/dashboards/d1");
   });
 
+  it("nests a WORKSPACE dashboard under the workspace page (cinatra#2811)", () => {
+    expect(
+      canonicalDashboardPath({ id: "dash:workspace:__workspace__:user:u1:overview", entityType: "workspace", entityId: "__workspace__" }),
+    ).toBe("/workspace/dashboards/dash%3Aworkspace%3A__workspace__%3Auser%3Au1%3Aoverview");
+    // Only the exact workspace entity: any other id under the type stays flat.
+    expect(
+      canonicalDashboardPath({ id: "d1", entityType: "workspace", entityId: "org-1" }),
+    ).toBe("/dashboards/d1");
+  });
+
   it("URL-encodes both path pieces", () => {
     expect(
       canonicalDashboardPath({ id: "a b", entityType: "team", entityId: "t/x" }),

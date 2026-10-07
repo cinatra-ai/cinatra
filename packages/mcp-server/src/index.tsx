@@ -1051,6 +1051,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // REFUSED, never tagged; the refusal itself is the paired enforcement below.
     const runContext = resolveRequestRunContext({
       delegatedRunId: delegatedActor?.delegation === "agent_run" ? delegatedActor.runId : undefined,
+      delegatedStepId: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedStepId : undefined,
       durable: durableRunContext,
       headerRunId: request.headers.get("x-cinatra-run-id") ?? undefined,
       headerAgentId: request.headers.get("x-cinatra-agent-id") ?? undefined,
@@ -1075,6 +1076,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       agentId: runContext.agentId,
       packageVersion: runContext.packageVersion,
       agentSpecVersion: runContext.agentSpecVersion,
+      // The verified step of the calling run step (cinatra#3745) — only from
+      // the channel that served the verified run id (see resolveRequestRunContext).
+      verifiedStepId: runContext.stepId,
       platformRole: resolvedPlatformRole,
       orgRole: resolvedOrgRole,
       // delegated-chat allowlist is keyed on the CHAT delegation type only.

@@ -24,7 +24,9 @@ import type {
   CatalogAddResult,
   CatalogTemplateView,
   ScopeCatalogSource,
+  ScopeCatalogWords,
 } from "@/lib/dashboards/installed-catalog-contract";
+import { WORKSPACE_CATALOG_WORDS } from "@/lib/dashboards/installed-catalog-contract";
 
 // ---------------------------------------------------------------------------
 // Concept B's section (cinatra#2474 PR4's rows; PR5's Add) — RENDER + BEHAVIOUR
@@ -56,15 +58,17 @@ function mount({
   canAdd = true,
   onAdded = vi.fn(),
   src = source(),
+  words,
 }: {
   templates?: readonly CatalogTemplateView[];
   canAdd?: boolean;
   onAdded?: (d: typeof CREATED) => void;
   src?: ScopeCatalogSource;
+  words?: ScopeCatalogWords;
 } = {}) {
   return render(
     <CatalogAddOutcomeProvider canAdd={canAdd} onAdded={onAdded as never}>
-      <ScopeCatalogSection templates={templates} source={src} />
+      <ScopeCatalogSection templates={templates} source={src} words={words} />
     </CatalogAddOutcomeProvider>,
   );
 }
@@ -224,5 +228,80 @@ describe("<ScopeCatalogSection> — driving the add", () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(screen.getAllByRole("button", { name: "Add" })).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-surface words (cinatra#2811 fix leg 4). The amended drawing gives the
+// WORKSPACE popup its own heading, its own helper line, and a row note naming
+// the package AND the kind it contributes. The tenant callers pass no words and
+// must read exactly as they landed.
+// ---------------------------------------------------------------------------
+describe("<ScopeCatalogSection>: the words of the surface it renders on", () => {
+  const said = (el: Element | null) =>
+    (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  it("keeps the tenant tabs' landed heading, caption and bare package name", () => {
+    mount();
+    const section = screen.getByRole("region", {
+      name: "Add from the installed catalog",
+    });
+    expect(said(section)).toContain("From the installed catalog");
+    expect(said(section)).toContain(
+      "Dashboards that installed extensions have added to this workspace.",
+    );
+    expect(within(section).getByText("@cinatra-ai/a-artifact")).toBeTruthy();
+    expect(said(section)).not.toContain("A catalog dashboard homes in the workspace");
+  });
+
+  it("reads the workspace's drawn heading, helper and <package>:<kind> row note", () => {
+    render(
+      <CatalogAddOutcomeProvider canAdd onAdded={vi.fn() as never}>
+        <ScopeCatalogSection
+          templates={rows}
+          source={source()}
+          words={WORKSPACE_CATALOG_WORDS}
+        />
+      </CatalogAddOutcomeProvider>,
+    );
+    const section = screen.getByRole("region", {
+      name: "Add from the installed catalog",
+    });
+    expect(said(section)).toContain("Add from the installed catalog");
+    expect(said(section)).toContain(
+      "A catalog dashboard homes in the workspace, exactly as a created one does.",
+    );
+    expect(within(section).getByText("@cinatra-ai/a-artifact:dashboard")).toBeTruthy();
+    expect(within(section).getByText("@cinatra-ai/b-artifact:dashboard")).toBeTruthy();
+    // The landed tenant sentences are not repeated under the drawn one.
+    expect(said(section)).not.toContain("From the installed catalog’");
+    expect(said(section)).not.toContain(
+      "Dashboards that installed extensions have added to this workspace.",
+    );
+    // One control per row, still Add.
+    for (const b of screen.getAllByRole("button")) {
+      expect(b.textContent).toBe("Add");
+    }
+  });
+});
+
+describe("<ScopeCatalogSection> — the accessible name follows the surface's words", () => {
+  const WORDS: ScopeCatalogWords = {
+    title: "Catalog rows for this surface",
+    rowKind: "dashboard",
+    helper: "A copy homes here.",
+    helperWithoutAuthority: "Rows only; no control for you here.",
+  };
+
+  it("names the region by the supplied title, so one string carries the heading and the name", () => {
+    mount({ words: WORDS });
+    const section = screen.getByRole("region", { name: "Catalog rows for this surface" });
+    expect(within(section).getByText("Catalog rows for this surface")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Add from the installed catalog" })).toBeNull();
+  });
+
+  it("keeps the landed name when a caller hands no words", () => {
+    mount();
+    expect(screen.getByRole("region", { name: "Add from the installed catalog" })).toBeTruthy();
   });
 });

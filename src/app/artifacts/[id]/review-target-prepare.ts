@@ -7,19 +7,17 @@ import "server-only";
 // library, but PINNED to the exact revision the gate froze (never "latest").
 //
 // RENDERER RESOLVED FROM THE ARTIFACT TYPE (never caller-chosen): `resolveMount`
-// runs the SAME resolution the artifact detail page runs — `resolveArtifactDispatchInputs`
-// fed to the pure `pickArtifactRenderer` leaf — and then classifies the loadable
-// path exactly like `ExtensionRendererMount`. It branches only on the opaque
-// dispatch outputs — G1-clean, no concrete type / renderer id keyed here.
+// runs the SAME resolution the artifact detail page runs, through the one
+// exported primitive both call. It branches only on the opaque mount outputs —
+// G1-clean, no concrete type / renderer id keyed here.
 //
-// ONE RESOLUTION, CARD AND PAGE (plan `PLAN: Agents Lifecycle (B)` §5). This
-// binder used to re-implement the precedence: semantic winner, then an EXTENSION
-// representation provider, then the floor — the page's ladder minus its last
-// rung, the first-party renderer for declared text forms. That missing rung is
-// the whole defect the plan names: the same markdown draft that renders on its
-// own page showed "cannot render" under review. Calling the page's own
-// composition instead of a second copy of it means the two cannot drift again,
-// and the rung arrives with it rather than as a fourth branch here.
+// ONE RESOLUTION, CARD AND PAGE. This binder used to re-implement the
+// precedence and then classify the loadable path "exactly like the detail
+// route" — two copies of one decision, which is the shape a drift takes before
+// it is a drift. Both roads now call the SHARED display primitive
+// (`resolveArtifactDisplayMount` in `./renderer-resolution`, mounted through
+// `./artifact-display-mount`), so the ladder, the mount and the failure
+// policy are decided once for the page and the card alike.
 //
 // AND ONE IDENTITY. The page resolves off the row's assertion-aware PRESENTATION
 // identity (epic #1883 A6); this path resolved off the EFFECTIVE identity, so a
@@ -84,13 +82,7 @@ import {
   isFileFormMember,
 } from "@/lib/artifacts/artifact-review-preparation";
 
-import { pickArtifactRenderer } from "./renderer-dispatch";
-import {
-  resolveArtifactDispatchInputs,
-  classifyLoadablePath,
-} from "./renderer-resolution";
-import { resolveRuntimeRendererForRoute } from "./runtime-renderer-route";
-import { ensureActivatedRepresentationProviders } from "@/lib/artifacts/system-artifact-renderer-registrar";
+import { resolveArtifactDisplayMount } from "./renderer-resolution";
 
 /** The two run/gate ports the caller supplies (the agents-domain seam). */
 export type ReviewRunGatePorts = Pick<
@@ -230,95 +222,58 @@ export function bindArtifactReviewPorts(ctx: {
     representationRevisionId: string,
   ): RevisionMemberOutcome => memberFor(artifactId, representationRevisionId, false);
 
+  /**
+   * ONE RESOLUTION, CARD AND PAGE — now literally one function.
+   *
+   * This binder used to classify the loadable path itself, "exactly like the
+   * detail route", which is the shape a drift takes before it is a drift. Both
+   * roads call `resolveArtifactDisplayMount` instead: the ladder, the loadable
+   * classification and the failure policy are decided once, and what stays this
+   * road's own is the REVISION it resolves at — the one the gate froze, never
+   * the artifact's latest — and the words its floor is drawn in.
+   */
   const resolveMount = async (input: {
     artifact: ArtifactSummary;
     mime: string;
     propsApiVersion: number;
   }): Promise<ResolvedRendererMount> => {
-    // Classify a resolved (packageName, generatedKey) pair into a host mount
-    // descriptor exactly like the detail route: the build-map SSR fast path, the
-    // runtime dynamic seam, or the never-blank floor (requires-rebuild when the
-    // resolved key is not loadable in THIS build). Keyed only on the opaque
-    // `generatedKey`; no concrete package identity is branched on here
-    // (coupling-ban G1).
-    const mountLoadable = async (
-      packageName: string,
-      generatedKey: string,
-    ): Promise<ResolvedRendererMount> => {
-      const path = classifyLoadablePath(generatedKey);
-      if (path === "build-map") {
-        return { kind: "build-map", packageName, generatedKey };
-      }
-      if (path === "runtime") {
-        const descriptor = await resolveRuntimeRendererForRoute(generatedKey, input.propsApiVersion);
-        if (!descriptor) {
-          return { kind: "floor", packageName, reason: "requires-rebuild" };
-        }
-        // Pass the descriptor through even when it carries a pre-import `reason`
-        // (peer/abi/archived) — the client loader renders its floor from the reason,
-        // exactly as the detail route does. Never blank.
-        //
-        // AND CARRY THE VERSION THIS DISPLAY NEGOTIATED (enabler 0.4): "resolve
-        // the display, read its declared props version, then build the snapshot
-        // at that version". The tuple names the version the display itself
-        // declared, and admission has already put it inside the host's window,
-        // so the core builds the snapshot at it rather than at the host's
-        // newest. A descriptor carrying a pre-import floor `reason` never
-        // renders, so it keeps the host's own version and nothing changes.
-        if (descriptor.reason === undefined) {
-          return {
-            kind: "runtime",
-            packageName,
-            descriptor,
-            propsApiVersion: descriptor.tuple.propsApiVersion,
-          };
-        }
-        return { kind: "runtime", packageName, descriptor };
-      }
-      return { kind: "floor", packageName, reason: "requires-rebuild" };
-    };
+    const mount = await resolveArtifactDisplayMount({
+      orgId,
+      baseType: input.artifact.objectType,
+      // THE PRESENTATION IDENTITY, the one the page resolves off, so a row filed
+      // under an asserted type cannot resolve one display on its page and
+      // another under review.
+      identity: input.artifact.presentationIdentity,
+      mime: input.mime,
+      propsApiVersion: input.propsApiVersion,
+    });
 
-    // ACTIVATION-COUPLED BINDING (cinatra#2044 L-A3): the org-scoped providers of
-    // build-bundled NON-SYSTEM (`guardedOptional`) renderer packs are bound/retired
-    // from the canonical install rows before the SYNC resolve below. Without this
-    // the CMS-snapshot pack — bundled and dev-enrolled, but deliberately NOT a
-    // system base (cinatra#1630: no auto-bind for every org, no teardown exemption)
-    // — has no production binding path at all and its representation never resolves.
-    // The detail route does exactly this before its own dispatch.
-    await ensureActivatedRepresentationProviders(orgId);
-
-    // THE PAGE'S OWN LADDER, called rather than copied: semantic winner →
-    // representation provider → the first-party form arm → the fallback.
-    const dispatch = pickArtifactRenderer(
-      resolveArtifactDispatchInputs({
-        orgId,
-        baseType: input.artifact.objectType,
-        identity: input.artifact.presentationIdentity,
-        mime: input.mime,
-      }),
-    );
-
-    switch (dispatch.kind) {
-      case "semantic":
-      case "representation":
-        return mountLoadable(dispatch.packageName, dispatch.generatedKey);
-      case "requires-rebuild":
-        return { kind: "floor", packageName: dispatch.packageName, reason: "requires-rebuild" };
-      case "mime":
-        // THE FORM RUNG. `pickHandler` still owns exactly two declared text
-        // forms after the G2 cutover (markdown, escaped plain text); any other
-        // handler kind is unreachable from it and floors rather than inventing a
-        // mount the review surface cannot render.
-        if (dispatch.handler === "markdown" || dispatch.handler === "text") {
-          return { kind: "form", arm: "first-party", form: dispatch.handler };
-        }
-        return { kind: "floor", packageName: null, reason: "no-semantic-renderer" };
-      case "fallback":
-        // Genuinely nothing renders this type: no package renderer, no declared
-        // text form. This is the ONLY state the card's "cannot render" reading is
-        // for, and the floor gate counts exactly it.
-        return { kind: "floor", packageName: null, reason: "no-semantic-renderer" };
+    if (mount.kind === "build-map") {
+      return {
+        kind: "build-map",
+        slot: mount.slot,
+        packageName: mount.packageName,
+        generatedKey: mount.generatedKey,
+      };
     }
+    if (mount.kind === "runtime") {
+      return {
+        kind: "runtime",
+        slot: mount.slot,
+        packageName: mount.packageName,
+        descriptor: mount.descriptor,
+        ...(mount.propsApiVersion === undefined ? {} : { propsApiVersion: mount.propsApiVersion }),
+      };
+    }
+    // The card's own vocabulary for the two floors the resolver classifies: a
+    // claimant this build does not carry, and the terminal state where nothing
+    // installed draws the row at all.
+    return {
+      kind: "floor",
+      slot: mount.slot,
+      packageName: mount.packageName,
+      reason: mount.reason === "requires-rebuild" ? "requires-rebuild" : "no-semantic-renderer",
+    };
   };
 
   /**

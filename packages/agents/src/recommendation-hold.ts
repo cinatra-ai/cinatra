@@ -209,6 +209,67 @@ export const RECOMMENDATION_OFFER_UNREADABLE_REFUSAL =
 /** The TYPED outcome that rides alongside the prose above. */
 export const RECOMMENDATION_OFFER_UNREADABLE_CODE = "recommendation_offer_unreadable";
 
+/**
+ * THE KEEP'S SCOPE COULD NOT BE DECIDED (cinatra#2815 S3 part 4).
+ *
+ * A keep writes the accepted skills into ONE scope, derived from the run's
+ * IMMUTABLE assignment-scope snapshot. When that payload is unusable AND no
+ * durable organization can be named for the run, there is no chain to
+ * intersect and no fallback to take. The scope is UNDECIDABLE, which is a
+ * different thing from an actor who holds nothing writable (that one refuses
+ * the keep alone and keeps the selection).
+ *
+ * So this refuses the WHOLE confirm, and it is raised BEFORE the selection
+ * write. Raised after it, the reader would be told the confirm failed while
+ * the run's set had already changed under them, which is the worst of both
+ * readings. Nothing is written, and the one true and actionable thing is
+ * said: try again.
+ */
+export const RECOMMENDATION_SCOPE_UNDECIDABLE_REFUSAL =
+  "This run's assignment scope could not be read, so the skills could not be kept. Nothing was recorded. Please try again.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_SCOPE_UNDECIDABLE_CODE = "recommendation_scope_undecidable";
+
+/**
+ * A KEEP IS AN INTERACTIVE ACT (cinatra#2815 S3 part 4).
+ *
+ * The issue binds recommendation persistence to interactive runs, and headless
+ * runs to assigned-only. What marks a run interactive in this codebase is
+ * `humanPresent`: the run-start presence discriminator (cinatra#2067), true only
+ * for UI and chat runs and null or false for everything a schedule, a trigger or
+ * an orchestrator starts. The hold that OFFERS a recommendation already gates on
+ * it, so an offer can only appear on an interactive run; this refuses the WRITE
+ * on the same rule, so a keep cannot reach a scheduled run through some later
+ * caller that never passed the hold.
+ *
+ * It refuses the keep alone, not the confirm: the selection itself is an
+ * ordinary confirm and nothing about it is wrong. The reader is told that the
+ * skills were applied to this run and not kept for the next one, which is
+ * exactly what happened.
+ */
+export const RECOMMENDATION_KEEP_NOT_INTERACTIVE_REFUSAL =
+  "These skills were applied to this run. A run nobody started by hand cannot keep them for the next one, so nothing was assigned.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_KEEP_NOT_INTERACTIVE_CODE = "recommendation_keep_not_interactive";
+
+/**
+ * A KEEP NAMES THE SCOPE IT WRITES INTO (cinatra#2815 S3 part 4).
+ *
+ * A keep request that named no scope used to reach a resolver that chose one
+ * for it, the narrowest the confirmer could write. That is a real scope and a
+ * real row: an organization administrator who asked to keep without choosing
+ * anywhere had organization-wide assignments written on their confirmation.
+ * The choice belongs to the person, so a keep without one is refused and
+ * writes nothing. The selection itself is an ordinary confirm and still lands.
+ */
+export const RECOMMENDATION_KEEP_SCOPE_REQUIRED_REFUSAL =
+  "These skills were applied to this run. Keeping them for the next one needs a scope to keep them in, so nothing was assigned.";
+
+/** The TYPED outcome that rides alongside the prose above. */
+export const RECOMMENDATION_KEEP_SCOPE_REQUIRED_CODE = "recommendation_keep_scope_required";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;
@@ -552,6 +613,13 @@ async function publishHoldEvent(
 export type RunForRecommendationCandidates = Pick<AgentRunRecord, "id" | "runBy" | "orgId"> & {
   sourceType?: string | null;
   dependentInstallId?: string | null;
+  /**
+   * The run's FROZEN assignment scopes (cinatra#2815 S3, epic #2812). Without
+   * them the resolution takes the sole legacy fallback, so a run's project,
+   * team and personal assignments never appear in the candidate set and the
+   * caller's own organization supplies the tenancy floor.
+   */
+  assignmentScopeSnapshot?: unknown;
 };
 
 /** The actor-scope filter shape `getAssignedSkillIdsForAgent` consumes. Kept to
@@ -640,11 +708,18 @@ export async function resolveRecommendationCandidateSkillIds(input: {
     actorFilter = undefined;
   }
 
+  // The run's own frozen scopes decide WHICH assignments this run can see, on
+  // both arms. An actor-less resolution still carries them, because the scopes
+  // belong to the run and not to whoever is asking.
+  const runScope = {
+    snapshot: run.assignmentScopeSnapshot,
+    durableOrgId: run.orgId ?? null,
+  };
   let runCapabilityIds: string[];
   try {
     runCapabilityIds = actorFilter
-      ? await getAssignedSkillIdsForAgent(packageName, actorFilter)
-      : await getAssignedSkillIdsForAgent(packageName);
+      ? await getAssignedSkillIdsForAgent(packageName, actorFilter, runScope)
+      : await getAssignedSkillIdsForAgent(packageName, undefined, runScope);
   } catch {
     return [];
   }

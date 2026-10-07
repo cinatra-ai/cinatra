@@ -1,0 +1,91 @@
+{
+  "note": "extension-rendering-gate — the floor of the rendering gate (cinatra#3871): the claiming artifact extensions that draw no display of their own. It only shrinks: a new entry fails against the base branch. Remove an entry with `node scripts/audit/extension-rendering-gate.mjs --write-baseline` once its extension ships its own detail display; the writer never adds one.",
+  "deficit": [
+    {
+      "package": "@cinatra-ai/blog-idea-artifact",
+      "types": [
+        "@cinatra-ai/blog-idea-artifact:blog-idea"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/blog-image-artifact",
+      "types": [
+        "@cinatra-ai/blog-image-artifact:blog-image"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/blog-post-artifact",
+      "types": [
+        "@cinatra-ai/blog-post-artifact:post"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/brand-voice-artifact",
+      "types": [
+        "@cinatra-ai/brand-voice:guide"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/competitive-analysis-artifact",
+      "types": [
+        "@cinatra-ai/competitive-analysis-artifact:competitive-analysis"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/contract-artifact",
+      "types": [
+        "@cinatra-ai/contract-artifact:contract"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/dashboard-artifact",
+      "types": [
+        "@cinatra-ai/dashboard-artifact:dashboard"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/drupal-artifacts",
+      "types": [
+        "@cinatra-ai/drupal:node"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/email-artifacts",
+      "types": [
+        "@cinatra-ai/email:body",
+        "@cinatra-ai/email:received-reply",
+        "@cinatra-ai/email:sent-email"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/linkedin-artifacts",
+      "types": [
+        "@cinatra-ai/linkedin:post-draft"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/marketing-icp-artifact",
+      "types": [
+        "@cinatra-ai/marketing-icp:profile"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/marketing-strategy-artifact",
+      "types": [
+        "@cinatra-ai/marketing-strategy-artifact:artifact"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/product-portfolio-artifact",
+      "types": [
+        "@cinatra-ai/product-portfolio-artifact:product-portfolio"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/sales-playbook-artifact",
+      "types": [
+        "@cinatra-ai/sales-playbook-artifact:sales-playbook"
+      ]
+    }
+  ]
+}

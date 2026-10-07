@@ -69,6 +69,12 @@ export type PreparedRepositorySnapshot = SuppliedInstallCandidate & {
   entryCount: number;
   totalBytes: number;
   contentDigest: string;
+  /**
+   * The package's own manifest text, as the archive intake read it — carried
+   * so the upload road reads the package's declared pack dependencies on this
+   * road exactly as on the file road (cinatra#3204 criterion 24).
+   */
+  packageJson?: string;
 };
 
 /**
@@ -492,7 +498,7 @@ export async function fetchSuppliedRepositoryArchive(
 
   if (response.status === 404) {
     throw new Error(
-      `[supplied-install] GitHub served no archive for ${repository} at ${refLabel} (HTTP 404). ` +
+      `GitHub served no archive for ${repository} at ${refLabel} (HTTP 404). ` +
         `This instance downloads the archive anonymously, so a private repository - or a branch, tag ` +
         `or release that does not exist - cannot be read. Check the link, or upload the package as a file.`,
     );
@@ -711,7 +717,7 @@ function finalizeRecordedRef(input: {
   const proved = input.proved?.trim() ?? "";
   if (proved.length > 0 && !isPlaceholderRefName(proved)) return proved;
   throw new Error(
-    `[supplied-install] ${input.owner}/${input.repo}: this install could not resolve the branch, tag or ` +
+    `this install could not resolve the branch, tag or ` +
       `release name to record - the link named none and the archive that was downloaded does not name the ` +
       `branch it was generated from. Type the branch, tag or release to install from and try again. ` +
       `Nothing was written.`,
@@ -873,6 +879,7 @@ export async function prepareSuppliedRepositoryArchiveSnapshot(
     entryCount: prepared.package.deliveredEntries.size,
     totalBytes: prepared.tarball.byteLength,
     contentDigest: prepared.package.contentDigest,
+    packageJson: prepared.package.packageJson,
   };
 }
 

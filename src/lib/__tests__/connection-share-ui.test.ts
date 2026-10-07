@@ -5,9 +5,9 @@
 //     option disabled (same ceiling predicate as the read clamp),
 //   • default:* STATES the recommendation ONLY while the stored policy is the
 //     untouched connect seed (seededDefault marker) — an explicit owner save
-//     is never overridden (codex round-0 finding 1) — and the picker keeps
-//     opening on the stored grant, so the recommended scope stays an enabled
-//     option the owner may choose and save (cinatra#3408).
+//     is never overridden (codex round-0 finding 1). On that seed the picker
+//     opens PRE-SELECTED to the recommended scope next to the drawing's line;
+//     nothing is written until Save (cinatra#3408).
 
 import { describe, it, expect } from "vitest";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
@@ -16,6 +16,13 @@ import {
   decideConnectionShareSurface,
 } from "@/lib/connection-share-ui";
 import type { AvailableScopes } from "@/components/access-scope";
+
+/**
+ * The recommendation line as section II of the connectors drawing gives it,
+ * word for word. The dash is U+2014, written as an escape here.
+ */
+const RECOMMENDATION_LINE =
+  "This connector recommends sharing with your organization \u2014 nothing is shared until you save. Currently: only you.";
 
 const ORG = "org-1";
 const scopes: AvailableScopes = {
@@ -127,34 +134,88 @@ describe("decideConnectionShareSurface — default:* recommendation (never auto-
     expect(s).toMatchObject({ surface: "editable", value: "owner" });
   });
 
-  it("default:workspace states the recommendation on the untouched seed and keeps the picker on the stored owner scope", () => {
+  it("default:workspace pre-selects the recommended scope on the untouched seed and draws the drawing's line word for word", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("default", "workspace"),
       storedPolicy: policyOf("owner", true),
       scopes,
     });
-    expect(s.surface).toBe("editable");
-    if (s.surface !== "editable") return;
-    // The sentence beside the picker reads "Currently: only you." — the picker
-    // must say the same thing, and the recommended scope must stay an option
-    // the owner can still choose and save (cinatra#3408).
-    expect(s.value).toBe("owner");
-    expect(s.value).not.toBe("workspace");
-    expect(s.recommendationNote).toMatch(/nothing is shared until you save/);
+    // The MCP Servers connector's own declaration (mode default, scope
+    // workspace). A workspace grant on a connection of an organization reaches
+    // exactly that organization, so the line names it as the drawing does
+    // (cinatra#3408).
+    expect(s).toEqual({
+      surface: "editable",
+      value: "workspace",
+      recommendationNote: RECOMMENDATION_LINE,
+    });
   });
 
-  it("default:organization states the CONCRETE owning org without pre-selecting it", () => {
+  it("default:organization pre-selects the CONCRETE owning org and draws the same line", () => {
     const s = decideConnectionShareSurface({
       identity,
       declaration: decl("default", "organization"),
       storedPolicy: policyOf("owner", true),
       scopes,
     });
-    expect(s).toMatchObject({ surface: "editable", value: "owner" });
-    expect(s.surface === "editable" && s.recommendationNote).toMatch(
-      /recommends sharing with your organization/,
-    );
+    expect(s).toEqual({
+      surface: "editable",
+      value: `org:${ORG}`,
+      recommendationNote: RECOMMENDATION_LINE,
+    });
+  });
+
+  it("default:workspace on a connection of NO organization recommends nothing the save would refuse", () => {
+    // The write gate refuses a workspace grant on a connection without an
+    // organization (the ratified rule of cinatra#3397), so a pre-selected
+    // workspace scope could never be saved there, and "your organization"
+    // would name nothing.
+    // The stated exception to acceptance item 1 of cinatra#3408; the save
+    // path's refusal on the same row is pinned in
+    // connection-share-ui-no-organization-exception.test.ts.
+    const s = decideConnectionShareSurface({
+      identity: { organizationId: null },
+      declaration: decl("default", "workspace"),
+      storedPolicy: policyOf("owner", true),
+      scopes,
+    });
+    expect(s).toEqual({ surface: "editable", value: "owner" });
+  });
+
+  it("a seed that already shares is never narrowed by a recommendation, and no line claims only you", () => {
+    // An app-scope row is seeded with the workspace grant. The line ends in
+    // "Currently: only you.", which would be false on this row.
+    const s = decideConnectionShareSurface({
+      identity,
+      declaration: decl("default", "organization"),
+      storedPolicy: policyOf("workspace", true),
+      scopes,
+    });
+    expect(s).toEqual({ surface: "editable", value: "workspace" });
+  });
+
+  it("regression guard (passes without the #3408 fix too): a SAVED recommended scope draws as saved, with no line", () => {
+    const s = decideConnectionShareSurface({
+      identity,
+      declaration: decl("default", "workspace"),
+      storedPolicy: policyOf("workspace", false), // the first explicit save
+      scopes,
+    });
+    expect(s).toEqual({ surface: "editable", value: "workspace" });
+  });
+
+  it("regression guard (passes without the #3408 fix too): a connector with a ceiling never states a recommendation, even on the untouched seed", () => {
+    const s = decideConnectionShareSurface({
+      identity,
+      declaration: decl("only", "workspace"),
+      storedPolicy: policyOf("owner", true),
+      scopes,
+    });
+    expect(s.surface).toBe("locked");
+    expect(s).not.toHaveProperty("recommendationNote");
+    if (s.surface !== "locked") return;
+    expect(s.value).toBe("owner");
   });
 
   it("an id-less team/project recommendation stays on owner and only notes the recommendation", () => {

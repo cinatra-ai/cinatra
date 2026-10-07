@@ -35,7 +35,27 @@
 // member's title is read from that member's own first line behind the declared
 // prefix. The member level must be DECLARED (`json_schema.items.type`) and must
 // be a plain string: a bound list never leaves its members undeclared, and the
-// materializer never dissects an object member into a title.
+// first-line road never dissects an object member into a title.
+//
+// A MEMBER-FIELD fan-out (cinatra#3732) is the second road, for a list of
+// STRUCTURED items (a feed's episodes, one JSON object per member):
+//
+//   "outputs": [{ "title": "episodes", "type": "array",
+//     "json_schema": { "items": { "type": "object",
+//       "properties": { "title": { "type": "string" }, ... } } },
+//     "cinatra": { "artifact": {
+//       "extension": "@cinatra-ai/podcast-artifacts",
+//       "contentFrom": "episodes",
+//       "declaredMime": "application/json",
+//       "fanOut": { "mode": "member", "titleFrom": "member-field", "titleField": "title" }
+//     }}}]
+//
+// Each member must be a DECLARED object (`json_schema.items.type` "object") and
+// is filed unchanged as its own JSON body (the static MIME "application/json");
+// its title is the value of the member field the binding names, which the list
+// must declare as a string. A title is still never invented: a member without
+// a non-empty string in that field fails alone. An empty list files nothing and
+// fails nothing — for a feed, nothing new is a normal result.
 //
 // `objectTypeId` (cinatra#1454, completing the #1788 direction on the binding
 // side — symmetric with `cinatra.produces`'s SemanticArtifactRef.objectTypeId)
@@ -93,18 +113,33 @@ export const FAN_OUT_MEMBER_IDENTITY_RE = /\[\d+\]$/;
 
 /**
  * The fan-out block of a binding (cinatra#3034, plan item 0.27). `mode` is
- * `member` — one artifact per member of the bound array. `titleFrom` is
- * `first-line` — the member's own first line, behind `titlePrefix`, IS the
- * title; a title is never invented and never taken from a sibling output.
+ * `member` — one artifact per member of the bound array. `titleFrom` picks the
+ * title source, and a title is never invented and never taken from a sibling
+ * output:
+ *   - `first-line` — the member's own first line, behind `titlePrefix`, IS the
+ *     title (a list of plain-text members);
+ *   - `member-field` (cinatra#3732) — the value of the member's own field named
+ *     by `titleField` IS the title (a list of object members, each filed
+ *     unchanged as its own JSON body).
  */
-export const artifactFanOutSchema = z
-  .object({
-    mode: z.literal("member"),
-    titleFrom: z.literal("first-line"),
-    /** Literal marker the member's first line must open with; stripped from the title. */
-    titlePrefix: z.string().min(1),
-  })
-  .strict();
+export const artifactFanOutSchema = z.discriminatedUnion("titleFrom", [
+  z
+    .object({
+      mode: z.literal("member"),
+      titleFrom: z.literal("first-line"),
+      /** Literal marker the member's first line must open with; stripped from the title. */
+      titlePrefix: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("member"),
+      titleFrom: z.literal("member-field"),
+      /** The member's own field whose string value is the title. */
+      titleField: z.string().min(1),
+    })
+    .strict(),
+]);
 
 export type ArtifactOutputFanOut = z.infer<typeof artifactFanOutSchema>;
 
@@ -439,9 +474,10 @@ export function collectArtifactBindingsFromOasDocument(
       // ------------------------------------------------------------------
       // Fan-out member-shape disclosure (cinatra#3034, plan item 0.27). The
       // fan-out binds the ANNOTATED list itself, that list is an array, and
-      // its member level is DECLARED as a plain string. No level of a bound
-      // list is left undeclared, and a member is never an object the host
-      // would have to dissect.
+      // its member level is DECLARED: a plain string on the first-line road,
+      // so a member is never an object the host would have to dissect; an
+      // object declaring its string title field on the member-field road
+      // (cinatra#3732), filed unchanged as its own JSON body.
       // ------------------------------------------------------------------
       if (binding.fanOut !== undefined) {
         if (binding.contentFrom !== title) {
@@ -471,7 +507,52 @@ export function collectArtifactBindingsFromOasDocument(
           );
           continue;
         }
-        if (items.type !== "string") {
+        if (binding.fanOut.titleFrom === "member-field") {
+          // One error per violation, each naming the output.
+          const memberFieldErrors: string[] = [];
+          const titleField = binding.fanOut.titleField;
+          if (items.type !== "object") {
+            memberFieldErrors.push(
+              `${where}: a member-field fanOut requires declared object members ` +
+                `(json_schema.items.type "object"; "${title}" declares "${String(items.type ?? "<none>")}")`,
+            );
+          } else {
+            const properties = isPlainObject(items.properties)
+              ? (items.properties as Record<string, unknown>)
+              : null;
+            const field =
+              properties !== null &&
+              Object.prototype.hasOwnProperty.call(properties, titleField) &&
+              isPlainObject(properties[titleField])
+                ? (properties[titleField] as Record<string, unknown>)
+                : null;
+            if (field === null) {
+              memberFieldErrors.push(
+                `${where}.fanOut.titleField: "${titleField}" is not a declared property of the ` +
+                  `members of "${title}" (json_schema.items.properties) — the title is read from a field the list declares`,
+              );
+            } else if (field.type !== "string") {
+              memberFieldErrors.push(
+                `${where}.fanOut.titleField: the title field "${titleField}" must be declared type "string" ` +
+                  `("${title}" declares "${String(field.type ?? "<none>")}")`,
+              );
+            }
+          }
+          if (binding.declaredMime !== "application/json") {
+            memberFieldErrors.push(
+              `${where}.declaredMime: a member-field fanOut files each member as its own JSON body — ` +
+                `the MIME must be the static "application/json" (${
+                  binding.declaredMime === undefined
+                    ? `the binding declares mimeFrom "${String(binding.mimeFrom)}"`
+                    : `the binding declares "${binding.declaredMime}"`
+                })`,
+            );
+          }
+          if (memberFieldErrors.length > 0) {
+            errors.push(...memberFieldErrors);
+            continue;
+          }
+        } else if (items.type !== "string") {
           errors.push(
             `${where}: fanOut members must be declared plain string members ` +
               `(json_schema.items.type "string"; "${title}" declares "${String(items.type ?? "<none>")}")`,

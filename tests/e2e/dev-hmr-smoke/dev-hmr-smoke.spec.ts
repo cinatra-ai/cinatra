@@ -33,6 +33,14 @@ import { resolve } from "node:path";
 
 import { test, expect } from "@playwright/test";
 import type { Page, Response } from "@playwright/test";
+import { withSmokeResourcePhase } from "./smoke-resources";
+import {
+  selectConnectorSetupRoutes,
+  SMOKE_WALK_BUDGET_MS,
+  walkSmokeSurfaces,
+  type ConnectorDescriptor,
+  type SmokePhase,
+} from "./smoke-walk";
 
 // Same CLI-safe, dependency-free catalog module render-smoke imports — the
 // source of the connector setup-page route enumeration (no hand-curated list).
@@ -46,14 +54,7 @@ import { CONNECTOR_DESCRIPTORS } from "@cinatra-ai/connectors-catalog/descriptor
 // enough to register server-reference objects and force the bridge recompile.
 // ---------------------------------------------------------------------------
 
-const MAX_CONNECTORS = Number(process.env.HMR_SMOKE_MAX_CONNECTORS ?? 6);
-
-type ConnectorDescriptor = { packageId: string; slug: string; setupSubroute: string };
-
-const CONNECTOR_SETUP_ROUTES = (CONNECTOR_DESCRIPTORS as ConnectorDescriptor[])
-  .map((d) => `/connectors/${d.packageId.replace(/^@/, "").split("/")[0]}/${d.slug}/${d.setupSubroute}`)
-  .sort()
-  .slice(0, Math.max(1, MAX_CONNECTORS));
+const CONNECTOR_SETUP_ROUTES = selectConnectorSetupRoutes(CONNECTOR_DESCRIPTORS as ConnectorDescriptor[]);
 
 const SURFACES: string[] = ["/connectors", "/agents", ...CONNECTOR_SETUP_ROUTES];
 
@@ -78,7 +79,7 @@ const ERROR_BOUNDARY_MARKERS = [
 const DEV_OVERLAY_MARKERS = ["Unhandled Runtime Error", "Build Error", "Failed to compile"];
 
 async function pageProblem(page: Page): Promise<string | null> {
-  const body = (await page.locator("body").innerText().catch(() => "")) ?? "";
+  const body = await page.locator("body").innerText({ timeout: 5_000 });
   for (const marker of [...ERROR_BOUNDARY_MARKERS, ...DEV_OVERLAY_MARKERS]) {
     if (body.includes(marker)) return marker;
   }
@@ -96,68 +97,94 @@ async function pageProblem(page: Page): Promise<string | null> {
         for (const m of markers) if (text.includes(m)) return m;
       }
       return null;
-    }, DEV_OVERLAY_MARKERS)
-    .catch(() => null);
+    }, DEV_OVERLAY_MARKERS);
   if (overlayError) return `dev-overlay error: "${overlayError}"`;
   return null;
 }
 
 /** Visit one surface and assert the floor. Returns a failure string or null. */
-async function checkSurface(page: Page, route: string): Promise<string | null> {
+async function checkSurface(page: Page, route: string, navigationTimeout: number): Promise<string | null> {
   let response: Response | null = null;
   try {
-    response = await page.goto(route, { waitUntil: "domcontentloaded" });
+    response = await page.goto(route, { waitUntil: "domcontentloaded", timeout: navigationTimeout });
   } catch (err) {
-    return `${route}: navigation threw (${(err as Error).message})`;
+    return `navigation threw (${(err as Error).message})`;
   }
   const status = response?.status() ?? 0;
-  if (status >= 500) return `${route}: HTTP ${status}`;
+  if (status >= 500) return `HTTP ${status}`;
   const problem = await pageProblem(page);
-  if (problem) return `${route}: rendered error surface ("${problem}")`;
+  if (problem) return `rendered error surface ("${problem}")`;
   return null;
 }
 
-async function walk(page: Page, phase: string): Promise<string[]> {
-  const failures: string[] = [];
-  for (const route of SURFACES) {
-    const failure = await checkSurface(page, route);
-    if (failure) failures.push(`[${phase}] ${failure}`);
-  }
-  return failures;
+async function walk(page: Page, phase: SmokePhase, routes: readonly string[], deadline: number, visitedRoutes: Set<string>): Promise<string[]> {
+  return withSmokeResourcePhase(phase, () => walkSmokeSurfaces({
+    phase,
+    routes,
+    deadline,
+    visitedRoutes,
+    now: () => performance.now(),
+    // Bound the entire visit, including body/shadow-root inspection. A stuck
+    // evaluate must fail the smoke while there is still time to retain a trace.
+    check: (route, timeoutMs) => test.step(`${phase}: ${route}`, async () => {
+      if (phase !== "precompile") return checkSurface(page, route, timeoutMs);
+      // Use the authenticated browser context to compile cold routes before
+      // measuring their warm browser visit. This still spends the shared budget.
+      const response = await page.request.get(route, { timeout: timeoutMs });
+      try {
+        return response.ok() ? null : `precompile HTTP ${response.status()}`;
+      } finally {
+        await response.dispose();
+      }
+    }, { timeout: timeoutMs }),
+    report: (visit) => process.stdout.write(`[hmr-smoke] ${JSON.stringify(visit)}\n`),
+  }));
 }
 
 // ---------------------------------------------------------------------------
 
 test.describe("warm dev-session HMR smoke", () => {
   test("server-action surfaces survive a true HMR recompile of the reference bridge", async ({ page }) => {
+    const deadline = performance.now() + SMOKE_WALK_BUDGET_MS;
+    const visitedRoutes = new Set<string>();
+    expect(CONNECTOR_SETUP_ROUTES.length, "the smoke needs a setup route to exercise the reference bridge").toBeGreaterThan(0);
     test.info().annotations.push({
       type: "surfaces",
       description: `${SURFACES.length} server-action surfaces: ${SURFACES.join(", ")}`,
     });
 
     // 1. WARM — baseline floor + register the server-reference objects.
-    const warmFailures = await walk(page, "warm");
+    // Every first visit compiles its route and activates extensions. The
+    // failing baseline returned /connectors 200 after 133 s. Each route gets
+    // at most 180s on first use, then 90s, always capped by the shared deadline.
+    // Precompilation remains sequential and spends that same budget.
+    // Precompilation and both walks share 540s, leaving 60s of the test budget
+    // for failure reporting and cleanup rather than losing the trace to the job
+    // limit. Two sampled setup routes avoid compiling four separate setup pages.
+    const entryFailures = await walk(page, "warm", SURFACES.slice(0, 1), deadline, visitedRoutes);
+    expect(entryFailures, `cold-entry floor failures:\n${entryFailures.join("\n")}`).toEqual([]);
+    const precompileFailures = await walk(page, "precompile", SURFACES.slice(1), deadline, visitedRoutes);
+    expect(precompileFailures, `bounded precompile failures:\n${precompileFailures.join("\n")}`).toEqual([]);
+    const warmFailures = await walk(page, "warm", SURFACES.slice(1), deadline, visitedRoutes);
     expect(warmFailures, `warm-walk floor failures (baseline broken, independent of HMR):\n${warmFailures.join("\n")}`).toEqual([]);
 
     // 2. RECOMPILE — benign, restored touch of the bridge module.
     const original = readFileSync(BRIDGE_FILE, "utf8");
     let reWalkFailures: string[] = [];
     try {
-      writeFileSync(
-        BRIDGE_FILE,
-        `${original}\n// cinatra#1093 warm-dev HMR smoke recompile touch ${Date.now()} (auto-restored)\n`,
-        "utf8",
-      );
-      // Let the file-watcher register the change before we drive the recompile.
-      await page.waitForTimeout(2_000);
-      // Drive the on-demand Turbopack recompile by re-requesting a bridge-bound
-      // route; the navigation blocks until the module re-evaluates. A #1068
-      // regression throws here (deterministically), not transiently.
-      await page.goto(CONNECTOR_SETUP_ROUTES[0], { waitUntil: "domcontentloaded" }).catch(() => undefined);
-      await page.waitForTimeout(1_000);
-
-      // 3. RE-WALK — the same surfaces, post-recompile. This is the #1068 leg.
-      reWalkFailures = await walk(page, "post-recompile");
+      await withSmokeResourcePhase("recompile", async () => {
+        writeFileSync(
+          BRIDGE_FILE,
+          `${original}\n// cinatra#1093 warm-dev HMR smoke recompile touch ${Date.now()} (auto-restored)\n`,
+          "utf8",
+        );
+        // Let the file-watcher register the change before we drive the recompile.
+        await page.waitForTimeout(2_000);
+      });
+      // 3. RE-WALK — request a bridge-bound setup route FIRST to drive the
+      // recompile, and assert that response itself. There is no unchecked probe
+      // that can swallow a recompile error before a later request succeeds.
+      reWalkFailures = await walk(page, "post-recompile", [...CONNECTOR_SETUP_ROUTES, "/connectors", "/agents"], deadline, visitedRoutes);
     } finally {
       writeFileSync(BRIDGE_FILE, original, "utf8");
     }

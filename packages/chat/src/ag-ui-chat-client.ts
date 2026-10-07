@@ -232,7 +232,13 @@ export type StreamAssistantTurnOptions = {
    * under the reader's own access; this is what the composer could SEE, not a
    * decision it made.
    */
-  boundCard?: { refs: string[]; focused: string | null };
+  boundCard?: {
+    refs: string[];
+    focused: string | null;
+    /** Runs whose WAITING SCREEN the composer sits under (cinatra#2934). The
+     *  server mints that screen's own ref; the page claims nothing about it. */
+    screenRunIds?: readonly string[];
+  };
   resumeEndpointFor?: (runId: string) => string;
   // ----- S5 Lane B embed seams (cinatra#1221 §9.1) — ADDITIVE; every field is
   // optional and defaults to today's session behaviour so `/chat` is
@@ -611,7 +617,13 @@ export type DriveAssistantChatTurnOptions = {
    * binds. The page decides nothing: it cannot bind a card the reader may not
    * see, and it cannot suppress the platform's refusal when two are open.
    */
-  boundCard?: { refs: string[]; focused: string | null };
+  boundCard?: {
+    refs: string[];
+    focused: string | null;
+    /** Runs whose WAITING SCREEN the composer sits under (cinatra#2934). The
+     *  server mints that screen's own ref; the page claims nothing about it. */
+    screenRunIds?: readonly string[];
+  };
   // ----- Broker-transport seams (cinatra#2683, epic #2564 S8f) — ADDITIVE.
   // `streamAssistantTurn` has carried these since S5 Lane B (#1221 §9.1); this
   // driver did not, so the embed could not use it and drove the wire itself

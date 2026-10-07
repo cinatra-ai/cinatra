@@ -198,7 +198,9 @@ vi.mock("../auth-policy", () => ({
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
 }));
 
-vi.mock("../artifact-review-gate-store", () => ({
+vi.mock("../artifact-review-gate-store", async () => ({
+  // Retain the real pure park predicate exported by the current store; only storage reads are ports.
+  isParkedOnProducedReview: (await import("../run-produced-review-hold")).isParkedOnProducedReview,
   listReviewGatesForRun: vi.fn(async () => []),
   readReviewGate: vi.fn(async () => null),
   readRunReviewSlot: vi.fn(async () => ({ reviewTaskId: null, awaiting: false })),

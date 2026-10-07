@@ -54,6 +54,8 @@ type Props = {
    * wrapper + the migrated host KIND-table floors).
    */
   bypassRegistry?: boolean;
+  /** The window's placed values (the shared props contract); this field reads its own key. */
+  aiSuggestions?: Record<string, unknown>;
 };
 
 /**
@@ -396,6 +398,27 @@ export function SchemaFieldRenderer(props: Props) {
     else if (typeof value === "number") setLocalValue(String(value));
     else if (Array.isArray(value)) setLocalValue(value.map((v) => String(v)).join("\n"));
   }, [value]);
+
+  // THE WINDOW'S FILL REACHES THIS FIELD (cinatra#2934). The shared props
+  // contract's `aiSuggestions` changes only when a turn placed values, and the
+  // per-field setup panels hand a string field the whole values envelope as
+  // `value` — so this field's own key is read from the payload, in the same
+  // shape the `value` sync above writes. A payload without this field's key
+  // changes nothing. Adjusted during render when a NEW payload object arrives
+  // (not in an effect), so the same payload on a later render never overwrites
+  // a typed edit.
+  const aiSuggestions = props.aiSuggestions;
+  const [seenAiSuggestions, setSeenAiSuggestions] = useState<Record<string, unknown> | undefined>(undefined);
+  if (aiSuggestions !== seenAiSuggestions) {
+    setSeenAiSuggestions(aiSuggestions);
+    const suggested =
+      aiSuggestions && Object.prototype.hasOwnProperty.call(aiSuggestions, fieldName)
+        ? aiSuggestions[fieldName]
+        : undefined;
+    if (typeof suggested === "string") setLocalValue(suggested);
+    else if (typeof suggested === "number") setLocalValue(String(suggested));
+    else if (Array.isArray(suggested)) setLocalValue(suggested.map((v) => String(v)).join("\n"));
+  }
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
