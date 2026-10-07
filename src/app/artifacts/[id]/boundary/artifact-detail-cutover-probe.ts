@@ -51,8 +51,6 @@ function outcomeOf(dispatch: ArtifactRenderDispatch, system: CutoverSystem): Cut
       return { outcome: system === "semantic-renderer" ? "extension" : "cross-applied", modulesExecuted: 1 };
     case "requires-rebuild":
       return { outcome: "requires-rebuild", modulesExecuted: 1, detail: `slot=${dispatch.slot}` };
-    case "mime":
-      return { outcome: "first-party-floor", modulesExecuted: 1, detail: `handler=${dispatch.handler}` };
     case "fallback":
       return { outcome: "generic-floor", modulesExecuted: 1 };
     default: {
@@ -84,12 +82,6 @@ export function representationViewerProbe(arm: {
       semantic: null,
       representation: { tier: "extension", packageName: pkg, generatedKey, pattern: arm.mime, slot, built },
     });
-  const firstPartyOnly = (): ArtifactRenderDispatch =>
-    pickArtifactRenderer({
-      identity: floor,
-      semantic: null,
-      representation: { tier: "first-party", handler: arm.firstPartyHandler },
-    });
   const bareFloor = (): ArtifactRenderDispatch =>
     pickArtifactRenderer({ identity: floor, semantic: null, representation: null });
 
@@ -103,14 +95,17 @@ export function representationViewerProbe(arm: {
         return outcomeOf(extProvider(true), "representation-viewer");
       case "disabled":
       case "uninstalled":
-        return outcomeOf(firstPartyOnly(), "representation-viewer");
+        // NO HOST VIEWER UNDER THE PROVIDER any more: a disabled or uninstalled
+        // provider leaves the row on the terminal floor, which is what the
+        // matrix now requires of both systems.
+        return outcomeOf(bareFloor(), "representation-viewer");
       case "incompatible":
         return outcomeOf(extProvider(false), "representation-viewer");
       case "failing":
       case "floor-recovery":
         // Render-time failure is isolated by the ExtensionRendererSlot error
         // boundary (S2); the recovered state is the generic floor, which the
-        // leaf yields when nothing resolves (the ?renderer=generic world-state).
+        // leaf yields when nothing resolves.
         return outcomeOf(bareFloor(), "representation-viewer");
       default: {
         const _exhaustive: never = caseId;
