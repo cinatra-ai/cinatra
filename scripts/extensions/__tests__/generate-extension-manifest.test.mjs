@@ -1664,3 +1664,34 @@ describe("artifactKindLabelEntries — carried, never derived", () => {
     );
   });
 });
+
+
+describe("artifact kind labels — exact declared object-type identity (#3527)", () => {
+  const records = [
+    { packageName: "@owner/idea-artifact", kind: "artifact", displayName: "Idea", artifactObjectTypes: [{ type: "@owner/blog:idea", claim: "dedicated" }] },
+    { packageName: "@owner/post-artifact", kind: "artifact", displayName: "Post", artifactObjectTypes: [{ type: "@owner/blog:post", claim: "dedicated" }] },
+    { packageName: "@owner/generic-artifact", kind: "artifact", displayName: "Generic", artifactObjectTypes: [{ type: "@owner/blog:post", claim: "default" }] },
+  ];
+  it("carries different exact declared types under one owner namespace without inventing aliases", () => {
+    const emitted = emitArtifactKindLabels(records);
+    expect(emitted).toContain('"@owner/blog:idea": "Idea",');
+    expect(emitted).toContain('"@owner/blog:post": "Post",');
+    expect(emitted).not.toContain('"@owner/blog":');
+    expect(emitted).toContain('"@owner/generic-artifact": "Generic",');
+    expect(emitArtifactKindLabels([...records].reverse())).toBe(emitted);
+  });
+  it("collects the actual pinned manifest claim even when its package name differs", async () => {
+    const manifest = await buildManifest();
+    const record = manifest.records.find((r) => r.packageName === "@cinatra-ai/linkedin-artifacts");
+    expect(record.artifactObjectTypes).toEqual(expect.arrayContaining([{ type: "@cinatra-ai/linkedin:post-draft", claim: "dedicated" }]));
+    expect(emitArtifactKindLabels(manifest.records)).toContain('"@cinatra-ai/linkedin:post-draft": "LinkedIn Artifacts",');
+  });
+  it("refuses conflicting dedicated labels rather than selecting by arrival order", () => {
+    expect(() => emitArtifactKindLabels([records[0], { ...records[1], artifactObjectTypes: records[0].artifactObjectTypes }])).toThrow("conflicting declared labels for @owner/blog:idea");
+  });
+  it("does not make a generic default or a non-artifact the owner of a type's label", () => {
+    const emitted = emitArtifactKindLabels([records[2], { ...records[0], kind: "connector" }]);
+    expect(emitted).not.toContain('"@owner/blog:');
+    expect(emitted).toContain('"@owner/generic-artifact": "Generic",');
+  });
+});

@@ -1,12 +1,26 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   artifactKindLabelFor,
   artifactKindLabelPackageId,
   resolveArtifactKindLabel,
 } from "../artifact-kind-label";
 import { GENERATED_ARTIFACT_KIND_LABELS } from "@/lib/generated/artifact-kind-labels";
+
+// Unit fixture declarations pass through the actual generator before the actual
+// host reader sees them; production methods are never replaced.
+vi.mock("@/lib/generated/artifact-kind-labels", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/generated/artifact-kind-labels")>();
+  const { artifactKindLabelEntries } = await import("../../../../scripts/extensions/generate-extension-manifest.mjs");
+  const records = [
+    { packageName: "@fixture/idea-artifact", kind: "artifact", displayName: "Idea", artifactObjectTypes: [{ type: "@fixture/blog:idea", claim: "dedicated" }] },
+    { packageName: "@fixture/post-artifact", kind: "artifact", displayName: "Post", artifactObjectTypes: [{ type: "@fixture/blog:post", claim: "dedicated" }] },
+    { packageName: "@fixture/blog", kind: "artifact", displayName: "Package fallback" },
+  ];
+  return { GENERATED_ARTIFACT_KIND_LABELS: { ...actual.GENERATED_ARTIFACT_KIND_LABELS,
+    ...Object.fromEntries(artifactKindLabelEntries(records).map((e) => [e.packageName, e.label])) } };
+});
 
 const read = (rel: string) => readFileSync(path.join(process.cwd(), rel), "utf8");
 
@@ -105,7 +119,8 @@ describe("the generated map is the declaration road, not a host roster", () => {
 
   it("holds only artifact packs — the host keeps no roster of anything else", () => {
     for (const pkg of Object.keys(GENERATED_ARTIFACT_KIND_LABELS)) {
-      expect(pkg, pkg).toMatch(/-artifacts?$/);
+      // Dedicated type keys need not share the declaring package name.
+      expect(pkg, pkg).toMatch(/^@[\w-]+\/[\w-]+(?::[\w-]+)?$/);
     }
   });
 });
@@ -180,5 +195,19 @@ describe("the review line and the artifact page header name the same pack the sa
     }
     expect(artifactKindLabelFor("@cinatra-ai/zip-artifact:archive")).toBe("Archive");
     expect(artifactKindLabelFor("@acme/support-desk:case")).toBe("Support Desk");
+  });
+});
+
+
+describe("exact declared object types before package fallback (#3527)", () => {
+  it("reads the actual pinned differently named package declaration", () => {
+    expect(resolveArtifactKindLabel("  @cinatra-ai/linkedin:post-draft  ")).toEqual({ label: "LinkedIn Artifacts", source: "declared" });
+    expect(artifactKindLabelFor("@cinatra-ai/linkedin-artifacts")).toBe("LinkedIn Artifacts");
+  });
+  it("distinguishes exact types sharing a namespace before falling back to a package label", () => {
+    expect(artifactKindLabelFor("@fixture/blog:idea")).toBe("Idea");
+    expect(artifactKindLabelFor(" @fixture/blog:post ")).toBe("Post");
+    expect(artifactKindLabelFor("@fixture/blog:unclaimed")).toBe("Package fallback");
+    expect(artifactKindLabelFor("@fixture/post-artifact@1.2.0")).toBe("Post");
   });
 });
