@@ -35,6 +35,7 @@
 // on, and an error the page shows, if any.
 import {
   CONTROL_ACTION_BOUND_MS,
+  CONTROL_HYDRATION_BOUND_MS,
   CONTROL_MARK,
   CONTROL_NAMES_LISTED,
   CONTROL_POLL_MS,
@@ -47,8 +48,9 @@ import {
   readPageControls,
   unmarkControls,
   unspacedNote,
+  waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 import { RUN_COMPLETION_SELECTOR, RUN_STATUS_SELECTOR, RUN_SURFACE_SELECTOR } from "./watch-run.mjs";
 
 const STEP = "dispatchRun";
@@ -176,6 +178,7 @@ export async function dispatchRun(
   const composerName = plainName(composer);
   if (typeof composer !== "string" || composerName === "") throw input("name the composer, such as Send message");
   const bound = readBounds(STEP, record, DISPATCH_RUN_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const cardName = quotedName(wanted);
   const named = quotedName(controlName);
   const composerNamed = quotedName(composerName);
@@ -202,6 +205,10 @@ export async function dispatchRun(
   let pressedAt = performance.now();
   try {
     if (card !== undefined) {
+      // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+      if (!(await waitForPageHydration(page))) {
+        throw refuse(STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+      }
       const reading = await within(
         readPageControls(page, { mode: "card", card: wanted, control: controlName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED }),
         READING_BOUND_MS,
@@ -254,6 +261,10 @@ export async function dispatchRun(
       let reading = null;
       for (;;) {
         await within(page.evaluate(unmarkControls, { attribute: CONTROL_MARK, mark }), READING_BOUND_MS);
+        // The page the card's press landed on hydrates anew: its composer is read only once it has.
+        if (!(await waitForPageHydration(page))) {
+          throw refuse(STEP, record, "unreadable", `the page on ${pathOf(page.url())} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — no prompt was sent`);
+        }
         reading = (await within(readPageControls(page, { mode: "composer", composer: composerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED }), READING_BOUND_MS)) ?? reading;
         if (reading && reading.found > 0) break;
         const remaining = bound.composerMs - (performance.now() - waitedFrom);

@@ -142,6 +142,7 @@ function makeRun(): AgentRunRecord {
     traceId: null,
     timeoutSeconds: null,
     streamedText: null,
+    producedReviewPark: null,
     authPolicy: null,
     orgId: "org-test",
     projectId: null,

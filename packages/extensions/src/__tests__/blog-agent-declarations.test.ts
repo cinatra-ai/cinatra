@@ -21,12 +21,12 @@ const EXT = join(__dirname, "..", "..", "..", "..", "extensions", "cinatra-ai");
 
 const IDEA = "@cinatra-ai/blog-idea-artifact";
 const POST = "@cinatra-ai/blog-post-artifact";
-const IMAGE = "@cinatra-ai/blog-image-artifact";
+const IMAGE = "@cinatra-ai/image-artifact";
 const LINKEDIN = "@cinatra-ai/linkedin-artifacts";
 
 const IDEA_TYPE = "@cinatra-ai/blog-idea-artifact:blog-idea";
 const POST_TYPE = "@cinatra-ai/blog-post-artifact:post";
-const IMAGE_TYPE = "@cinatra-ai/blog-image-artifact:blog-image";
+const IMAGE_TYPE = "@cinatra-ai/image-artifact:image";
 const LINKEDIN_TYPE = "@cinatra-ai/linkedin:post-draft";
 
 type Manifest = {
@@ -72,10 +72,10 @@ const TABLE: Array<{
     agent: "blog-image-generator-agent",
     // The picture it settles is filed by the pipeline's own step through the
     // host's image tool, mid-run, so the produces entry for that picture is the
-    // pipeline's and this agent declares none. BOTH EDGES stay: they say what
-    // the run touches, which is true today.
+    // pipeline's and this agent declares none. At its pin it declares one
+    // artifact edge, the blog post it reads.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST],
   },
   {
     agent: "blog-linkedin-writer-agent",
@@ -95,8 +95,9 @@ const TABLE: Array<{
   },
   {
     agent: "blog-wordpress-publish-agent",
+    // At its pin it declares one artifact edge, the blog post it publishes.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST],
   },
   {
     agent: "blog-pipeline-agent",
@@ -106,6 +107,7 @@ const TABLE: Array<{
     // image tool. Only the ideas entry still waits for its write road — the fleet's
     // adoption gate refuses a declared production nothing materializes. All
     // four EDGES stay: they say what the run touches, which is true either way.
+    // At its pin it files the picture as an image artifact and declares that edge.
     produces: [
       { extension: POST, objectTypeId: POST_TYPE },
       { extension: IMAGE, objectTypeId: IMAGE_TYPE },
@@ -128,11 +130,11 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     });
   }
 
-  it("declares the fourteen dependency edges section 5.3.2 counts", () => {
-    // All fourteen. The last two arrived with the image agent's own package,
-    // which replaces the retired prompt writer.
+  it("declares the twelve dependency edges the pinned packs declare", () => {
+    // Twelve at the current pins: the image agent and the publish agent no
+    // longer declare the retired blog picture type.
     const total = TABLE.reduce((n, row) => n + row.edges.length, 0);
-    expect(total).toBe(14);
+    expect(total).toBe(12);
   });
 
   it("declares six of the nine typed produces entries", () => {

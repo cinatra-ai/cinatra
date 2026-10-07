@@ -157,8 +157,10 @@ import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
+import { reviewGateHeaderTitle } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
+  ReviewSettledOutcome,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
 
@@ -1021,10 +1023,11 @@ function renderState(args: {
       //     panel it always drew, and no island.
       return state.outcome ? (
         <>
-          <ReviewGateHeader pending={false} />
-          {/* §IV — the header the decision was taken on, kept over the reviewed
-              work: a settled gate names what was reviewed whether or not its
-              read-only preview has painted. */}
+          <ReviewGateHeader pending={false} outcome={state.outcome} />
+          {/* MERGE: the settled header keeps the recorded outcome it names, and
+              keeps the target header over the reviewed work: a settled gate
+              names what was reviewed whether or not its read-only preview has
+              painted. */}
           <ReviewTargetHeaders headers={targetHeaders} />
           {/* §III — the reviewed target(s), read-only, exactly as the pending
               reading drew them: one island, every pinned target, the renderer
@@ -1590,13 +1593,25 @@ export function SuggestionChips({
  * + the awaiting-your-decision pill), now owned by the card so all three hosts
  * show the same thing. Markup and tokens are the page's, unchanged.
  */
-function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
+function ReviewGateHeader({
+  pending,
+  outcome,
+}: {
+  pending: boolean;
+  /** The recorded outcome, for a settled gate that has one. Absent on every
+   *  other reading, which keeps the request wording it always had. The title
+   *  itself is `reviewGateHeaderTitle`, shared with the settled line below so
+   *  the two cannot say different things about one gate (cinatra#3046). */
+  outcome?: ReviewSettledOutcome | null;
+}): ReactElement {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
         <ClipboardCheck aria-hidden="true" className="size-4" />
       </span>
-      <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
+      <span className="font-sans text-sm font-bold text-foreground">
+        {reviewGateHeaderTitle(outcome)}
+      </span>
       {pending ? (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-mustard/40 bg-brand-mustard/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
           <span className="size-[7px] rounded-full bg-brand-mustard" aria-hidden="true" />
@@ -1686,6 +1701,24 @@ function ReviewTargetIsland({
   }
 
   const frame = useRef<HTMLIFrameElement | null>(null);
+  const palette = useLifecycleCardColorScheme();
+  const previousPalette = useRef(palette);
+  const announcePalette = useCallback(() => {
+    const current = frame.current;
+    if (!current?.contentWindow || palette === null) return;
+    // Kept beside the sender, like the height message above; the DOM tests pin
+    // this fixed shape to the island listener. No selector or grant crosses.
+    current.contentWindow.postMessage(
+      { type: "cinatra.review-island.palette", scheme: palette },
+      new URL(current.src).origin,
+    );
+  }, [palette]);
+  useEffect(() => {
+    if (previousPalette.current === palette) return;
+    previousPalette.current = palette;
+    announcePalette();
+  }, [palette, announcePalette]);
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       // ONLY THIS FRAME'S OWN DOCUMENT. The island is same-origin, so the origin
@@ -1737,11 +1770,12 @@ function ReviewTargetIsland({
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() =>
+        onLoad={() => {
+          announcePalette();
           setLoad((current) =>
             current.identity === identity ? { ...current, loaded: true } : current,
-          )
-        }
+          );
+        }}
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The

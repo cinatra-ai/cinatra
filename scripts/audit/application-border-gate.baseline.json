@@ -307,10 +307,6 @@
       "count": 1,
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
-    "src/lib/blog/gemini.ts :: name :: blog": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "src/lib/blog/generation.ts :: name :: blog": {
       "count": 1,
       "owner": "@cinatra-ai/blog-pipeline-agent"
@@ -626,7 +622,7 @@
       "owner": "@cinatra-ai/blog-idea-generator-agent"
     },
     "src/lib/blog-image-materializer.ts": {
-      "count": 5,
+      "count": 3,
       "owner": "@cinatra-ai/blog-image-generator-agent"
     },
     "src/lib/blog-post-artifact-materializer.ts": {
@@ -649,12 +645,8 @@
       "count": 2,
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
-    "src/lib/blog/gemini.ts": {
-      "count": 8,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "src/lib/blog/generation.ts": {
-      "count": 18,
+      "count": 15,
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/lib/blog/index.ts": {
@@ -670,7 +662,7 @@
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/lib/blog/integration/blog-content-adapters.ts": {
-      "count": 6,
+      "count": 5,
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/lib/blog/integration/module.ts": {
@@ -694,7 +686,7 @@
       "owner": "@cinatra-ai/blog-connector"
     },
     "src/lib/blog/mcp/schemas.ts": {
-      "count": 17,
+      "count": 16,
       "owner": "@cinatra-ai/blog-connector"
     },
     "src/lib/blog/member-post-draft-projection.ts": {

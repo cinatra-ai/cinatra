@@ -92,7 +92,6 @@ const AGENTS = enumerateAgents();
  */
 const START_NODE_INPUT_BASELINE: Record<string, string[]> = {
   "drupal-agent": ["$referenced_components.start"],
-  "email-follow-up-agent": ["$referenced_components.start"],
   "wordpress-agent": ["$referenced_components.start"],
 };
 

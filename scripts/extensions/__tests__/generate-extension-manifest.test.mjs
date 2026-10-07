@@ -1498,8 +1498,14 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
       "@cinatra-ai/screenshot-artifact/src/renderers/detail",
       "@cinatra-ai/slide-deck-artifact/src/renderers/detail",
+      // The email body display joins the same guarded-optional road with the email
+      // pack's pin advance: its detail and list-row subpaths stand in the roster by
+      // name, at the roster's end; the assertion below sorts the roster so its
+      // order carries no meaning.
+      "@cinatra-ai/email-artifacts/src/renderers/detail",
+      "@cinatra-ai/email-artifacts/src/renderers/list-row",
     ];
-    expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)));
+    expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)).sort());
     // Anti-vacuity: the CMS snapshot + podcast displays are emitted at every pin.
     expect(aliased.length).toBeGreaterThanOrEqual(4);
     expect(emittedByResolution("guardedOptional")).toEqual(aliased);

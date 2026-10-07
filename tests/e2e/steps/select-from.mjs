@@ -66,6 +66,7 @@
 // before the selection. A search field's choice shows as SEARCHED says.
 import {
   CONTROL_ACTION_BOUND_MS,
+  CONTROL_HYDRATION_BOUND_MS,
   CONTROL_MARK,
   CONTROL_NAMES_LISTED,
   CONTROL_POLL_MS,
@@ -77,8 +78,9 @@ import {
   readPageControls,
   unmarkControls,
   unspacedNote,
+  waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "selectFrom";
 
@@ -174,6 +176,7 @@ async function waitForClose(page, { mark, readMarked, bound, onlyWhileHidden }) 
  * @returns {Promise<{ picker: string, entry: string, kind: string, via: "state" | "confirmation", path: string, elapsedMs: number }>}
  */
 export async function selectFrom(page, { picker, entry, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was selected");
   requireRecord(STEP, record);
   const nothing = "nothing was selected";
   const pickerName = plainName(picker);
@@ -199,6 +202,10 @@ export async function selectFrom(page, { picker, entry, record, bounds } = /** @
     }
     return closing.waited ? `; its list closed after ${closing.elapsedMs} ms` : "";
   };
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   try {
     let reading = await read();
     if (!reading) throw refuse(STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);
@@ -386,6 +393,7 @@ const READ_STEP = "readOptions";
  * @returns {Promise<{ picker: string, kind: string, entries: string[], more: number, shows: string, path: string }>}
  */
 export async function readOptions(page, { picker, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(READ_STEP, record, page, "nothing was read");
   requireRecord(READ_STEP, record);
   const nothing = "nothing was read";
   const pickerName = plainName(picker);
@@ -398,6 +406,10 @@ export async function readOptions(page, { picker, record, bounds } = /** @type {
   const query = { mode: "picker", picker: pickerName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
   // The picker the step has opened, read again by its mark (see OPENED).
   const readMarked = () => within(readPageControls(page, { ...query, marked: true }), READING_BOUND_MS);
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(READ_STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   try {
     const first = await within(readPageControls(page, query), READING_BOUND_MS);
     if (!first) throw refuse(READ_STEP, record, "unreadable", `the pickers on ${from} could not be read — ${nothing}`);

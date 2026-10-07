@@ -132,13 +132,24 @@ describe("W11 — one review per artifact", () => {
     ]);
   });
 
-  it("gives one artifact one review even when the set names two of its revisions", () => {
+  it("App160: only an exact artifact+revision pair deduplicates; distinct revisions remain distinct", () => {
     const planned = planPerArtifactReviewGates({
       reviewTaskId: "t",
       targets: [POST, { artifactId: POST.artifactId, representationRevisionId: "rev-post-3" }],
     });
-    expect(planned).toHaveLength(1);
-    expect(planned[0].targets).toEqual([POST]);
+    expect(planned).toEqual([
+      { reviewTaskId: "t", targets: [POST] },
+      { reviewTaskId: "t#2", targets: [{ artifactId: POST.artifactId, representationRevisionId: "rev-post-3" }] },
+    ]);
+  });
+
+  it("App160: exact duplicate pairs alone may collapse", () => {
+    expect(planPerArtifactReviewGates({ reviewTaskId: "t", targets: [POST, { ...POST }, FEATURED, { ...FEATURED }] })).toEqual([
+      { reviewTaskId: "t", targets: [POST] }, { reviewTaskId: "t#2", targets: [FEATURED] },
+    ]);
+  });
+  it.each([null, { artifactId: POST.artifactId }, "unknown-pin"])("App160: no partial valid plan hides malformed or unknown pin %j", (invalid) => {
+    expect(planPerArtifactReviewGates({ reviewTaskId: "t", targets: [POST, invalid, invalid, FEATURED] })).toEqual([]);
   });
 
   it("plans nothing for an empty set", () => {

@@ -15,12 +15,13 @@ import "server-only";
 //
 // The seam's `emit` returns a RESULT (never throws the store's typed
 // `ArtifactReviewGateError`) so the run executor needs neither the store nor its
-// error type; `readGate` projects the gate row down to the minimal {orgId,
-// status} the executor's re-read decision needs.
+// error type; `readGate` projects the gate row down to the org/status and complete pinned target identity the executor needs to
+// distinguish a grandfathered combined gate before any singleton mint.
 // ---------------------------------------------------------------------------
 
 import {
   emitArtifactReviewGate,
+  emitDeclaredReviewGateFamily,
   listReviewGatesForRun,
   readReviewGate,
   ArtifactReviewGateError,
@@ -53,10 +54,11 @@ export type ArtifactReviewGateSeam = {
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
   >;
+  emitFamily: ArtifactReviewGateSeam["emit"];
   readGate(
     runId: string,
     reviewTaskId: string,
-  ): Promise<{ orgId: string; status: string } | null>;
+  ): Promise<{ orgId: string; status: string; targets: Array<{ artifactId: string; representationRevisionId: string }> } | null>;
   /** cinatra#3035 (epic #3023 W11) — every gate this run owns, projected to what
    *  the per-artifact routing needs: a review that opens one gate per artifact
    *  sends the person to the first artifact still waiting to be read, and only
@@ -83,9 +85,22 @@ export function bindArtifactReviewGateSeam(): void {
         throw err;
       }
     },
+    async emitFamily(input) {
+      try {
+        await emitDeclaredReviewGateFamily(input);
+        return { ok: true };
+      } catch (err) {
+        if (err instanceof ArtifactReviewGateError) return { ok: false, code: err.code, message: err.message };
+        throw err;
+      }
+    },
     async readGate(runId, reviewTaskId) {
       const gate = await readReviewGate(runId, reviewTaskId);
-      return gate ? { orgId: gate.orgId, status: gate.status } : null;
+      return gate ? {
+        orgId: gate.orgId,
+        status: gate.status,
+        targets: gate.pinnedTargets.map(({ artifactId, representationRevisionId }) => ({ artifactId, representationRevisionId })),
+      } : null;
     },
     async listGates(runId) {
       const gates = await listReviewGatesForRun(runId);

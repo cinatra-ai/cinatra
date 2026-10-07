@@ -26,6 +26,7 @@
 // that did not change it is refused.
 import {
   CONTROL_ACTION_BOUND_MS,
+  CONTROL_HYDRATION_BOUND_MS,
   CONTROL_MARK,
   CONTROL_NAMES_LISTED,
   CONTROL_POLL_MS,
@@ -37,9 +38,10 @@ import {
   quotedName,
   readPageControls,
   unspacedNote,
+  waitForPageHydration,
 } from "./page-controls.mjs";
 import { pressAndSettle } from "./press-settle.mjs";
-import { READING_BOUND_MS, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, pathOf, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "press";
 
@@ -113,11 +115,16 @@ export async function press(page, { name, role = "button", within: scope, record
     throw refuse(STEP, record, "input", `name the scope by the name of a landmark, a heading or a labelled section, such as Settings — ${nothing}`);
   }
   const bound = readBounds(STEP, record, PRESS_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const [word, words] = ROLE_WORDS[role];
   const named = quotedName(wanted);
   const checks = CHECKED_ROLES.includes(role);
 
   const from = pathOf(page.url());
+  // Read only once the page has hydrated: a mark written before React has compared its element is a hydration mismatch.
+  if (!(await waitForPageHydration(page))) {
+    throw refuse(STEP, record, "unreadable", `the page on ${from} did not hydrate within ${CONTROL_HYDRATION_BOUND_MS} ms — ${nothing}`);
+  }
   const mark = newMark();
   const query = { mode: "press", role, name: wanted, within: scopeName, attribute: CONTROL_MARK, mark, listed: CONTROL_NAMES_LISTED };
   const reading = await within(readPageControls(page, query), READING_BOUND_MS);
