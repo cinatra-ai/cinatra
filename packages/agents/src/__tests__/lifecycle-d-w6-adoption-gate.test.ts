@@ -250,6 +250,31 @@ describe("lifecycle D W6 — the fleet as pinned passes the blocking gate", () =
     expect(EXPECTED_PINNED_PRODUCERS.filter((n) => !read.has(n))).toEqual([]);
   });
 
+  // The publish agent is a KNOWN NON-producer, and its name is absent from the
+  // list above for that reason alone: its flow writes the published address back
+  // onto the artifact it was handed and persists no revision, so its pinned head
+  // declares an EXPLICITLY EMPTY produces set in both its manifest and its flow
+  // document. Merely dropping a name would let an unsynced tree or a silently
+  // deleted declaration look exactly like an honest empty one, so the emptiness
+  // is read here directly, in both files, and the hollow-read guard keeps its
+  // teeth over the producing set.
+  const EXPECTED_EXPLICIT_NON_PRODUCERS = ["@cinatra-ai/blog-linkedin-publish-agent"];
+
+  it("a known non-producer declares its emptiness explicitly, in both files", () => {
+    for (const packageName of EXPECTED_EXPLICIT_NON_PRODUCERS) {
+      const slug = packageName.replace(/^@cinatra-ai\//, "");
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(extensionsRoot, slug, "package.json"), "utf8"),
+      ) as { name?: string; cinatra?: { produces?: unknown } };
+      const oas = JSON.parse(
+        fs.readFileSync(path.join(extensionsRoot, slug, "cinatra", "oas.json"), "utf8"),
+      ) as { metadata?: { cinatra?: { produces?: unknown } } };
+      expect(pkg.name).toBe(packageName);
+      expect(pkg.cinatra?.produces).toEqual([]);
+      expect(oas.metadata?.cinatra?.produces).toEqual([]);
+    }
+  });
+
   it("no pinned producer carries a declaration the gate refuses", () => {
     const refused = producers
       .map((a) => ({

@@ -134,7 +134,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -149,6 +149,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  splitRailExtrasAtSpine,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -616,6 +617,49 @@ type InterruptCtx = NonNullable<
   ReturnType<typeof useAgUiRunStream>["interruptContext"]
 >;
 
+/**
+ * Does this declared object schema ask the person for nothing of its own?
+ *
+ * The step-confirmation bypass below exists for the shape its comment names —
+ * "object schema with only { approved: boolean }" — and it used to fire on ANY
+ * object-typed schema, so a gate that declares a REAL field was swallowed whole:
+ * no renderer, no message, no prompt window, a card holding a Continue and
+ * nothing above it (cinatra#3035). A gate that declares a property the person is
+ * being asked for is not a bare confirmation, and the host already owns its
+ * drawing — SchemaFieldRenderer's object arm draws one control per declared
+ * property. A gate that declares no properties, or only the bare `approved`
+ * flag, has nothing for that arm to draw and keeps the bypass it has today.
+ */
+function declaresNoAskedProperty(schema: unknown): boolean {
+  const declared = schema as Record<string, unknown> | null | undefined;
+  // A schema that carries its fields behind a reference or a composition
+  // keyword declares them somewhere this host does not read (neither the
+  // compiler nor the schema-field renderer resolves `$ref`). It is not the bare
+  // confirmation this bypass is for, so it keeps the host's own drawing — the
+  // renderer's object arm, which floors at a JSON control — rather than the
+  // blank card this leg exists to end (convergence round, cinatra#3035).
+  if (
+    declared != null &&
+    (declared.$ref !== undefined ||
+      declared.allOf !== undefined ||
+      declared.oneOf !== undefined ||
+      declared.anyOf !== undefined)
+  ) {
+    return false;
+  }
+  const properties = declared?.properties;
+  if (properties === null || typeof properties !== "object") return true;
+  // `approved` is exempt as the CONFIRMATION FLAG the comment above names —
+  // `{ approved: boolean }` — never as a name. A property called `approved`
+  // that declares another type is something the person is asked to write, and
+  // swallowing it would draw the same blank card for it (convergence round).
+  return Object.entries(properties as Record<string, unknown>).every(([name, spec]) => {
+    if (name !== "approved") return false;
+    const type = (spec as { type?: unknown } | null | undefined)?.type;
+    return type === undefined || type === "boolean";
+  });
+}
+
 function HitlApprovalCard({
   interruptContext,
   runId,
@@ -1044,7 +1088,12 @@ function HitlApprovalCard({
   const isGenericObjectSchema =
     interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId);
+    !isSetupGateTaskId(interruptContext.reviewTaskId) &&
+    // NARROWED to what the comment above says the guard is for (cinatra#3035).
+    // A gate that declares a real property is drawn by the schema-field
+    // renderer's object arm; only a gate that asks for nothing of its own —
+    // no declared properties, or none besides a bare `approved` — bypasses it.
+    declaresNoAskedProperty(interruptContext.schema);
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -1434,7 +1483,13 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            {/* cinatra#3035: a gate whose kind declares the hold keeps its Continue unavailable until a pick is made. */}
+            <Button
+              size="sm"
+              disabled={isApproving || continueAwaitsAPick(entry, bufferedHitlValue)}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -1687,6 +1742,10 @@ function StepperColumn({
   // a second `data-run-step-rail` in the DOM — the very defect this closes.
   if (stepperSteps.length === 0 && railExtras.length === 0) return null;
 
+  // A review gate that stands in a declared step's place is drawn THERE, with
+  // its verification after it; only the rest trail the spine (cinatra#3035).
+  const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
+
   return (
     <TooltipProvider>
       <div
@@ -1706,7 +1765,31 @@ function StepperColumn({
               const isActive = s.index === activeStep;
               const isCompleted = s.index < activeStep;
               const isLoading = isActive && (isLoadingStatus || isResuming);
-              const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
+              const isLast = i === stepperSteps.length - 1 && trailing.length === 0;
+              const inPlace = onSpine.filter((entry) => entry.onStep === s.stepNumber);
+              if (inPlace.length > 0) {
+                return inPlace.map((entry, j) => (
+                  <StepperItem
+                    key={entry.key}
+                    step={s.index}
+                    completed={
+                      entry.status === "resolved" ||
+                      entry.status === "completed" ||
+                      s.index < activeStep
+                    }
+                    className="items-start !flex-none"
+                  >
+                    <RailExtraEntry
+                      entry={entry}
+                      reviewHrefBase={reviewHrefBase}
+                      displayStep={s.index}
+                    />
+                    {!(isLast && j === inPlace.length - 1) && (
+                      <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />
+                    )}
+                  </StepperItem>
+                ));
+              }
               const showPauseIcon = isPaused && !isCompleted && !isResuming;
               // The replay affordance this row actually carries — asserted by
               // the single-rail regression test (cinatra#2739).
@@ -1790,9 +1873,9 @@ function StepperColumn({
                 render here through the shared `RailExtraEntry`, which is why
                 retiring that second mount loses nothing. They trail the spine
                 in the exact order `buildRunStepRail` sorted them into. */}
-            {railExtras.map((entry, i) => {
+            {trailing.map((entry, i) => {
               const displayStep = stepperSteps.length + i + 1;
-              const isLast = i === railExtras.length - 1;
+              const isLast = i === trailing.length - 1;
               return (
                 <StepperItem
                   key={entry.key}
@@ -2297,6 +2380,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       ? reReadForAnsweredGate.next
       : streamInterruptContext;
 
+  // cinatra#3035: inside the run frame the rail is server-rendered, so a live advance to a gate this panel has not been shown yet asks for one server render.
+  const liveGateTaskId = effectiveInterruptContext?.reviewTaskId ?? null;
+  const gatesShownRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!railFrameDrawsTheRail || liveGateTaskId === null) return;
+    const shown = gatesShownRef.current;
+    if (shown === null) {
+      gatesShownRef.current = new Set([liveGateTaskId]);
+      return;
+    }
+    if (shown.has(liveGateTaskId)) return;
+    shown.add(liveGateTaskId);
+    router.refresh();
+  }, [railFrameDrawsTheRail, liveGateTaskId, router]);
+
   // THE ANSWERED STEP, ONCE THE RUN HAS MOVED PAST IT. The run's own read has
   // answered that it is asking nothing — the step is answered and closed — so
   // the surface draws what was recorded for it, read-only. It is drawn from
@@ -2541,13 +2639,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:
     // the spine takes 1..N and the trailing rows continue from N+1.
+    // A gate standing in a spine step's place (cinatra#3035) is elected as that
+    // step; only the rest are trailing rows.
+    const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
     return electRunRailActiveStep({
       status,
       currentStepNumber,
       awaitingNextStep,
       highestStepNumber: highestStepNumberRef.current,
       spine: stepperSteps,
-      railExtras,
+      railExtras: trailing,
+      spineGates: onSpine.flatMap((entry) => {
+        const step = stepperSteps.find((s) => s.stepNumber === entry.onStep);
+        return entry.kind === "gate" && step ? [{ index: step.index, status: entry.status }] : [];
+      }),
     });
   })();
 

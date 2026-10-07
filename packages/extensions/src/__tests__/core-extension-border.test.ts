@@ -307,7 +307,8 @@ describe("core/extension border — the repository itself", () => {
     expect(keys).toContain("src/lib/blog");
     expect(keys).toContain("packages/agents/src/campaign-recipients-review-renderer.tsx");
     expect(keys).toContain("packages/agents/src/email-drafts-review-renderer.tsx");
-    expect(keys).toContain("packages/agents/src/blog-idea-selection-renderer.tsx");
+    // The host chooser left with its file (cinatra#3380).
+    expect(keys).not.toContain("packages/agents/src/blog-idea-selection-renderer.tsx");
   });
 
   it("fails closed when the committed locks are not there to read", () => {

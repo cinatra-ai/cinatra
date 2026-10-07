@@ -54,14 +54,6 @@
     },
     {
       "rule": "pack-shaped-core-domain",
-      "key": "packages/agents/src/blog-idea-selection-renderer.tsx",
-      "reason": "A host-authored renderer bound to one pack's declared selection screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink.",
-      "files": {
-        "packages/agents/src/blog-idea-selection-renderer.tsx": 145
-      }
-    },
-    {
-      "rule": "pack-shaped-core-domain",
       "key": "packages/agents/src/campaign-recipients-review-renderer.tsx",
       "reason": "A host-authored renderer for a pack's review screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink as the pack takes its pixels back.",
       "files": {

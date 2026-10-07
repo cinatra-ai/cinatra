@@ -8,9 +8,6 @@
     }
   },
   "stepRenderers": {
-    "blog-idea-selection :: packages/agents/src/blog-idea-selection-renderer.tsx": {
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "campaign-recipients-review :: packages/agents/src/campaign-recipients-review-renderer.tsx": {
       "owner": "@cinatra-ai/email-artifacts"
     },
@@ -31,15 +28,6 @@
     }
   },
   "ceilings": {
-    "packages/agents/src/blog-idea-selection-renderer.tsx": {
-      "topLevel": 2,
-      "imports": [
-        "packages/agents/src/schema-field-renderer",
-        "react",
-        "src/components/ui/radio-group"
-      ],
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "packages/agents/src/campaign-recipients-review-renderer.tsx": {
       "topLevel": 2,
       "imports": [

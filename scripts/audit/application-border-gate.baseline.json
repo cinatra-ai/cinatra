@@ -119,10 +119,6 @@
       "count": 1,
       "owner": "@cinatra-ai/email-connector"
     },
-    "packages/agents/src/blog-idea-selection-renderer.tsx :: name :: blog": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-idea-generator-agent"
-    },
     "packages/agents/src/blog-post-repair-producer.ts :: name :: blog": {
       "count": 1,
       "owner": "@cinatra-ai/blog-draft-writer-agent"
@@ -460,10 +456,6 @@
     "packages/agent-ui-protocol/src/schema-enricher.ts": {
       "count": 9,
       "owner": "@cinatra-ai/email-connector"
-    },
-    "packages/agents/src/blog-idea-selection-renderer.tsx": {
-      "count": 2,
-      "owner": "@cinatra-ai/blog-idea-generator-agent"
     },
     "packages/agents/src/blog-post-repair-producer.ts": {
       "count": 1,
