@@ -539,6 +539,49 @@ for (const { name: palette, theme } of PALETTES) {
   });
 
   test.describe("card — the section's rendered values", () => {
+    test('"1px line border" and the presentation/interactive grounds come from the real Card', async ({ page }) => {
+      await open(page, theme);
+      const surface = await token(page, "--surface");
+      const interactiveSurface = await token(page, "--surface-strong");
+      const line = await token(page, "--line");
+      for (const state of ["presentation", "interactive", "interactive-small"]) {
+        const card = page.locator(`${seam("card")} [data-wave-state="${state}"]`);
+        await expect(card).toBeVisible();
+        expect(await style(card, "background-color")).toBe(state === "presentation" ? surface : interactiveSurface);
+        for (const side of ["top", "right", "bottom", "left"]) {
+          expect(await style(card, `border-${side}-width`)).toBe("1px");
+          expect(await style(card, `border-${side}-style`)).toBe("solid");
+          expect(await style(card, `border-${side}-color`)).toBe(line);
+        }
+      }
+    });
+
+    test('"Hover lifts it 1px" applies only to interactive Cards and respects reduced motion', async ({ page }) => {
+      await open(page, theme);
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      const top = (target: Locator) => target.evaluate(el => el.getBoundingClientRect().top);
+      for (const state of ["presentation", "interactive", "interactive-small"]) {
+        const card = page.locator(`${seam("card")} [data-wave-state="${state}"]`);
+        await card.scrollIntoViewIfNeeded();
+        await page.mouse.move(0, 0);
+        const restingTop = await top(card);
+        await card.hover();
+        await expect.poll(async () => (await top(card)) - restingTop).toBe(state === "presentation" ? 0 : -1);
+        await page.mouse.move(0, 0);
+        await expect.poll(async () => (await top(card)) - restingTop).toBe(0);
+      }
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      for (const state of ["interactive", "interactive-small"]) {
+        const card = page.locator(`${seam("card")} [data-wave-state="${state}"]`);
+        await card.scrollIntoViewIfNeeded();
+        await page.mouse.move(0, 0);
+        const restingTop = await top(card);
+        await card.hover();
+        await expect.poll(async () => (await top(card)) - restingTop).toBe(0);
+        expect(await style(card, "transition-duration")).toBe("0s");
+      }
+    });
+
     /**
      * The band the section states, in px, inclusive at both ends: "10–12px
      * radius". Read at the DOM seam, on every card the harness route lays out,
