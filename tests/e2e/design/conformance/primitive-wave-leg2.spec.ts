@@ -281,7 +281,7 @@ for (const { name: palette, theme } of PALETTES) {
   test.describe(`palette: ${palette}`, () => {
     // ─── CELL1 · Input OTP ──────────────────────────────────────────────
     test.describe("input otp — the section's rendered values", () => {
-      test('"40px white slots": every slot is the 40px square the clause names', async ({
+      test('"40px white slots": every slot is 40px wide and 44px high as the example draws', async ({
         page,
       }) => {
         await open(page, theme);
@@ -292,7 +292,7 @@ for (const { name: palette, theme } of PALETTES) {
         for (let i = 0; i < count; i += 1) {
           const { width, height } = await box(slots.nth(i));
           expect(width, `slot ${i} width`).toBe(40);
-          expect(height, `slot ${i} height`).toBe(40);
+          expect(height, `slot ${i} height`).toBe(44);
         }
       });
 
