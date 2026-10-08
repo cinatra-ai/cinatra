@@ -94,7 +94,7 @@ import type { OwnerView as CoOwnerView } from "@/components/permissions-form";
 import type { AvailableScopes } from "@/components/access-combobox";
 import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
-import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
+import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, readAnsweredContextHistory, type AnsweredContextRailReading, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
 // cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
 // run's own access, resolved on the server so no window is drawn for a person
@@ -157,7 +157,7 @@ import {
   type RunMadeArtifactRow,
 } from "./run-made-reading";
 import { RunMadeStepSurface } from "./run-made-step-surface";
-import { buildRunInputRailSteps } from "./run-input-rail-steps";
+import { buildRunInputRailSteps, buildAnsweredContextRailSteps } from "./run-input-rail-steps";
 // The gate's own screen names its rail row, by the same rule the gate's card
 // titles itself (cinatra#3221) -- one derivation, so the row and the card
 // cannot say two different things about one gate.
@@ -1816,6 +1816,14 @@ export async function SetupScreen({
     ? await deriveRunHitlContext(run, { template }).catch(() => null)
     : null;
 
+  // Confirmed past context answers are independent of the live interrupt and
+  // renderer-policy cursor. Unavailable persistence never fabricates history.
+  let answeredContextHistory: AnsweredContextRailReading[] = [];
+  if (run) {
+    try { answeredContextHistory = await readAnsweredContextHistory(run.id); }
+    catch { /* Optional unavailable history never invents a settled answer. */ }
+  }
+
   // ── THE RUN'S OWN INPUT STEPS (cinatra#3068) ─────────────────────────────
   //
   // The first step a person meets on this page is the agent's own input form,
@@ -2882,6 +2890,8 @@ export async function SetupScreen({
                 const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
                 railSteps.push(...buildRunInputRailSteps(runInputSteps, runDetailFallback, railRowsAboveTheInputSteps));
               }
+              railSteps.push(...buildAnsweredContextRailSteps(answeredContextHistory,
+                runSurfaceRailNumberedCount(railSteps.map(step=>step.key))));
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
               //
