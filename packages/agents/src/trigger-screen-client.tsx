@@ -28,6 +28,19 @@ import { useRunWindowConversation } from "./use-run-window-conversation";
 import { setRunTrigger } from "./run-actions";
 import { buildAgentPackageBasePath } from "@/lib/agent-url";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+// THE TIMEZONE FIELD'S ONE RESOLUTION (cinatra#3142). The value and the option
+// list used to be resolved here, independently, with nothing tying them
+// together — which is how both Timezone controls came to draw empty. The
+// invariant (the bound value is always a member of the list beneath it), the
+// non-silent degrade, and the drawing's "~8" size rule for the select family
+// all live in that one module now, so neither call site below can restate them
+// differently.
+import {
+  readBrowserTimezone,
+  readSupportedTimezones,
+  resolveTimezoneField,
+} from "./trigger-timezone";
+import { TimezoneField } from "./timezone-field";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
@@ -371,21 +384,11 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
 
-  const browserTz = useMemo(() => {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    } catch {
-      return "UTC";
-    }
-  }, []);
+  const browserTz = useMemo(() => readBrowserTimezone(), []);
 
-  const allTimezones = useMemo(() => {
-    try {
-      return Intl.supportedValuesOf("timeZone") as string[];
-    } catch {
-      return ["UTC"];
-    }
-  }, []);
+  // `null` — not a one-entry list — when the platform told us nothing, so the
+  // render can say so instead of degrading in silence.
+  const supportedTimezones = useMemo(() => readSupportedTimezones(), []);
 
   // THE ROW THIS FORM OPENS ON (cinatra#2936). Not a default of this form's:
   // the two inputs go to the runner's own decision and the answer comes back as
@@ -424,6 +427,55 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
 
   const triggerType = watch("triggerType");
   const timezone = watch("timezone");
+
+  // ONE resolution for both Timezone controls (cinatra#3142). The value handed
+  // to a control is always a member of the list rendered beneath it — including
+  // when the platform's zone list could not be read, and including a bound
+  // value of the empty string, which `??` never coalesced.
+  const timezoneField = useMemo(
+    () =>
+      resolveTimezoneField({
+        bound: timezone,
+        browserTimezone: browserTz,
+        supported: supportedTimezones,
+      }),
+    [timezone, browserTz, supportedTimezones],
+  );
+
+  // THE FIELD HOLDS WHAT THE CONTROL DRAWS (cinatra#3142). The resolution above
+  // decides what a reader SEES; this writes that same zone back into the form,
+  // so what is submitted cannot differ from what was read before Continue. It
+  // matters twice over: a bound empty string (which an applied suggestion can
+  // set) draws the browser's zone while the schema's min(1) refuses the submit,
+  // and a bound run of spaces draws the browser's zone while passing that check
+  // and persisting the blank. The write converges in one pass -- the resolved
+  // value is non-blank, so re-resolving it returns itself -- and it never
+  // overwrites a zone the person chose, because a chosen zone already resolves
+  // to itself.
+  useEffect(() => {
+    if (timezone === timezoneField.value) return;
+    setValue("timezone", timezoneField.value);
+  }, [timezone, timezoneField.value, setValue]);
+
+  /**
+   * The Timezone control, drawn once for the scheduled block and once for the
+   * recurring one. What it draws lives in `TimezoneField` — one render for both
+   * call sites, and the same render a conformance fixture mounts — and what it
+   * commits is this form's business: the zone, and the block that owns it.
+   */
+  const renderTimezoneControl = (
+    controlId: "timezone-scheduled" | "timezone-recurring",
+    selects: "scheduled" | "recurring",
+  ) => (
+    <TimezoneField
+      id={controlId}
+      field={timezoneField}
+      onValueChange={(v) => {
+        setValue("timezone", v);
+        setValue("triggerType", selects);
+      }}
+    />
+  );
   const scheduledAtValue = (watch as (n: string) => string)("scheduledAt") ?? "";
 
   // THE "RUN AT" FIELD, ON THE APP'S OWN CHROME (cinatra#3182 item 6). The
@@ -758,22 +810,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="timezone-scheduled" className="font-normal">Timezone</Label>
-                    <Select
-                      value={timezone ?? browserTz}
-                      onValueChange={(v) => {
-                        setValue("timezone", v);
-                        setValue("triggerType", "scheduled");
-                      }}
-                    >
-                      <SelectTrigger id="timezone-scheduled" className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allTimezones.map((tz) => (
-                          <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {renderTimezoneControl("timezone-scheduled", "scheduled")}
                   </div>
                 </div>
                 )}
@@ -811,7 +848,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <Label className="shrink-0 font-normal">Repeat every</Label>
                     {(recurring.frequency === "daily" || recurring.frequency === "weekly" || recurring.frequency === "monthly") && (
                       <Select value={String(recurring.interval)} onValueChange={(v) => updateRecurring({ interval: Number(v) })}>
-                        <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger aria-label="Repeat every" className="w-20"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {[1, 2, 3, 4, 6, 8, 12].map((n) => (
                             <SelectItem key={n} value={String(n)}>{n}</SelectItem>
@@ -820,7 +857,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       </Select>
                     )}
                     <Select value={recurring.frequency} onValueChange={(v) => updateRecurring({ frequency: v as RecurringFrequency })}>
-                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label="Repeat unit" className="w-32"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="daily">day(s)</SelectItem>
                         <SelectItem value="weekly">week(s)</SelectItem>
@@ -862,7 +899,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <div className="flex items-center gap-2">
                       <Label className="shrink-0 font-normal">Month</Label>
                       <Select value={String(recurring.yearlyMonth)} onValueChange={(v) => updateRecurring({ yearlyMonth: Number(v) })}>
-                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                        <SelectTrigger aria-label="Month" className="w-24"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {MONTH_LABELS.map((label, i) => (
                             <SelectItem key={i + 1} value={String(i + 1)}>{label}</SelectItem>
@@ -942,7 +979,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         </div>
                         {recurring.monthlyMode === "date" && (
                           <Select value={String(recurring.dayOfMonth)} onValueChange={(v) => updateRecurring({ dayOfMonth: Number(v) })}>
-                            <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                            <SelectTrigger aria-label="Day of month" className="w-20"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
                                 <SelectItem key={d} value={String(d)}>{d}</SelectItem>
@@ -953,7 +990,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         {recurring.monthlyMode === "weekday" && (
                           <>
                             <Select value={String(recurring.nthWeek)} onValueChange={(v) => updateRecurring({ nthWeek: Number(v) as 1|2|3|4 })}>
-                              <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                              <SelectTrigger aria-label="Week of month" className="w-24"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {([1,2,3,4] as const).map((n) => (
                                   <SelectItem key={n} value={String(n)}>{NTH_LABELS[n-1]}</SelectItem>
@@ -961,7 +998,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                               </SelectContent>
                             </Select>
                             <Select value={String(recurring.monthlyWeekday)} onValueChange={(v) => updateRecurring({ monthlyWeekday: Number(v) })}>
-                              <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                              <SelectTrigger aria-label="Weekday" className="w-28"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {WEEKDAY_LABELS.map((label, i) => (
                                   <SelectItem key={i} value={String(i)}>{label}</SelectItem>
@@ -976,7 +1013,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   <div className="flex items-center gap-2">
                     <Label className="shrink-0 font-normal">At</Label>
                     <Select value={String(recurring.hour)} onValueChange={(v) => updateRecurring({ hour: Number(v) })}>
-                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label="At hour" className="w-20"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Array.from({ length: 24 }, (_, i) => (
                           <SelectItem key={i} value={String(i)}>{String(i).padStart(2, "0")}</SelectItem>
@@ -985,7 +1022,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     </Select>
                     <span className="text-muted-foreground">:</span>
                     <Select value={String(recurring.minute)} onValueChange={(v) => updateRecurring({ minute: Number(v) })}>
-                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label="At minute" className="w-20"><SelectValue /></SelectTrigger>
                       {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278) — the same
                           defect the schedule card carried: a stated 05:12 found
                           no option for 12 and drew a blank minute. Only the
@@ -1000,22 +1037,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   </div>
                   <div className="flex flex-col gap-1">
                     <Label htmlFor="timezone-recurring" className="font-normal">Timezone</Label>
-                    <Select
-                      value={timezone ?? browserTz}
-                      onValueChange={(v) => {
-                        setValue("timezone", v);
-                        setValue("triggerType", "recurring");
-                      }}
-                    >
-                      <SelectTrigger id="timezone-recurring" className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allTimezones.map((tz) => (
-                          <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {renderTimezoneControl("timezone-recurring", "recurring")}
                   </div>
                   <Input type="hidden" {...register("cronExpression" as never)} />
                   {errorBag.cronExpression?.message && (

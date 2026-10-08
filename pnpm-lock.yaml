@@ -1401,6 +1401,9 @@ importers:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
