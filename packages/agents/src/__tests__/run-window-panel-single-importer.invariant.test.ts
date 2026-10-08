@@ -169,10 +169,10 @@ describe("E1 — the run-window panel has exactly one importer", () => {
 function fixtureImporters(importSource: string, target = "packages/agents/src/forbidden-screen.tsx"): string[] {
   const root = mkdtempSync(path.join(tmpdir(), "run-window-import-fence-"));
   try {
-    for (const module of [PANEL_MODULE, THE_ONE_IMPORTER]) {
-      const file = path.join(root, module);
+    for (const modulePath of [PANEL_MODULE, THE_ONE_IMPORTER]) {
+      const file = path.join(root, modulePath);
       mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, readFileSync(path.join(REPO_ROOT, module)));
+      writeFileSync(file, readFileSync(path.join(REPO_ROOT, modulePath)));
     }
     const file = path.join(root, target);
     mkdirSync(path.dirname(file), { recursive: true });
