@@ -7502,21 +7502,48 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
                 armed: false,
                 snapshot: null as { state: string; text: string } | null,
                 observer: null as MutationObserver | null,
+                sample: null as (() => void) | null,
               };
               target[key] = record;
-              record.observer = new MutationObserver(() => {
+              // Match the maintained assertion's visibility semantics while
+              // sampling: opacity zero is still visible; hidden/empty boxes
+              // cannot supply the loading witness.
+              const isVisible = (element: Element): boolean => {
+                const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+                if (!style) return true;
+                if (style.display === "contents") {
+                  return Array.from(element.childNodes).some((child) => {
+                    if (child.nodeType === 1) return isVisible(child as Element);
+                    if (child.nodeType !== 3) return false;
+                    const range = element.ownerDocument.createRange();
+                    range.selectNode(child);
+                    const rect = range.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                  });
+                }
+                const details = element.closest("details, summary");
+                if (details !== element && details?.tagName === "DETAILS"
+                  && !details.hasAttribute("open")) return false;
+                if (style.visibility !== "visible") return false;
+                if (typeof element.checkVisibility === "function" && !element.checkVisibility()) return false;
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              };
+              record.sample = () => {
                 const state = node.getAttribute("data-state");
                 const text = node.querySelector(selector)?.textContent ?? "";
                 if (record.armed && !record.snapshot && node.isConnected && mount?.isConnected
                   && mount.querySelector(formSelector) === node
+                  && isVisible(node)
                   && state === "loading" && text.includes("Looking up")) {
                   record.snapshot = { state, text };
                   record.observer?.disconnect();
                 }
-              });
+              };
+              record.observer = new MutationObserver(record.sample);
               record.observer.observe(node, {
                 attributes: true,
-                attributeFilter: ["data-state"],
+                attributeFilter: ["data-state", "class", "style", "hidden", "open"],
                 childList: true,
                 subtree: true,
                 characterData: true,
@@ -7539,7 +7566,9 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
               const record = (node as HTMLElement & Record<string, unknown>)[key] as {
                 snapshot: { state: string; text: string } | null;
                 mount: Element | null;
+                sample: (() => void) | null;
               } | undefined;
+              record?.sample?.();
               return node.isConnected && record?.mount?.isConnected
                 && record.mount.querySelector(formSelector) === node ? record.snapshot : null;
             }, { key, formSelector: UPLOAD_FORM_NODE }), { timeout: 2_000 }).toEqual({
