@@ -48,16 +48,18 @@ export function ReviewGateBlocked({
         <CircleX aria-hidden="true" className="size-[18px]" />
       </div>
       <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
-      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
-      <Button
-        variant="link"
-        size="sm"
-        className="mt-1"
-        data-action="refresh-gate -> live-gate"
-        onClick={() => (onRefresh ? onRefresh() : router.refresh())}
-      >
-        Refresh
-      </Button>
+      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
+        {copy.body}{" "}
+        <Button
+          variant="link"
+          size="sm"
+          className="inline h-auto p-0 align-baseline text-xs underline underline-offset-[3px]"
+          data-action="refresh-gate -> live-gate"
+          onClick={() => (onRefresh ? onRefresh() : router.refresh())}
+        >
+          Refresh
+        </Button>
+      </p>
     </div>
   );
 }
