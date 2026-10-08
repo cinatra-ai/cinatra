@@ -26,7 +26,8 @@
  *
  * The rows are read inside the frame's own column, `[data-run-step-rail-column]`,
  * through the head rows' own anchors; the page's own step-row panel and the
- * run's record are not part of the order this suite grades.
+ * run's record are not part of the order this suite grades. The numeral case
+ * also reads the policy work row, because forecast Review follows that row.
  *
  * Run:
  *   cd packages/agents && npx vitest run \
@@ -373,10 +374,12 @@ const HEAD_ROWS =
   "[data-recommendation-rail-step],[data-schedule-rail-step],[data-run-surface-rail-step]";
 
 /** The frame column's head rows, in the order they are drawn. */
-function readHead(container: HTMLElement): HeadRow[] {
+function readHead(container: HTMLElement, includeWork = false): HeadRow[] {
   const column = container.querySelector<HTMLElement>("[data-run-step-rail-column]");
   if (!column) return [];
-  return Array.from(column.querySelectorAll<HTMLElement>(HEAD_ROWS))
+  return Array.from(column.querySelectorAll<HTMLElement>(
+      includeWork ? `${HEAD_ROWS},[data-rail-kind="step"]` : HEAD_ROWS,
+    ))
     .filter((el) => el.getAttribute("data-run-surface-rail-step-key") !== "made")
     .map((el) => {
       const text = (el.textContent ?? "").trim();
@@ -400,14 +403,14 @@ const DRAWN_ORDER = ["Skills", "Schedule", "Setup", "Review"];
 /** The readings this run takes, kept for the lane's own table of readings. */
 const READINGS: Record<string, HeadRow[]> = {};
 
-async function readRunPage(moment: MomentName): Promise<HeadRow[]> {
+async function readRunPage(moment: MomentName, includeWork = false): Promise<HeadRow[]> {
   atMoment(moment);
   const tree = await SetupScreen({ agentId: "blog-draft-writer", instanceId: RUN_ID });
   const { container } = render(tree as React.ReactElement);
   await waitFor(() => {
     expect(container.querySelector("[data-run-step-rail-column]")).not.toBeNull();
   });
-  const head = readHead(container);
+  const head = readHead(container, includeWork);
   READINGS[`run page (${moment})`] = head;
   cleanup();
   return head;
@@ -478,14 +481,18 @@ describe("cinatra#3663 — one run's rail keeps the drawing's order at every rea
     expect(before.map((entry) => entry.title)).toEqual(after.map((entry) => entry.title));
   });
 
-  it("numbers the entries in the drawn order: Skills, 1 Schedule, 2 Setup, 3 Review", async () => {
-    const head = await readRunPage("a");
+  it("numbers every visible entry: Skills, 1 Schedule, 2 Setup, 3 work, 4 Review", async () => {
+    // The actual policy fixture carries Draft the post. Main's forecast Review
+    // follows that work row (#3679); omitting it from this reading hid a row.
+    const head = await readRunPage("a", true);
     expect(head.map((entry) => [entry.title, entry.numeral])).toEqual([
       ["Skills", null],
       ["Schedule", 1],
       ["Setup", 2],
-      ["Review", 3],
+      ["Draft the post", 3],
+      ["Review", 4],
     ]);
+    expect(head.filter((entry) => entry.current).map((entry) => entry.title)).toEqual(["Skills"]);
   });
 });
 

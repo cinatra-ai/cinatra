@@ -15,8 +15,18 @@
  * leaves the rows no longer editable", and the reading it leaves behind is
  * written as:
  *
- *   "Pressing it stops the recurring schedule, and the rows are not editable
- *    after that."
+ *   "The recurring schedule was stopped; its rows are no longer editable."
+ *
+ * THE DRAWING GIVES THE STOPPED READING ITS OWN PAST-TENSE REPORT
+ * (cinatra#3304). Section VI's own note says so: "Once it is stopped, the turn
+ * says so in the past tense. Above a stopped recurring card the one line the
+ * rule above fixes for every reading is The recurring schedule was stopped; its
+ * rows are no longer editable. — it reports the press that was already taken,
+ * and it is never the description of the control itself, which speaks of a press
+ * still to come." The sentence about pressing the control is the fired-recurring
+ * note's description of Cancel schedule and is not this reading's sentence: it
+ * speaks of a press still to come, and by the time this turn is drawn the press
+ * has already been made.
  *
  * THE REAL ROAD, AND A REAL PRESS. Like its fix-leg-7 sibling this file drives
  * the WHOLE conversation column — the real composer, the real card, resolved
@@ -107,7 +117,7 @@ import { mountSurface } from "./conversation-column-harness";
  * pass a test that imported it.
  */
 const STOPPED_RECURRING_SENTENCE =
-  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
+  "The recurring schedule was stopped; its rows are no longer editable.";
 
 const RUN_ID = "1d3a7c60-8b21-4f0e-9a55-6c2b4d0f7a13";
 const CARD_REF = "schedule-ref-3193-fix8";

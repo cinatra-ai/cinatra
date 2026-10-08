@@ -1338,6 +1338,7 @@ END $$`,
       agent_id text NOT NULL,
       step_key text NOT NULL,
       message text NOT NULL,
+      dispatch_receipt jsonb,
       captured_at timestamptz NOT NULL DEFAULT now(),
       excluded boolean NOT NULL DEFAULT false
     )` },
@@ -1345,6 +1346,8 @@ END $$`,
     // submitted_values jsonb: structured renderer payload for HITL submission trail
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS submitted_values jsonb` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS schema_snapshot jsonb` },
+    // Nullable server receipt: legacy captures remain unconfirmed, with no backfill.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS dispatch_receipt jsonb` },
     // agent_run_test_sends: per-action idempotency + crash ledger for the run-scoped
     // test-delivery send primitive (#1625, DESIGN-V3 contract (4)). TWIN of
     // migrations/core/core__0067 — the two DDLs MUST stay identical.

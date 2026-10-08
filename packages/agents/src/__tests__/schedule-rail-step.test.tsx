@@ -27,7 +27,8 @@ import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-proto
 
 import { Button } from "@/components/ui/button";
 
-import { ScheduleRailStep, useRunStepSelection } from "../schedule-rail-step";
+import { ScheduleRailStep, ScheduleRailStepRow, useRunStepSelection } from "../schedule-rail-step";
+import { RunSurfaceRail } from "../run-surface-rail";
 
 afterEach(() => {
   cleanup();
@@ -128,6 +129,47 @@ const detailColumn = (c: HTMLElement) =>
   c.querySelector<HTMLElement>("[data-run-detail-column]");
 const card = (c: HTMLElement) =>
   c.querySelector<HTMLElement>('[data-lifecycle-card="trigger_schedule_proposal"]');
+
+describe("the Schedule row speaks its position even after settlement (cinatra#3806)", () => {
+  const cases = (["run_card", "page_gate_region"] as const).flatMap((host) =>
+    [false, true].flatMap((settled) => [1, 3, 12].map((displayStep) => ({ host, settled, displayStep }))),
+  );
+
+  it.each(cases)("names and preserves the actual row $host/$settled/$displayStep", ({ host, settled, displayStep }) => {
+    const mounted = render(
+      <RunSurfaceRail
+        steps={[{
+          key: "schedule",
+          row: <ScheduleRailStepRow host={host} displayStep={displayStep} settled={settled} />,
+          surface: <div data-testid="selected-schedule">Schedule controls</div>,
+        }]}
+        rail={<DetailRow />}
+        detail={<RunProgress />}
+        initialSelection="detail"
+      />,
+    );
+    const row = mounted.getByRole("button", { name: `${displayStep} Schedule` });
+    expect(row.getAttribute("aria-label")).toBe(`${displayStep} Schedule`);
+    expect(mounted.container.querySelectorAll('[data-schedule-rail-step][aria-label]').length).toBe(1);
+    expect(row.textContent).toBe(settled ? "Schedule" : `${displayStep}Schedule`);
+    expect(row.getAttribute("data-schedule-rail-host")).toBe(host);
+    expect(row.getAttribute("data-schedule-step-settled")).toBe(String(settled));
+    const indicator = row.querySelector('[data-conformance-id="schedule-rail-indicator"]')!;
+    expect(indicator.querySelector("svg") !== null).toBe(settled);
+    expect(indicator.textContent).toBe(settled ? "" : String(displayStep));
+    expect(row.getAttribute("data-schedule-step-selected")).toBe("false");
+    expect(row.hasAttribute("aria-current")).toBe(false);
+    expect(row.hasAttribute("aria-disabled")).toBe(false);
+    fireEvent.click(row);
+    expect(mounted.getByTestId("selected-schedule").textContent).toBe("Schedule controls");
+    expect(row.getAttribute("data-schedule-step-selected")).toBe("true");
+    expect(row.getAttribute("aria-current")).toBe("step");
+    fireEvent.click(mounted.getByTestId("detail-row"));
+    expect(mounted.getByTestId("run-detail-panel")).not.toBeNull();
+    expect(row.getAttribute("data-schedule-step-selected")).toBe("false");
+    expect(row.getAttribute("aria-label")).toBe(`${displayStep} Schedule`);
+  });
+});
 
 describe("the schedule step's surface opens in the RUN DETAIL, not under its rail row", () => {
   it("draws the form inside the run-detail column and NOT inside the rail column", async () => {

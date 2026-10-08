@@ -19,7 +19,7 @@ import type { ActorRoleHints } from "./auth-policy";
 import { enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
-import { assertAgentPackageRunnable } from "./runtime-install-gate";
+import { assertAgentPackageRunnable, type AgentInstallRefusal } from "./runtime-install-gate";
 import {
   readAgentRunById,
   readAgentRunMessages,
@@ -135,7 +135,7 @@ export type CreatePendingRunArgs = {
 export type CreatePendingRunResult =
   | { ok: true; runId: string }
   // See TriggerAgentRunResult — actionable preflight failure fields.
-  | { ok: false; error: string; code?: string; settingsHref?: string };
+  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal };
 
 /**
  * Creates an empty `pending_input` run for any template. The dispatcher's
@@ -233,7 +233,7 @@ async function createAndTriggerRunCore(
     template.packageName ?? template.name,
     { packageVersion: template.packageVersion ?? null },
   );
-  if (notRunnable) return { ok: false, error: notRunnable.error };
+  if (notRunnable) return { ok: false, ...notRunnable };
   // orgId is resolved by the caller (do NOT re-resolve session inside this
   // helper) and threaded through to createAgentRunPendingInput.
   // cinatra#1940 P3 (Decision 2): mint the member session authority ONCE, up
@@ -677,7 +677,18 @@ export async function buildSubmissionMapByStepIndex(
       }
     }
     const slotMeta = v["slotMeta"] as { slotId?: unknown } | undefined;
-    return typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"]);
+    if (typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"])) return true;
+    // The prompt writer stores parsed context JSON directly. Keep that exact
+    // canonical envelope out of this policy cursor too, without dropping an
+    // ordinary policy answer merely because it happens to have selectedRefs.
+    return Object.keys(v).length === 3
+      && typeof v["slotId"] === "string" && v["slotId"].trim().length > 0
+      && (v["resolutionMode"] === "override" || v["resolutionMode"] === "accumulate")
+      && Array.isArray(v["selectedRefs"])
+      && v["selectedRefs"].every(ref => ref && typeof ref === "object"
+        && ["artifactId", "representationRevisionId", "semanticAssertionId"].every(key =>
+          typeof (ref as Record<string, unknown>)[key] === "string"
+          && ((ref as Record<string, unknown>)[key] as string).trim().length > 0));
   };
   const prompts = allPrompts.filter((p) => !isContextSubmission(p.submittedValues));
 
@@ -717,6 +728,47 @@ export async function buildSubmissionMapByStepIndex(
     }
   }
   return entries;
+}
+
+export type AnsweredContextRailReading = {
+  reviewTaskId: string; label: string;
+  answers: readonly {field: string; label: string; value: string}[];
+};
+
+/** Separate task-bound context history, never a policy prompt cursor entry. */
+export async function readAnsweredContextHistory(runId: string): Promise<AnsweredContextRailReading[]> {
+  const session=await requireAuthSession().catch(()=>null);
+  if(!session?.user?.id) return [];
+  const actor:PrimitiveActorContext={actorType:"human",source:"ui",userId:session.user.id};
+  const run=await readAgentRunById(runId,actor).catch(()=>null);
+  if(!run || run.id!==runId || !run.orgId) return [];
+  const {readAgentTemplateById}=await import("./store");
+  const template=await readAgentTemplateById(run.templateId).catch(()=>null);
+  if(!template?.packageName) return [];
+  const {readConfirmedContextGates}=await import("./agent-run-hitl-prompts");
+  const gates=await readConfirmedContextGates(run.id,run.orgId,template.packageName).catch(()=>[]);
+  const result:AnsweredContextRailReading[]=[];
+  for(const gate of gates){
+    const refs=gate.submittedValues.selectedRefs as unknown[];
+    const names:string[]=[];
+    if(refs.length){
+      try {
+        const viewer=await requireActorContext();
+        const {readArtifactForSettledReview}=await import("@/lib/artifacts/artifact-service");
+        for(const ref of refs){
+          const artifactId=(ref as {artifactId?:unknown})?.artifactId;
+          if(typeof artifactId!=="string") continue;
+          const access=readArtifactForSettledReview({artifactId,orgId:run.orgId,actor:viewer});
+          if(access.kind==="ok" && access.artifact.title?.trim()) names.push(access.artifact.title);
+        }
+      } catch { /* Reference labels remain private when their read is refused. */ }
+    }
+    const label=gate.label.replace(/([a-z0-9])([A-Z])/g,"$1 $2").replace(/^./,c=>c.toUpperCase());
+    result.push({reviewTaskId:gate.reviewTaskId,label,answers:[{field:"selectedRefs",label,
+      value:refs.length===0 ? "No context selected" : names.length===refs.length ? names.join(", ")
+        : [...names,"Selection unavailable"].join(", ")}]});
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

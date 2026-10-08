@@ -26,6 +26,14 @@
  * schedule that has never fired — keeps the model's lead-in as its one line,
  * which is what the section's first-shown and configured examples draw.
  *
+ * AND THE STOPPED READING'S ONE LINE IS ITS OWN PAST-TENSE REPORT
+ * (cinatra#3304). Section VI says "Once it is stopped, the turn says so in the
+ * past tense", and the one line it fixes for that reading is "The recurring
+ * schedule was stopped; its rows are no longer editable." The sentence about
+ * pressing the control is the fired-recurring note's description of Cancel
+ * schedule — it speaks of a press still to come — and is not this reading's
+ * sentence, so it is not what this file measures over a stopped card.
+ *
  *   pnpm --filter @cinatra-ai/chat exec vitest run \
  *     src/__tests__/schedule-standing-line-single-prose-3193-fix9.test.tsx
  */
@@ -108,7 +116,7 @@ const FIRED_RECURRING_SENTENCE =
 const SPENT_ONE_OFF_SENTENCE =
   "It ran at the time you set. A one-time schedule is spent once it fires, so the rows below are the record of it and cannot be changed.";
 const STOPPED_RECURRING_SENTENCE =
-  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
+  "The recurring schedule was stopped; its rows are no longer editable.";
 
 const RUN_ID = "1d3a7c60-8b21-4f0e-9a55-6c2b4d0f7a13";
 const CARD_REF = "schedule-ref-3193-fix9";
