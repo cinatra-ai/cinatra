@@ -431,7 +431,8 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
  * surface, so it is answered from the run's own rows rather than from a model
  * turn or a pull tool:
  *
- *   `reviewTaskId` — the run's most recent review gate, PENDING OR RESOLVED. The
+ *   `reviewTaskId` — the FIRST pending gate in raise order, or the most recent
+ *     resolved gate when no pending gate remains. The
  *     resolved one is deliberately included: a reader who approves in place must
  *     keep seeing what they decided, and the card's own state ladder draws that
  *     (§IV settled) from the same ref. Dropping it here would replace the
@@ -496,12 +497,26 @@ export async function readRunReviewSlot(
       ),
     )
     .limit(1);
-  const [gate] = await db
-    .select({ reviewTaskId: artifactReviewGates.reviewTaskId })
+  // Use the rail's actual comparator, including task-key ties. Database text
+  // collation need not equal JavaScript localeCompare, so SQL cannot elect that
+  // tie on the rail's behalf. Keep SQL's old DESC order for settled history.
+  // This reads each run-scoped gate's small metadata projection instead of one
+  // row; the common path still makes three queries, without loading targets.
+  const firstPendingReview = <T extends { status: string; createdAt: Date; reviewTaskId: string }>(rows: readonly T[]): T | undefined => {
+    let first: T | undefined;
+    for (const row of rows) {
+      if (row.status !== "pending") continue;
+      const time = first ? row.createdAt.valueOf() - first.createdAt.valueOf() : 0;
+      if (!first || time < 0 || (time === 0 && row.reviewTaskId.localeCompare(first.reviewTaskId) < 0)) first = row;
+    }
+    return first;
+  };
+  const gates = await db
+    .select({ reviewTaskId: artifactReviewGates.reviewTaskId, status: artifactReviewGates.status, createdAt: artifactReviewGates.createdAt })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
-    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id))
-    .limit(1);
+    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
+  const gate = firstPendingReview(gates) ?? gates[0];
   // AND IS THE RUN ITSELF WAITING ON THIS REVIEW? (cinatra#3046.)
   //
   // The two facts above describe the REVIEW. This one describes the RUN, and no
@@ -532,9 +547,9 @@ export async function readRunReviewSlot(
 
   // AND FOR A PARKED RUN THE GATE IS THE ONE ITS OWN PRODUCTION LINKED.
   //
-  // "The run's most recent review gate, pending or resolved" is the right answer
-  // for a run that has FINISHED: a decided review stays on file as read-only
-  // history and the surface draws it. For a run PARKED on its produced output's
+  // "The run's most recent resolved review gate" is the right answer
+  // for a run that has FINISHED with no pending gate: a decided review stays on file as
+  // read-only history and the surface draws it. For a run PARKED on its produced output's
   // review it can be the wrong gate entirely. A run that owes a SECOND review
   // carries both at once — the first gate decided, the next one not minted yet
   // (or its linkage failed closed) — and naming the decided one there draws a
@@ -553,9 +568,9 @@ export async function readRunReviewSlot(
   // AND AMONG THAT LINKAGE, THE ORDER IS THE HOLD'S OWN LADDER, because "the
   // newest linked gate" is still the wrong gate in two reachable states:
   //
-  //   • AN UNDECIDED GATE WINS over a decided one, however new the decided one
-  //     is. The undecided one is what the run is being held for and the only one
-  //     the reader can act on; a newer decided gate would hide it.
+  //   • THE FIRST UNDECIDED GATE in rail raise order wins over a decided one,
+  //     however new the decided one is. The undecided one is what the run is being
+  //     held for and the only one the reader can act on; a newer decided gate would hide it.
   //   • NOTHING UNDECIDED, AND ANOTHER PRODUCTION STILL PENDING ⇒ NO GATE YET.
   //     A run reviewed once and then producing again carries its first gate's
   //     linkage for ever, so this is the state that would draw the review the
@@ -593,6 +608,7 @@ export async function readRunReviewSlot(
           .select({
             reviewTaskId: artifactReviewGates.reviewTaskId,
             status: artifactReviewGates.status,
+            createdAt: artifactReviewGates.createdAt,
           })
           .from(artifactReviewGates)
           .where(
@@ -602,7 +618,7 @@ export async function readRunReviewSlot(
             ),
           )
           .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
-  const undecided = linkedGates.find((g) => g.status !== "resolved");
+  const undecided = firstPendingReview(linkedGates);
   const heldGate = undecided ?? (pendingProduced ? undefined : linkedGates[0]);
   return {
     reviewTaskId: heldGate?.reviewTaskId ?? null,

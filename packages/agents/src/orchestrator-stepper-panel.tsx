@@ -1749,6 +1749,7 @@ function StepperColumn({
                   >
                     <StepperTrigger
                       className={RUN_PAGE_RAIL_ROW_CLASS}
+                      aria-label={`${s.index} ${s.label}`}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
                       onClick={
@@ -2710,6 +2711,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     mayStillOpen: reviewMayStillOpen,
     stillReading: reviewStillReading,
   } = useRunReviewSlot({
+    runId,
     status,
     initial: initialReviewGate,
     read: slotReader,
@@ -2954,6 +2956,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           setAnsweredSetupReading({ key: gateKey, ...answer });
         }}
         onApprovalSubmitted={(values, schema, xRenderer) => {
+          if (!embedMode) router.refresh();
           const entry = stepperSteps.find((s) => (s as { xRenderer?: string }).xRenderer === xRenderer);
           if (entry) {
             setLiveSubmissionMap((prev) => new Map([...prev, [entry.index, {

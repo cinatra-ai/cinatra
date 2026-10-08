@@ -30,13 +30,15 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 
-vi.mock("lucide-react", () => {
+vi.mock("lucide-react", async () => {
+  const actual = await vi.importActual<typeof import("lucide-react")>("lucide-react");
   const StubIcon: React.FC = () => null;
   return new Proxy({} as Record<string, React.FC>, {
     get: (_target, prop) => {
       if (prop === "__esModule") return true;
       if (prop === "then") return undefined;
       if (typeof prop === "symbol") return undefined;
+      if (prop === "Loader2Icon") return actual.Loader2Icon;
       return StubIcon;
     },
     has: () => true,

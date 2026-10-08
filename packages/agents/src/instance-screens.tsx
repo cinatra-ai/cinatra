@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildRunStepPath } from "@/lib/agent-url";
+import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildAgentWorkspacePath, buildRunStepPath } from "@/lib/agent-url";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -13,6 +13,7 @@ import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surf
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
+import { RunStartRefusedPanel } from "./run-start-refused-panel";
 import {
   getAuthSession,
   isPlatformAdmin,
@@ -93,7 +94,7 @@ import type { OwnerView as CoOwnerView } from "@/components/permissions-form";
 import type { AvailableScopes } from "@/components/access-combobox";
 import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
-import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
+import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, readAnsweredContextHistory, type AnsweredContextRailReading, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
 // cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
 // run's own access, resolved on the server so no window is drawn for a person
@@ -156,7 +157,7 @@ import {
   type RunMadeArtifactRow,
 } from "./run-made-reading";
 import { RunMadeStepSurface } from "./run-made-step-surface";
-import { buildRunInputRailSteps } from "./run-input-rail-steps";
+import { buildRunInputRailSteps, buildAnsweredContextRailSteps } from "./run-input-rail-steps";
 // The gate's own screen names its rail row, by the same rule the gate's card
 // titles itself (cinatra#3221) -- one derivation, so the row and the card
 // cannot say two different things about one gate.
@@ -1522,6 +1523,17 @@ export async function SetupScreen({
         }),
       );
     }
+    if (result.installRefusal?.kind === "missing-required-dependency") {
+      return <RunStartRefusedPanel
+        agentName={template.name} missing={result.installRefusal.missing}
+        requirementsHref={buildExtensionHeaderLink(template.packageName, isPlatformAdmin(session))?.extensionHref ?? null}
+        agentsHref={`${scopeBase ?? ""}/agents`}
+        crumbEntries={[
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
+        ]}
+      />;
+    }
     notFound();
   }
 
@@ -1803,6 +1815,14 @@ export async function SetupScreen({
   const initialHitlContext = run
     ? await deriveRunHitlContext(run, { template }).catch(() => null)
     : null;
+
+  // Confirmed past context answers are independent of the live interrupt and
+  // renderer-policy cursor. Unavailable persistence never fabricates history.
+  let answeredContextHistory: AnsweredContextRailReading[] = [];
+  if (run) {
+    try { answeredContextHistory = await readAnsweredContextHistory(run.id); }
+    catch { /* Optional unavailable history never invents a settled answer. */ }
+  }
 
   // ── THE RUN'S OWN INPUT STEPS (cinatra#3068) ─────────────────────────────
   //
@@ -2845,6 +2865,23 @@ export async function SetupScreen({
               // exception for it — it names no input step anywhere — so there
               // is no second drawn sentence to weigh, and the Skills entry
               // stands above these.
+              // A forecast Schedule has the same fixed place as a real one
+              // (§I; #3679), ahead of input work. Add it before mapping the
+              // input rows so their numerals count it exactly once.
+              if (
+                !railSteps.some((step) => step.key === "schedule") &&
+                !parkedScheduleStep &&
+                railDrawsUpcomingRunSteps({
+                  inputStepIsOpen,
+                  inputStepsInRail,
+                  gateStepInRail: hasRecommendationStep,
+                  hasExecution: runHasExecution,
+                })
+              ) {
+                railSteps.push(...buildSetupRailSteps([
+                  { key: "schedule", reached: false, settled: false, surface: null },
+                ], runSurfaceRailNumberedCount(railSteps.map((step) => step.key))));
+              }
               if (inputStepsInRail) {
                 // BENEATH THE SCHEDULE, AND NUMBERED AFTER IT (cinatra#3478).
                 // These rows number themselves from their own index, so an
@@ -2853,6 +2890,8 @@ export async function SetupScreen({
                 const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
                 railSteps.push(...buildRunInputRailSteps(runInputSteps, runDetailFallback, railRowsAboveTheInputSteps));
               }
+              railSteps.push(...buildAnsweredContextRailSteps(answeredContextHistory,
+                runSurfaceRailNumberedCount(railSteps.map(step=>step.key))));
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
               //
@@ -2985,7 +3024,12 @@ export async function SetupScreen({
                   hasExecution: runHasExecution,
                 }),
                 drawnKeys: railSteps.map((step) => step.key),
-              });
+              }).filter((key) =>
+                // The persisted rail already carries the real reviews, pending
+                // or settled. A second generic forecast inserts an extra row
+                // before that history and changes its place (#3679).
+                key !== "review" || !rail.entries.some((entry) => entry.kind === "gate"),
+              );
               // AND THE SKILLS PLACEHOLDER KEEPS THE HEAD OF THE RAIL, LIKE
               // THE STEP IT STANDS FOR (cinatra#3047 fix leg 8, convergence).
               //
@@ -3022,10 +3066,11 @@ export async function SetupScreen({
                   ...buildSetupRailSteps(upcomingHeadKeys.map(asUpcomingStep), 0),
                 );
               }
-              if (upcomingNumberedKeys.length > 0) {
+              const upcomingRowsAboveWork = upcomingNumberedKeys.filter((key) => key !== "review");
+              if (upcomingRowsAboveWork.length > 0) {
                 railSteps.push(
                   ...buildSetupRailSteps(
-                    upcomingNumberedKeys.map(asUpcomingStep),
+                    upcomingRowsAboveWork.map(asUpcomingStep),
                     // THE OFFSET IS THE RAIL'S OWN NUMERAL RULE (cinatra#3047),
                     // not this list's length. The Skills entry above draws the
                     // drawing's glyph and consumes no numeral, so the steps
@@ -3117,6 +3162,7 @@ export async function SetupScreen({
                 // steps in neither column.
                 gateStepCount:
                   railSteps.length +
+                  (upcomingNumberedKeys.includes("review") ? 1 : 0) +
                   (railCarriesMadeStep ? 1 : 0) +
                   reviewSelectionSteps.length,
                 panel: runDetailPanel,
@@ -3135,6 +3181,16 @@ export async function SetupScreen({
                   stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
                 />
               ) : null;
+              // Review is a forecast after the work, never a head row above
+              // it (§I; #3679). The existing frame tail preserves selection
+              // and separator semantics. Count only work rows actually drawn.
+              if (upcomingNumberedKeys.includes("review")) {
+                railSteps.push(...buildSetupRailSteps(
+                  [asUpcomingStep("review")],
+                  runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) +
+                    (railDraws ? rail.entries.length : 0),
+                ).map((step) => ({ ...step, tail: true })));
+              }
               // THE RUN'S LAST STEP CLOSES THE RAIL (cinatra#3029, fix leg 2).
               //
               // The ratified drawing's artifact review, section I.2: "The

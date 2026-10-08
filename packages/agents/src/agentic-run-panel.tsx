@@ -938,6 +938,7 @@ export function AgenticRunPanel({
     mayStillOpen: reviewMayStillOpen,
     stillReading: reviewStillReading,
   } = useRunReviewSlot({
+    runId,
     status,
     initial: initialReviewGate,
     read: readReviewSlot ?? fallbackSlotReader,

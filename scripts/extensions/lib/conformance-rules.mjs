@@ -375,10 +375,6 @@ export const PROCESS_ENV_ALLOWLIST = new Set([
 export const CONNECTOR_ARTIFACT_BORDER_FLOOR = Object.freeze({
   "@cinatra-ai/wordpress-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
     "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
-  "@cinatra-ai/drupal-mcp-connector:src/register.ts:@cinatra-ai/host:cms-review":
-    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:cms-review)",
-  "@cinatra-ai/blog-connector:src/register.ts:@cinatra-ai/host:blog-routing":
-    "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:blog-routing)",
   "@cinatra-ai/email-connector:src/register.ts:@cinatra-ai/host:email-routing":
     "border.connector-creates-artifact — removed by cinatra#3821's follow-up (@cinatra-ai/host:email-routing)",
 });
@@ -412,8 +408,6 @@ export const CONNECTOR_ARTIFACT_BORDER_FLOOR = Object.freeze({
 export const CONNECTOR_KNOWN_FINDINGS_FLOOR = Object.freeze({
   "@cinatra-ai/anthropic-connector:src/telemetry.ts:fs-ban.direct-filesystem-access":
     "fs-ban.direct-filesystem-access — removed by cinatra#3828",
-  "@cinatra-ai/drupal-assistant-connector:src/settings-page.tsx:env-ban.direct-process-env-access":
-    "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/openai-connector:src/adapter/openai-adapter.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/plane-connector:src/dev-setup.ts:env-ban.direct-process-env-access":
