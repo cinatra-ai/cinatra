@@ -366,11 +366,16 @@ describe("the resolution subprocess is the real one, and the transaction survive
     else process.env.DESIGN_DRAWINGS_DIR = previous;
   });
 
-  /** A local design copy carrying exactly the drawing this repository's pin governs. */
-  const copyDrawing = (text) => {
+  /** Both drawings governed by this repository's current pin are real subprocess inputs. */
+  const copyDrawing = (text, { includeSibling = true } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), "adopt-seam-drawings-"));
     mkdirSync(join(dir, "specs"), { recursive: true });
     writeFileSync(join(dir, "specs", "app-lifecycle-cards.html"), text, "utf8");
+    if (includeSibling) {
+      // Empty on purpose: this fixture supplies the required input, without
+      // inventing a drawn HITL card or field to satisfy the assertions below.
+      writeFileSync(join(dir, "specs", "app-artifact-review.html"), "<main>empty sibling drawing</main>", "utf8");
+    }
     drawings.push(dir);
     return dir;
   };
@@ -428,6 +433,15 @@ describe("the resolution subprocess is the real one, and the transaction survive
     expect(result.unresolved).not.toContain('[data-embed-assistant][data-phase="active"]');
     expect(result.unresolved).toContain('[data-conformance-id="agent-hitl-screen-card"]');
     expect(result.unresolved).toContain('[data-conformance-id="hitl-screen-fields"]');
+  });
+
+  it("refuses and rolls back when just the governed sibling drawing is missing", () => {
+    const dir = copyDrawing("<main>lifecycle drawing</main>", { includeSibling: false });
+    const { result, err, files } = adoptAgainst(dir);
+    expect(result.exitCode).toBe(1);
+    expect(err).toContain("rolled back");
+    expect(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"))).toBe(manifestText());
+    expect(files.get(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"))).toBe(contractText());
   });
 
   it("still rolls the tree back when the subprocess itself cannot run", () => {
