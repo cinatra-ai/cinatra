@@ -27,7 +27,7 @@ import * as fs from "node:fs";
 
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 const wired = vi.hoisted(() => ({ refreshed: { current: null as null | (() => void) } }));
 
@@ -69,6 +69,22 @@ vi.mock("lucide-react", () => {
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
+
+// Storage rows remain raw: the real task-bound receipt reader validates them.
+const history = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
+vi.mock("../db", () => ({
+  agentBuilderPool: { query: async () => ({ rows: history.rows }), on: () => {}, listenerCount: () => 1 },
+  db: {},
+}));
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: {}, STATIC_EXTENSION_RECORDS: [],
+  GENERATED_EXTENSION_SERVER_ENTRIES: {}, GENERATED_CONNECTOR_ENTRY_MODULES: {},
+  GENERATED_CONNECTOR_MCP_MODULES: {}, GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: {},
+  GENERATED_EXTERNAL_MCP_TOOLBOXES: {}, GENERATED_WIDGET_STREAM_AGENTS: {},
+  GENERATED_CHAT_WIDGET_MODULES: {}, GENERATED_CHAT_WIDGET_MANIFEST_MODULES: {},
+  GENERATED_DEV_SETUP_MODULES: {},
+}));
+vi.mock("@/lib/generated/field-renderer-components", () => ({ GENERATED_FIELD_RENDERER_COMPONENTS: {} }));
 
 const RUN_ID = "run-3246-gate";
 
@@ -170,6 +186,8 @@ vi.mock("@/lib/auth-session", () => ({
     user: { id: "user-1", name: "A", email: "a@b.c" },
     session: { activeOrganizationId: "org-1" },
   })),
+  requireAuthSession: async () => ({ user: { id: "user-1" } }),
+  requireActorContext: async () => ({ actorType: "human", source: "ui", userId: "user-1", orgId: "org-1" }),
   isPlatformAdmin: () => false,
   resolveOrgRoleForSession: vi.fn(async () => "member"),
 }));
@@ -183,6 +201,7 @@ vi.mock("@/lib/better-auth-db", () => ({
 
 vi.mock("../store", () => ({
   readAgentTemplateBySlug: vi.fn(async () => TEMPLATE),
+  readAgentTemplateById: vi.fn(async () => TEMPLATE),
   readAgentRunById: vi.fn(async () => makeRun()),
   readAgentRunMessages: vi.fn(async () => []),
   readAgentTemplates: vi.fn(async () => ({ items: [] })),
@@ -190,7 +209,8 @@ vi.mock("../store", () => ({
   readRunCoOwners: vi.fn(async () => []),
 }));
 
-vi.mock("../auth-policy", () => ({
+vi.mock("../auth-policy", async () => ({
+  buildActorContextFromPrimitive: (await vi.importActual<typeof import("@/lib/authz/build-actor-context")>("@/lib/authz/build-actor-context")).buildActorContextFromPrimitive,
   resolveEffectivePolicy: vi.fn(() => ({ runDataVisibility: "owner" })),
   buildScopeReason: vi.fn(() => null),
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
@@ -223,7 +243,8 @@ vi.mock("../hitl-context", () => ({
   deriveRunHitlContext: vi.fn(async () => row.hitlContext),
 }));
 
-vi.mock("../run-actions", () => ({
+vi.mock("../run-actions", async (original) => ({
+  ...await original<typeof import("../run-actions")>(),
   createAndTriggerRunWithContext: vi.fn(async () => ({ ok: false })),
   buildSubmissionMapByStepIndex: vi.fn(async () => []),
   createAndTriggerRun: vi.fn(async () => ({ ok: false })),
@@ -262,6 +283,8 @@ vi.mock("../run-recommendation-core", () => ({
   resolveRecommendationHoldStateForActor: vi.fn(async () => null),
 }));
 
+import { continueBindingDigest, continueGateDigest } from "../agent-run-hitl-prompts";
+import { readAnsweredContextHistory } from "../run-actions";
 import * as instanceScreens from "../instance-screens";
 import { SetupScreen } from "../instance-screens";
 import * as frame from "../run-surface-rail";
@@ -441,6 +464,7 @@ const DRAWN_AT_THE_GATE = ["Skills", "Schedule", "Setup", "Draft Context", "Revi
 beforeEach(() => {
   vi.stubGlobal("EventSource", StubEventSource);
   wired.refreshed.current = null;
+  history.rows = [];
   atMoment("working");
 });
 
@@ -461,6 +485,68 @@ afterAll(() => {
 });
 
 describe("cinatra#3246 -- the gate the run stops at after its trigger row is a work-step entry", () => {
+  it("keeps confirmed past context above the later live gate, with its own numeral and read-only answers", async () => {
+    atMoment("gate");
+    const answer = { slotId: "draftContext", resolutionMode: "accumulate", selectedRefs: [] };
+    const materializedAt = "2026-10-08T00:00:00.000Z";
+    const gate = {
+      runId: RUN_ID, reviewTaskId: "wayflow-context-A", xRenderer: "context-selector", materializedAt,
+      inputSchema: { type: "object", properties: { selectedRefs: { type: "array" } } },
+      values: { slotMeta: { slotId: "draftContext" } },
+    };
+    // Same persisted task-A / later live task-C model as the current history reader's guard.
+    history.rows = [{
+      step_key: "context-A", submitted_values: answer, review_task_id: gate.reviewTaskId,
+      x_renderer: gate.xRenderer, input_schema: gate.inputSchema, gate_values: gate.values,
+      field_name: null, a2a_context_id: "ctx", materialized_at: materializedAt,
+      dispatch_receipt: {
+        version: 1, runId: RUN_ID, orgId: TEMPLATE.orgId, agentId: TEMPLATE.packageName,
+        reviewTaskId: gate.reviewTaskId, contextId: "ctx", returnedTaskId: "review-B",
+        returnedState: "input-required", materializedAt,
+        schemaDigest: continueGateDigest(gate), answerDigest: continueBindingDigest(answer),
+        acknowledgedAt: "2026-10-08T00:01:00.000Z",
+      },
+    }];
+    row.lifecycleCardRef = "wayflow-context-C";
+    row.hitlContext = {
+      xRenderer: "context-selector", currentValues: { ...CONTEXT_GATE_PAYLOAD, slotMeta: { slotId: "laterContext" } },
+      fieldName: null, schema: { type: "object", properties: {} }, reviewTaskId: "wayflow-context-C",
+    };
+    expect(await readAnsweredContextHistory(RUN_ID)).toEqual([{
+      reviewTaskId: "wayflow-context-A", label: "Draft Context",
+      answers: [{ field: "selectedRefs", label: "Draft Context", value: "No context selected" }],
+    }]);
+    const { container } = render(await serverTree());
+    const reading = readRail(container);
+    READINGS["confirmed context before a later current gate"] = reading;
+    expect(reading.rows.map((r) => r.key)).toEqual([
+      "recommendation", "schedule", "input:0", "context:wayflow-context-A", "gate", "review",
+    ]);
+    const allRows = Array.from(container.querySelectorAll<HTMLElement>(
+      `[data-run-step-rail-column] ${RAIL_ROWS.split(",").join(",[data-run-step-rail-column] ")},[data-run-step-rail-column] [data-rail-kind="step"]`,
+    ));
+    expect(allRows.map((el) => (el.textContent ?? "").trim().replace(/^\d+/, ""))).toEqual([
+      "Skills", "Schedule", "Setup", "Draft Context · continued", "Later Context", "Draft the post", "Review",
+    ]);
+    // Settled rows draw checks, but retain their numeral in the accessible name.
+    expect(reading.rows.map((r) => container.querySelector(
+      r.key === "recommendation" ? "[data-recommendation-rail-step]" : `[data-run-surface-rail-step-key="${r.key}"]`,
+    )?.getAttribute("aria-label"))).toEqual([
+      null, "1 Schedule", "2 Setup", "3 Draft Context · continued", "4 Later Context", "6 Review",
+    ]);
+    expect(container.querySelector('[data-rail-kind="step"]')?.textContent?.trim()).toBe("5Draft the post");
+    expect(reading.currentCount).toBe(1);
+    expect(reading.rows.filter((r) => r.current).map((r) => r.key)).toEqual(["gate"]);
+    expect(reading.selectedStep).toBe("gate");
+    const past = container.querySelector<HTMLElement>('[data-run-surface-rail-step-key="context:wayflow-context-A"]')!;
+    const live = container.querySelector<HTMLElement>('[data-run-surface-rail-step-key="gate"]')!;
+    expect(past.getAttribute("data-run-surface-rail-settled")).toBe("true");
+    expect(past.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    fireEvent.click(past);
+    await waitFor(() => expect(container.textContent).toContain("No context selected"));
+    expect(readRail(container).selectedStep).toBe("context:wayflow-context-A");
+  });
+
   it("(i) a fresh render at the gate reads Skills, Schedule, Setup, Draft Context, Review with Draft Context current", async () => {
     const reading = await freshReading("gate");
     expect.soft(reading.rows.map((r) => r.title)).toEqual(DRAWN_AT_THE_GATE);
@@ -699,6 +785,12 @@ describe("the pure arms", () => {
       "input:0",
       "gate",
       "review",
+    ]);
+  });
+
+  it("keeps context history in receipt order after all inputs and before the live gate, without promoting unknown keys", () => {
+    expect(order(["gate", "context:task-A", "input:1", "context:task-B", "input:0", "unknown", "review"])).toEqual([
+      "input:0", "input:1", "context:task-A", "context:task-B", "gate", "unknown", "review",
     ]);
   });
 

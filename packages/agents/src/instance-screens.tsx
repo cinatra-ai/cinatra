@@ -833,7 +833,11 @@ export function orderRunRailSteps<T extends { key: string; row?: ReactNode }>(
   const rank = (key: string): [number, number] =>
     key.startsWith("input:")
       ? [2, Number(key.slice("input:".length))]
-      : [RUN_RAIL_STEP_KIND_RANK[key] ?? 4, 0];
+      // Confirmed context is past work: keep receipt order after inputs,
+      // above a later live gate. Unknown keys retain their existing rank.
+      : key.startsWith("context:")
+        ? [2.5, 0]
+        : [RUN_RAIL_STEP_KIND_RANK[key] ?? 4, 0];
   const ordered = steps
     .map((step, at) => ({ step, at, rank: rank(step.key) }))
     .sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.at - b.at)
