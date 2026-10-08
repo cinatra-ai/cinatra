@@ -2950,6 +2950,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           setAnsweredSetupReading({ key: gateKey, ...answer });
         }}
         onApprovalSubmitted={(values, schema, xRenderer) => {
+          if (!embedMode) router.refresh();
           const entry = stepperSteps.find((s) => (s as { xRenderer?: string }).xRenderer === xRenderer);
           if (entry) {
             setLiveSubmissionMap((prev) => new Map([...prev, [entry.index, {
