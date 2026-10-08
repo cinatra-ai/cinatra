@@ -21,7 +21,8 @@
  *   cd packages/agents && pnpm exec vitest run \
  *     src/__tests__/run-window-panel-single-importer.invariant.test.ts
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -86,11 +87,11 @@ function walk(dir: string, out: string[]): void {
  */
 const SPECIFIER = /from\s+["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)|require\(\s*["']([^"']+)["']\s*\)/g;
 
-function resolvesToThePanel(fromFile: string, specifier: string): boolean {
+function resolvesToThePanel(fromFile: string, specifier: string, repoRoot = REPO_ROOT): boolean {
   if (specifier.startsWith(".")) {
     const abs = path.resolve(path.dirname(fromFile), specifier);
-    const rel = path.relative(REPO_ROOT, abs).split(path.sep).join("/");
-    return rel === PANEL_MODULE.replace(/\.tsx$/, "");
+    const rel = path.relative(repoRoot, abs).split(path.sep).join("/");
+    return rel === PANEL_MODULE || rel === PANEL_MODULE.replace(/\.tsx$/, "");
   }
   return (
     specifier === "@cinatra-ai/agents/hitl-conversation-panel" ||
@@ -98,16 +99,16 @@ function resolvesToThePanel(fromFile: string, specifier: string): boolean {
   );
 }
 
-function importersOfThePanel(): string[] {
+function importersOfThePanel(repoRoot = REPO_ROOT): string[] {
   const files: string[] = [];
   for (const root of SOURCE_ROOTS) {
-    const abs = path.join(REPO_ROOT, root);
+    const abs = path.join(repoRoot, root);
     if (!existsSync(abs)) continue;
     walk(abs, files);
   }
   const importers = new Set<string>();
   for (const file of files) {
-    const rel = path.relative(REPO_ROOT, file).split(path.sep).join("/");
+    const rel = path.relative(repoRoot, file).split(path.sep).join("/");
     if (rel === PANEL_MODULE) continue;
     const text = readFileSync(file, "utf8");
     if (!text.includes("hitl-conversation-panel")) continue;
@@ -116,7 +117,7 @@ function importersOfThePanel(): string[] {
     while ((m = SPECIFIER.exec(text)) !== null) {
       const spec = m[1] ?? m[2] ?? m[3];
       if (!spec) continue;
-      if (resolvesToThePanel(file, spec)) importers.add(rel);
+      if (resolvesToThePanel(file, spec, repoRoot)) importers.add(rel);
     }
   }
   return [...importers].sort();
@@ -159,5 +160,55 @@ describe("E1 — the run-window panel has exactly one importer", () => {
     );
     expect(/\b(it|describe|test)\.(skip|todo)\b/.test(self)).toBe(false);
     expect(/\bprocess\.env\b/.test(self)).toBe(false);
+  });
+});
+
+/** Exercise the actual scanner against isolated product-shaped source trees.
+ * The shipped panel and allowed chrome bytes are copied, never executed or
+ * altered. A forbidden source module uses legal import syntax for that target. */
+function fixtureImporters(importSource: string, target = "packages/agents/src/forbidden-screen.tsx"): string[] {
+  const root = mkdtempSync(path.join(tmpdir(), "run-window-import-fence-"));
+  try {
+    for (const module of [PANEL_MODULE, THE_ONE_IMPORTER]) {
+      const file = path.join(root, module);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, readFileSync(path.join(REPO_ROOT, module)));
+    }
+    const file = path.join(root, target);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, importSource);
+    return importersOfThePanel(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("E1 recognizes legal names of the real panel module", () => {
+  it.each([
+    'import { HitlConversationPanel } from "./hitl-conversation-panel.tsx";',
+    'const panel = import("./hitl-conversation-panel.tsx");',
+    'const panel = require("./hitl-conversation-panel.tsx");',
+  ])("names the forbidden explicit-extension importer: %s", (source) => {
+    expect(fixtureImporters(source)).toEqual([
+      "packages/agents/src/forbidden-screen.tsx", THE_ONE_IMPORTER,
+    ]);
+  });
+
+  it("retains the extensionless relative and declared package-export witnesses", () => {
+    const manifest = JSON.parse(readFileSync(path.join(REPO_ROOT, "packages/agents/package.json"), "utf8"));
+    expect(manifest.exports["./hitl-conversation-panel"]).toBe("./src/hitl-conversation-panel.tsx");
+    for (const source of [
+      'const panel = require("./hitl-conversation-panel");',
+      'import { HitlConversationPanel } from "@cinatra-ai/agents/hitl-conversation-panel";',
+    ]) {
+      expect(fixtureImporters(source)).toEqual([
+        "packages/agents/src/forbidden-screen.tsx", THE_ONE_IMPORTER,
+      ]);
+    }
+  });
+
+  it("does not mistake a different relative target for the panel", () => {
+    expect(fixtureImporters('const panel = require("./other/hitl-conversation-panel.tsx");'))
+      .toEqual([THE_ONE_IMPORTER]);
   });
 });
