@@ -24,6 +24,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.resolve(__dirname, "../../../..");
@@ -112,6 +113,16 @@ function importersOfThePanel(repoRoot = REPO_ROOT): string[] {
     if (rel === PANEL_MODULE) continue;
     const text = readFileSync(file, "utf8");
     if (!text.includes("hitl-conversation-panel")) continue;
+    // A bare import has no `from`. Parse actual declarations so comments and
+    // string/template contents that resemble one do not become importers.
+    const parsed = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false);
+    for (const statement of parsed.statements) {
+      if (ts.isImportDeclaration(statement) && statement.importClause === undefined &&
+          ts.isStringLiteral(statement.moduleSpecifier) &&
+          resolvesToThePanel(file, statement.moduleSpecifier.text, repoRoot)) {
+        importers.add(rel);
+      }
+    }
     SPECIFIER.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = SPECIFIER.exec(text)) !== null) {
@@ -164,8 +175,9 @@ describe("E1 — the run-window panel has exactly one importer", () => {
 });
 
 /** Exercise the actual scanner against isolated product-shaped source trees.
- * The shipped panel and allowed chrome bytes are copied, never executed or
- * altered. A forbidden source module uses legal import syntax for that target. */
+ * The shipped panel and allowed chrome bytes are copied, never executed; the
+ * shipped files stay unchanged. An allowed-chrome witness appends an import
+ * only to its private copy. Other witnesses use a separate source module. */
 function fixtureImporters(importSource: string, target = "packages/agents/src/forbidden-screen.tsx"): string[] {
   const root = mkdtempSync(path.join(tmpdir(), "run-window-import-fence-"));
   try {
@@ -176,7 +188,8 @@ function fixtureImporters(importSource: string, target = "packages/agents/src/fo
     }
     const file = path.join(root, target);
     mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, importSource);
+    const prefix = target === THE_ONE_IMPORTER ? readFileSync(file, "utf8") + "\n" : "";
+    writeFileSync(file, prefix + importSource);
     return importersOfThePanel(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -210,5 +223,36 @@ describe("E1 recognizes legal names of the real panel module", () => {
   it("does not mistake a different relative target for the panel", () => {
     expect(fixtureImporters('const panel = require("./other/hitl-conversation-panel.tsx");'))
       .toEqual([THE_ONE_IMPORTER]);
+  });
+});
+
+describe("E1 recognizes static side-effect imports", () => {
+  const imports = [
+    'import "./hitl-conversation-panel.tsx";',
+    'import "./hitl-conversation-panel";',
+    'import "@cinatra-ai/agents/hitl-conversation-panel";',
+  ];
+
+  it.each(imports)("names the forbidden side-effect importer: %s", (source) => {
+    expect(fixtureImporters(source)).toEqual([
+      "packages/agents/src/forbidden-screen.tsx", THE_ONE_IMPORTER,
+    ]);
+  });
+
+  it("still allows the actual chrome when it also imports for side effects", () => {
+    for (const source of imports) {
+      expect(fixtureImporters(source, THE_ONE_IMPORTER)).toEqual([THE_ONE_IMPORTER]);
+    }
+  });
+
+  it("does not count side-effect import text inside comments or literals", () => {
+    for (const source of [
+      '// import "./hitl-conversation-panel.tsx";',
+      '/*\nimport "./hitl-conversation-panel.tsx";\n*/',
+      'const quoted = \'import "./hitl-conversation-panel.tsx";\';',
+      'const template = `\nimport "./hitl-conversation-panel.tsx";\n`;',
+    ]) {
+      expect(fixtureImporters(source)).toEqual([THE_ONE_IMPORTER]);
+    }
   });
 });
