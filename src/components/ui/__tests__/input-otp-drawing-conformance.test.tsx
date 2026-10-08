@@ -51,8 +51,9 @@ if (!Element.prototype.scrollIntoView) {
 }
 
 // input-otp checks this browser hit-test port only to detect password-manager
-// badges after focus. jsdom has no hit testing; report no badge, without
-// supplying any layout, focus, selection or OTP state.
+// badges after focus. jsdom has no hit testing; supply null at that port.
+// The library can then classify a badge as present. This test does not grade
+// badge detection or layout; focus, selection and OTP state remain real.
 if (!document.elementFromPoint) {
   document.elementFromPoint = () => null;
 }
