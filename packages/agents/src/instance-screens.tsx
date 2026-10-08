@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildRunStepPath } from "@/lib/agent-url";
+import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildAgentWorkspacePath, buildRunStepPath } from "@/lib/agent-url";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -13,6 +13,7 @@ import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surf
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
+import { RunStartRefusedPanel } from "./run-start-refused-panel";
 import {
   getAuthSession,
   isPlatformAdmin,
@@ -1521,6 +1522,17 @@ export async function SetupScreen({
           scopeBase: scopeBase ?? null,
         }),
       );
+    }
+    if (result.installRefusal?.kind === "missing-required-dependency") {
+      return <RunStartRefusedPanel
+        agentName={template.name} missing={result.installRefusal.missing}
+        requirementsHref={buildExtensionHeaderLink(template.packageName, isPlatformAdmin(session))?.extensionHref ?? null}
+        agentsHref={`${scopeBase ?? ""}/agents`}
+        crumbEntries={[
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
+        ]}
+      />;
     }
     notFound();
   }
