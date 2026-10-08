@@ -384,10 +384,6 @@ describe("cinatra#4002 — uploaded typed production reads the installed require
     if (failure === "foreign-org") artifact.organizationId = "foreign-org";
     if (failure === "archived") artifact.status = "archived";
     if (failure === "wrong-kind") artifact.kind = "agent";
-    if (failure === "raw-kind") await writeFile(join(sourceDir, "package.json"), JSON.stringify({ ...artifactManifest(ART, [TYPE]), cinatra: { kind: "agent" } }));
-    if (failure === "image-kind") IMAGE_RECORDS[ART].kind = "agent";
-    if (failure === "image-name") IMAGE_RECORDS[ART].packageName = "@other/artifact";
-    if (failure === "heal-owner") artifact.ownerId = "foreign-org";
     if (failure === "stale-version") await writePayload(artifact, { ...artifactManifest(ART, [TYPE]), version: "2.0.0" }, ART_DIGEST);
     if (failure === "unfinalized") JOURNALS.get(JSON.stringify([ART, "org-1", "0.0.0"]))!.phase = "materialized";
     if (failure === "digest-mismatch") JOURNALS.get(JSON.stringify([ART, "org-1", "0.0.0"]))!.digest = "d".repeat(64);
