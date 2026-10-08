@@ -13,6 +13,7 @@
     "./installed-oas-path": "./src/installed-oas-path.ts",
     "./read-llm-requirement-from-mount": "./src/read-llm-requirement-from-mount.ts",
     "./runtime-install-gate": "./src/runtime-install-gate.ts",
+    "./agent-unavailable-action": "./src/agent-unavailable-action.ts",
     "./extension-handler": "./src/extension-handler.ts",
     "./extension-handler-rollback": "./src/extension-handler-rollback.ts",
     "./package-contract": "./src/verdaccio/package-contract.ts",

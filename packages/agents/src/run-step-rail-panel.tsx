@@ -228,7 +228,7 @@ export function RunStepRailPanel({
                       {titleNode}
                     </div>
                   ) : (
-                    <StepperTrigger className={RUN_PAGE_RAIL_ROW_CLASS} tabIndex={-1}>
+                    <StepperTrigger className={RUN_PAGE_RAIL_ROW_CLASS} aria-label={`${displayStep} ${entry.label}`} tabIndex={-1}>
                       {indicatorNode}
                       {titleNode}
                     </StepperTrigger>
