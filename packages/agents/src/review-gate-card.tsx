@@ -158,7 +158,7 @@ import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
-import { reviewGateHeaderTitle } from "@/lib/artifacts/review-surface-model";
+import { reviewGateHeaderTitle, reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
   ReviewSettledOutcome,
@@ -587,7 +587,33 @@ export function ReviewGateCard({
     enabled: present,
     reloadToken,
   });
-  const state: LifecycleCardState | null = resolved?.state ?? null;
+  // #4024: the canonical submit result is already a committed decision. A
+  // delayed/failed re-resolve must not leave its old pending header beside a
+  // second, local success notice. Bind that result to this ref and credential
+  // declaration; any newly resolved envelope takes precedence, including absent
+  // or blocked. No decision instant or remote effect is inferred here.
+  const [decisionBinding, setDecisionBinding] = useState({ ref: view.ref, auth, generation: 0 });
+  let binding = decisionBinding;
+  if (binding.ref !== view.ref || binding.auth !== auth) {
+    binding = { ref: view.ref, auth, generation: binding.generation + 1 };
+    setDecisionBinding(binding);
+  }
+  const [decisionReading, setDecisionReading] = useState({
+    binding, resolved, generation: 0, inFlight: false, outcome: null as ReviewSettledOutcome | null,
+  });
+  if (decisionReading.binding !== binding || decisionReading.resolved !== resolved) {
+    setDecisionReading({
+      binding, resolved, inFlight: false, outcome: null,
+      generation: decisionReading.generation +
+        (decisionReading.binding !== binding || decisionReading.inFlight || decisionReading.outcome !== null ? 1 : 0),
+    });
+  }
+  const serverState = resolved?.state ?? null;
+  const state: LifecycleCardState | null =
+    serverState?.state === "pending" && decisionReading.outcome !== null &&
+    decisionReading.binding === binding && decisionReading.resolved === resolved
+      ? { state: "settled", outcome: decisionReading.outcome }
+      : serverState;
   // §IV's target header(s), composed for this reader by the resolve answer
   // (cinatra#3141 item 7). The CARD draws them, in every island state, because
   // the island only exists in one of its three.
@@ -697,8 +723,26 @@ export function ReviewGateCard({
   // has no such re-render, so the refresh is explicit here — and it now applies
   // on the page too, keeping all three hosts identical.
   const submitAndRefresh: SubmitReviewDecisionAction = async (input) => {
-    const outcome = await (submitAction ?? refBoundSubmit)(input);
-    if (outcome.kind === "decided" || outcome.kind === "changes-requested") refresh();
+    setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+      ? { ...current, inFlight: true } : current);
+    let outcome: Awaited<ReturnType<SubmitReviewDecisionAction>>;
+    try {
+      outcome = await (submitAction ?? refBoundSubmit)(input);
+    } finally {
+      setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+        ? { ...current, inFlight: false } : current);
+    }
+    const settledOutcome = outcome.kind === "decided"
+      ? reviewSettledOutcomeFromDisposition(outcome.disposition)
+      : outcome.kind === "changes-requested"
+        ? reviewSettledOutcomeFromDisposition("changes_requested")
+        : null;
+    if (settledOutcome !== null) {
+      setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+        ? { ...current, outcome: settledOutcome }
+        : current);
+      refresh();
+    }
     return outcome;
   };
 
@@ -737,11 +781,10 @@ export function ReviewGateCard({
         await submitAndRefresh({ disposition: "comment", comment: trimmed }),
       );
     },
-    // `submitAndRefresh` is rebuilt every render, but it closes over exactly
-    // these three — so listing them is listing it, and the callback is rebuilt
-    // whenever the transport it would use actually changes.
+    // Keep the composer submit bound to the current transport AND authorized
+    // reading, just like the decision bar's submit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [submitAction, refBoundSubmit, refresh],
+    [submitAction, refBoundSubmit, refresh, binding, resolved],
   );
 
   // The gate takes composer input only while the SERVER says it is open to this
@@ -844,6 +887,7 @@ export function ReviewGateCard({
   const serverIslandSrc = islandAddress.islandSrc;
   const body = renderState({
     state,
+    decisionGeneration: decisionReading.generation,
     targetHeaders,
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
@@ -934,6 +978,7 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  decisionGeneration: number;
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
@@ -957,6 +1002,7 @@ function renderState(args: {
 }): ReactElement | null {
   const {
     state,
+    decisionGeneration,
     targetHeaders,
     promptWindow,
     settledExchange,
@@ -1110,6 +1156,7 @@ function renderState(args: {
           <ComposerFocusRow binding={focusBinding} />
           {/* §II/§IV — ONE gate-level decision floor, however many targets. */}
           <ReviewDecisionBar
+            key={decisionGeneration}
             permissions={permissions}
             submitAction={submit}
             suggestionDecisionsFor={suggestionDecisionsFor}

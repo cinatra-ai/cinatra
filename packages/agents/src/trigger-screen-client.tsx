@@ -840,7 +840,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <Label className="shrink-0 font-normal">Repeat every</Label>
                     {(recurring.frequency === "daily" || recurring.frequency === "weekly" || recurring.frequency === "monthly") && (
                       <Select value={String(recurring.interval)} onValueChange={(v) => updateRecurring({ interval: Number(v) })}>
-                        <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger aria-label="Repeat every" className="w-20"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {[1, 2, 3, 4, 6, 8, 12].map((n) => (
                             <SelectItem key={n} value={String(n)}>{n}</SelectItem>
@@ -849,7 +849,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       </Select>
                     )}
                     <Select value={recurring.frequency} onValueChange={(v) => updateRecurring({ frequency: v as RecurringFrequency })}>
-                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label="Repeat unit" className="w-32"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="daily">day(s)</SelectItem>
                         <SelectItem value="weekly">week(s)</SelectItem>
@@ -891,7 +891,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     <div className="flex items-center gap-2">
                       <Label className="shrink-0 font-normal">Month</Label>
                       <Select value={String(recurring.yearlyMonth)} onValueChange={(v) => updateRecurring({ yearlyMonth: Number(v) })}>
-                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                        <SelectTrigger aria-label="Month" className="w-24"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {MONTH_LABELS.map((label, i) => (
                             <SelectItem key={i + 1} value={String(i + 1)}>{label}</SelectItem>
@@ -971,7 +971,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         </div>
                         {recurring.monthlyMode === "date" && (
                           <Select value={String(recurring.dayOfMonth)} onValueChange={(v) => updateRecurring({ dayOfMonth: Number(v) })}>
-                            <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                            <SelectTrigger aria-label="Day of month" className="w-20"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
                                 <SelectItem key={d} value={String(d)}>{d}</SelectItem>
@@ -982,7 +982,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         {recurring.monthlyMode === "weekday" && (
                           <>
                             <Select value={String(recurring.nthWeek)} onValueChange={(v) => updateRecurring({ nthWeek: Number(v) as 1|2|3|4 })}>
-                              <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                              <SelectTrigger aria-label="Week of month" className="w-24"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {([1,2,3,4] as const).map((n) => (
                                   <SelectItem key={n} value={String(n)}>{NTH_LABELS[n-1]}</SelectItem>
@@ -990,7 +990,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                               </SelectContent>
                             </Select>
                             <Select value={String(recurring.monthlyWeekday)} onValueChange={(v) => updateRecurring({ monthlyWeekday: Number(v) })}>
-                              <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                              <SelectTrigger aria-label="Weekday" className="w-28"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {WEEKDAY_LABELS.map((label, i) => (
                                   <SelectItem key={i} value={String(i)}>{label}</SelectItem>
@@ -1005,7 +1005,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                   <div className="flex items-center gap-2">
                     <Label className="shrink-0 font-normal">At</Label>
                     <Select value={String(recurring.hour)} onValueChange={(v) => updateRecurring({ hour: Number(v) })}>
-                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label="At hour" className="w-20"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Array.from({ length: 24 }, (_, i) => (
                           <SelectItem key={i} value={String(i)}>{String(i).padStart(2, "0")}</SelectItem>
@@ -1014,7 +1014,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                     </Select>
                     <span className="text-muted-foreground">:</span>
                     <Select value={String(recurring.minute)} onValueChange={(v) => updateRecurring({ minute: Number(v) })}>
-                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                      <SelectTrigger aria-label="At minute" className="w-20"><SelectValue /></SelectTrigger>
                       {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278) — the same
                           defect the schedule card carried: a stated 05:12 found
                           no option for 12 and drew a blank minute. Only the
