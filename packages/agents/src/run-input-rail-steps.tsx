@@ -114,3 +114,18 @@ export function buildRunInputRailSteps(
     };
   });
 }
+
+/** Task-bound settled context entries keep their own read-only detail. */
+export function buildAnsweredContextRailSteps(
+  history: readonly {reviewTaskId:string;label:string;answers:readonly {field:string;label:string;value:string}[]}[],
+  displayOffset=0,
+): RunSurfaceRailStep[] {
+  return history.map((reading,index)=>{
+    const key=`context:${reading.reviewTaskId}` as const;
+    return {key,reached:true,settled:true,selectable:true,
+      surface:<RunInputStepAnsweredReading label={reading.label} answers={reading.answers}/>,
+      row:<RunSurfaceRailRow selectionKey={key} label={reading.label} displayStep={displayOffset+index+1}
+        reached settled selectable conformanceId="run-surface-rail-step"
+        indicatorConformanceId="run-surface-rail-indicator" action="open-context-history-step"/>};
+  });
+}
