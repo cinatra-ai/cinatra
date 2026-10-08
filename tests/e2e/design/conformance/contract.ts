@@ -7459,15 +7459,101 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
     // loading — "reads Looking up... while the lookup is in flight", and the
     // form says so on its own root only while it is.
     loading: async (_page, root) => {
-      const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
-      await expect(async () => {
-        await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
-        await submit.click();
-        await expect(
-          root.locator(`${UPLOAD_FORM_NODE}[data-state="loading"]`),
-        ).toBeVisible({ timeout: 2_000 });
-        await expect(submit).toContainText("Looking up");
-      }).toPass({ timeout: 30_000 });
+      const cleanups = new Map<string, () => Promise<void>>();
+      let finished = false;
+      try {
+        await expect(async () => {
+          if (finished) throw new Error("The loading observation has finished");
+          const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
+          const form = await root.locator(UPLOAD_FORM_NODE).elementHandle({ timeout: 5_000 });
+          if (!form) throw new Error("The upload form is not mounted");
+          if (finished) {
+            await form.dispose();
+            throw new Error("The loading observation has finished");
+          }
+          // Observe before the action: a fast lookup can finish before click's
+          // transport reply arrives. Retain one actual same-form DOM sample,
+          // rather than requiring two later reads inside the loading window.
+          const key = `__conformanceUploadLoading_${crypto.randomUUID()}`;
+          let cleanupPromise: Promise<void> | undefined;
+          const cleanup = () => cleanupPromise ??= (async () => {
+            try {
+              await form.evaluate((node, key) => {
+                const target = node as HTMLElement & Record<string, unknown>;
+                const record = target[key] as { observer: MutationObserver | null } | undefined;
+                record?.observer?.disconnect();
+                delete target[key];
+              }, key);
+            } finally {
+              try {
+                await form.dispose();
+              } finally {
+                cleanups.delete(key);
+              }
+            }
+          })();
+          cleanups.set(key, cleanup);
+          try {
+            await form.evaluate((node, { key, selector, mountSelector, formSelector }) => {
+              const target = node as HTMLElement & Record<string, unknown>;
+              const mount = node.closest(mountSelector);
+              const record = {
+                mount,
+                armed: false,
+                snapshot: null as { state: string; text: string } | null,
+                observer: null as MutationObserver | null,
+              };
+              target[key] = record;
+              record.observer = new MutationObserver(() => {
+                const state = node.getAttribute("data-state");
+                const text = node.querySelector(selector)?.textContent ?? "";
+                if (record.armed && !record.snapshot && node.isConnected && mount?.isConnected
+                  && mount.querySelector(formSelector) === node
+                  && state === "loading" && text.includes("Looking up")) {
+                  record.snapshot = { state, text };
+                  record.observer?.disconnect();
+                }
+              });
+              record.observer.observe(node, {
+                attributes: true,
+                attributeFilter: ["data-state"],
+                childList: true,
+                subtree: true,
+                characterData: true,
+              });
+              if (!mount?.isConnected || node.getAttribute("data-state") === "loading") {
+                throw new Error("The loading driver requires an idle upload form");
+              }
+            }, { key, selector: UPLOAD_RESOLVE_CONTROL, mountSelector: UPLOAD_GITHUB_FORM_MOUNT, formSelector: UPLOAD_FORM_NODE });
+            if (finished) throw new Error("The loading observation has finished");
+            await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+            if (finished) throw new Error("The loading observation has finished");
+            await form.evaluate((node, key) => {
+              const record = (node as HTMLElement & Record<string, unknown>)[key] as { armed: boolean };
+              if (record) record.armed = true;
+            }, key);
+            if (finished) throw new Error("The loading observation has finished");
+            await submit.click({ timeout: 5_000 });
+            if (finished) throw new Error("The loading observation has finished");
+            await expect.poll(() => form.evaluate((node, { key, formSelector }) => {
+              const record = (node as HTMLElement & Record<string, unknown>)[key] as {
+                snapshot: { state: string; text: string } | null;
+                mount: Element | null;
+              } | undefined;
+              return node.isConnected && record?.mount?.isConnected
+                && record.mount.querySelector(formSelector) === node ? record.snapshot : null;
+            }, { key, formSelector: UPLOAD_FORM_NODE }), { timeout: 2_000 }).toEqual({
+              state: "loading",
+              text: expect.stringContaining("Looking up"),
+            });
+          } finally {
+            await cleanup();
+          }
+        }).toPass({ timeout: 30_000 });
+      } finally {
+        finished = true;
+        await Promise.all([...cleanups.values()].map((cleanup) => cleanup()));
+      }
     },
   },
 };
