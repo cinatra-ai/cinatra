@@ -15,7 +15,7 @@
     {
       "packageName": "@cinatra-ai/apollo-connector",
       "repo": "cinatra-ai/apollo-connector",
-      "resolvedSha": "800f505e1ba4f309c2333d0586f3b1b7d2b9bf56"
+      "resolvedSha": "cb01be46c95f40c21f46c84c4fd168d56050faf4"
     },
     {
       "packageName": "@cinatra-ai/apollo-prospecting-agent",
@@ -160,7 +160,7 @@
     {
       "packageName": "@cinatra-ai/crm-connector",
       "repo": "cinatra-ai/crm-connector",
-      "resolvedSha": "abb56f3fe96cf0ec2f8a01e89adecf83cbb2e90b"
+      "resolvedSha": "1b442aff50a4f166506e49875e9b22bf03365c12"
     },
     {
       "packageName": "@cinatra-ai/drupal-agent",
@@ -175,12 +175,12 @@
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
       "repo": "cinatra-ai/drupal-assistant-connector",
-      "resolvedSha": "cb158357b5949b60322e4f3df0e7050ef23b1a84"
+      "resolvedSha": "30152bc1060f38f919a020ed0e977d26dbd9a168"
     },
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "6dd400f3bc155081d39a34bbf73df59c2f3e6004"
+      "resolvedSha": "865aa5982476665c6355ebede711b5c13b506786"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
@@ -270,7 +270,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-oauth-connector",
       "repo": "cinatra-ai/linkedin-oauth-connector",
-      "resolvedSha": "462f79dba12c3d9108b84ff772e2f49ab8201a79"
+      "resolvedSha": "107a8359d0b24abe1a9a429d634e80ef2b1a6dfe"
     },
     {
       "packageName": "@cinatra-ai/list-curation-skill",
@@ -310,7 +310,7 @@
     {
       "packageName": "@cinatra-ai/mcp-client-connector",
       "repo": "cinatra-ai/mcp-client-registry-connector",
-      "resolvedSha": "b44179b72985b06ab2002fb5ce8567a12592468e"
+      "resolvedSha": "9ff98a55585aeed221618861609d7c695d96f10f"
     },
     {
       "packageName": "@cinatra-ai/mcp-server-connector",
@@ -395,7 +395,7 @@
     {
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
-      "resolvedSha": "46408309486f28761b6b1ea1febb003d3cab80b8"
+      "resolvedSha": "e8f6a72d20091fd1f78407d6d4e713f240a22b45"
     },
     {
       "packageName": "@cinatra-ai/twenty-connector",
@@ -425,7 +425,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
       "repo": "cinatra-ai/wordpress-assistant-connector",
-      "resolvedSha": "bd91ff6b7d140fc57f995d686a025ba8fc407be7"
+      "resolvedSha": "0f43e5e6ee6b030d41ad7e0447dc2c5c2e827c1a"
     },
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
@@ -440,7 +440,7 @@
     {
       "packageName": "@cinatra-ai/youtube-connector",
       "repo": "cinatra-ai/youtube-connector",
-      "resolvedSha": "5ea1ba34f965f6e5aac0a50b5d288c7b66e4f20f"
+      "resolvedSha": "2d47f9334191e09542e1c9ed27336d24ae0a217c"
     }
   ]
 }

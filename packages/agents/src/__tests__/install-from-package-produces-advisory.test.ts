@@ -13,7 +13,7 @@ import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 // (resolveTypedProducesContract) runs via importOriginal; only the schema-parse
 // stub is overridden so the compact fixture manifest reaches the preflight.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InstalledExtension, ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
@@ -23,6 +23,8 @@ import { storeDigestDirV2 } from "@/lib/extension-package-store-core";
 const ART = "@cinatra-ai/blog-post-artifact";
 const TYPE = "@cinatra-ai/blog-post-artifact:post";
 const OTHER_TYPE = "@cinatra-ai/blog-post-artifact:comment";
+const DEV_SHA = "a1b2c3d";
+let DEV_ROOT = "";
 
 // Configurable agent manifest slices (produces + required deps) and the
 // registry manifests the preflight resolves for each required artifact dep.
@@ -47,6 +49,17 @@ vi.mock("@/lib/extension-install-ops", () => ({
 vi.mock("@/lib/extension-data-root", () => ({ resolveExtensionDataRoot: () => DATA_ROOT }));
 vi.mock("@/lib/generated/extensions.server", () => ({ get STATIC_EXTENSION_MANIFEST() { return IMAGE_RECORDS; } }));
 vi.mock("@/lib/bundled-digests", () => ({ readRecordedBundledDigests: () => IMAGE_DIGESTS }));
+vi.mock("../../../extensions/src/lifecycle-primitive", () => ({
+  sourceSwitchExtension: async (id: string, source: InstalledExtension["source"]) => {
+    const row = INSTALLED_ROWS.find((row) => row.id === id)!;
+    row.source = source;
+    return row;
+  },
+}));
+vi.mock("@cinatra-ai/extensions/dev-version", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../../extensions/src/dev-version")>(),
+  currentGitSha: () => DEV_SHA,
+}));
 // Only the external root-payload lookup is mocked. Artifact selection, the
 // journal/digest trust selector and actual package.json reads remain real.
 vi.mock("@/lib/extension-store-payload", () => ({
@@ -237,9 +250,11 @@ beforeEach(async () => {
   registryRead.mockImplementation(async (name) => ARTIFACT_MANIFESTS[name] ?? null);
 });
 afterEach(async () => {
+  vi.restoreAllMocks(); vi.unstubAllEnvs();
   if (DATA_ROOT) await rm(DATA_ROOT, { recursive: true, force: true });
   if (EXTRACT_DIR) await rm(EXTRACT_DIR, { recursive: true, force: true });
-  DATA_ROOT = ""; EXTRACT_DIR = "";
+  if (DEV_ROOT) await rm(DEV_ROOT, { recursive: true, force: true });
+  DATA_ROOT = ""; EXTRACT_DIR = ""; DEV_ROOT = "";
 });
 
 // Both registry extracts and finalized uploaded agent payloads must carry the
@@ -524,5 +539,87 @@ describe("typed-claim fixtures preserve the visible Flow input gate", () => {
     await expect(upload()).rejects.toThrow(/Cannot verify start inputs/);
     expect(createLocal).not.toHaveBeenCalled();
     expect(registryRead).not.toHaveBeenCalled();
+  });
+});
+
+// #3759 App458: the real installed lookup reads raw development-local claims.
+async function devLocalFixture(record: "heal" | "git" = "heal") {
+  const { root, artifact } = await uploadedFixture();
+  DEV_ROOT = await realpath(await mkdtemp(join(tmpdir(), "cinatra-dev-local-claim-")));
+  vi.spyOn(process, "cwd").mockReturnValue(DEV_ROOT);
+  vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+  const relative = "extensions/cinatra-ai/blog-post-artifact";
+  const sourceDir = join(DEV_ROOT, relative);
+  await mkdir(sourceDir, { recursive: true });
+  await writeFile(join(sourceDir, "package.json"), JSON.stringify(artifactManifest(ART, [TYPE])));
+  // Exact defaultInstallRow heal shape: explicit version, platform, no digest.
+  artifact.organizationId = null; artifact.ownerLevel = "platform"; artifact.ownerId = null;
+  artifact.version = "1.0.0"; artifact.manifestHash = null;
+  artifact.source = { type: "local", path: sourceDir, resolvedCommitOrTreeHash: "in-tree@1.0.0" };
+  IMAGE_RECORDS[ART] = { packageName: ART, kind: "artifact", version: "1.0.0", sourceDir: relative };
+  root.dependencyEdges = [{ ...requiredArtifactEdge(ART), resolvedInstallId: artifact.id, resolutionReason: "scoped:platform" }];
+  JOURNALS.delete(JSON.stringify([ART, "org-1", "0.0.0"]));
+  if (record === "git") {
+    // Execute the maintained recorder; mock only its canonical write/Git read.
+    const { recordDevExtensionVersion } = await import("@cinatra-ai/extensions/dev-version");
+    expect((await recordDevExtensionVersion(ART, sourceDir, { sha: DEV_SHA })).ok).toBe(true);
+    expect(artifact.version).toBe("1.0.0");
+    expect(artifact.source).toEqual({ type: "local", path: sourceDir, resolvedCommitOrTreeHash: DEV_SHA });
+  }
+  return { root, artifact, sourceDir };
+}
+
+describe("#3759 trusted development-local installed claims", () => {
+  it.each(["heal", "git"] as const)("reads a legitimate %s record's raw claims without digest or registry", async (record) => {
+    await devLocalFixture(record);
+    expect((await upload()).templateId).toBeTruthy();
+    expect(registryRead).not.toHaveBeenCalled();
+    expect(journalRead).not.toHaveBeenCalledWith(ART, null, expect.anything());
+  });
+  it.each(["production", "test", ""])("refuses a nondigest local record outside development (%s)", async (mode) => {
+    await devLocalFixture(); vi.stubEnv("CINATRA_RUNTIME_MODE", mode);
+    await expect(upload()).rejects.toThrow(/typed-production contract failed/);
+    expect(createLocal).not.toHaveBeenCalled(); expect(registryRead).not.toHaveBeenCalled();
+  });
+  it.each(["wrong-name", "wrong-kind", "raw-kind", "image-kind", "image-name", "heal-owner", "manifest-version", "row-version", "image-version", "foreign-org", "heal-own-org", "wrong-hash", "unknown-git", "stale-git", "wrong-row-path", "traversal-path", "wrong-image-path", "missing-image", "unfinalized-upload", "custom-local", "wrong-claim", "package-json-symlink", "package-dir-symlink"])("refuses %s without registry or other-row fallback", async (failure) => {
+    const { artifact, sourceDir } = await devLocalFixture();
+    if (failure === "wrong-name") await writeFile(join(sourceDir, "package.json"), JSON.stringify(artifactManifest("@other/artifact", [TYPE])));
+    if (failure === "wrong-kind") artifact.kind = "agent";
+    if (failure === "raw-kind") await writeFile(join(sourceDir, "package.json"), JSON.stringify({ ...artifactManifest(ART, [TYPE]), cinatra: { kind: "agent" } }));
+    if (failure === "image-kind") IMAGE_RECORDS[ART].kind = "agent";
+    if (failure === "image-name") IMAGE_RECORDS[ART].packageName = "@other/artifact";
+    if (failure === "heal-owner") artifact.ownerId = "foreign-org";
+    if (failure === "manifest-version") await writeFile(join(sourceDir, "package.json"), JSON.stringify({ ...artifactManifest(ART, [TYPE]), version: "2.0.0" }));
+    if (failure === "row-version") artifact.version = "2.0.0";
+    if (failure === "image-version") IMAGE_RECORDS[ART].version = "2.0.0";
+    if (failure === "foreign-org") artifact.organizationId = "foreign-org";
+    if (failure === "heal-own-org") { artifact.organizationId = "org-1"; artifact.ownerLevel = "organization"; artifact.ownerId = "org-1"; }
+    if (failure === "wrong-hash") Object.assign(artifact.source, { resolvedCommitOrTreeHash: "in-tree@2.0.0" });
+    if (failure === "unknown-git") Object.assign(artifact.source, { resolvedCommitOrTreeHash: "unknown" });
+    if (failure === "stale-git") Object.assign(artifact.source, { resolvedCommitOrTreeHash: "deadbee" });
+    if (failure === "wrong-row-path") Object.assign(artifact.source, { path: ROOT_STORE_DIR });
+    if (failure === "traversal-path") Object.assign(artifact.source, { path: sourceDir + "/../blog-post-artifact" });
+    if (failure === "wrong-image-path") IMAGE_RECORDS[ART].sourceDir = ".";
+    if (failure === "missing-image") delete IMAGE_RECORDS[ART];
+    if (failure === "unfinalized-upload") Object.assign(artifact.source, { contentDigest: ART_DIGEST, integrity: "sha512-upload" });
+    if (failure === "custom-local") Object.assign(artifact.source, { resolvedCommitOrTreeHash: "custom-source" });
+    if (failure === "wrong-claim") await writeFile(join(sourceDir, "package.json"), JSON.stringify(artifactManifest(ART, [OTHER_TYPE])));
+    if (failure === "package-json-symlink") {
+      const target = join(DEV_ROOT, "injected-package.json");
+      await writeFile(target, JSON.stringify(artifactManifest(ART, [TYPE])));
+      await rm(join(sourceDir, "package.json")); await symlink(target, join(sourceDir, "package.json"));
+    }
+    if (failure === "package-dir-symlink") {
+      const target = join(DEV_ROOT, "injected-package"); await mkdir(target);
+      await writeFile(join(target, "package.json"), JSON.stringify(artifactManifest(ART, [TYPE])));
+      await rm(sourceDir, { recursive: true }); await symlink(target, sourceDir);
+    }
+    await expect(upload()).rejects.toThrow(/typed-production contract failed/);
+    expect(createLocal).not.toHaveBeenCalled(); expect(registryRead).not.toHaveBeenCalled();
+  });
+  it.each(["development", "production"])("preserves finalized digest trust in %s", async (mode) => {
+    await uploadedFixture(); vi.stubEnv("CINATRA_RUNTIME_MODE", mode);
+    expect((await upload()).templateId).toBeTruthy();
+    expect(journalRead).toHaveBeenCalledWith(ART, "org-1", "0.0.0"); expect(registryRead).not.toHaveBeenCalled();
   });
 });
