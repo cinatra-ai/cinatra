@@ -511,7 +511,8 @@ export function runCarriesInputSteps(
    */
   inDispatchHandoff = false,
 ): boolean {
-  if (atInputMoment) return runOwesInputStep(steps);
+  // A later context question must not retire the Setup forms already answered.
+  if (atInputMoment) return runOwesInputStep(steps) || runHasAnsweredInputStep(steps);
   if (inDispatchHandoff) return runOwesInputStep(steps) || runHasAnsweredInputStep(steps);
   return runHasAnsweredInputStep(steps);
 }

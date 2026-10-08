@@ -161,6 +161,7 @@ export function ScheduleRailStepRow({
       data-run-surface-rail-settled={settled ? "true" : "false"}
       data-run-surface-rail-selected={scheduleSelected ? "true" : "false"}
       data-action="open-schedule-step"
+      aria-label={`${displayStep} ${SCHEDULE_RAIL_STEP_LABEL}`}
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
       className={RUN_SURFACE_RAIL_ROW_CLASS}

@@ -467,6 +467,30 @@ const KINDS: EntryKind[] = [
       "review:task-history",
     ),
   },
+  // Main's confirmed context history is addressed by the task it answered.
+  // Exercise the real generic row through the same independently found box.
+  {
+    id: "frame:context:*",
+    name: "a confirmed context answer selected by its own review task",
+    where: "packages/agents/src/run-surface-rail-step.ts:RunAnsweredContextStepKey through RunSurfaceRailRow",
+    rowClass: RUN_SURFACE_RAIL_ROW_CLASS,
+    reached: "true",
+    settled: "true",
+    selected: "true",
+    stepKey: "context:task-answer",
+    mount: async () => frameRow(
+      <RunSurfaceRailRow
+        selectionKey="context:task-answer"
+        label="Stored ideas"
+        displayStep={3}
+        conformanceId="run-surface-rail-step"
+        action="open-context-history"
+        reached
+        settled
+      />,
+      "context:task-answer",
+    ),
+  },
   // The panel's ordinary work-step rows, in each status the kind takes.
   {
     id: "panel:step",

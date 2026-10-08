@@ -26,6 +26,10 @@ import {
   DEFAULT_ARTIFACT_KIND_LABEL,
   extensionDisplayName,
 } from "@/lib/artifacts/extension-display-name";
+import {
+  artifactOwnerLabel,
+  artifactVisibilityLabel,
+} from "@/lib/artifacts/artifact-owner-label";
 
 /** The drawn header: a title, the kind beside it, and the mono meta line. */
 export type ArtifactDetailHeaderModel = {
@@ -65,11 +69,13 @@ export function artifactRevisionLabel(revisionId: string | null): string | null 
   return `revision ${REVISION_PREFIX}${short.toLowerCase()}…`;
 }
 
-/** Owner level and visibility are drawn capitalized, exactly as the library
- *  row draws the same two facts about the same row. */
-function capitalized(word: string): string {
-  return word.charAt(0).toUpperCase() + word.slice(1);
-}
+// THE OWNER AND THE VISIBILITY ARE DRAWN BY THE ONE COMPOSER (cinatra#3475).
+// This header used to capitalize the STORED values through a local helper, so
+// one artifact read "Organization: Acme Corp" on its library row and a bare
+// "Organization" on its own page, and a personal row read "User" here against
+// the drawn word "Personal" there. Both facts now come from
+// `@/lib/artifacts/artifact-owner-label` — the composer the library row and the
+// dashboard row read — so the same row cannot be worded two ways.
 
 /** The kind beside the title — the row's presentation identity, which is the
  *  identity the page's renderer dispatch already presents, so the chip and the
@@ -106,6 +112,11 @@ export function buildArtifactDetailHeader(input: {
   readonly artifact: ArtifactSummary;
   readonly mime: string;
   readonly revisionId: string | null;
+  /** The owning team's / organization's display name, resolved by the page.
+   *  Null or absent where the locus names no entity (a personal or
+   *  workspace-owned row) or where the name did not resolve — the owner cell
+   *  then draws the level word alone, never a stored value. */
+  readonly ownerName?: string | null;
   readonly now?: Date;
 }): ArtifactDetailHeaderModel {
   const { artifact, mime, revisionId } = input;
@@ -127,8 +138,8 @@ export function buildArtifactDetailHeader(input: {
     metaCells: [
       artifact.objectType,
       ...(revision === null ? [] : [revision]),
-      capitalized(artifact.ownerLevel),
-      capitalized(artifact.visibility),
+      artifactOwnerLabel(artifact.ownerLevel, input.ownerName),
+      artifactVisibilityLabel(artifact.visibility),
       mime || "unknown",
       updated,
     ],

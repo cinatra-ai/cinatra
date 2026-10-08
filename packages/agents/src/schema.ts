@@ -1158,6 +1158,7 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
   excluded:   boolean("excluded").notNull().default(false),
   submittedValues: jsonb("submitted_values").$type<Record<string, unknown> | null>(),
   schemaSnapshot: jsonb("schema_snapshot").$type<Record<string, unknown> | null>(),
+  dispatchReceipt: jsonb("dispatch_receipt").$type<Record<string, unknown> | null>(),
 }, (t) => ({
   runIdAgentIdx: index("agent_run_hitl_prompts_run_id_agent_idx").on(t.runId, t.agentId),
 }));

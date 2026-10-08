@@ -270,6 +270,7 @@ export function RunStepRailPanel({
                   ) : (
                     <StepperTrigger
                       className={RUN_PAGE_RAIL_ROW_CLASS}
+                      aria-label={`${displayStep} ${entry.label}`}
                       tabIndex={-1}
                       // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
                       // (cinatra#3449), and it is THIS node rather than the box

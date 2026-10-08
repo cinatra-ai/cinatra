@@ -39,6 +39,13 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+vi.mock("../agent-run-hitl-prompts", () => ({
+  captureHitlPromptForContinue: async (input: never) => {
+    await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
+  },
+  recordSuccessfulContinue: async () => {},
+  continueBindingDigest: () => "", continueGateDigest: () => "",
+}));
 
 // No rows: the install-scope guard reads the run's scope ref straight off the
 // database and returns without a decision when there is none, so the REAL guard

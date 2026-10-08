@@ -1753,6 +1753,7 @@ function StepperColumn({
                       data-run-surface-rail-reached={isCompleted || isActive ? "true" : "false"}
                       data-run-surface-rail-settled={isCompleted ? "true" : "false"}
                       data-run-surface-rail-selected={isActive ? "true" : "false"}
+                      aria-label={`${s.index} ${s.label}`}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
                       onClick={
@@ -2959,6 +2960,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           setAnsweredSetupReading({ key: gateKey, ...answer });
         }}
         onApprovalSubmitted={(values, schema, xRenderer) => {
+          if (!embedMode) router.refresh();
           const entry = stepperSteps.find((s) => (s as { xRenderer?: string }).xRenderer === xRenderer);
           if (entry) {
             setLiveSubmissionMap((prev) => new Map([...prev, [entry.index, {
