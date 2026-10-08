@@ -1,5 +1,5 @@
 /**
- * #3189: approved Tooltip example has padding 6px 10px.
+ * #3189: approved Tooltip example has padding 6px 10px and a 6px corner.
  * Read the existing unoverridden gallery tooltip's real computed cascade in
  * both application palettes. No fixture, CSS, theme class or primitive is
  * substituted. Authoring does not claim a browser run or independent UI grade.
@@ -12,7 +12,7 @@ const PALETTES = [
 ] as const;
 
 for (const palette of PALETTES) {
-  test(`default Tooltip padding — ${palette.name}`, async ({ page }) => {
+  test(`default Tooltip padding and corners — ${palette.name}`, async ({ page }) => {
     // Initialize next-themes as the maintained primitive conformance cases do.
     await page.addInitScript((theme) => {
       window.localStorage.setItem("theme", theme);
@@ -32,11 +32,14 @@ for (const palette of PALETTES) {
     await expect(content).toBeVisible();
     await expect(content).toContainText("Tooltip — navy bg, cream text");
     await expect(content.locator('[data-slot="kbd"]')).toHaveCount(0);
-    const padding = await content.evaluate((element) => {
+    const geometry = await content.evaluate((element) => {
       const style = getComputedStyle(element);
       return { left: style.paddingLeft, right: style.paddingRight,
-        top: style.paddingTop, bottom: style.paddingBottom };
+        top: style.paddingTop, bottom: style.paddingBottom,
+        topLeft: style.borderTopLeftRadius, topRight: style.borderTopRightRadius,
+        bottomLeft: style.borderBottomLeftRadius, bottomRight: style.borderBottomRightRadius };
     });
-    expect(padding).toEqual({ left: "10px", right: "10px", top: "6px", bottom: "6px" });
+    expect(geometry).toEqual({ left: "10px", right: "10px", top: "6px", bottom: "6px",
+      topLeft: "6px", topRight: "6px", bottomLeft: "6px", bottomRight: "6px" });
   });
 }

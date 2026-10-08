@@ -15,6 +15,9 @@
 //
 // The approved example also specifies padding 6px 10px. Native checks pin
 // that recipe on actual Radix DOM; browser-computed geometry is separate.
+// Its content corner is 6px. The corner checks below read the actual Radix
+// recipe and caller merge behavior; cached Tailwind declaration evidence and
+// the authored browser case separately cover the geometry contract.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
@@ -118,6 +121,35 @@ describe('approved example: "padding: 6px 10px"', () => {
     expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
     expect(content.className.split(/\s+/)).toContain("has-data-[slot=kbd]:pr-1.5");
     expect(content.className.split(/\s+/)).toContain("px-2.5");
+  });
+});
+
+describe('approved example: "border-radius: 6px"', () => {
+  it("renders a fixed six-pixel content corner instead of the palette-dependent step", () => {
+    const classes = renderTooltip().className.split(/\s+/);
+    expect(classes).toContain("rounded-[6px]");
+    expect(classes).not.toContain("rounded-md");
+  });
+
+  it("lets a caller choose its corner without changing the arrow recipe", () => {
+    const content = renderTooltip({ className: "rounded-xl" });
+    const classes = content.className.split(/\s+/);
+    expect(classes).toContain("rounded-xl");
+    expect(classes).not.toContain("rounded-[6px]");
+    expect(classes).not.toContain("rounded-md");
+    expect(content.querySelector("svg")?.getAttribute("class")?.split(/\s+/))
+      .toContain("rounded-[2px]");
+  });
+
+  it("keeps keyboard corners, semantic colors and the real focusable trigger", () => {
+    const content = renderTooltip({ shortcut: true });
+    expect(content.className.split(/\s+/)).toContain("**:data-[slot=kbd]:rounded-sm");
+    expect(content.className.split(/\s+/)).toContain("bg-foreground");
+    expect(content.className.split(/\s+/)).toContain("text-background");
+    const trigger = screen.getByRole("button", { name: "Approve", exact: true });
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+    expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
   });
 });
 
