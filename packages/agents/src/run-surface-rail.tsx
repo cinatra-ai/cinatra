@@ -325,6 +325,9 @@ export function RunSurfaceRailRow({
   // that cannot be opened never gets it — and neither does a row its page has
   // said the run has not reached.
   const emphasised = Boolean(selected) && selectable && reached !== false;
+  // Only confirmed, successfully continued context gates get a settlement
+  // word. Ordinary answered inputs keep their plain Setup/field label.
+  const title = settled && selectionKey.startsWith("context:") ? `${label} · continued` : label;
   return (
     <Button
       type="button"
@@ -339,7 +342,7 @@ export function RunSurfaceRailRow({
       data-conformance-id={conformanceId}
       data-action={action}
       aria-current={selected ? "step" : undefined}
-      aria-label={displayStep !== null && !runSurfaceStepDrawsGlyph(selectionKey) ? `${displayStep} ${label}` : undefined}
+      aria-label={displayStep !== null && !runSurfaceStepDrawsGlyph(selectionKey) ? `${displayStep} ${title}` : undefined}
       // `aria-disabled`, NOT the native `disabled`. Native `disabled` takes the
       // row out of the tab order, so keyboard focus could not reach the row —
       // and "its row stays on the rail, so the series is visible" is precisely
@@ -375,11 +378,10 @@ export function RunSurfaceRailRow({
           displayStep
         )}
       </span>
-      {/* THE TITLE IS NOT EMPHASISED BY THE SETTLING, only by the selection —
-          "the completed circle in place of the numeral, the title
-          unhighlighted". No status word is added beside it: the drawing shows
-          none. */}
-      <span className={runSurfaceRailTitleClass(emphasised)}>{label}</span>
+      {/* Settled context gates record how they settled, in the same title
+          form as review gates. Settling does not emphasise the title; only
+          selection does. Ordinary answered Setup keeps its plain label. */}
+      <span className={runSurfaceRailTitleClass(emphasised)}>{title}</span>
     </Button>
   );
 }
