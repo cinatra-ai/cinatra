@@ -43,7 +43,10 @@
       "src/app/design-fixtures/conformance/scope-assignment-skills-fixture-data.ts",
       "src/app/design-fixtures/conformance/__tests__/scope-assignment-skills-fixture.test.tsx",
       "src/components/scope-assignment/scope-assignment-skill-actions.tsx",
-      "src/components/scope-assignment/scope-assignment-skills.tsx"
+      "src/components/scope-assignment/scope-assignment-skills.tsx",
+      "src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data.ts",
+      "src/app/design-fixtures/conformance/agent-run-eligibility-fixtures.tsx",
+      "src/app/design-fixtures/conformance/__tests__/agent-run-eligibility-fixtures.test.tsx"
     ],
     "app-connectors": [
       "tests/e2e/design/conformance/manifests/app-connectors.json",

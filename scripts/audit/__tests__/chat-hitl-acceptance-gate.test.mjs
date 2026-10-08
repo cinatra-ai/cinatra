@@ -304,10 +304,10 @@ describe("the REAL manifest", () => {
     // walk the WHOLE trail rather than only checking the head — a move that
     // dropped an older pin on its way past would still satisfy a head-only
     // check.
-    expect(m.specCommit).toContain("b3665f8f308f32138f47f59ca490684c526c1e89");
+    expect(m.specCommit).toContain("831df38088ec969c7392018e79b297a49ee935a2");
     // An IMMUTABLE pin: a 40-character commit, never a branch name.
     expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
-    expect(m.specCommitDrift.previousPin).toContain("99e6977ca1443c5ec8a92b90f9a64a04c84364c7");
+    expect(m.specCommitDrift.previousPin).toContain("b3665f8f308f32138f47f59ca490684c526c1e89");
     expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
     for (const prior of [
       "6c20871b4108176c1d0193f19ecd2947f6c6355f",
@@ -318,6 +318,7 @@ describe("the REAL manifest", () => {
       "38f3635b83c34a30d2a8fe76fcbba8e4f5fbb978",
       "a9f9ad01a0b80fa6400396e91605270730f47802",
       "1836b4f996d8ed157d5d837b630a6c2443f966dd",
+      "99e6977ca1443c5ec8a92b90f9a64a04c84364c7",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
@@ -339,7 +340,7 @@ describe("the REAL manifest", () => {
     expect(untilDates, m.specCommitDrift.priorPins.join("\n")).toStrictEqual([...untilDates].sort());
     // The pin this move displaced is the one that stood LAST, so it is the tail
     // of the trail and not an insertion into the middle of it.
-    expect(m.specCommitDrift.priorPins.at(-1)).toContain("1836b4f996d8ed157d5d837b630a6c2443f966dd");
+    expect(m.specCommitDrift.priorPins.at(-1)).toContain("99e6977ca1443c5ec8a92b90f9a64a04c84364c7");
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
@@ -347,7 +348,7 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-10-04/);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-10-07/);
   });
 
   it("the branch pin this merge superseded is recorded, and row 9 does not contradict its own arm", () => {
