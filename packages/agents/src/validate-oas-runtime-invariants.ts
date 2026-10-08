@@ -1935,7 +1935,7 @@ export function scanOasForVisibleInputContractFindings(
     if (flow.flowInputDefaults.has(title) || PLATFORM_SUPPLIED_FLOW_INPUTS.includes(title)) continue;
     if (isOnVisibleInputInstallBaseline(packageName, title)) continue;
     findings.push({
-      code: "OAS-RUNTIME-015",
+      code: "visible_input_setup_omission",
       severity: "blocker",
       message: `${agentLabel}: visible Flow input "${title}" has no default and is not declared required in the StartNode's metadata.cinatra.required. Setup cannot ask for it as a required field. Declare it required or give the Flow and StartNode input an explicit default before installing.`,
       location: `inputs[] "${title}" (Flow "${flow.flowId}")`,

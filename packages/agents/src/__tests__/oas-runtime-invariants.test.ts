@@ -1756,9 +1756,9 @@ describe("OAS-RUNTIME-013 — InputMessageNode gate must be mountable on the pin
 });
 
 
-describe("OAS-RUNTIME-015 — visible inputs omitted from setup", () => {
+describe("visible_input_setup_omission — visible inputs omitted from setup", () => {
   const scan = (spec: Parameters<typeof flowWithStartMeta>[0]) =>
-    scanOasForRuntimeInvariantFindings(flowWithStartMeta(spec)).filter(f => f.code === "OAS-RUNTIME-015");
+    scanOasForRuntimeInvariantFindings(flowWithStartMeta(spec)).filter(f => f.code === "visible_input_setup_omission");
 
   it("refuses a visible input without a default or required declaration, naming the input", () => {
     const findings = scan({ inputs: [{ title: "brief", type: "string" }] });
@@ -1806,6 +1806,6 @@ describe("OAS-RUNTIME-015 — visible inputs omitted from setup", () => {
     const child = flowWithStartMeta({ inputs: [{ title: "from_parent", type: "string" }] });
     const root = flowWithStartMeta({ inputs: [] });
     (root.$referenced_components as Record<string, unknown>).child = child;
-    expect(scanOasForRuntimeInvariantFindings(root).filter(f => f.code === "OAS-RUNTIME-015")).toEqual([]);
+    expect(scanOasForRuntimeInvariantFindings(root).filter(f => f.code === "visible_input_setup_omission")).toEqual([]);
   });
 });
