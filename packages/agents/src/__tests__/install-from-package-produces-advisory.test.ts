@@ -35,6 +35,7 @@ let INSTALLED_ROWS: InstalledExtension[] = [];
 let JOURNALS = new Map<string, { phase: string; digest: string }>();
 let DATA_ROOT = "";
 let ROOT_STORE_DIR: string | null = null;
+let EXTRACT_DIR = "";
 let IMAGE_RECORDS: Record<string, { packageName: string; kind: string; version: string; sourceDir: string }> = {};
 let IMAGE_DIGESTS = new Map<string, { kind: string; version: string; digest: string }>();
 const registryRead = vi.fn(async (packageName: string) => ARTIFACT_MANIFESTS[packageName] ?? null);
@@ -112,7 +113,7 @@ vi.mock("@cinatra-ai/registries", () => ({
   extractAgentPackage: async () => ({
     packageName: "@cinatra-ai/blog-draft-writer-agent",
     packageVersion: "1.0.0",
-    tempDir: "/tmp/extract-fixture",
+    tempDir: EXTRACT_DIR,
     manifest: {
       name: "@cinatra-ai/blog-draft-writer-agent",
       version: "1.0.0",
@@ -222,7 +223,9 @@ import { installAgentFromPackage } from "../install-from-package";
 const install = (extra?: Record<string, unknown>) =>
   installAgentFromPackage({ packageName: "@cinatra-ai/blog-draft-writer-agent", orgId: "org-1", ...extra });
 
-beforeEach(() => {
+beforeEach(async () => {
+  EXTRACT_DIR = await mkdtemp(join(tmpdir(), "cinatra-typed-claim-extract-"));
+  await writeOasFixture(EXTRACT_DIR);
   vi.clearAllMocks();
   readTemplate.mockResolvedValue(null);
   PRODUCES = [];
@@ -233,7 +236,22 @@ beforeEach(() => {
   IMAGE_RECORDS = {}; IMAGE_DIGESTS = new Map();
   registryRead.mockImplementation(async (name) => ARTIFACT_MANIFESTS[name] ?? null);
 });
-afterEach(async () => { if (DATA_ROOT) await rm(DATA_ROOT, { recursive: true, force: true }); DATA_ROOT = ""; });
+afterEach(async () => {
+  if (DATA_ROOT) await rm(DATA_ROOT, { recursive: true, force: true });
+  if (EXTRACT_DIR) await rm(EXTRACT_DIR, { recursive: true, force: true });
+  DATA_ROOT = ""; EXTRACT_DIR = "";
+});
+
+// Both registry extracts and finalized uploaded agent payloads must carry the
+// real Flow bytes that the pre-install input guard reads before typed claims.
+async function writeOasFixture(dir: string, inputs: Array<{ title: string; type: string }> = []) {
+  await mkdir(join(dir, "cinatra"), { recursive: true });
+  await writeFile(join(dir, "cinatra", "oas.json"), JSON.stringify({
+    component_type: "Flow", id: "typed-claim-fixture", inputs,
+    start_node: { $component_ref: "start" },
+    $referenced_components: { start: { component_type: "StartNode", id: "start", inputs } },
+  }));
+}
 
 describe("installAgentFromPackage — cinatra#1788 typed-production preflight", () => {
   it("conforming: produces objectTypeId claimed by a required artifact dep → installs, no dynamic type minted", async () => {
@@ -321,6 +339,7 @@ async function writePayload(row: InstalledExtension, manifest: unknown, digest: 
   const dir = storeDigestDirV2(DATA_ROOT, row.kind, row.packageName, digest);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "package.json"), JSON.stringify(manifest));
+  if (row.kind === "agent") await writeOasFixture(dir);
   JOURNALS.set(JSON.stringify([row.packageName, row.organizationId, row.isDefault === false ? row.version : "0.0.0"]), { phase: "finalized", digest });
   return dir;
 }
@@ -481,5 +500,29 @@ describe("cinatra#4002 — uploaded typed production reads the installed require
     await uploadedFixture(); ROOT_STORE_DIR = null;
     registryRead.mockImplementation(async () => artifactManifest(ART, [OTHER_TYPE]));
     await expect(install()).rejects.toThrow(/typed-production contract failed/); expect(registryRead).toHaveBeenCalled(); expect(createLocal).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("typed-claim fixtures preserve the visible Flow input gate", () => {
+  it("refuses a registry package with an undeclared visible input before writes or claim lookup", async () => {
+    await writeOasFixture(EXTRACT_DIR, [{ title: "fixture_brief", type: "string" }]);
+    await expect(install()).rejects.toThrow(/fixture_brief/);
+    expect(createLocal).not.toHaveBeenCalled();
+    expect(registryRead).not.toHaveBeenCalled();
+  });
+  it("refuses a supplied package with an undeclared visible input before writes or registry fallback", async () => {
+    await uploadedFixture();
+    await writeOasFixture(ROOT_STORE_DIR!, [{ title: "fixture_brief", type: "string" }]);
+    await expect(upload()).rejects.toThrow(/fixture_brief/);
+    expect(createLocal).not.toHaveBeenCalled();
+    expect(registryRead).not.toHaveBeenCalled();
+  });
+  it("refuses a supplied payload missing Flow bytes without registry fallback", async () => {
+    await uploadedFixture();
+    await rm(join(ROOT_STORE_DIR!, "cinatra", "oas.json"));
+    await expect(upload()).rejects.toThrow(/Cannot verify start inputs/);
+    expect(createLocal).not.toHaveBeenCalled();
+    expect(registryRead).not.toHaveBeenCalled();
   });
 });
