@@ -7,10 +7,8 @@
  * rail had no entry for it -- no step was highlighted at all -- and the
  * Schedule entry was drawn without the rail's own row marker.
  *
- * The ratified drawing, section I: "The rail lists the run's steps in order,
- * merged so that a gate is not a page outside the run but a step in the run
- * ... The step the run is paused on is highlighted". Owner ruling 629 A: the
- * order is fixed -- Skills, Schedule, the work steps, Review.
+ * The rail keeps Skills, Schedule, the work steps and Review in that order,
+ * and highlights the step at which the run is paused.
  *
  * WHAT IS READ HERE. ONE run of an agent with a Skills park (released), its
  * setup form answered, a spent one-off trigger row (`immediate`), and a review
