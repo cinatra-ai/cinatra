@@ -364,6 +364,36 @@ export function ConversationColumn({
     composerReservedSpace,
   ]);
 
+  // A card the run card draws by its own reads, inside a turn the column
+  // already has, grows the thread with none of the pin's dependencies moving
+  // (cinatra#4011). The stream's own box does not change when its content
+  // grows (it is the fixed-height viewport), so its element children are what
+  // report the growth; and the list arrives behind the lazy boundary, so the
+  // child set is followed rather than captured once. The reader's lock still
+  // decides, inside scrollToBottom.
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => scrollToBottom());
+    const observeElements = (nodes: Iterable<Node>) => {
+      for (const node of nodes) {
+        if (node instanceof Element) observer.observe(node);
+      }
+    };
+    observeElements(Array.from(container.children));
+    const children =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver((records) => {
+            for (const record of records) observeElements(Array.from(record.addedNodes));
+          });
+    children?.observe(container, { childList: true });
+    return () => {
+      children?.disconnect();
+      observer.disconnect();
+    };
+  }, [scrollToBottom]);
+
   // -------------------------------------------------------------------------
   // The COLD-LOAD settle pass (cinatra#2740).
   // -------------------------------------------------------------------------
