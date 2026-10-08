@@ -146,6 +146,7 @@ export function ScheduleRailStepRow({
       // circle the same way on every row it appears in.
       data-schedule-step-settled={settled ? "true" : "false"}
       data-action="open-schedule-step"
+      aria-label={`${displayStep} ${SCHEDULE_RAIL_STEP_LABEL}`}
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
       className={RUN_SURFACE_RAIL_ROW_CLASS}

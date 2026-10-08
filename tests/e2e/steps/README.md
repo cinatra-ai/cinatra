@@ -28,7 +28,7 @@ defect of a step, with a test, fixed once for every run.
 | `typeInWindow` | Text typed into a window's text box through the keyboard, read back from the box, and sent through the window's own send control when asked. |
 | `waitForTurn` | A turn of a window's conversation waited for without a reload: a new entry of the assistant, and the send control idle again. |
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
-| `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
+| `sendInComposer` | One message sent through the conversation's composer, awaiting its card by default or, with explicit `expect: "run"`, its new run ID. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
 | `readAddress` | The page's path and the values of the query parameters the caller names, read once the address has held still; any other parameter counted, never written. |
 | `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
@@ -567,7 +567,7 @@ only the error's class is kept).
 
 <!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
 
-## `uploadFile(page, { control, path, record, bounds? })`
+## `uploadFile(page, { control, path, record, bounds?, done? })`
 
 Uploads the file at `path` through the page's own upload control. It presses the
 first shown button named `control` (the library's Upload button, which opens a
@@ -579,6 +579,19 @@ place it was read from. A press the page's handler has not taken over yet (befor
 the page has hydrated) opens no chooser, and is refused as such at once. It
 answers `{ control, file, path, elapsedMs }`.
 
+For an extension import that acknowledges the file on its own screen, pass
+`done: { selector: '[data-testid="upload-resolved-name"]', text: '@cinatra-ai/list-curation-skill' }`. This optional
+road waits for the named trigger's own file input to belong to React's current
+committed tree and carry its change handler, then uses `setInputFiles` on that
+input. Server markup, an uncommitted fiber or a missing handler cannot admit
+an upload. It does not press the sr-only input or a covering icon, and does not
+change any checkbox. It refuses ambiguous controls and an already shown
+completion signal before handing over a file, then waits for the caller's
+selector to read the expected text within `doneMs` (60 seconds by default). Without this option, the chooser and library-row
+road above is unchanged. The existing driver forwards this option with the
+other `uploadFile` options. The record line names `done.selector` and the text
+it read; a shown selector with a different package name is not completion.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `UPLOAD_CONTROL_BOUND_MS` | 15_000 | the control shown with its name |
@@ -586,10 +599,12 @@ answers `{ control, file, path, elapsedMs }`.
 | `UPLOAD_CHOOSER_BOUND_MS` | 5_000 | from the press to the file chooser |
 | `UPLOAD_ROW_BOUND_MS` | 120_000 | from the file handed over to its row |
 | `UPLOAD_POLL_MS` | 250 | how often the control and the list are read |
+| `doneMs` | 60_000 | from hand-over to the caller's exact completion text (`doneMs`) |
 
 Refusal kinds: `input` (nothing was pressed), `no-control` (naming the page's file
 inputs), `driver-failure`, `no-chooser` (the press opened no file chooser) and
-`no-row` (naming the rows the list shows).
+`no-row` (naming the rows the list shows). With `done`,
+`unhydrated`, `ambiguous`, `stale-completion` and `no-completion` also apply.
 
 ## `fillForm(page, { fields, record, form?, submit?, bounds? })`
 
@@ -758,7 +773,7 @@ the sign-in page, is refused, naming where it landed.
 Refusal kinds: `input` and `closed` (nothing was reloaded), `no-load`,
 `landed-elsewhere` and `driver-failure` (the new document could not be read).
 
-## `sendInComposer(page, { prompt, composer, record, bounds? })`
+## `sendInComposer(page, { prompt, composer, expect?, record, bounds? })`
 
 Sends one message through the conversation's composer, the one shown text box
 named `composer` ("Send message" in the product), and waits for the card that
@@ -774,6 +789,21 @@ run page's surface, the run panel the conversation draws, or a notification of
 a run) and refuses a send after which one shows: starting a run is
 `dispatchRun`'s act. No line carries the prompt.
 
+When a chat message is expected to start a run, opt in with
+`sendInComposer(page, { prompt, composer: "Send message", expect: "run", record })`.
+This arm waits for a new **visible** inline card's `data-inline-run-card` ID and
+returns `{ composer, runId, threadPath, elapsedMs }`, reading `threadPath` from
+the caller's document (the frame's path when called on a frame scope). It does
+not wait for a progress panel: a landed review card can occupy that place.
+IDs already visible before the send, hidden cards, empty IDs, a card without a
+run ID, and a run-start notification alone cannot satisfy it. If no new ID
+appears within `cardMs`, it refuses `no-run`, naming any new page error.
+
+Omitting `expect`, or passing `expect: "card"`, keeps the existing card arm:
+a run or run-start notification still refuses `starts-run`. An unsupported
+`expect` refuses `input` before typing. Both arms type once and never infer a
+run ID from prompt text, a toast, or an API request.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call to the composer shown with its name (`composerMs`) |
@@ -783,7 +813,7 @@ a run) and refuses a send after which one shows: starting a run is
 | `CONTROL_POLL_MS` | 100 | how often the page is read (`pollMs`) |
 
 Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
-`no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
+`no-composer` in place of `no-field`, `starts-run`, `no-run` (the opt-in arm), and `no-card` (naming an
 error the page shows, the conversation's error card among them).
 
 ## `openAddress(page, { path, record, params?, bounds? })`
@@ -1130,7 +1160,15 @@ window's path).
   `pnpm exec vitest run --config vitest.config.ts tests/e2e/steps`). Each step's
   branches run against a page double over a local fixture app: no browser, no
   server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
-  over the same fixture pages, which keeps the double honest.
+  over the same fixture pages, which keeps the double honest. In the checks, the
+  job **Step tests in a real browser** runs them with the switch set for every
+  pull request that changes a file here other than Markdown: first on the page
+  double, then with the switch. Both runs receive `E2E_STEPS_UNIT_DATABASE_URL`
+  from a job-scoped PostgreSQL service at its mapped host port, so the real
+  `readRows` database cases run too. It fails unless every case passed, so in that
+  job a browser that cannot be launched is a failure, not a skip, and the
+  required `build` check fails with it. Any other pull request skips the job;
+  the selection line of **Detect CI impact (build-image)** names the reason.
 - **The live smoke**, one per step, against a running development server:
   `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
   browser or a server every test is skipped, and its reason names what is missing.
