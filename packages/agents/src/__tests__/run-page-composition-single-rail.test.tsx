@@ -88,6 +88,15 @@ vi.mock("@/lib/generated/field-renderer-components", () => ({
 
 const RUN_ID = "run-3478";
 
+const capturedSubmissions = vi.hoisted(() => ({
+  rows: [] as Array<[number, {
+    submittedValues: Record<string, unknown> | null;
+    schemaSnapshot: Record<string, unknown> | null;
+    stepKey: string;
+  }]>,
+}));
+
+
 const artifactReads = vi.hoisted(() => ({ live: vi.fn(), historical: vi.fn() }));
 vi.mock("@/lib/artifacts/artifact-service", () => ({
   readArtifactForDetail: artifactReads.live,
@@ -127,6 +136,7 @@ const row = vi.hoisted(() => ({
   producedReviewPark: null as string | null,
   /** Stored execution evidence, independent of the answered setup fields. */
   streamedText: null as string | null,
+  policyLabels: null as string[] | null,
 }));
 
 /**
@@ -246,7 +256,9 @@ function makeTemplate() {
   return {
     ...TEMPLATE,
     type: row.templateType,
-    approvalPolicy: row.templateType === "agent" ? null : TEMPLATE.approvalPolicy,
+    approvalPolicy: row.templateType === "agent" ? null : row.policyLabels
+      ? { steps: row.policyLabels.map((name, index) => ({ stepNumber: index + 1, xRenderer: "cinatra/review", name })) }
+      : TEMPLATE.approvalPolicy,
     inputSchema: {
       ...TEMPLATE.inputSchema,
       properties: row.properties,
@@ -377,7 +389,7 @@ vi.mock("../hitl-context", () => ({
 
 vi.mock("../run-actions", () => ({
   createAndTriggerRunWithContext: vi.fn(async () => ({ ok: false })),
-  buildSubmissionMapByStepIndex: vi.fn(async () => []),
+  buildSubmissionMapByStepIndex: vi.fn(async () => capturedSubmissions.rows),
   createAndTriggerRun: vi.fn(async () => ({ ok: false })),
   readRunOutputEvidence: vi.fn(async () => ({ hasOutput: false, hasArtifacts: false })),
 }));
@@ -453,6 +465,8 @@ beforeEach(() => {
   row.inputParams = { idea: "a post about rails", audience: "developers" };
   row.producedReviewPark = null;
   row.streamedText = null;
+  row.policyLabels = null;
+  capturedSubmissions.rows = [];
   recommendationPark.row = null;
   recommendationPark.holdState = { state: "none" };
   reviewSlot.awaiting = false;
@@ -1037,9 +1051,9 @@ describe("the run's schedule heads the one rail (cinatra#3478)", () => {
     expect(labels).toEqual([
       "Schedule",
       "Setup",
-      "Review",
       "Draft the post",
       "Pick the image",
+      "Review",
       "What this run made",
     ]);
     expect(new Set(labels).size).toBe(labels.length);
@@ -1141,7 +1155,8 @@ describe("the run's schedule heads the one rail (cinatra#3478)", () => {
     expect(columns.length).toBe(1);
     const labels = railEntryLabels(columns[0]);
     expect(labels.filter((label) => label === "Schedule")).toHaveLength(1);
-    expect(labels).toEqual(["Schedule", "Setup", "Review", "Draft the post", "Pick the image"]);
+    // #3679 corrects the prior Review-before-work expectation to §I.
+    expect(labels).toEqual(["Schedule", "Setup", "Draft the post", "Pick the image", "Review"]);
     // AND ONE NUMBERED SERIES WITH IT: no numeral drawn twice, and none out of
     // order. This is the reading that dies if the offset handed to the input
     // steps is dropped — the schedule and the first numbered work step would
@@ -1326,4 +1341,154 @@ describe("a step the reader selects opens its own card, never a blank run detail
     expect(detail.getAttribute("data-run-surface-selected-step")).toBe("recommendation");
     expectTheSkillsCard(detail);
   });
+});
+
+
+// #3679: exercise the real page/frame/input mapper and persisted gate rail,
+// with only existing external store/auth/route ports supplied by this suite.
+// DOM order is Source behavior; actual page grading remains App-owned.
+describe("input and resolved gates keep their place in the one rail (#3679)", () => {
+  function atReviewAfterSetup() {
+    row.templateType = "agent";
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = ["idea"];
+    row.properties = { idea: { type: "string", title: "Scrape setup" } };
+    row.inputParams = { idea: "an answered setup form" };
+    triggerRow.row = firedImmediateTrigger();
+    const titleRead = ({ artifactId }: { artifactId: string }) => ({
+      kind: "ok", artifact: { title: artifactId === "schema" ? "the scrape schema" : "the list" },
+    });
+    artifactReads.live.mockImplementation(titleRead);
+    artifactReads.historical.mockImplementation(titleRead);
+  }
+  function schemaGate(status: "pending" | "resolved") {
+    return {
+      ...gateRow(status),
+      disposition: status === "resolved" ? "approve" : null,
+      pinnedTargets: [{ artifactId: "schema", representationRevisionId: "schema-revision" }],
+    };
+  }
+  it.each(["pending", "resolved"] as const)("never puts an upcoming generic Review before the real %s schema gate", async (status) => {
+    atReviewAfterSetup();
+    reviewGates.rows = [schemaGate(status)];
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const labels = railEntryLabels(columns[0]);
+    expect(labels.filter((label) => label === "Review")).toHaveLength(0);
+    expect(labels[0]).toBe("Schedule");
+    expect(labels[1]).toBe("Scrape setup");
+    expect(labels[2]).toContain("Review · the scrape schema");
+    const gate = columns[0].querySelector('[data-rail-kind="gate"]');
+    expect(gate).not.toBeNull();
+    expect(gate!.getAttribute("data-rail-status")).toBe(status);
+    expect(gate!.hasAttribute('data-rail-gate-settlement')).toBe(status === "resolved");
+  });
+  it("keeps the schema gate third when it resolves and a later list gate opens", async () => {
+    atReviewAfterSetup();
+    reviewGates.rows = [schemaGate("pending")];
+    const view = await renderRunPage();
+    const before = railEntryLabels(railColumns(view.container)[0]);
+    expect(before.findIndex((label) => label.includes("Review · the scrape schema"))).toBe(2);
+    const settled = schemaGate("resolved");
+    const next = { ...gateRow("pending"), id: "gate-list", reviewTaskId: "task-list",
+      createdAt: new Date("2026-09-13T13:00:00Z"),
+      pinnedTargets: [{ artifactId: "list", representationRevisionId: "list-revision" }],
+    };
+    const frozen = structuredClone([settled, next]);
+    // Reverse storage input order to exercise the actual chronological merger.
+    reviewGates.rows = [next, settled];
+    const tree = await SetupScreen({ agentId: "blog-idea-generator", instanceId: RUN_ID });
+    view.rerender(tree as React.ReactElement);
+    const column = railColumns(view.container)[0];
+    const after = railEntryLabels(column);
+    expect(after.findIndex((label) => label.includes("Review · the scrape schema"))).toBe(2);
+    expect(after.findIndex((label) => label.includes("Review · the list"))).toBe(3);
+    expect(after.filter((label) => label === "Review")).toHaveLength(0);
+    expect(column.querySelectorAll('[data-rail-gate-settlement="Continued"]')).toHaveLength(1);
+    expect(reviewGates.rows).toEqual([frozen[1], frozen[0]]);
+  });
+  it("keeps a forecast Review below the actual work rows while the input rail is present", async () => {
+    triggerRow.row = { triggerType: "immediate", releasedAt: null };
+    row.status = "armed";
+    row.lifecycleMoment = "schedule";
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    const { container } = await renderRunPage();
+    const column = railColumns(container)[0];
+    expect(railEntryLabels(column)).toEqual(["Schedule", "Setup", "Draft the post", "Pick the image", "Review"]);
+    const numerals = railEntries(column).flatMap((text) => {
+      const numeral = /^(\d+)/.exec(text)?.[1];
+      return numeral == null ? [] : [Number(numeral)];
+    });
+    expect(numerals).toEqual([1, 3, 4, 5]);
+    expect(new Set(numerals).size).toBe(numerals.length);
+  });
+});
+
+
+describe("forecast Schedule keeps its fixed place ahead of input work (#3679)", () => {
+  it.each([false, true])("keeps Skills, Schedule, input, Review order with input answered=%s", async (answered) => {
+    row.templateType = "agent";
+    row.status = answered ? "queued" : "pending_input";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = ["idea"];
+    row.properties = { idea: { type: "string", title: "Scrape setup" } };
+    row.inputParams = answered ? { idea: "the recorded answer" } : {};
+    const { container } = await renderRunPage();
+    const column = railColumns(container)[0];
+    expect(railEntryLabels(column)).toEqual(["Skills", "Schedule", "Scrape setup", "Review"]);
+    const schedule = column.querySelector('[data-run-surface-rail-step-key="schedule"]');
+    expect(schedule).not.toBeNull();
+    expect(schedule!.getAttribute("data-run-surface-rail-reached")).toBe("false");
+    const words = railEntries(column);
+    expect(words.some((text) => text === "1Schedule")).toBe(true);
+    expect(words.some((text) => text === "3Review")).toBe(true);
+    if (!answered) expect(words.some((text) => text === "2Scrape setup")).toBe(true);
+  });
+});
+
+
+it("keeps the round's schema policy row third when its answer is captured and the list step follows (#3679)", async () => {
+  // Exact label/state progression read in App round16: schema gate, then list.
+  // This uses the real policy projection and submission merge. A captured HITL
+  // answer can exist before stepResults or messages; no output is invented.
+  row.policyLabels = ["Review the scrape schema", "Approve the list"];
+  row.status = "pending_approval";
+  row.lifecycleMoment = null;
+  row.lifecycleCardKind = null;
+  row.lifecycleCardRef = null;
+  row.hitlContext = null;
+  row.required = ["idea"];
+  row.inputParams = { idea: "the supplied scrape setup" };
+  triggerRow.row = firedImmediateTrigger();
+  const view = await renderRunPage();
+  const beforeColumn = railColumns(view.container)[0];
+  const before = railEntryLabels(beforeColumn);
+  expect(before).toEqual(["Schedule", "Setup", "Review the scrape schema", "Approve the list", "Review"]);
+  const schemaBefore = Array.from(beforeColumn.querySelectorAll<HTMLElement>('[data-rail-status]'))
+    .find((entry) => entry.textContent?.includes("Review the scrape schema"));
+  expect(schemaBefore!.getAttribute("data-rail-status")).toBe("upcoming");
+  capturedSubmissions.rows = [[1, {
+    submittedValues: { approved: true }, schemaSnapshot: null, stepKey: "schema-step",
+  }]];
+  const snapshot = structuredClone(capturedSubmissions.rows);
+  const tree = await SetupScreen({ agentId: "blog-idea-generator", instanceId: RUN_ID });
+  view.rerender(tree as React.ReactElement);
+  const afterColumn = railColumns(view.container)[0];
+  const after = railEntryLabels(afterColumn);
+  expect(after).toEqual(before);
+  const schemaAfter = Array.from(afterColumn.querySelectorAll<HTMLElement>('[data-rail-status]'))
+    .find((entry) => entry.textContent?.includes("Review the scrape schema"));
+  expect(schemaAfter!.getAttribute("data-rail-status")).toBe("completed");
+  expect(railEntries(afterColumn)).toContain("4Approve the list");
+  expect(capturedSubmissions.rows).toEqual(snapshot);
 });
