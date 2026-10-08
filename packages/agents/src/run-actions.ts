@@ -19,7 +19,7 @@ import type { ActorRoleHints } from "./auth-policy";
 import { enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
-import { assertAgentPackageRunnable } from "./runtime-install-gate";
+import { assertAgentPackageRunnable, type AgentInstallRefusal } from "./runtime-install-gate";
 import {
   readAgentRunById,
   readAgentRunMessages,
@@ -135,7 +135,7 @@ export type CreatePendingRunArgs = {
 export type CreatePendingRunResult =
   | { ok: true; runId: string }
   // See TriggerAgentRunResult — actionable preflight failure fields.
-  | { ok: false; error: string; code?: string; settingsHref?: string };
+  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal };
 
 /**
  * Creates an empty `pending_input` run for any template. The dispatcher's
@@ -233,7 +233,7 @@ async function createAndTriggerRunCore(
     template.packageName ?? template.name,
     { packageVersion: template.packageVersion ?? null },
   );
-  if (notRunnable) return { ok: false, error: notRunnable.error };
+  if (notRunnable) return { ok: false, ...notRunnable };
   // orgId is resolved by the caller (do NOT re-resolve session inside this
   // helper) and threaded through to createAgentRunPendingInput.
   // cinatra#1940 P3 (Decision 2): mint the member session authority ONCE, up
