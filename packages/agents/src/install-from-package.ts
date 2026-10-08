@@ -7,6 +7,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import type { SuppliedPackageProvenance } from "@cinatra-ai/extension-types";
 import type { InstalledExtension, InstallRowOwnership, ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 import {
@@ -829,7 +830,6 @@ async function readInstalledClaimManifest(row: InstalledExtension): Promise<Reco
     if (row.source.type === "bundled") {
       // Bundled rows have no install journal. The generated image inventory,
       // rather than a row-supplied sourceDir, owns the metadata read address.
-      const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
       const { readRecordedBundledDigests } = await import("@/lib/bundled-digests");
       const image = STATIC_EXTENSION_MANIFEST[row.packageName];
       const recorded = readRecordedBundledDigests().get(row.packageName);
