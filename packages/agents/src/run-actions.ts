@@ -719,6 +719,47 @@ export async function buildSubmissionMapByStepIndex(
   return entries;
 }
 
+export type AnsweredContextRailReading = {
+  reviewTaskId: string; label: string;
+  answers: readonly {field: string; label: string; value: string}[];
+};
+
+/** Separate task-bound context history, never a policy prompt cursor entry. */
+export async function readAnsweredContextHistory(runId: string): Promise<AnsweredContextRailReading[]> {
+  const session=await requireAuthSession().catch(()=>null);
+  if(!session?.user?.id) return [];
+  const actor:PrimitiveActorContext={actorType:"human",source:"ui",userId:session.user.id};
+  const run=await readAgentRunById(runId,actor).catch(()=>null);
+  if(!run || run.id!==runId || !run.orgId) return [];
+  const {readAgentTemplateById}=await import("./store");
+  const template=await readAgentTemplateById(run.templateId).catch(()=>null);
+  if(!template?.packageName) return [];
+  const {readConfirmedContextGates}=await import("./agent-run-hitl-prompts");
+  const gates=await readConfirmedContextGates(run.id,run.orgId,template.packageName).catch(()=>[]);
+  const result:AnsweredContextRailReading[]=[];
+  for(const gate of gates){
+    const refs=gate.submittedValues.selectedRefs as unknown[];
+    const names:string[]=[];
+    if(refs.length){
+      try {
+        const viewer=await requireActorContext();
+        const {readArtifactForSettledReview}=await import("@/lib/artifacts/artifact-service");
+        for(const ref of refs){
+          const artifactId=(ref as {artifactId?:unknown})?.artifactId;
+          if(typeof artifactId!=="string") continue;
+          const access=readArtifactForSettledReview({artifactId,orgId:run.orgId,actor:viewer});
+          if(access.kind==="ok" && access.artifact.title?.trim()) names.push(access.artifact.title);
+        }
+      } catch { /* Reference labels remain private when their read is refused. */ }
+    }
+    const label=gate.label.replace(/([a-z0-9])([A-Z])/g,"$1 $2").replace(/^./,c=>c.toUpperCase());
+    result.push({reviewTaskId:gate.reviewTaskId,label,answers:[{field:"selectedRefs",label,
+      value:refs.length===0 ? "No context selected" : names.length===refs.length ? names.join(", ")
+        : [...names,"Selection unavailable"].join(", ")}]});
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Terminal-run OUTPUT evidence (folded in from run-output-actions.ts,
 // cinatra#2482 — route-graph ratchet: the locked routes already carry this

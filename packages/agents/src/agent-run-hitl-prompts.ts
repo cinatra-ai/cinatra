@@ -23,9 +23,9 @@
 // ---------------------------------------------------------------------------
 
 import { and, eq, inArray } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import { db } from "./db";
+import { db, agentBuilderPool } from "./db";
 import { agentRunHitlPrompts } from "./schema";
 
 export type WriteHitlPromptInput = {
@@ -38,7 +38,7 @@ export type WriteHitlPromptInput = {
   excluded?: boolean;                                  // Pattern 4(b): bare-approval rows pass true so autosave skips them
 };
 
-export async function writeHitlPrompt(input: WriteHitlPromptInput): Promise<void> {
+async function insertHitlPrompt(input: WriteHitlPromptInput): Promise<string> {
   if (input.message.length > 32_768) {
     throw new Error(`[writeHitlPrompt] message too large (${input.message.length} chars)`);
   }
@@ -51,8 +51,9 @@ export async function writeHitlPrompt(input: WriteHitlPromptInput): Promise<void
       input = { ...input, schemaSnapshot: null };
     }
   }
+  const id = randomUUID();
   await db.insert(agentRunHitlPrompts).values({
-    id: randomUUID(),
+    id,
     runId: input.runId,
     agentId: input.agentId,
     stepKey: input.stepKey,
@@ -61,6 +62,17 @@ export async function writeHitlPrompt(input: WriteHitlPromptInput): Promise<void
     schemaSnapshot: input.schemaSnapshot ?? null,
     excluded: input.excluded ?? false,                //
   });
+  return id;
+}
+
+/** Existing capture ABI and single pre-dispatch insert remain unchanged. */
+export async function writeHitlPrompt(input: WriteHitlPromptInput): Promise<void> {
+  await insertHitlPrompt(input);
+}
+
+/** Internal approval capture: same insert, with its exact immutable ID. */
+export async function captureHitlPromptForContinue(input: WriteHitlPromptInput): Promise<string> {
+  return insertHitlPrompt(input);
 }
 
 export type HitlPromptRecord = {
@@ -94,7 +106,11 @@ export async function readHitlPromptsForRun(
   agentId: string,
 ): Promise<HitlPromptRecord[]> {
   return db
-    .select()
+    .select({id: agentRunHitlPrompts.id, runId: agentRunHitlPrompts.runId,
+      agentId: agentRunHitlPrompts.agentId, stepKey: agentRunHitlPrompts.stepKey,
+      message: agentRunHitlPrompts.message, capturedAt: agentRunHitlPrompts.capturedAt,
+      excluded: agentRunHitlPrompts.excluded, submittedValues: agentRunHitlPrompts.submittedValues,
+      schemaSnapshot: agentRunHitlPrompts.schemaSnapshot})
     .from(agentRunHitlPrompts)
     .where(
       and(
@@ -117,7 +133,11 @@ export async function readAllHitlPromptsForRun(
   agentId: string,
 ): Promise<HitlPromptRecord[]> {
   return db
-    .select()
+    .select({id: agentRunHitlPrompts.id, runId: agentRunHitlPrompts.runId,
+      agentId: agentRunHitlPrompts.agentId, stepKey: agentRunHitlPrompts.stepKey,
+      message: agentRunHitlPrompts.message, capturedAt: agentRunHitlPrompts.capturedAt,
+      excluded: agentRunHitlPrompts.excluded, submittedValues: agentRunHitlPrompts.submittedValues,
+      schemaSnapshot: agentRunHitlPrompts.schemaSnapshot})
     .from(agentRunHitlPrompts)
     .where(
       and(
@@ -190,4 +210,126 @@ export async function readNonExcludedAgentIdsForRun(runId: string): Promise<stri
       ),
     );
   return rows.map((r) => r.agentId).sort();
+}
+
+// Server-only continuation receipt. No package barrel/store re-export or public
+// capture DTO includes this metadata. A pre-send capture alone is never history.
+import type { DurableHitlGateArtifact, HitlGateQuery } from "./store";
+export type ContinueReceipt = {
+  version: 1; runId: string; orgId: string; agentId: string;
+  reviewTaskId: string; contextId: string; returnedTaskId: string;
+  returnedState: "completed" | "input-required"; materializedAt: string;
+  schemaDigest: string; answerDigest: string; acknowledgedAt: string;
+};
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") return Object.fromEntries(
+    Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,canonical(item)]));
+  return value;
+}
+export function continueBindingDigest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
+}
+export function continueGateDigest(gate: ContinueGateSnapshot): string {
+  return continueBindingDigest({runId:gate.runId, reviewTaskId:gate.reviewTaskId,
+    xRenderer:gate.xRenderer,inputSchema:gate.inputSchema,materializedAt:gate.materializedAt});
+}
+function qualifiedMissingReceiptColumn(error: unknown): boolean {
+  const e = error as {code?:unknown;message?:unknown};
+  return e?.code === "42703" && typeof e.message === "string" && e.message.includes("dispatch_receipt");
+}
+function table(name: string): string {
+  const schema = (process.env.SUPABASE_SCHEMA?.trim() || "cinatra").replaceAll('"','""');
+  return `"${schema}"."${name}"`;
+}
+const receiptQuery: HitlGateQuery = async <T>(text: string, values: readonly unknown[]) => {
+  const result = await agentBuilderPool.query(text, values as unknown[]); return result.rows as T[];
+};
+export async function recordSuccessfulContinue(input: {
+  promptId: string; gate: ContinueGateSnapshot; receipt: ContinueReceipt;
+  submittedValues: Record<string,unknown>;
+}, query: HitlGateQuery = receiptQuery): Promise<void> {
+  const {gate,receipt,submittedValues}=input;
+  if (receipt.runId !== gate.runId || receipt.reviewTaskId !== gate.reviewTaskId
+    || receipt.schemaDigest !== continueGateDigest(gate)
+    || receipt.answerDigest !== continueBindingDigest(submittedValues)) return;
+  try {
+    await query(`UPDATE ${table("agent_run_hitl_prompts")} AS p SET dispatch_receipt = $1::jsonb
+      WHERE p.id = $2 AND p.run_id = $3 AND p.agent_id = $4 AND p.step_key = $5
+        AND p.dispatch_receipt IS NULL AND p.submitted_values = $6::jsonb
+        AND EXISTS (SELECT 1 FROM ${table("agent_runs")} r WHERE r.id=p.run_id AND r.org_id=$7 AND r.a2a_context_id=$12)
+        AND EXISTS (SELECT 1 FROM ${table("agent_run_hitl_gates")} g WHERE g.run_id=p.run_id
+          AND g.review_task_id=$8 AND g.x_renderer=$9 AND g.input_schema=$10::jsonb
+          AND g.materialized_at=$11::timestamptz)`,
+      [JSON.stringify(receipt),input.promptId,gate.runId,receipt.agentId,
+        gate.reviewTaskId.slice("wayflow-".length),JSON.stringify(submittedValues),receipt.orgId,
+        gate.reviewTaskId,gate.xRenderer,JSON.stringify(gate.inputSchema),gate.materializedAt,receipt.contextId]);
+  } catch(error) { if (!qualifiedMissingReceiptColumn(error)) throw error; }
+}
+export type AnsweredContextGate = {
+  reviewTaskId: string; label: string; schema: Record<string,unknown>;
+  submittedValues: Record<string,unknown>; acknowledgedAt: string;
+};
+export async function readConfirmedContextGates(
+  runId: string, orgId: string, agentId: string, query: HitlGateQuery = receiptQuery,
+): Promise<AnsweredContextGate[]> {
+  let rows: Array<{step_key:string;submitted_values:Record<string,unknown>|null;
+    dispatch_receipt:ContinueReceipt|null;review_task_id:string;x_renderer:string;
+    input_schema:Record<string,unknown>;gate_values:Record<string,unknown>;
+    field_name:string|null;materialized_at:Date|string;a2a_context_id:string|null}>;
+  try {
+    rows = await query(`SELECT p.step_key,p.submitted_values,p.dispatch_receipt,
+      g.review_task_id,g.x_renderer,g.input_schema,g.gate_values,g.field_name,g.materialized_at,r.a2a_context_id
+      FROM ${table("agent_run_hitl_prompts")} p
+      JOIN ${table("agent_runs")} r ON r.id=p.run_id
+      JOIN ${table("agent_run_hitl_gates")} g ON g.run_id=p.run_id AND g.review_task_id='wayflow-' || p.step_key
+      WHERE p.run_id=$1 AND r.org_id=$2 AND p.agent_id=$3 AND p.dispatch_receipt IS NOT NULL
+      ORDER BY p.captured_at ASC,p.id ASC`, [runId,orgId,agentId]);
+  } catch(error) { if (qualifiedMissingReceiptColumn(error)) return []; throw error; }
+  const result: AnsweredContextGate[]=[]; const seen=new Set<string>();
+  for(const row of rows){
+    const receipt=row.dispatch_receipt; const answer=row.submitted_values;
+    const slot = row.gate_values?.slotMeta as {slotId?:unknown}|undefined;
+    if(!receipt || receipt.version!==1 || receipt.runId!==runId || receipt.orgId!==orgId
+      || receipt.agentId!==agentId || receipt.reviewTaskId!==row.review_task_id
+      || receipt.reviewTaskId!==`wayflow-${row.step_key}` || !receipt.contextId
+      || receipt.contextId!==row.a2a_context_id
+      || !receipt.returnedTaskId || !(receipt.returnedState==="completed" ||
+        (receipt.returnedState==="input-required" && receipt.returnedTaskId!==row.step_key))
+      || !answer || typeof slot?.slotId!=="string" || answer.slotId!==slot.slotId
+      || (answer.resolutionMode!=="override" && answer.resolutionMode!=="accumulate")
+      || !Array.isArray(answer.selectedRefs)
+      || !answer.selectedRefs.every(ref=>ref && typeof ref==="object" &&
+        ["artifactId","representationRevisionId","semanticAssertionId"].every(key=>
+          typeof (ref as Record<string,unknown>)[key]==="string" && (ref as Record<string,string>)[key].length>0))) continue;
+    const gate:ContinueGateSnapshot={runId,reviewTaskId:row.review_task_id,xRenderer:row.x_renderer,
+      inputSchema:row.input_schema,values:row.gate_values,materializedAt:new Date(row.materialized_at).toISOString()};
+    if(receipt.materializedAt!==gate.materializedAt || receipt.schemaDigest!==continueGateDigest(gate)
+      || receipt.answerDigest!==continueBindingDigest(answer) || seen.has(row.review_task_id)) continue;
+    seen.add(row.review_task_id);
+    result.push({reviewTaskId:row.review_task_id,label:slot.slotId,
+      schema:row.input_schema,submittedValues:answer,acknowledgedAt:receipt.acknowledgedAt});
+  }
+  return result;
+}
+
+/** Internal exact materialization identity, distinct from the public latest-gate DTO. */
+export type ContinueGateSnapshot = DurableHitlGateArtifact & { readonly materializedAt: string };
+
+export async function readDurableHitlGateForContinue(
+  runId: string, reviewTaskId: string, deps: {query?: HitlGateQuery} = {},
+): Promise<ContinueGateSnapshot | null> {
+  const rows = await (deps.query ?? receiptQuery)<{
+    run_id: string; review_task_id: string; x_renderer: string;
+    input_schema: Record<string, unknown>; gate_values: Record<string, unknown>;
+    field_name: string | null; materialized_at: Date | string;
+  }>(`SELECT run_id, review_task_id, x_renderer, input_schema, gate_values,
+           field_name, materialized_at FROM ${table("agent_run_hitl_gates")}
+       WHERE run_id = $1 AND review_task_id = $2`, [runId, reviewTaskId]);
+  const row = rows[0];
+  if (!row || row.run_id !== runId || row.review_task_id !== reviewTaskId) return null;
+  const materializedAt = new Date(row.materialized_at).toISOString();
+  return {runId, reviewTaskId, xRenderer: row.x_renderer,
+    inputSchema: row.input_schema, values: row.gate_values, materializedAt,
+    ...(row.field_name ? {fieldName: row.field_name} : {})};
 }

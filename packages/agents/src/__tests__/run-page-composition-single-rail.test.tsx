@@ -125,6 +125,8 @@ const row = vi.hoisted(() => ({
     unknown
   >,
   producedReviewPark: null as string | null,
+  /** Stored execution evidence, independent of the answered setup fields. */
+  streamedText: null as string | null,
 }));
 
 /**
@@ -277,7 +279,7 @@ function makeRun() {
     lgThreadId: null,
     traceId: null,
     timeoutSeconds: null,
-    streamedText: null,
+    streamedText: row.streamedText,
     authPolicy: null,
     orgId: "org-1",
     projectId: null,
@@ -450,6 +452,7 @@ beforeEach(() => {
   };
   row.inputParams = { idea: "a post about rails", audience: "developers" };
   row.producedReviewPark = null;
+  row.streamedText = null;
   recommendationPark.row = null;
   recommendationPark.holdState = { state: "none" };
   reviewSlot.awaiting = false;
@@ -629,6 +632,8 @@ describe("the run page draws exactly one step rail (cinatra#3478)", () => {
   });
 
   it("lists the run's steps in ONE numbered series with the pause inline", async () => {
+    // This later context gate follows actual execution, while its Setup answer stays.
+    row.streamedText = "The draft is ready for context.";
     const { container } = await renderRunPage();
 
     const [column] = railColumns(container);
@@ -638,7 +643,7 @@ describe("the run page draws exactly one step rail (cinatra#3478)", () => {
     // The gate the run is stopped at, then the steps still to come — one list,
     // one series of numerals, in the run's own order. Before the fix these were
     // two lists in two columns, each numbered from 1.
-    expect(entries).toEqual(["1Stored Ideas", "2Draft the post", "3Pick the image"]);
+    expect(entries).toEqual(["1Setup", "2Stored Ideas", "3Draft the post", "4Pick the image"]);
     expect(new Set(entries).size).toBe(entries.length);
   });
 
