@@ -349,3 +349,140 @@ describe("prepareReviewTargetsCore — the props builder may read the pinned rev
     expect(r.prepared[0].props).toBe(built);
   });
 });
+
+// #3978: real preparation forwards only the authenticated canonical witness.
+describe("3978 authenticated pinned decision projection", () => {
+  const decidedAt = "2026-10-07T09:35:30.000Z";
+  const decision = { gateId: "gate-1", orgId: "org-1", runId: "run", reviewTaskId: "wayflow-t", fingerprint: "a".repeat(64), disposition: "approve" as const, decidedAt };
+  const input = { runId: "run", reviewTaskId: "wayflow-t", targets: [t("a", "1")], acceptResolvedGate: true };
+  function fixture(over: Record<string, unknown> = {}, version = 5, orgId: string | null = "org-1") {
+    const buildProps = vi.fn((value: Parameters<PrepareReviewPorts["buildProps"]>[0]) => ({ ...fakeProps(), propsApiVersion: value.propsApiVersion }));
+    const bound = ports({
+      verifyRunAccess: async () => ({ ok: true, ...(orgId === null ? {} : { orgId }) }),
+      readGatePinnedTargets: async () => ({ status: "resolved", targets: [t("a", "1")], decision: { ...decision, ...over } }),
+      resolveMount: () => ({ kind: "build-map", packageName: "@x/ext", generatedKey: "@x/ext::detail", propsApiVersion: version }),
+      buildProps,
+    });
+    return { bound, buildProps };
+  }
+  it("passes the exact authenticated decision to the pinned member's v5 builder", async () => {
+    const { bound, buildProps } = fixture();
+    expect((await prepareReviewTargetsCore(input, bound)).ok).toBe(true);
+    expect(buildProps.mock.calls[0][0]).toMatchObject({ representationRevisionId: "1", review: { reading: "continued", openLive: null, decidedAt } });
+  });
+  it.each([1, 2, 3, 4])("keeps negotiated v%s preparation builder input byte/key equal to the legacy path", async (version) => {
+    const { bound, buildProps } = fixture({}, version);
+    await prepareReviewTargetsCore(input, bound);
+    const legacy = fixture({}, version);
+    legacy.bound.readGatePinnedTargets = async () => ({ status: "resolved", targets: [t("a", "1")] });
+    await prepareReviewTargetsCore(input, legacy.bound);
+    expect(buildProps.mock.calls[0][0]).toEqual(legacy.buildProps.mock.calls[0][0]);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+  });
+  it.each([
+    { orgId: "foreign-org" }, { runId: "foreign-run" }, { reviewTaskId: "foreign-task" },
+    { gateId: "" }, { fingerprint: "" }, { fingerprint: "malformed" },
+    { disposition: "reject" }, { disposition: "comment" }, { decidedAt: "" },
+    { decidedAt: "2026-02-30T00:00:00.000Z" },
+  ])("suppresses facts from a mismatched or invalid canonical witness %j", async (over) => {
+    const { bound, buildProps } = fixture(over);
+    expect((await prepareReviewTargetsCore(input, bound)).ok).toBe(true);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+  });
+  it("does not substitute missing run authority or caller/model facts", async () => {
+    const { bound, buildProps } = fixture({}, 5, null);
+    await prepareReviewTargetsCore({ ...input, review: { decidedAt } } as typeof input, bound);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+  });
+  it("denies before gate/artifact reads when the actual viewer cannot read the run", async () => {
+    const { bound, buildProps } = fixture();
+    const gateRead = vi.fn(bound.readGatePinnedTargets);
+    bound.readGatePinnedTargets = gateRead;
+    bound.verifyRunAccess = async () => ({ ok: false, status: 403 });
+    expect(await prepareReviewTargetsCore(input, bound)).toEqual({ ok: false, error: { kind: "run-access-denied", status: 403 } });
+    expect(gateRead).not.toHaveBeenCalled(); expect(buildProps).not.toHaveBeenCalled();
+  });
+  it("never upgrades a pending row, missing witness or substituted revision into settled facts", async () => {
+    const { bound, buildProps } = fixture();
+    bound.readGatePinnedTargets = async () => ({ status: "pending", targets: [t("a", "1")] });
+    await prepareReviewTargetsCore(input, bound);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+    bound.readGatePinnedTargets = async () => ({ status: "resolved", targets: [t("a", "1")] });
+    buildProps.mockClear(); await prepareReviewTargetsCore(input, bound);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+    buildProps.mockClear();
+    expect(await prepareReviewTargetsCore({ ...input, targets: [t("a", "later-revision")] }, bound)).toMatchObject({ ok: false, error: { kind: "target-substitution" } });
+    expect(buildProps).not.toHaveBeenCalled();
+  });
+});
+
+// Exercise the actual artifact-side binder and snapshot builder, not a mock builder.
+describe("3978 real artifact binder decision forwarding", () => {
+  it("forwards the v5 decision through the real pinned builder and preserves legacy absence", async () => {
+    const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
+    const { absentArtifactContent } = await import("../artifact-renderer-props");
+    const bind = bindArtifactReviewPorts({ orgId: "org-1", actor: {} as Parameters<typeof bindArtifactReviewPorts>[0]["actor"],
+      buildContent: async (input) => absentArtifactContent(input.representationRevisionId) });
+    const artifact = { ...fakeArtifact("a"), ...fakeProps().artifact, artifactId: "a" };
+    const base = { artifact, representationRevisionId: "1", mime: "application/json", member: { mime: "application/json" } };
+    const review = { reading: "continued" as const, openLive: null, decidedAt: "2026-10-07T09:35:30.000Z" };
+    const actual = await bind.buildProps({ ...base, propsApiVersion: 5, review });
+    expect(actual.review).toEqual(review);
+    expect(actual.representation?.revisionId).toBe("1");
+    for (const propsApiVersion of [1, 2, 3, 4]) {
+      const before = await bind.buildProps({ ...base, propsApiVersion });
+      expect(await bind.buildProps({ ...base, propsApiVersion, review })).toEqual(before);
+      expect(before).not.toHaveProperty("review");
+    }
+  });
+});
+
+describe("3978 real reviewing-actor port binding", () => {
+  it("passes the same viewing principal and trusted org into the canonical readers", async () => {
+    const store = await import("@cinatra-ai/agents/artifact-review-gate-store");
+    const { bindReviewRunGatePorts } = await import("@/app/artifacts/[id]/review-gate-ports");
+    const ctx = { actor: { actorType: "human" as const, userId: "viewer-1", source: "route" as const }, orgId: "org-1" };
+    const access = vi.spyOn(store, "enforceReviewRunAccess").mockResolvedValue({ ok: true, orgId: "org-1" });
+    const read = vi.spyOn(store, "readGatePinnedTargets").mockResolvedValue({ status: "not-found" });
+    try {
+      const bound = bindReviewRunGatePorts(ctx);
+      expect(await bound.verifyRunAccess("run")).toEqual({ ok: true, orgId: "org-1" });
+      expect(access).toHaveBeenCalledWith("run", ctx.actor, "read", undefined, { includeOrgId: true });
+      await bound.readGatePinnedTargets("run", "task");
+      expect(read).toHaveBeenCalledWith("run", "task", { decisionFactsForOrgId: "org-1" });
+      access.mockResolvedValue({ ok: true, orgId: "foreign-org" });
+      expect(await bound.verifyRunAccess("run")).toEqual({ ok: false, status: 403 });
+      access.mockResolvedValue({ ok: false, status: 404 });
+      expect(await bound.verifyRunAccess("run")).toEqual({ ok: false, status: 404 });
+    } finally { access.mockRestore(); read.mockRestore(); }
+  });
+});
+
+describe("3978 real build-map version window", () => {
+  it("reads the actual pinned email v4 declaration instead of the new host ceiling", async () => {
+    const { classifyArtifactDisplayMount } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const { GENERATED_ARTIFACT_RENDERERS } = await import("@/lib/generated/artifact-renderers");
+    expect(GENERATED_ARTIFACT_RENDERERS["@cinatra-ai/email-artifacts::detail"].propsApiVersion).toBe(4);
+    const mount = await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: "@cinatra-ai/email-artifacts",
+      generatedKey: "@cinatra-ai/email-artifacts::detail", propsApiVersion: 5 });
+    expect(mount).toMatchObject({ kind: "build-map", propsApiVersion: 4 });
+  });
+  it("preserves declarations across the whole supported window and floors malformed/too-new metadata", async () => {
+    const { classifyArtifactDisplayMount } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const { GENERATED_ARTIFACT_RENDERERS } = await import("@/lib/generated/artifact-renderers");
+    const key = "@cinatra-ai/email-artifacts::detail";
+    const original = GENERATED_ARTIFACT_RENDERERS[key];
+    try {
+      for (const propsApiVersion of [1, 2, 3, 4, 5]) {
+        GENERATED_ARTIFACT_RENDERERS[key] = { ...original, propsApiVersion };
+        expect(await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: original.packageName, generatedKey: key, propsApiVersion: 5 }))
+          .toMatchObject({ kind: "build-map", propsApiVersion });
+      }
+      for (const propsApiVersion of [0, -1, 1.5, NaN, 6]) {
+        GENERATED_ARTIFACT_RENDERERS[key] = { ...original, propsApiVersion };
+        expect(await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: original.packageName, generatedKey: key, propsApiVersion: 5 }))
+          .toMatchObject({ kind: "floor", reason: "requires-rebuild" });
+      }
+    } finally { GENERATED_ARTIFACT_RENDERERS[key] = original; }
+  });
+});

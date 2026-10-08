@@ -44,6 +44,7 @@ import {
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  type ArtifactRendererProps,
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
@@ -254,6 +255,7 @@ export function bindArtifactReviewPorts(ctx: {
         slot: mount.slot,
         packageName: mount.packageName,
         generatedKey: mount.generatedKey,
+        ...(mount.propsApiVersion === undefined ? {} : { propsApiVersion: mount.propsApiVersion }),
       };
     }
     if (mount.kind === "runtime") {
@@ -331,6 +333,7 @@ export function bindArtifactReviewPorts(ctx: {
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
+    review?: ArtifactRendererProps["review"];
   }) => {
     // Host-authorized, version-PINNED hrefs (the exact reviewed revision, never
     // the artifact's latest) — the same content/preview endpoints the detail
@@ -433,6 +436,7 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
+      ...(input.propsApiVersion >= 5 && input.review ? { review: input.review } : {}),
       content,
       bytes,
     });

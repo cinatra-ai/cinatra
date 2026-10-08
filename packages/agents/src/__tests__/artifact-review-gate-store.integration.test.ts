@@ -136,6 +136,7 @@ function mkDecision(input: {
   };
 }
 
+describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real store)", () => {
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -208,7 +209,6 @@ afterAll(async () => {
   if (cleanupError) throw cleanupError;
 });
 
-describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real store)", () => {
   // -------------------------------------------------------------------------
   // PIN — the emitting gate.
   // -------------------------------------------------------------------------
@@ -916,5 +916,39 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       awaiting: false,
       parkedOnProducedReview: false,
     });
+  });
+});
+
+// #3978 native projection only. SQL fixtures and their hooks are separately scoped.
+describe("3978 fake-executor decision projection (no database)", () => {
+  const targets = [{ artifactId: "artifact-1", representationRevisionId: "reviewed-rev" }];
+  const time = new Date("2026-10-07T09:35:30.000Z");
+  const row = { id: "gate-1", orgId: "org-1", runId: "run-1", reviewTaskId: "task-1",
+    status: "resolved", pinnedTargets: targets, disposition: "approve", fingerprint: "a".repeat(64),
+    resolvedBy: "reviewer-1", resolvedAt: time, createdAt: new Date("2026-10-07T00:00:00.000Z") };
+  async function read(over: Record<string, unknown> = {}, orgId: string | null = "org-1") {
+    const store = await import("../artifact-review-gate-store");
+    const executor = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ ...row, ...over }] }) }) }) };
+    return store.readGatePinnedTargets("run-1", "task-1", {
+      executor: executor as unknown as NonNullable<Parameters<typeof store.readGatePinnedTargets>[2]>["executor"],
+      ...(orgId === null ? {} : { decisionFactsForOrgId: orgId }),
+    });
+  }
+  it("reads canonical continued time and the exact frozen targets without a database", async () => {
+    expect(await read()).toEqual({ status: "resolved", targets, decision: { gateId: "gate-1", orgId: "org-1",
+      runId: "run-1", reviewTaskId: "task-1", fingerprint: "a".repeat(64), disposition: "approve", decidedAt: time.toISOString() } });
+  });
+  it("keeps the legacy two-field outcome exact when facts were not requested", async () => {
+    expect(await read({}, null)).toEqual({ status: "resolved", targets });
+  });
+  it.each([
+    { orgId: "foreign-org" }, { runId: "foreign-run" }, { reviewTaskId: "foreign-task" },
+    { id: "" }, { disposition: "reject" }, { disposition: "comment" },
+    { fingerprint: null }, { fingerprint: "malformed" }, { resolvedAt: null }, { resolvedAt: new Date(NaN) },
+  ])("suppresses a refused or invalid canonical decision %j", async (over) => {
+    expect(await read(over)).toEqual({ status: "resolved", targets });
+  });
+  it("does not manufacture a decision from a still-pending gate", async () => {
+    expect(await read({ status: "pending" })).toEqual({ status: "pending", targets });
   });
 });
