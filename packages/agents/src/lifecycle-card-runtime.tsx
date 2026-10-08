@@ -384,8 +384,9 @@ export function runCardOwnsLifecycleCopy(
 // register, the report is a no-op, and nothing about those surfaces changes.
 // ---------------------------------------------------------------------------
 
-/** Told by a card: this card, in this container, is (or is no longer) settled. */
-export type SettledScheduleRegister = (cardId: string, settled: boolean) => void;
+/** Told by a card: this mount is settled. A turn-level durable view may also
+ * identify its run through the admitted body; an opaque ref is never that ID. */
+export type SettledScheduleRegister = (cardId: string, settled: boolean, runId?: string | null) => void;
 
 const SettledScheduleRegisterContext = createContext<SettledScheduleRegister | null>(null);
 
@@ -421,15 +422,15 @@ export function SettledScheduleRegisterProvider({
  * unmounts, and one that leaves the settled reading, both have to give the
  * container its turn back.
  */
-export function useReportSettledSchedule(cardId: string, settled: boolean): void {
+export function useReportSettledSchedule(cardId: string, settled: boolean, runId?: string | null): void {
   const register = useContext(SettledScheduleRegisterContext);
   const mountId = useId();
   const key = `${cardId}#${mountId}`;
   useEffect(() => {
     if (register === null) return;
-    register(key, settled);
-    return () => register(key, false);
-  }, [register, key, settled]);
+    register(key, settled, runId);
+    return () => register(key, false, runId);
+  }, [register, key, settled, runId]);
 }
 
 // ---------------------------------------------------------------------------
