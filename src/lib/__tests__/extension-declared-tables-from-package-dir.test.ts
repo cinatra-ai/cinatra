@@ -28,7 +28,7 @@ import { ensureExtensionDeclaredTablesFromPackageDir } from "@/lib/extension-mig
 const PACKAGE = "@cinatra-ai/x3462-seam-fixture";
 const DECLARED_TABLES = [
   {
-    name: "idea_drafts",
+    name: "seam_rows",
     organizationColumn: "org_id",
     columns: [
       { name: "id", type: "text", notNull: true, primaryKey: true },
@@ -106,7 +106,7 @@ describe("cinatra#3462 — ensureExtensionDeclaredTablesFromPackageDir", () => {
     expect(call.schemaName).toBe("cinatra");
     expect(call.packageName).toBe(PACKAGE);
     expect(call.roleName).toBe("ext_cinatra_ai_x3462_seam_fixture");
-    expect(call.plan.physicalTableNames).toEqual(["ext_cinatra_ai_x3462_seam_fixture_idea_drafts"]);
+    expect(call.plan.physicalTableNames).toEqual(["ext_cinatra_ai_x3462_seam_fixture_seam_rows"]);
   });
 
   it("FEEDS the prefix-collision refusal the installed inventory — it is never left empty", async () => {

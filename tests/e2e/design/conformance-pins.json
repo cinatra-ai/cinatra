@@ -12,21 +12,21 @@
     {
       "id": "app-components",
       "file": "app-components.json",
-      "source": "published",
+      "source": "repo",
       "manifestSha256": "f91eee6c9f3238830e2a7e11ff637b37ddfdbea44b11a5a10f893acff81d93a2",
       "specContentHash": "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c"
     },
     {
       "id": "app-extensions",
       "file": "app-extensions.json",
-      "source": "published",
+      "source": "repo",
       "manifestSha256": "a9d82c313356a7ac1ae02e0124500c4bc4287ab51e5330471ca04ff4a8d996d7",
       "specContentHash": "sha256:6cef4dce99482754c7ffc7ec879c1fe43ff0c321db6c7057f7e4d04ac4402187"
     },
     {
       "id": "app-connectors",
       "file": "app-connectors.json",
-      "source": "published",
+      "source": "repo",
       "manifestSha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
       "specContentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
     },

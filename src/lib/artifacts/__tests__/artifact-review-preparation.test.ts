@@ -459,13 +459,13 @@ describe("3978 real reviewing-actor port binding", () => {
 });
 
 describe("3978 real build-map version window", () => {
-  it("reads the actual pinned email v4 declaration instead of the new host ceiling", async () => {
+  it("reads the actual merged email v5 declaration from the build map", async () => {
     const { classifyArtifactDisplayMount } = await import("@/app/artifacts/[id]/renderer-resolution");
     const { GENERATED_ARTIFACT_RENDERERS } = await import("@/lib/generated/artifact-renderers");
-    expect(GENERATED_ARTIFACT_RENDERERS["@cinatra-ai/email-artifacts::detail"].propsApiVersion).toBe(4);
+    expect(GENERATED_ARTIFACT_RENDERERS["@cinatra-ai/email-artifacts::detail"].propsApiVersion).toBe(5);
     const mount = await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: "@cinatra-ai/email-artifacts",
       generatedKey: "@cinatra-ai/email-artifacts::detail", propsApiVersion: 5 });
-    expect(mount).toMatchObject({ kind: "build-map", propsApiVersion: 4 });
+    expect(mount).toMatchObject({ kind: "build-map", propsApiVersion: 5 });
   });
   it("preserves declarations across the whole supported window and floors malformed/too-new metadata", async () => {
     const { classifyArtifactDisplayMount } = await import("@/app/artifacts/[id]/renderer-resolution");

@@ -40,6 +40,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { buildRunStepRail } from "../run-step-rail";
 import { Client } from "pg";
 import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 
@@ -870,35 +871,48 @@ afterAll(async () => {
     });
   });
 
-  it("SLOT: the NEWEST gate is the run's answer when it has more than one", async () => {
+  it("SLOT: detail and rail advance in raise order through three actual decisions", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
-    });
-    // Age the first one so "newest" is decidable without depending on clock
-    // resolution between two inserts.
+    const tasks = [reviewTaskId, `${reviewTaskId}-second`, `${reviewTaskId}-third`];
+    const targets = tasks.map(task => [{ artifactId: `art-${task}`, representationRevisionId: "rev-1" }]);
+    for (let i = 0; i < tasks.length; i++) {
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: tasks[i], targets: targets[i] });
+      await client!.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+            SET created_at = timestamptz '2026-10-01 00:00:00+00' + $3 * interval '1 second'
+          WHERE run_id = $1 AND review_task_id = $2`,
+        [runId, tasks[i], i],
+      );
+    }
+    for (let i = 0; i < tasks.length; i++) {
+      const gates = await gateStore.listReviewGatesForRun(runId);
+      const rail = buildRunStepRail({ gates: gates.map(g => ({ gateId: g.id, reviewTaskId: g.reviewTaskId,
+        status: g.status, disposition: g.disposition, createdAt: g.createdAt })) });
+      expect(rail.entries.find(entry => entry.ordinal === rail.activeOrdinal)?.gate?.reviewTaskId).toBe(tasks[i]);
+      await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+        reviewTaskId: tasks[i], awaiting: false, parkedOnProducedReview: false,
+      });
+      const decision = await submitReviewDecisionCore(
+        mkDecision({ runId, reviewTaskId: tasks[i], disposition: "approve", targets: targets[i] }), makeDecidePorts(),
+      );
+      expect(decision.ok).toBe(true);
+    }
+    // All decided: retain the latest settled review rather than a completion flash.
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe(tasks[2]);
+  });
+
+  it("SLOT: simultaneous pending gates use the rail's task-key tie order", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const tasks = [`${reviewTaskId}-Z`, `${reviewTaskId}-a`, `${reviewTaskId}-A`, `${reviewTaskId}_2`, `${reviewTaskId}#2`];
+    for (const task of tasks) {
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: task,
+        targets: [{ artifactId: `art-${task}`, representationRevisionId: "rev-1" }] });
+    }
     await client!.query(
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
-          SET created_at = now() - interval '1 hour'
-        WHERE run_id = $1 AND review_task_id = $2`,
-      [runId, reviewTaskId],
+          SET created_at = timestamptz '2026-10-01 00:00:00+00' WHERE run_id = $1`, [runId],
     );
-    const second = `${reviewTaskId}-second`;
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId: second,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" }],
-    });
-
-    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
-      reviewTaskId: second,
-      awaiting: false,
-      parkedOnProducedReview: false,
-    });
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort((a, b) => a.localeCompare(b))[0]);
   });
 
   it("SLOT: another run's gate is never this run's answer", async () => {
