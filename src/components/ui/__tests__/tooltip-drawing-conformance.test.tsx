@@ -146,7 +146,7 @@ describe('approved example: "border-radius: 6px"', () => {
     expect(content.className.split(/\s+/)).toContain("**:data-[slot=kbd]:rounded-sm");
     expect(content.className.split(/\s+/)).toContain("bg-foreground");
     expect(content.className.split(/\s+/)).toContain("text-background");
-    const trigger = screen.getByRole("button", { name: "Approve", exact: true });
+    const trigger = screen.getByRole("button", { name: /^Approve$/ });
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
     expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
