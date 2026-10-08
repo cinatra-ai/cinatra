@@ -54,6 +54,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseSpecCommit } from "../../ci/lib/design-pin.mjs";
+
 import {
   CANONICAL_CRITERIA,
   DISPOSITIONS,
@@ -304,9 +306,12 @@ describe("the REAL manifest", () => {
     // walk the WHOLE trail rather than only checking the head — a move that
     // dropped an older pin on its way past would still satisfy a head-only
     // check.
-    expect(m.specCommit).toContain("831df38088ec969c7392018e79b297a49ee935a2");
-    // An IMMUTABLE pin: a 40-character commit, never a branch name.
-    expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
+    // The approved revision governs both drawings; the canonical parser keeps
+    // the immutable revision and exact sibling set strict.
+    expect(parseSpecCommit(m.specCommit)).toEqual({
+      revision: "831df38088ec969c7392018e79b297a49ee935a2",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
     expect(m.specCommitDrift.previousPin).toContain("b3665f8f308f32138f47f59ca490684c526c1e89");
     expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
     for (const prior of [
