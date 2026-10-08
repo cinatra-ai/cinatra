@@ -51,13 +51,14 @@ import { readReviewTargetHeaders } from "@/lib/lifecycle/lifecycle-target-header
 import { LifecycleCardSurfaceProvider } from "../../../../packages/agents/src/lifecycle-card-runtime";
 import { ReviewGateCard } from "../../../../packages/agents/src/review-gate-card";
 
-const DECLARED = [
+const VISIBLE_LABELS = [
   ["@cinatra-ai/linkedin:post-draft", "LinkedIn post"],
-  ["@cinatra-ai/email:body", "Email Artifacts"],
-  ["@cinatra-ai/email:sent-email", "Email Artifacts"],
-  ["@cinatra-ai/email:received-reply", "Email Artifacts"],
-  ["@cinatra-ai/email:recipient", "Email Artifacts"],
-  ["@cinatra-ai/drupal:node", "Drupal Artifacts"],
+  ["@cinatra-ai/email:draft", "Email"],
+  ["@cinatra-ai/email:body", "Email"],
+  ["@cinatra-ai/email:sent-email", "Email"],
+  ["@cinatra-ai/email:received-reply", "Email"],
+  ["@cinatra-ai/email:recipient", "Email"],
+  ["@cinatra-ai/drupal:node", "Drupal"],
   ["@cinatra-ai/marketing-icp:profile", "Marketing ICP"],
 ] as const;
 
@@ -85,8 +86,8 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-describe("declared pack labels on actual artifact and review surfaces", () => {
-  it.each(DECLARED)("the real artifact page chip renders %s as %s", async (objectType, label) => {
+describe("bounded LinkedIn/ICP declarations and preserved Email/Drupal surface labels", () => {
+  it.each(VISIBLE_LABELS)("the real artifact page chip renders %s as %s", async (objectType, label) => {
     ports.artifact.objectType = objectType;
     const props = { params: Promise.resolve({ id: "artifact-label" }), searchParams: Promise.resolve({ renderer: "generic" }) };
     const output = await ArtifactDetailPage(props);
@@ -99,7 +100,7 @@ describe("declared pack labels on actual artifact and review surfaces", () => {
     expect(ui.container.querySelector("h1")?.textContent).toContain("A pinned draft");
   });
 
-  it.each(DECLARED)("the real review card header renders %s as %s", async (objectType, label) => {
+  it.each(VISIBLE_LABELS)("the real review card header renders %s as %s", async (objectType, label) => {
     ports.artifact.objectType = objectType;
     const ref = encodeLifecycleGateRef({ runId: "run-label", reviewTaskId: "review-label" })!;
     const state = { state: "pending" as const, canDecide: true as const, canComment: true };
@@ -117,7 +118,7 @@ describe("declared pack labels on actual artifact and review surfaces", () => {
     expect(ui.container.querySelector("[data-review-target-type]")?.getAttribute("data-review-target-type")).toBe(label);
   });
 
-  it.each(DECLARED)("the production exact-type reader resolves %s to %s", (objectType, label) => {
+  it.each(VISIBLE_LABELS)("the production exact-type reader resolves %s to %s", (objectType, label) => {
     expect(artifactKindLabelFor(objectType)).toBe(label);
   });
   it("preserves the declared package fallback", () => {

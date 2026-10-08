@@ -204,9 +204,9 @@ describe("exact declared object types before package fallback (#3527)", () => {
     expect(resolveArtifactKindLabel("  @cinatra-ai/linkedin:post-draft  ")).toEqual({ label: "LinkedIn post", source: "declared" });
     expect(artifactKindLabelFor("@cinatra-ai/linkedin-artifacts")).toBe("LinkedIn post");
   });
-  it("distinguishes exact types sharing a namespace before falling back to a package label", () => {
-    expect(artifactKindLabelFor("@fixture/blog:idea")).toBe("Idea");
-    expect(artifactKindLabelFor(" @fixture/blog:post ")).toBe("Post");
+  it("does not rename unreviewed types with an aggregate pack declaration", () => {
+    expect(artifactKindLabelFor("@fixture/blog:idea")).toBe("Package fallback");
+    expect(artifactKindLabelFor(" @fixture/blog:post ")).toBe("Package fallback");
     expect(artifactKindLabelFor("@fixture/blog:unclaimed")).toBe("Package fallback");
     expect(artifactKindLabelFor("@fixture/post-artifact@1.2.0")).toBe("Post");
   });

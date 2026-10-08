@@ -106,8 +106,8 @@ function derivedKindLabel(id: string): string {
  * declaring repository's own change, never a host rewrite.
  */
 export function resolveArtifactKindLabel(id: string): ResolvedArtifactKindLabel {
-  // A registering type namespace can differ from its declaring artifact pack.
-  // Prefer its exact declared identity, then preserve the package fallback.
+  // The reviewed LinkedIn/ICP migration carries two exact declared aliases.
+  // Other types keep the existing package declaration or never-blank floor.
   const declared = GENERATED_ARTIFACT_KIND_LABELS[id.trim()]
     ?? GENERATED_ARTIFACT_KIND_LABELS[artifactKindLabelPackageId(id)];
   if (typeof declared === "string" && declared.trim().length > 0) {

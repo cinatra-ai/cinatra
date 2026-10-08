@@ -9,23 +9,6 @@
       "src/components/ui/pagination.tsx",
       "src/components/ui/table.tsx"
     ],
-    "crm-connector": [
-      "src/components/ui/button.tsx",
-      "src/components/ui/field.tsx",
-      "src/components/ui/input-group.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/separator.tsx",
-      "src/components/ui/textarea.tsx"
-    ],
-    "drupal-assistant-connector": [
-      "src/components/ui/badge.tsx",
-      "src/components/ui/button.tsx",
-      "src/components/ui/field.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/separator.tsx"
-    ],
     "drupal-mcp-connector": [
       "src/components/ui/alert.tsx",
       "src/components/ui/badge.tsx",
@@ -55,18 +38,6 @@
       "src/components/ui/input.tsx",
       "src/components/ui/label.tsx"
     ],
-    "linkedin-oauth-connector": [
-      "src/components/ui/button.tsx",
-      "src/components/ui/card.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/text-link.tsx"
-    ],
-    "mcp-client-connector": [
-      "src/components/ui/alert.tsx",
-      "src/components/ui/button.tsx",
-      "src/components/ui/link.tsx"
-    ],
     "nango-connector": [
       "src/components/ui/alert.tsx",
       "src/components/ui/button.tsx",
@@ -84,36 +55,12 @@
       "src/components/ui/card.tsx",
       "src/components/ui/input.tsx"
     ],
-    "tailscale-connector": [
-      "src/components/ui/alert.tsx",
-      "src/components/ui/badge.tsx",
-      "src/components/ui/button.tsx",
-      "src/components/ui/card.tsx",
-      "src/components/ui/external-link.tsx",
-      "src/components/ui/field.tsx",
-      "src/components/ui/input-group.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/separator.tsx",
-      "src/components/ui/textarea.tsx"
-    ],
-    "wordpress-assistant-connector": [
-      "src/components/ui/badge.tsx",
-      "src/components/ui/button.tsx",
-      "src/components/ui/field.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/separator.tsx"
-    ],
     "wordpress-mcp-connector": [
       "src/components/ui/badge.tsx",
       "src/components/ui/button.tsx",
       "src/components/ui/input-group.tsx",
       "src/components/ui/input.tsx",
       "src/components/ui/textarea.tsx"
-    ],
-    "youtube-connector": [
-      "src/components/ui/link.tsx"
     ]
   }
 }
