@@ -1987,8 +1987,6 @@ describe("cinatra#3867 — the private-repository rule matches whole repository 
 const EXPECTED_KNOWN_FINDINGS_FLOOR = {
   "@cinatra-ai/anthropic-connector:src/telemetry.ts:fs-ban.direct-filesystem-access":
     "fs-ban.direct-filesystem-access — removed by cinatra#3828",
-  "@cinatra-ai/drupal-assistant-connector:src/settings-page.tsx:env-ban.direct-process-env-access":
-    "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/openai-connector:src/adapter/openai-adapter.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/plane-connector:src/dev-setup.ts:env-ban.direct-process-env-access":
