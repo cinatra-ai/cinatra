@@ -1991,8 +1991,6 @@ const EXPECTED_KNOWN_FINDINGS_FLOOR = {
     "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/plane-connector:src/dev-setup.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
-  "@cinatra-ai/plane-connector:src/plane-provision.ts:env-ban.direct-process-env-access":
-    "env-ban.direct-process-env-access — removed by cinatra#3828",
 };
 
 describe("cinatra#3867 — the floor of the known older findings of connectors", () => {
@@ -2023,34 +2021,32 @@ describe("cinatra#3867 — the floor of the known older findings of connectors",
   });
 
   it("known findings on the floor are reported as known and the exit is 0 (strict fails them)", () => {
-    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": ENV_READ });
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ });
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.infra).toBe(false);
     expect(result.blocking).toEqual([]);
     expect(result.conform).toBe(true);
     expect(result.known.map((f) => `${f.rule} ${f.file}`).sort()).toEqual([
       "env-ban.direct-process-env-access src/dev-setup.ts",
-      "env-ban.direct-process-env-access src/plane-provision.ts",
     ]);
     expect(result.known.every((f) => f.detail.includes("cinatra#3828"))).toBe(true);
     const strict = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT, strict: true });
     expect(strict.conform).toBe(false);
-    expect(strict.blocking.filter((f) => f.rule === "env-ban.direct-process-env-access")).toHaveLength(2);
+    expect(strict.blocking.filter((f) => f.rule === "env-ban.direct-process-env-access")).toHaveLength(1);
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
   it("the checker's command line exits 0 on a package whose only findings are on the floor", () => {
-    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": ENV_READ });
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ });
     const gate = join(REPO_ROOT, "scripts", "extensions", "conformance-gate.mjs");
     const run = spawnSync(process.execPath, [gate, "--package", pkgDir, "--sdk-root", REPO_ROOT], { encoding: "utf8" });
     expect(run.status, run.stdout + run.stderr).toBe(0);
     expect(run.stdout).toContain("KNOWN [env-ban.direct-process-env-access] src/dev-setup.ts");
-    expect(run.stdout).toContain("KNOWN [env-ban.direct-process-env-access] src/plane-provision.ts");
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
   it("a second finding of the same rule in another file of the same package fails", () => {
-    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": ENV_READ, "src/other.ts": ENV_READ });
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/other.ts": ENV_READ });
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
     expect(result.blocking.map((f) => `${f.rule} ${f.file}`)).toEqual(["env-ban.direct-process-env-access src/other.ts"]);
@@ -2059,7 +2055,7 @@ describe("cinatra#3867 — the floor of the known older findings of connectors",
 
   it("a finding of another rule in a floored file fails", () => {
     const fsImport = 'import { readFileSync } from "node:fs";\n';
-    const pkgDir = plane({ "src/dev-setup.ts": fsImport + ENV_READ, "src/plane-provision.ts": ENV_READ });
+    const pkgDir = plane({ "src/dev-setup.ts": fsImport + ENV_READ });
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
     expect(result.blocking.map((f) => `${f.rule} ${f.file}`)).toEqual(["fs-ban.direct-filesystem-access src/dev-setup.ts"]);
@@ -2070,23 +2066,23 @@ describe("cinatra#3867 — the floor of the known older findings of connectors",
   // at a pinned commit of the application whose floor still holds the line.
   it("a cured connector's SINGLE-PACKAGE run passes with a note for its line (also under --strict), and reads no other package's lines", () => {
     const cured = "export const base = 'x';\n";
-    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": cured });
+    const pkgDir = plane({ "src/dev-setup.ts": cured });
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.infra).toBe(false);
     expect(result.blocking).toEqual([]);
     expect(result.conform).toBe(true);
-    expect(result.known.map((f) => f.file)).toEqual(["src/dev-setup.ts"]);
-    expect(result.notes.map((f) => `${f.rule} ${f.file}`)).toEqual(["floor.connector-known-finding-cured src/plane-provision.ts"]);
-    expect(result.notes[0].detail).toContain(`${PLANE}:src/plane-provision.ts:env-ban.direct-process-env-access`);
+    expect(result.known).toEqual([]);
+    expect(result.notes.map((f) => `${f.rule} ${f.file}`)).toEqual(["floor.connector-known-finding-cured src/dev-setup.ts"]);
+    expect(result.notes[0].detail).toContain(`${PLANE}:src/dev-setup.ts:env-ban.direct-process-env-access`);
     expect(result.notes[0].detail).toContain("cured here");
     const strict = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT, strict: true });
-    expect(strict.blocking.map((f) => f.file)).toEqual(["src/dev-setup.ts"]);
+    expect(strict.blocking).toEqual([]);
     expect(strict.notes).toHaveLength(1);
 
     const gate = join(REPO_ROOT, "scripts", "extensions", "conformance-gate.mjs");
     const run = spawnSync(process.execPath, [gate, "--package", pkgDir, "--sdk-root", REPO_ROOT], { encoding: "utf8" });
     expect(run.status, run.stdout + run.stderr).toBe(0);
-    expect(run.stdout).toContain("NOTE  [floor.connector-known-finding-cured] src/plane-provision.ts: cured here");
+    expect(run.stdout).toContain("NOTE  [floor.connector-known-finding-cured] src/dev-setup.ts: cured here");
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
@@ -2094,7 +2090,7 @@ describe("cinatra#3867 — the floor of the known older findings of connectors",
     const pkgDir = plane({});
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(true);
-    expect(result.notes.map((f) => f.file).sort()).toEqual(["src/dev-setup.ts", "src/plane-provision.ts"]);
+    expect(result.notes.map((f) => f.file).sort()).toEqual(["src/dev-setup.ts"]);
     rmSync(pkgDir, { recursive: true, force: true });
   });
 
@@ -2102,7 +2098,7 @@ describe("cinatra#3867 — the floor of the known older findings of connectors",
     const cured = "export const base = 'x';\n";
     const tree = writeFixture({});
     const planeDir = join(tree, "plane-connector");
-    const planeFiles = { ...cleanConnectorFiles({ pkg: { name: PLANE } }), "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": cured };
+    const planeFiles = { ...cleanConnectorFiles({ pkg: { name: PLANE } }), "src/dev-setup.ts": cured };
     for (const [rel, content] of Object.entries(planeFiles)) {
       mkdirSync(dirname(join(planeDir, rel)), { recursive: true });
       writeFileSync(join(planeDir, rel), content);
@@ -2111,12 +2107,12 @@ describe("cinatra#3867 — the floor of the known older findings of connectors",
     expect(report.infra).toEqual([]);
     expect(report.checked).toEqual([PLANE]);
     expect(report.stale.map((f) => `${f.rule} ${f.floorKey}`)).toEqual([
-      `floor.connector-known-finding-stale ${PLANE}:src/plane-provision.ts:env-ban.direct-process-env-access`,
+      `floor.connector-known-finding-stale ${PLANE}:src/dev-setup.ts:env-ban.direct-process-env-access`,
     ]);
     const floorPackages = [...new Set(Object.keys(EXPECTED_KNOWN_FINDINGS_FLOOR).map((k) => k.split(":")[0]))];
     expect(report.unmaterialized.sort()).toEqual(floorPackages.filter((n) => n !== PLANE).sort());
 
-    writeFileSync(join(planeDir, "src/plane-provision.ts"), ENV_READ);
+    writeFileSync(join(planeDir, "src/dev-setup.ts"), ENV_READ);
     const healed = gateModule.checkKnownFindingsFloorOverTree([planeDir], { sdkRoot: REPO_ROOT });
     expect(healed.stale).toEqual([]);
     rmSync(tree, { recursive: true, force: true });
