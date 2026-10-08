@@ -91,6 +91,7 @@ export function sendInFixtureWindow(send, later) {
   };
   const answer = function () {
     if (!own.answer) return;
+    if (own.answer.path) document.defaultView.history.pushState(null, "", own.answer.path);
     if (own.answer.entry) entry("assistant", own.answer.entry);
     if (own.answer.html) {
       const into = document.querySelector(own.answer.into);
@@ -274,6 +275,12 @@ export const COMPOSER_SCENARIOS = Object.freeze({
   view: { answer: inThread(PREVIEW_CARD) },
   thread: { thread: `<li>An earlier question.</li><li>${SOURCES_CARD}</li>`, draft: DRAFT, answer: inThread(SOURCES_CARD) },
   run: { answer: inThread(RUN_PANEL) },
+  "inline-run": { answer: inThread('<div data-inline-run-card="fixture-run-new"><div data-run-review-slot="review">Review</div></div>') },
+  "inline-run-new-thread": { answer: { ...inThread('<div data-inline-run-card="fixture-run-new">New review</div>'), path: "/chat/fixture-created-thread" } },
+  "inline-run-after-old": { thread: '<li><div data-inline-run-card="fixture-run-old">Old review</div></li>', answer: inThread('<div data-inline-run-card="fixture-run-new">New review</div>') },
+  "inline-old-only": { thread: '<li><div data-inline-run-card="fixture-run-old">Old review</div></li>', answer: inThread("No new run.") },
+  "inline-hidden": { answer: inThread('<div hidden data-inline-run-card="fixture-run-hidden">Hidden run</div>') },
+  "inline-unnamed": { answer: inThread('<div data-inline-run-card="">Unnamed run</div>') },
   notify: { answer: { html: '<li data-sonner-toast="" data-type="success">Run started: Research assistant</li>', into: "#composer-toasts" } },
   quiet: { answer: inThread("Here is what I found.") },
   error: { answer: inThread('<div data-chat-error-card="">The assistant could not answer.</div>') },

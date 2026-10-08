@@ -20,8 +20,6 @@ export const BACKGROUND_JOB_NAMES = {
   //                                    (`draft_flow`)
   // - `BLOG_POST_LINKEDIN_DRAFT_CREATION` → `blog-linkedin-writer-agent`
   //                                    (`linkedin_flow`)
-  // Image-byte job 3 (`BLOG_POST_IMAGE_REGENERATION`) remains on this queue.
-  BLOG_POST_IMAGE_REGENERATION: "blog-post-image-regeneration",
   BLOG_POST_WORDPRESS_DRAFT_CREATION: "blog-post-wordpress-draft-creation",
   BLOG_POST_LINKEDIN_DRAFT_PUBLISH: "blog-post-linkedin-draft-publish",
   LITELLM_PRICING_SYNC: "litellm-pricing-sync",

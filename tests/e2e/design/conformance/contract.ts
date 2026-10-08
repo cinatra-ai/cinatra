@@ -19,6 +19,7 @@
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
+import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 
@@ -1971,6 +1972,113 @@ const INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER: SurfaceDriver = {
 // and exercises each manifest action to its specified outcome (asserted on the
 // harness `data-outcome` instrumentation, mirrored by a real StatusPill).
 // ---------------------------------------------------------------------------
+
+// Approved Extensions §IV.1–2. The static mounts use the actual All Agents
+// card and the same pure refusal panel as the server start screen. Reader
+// variants are asserted independently: an administrator's link must never
+// cause a member fixture to appear to have reachable recourse.
+const eligibilityReader = (root: Locator, reader: "administrator" | "member") =>
+  root.locator(`[data-reader="${reader}"]`);
+
+async function assertCannotRunCard(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const card = eligibilityReader(root, reader);
+    await expect(card.locator('[data-slot="installed-extension-card"]')).toBeVisible();
+    await expect(card.locator('[data-slot="installed-extension-kind-label"]')).toHaveText("Agent");
+    await expect(card.locator('[data-slot="installed-extension-card"]')).toHaveClass(/bg-surface-strong/);
+    await expect(card.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(card.locator('[data-icon="inline-start"]')).toHaveCount(0);
+    await expect(card.locator(`a[href="${RUN_ELIGIBILITY_AGENT.runHref}"]`)).toHaveCount(0);
+    await expect(card.locator('[data-slot="installed-status-indicator"]')).toHaveCount(0);
+    await expect(card.locator('[data-slot="installed-extension-card"]')).not.toHaveAttribute("data-archived", "");
+    await expect(card.locator('[data-slot="installed-extension-card"]')).not.toHaveAttribute("data-needs-review", "");
+    await expect(card.locator('[data-slot="installed-extension-spec-line"]')).toHaveCount(0);
+    await expect(card.getByRole("link", { name: "Settings" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.settingsHref);
+    await expect(card.getByText("More details", { exact: true })).toBeVisible();
+  }
+  const admin = eligibilityReader(root, "administrator");
+  const member = eligibilityReader(root, "member");
+  const reason = `This agent cannot run: ${RUN_ELIGIBILITY_MISSING[0].displayName} is not installed.`;
+  const link = admin.getByRole("link", { name: `${RUN_ELIGIBILITY_AGENT.name} cannot run — ${RUN_ELIGIBILITY_MISSING[0].displayName} not installed. View requirements`, exact: true });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute("title", reason);
+  await expect(link).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.listingHref);
+  await expect(link).toHaveClass(/border/);
+  await expect(member.getByText("Unavailable", { exact: true })).toHaveAttribute("title", reason);
+  await expect(member.getByText("View requirements", { exact: true })).toHaveCount(0);
+  await expect(member.locator('a[href^="/configuration"]')).toHaveCount(0);
+}
+
+async function assertStartRefused(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const panel = eligibilityReader(root, reader);
+    const alert = panel.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveAttribute("data-state", "error kind:agent");
+    await expect(alert).toContainText(`${RUN_ELIGIBILITY_AGENT.name} can't start`);
+    await expect(alert).toContainText(RUN_ELIGIBILITY_MISSING[0].displayName!);
+    await expect(alert.locator(".font-mono")).toHaveText(RUN_ELIGIBILITY_MISSING[0].packageName);
+    await expect(panel.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(panel.getByText("not found", { exact: false })).toHaveCount(0);
+    await expect(panel.getByRole("link", { name: "Back to Agents" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.agentsHref);
+    if (reader === "administrator") {
+      await expect(panel.getByRole("link", { name: "View requirements" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.listingHref);
+      await expect(alert).toContainText("Install it from the marketplace, then start the agent again.");
+    } else {
+      await expect(panel.getByRole("link", { name: "View requirements" })).toHaveCount(0);
+      await expect(alert).toContainText("Ask a platform administrator to install it, then start the agent again.");
+    }
+  }
+}
+
+// The static harness consumes actual product-Link navigation at its declared
+// fixture port. This proves dispatch and its exact address, not an authenticated
+// destination page; the latter belongs to the actual host's browser proof.
+async function followEligibilityLink(root: Locator, link: Locator, href: string, outcome: string): Promise<void> {
+  await expect(link).toHaveAttribute("href", href);
+  await link.click();
+  await expect(root).toHaveAttribute("data-outcome", outcome);
+  await expect(root).toHaveAttribute("data-destination", href);
+}
+
+const AGENT_CARD_CANNOT_RUN_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-card-cannot-run"]'),
+  present: async (_page, root) => assertCannotRunCard(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => {
+      for (const reader of ["administrator", "member"] as const) {
+        await expect(eligibilityReader(root, reader).locator('[data-slot="extension-card-name"]')).toHaveText(RUN_ELIGIBILITY_AGENT.name);
+      }
+    } },
+    "missing-dependency": { source: "dependency.manifest.displayName", assert: async (_page, root) => assertCannotRunCard(root) },
+  },
+  actions: {
+    "view-requirements": { outcome: "agent-listing-open", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").locator('[data-slot="agent-card-unavailable-action"]'), RUN_ELIGIBILITY_AGENT.listingHref, "agent-listing-open") },
+  },
+  states: { "kind:agent": async (page) => assertCannotRunCard(page.locator('[data-surface-id="agent-card-cannot-run"]')) },
+};
+
+const AGENT_START_REFUSED_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-start-refused"]'),
+  present: async (_page, root) => assertStartRefused(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => assertStartRefused(root) },
+    "missing-dependency": { source: "dependency.manifest.displayName", assert: async (_page, root) => assertStartRefused(root) },
+  },
+  actions: {
+    "view-requirements": { outcome: "agent-listing-open", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").getByRole("link", { name: "View requirements" }), RUN_ELIGIBILITY_AGENT.listingHref, "agent-listing-open") },
+    "back-to-agents": { outcome: "scope-agents-tab", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "member"), eligibilityReader(root, "member").getByRole("link", { name: "Back to Agents" }), RUN_ELIGIBILITY_AGENT.agentsHref, "scope-agents-tab") },
+  },
+  states: {
+    error: async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+    "kind:agent": async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+  },
+};
 
 /** The populated (interactive) root of an approvals/scheduling harness surface. */
 function harnessRoot(id: string): (page: Page) => Locator {
@@ -7242,8 +7350,9 @@ const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
 async function resolveUploadReference(root: Locator): Promise<Locator> {
   const panel = root.locator(UPLOAD_PANEL_NODE);
   await expect(async () => {
-    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
-    await root.locator(UPLOAD_RESOLVE_CONTROL).click();
+    // An unbounded action consumes the outer budget before toPass can refill.
+    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+    await root.locator(UPLOAD_RESOLVE_CONTROL).click({ timeout: 5_000 });
     await expect(panel).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 30_000 });
   return panel;
@@ -7495,6 +7604,8 @@ const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
 
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
+  "agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER,
+  "agent-start-refused": AGENT_START_REFUSED_DRIVER,
   toast: TOAST_DRIVER,
   "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,
