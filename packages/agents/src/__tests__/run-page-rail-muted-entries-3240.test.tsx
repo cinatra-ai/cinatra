@@ -15,8 +15,11 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 
+import { Stepper, StepperItem, StepperNav } from "@/components/reui/stepper";
+
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { RunStepRailPanel } from "../run-step-rail-panel";
+import { RailExtraEntry } from "../run-step-rail-extra-entry";
 import type { RunStepRailEntry } from "../run-step-rail";
 
 // ---------------------------------------------------------------------------
@@ -555,6 +558,77 @@ describe("the run page rail in the DARK palette", () => {
 });
 
 // ---------------------------------------------------------------------------
+// WHAT DIMS A TITLE ON ITS WAY TO THE READER (cinatra#3240).
+//
+// A title's own utility can state the muted token while an ancestor's opacity
+// paints it paler: the class reading above never sees that opacity, and neither
+// does a browser's computed `color`. This walks from the title itself up to and
+// including the rail it stands in -- the nearest `[data-run-step-rail]`, or the
+// stepper's root when no rail anchor stands above it -- and returns every
+// opacity that APPLIES on that path.
+// ---------------------------------------------------------------------------
+
+/** Whether one variant applies to this element; any variant not named here is
+ *  not counted. */
+function variantApplies(variant: string, el: HTMLElement, palette: Palette): boolean {
+  if (variant === "disabled") return el.matches(":disabled");
+  if (variant === "dark") return palette === "dark";
+  if (variant === "aria-disabled") return el.getAttribute("aria-disabled") === "true";
+  const state = /^data-\[state=([^\]]+)\]$/.exec(variant);
+  if (state) return el.getAttribute("data-state") === state[1];
+  return false;
+}
+
+/** A class token cut into its variants and its utility, at the colons that
+ *  stand outside brackets (`data-[state=active]:opacity-60`). */
+function variantsAndUtility(token: string): { variants: string[]; utility: string } {
+  const variants: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < token.length; i += 1) {
+    const c = token[i];
+    if (c === "[") depth += 1;
+    else if (c === "]") depth -= 1;
+    else if (c === ":" && depth === 0) {
+      variants.push(token.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return { variants, utility: token.slice(start) };
+}
+
+/** `opacity-<n>` with n below 100, or `opacity-[<v>]` with v below 1. */
+function dimsByItself(utility: string): boolean {
+  const bare = utility.replace(/^!|!$/g, "");
+  const scale = /^opacity-(\d+)$/.exec(bare);
+  if (scale) return Number(scale[1]) < 100;
+  const arbitrary = /^opacity-\[([^\]]+)\]$/.exec(bare);
+  if (!arbitrary) return false;
+  const value = arbitrary[1]!.trim();
+  const v = value.endsWith("%") ? Number(value.slice(0, -1)) / 100 : Number(value);
+  return v < 1;
+}
+
+function dimmingOnThePath(title: HTMLElement, palette: Palette): string[] {
+  const end =
+    title.closest<HTMLElement>("[data-run-step-rail]") ??
+    title.closest<HTMLElement>('[data-slot="stepper"]');
+  const found: string[] = [];
+  for (let el: HTMLElement | null = title; el; el = el.parentElement) {
+    const current: HTMLElement = el;
+    for (const token of (current.getAttribute("class") ?? "").split(/\s+/).filter(Boolean)) {
+      const { variants, utility } = variantsAndUtility(token);
+      if (!dimsByItself(utility)) continue;
+      if (variants.every((variant) => variantApplies(variant, current, palette))) found.push(token);
+    }
+    const inline = current.style.opacity;
+    if (inline !== "" && Number(inline) < 1) found.push(`style="opacity: ${inline}"`);
+    if (current === end) break;
+  }
+  return found;
+}
+
+// ---------------------------------------------------------------------------
 // THE READING REFUSES THE WAYS IT COULD LIE. A substitute for a browser is only
 // worth the cases it cannot be fooled by.
 // ---------------------------------------------------------------------------
@@ -587,5 +661,95 @@ describe("the reading itself", () => {
     expect(paints("foreground", "light")).toBe("rgb(21, 33, 58)");
     expect(paints("muted-foreground", "dark")).toBe("oklch(0.704 0.04 256.788)");
     expect(paints("foreground", "dark")).toBe("oklch(0.984 0.003 247.858)");
+  });
+
+  it("finds the opacity on a title's path, and none on a path that carries none", () => {
+    const dimmed = render(
+      <div className="cursor-default opacity-60">
+        <h3 data-slot="stepper-title">Wrote the draft</h3>
+      </div>,
+    ).container.querySelector<HTMLElement>('[data-slot="stepper-title"]');
+    const plain = render(
+      <div className="cursor-default">
+        <h3 data-slot="stepper-title">Wrote the draft</h3>
+      </div>,
+    ).container.querySelector<HTMLElement>('[data-slot="stepper-title"]');
+    expect(dimmingOnThePath(dimmed!, "light")).toEqual(["opacity-60"]);
+    expect(dimmingOnThePath(plain!, "light")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A RAIL ROW THAT OPENS NOTHING (cinatra#3240). The step result a run leaves
+// keeps its row and opens nothing. The drawing gives every entry the reader is
+// not on the muted ink itself and dims no title, so that row's title must read
+// the muted token undimmed -- at BOTH sites that draw it: the page rail and the
+// live rail's shared row.
+// ---------------------------------------------------------------------------
+
+/** The step result the run leaves: settled, named by its work, opens nothing. */
+function inertStepResult(): RunStepRailEntry {
+  return {
+    key: "step:stepResult:2",
+    ordinal: 2,
+    kind: "step",
+    label: "Wrote the draft",
+    status: "completed",
+    sources: ["stepResult"],
+    openable: false,
+  } as RunStepRailEntry;
+}
+
+function readsTheInertRowMuted(palette: Palette) {
+  const { container } = render(
+    <>
+      <RunStepRailPanel
+        entries={[
+          stepEntry("Settled step", 1, "completed"),
+          inertStepResult(),
+          stepEntry("Active step", 3, "pending"),
+        ]}
+        activeOrdinal={3}
+        reviewHrefBase="/agents/v/p/i"
+      />
+      <Stepper value={1} orientation="vertical">
+        <StepperNav>
+          <StepperItem step={1} completed>
+            <RailExtraEntry
+              entry={inertStepResult()}
+              reviewHrefBase="/agents/v/p/i"
+              displayStep={1}
+            />
+          </StepperItem>
+        </StepperNav>
+      </Stepper>
+    </>,
+  );
+
+  const muted = tokenLiteral(palette, "--muted");
+  const inertRows = Array.from(container.querySelectorAll<HTMLElement>("[data-rail-inert]"));
+  expect(inertRows, "the page rail and the live rail's shared row each draw the row").toHaveLength(2);
+  for (const row of inertRows) {
+    const title = row.querySelector<HTMLElement>('[data-slot="stepper-title"]');
+    expect(title, "the row that opens nothing carries its title").not.toBeNull();
+    expect(title!.textContent).toBe("Wrote the draft");
+    expect(
+      paints(colourUtilityAt(title!.className, title!.getAttribute("data-state")!), palette),
+      "the inert row's title states the muted token",
+    ).toBe(muted);
+    expect(
+      dimmingOnThePath(title!, palette),
+      "an opacity on the inert row's title path paints its muted title paler than the muted token",
+    ).toEqual([]);
+  }
+}
+
+describe("a rail row that opens nothing reads the muted token itself (cinatra#3240)", () => {
+  it("light", () => {
+    readsTheInertRowMuted("light");
+  });
+
+  it("dark", () => {
+    readsTheInertRowMuted("dark");
   });
 });

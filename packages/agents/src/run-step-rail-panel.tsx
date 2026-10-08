@@ -211,9 +211,9 @@ export function RunStepRailPanel({
                       the same circle, numeral, title and box as the rows that
                       do open, so on pixels nothing told a reader it does not
                       open, and the sixth proof round read the same picture
-                      back. It now takes the rail's own reading for a row a
-                      reader cannot press (RUN_PAGE_RAIL_INERT_ROW_CLASS), which
-                      this rail already draws for a step still ahead. The
+                      back. It is not a control, takes no pointer cursor
+                      (RUN_PAGE_RAIL_INERT_ROW_CLASS) and reads the rail's
+                      muted ink like every entry the reader is not on. The
                       GEOMETRY is untouched — the trigger's own spacing is
                       carried here from the shared row constant so the two rows
                       cannot drift — and StepperIndicator and StepperTitle read

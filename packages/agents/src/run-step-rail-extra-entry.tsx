@@ -234,34 +234,16 @@ export const RUN_PAGE_RAIL_SEP_CLASS = RUN_RAIL_MARK_CLASS;
  * A run on the agent runtime leaves one step result, and the rail carries it as
  * a row: it IS a thing that happened and it keeps its place. It opens nothing —
  * only gate, verification and lifecycle rows carry a target — so fix leg 6 took
- * the button off it. The row went on drawing the same circle, the same numeral,
- * the same title and the same box as the rows that DO open, so on pixels
- * nothing told a reader it does not open: a difference only the DOM carried.
+ * the button off it: the row is not a control and takes no pointer cursor.
  *
- * THE DRAWING GIVES NO SUCH ROW TO COPY. The ratified drawing names ONE action
- * for this rail — "open-run-step -> step-detail" — and every rail row it draws
- * opens on selection; its rows are parted by the state ink alone (the entry
- * passed and the entry ahead share one muted ground, the entry being read takes
- * the ink). There is no drawn treatment for a row that looks like a step and
- * cannot be opened, and inventing a mark the drawing does not have would be a
- * second departure rather than a fix for the first.
- *
- * SO THE ROW TAKES THE RAIL'S OWN READING FOR A ROW A READER CANNOT PRESS. This
- * rail already draws them: a step still ahead is rendered `disabled`, and the
- * vendored stepper row's own class list is
- * "... cursor-pointer ... disabled:pointer-events-none disabled:opacity-60" —
- * so on this very surface "cannot be pressed" is already 60% ink and no pointer
- * cursor. The literal classes are carried here rather than the `disabled:`
- * variants because this row is not a disabled CONTROL — it is not a control at
- * all, and a variant keyed off a button's disabled attribute never fires on a
- * div.
- *
- * WHAT DOES NOT CHANGE: the drawing's row anatomy. The 24px glyph, the numeral,
- * the title, the 28px box and the marks between the rows are untouched, so the
- * rail's geometry reads exactly as it was graded. Only the affordance moves,
- * which is the one thing the row was saying wrongly.
+ * IT CARRIES NO OPACITY (cinatra#3240). The drawing gives every entry the
+ * reader is not on the muted ink itself and dims no title and no whole step
+ * (section I's rail rules), so neither does this row: an opacity on it painted
+ * its muted title paler than the muted token. The row's anatomy — the 24px
+ * glyph, the numeral, the title, the 28px box and the marks between the rows —
+ * is unchanged.
  */
-export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default opacity-60";
+export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default";
 
 
 // ---------------------------------------------------------------------------
