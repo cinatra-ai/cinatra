@@ -113,7 +113,7 @@ const SPENT_ONE_OFF_SENTENCE =
 const FIRED_RECURRING_SENTENCE =
   "It is still recurring, so the rows below still take a change — it applies to the runs still to come.";
 const STOPPED_RECURRING_SENTENCE =
-  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
+  "The recurring schedule was stopped; its rows are no longer editable.";
 
 const RUN_ID = "7f1c9b24-5d08-4a6e-b3f1-92c4de0a5b77";
 const CARD_REF = "schedule-ref-3281";
