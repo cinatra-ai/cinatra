@@ -13,7 +13,8 @@
 //   "Tooltips are navy with cream type; popovers are surface-strong with navy
 //    text. Tooltips read at 12px."
 //
-// NO DEPARTURE FOUND.
+// The approved example also specifies padding 6px 10px. Native checks pin
+// that recipe on actual Radix DOM; browser-computed geometry is separate.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
@@ -46,12 +47,12 @@ if (!Element.prototype.scrollIntoView) {
 
 afterEach(cleanup);
 
-function renderTooltip() {
+function renderTooltip({ className, shortcut = false }: { className?: string; shortcut?: boolean } = {}) {
   render(
     <TooltipProvider>
       <Tooltip open>
         <TooltipTrigger>Approve</TooltipTrigger>
-        <TooltipContent>Approve and send to all 12 prospects</TooltipContent>
+        <TooltipContent className={className}>Approve and send to all 12 prospects{shortcut ? <kbd data-slot="kbd">⌘K</kbd> : null}</TooltipContent>
       </Tooltip>
     </TooltipProvider>,
   );
@@ -91,6 +92,32 @@ describe('clause: "12px tooltip" / "Tooltips read at 12px"', () => {
     // The clause pairs 12px with the tooltip's role; `max-w-xs` is what stops a
     // tooltip growing into the popover's job.
     expect(renderTooltip().className).toContain("max-w-xs");
+  });
+});
+
+describe('approved example: "padding: 6px 10px"', () => {
+  it("renders the default ten-pixel horizontal and six-pixel vertical recipe", () => {
+    const classes = renderTooltip().className.split(/\s+/);
+    // jsdom has no generated Tailwind stylesheet: this pins the shipped recipe,
+    // not computed geometry. The companion both-palette browser case reads it.
+    expect(classes).toContain("px-2.5");
+    expect(classes).not.toContain("px-3");
+    expect(classes).toContain("py-1.5");
+  });
+
+  it("preserves a caller's horizontal override while retaining vertical padding", () => {
+    const classes = renderTooltip({ className: "px-5" }).className.split(/\s+/);
+    expect(classes).toContain("px-5");
+    expect(classes).not.toContain("px-2.5");
+    expect(classes).not.toContain("px-3");
+    expect(classes).toContain("py-1.5");
+  });
+
+  it("preserves the keyboard shortcut's existing right-padding exception", () => {
+    const content = renderTooltip({ shortcut: true });
+    expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
+    expect(content.className.split(/\s+/)).toContain("has-data-[slot=kbd]:pr-1.5");
+    expect(content.className.split(/\s+/)).toContain("px-2.5");
   });
 });
 
