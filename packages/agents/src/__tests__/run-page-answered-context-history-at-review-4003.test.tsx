@@ -470,11 +470,31 @@ function atReview(){
 }
 describe("confirmed context history remains under the same real run rail",()=>{
   it("keeps answered Setup and context above the pending review; context opens its OWN read-only answer",async()=>{
-    atReview();const {container}=await renderRunPage();
+    atReview();
+    // The actual run has fired its Schedule, answered its ordinary Setup, then
+    // successfully continued its persisted context gate into the next Review.
+    row.templateType="agent";
+    row.properties={idea:{type:"string",title:"idea"}};
+    reviewSlot.awaiting=false;
+    reviewGates.rows=[{id:"gate-review-B",orgId:"org-1",pinnedTargets:[],reviewTaskId:"review-B",
+      status:"pending",disposition:null,createdAt:new Date("2026-01-01T00:02:00Z")}];
+    triggerRow.row={triggerType:"immediate",releasedAt:new Date("2026-01-01T00:00:00Z")};
+    const {container}=await renderRunPage();
+    const column=railColumns(container)[0];
+    const entries=Array.from(column.querySelectorAll<HTMLElement>(
+      "[data-run-surface-rail-step],[data-rail-kind],[data-rail-status],[data-schedule-rail-step],[data-recommendation-rail-step]",
+    )).filter(el=>el.parentElement?.closest("[data-run-surface-rail-step]")==null);
+    const labels=entries.map(el=>(el.textContent??"").trim().replace(/^\d+/,""));
+    expect(labels.slice(0,4)).toEqual(["Schedule","Setup","Draft Context · continued","Review"]);
     const rows=Array.from(container.querySelectorAll<HTMLElement>("[data-run-surface-rail-step-key]"));
     const context=rows.find(el=>el.dataset.runSurfaceRailStepKey==="context:wayflow-context-A");
     expect(rows.some(el=>el.dataset.runSurfaceRailStepKey==="input:0")).toBe(true);
     expect(context).toBeDefined();expect(context!.dataset.runSurfaceRailSettled).toBe("true");
+    expect(context!.getAttribute("aria-label")).toMatch(/^\d+ Draft Context · continued$/);
+    const setup=rows.find(el=>el.dataset.runSurfaceRailStepKey==="input:0")!;
+    expect(setup.textContent?.replace(/^\d+/,"")).toBe("Setup");
+    const pending=entries[3];
+    expect(pending.dataset.railGatePending).toBe("true");
     fireEvent.click(context!);
     await waitFor(()=>expect(container.textContent).toContain("No context selected"));
     const reading=container.querySelector('[data-run-input-step-reading="answered"]');
