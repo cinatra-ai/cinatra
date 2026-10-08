@@ -7,6 +7,8 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import type { SuppliedPackageProvenance } from "@cinatra-ai/extension-types";
+import type { InstalledExtension, InstallRowOwnership, ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 import {
   cleanupExtractedAgentPackage,
   ensureConfig,
@@ -80,6 +82,13 @@ export type InstallAgentFromPackageInput = {
    * closes). Saga-external transitive dependency nodes leave it unset.
    */
   requireStorePayload?: boolean;
+  /** Server-derived supplied install context, distinct from store-first registry
+   * saga installs. The original canonical anchor never inherits the translated
+   * native template owner. Claims are metadata, not authorization inputs. */
+  suppliedClaimContext?: {
+    rootAnchor: InstallRowOwnership;
+    provenance: SuppliedPackageProvenance;
+  };
   creatorId?: string;
   // Includes "active" so the install handler can pass status:"active" and
   // newly installed extensions appear in /agents (which filters by status
@@ -231,6 +240,9 @@ async function _installAgentFromPackageImpl(
   input: InstallAgentFromPackageInput,
   config?: VerdaccioConfig,
 ): Promise<InstallAgentFromPackageResult> {
+  if (input.suppliedClaimContext && input.requireStorePayload !== true) {
+    throw new Error("[installAgentFromPackage] supplied claims require the finalized root payload");
+  }
   const resolvedConfig = ensureConfig(config, "installAgentFromPackage");
   // cinatra#2616 — WHO is claiming this package name. Derived once, before any
   // I/O, and THROWS when the caller's org values disagree (claiming as A while
@@ -458,13 +470,15 @@ async function _installAgentFromPackageImpl(
     // write, so a refusal mutates nothing. REPLACES the removed post-write
     // produced-artifact advisory (#1059): no mutate-then-warn path remains and
     // no dynamic type is minted. The required artifact-kind dependency's claims
-    // resolve from the registry (the same PLANNED-closure manifests the batch
-    // saga installs), never by querying post-write installed state.
+    // use registry PLANNED-closure manifests for registry installs. Supplied
+    // roots instead use the already-installed, trusted required-edge target;
+    // neither road queries post-write state or performs a dependency install.
     await enforceTypedProducesContractForInstall({
       manifest: extracted.manifest,
       packageName: extracted.packageName,
       packageVersion: extracted.packageVersion,
       config: resolvedConfig,
+      suppliedClaimContext: input.suppliedClaimContext,
     });
 
     // Canonical agent type for the template row. Sourced from the OAS-compile
@@ -744,6 +758,7 @@ async function enforceTypedProducesContractForInstall(input: {
   packageName: string;
   packageVersion: string;
   config: VerdaccioConfig;
+  suppliedClaimContext?: InstallAgentFromPackageInput["suppliedClaimContext"];
 }): Promise<void> {
   const { readAgentProducesFromPackageManifest } = await import(
     "@cinatra-ai/extensions/agent-produces-reader"
@@ -756,10 +771,14 @@ async function enforceTypedProducesContractForInstall(input: {
   const { getPublishedExtensionSummary, resolveMaxSatisfyingVersion } = await import(
     "@cinatra-ai/registries"
   );
+  const installedLookup = input.suppliedClaimContext
+    ? await makeInstalledArtifactClaimLookup(input, input.suppliedClaimContext)
+    : null;
   const findings = await resolveTypedProducesContract({
     produces,
     cinatraDependencies,
     resolveManifest: async (dep, versionConstraint) => {
+      if (installedLookup) return installedLookup(dep, versionConstraint);
       try {
         // Resolve the manifest at the EXACT version the edge PINS — never
         // `latest`; matches the version the install closure selects. An
@@ -798,6 +817,130 @@ async function enforceTypedProducesContractForInstall(input: {
         `${findings.map((f) => f.message).join(" | ")}`,
     );
   }
+}
+
+/** Read ONLY metadata of an exact installed row. Never execute its code or
+ * substitute a default/global row for the selected identity. */
+async function readInstalledClaimManifest(row: InstalledExtension): Promise<Record<string, unknown> | null> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    let sourceDir: string;
+    let expectedVersion: string | null = null;
+    if (row.source.type === "bundled") {
+      // Bundled rows have no install journal. The generated image inventory,
+      // rather than a row-supplied sourceDir, owns the metadata read address.
+      const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+      const { readRecordedBundledDigests } = await import("@/lib/bundled-digests");
+      const image = STATIC_EXTENSION_MANIFEST[row.packageName];
+      const recorded = readRecordedBundledDigests().get(row.packageName);
+      if (row.organizationId !== null || row.kind !== "artifact" || !image ||
+          image.packageName !== row.packageName || image.kind !== row.kind ||
+          row.source.packageName !== row.packageName || !row.source.version ||
+          image.version !== row.source.version || row.version !== image.version ||
+          (recorded && (recorded.version !== image.version || recorded.kind !== row.kind || recorded.digest !== row.source.digest)) ||
+          (row.source.digest && !recorded)) return null;
+      sourceDir = image.sourceDir;
+      expectedVersion = image.version;
+    } else {
+      const { resolveInstallAnchor } = await import("@/lib/extension-install-anchor");
+      const { readInstallOpForVersion } = await import("@/lib/extension-install-ops");
+      const { storeDigestDirV2 } = await import("@/lib/extension-package-store-core");
+      const { resolveExtensionDataRoot } = await import("@/lib/extension-data-root");
+      const anchor = await resolveInstallAnchor(row.packageName, {
+        orgId: row.organizationId,
+        readActiveInstall: async () => row,
+        readGrant: async () => null, // claims confer no host-port grant
+        readInstallOp: (name, orgId) => readInstallOpForVersion(name, orgId,
+          row.isDefault === false ? (row.version ?? "0.0.0") : "0.0.0"),
+      });
+      if (!anchor || !anchor.digest || anchor.installId !== row.id || anchor.kind !== row.kind) return null;
+      sourceDir = storeDigestDirV2(resolveExtensionDataRoot(), row.kind as "agent" | "artifact", row.packageName, anchor.digest);
+      // Supplied canonical 0.0.0 is a storage floor, NEVER the payload version.
+      if (row.source.type === "verdaccio") expectedVersion = row.source.version;
+    }
+    const manifest = JSON.parse(await readFile(join(sourceDir, "package.json"), "utf8")) as Record<string, unknown>;
+    const kind = (manifest.cinatra as { kind?: unknown } | undefined)?.kind;
+    if (manifest.name !== row.packageName || typeof manifest.version !== "string" || !manifest.version ||
+        kind !== row.kind || (expectedVersion !== null && manifest.version !== expectedVersion) ||
+        (row.version && row.version !== "0.0.0" && manifest.version !== row.version)) return null;
+    return manifest;
+  } catch {
+    return null; // missing bytes / unfinalized / contradictory metadata => no claims
+  }
+}
+
+/** Supplied metadata must bind the original canonical root and its current
+ * delivered manifest. Persisted edges are reused only when their declarations
+ * match that manifest; a previous upload's pins never control a new upload. */
+async function makeInstalledArtifactClaimLookup(
+  input: { manifest: unknown; packageName: string; packageVersion: string },
+  context: NonNullable<InstallAgentFromPackageInput["suppliedClaimContext"]>,
+): Promise<(name: string, constraint: unknown) => Promise<unknown>> {
+  const { readInstalledExtensionsByPackageName, readInstalledExtensionById } = await import("@cinatra-ai/extensions/canonical-store");
+  const { isSuppliedPackageProvenance } = await import("@cinatra-ai/extension-types");
+  const { satisfiesVersionRange } = await import("@cinatra-ai/registries");
+  const live = (row: InstalledExtension) => row.status === "active" || row.status === "locked";
+  const provenance = context.provenance;
+  const rows = await readInstalledExtensionsByPackageName(input.packageName);
+  const rootMatches = rows.filter((row) => {
+    if (!live(row) || row.kind !== "agent" || row.organizationId !== context.rootAnchor.organizationId ||
+        row.ownerLevel !== context.rootAnchor.ownerLevel || row.ownerId !== context.rootAnchor.ownerId ||
+        !isSuppliedPackageProvenance(row.source) || row.source.type !== provenance.type ||
+        row.source.contentDigest !== provenance.contentDigest) return false;
+    return row.source.type === "local" && provenance.type === "local"
+      ? row.source.path === provenance.path
+      : row.source.type === "github" && provenance.type === "github" &&
+        row.source.repo === provenance.repo && row.source.ref === provenance.ref && row.source.resolvedSha === provenance.resolvedSha;
+  });
+  if (rootMatches.length !== 1) return async () => null;
+  const root = rootMatches[0];
+  const rootManifest = await readInstalledClaimManifest(root);
+  const cinatra = (input.manifest as { cinatra?: { dependencies?: unknown; produces?: unknown } })?.cinatra;
+  const recordedCinatra = rootManifest?.cinatra as typeof cinatra;
+  if (!rootManifest || rootManifest.version !== input.packageVersion ||
+      JSON.stringify(recordedCinatra?.dependencies) !== JSON.stringify(cinatra?.dependencies) ||
+      JSON.stringify(recordedCinatra?.produces) !== JSON.stringify(cinatra?.produces)) return async () => null;
+  const satisfies = (version: string, constraint: unknown) => {
+    const q = artifactDepVersionQuery(constraint);
+    return "exact" in q ? version === q.exact : "range" in q ? satisfiesVersionRange(version, q.range) : false;
+  };
+  return async (name, constraint) => {
+    try {
+      const declarations = Array.isArray(cinatra?.dependencies)
+        ? (cinatra.dependencies as ExtensionDependency[]).filter((edge) =>
+          edge.packageName === name && edge.kind === "artifact" && edge.requirement === "required" &&
+          edge.edgeType !== "peer" && JSON.stringify(edge.versionConstraint) === JSON.stringify(constraint)) : [];
+      if (declarations.length !== 1) return null;
+      const declaration = declarations[0];
+      const persisted = (root.dependencyEdges ?? []).filter((edge) =>
+        edge.packageName === name && edge.kind === declaration.kind && edge.requirement === declaration.requirement &&
+        edge.edgeType === declaration.edgeType && edge.role === declaration.role &&
+        JSON.stringify(edge.versionConstraint) === JSON.stringify(constraint));
+      if (persisted.length > 1) return null;
+      let selected: InstalledExtension | null = null;
+      if (persisted[0]?.resolvedInstallId) {
+        // A named target is authoritative even when now invalid: no fallback.
+        selected = await readInstalledExtensionById(persisted[0].resolvedInstallId);
+      } else {
+        const candidates = (await readInstalledExtensionsByPackageName(name)).filter((row) =>
+          live(row) && (row.organizationId === root.organizationId || row.organizationId === null));
+        // Scope precedes trust/version checks. An own-org row that cannot
+        // satisfy the edge refuses; it never borrows a platform row's claims.
+        const own = root.organizationId === null ? [] : candidates.filter((row) => row.organizationId === root.organizationId);
+        const inScope = own.length ? own : candidates.filter((row) => row.organizationId === null);
+        inScope.sort((a, b) =>
+          Number(b.version === "0.0.0" || satisfies(b.version ?? "", constraint)) - Number(a.version === "0.0.0" || satisfies(a.version ?? "", constraint)) ||
+          Number(b.isDefault !== false) - Number(a.isDefault !== false) || a.id.localeCompare(b.id));
+        selected = inScope[0] ?? null;
+      }
+      if (!selected || !live(selected) || selected.packageName !== name || selected.kind !== "artifact" ||
+          (selected.organizationId !== root.organizationId && selected.organizationId !== null)) return null;
+      const manifest = await readInstalledClaimManifest(selected);
+      return manifest && satisfies(manifest.version as string, constraint) ? manifest : null;
+    } catch {
+      return null;
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------

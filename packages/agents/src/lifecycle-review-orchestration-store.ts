@@ -60,6 +60,7 @@ import {
 } from "./schema";
 import {
   emitArtifactReviewGate,
+  readReviewGate,
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
 import { markProducedEventProcessed } from "./lifecycle-produced-outbox-store";
@@ -835,9 +836,9 @@ export interface ReviewOrchestrationSweepSummary {
   noGate: number;
   notClassifiable: number;
   failed: number;
-  /** How many multi-artifact PRODUCTIONS were coalesced into a sealed batch this
-   * pass (each may fan into several ≤50-target partition gates, counted in
-   * `gatesCreated`). Zero when every pending event is a single-artifact production. */
+  /** How many multi-artifact PRODUCTIONS were sealed into a durable batch this
+   * pass. Each member opens its own gate, counted in `gatesCreated`. Zero when
+   * every pending event is a single-artifact production. */
   batchesCoalesced: number;
 }
 
@@ -1026,14 +1027,13 @@ export async function drainProducedProductionForRun(input: {
  * still short-circuits). Per-event failures are TALLIED (never rethrown) so one
  * bad row can never poison the drain; the event stays pending for the next cycle.
  *
- * COALESCING (S0 batch contract): pending events are grouped by their PRODUCTION —
+ * Pending events are grouped by their PRODUCTION —
  * `(orgId, producerRunId)`. A single-artifact production (a lone event, or a
  * run-less direct upload) orchestrates per-event, one gate per artifact — the
  * standard path. A MULTI-artifact production (the same run's several pending
- * revisions) COALESCES: its fired targets are sealed into one explicit membership,
- * partitioned into deterministic ≤50-target partitions, and each partition becomes
- * ONE gate whose terminal decision commits atomically across its targets (a single
- * aggregate commit). See `orchestrateProducedBatch`.
+ * revisions) seals its fired membership durably so retries recover the same set,
+ * then opens ONE single-artifact gate per pinned revision. Membership sealing is
+ * not a shared review decision. See `orchestrateProducedBatch`.
  */
 export async function sweepReviewOrchestration(opts?: {
   limit?: number;
@@ -1153,8 +1153,7 @@ export async function sweepReviewOrchestration(opts?: {
 }
 
 // ---------------------------------------------------------------------------
-// Batch coalescing (multi-artifact production → sealed membership → ≤50-target
-// partition gates, per the S0 lifecycle-batch contract).
+// Multi-artifact production → durable sealed membership → one gate per artifact.
 // ---------------------------------------------------------------------------
 
 /** The local equality key joining a produced event / partition target back to its
@@ -1169,9 +1168,36 @@ function targetKey(t: { artifactId: string; representationRevisionId: string }):
 
 type FiredCreateGate = { row: ProducedEventRow; plan: Extract<ReviewOrchestrationPlan, { action: "create-gate" }> };
 
+/** Recover grandfathered partition slots without creating or rewriting reviews.
+ * An old emit can have committed before even the first outbox link. Its remaining
+ * events must drain onto that exact gate, with its original pins and decisions;
+ * opening new singleton gates over them would create overlapping reviews. */
+async function grandfatheredEpochGates(
+  orgId: string,
+  runId: string,
+  membership: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>,
+): Promise<Array<{ targets: typeof membership; gateId: string; reviewTaskId: string }>> {
+  const existing: Array<{ targets: typeof membership; gateId: string; reviewTaskId: string }> = [];
+  for (const partition of partitionBatchTargets(membership)) {
+    const taskId = batchPartitionReviewTaskId(partition);
+    const gate = await readReviewGate(runId, taskId);
+    if (!gate) continue;
+    const expected = partition.map(targetKey).sort();
+    const actual = gate.pinnedTargets.map(targetKey).sort();
+    if (gate.orgId !== orgId || JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new ArtifactReviewGateError(
+        "pin-conflict",
+        `The historical partition slot ${taskId} does not match this organization's frozen membership.`,
+      );
+    }
+    existing.push({ targets: partition, gateId: gate.id, reviewTaskId: taskId });
+  }
+  return existing;
+}
+
 /**
- * Coalesce ONE multi-artifact production (a run's several pending revisions) into
- * sealed, partitioned aggregate review gates, per the S0 batch contract.
+ * Seal ONE multi-artifact production (a run's pending revisions), then open an
+ * individual review gate for each pinned artifact revision.
  *
  * PRECONDITION (cinatra#2047 OBS-2): `group` is the REPAIR-CLAIM-FILTERED member
  * set — `sweepReviewOrchestration` runs `partitionRepairClaimedMembers` first, so a
@@ -1183,35 +1209,29 @@ type FiredCreateGate = { row: ProducedEventRow; plan: Extract<ReviewOrchestratio
  *
  *   1. Per event: resolve context + plan the REVIEW checkpoint. A `no-gate` /
  *      not-classifiable / already-linked event is SETTLED inline (marked processed);
- *      only FIRED events (`create-gate`) join the batch — a coalesced review scopes
- *      exactly the production's gated revisions.
+ *      only FIRED events (`create-gate`) join the sealed membership.
  *   2. SEAL the fired membership as an EXPLICIT target list (`sealBatch`) — an
  *      explicit list seals immediately, so the seal is provable (the returned
  *      `sealed:true` is the proof the set is frozen; a later arrival is a SUCCESSOR
  *      batch, carry-forward is S2).
- *   3. PARTITION the sealed set into deterministic ≤50-target partitions
- *      (`partitionBatchTargets`) — each partition is one per-gate atomicity unit.
- *   4. Per partition: emit ONE gate pinning the partition's targets (idempotent on
- *      the deterministic partition task id); then, in ORDER: park every checkpointed
- *      member, ATOMICALLY link ALL members onto the gate (one UPDATE), and only THEN
- *      mark every member processed. The gate's terminal decision commits atomically
- *      across the partition (a single aggregate commit).
+ *   3. Recover old partition slots before any emit: existing reviews drain as
+ *      minted, without overlapping singleton reviews or rewritten decisions.
+ *   4. Per fired frozen member: emit ONE gate pinning that member (the SAME
+ *      deterministic event task id as the per-event path); then, in ORDER: park,
+ *      link and mark that member. An artifact's decision does not decide siblings.
  *
- * CRASH-IDEMPOTENT by the phase order (park -> link-all -> mark-all): a member is
- * marked processed ONLY after every member of its partition is linked. So on a
- * re-sweep a not-yet-finished member is EITHER already linked (settled park-safe,
- * never re-gated) OR, if unlinked, NO member of its partition was marked -> the whole
- * partition is still pending -> it reseals to the SAME deterministic gate id (emit is
- * idempotent on the pinned set), never a duplicate/overlapping gate. `park` precedes
- * `link` so a linked member is always already parked. A per-partition emit conflict
- * leaves that partition's events pending for a reconciling sweep.
+ * CRASH-IDEMPOTENT by the phase order (park -> link -> mark): a member is marked
+ * processed ONLY after it is linked. A retry either settles that link park-safe
+ * or re-emits the SAME per-event task id. Grandfathered partitions retain their
+ * original link-all -> mark-all ordering and identity, including an emit that
+ * committed before any links. A pin conflict leaves its members pending.
  *
  * DURABLE SEAL (cinatra#2040 S2): the sealed membership is now PERSISTED as a
  * `lifecycle_batch_epoch` row BEFORE any gate emit — this CLOSES S1's documented
  * crash-window. Under the exclusive `withProductionLock`, `sealBatchEpoch` either
  * finds an OPEN epoch (a prior pass sealed it, then crashed mid-partition) and
  * returns its FROZEN membership, or seals the current fired candidate. The
- * partition ids are derived from the FROZEN membership, so a re-sweep processes
+ * recovery uses the FROZEN membership, so a re-sweep processes
  * EXACTLY the sealed set — never a grown pending snapshot. A NEW revision that
  * arrived after the seal is NOT in the frozen membership; it stays pending and
  * seals a SUCCESSOR epoch once this one CLOSES (`closeBatchEpoch`, after every
@@ -1279,33 +1299,58 @@ async function orchestrateProducedBatch(
     })),
   });
   const frozenMembership = epoch.membership;
-  const partitions = partitionBatchTargets(frozenMembership);
   if (!reused) summary.batchesCoalesced += 1;
+
+  let historicalGates: Awaited<ReturnType<typeof grandfatheredEpochGates>>;
+  try {
+    historicalGates = await grandfatheredEpochGates(orgId, runId, frozenMembership);
+  } catch (err) {
+    if (!(err instanceof ArtifactReviewGateError)) throw err;
+    summary.failed += 1;
+    console.error(`[lifecycle-review-orchestration] batch epoch ${epoch.id} has an inconsistent historical slot: ${err.message}`);
+    return;
+  }
 
   // Map the FROZEN membership targets → their current fired plan (only the
   // still-pending members carry one; already-processed members on a crash-recovery
-  // pass are absent → their partition gate re-emits idempotently but nothing to
-  // park/link/mark). A NEW revision that fired but is NOT in the frozen membership
+  // pass need no emit, park, link or mark). A NEW revision outside frozen membership
   // stays pending (it seals a successor epoch after this one closes).
   const firedByKey = new Map<string, FiredCreateGate>();
   for (const f of fired) firedByKey.set(targetKey(f.row), f);
+  const grandfatheredTargets = new Set(historicalGates.flatMap(g => g.targets.map(targetKey)));
+  const gateUnits: Array<{ targets: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>; gateId?: string; reviewTaskId?: string }> = [
+    ...historicalGates,
+    ...partitionBatchTargets(frozenMembership, 1)
+      .filter(([target]) => !grandfatheredTargets.has(targetKey(target)))
+      .map(targets => ({ targets })),
+  ];
 
   const expiresAt = new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS);
   let anyConflict = false;
-  for (const partition of partitions) {
-    const reviewTaskId = batchPartitionReviewTaskId(partition);
+  for (const unit of gateUnits) {
+    const partition = unit.targets;
+    const members = partition
+      .map((t) => firedByKey.get(targetKeyOf(t)))
+      .filter((m): m is FiredCreateGate => m !== undefined);
+    // A frozen member already linked/processed by a prior pass owns its gate.
+    // Do not emit first and discover this afterwards, which would duplicate it.
+    if (members.length === 0) continue;
+    // Use the per-event identity even when a production has several artifacts:
+    // create→link interruption + later sibling arrival must retry the SAME gate.
+    const reviewTaskId = unit.reviewTaskId ?? members[0].plan.reviewTaskId;
     let gateId: string;
     let gateIdempotent: boolean;
     try {
-      const emitted = await emitArtifactReviewGate({
-        runId,
-        orgId,
-        reviewTaskId,
-        targets: partition,
-        expiresAt,
-      });
-      gateId = emitted.gateId;
-      gateIdempotent = emitted.idempotent;
+      if (unit.gateId) {
+        // A grandfathered gate drains as minted, pending or resolved. This is
+        // read-only recognition, not a new emit or a new decision.
+        gateId = unit.gateId;
+        gateIdempotent = true;
+      } else {
+        const emitted = await emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt });
+        gateId = emitted.gateId;
+        gateIdempotent = emitted.idempotent;
+      }
     } catch (err) {
       if (err instanceof ArtifactReviewGateError) {
         anyConflict = true;
@@ -1320,42 +1365,13 @@ async function orchestrateProducedBatch(
     // partition is idempotent — never double-count).
     if (!gateIdempotent) summary.gatesCreated += 1;
 
-    // cinatra#2833 — a fresh PARTITION gate is a review opening exactly like the
-    // single-artifact path's, so it notifies through the SAME seam. Before this,
-    // the batch path emitted the gate and told nobody: a run that produced
-    // several artifacts at once (or produced into an already-open review epoch)
-    // opened its gates silently, and the initiator's only way to find the review
-    // was to already be looking at the run page.
-    //
-    // ONE notification per emitted GATE, not per target: the partition (up to 50
-    // targets — `lifecycle-batch.ts`) is one gate, one review, one decision. Same
-    // idempotency posture as the single path — `!gateIdempotent` only, so a
-    // re-sweep of the same frozen partition re-emits idempotently and never
-    // re-notifies. `runId` is the batch's own producing run (batch grouping is
-    // keyed on it), so unlike the single path there is no synthetic-orphan case
-    // to exclude. Best-effort by construction: `dispatchAutoGateOpen` swallows
-    // every error, so a notification can never fail the sweep — and it is
-    // dispatched BEFORE the park/link/mark phases below for the same reason the
-    // single path dispatches before its link: the gate row is already committed,
-    // so the review the notification points at exists.
+    // One notification and one suggestion snapshot per fresh individual gate.
+    // Same best-effort seams and ordering as the per-event path; a retry neither
+    // repeats those effects nor binds a sibling's suggestions to this review.
     if (!gateIdempotent) {
       await dispatchAutoGateOpen({ runId, reviewTaskId });
-      // ENABLER 0.15 — "the host resolves it by kind when it opens a gate — on
-      // the single-artifact path AND THE BATCH PATH ALIKE". cinatra#2950's
-      // measured defect was precisely that this path "does not invoke the
-      // suggestion lane at all", so a run that produced several artifacts at
-      // once opened its gates with no suggestion snapshot at all — and the
-      // producer's single-target snapshot would have made a second target return
-      // `already-bound` even if it had. The snapshot is multi-target, so the
-      // WHOLE partition is offered at once and the batch decision stays one
-      // all-or-nothing boundary.
       await produceSuggestionsForPinnedTargets(gateId, orgId, partition);
     }
-
-    const members = partition
-      .map((t) => firedByKey.get(targetKeyOf(t)))
-      .filter((m): m is FiredCreateGate => m !== undefined);
-    if (members.length === 0) continue; // all this partition's members already processed.
 
     // Phase 1: PARK every checkpointed member (idempotent on run,event,checkpoint)
     // BEFORE linking, so a linked member is always already parked.
@@ -1435,7 +1451,7 @@ async function epochFullyProcessed(membership: Array<{ artifactId: string; repre
  *   - repair LANDED with its successor frozen → post-fix the successor is settled
  *     before the candidate set is built, so it can never enter a membership.
  * A landed repair whose successor is NOT frozen is the legitimate sibling batch
- * (the `STILL BATCHES` case) and is driven normally.
+ * (the sibling singleton-review case) and is driven normally.
  */
 function repairEpochQuarantineReason(
   epoch: { membership: Array<{ artifactId: string; representationRevisionId: string }> },

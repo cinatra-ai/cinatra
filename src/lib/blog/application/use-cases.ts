@@ -5,7 +5,6 @@ import {
   createBlogProjectPort,
   createBlogIdeaGenerationPort,
   createBlogDraftGenerationPort,
-  createBlogImageGenerationPort,
   createBlogPublishingPort,
   createBlogMediaPort,
 } from "../integration/blog-content-adapters";
@@ -13,7 +12,6 @@ import type {
   BlogProjectPort,
   BlogIdeaGenerationPort,
   BlogDraftGenerationPort,
-  BlogImageGenerationPort,
   BlogPublishingPort,
   BlogMediaPort,
 } from "../ports/blog-content";
@@ -22,7 +20,6 @@ export function createBlogContentUseCases(
   projectPort: BlogProjectPort = createBlogProjectPort(),
   ideaGenerationPort: BlogIdeaGenerationPort = createBlogIdeaGenerationPort(),
   draftGenerationPort: BlogDraftGenerationPort = createBlogDraftGenerationPort(),
-  imageGenerationPort: BlogImageGenerationPort = createBlogImageGenerationPort(),
   publishingPort: BlogPublishingPort = createBlogPublishingPort(),
   mediaPort: BlogMediaPort = createBlogMediaPort(),
 ) {
@@ -64,14 +61,6 @@ export function createBlogContentUseCases(
       imageArtifactId?: string;
       imageRepresentationRevisionId?: string;
     }) => draftGenerationPort.updateDraftRefs(input),
-
-    startImageRegeneration: (input: {
-      projectId: string;
-      postId: string;
-      prompt?: string;
-    }) => imageGenerationPort.startImageRegeneration(input),
-
-    stopImageRegeneration: (projectId: string) => imageGenerationPort.stopImageRegeneration(projectId),
 
     startWordPressDraftCreation: (input: {
       projectId: string;

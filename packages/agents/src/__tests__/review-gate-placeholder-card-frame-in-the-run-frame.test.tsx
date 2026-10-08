@@ -39,10 +39,12 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock("lucide-react", () => {
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react")>();
   const StubIcon = () => null;
   return new Proxy({} as Record<string, () => null>, {
     get: (_t, prop) => {
+      if (prop === "Loader2Icon" || prop === "Loader2") return actual.Loader2Icon;
       if (prop === "__esModule") return true;
       if (prop === "then") return undefined;
       if (typeof prop === "symbol") return undefined;
@@ -238,6 +240,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.documentElement.classList.remove("dark", "cinatra");
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   vi.useRealTimers();
@@ -260,7 +263,8 @@ afterAll(() => {
 
 describe("the working placeholder inside the rail's frame is the drawn run card (cinatra#3007, fix leg 20)", () => {
   // F1 - the placeholder's own root carries the drawn card frame on the run page.
-  it("F1: inside the rail's frame the placeholder's own root draws the card frame - the line border, the 12px radius, the surface-strong ground and the drawn padding", async () => {
+  it.each(["light", "dark"])("F1: inside the rail's frame the placeholder's own root draws the card frame and arc (%s)", async (palette) => {
+    document.documentElement.classList.add(palette === "dark" ? "dark" : "cinatra");
     stubTransport(workingRow);
     await mountPanel(true);
     const root = await placeholderRoot();
@@ -301,7 +305,8 @@ describe("the working placeholder inside the rail's frame is the drawn run card 
     expect(root!.getAttribute("class")).toBe("flex w-full flex-col gap-3");
   });
 
-  it("F1g: once the review card has drawn, no placeholder and no frame of it remains in the box", async () => {
+  it.each(["light", "dark"])("F1g: once the real review card has drawn, no placeholder or spinning arc remains (%s)", async (palette) => {
+    document.documentElement.classList.add(palette === "dark" ? "dark" : "cinatra");
     stubTransport(parkedRow);
     streamState.status = "pending_approval";
     await mountPanel(true);
@@ -314,6 +319,7 @@ describe("the working placeholder inside the rail's frame is the drawn run card 
     );
     const box = document.querySelector<HTMLElement>(SLOT);
     expect(box!.getAttribute("data-run-review-slot")).toBe("review");
+    expect(box!.querySelector("svg.animate-spin")).toBeNull();
     expect(box!.getAttribute("class") ?? "").not.toMatch(CARD_CHROME);
     const framedChildren = Array.from(box!.children).filter((child) =>
       DRAWN_FRAME.every((token) => classesOf(child).includes(token)),

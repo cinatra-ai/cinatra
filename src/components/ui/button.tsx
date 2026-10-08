@@ -1,6 +1,7 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
+import { Loader2Icon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -69,4 +70,17 @@ function Button({
   )
 }
 
-export { Button, buttonVariants }
+// Shared loading glyph for actions and waiting cards. The legacy spinner
+// module re-exports this same primitive for existing callers.
+// The `--primary` token drives the stroke colour; `animate-spin` is the
+// Tailwind default 1s linear infinite rotation. Call sites can override colour
+// via className when the spinner sits inside a coloured ground (button label,
+// etc.).
+function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
+  return (
+    <Loader2Icon role="status" aria-label="Loading" className={cn("size-4 animate-spin text-primary", className)} {...props} />
+  )
+}
+
+
+export { Button, buttonVariants, Spinner }

@@ -17,7 +17,6 @@ import { ObjectDetailPortlet } from "./portlets/object-detail-portlet";
 import { ArtifactListPortlet } from "./portlets/artifact-list-portlet";
 import { ObjectVersionHistoryPortlet } from "./portlets/object-version-history-portlet";
 import { ArtifactEditTextPortlet } from "./portlets/artifact-edit-text-portlet";
-import { ArtifactEditBinaryPromptPortlet } from "./portlets/artifact-edit-binary-prompt-portlet";
 import { AgentLauncherPortlet } from "./portlets/agent-launcher-portlet";
 import { EntityMetadataPortlet } from "./portlets/entity-metadata-portlet";
 import { EntityCountPortlet } from "./portlets/entity-count-portlet";
@@ -28,7 +27,6 @@ const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
   "artifact-list": ArtifactListPortlet,
   "artifact-version-history": ObjectVersionHistoryPortlet,
   "artifact-edit-text": ArtifactEditTextPortlet,
-  "artifact-edit-binary-prompt": ArtifactEditBinaryPromptPortlet,
   "agent-launcher": AgentLauncherPortlet,
   "entity-metadata": EntityMetadataPortlet,
   "entity-count": EntityCountPortlet,

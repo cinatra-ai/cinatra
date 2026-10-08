@@ -99,6 +99,14 @@ export type AgentRunMcpActor = {
    * org-write-seam writers refuse. Never widens anything.
    */
   executionAttemptId?: string;
+  /**
+   * The step of the run that made the model call this token serves (the `stp`
+   * claim, cinatra#3745): the executing step's id the flow runtime signed on
+   * the call and the bridge verified. OPTIONAL: a call without a verified step
+   * mints no claim, and a token without it stays valid. It is a verified field
+   * carried to the tool server's frame; it grants nothing on its own.
+   */
+  verifiedStepId?: string;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -115,6 +123,9 @@ type AgentRunMcpActorTokenClaims = {
   /** Current execution attempt id (cinatra#1939 S3) — optional; see
    *  `AgentRunMcpActor.executionAttemptId` for the tolerance contract. */
   att?: string;
+  /** The verified step of the calling model step (cinatra#3745) — optional;
+   *  see `AgentRunMcpActor.verifiedStepId`. */
+  stp?: string;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -201,6 +212,9 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
         }
       : {}),
     ...(input.executionAttemptId ? { att: input.executionAttemptId } : {}),
+    // The verified step of the calling model step (cinatra#3745), written only
+    // when the bridge verified one.
+    ...(input.verifiedStepId ? { stp: input.verifiedStepId } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -332,6 +346,11 @@ export function verifyAgentRunMcpActorToken(input: {
       // never here.
       ...(typeof payload.att === "string" && payload.att.length > 0
         ? { executionAttemptId: payload.att }
+        : {}),
+      // `stp` is read like `att`: a non-string or empty value reads as absent
+      // and the token stays valid (cinatra#3745).
+      ...(typeof payload.stp === "string" && payload.stp.length > 0
+        ? { verifiedStepId: payload.stp }
         : {}),
     };
   } catch {
