@@ -339,6 +339,7 @@ export function RunSurfaceRailRow({
       data-conformance-id={conformanceId}
       data-action={action}
       aria-current={selected ? "step" : undefined}
+      aria-label={displayStep !== null && !runSurfaceStepDrawsGlyph(selectionKey) ? `${displayStep} ${label}` : undefined}
       // `aria-disabled`, NOT the native `disabled`. Native `disabled` takes the
       // row out of the tab order, so keyboard focus could not reach the row —
       // and "its row stays on the rail, so the series is visible" is precisely

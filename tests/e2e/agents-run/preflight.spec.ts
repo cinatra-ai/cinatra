@@ -20,7 +20,7 @@
 import { expect, test } from "@playwright/test";
 import { Client } from "pg";
 
-import { CANONICAL_VISIBLE_PACKAGES, EXPECTED_VISIBLE_PACKAGE_SET } from "./fixtures";
+import { EXPECTED_VISIBLE_PACKAGE_SET } from "./fixtures";
 
 async function readPublicMcpBaseUrl(): Promise<string | null> {
   const connectionString =
@@ -64,33 +64,56 @@ test.describe("preflight", () => {
     await expect(page.getByRole("heading", { name: /Agent run|Run an agent/i }).first())
       .toBeVisible({ timeout: 30_000 });
 
-    // Each visible agent's package name appears somewhere on the page.
-    // We don't pin to specific row markup because future reshuffling could
-    // change the row chrome — package name is the stable contract.
-    //
-    // Note: this asserts "at least the canonical set is present", not
-    // "exactly that set with no extras". Detecting unexpected extras would
-    // require parsing the row markup, which is more brittle and not
-    // needed for the harness's primary concern. The set's SIZE is read from
-    // CANONICAL_VISIBLE_PACKAGES rather than written here as a literal —
-    // cinatra#2573 found a hard-coded count that had been wrong since the
-    // #1796 retirement removed two entries and nobody re-counted.
-    const html = await page.content();
-    const missing: string[] = [];
+    // Read exact equality: no missing packages, extra cards or duplicates.
+    // A card's Settings link (or its Run link without Settings) identifies
+    // its package; unrelated page text must not satisfy the picker contract.
+    const cards = page.locator('[data-slot="installed-extension-card"]');
+    await expect(
+      cards.first().or(page.getByRole("heading", {
+        name: "No human-in-the-loop agents installed",
+        exact: true,
+      })).first(),
+    ).toBeVisible({ timeout: 30_000 });
 
-    for (const { packageName } of CANONICAL_VISIBLE_PACKAGES) {
-      const bareSlug = packageName.replace(/^@[^/]+\//, "");
-      if (!html.includes(packageName) && !html.includes(bareSlug)) {
-        missing.push(packageName);
+    const observedPackages = await cards.evaluateAll((elements) => elements.map((card) => {
+      const settings = card.querySelector<HTMLAnchorElement>('a[data-slot="agent-card-settings"]');
+      const run = Array.from(card.querySelectorAll<HTMLAnchorElement>("a[href]"))
+        .find((link) => link.textContent?.trim() === "Run");
+      const link = settings ?? run;
+      const name = card.querySelector('[data-slot="extension-card-name"]')?.textContent?.trim()
+        || "unnamed card";
+      if (!link) return `unlinked:${name}`;
+      try {
+        const url = new URL(link.href, window.location.href);
+        const match = url.origin === window.location.origin
+          ? url.pathname.match(settings
+            ? /^\/workspace\/agents\/([^/]+)\/([^/]+)\/settings\/?$/
+            : /^\/agents\/([^/]+)\/([^/]+)\/new\/?$/)
+          : null;
+        return match
+          ? `@${decodeURIComponent(match[1])}/${decodeURIComponent(match[2])}`
+          : `unlinked:${name}`;
+      } catch {
+        return `unlinked:${name}`;
       }
-    }
+    }));
+    console.log(
+      `[preflight] picker observed (${observedPackages.length}): ${[...observedPackages].sort().join(", ")}`,
+    );
+    const observed = new Set(observedPackages);
+    const missing = [...EXPECTED_VISIBLE_PACKAGE_SET].filter((name) => !observed.has(name)).sort();
+    const extra = [...observed].filter((name) => !EXPECTED_VISIBLE_PACKAGE_SET.has(name)).sort();
+    const duplicates = [...new Set(observedPackages.filter((name, index) =>
+      observedPackages.indexOf(name) !== index))].sort();
 
-    if (missing.length > 0) {
+    if (missing.length > 0 || extra.length > 0 || duplicates.length > 0) {
       throw new Error(
         [
-          `Preflight FAIL: missing ${missing.length} of ${EXPECTED_VISIBLE_PACKAGE_SET.size} ` +
-            `canonical visible agents from /agents.`,
-          `Missing: ${missing.join(", ")}`,
+          `Preflight FAIL: /agents has ${missing.length} missing, ${extra.length} extra and ` +
+            `${duplicates.length} duplicate packages; expected ${EXPECTED_VISIBLE_PACKAGE_SET.size}.`,
+          `Missing: ${missing.join(", ") || "none"}`,
+          `Extra: ${extra.join(", ") || "none"}`,
+          `Duplicates: ${duplicates.join(", ") || "none"}`,
           `Most common cause: the harness is pointed at a feature branch's scoped ` +
             `schema, not the canonical \`cinatra\` schema on port 3000. Verify ` +
             `the dev server's SUPABASE_SCHEMA env var.`,
@@ -98,7 +121,7 @@ test.describe("preflight", () => {
       );
     }
 
-    expect(missing, "no canonical packages missing from /agents").toEqual([]);
+    expect([...observed].sort()).toEqual([...EXPECTED_VISIBLE_PACKAGE_SET].sort());
   });
 
   test("WayFlow container is healthy", async ({ request }) => {

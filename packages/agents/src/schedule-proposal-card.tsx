@@ -545,7 +545,11 @@ export function ScheduleProposalCard({
   //
   // A NO-OP WHERE NOBODY IS LISTENING. The run page and the review page declare
   // no register, so this changes nothing on them.
-  useReportSettledSchedule(wireRef, present && body !== null && body.phase === "settled");
+  useReportSettledSchedule(
+    wireRef,
+    present && body !== null && body.phase === "settled",
+    present && state?.state === "settled" && body?.phase === "settled" ? body.runId : null,
+  );
   // THE CARD TELLS THE TURN WHAT IT IS READING (cinatra#3044).
   //
   // The line above this card was minted at dispatch and frozen into the turn,
