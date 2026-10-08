@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-extensions.html",
-  "contentHash": "sha256:9595936d84048d6e914604e952142c291542c702a00b4424c237b7bbafa547b0",
+  "contentHash": "sha256:6cef4dce99482754c7ffc7ec879c1fe43ff0c321db6c7057f7e4d04ac4402187",
   "surfaces": [
     {
       "id": "extension-listing-grid",
@@ -177,6 +177,63 @@
       "states": []
     },
     {
+      "id": "agent-card-cannot-run",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "missing-dependency",
+          "source": "dependency.manifest.displayName"
+        },
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "missing-dependency",
+          "source": "dependency.manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "view-requirements",
+          "outcome": "agent-listing-open"
+        }
+      ],
+      "states": [
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "agent-start-refused",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "missing-dependency",
+          "source": "dependency.manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "view-requirements",
+          "outcome": "agent-listing-open"
+        },
+        {
+          "action": "back-to-agents",
+          "outcome": "scope-agents-tab"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:agent"
+      ]
+    },
+    {
       "id": "install-config-needs-callout",
       "fields": [
         {
@@ -193,6 +250,87 @@
       "states": [
         "empty",
         "kind:connector"
+      ]
+    },
+    {
+      "id": "agent-assignment-skills",
+      "fields": [
+        {
+          "field": "scope-label",
+          "source": "scope.label"
+        }
+      ],
+      "actions": [
+        {
+          "action": "search-skills",
+          "outcome": "matching-skills-shown"
+        },
+        {
+          "action": "remove-skill",
+          "outcome": "skill-unassigned"
+        }
+      ],
+      "states": [
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "upload-extension-screen",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "back-to-marketplace",
+          "outcome": "marketplace-page"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "upload-github-form",
+      "fields": [],
+      "actions": [
+        {
+          "action": "resolve-reference",
+          "outcome": "package-resolved"
+        }
+      ],
+      "states": [
+        "loading"
+      ]
+    },
+    {
+      "id": "upload-resolved-install-panel",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "version",
+          "source": "manifest.version"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-picker",
+          "outcome": "options-listed"
+        },
+        {
+          "action": "close-panel",
+          "outcome": "card-restored"
+        },
+        {
+          "action": "submit-install",
+          "outcome": "installed"
+        }
+      ],
+      "states": [
+        "loading"
       ]
     }
   ]

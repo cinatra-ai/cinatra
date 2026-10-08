@@ -4,6 +4,10 @@ import {
   requireActorContext,
   isPlatformAdmin,
   resolveOrgRoleForSession,
+  // cinatra#3692: the session-lineage ActorContext RESOLVER, aliased as the
+  // in-process A2A action aliases it — it is not the ALS frame reader of the
+  // same name in `@cinatra-ai/llm/actor-context`.
+  getActorContext as resolveSessionActorContext,
 } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
 // cinatra#1939 wave 2 (§2a): every run-status transition here is grounded by the
@@ -15,7 +19,7 @@ import type { ActorRoleHints } from "./auth-policy";
 import { enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
-import { assertAgentPackageRunnable } from "./runtime-install-gate";
+import { assertAgentPackageRunnable, type AgentInstallRefusal } from "./runtime-install-gate";
 import {
   readAgentRunById,
   readAgentRunMessages,
@@ -60,6 +64,44 @@ export type TriggerAgentRunArgs = RunStartDispatchArgs;
 export type TriggerAgentRunResult = RunStartDispatchResult;
 
 /**
+ * THE HUMAN WHO STARTED A RUN FROM THE RUN PAGE (cinatra#3692).
+ *
+ * The run's frozen assignment-scope snapshot names its originating human ONLY
+ * from an explicit `HumanUser` scope actor on the create input, and the context
+ * routes apply the person's own (user-level) layer only when that human is the
+ * run's owner. The run page's producers used to pass none, so every run started
+ * here froze a snapshot that named nobody and its context gate silently lost the
+ * personal layer. They now pass the session's own actor, resolved the way the
+ * in-process A2A producer resolves it.
+ *
+ * Accepted ONLY when it is the same human in the same organization as the
+ * session the run is being created for; otherwise — no session actor, another
+ * principal, another org, a non-human principal — the answer is `undefined` and
+ * the run is created exactly as before, with no scope actor. Never synthesized,
+ * never borrowed. The scope gate re-resolves this human live, and since it is
+ * the run owner (`runBy`) too, that is the one check the owner already gets.
+ * A resolver that fails (its grant or team reads) is "no resolvable actor"
+ * too: the run is created as before rather than refused where it succeeded.
+ */
+async function resolveRunPageScopeActor(userId: string, orgId: string) {
+  let actor: Awaited<ReturnType<typeof resolveSessionActorContext>>;
+  try {
+    actor = await resolveSessionActorContext();
+  } catch {
+    return undefined;
+  }
+  if (
+    !actor ||
+    actor.principalType !== "HumanUser" ||
+    actor.principalId !== userId ||
+    actor.organizationId !== orgId
+  ) {
+    return undefined;
+  }
+  return actor;
+}
+
+/**
  * THE COOKIE HOST'S RUN-START DISPATCH (the Run button, the run dialog, and the
  * chip-row's release on a signed-in surface).
  *
@@ -93,7 +135,7 @@ export type CreatePendingRunArgs = {
 export type CreatePendingRunResult =
   | { ok: true; runId: string }
   // See TriggerAgentRunResult — actionable preflight failure fields.
-  | { ok: false; error: string; code?: string; settingsHref?: string };
+  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal };
 
 /**
  * Creates an empty `pending_input` run for any template. The dispatcher's
@@ -129,6 +171,8 @@ export async function createPendingRunForZeroInputTemplate(
   // function never mints one today (it stays pending_input, no later
   // transition), so mint the member session authority up front.
   const authority = await verifySessionAuthority(userId, orgId);
+  // cinatra#3692: the originating human, so the frozen snapshot names them.
+  const scopeActor = await resolveRunPageScopeActor(userId, orgId);
 
   // Create an empty pending_input run owned by the actor. The setup loop in
   // execution.ts will emit INTERRUPTs for any required fields when the user
@@ -151,6 +195,7 @@ export async function createPendingRunForZeroInputTemplate(
         runBy: userId,
         inputParams: {},
         orgId,
+        ...(scopeActor ? { scopeActor } : {}),
       },
     },
     dispatch: {
@@ -188,7 +233,7 @@ async function createAndTriggerRunCore(
     template.packageName ?? template.name,
     { packageVersion: template.packageVersion ?? null },
   );
-  if (notRunnable) return { ok: false, error: notRunnable.error };
+  if (notRunnable) return { ok: false, ...notRunnable };
   // orgId is resolved by the caller (do NOT re-resolve session inside this
   // helper) and threaded through to createAgentRunPendingInput.
   // cinatra#1940 P3 (Decision 2): mint the member session authority ONCE, up
@@ -196,6 +241,10 @@ async function createAndTriggerRunCore(
   // pending_input→queued transition (was previously minted only for the
   // transition, after the — then unguarded — create).
   const authority = await verifySessionAuthority(userId, orgId);
+  // cinatra#3692: the originating human, so the frozen snapshot names them.
+  // Resolved from THIS request's session and accepted only when it is the
+  // caller-supplied `userId` in the caller-supplied `orgId`.
+  const scopeActor = await resolveRunPageScopeActor(userId, orgId);
 
   // ONE ORDERING, IN ONE PLACE (cinatra#2928). This function used to carry its
   // own copy of create-parked → evaluate the recommendation → release-or-park →
@@ -230,6 +279,7 @@ async function createAndTriggerRunCore(
           runBy: userId,
           inputParams: {},
           orgId,
+          ...(scopeActor ? { scopeActor } : {}),
         },
       },
       dispatch: {
@@ -460,6 +510,8 @@ export async function startDevChildPreviewRun(
   // this function (the mint at the former call site, after creation, is
   // removed to avoid a duplicate membership read).
   const authority = await verifySessionAuthority(userId, orgId);
+  // cinatra#3692: the originating human, so the frozen snapshot names them.
+  const scopeActor = await resolveRunPageScopeActor(userId, orgId);
 
   // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
   // so router.push paths match /agents/[vendor]/[pkg]/... routing.
@@ -508,6 +560,7 @@ export async function startDevChildPreviewRun(
           runBy: userId,
           inputParams: {},
           orgId,
+          ...(scopeActor ? { scopeActor } : {}),
         },
       },
       dispatch: { kind: "enqueue", options: (run) => ({ jobId: run.id }) },
@@ -624,7 +677,18 @@ export async function buildSubmissionMapByStepIndex(
       }
     }
     const slotMeta = v["slotMeta"] as { slotId?: unknown } | undefined;
-    return typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"]);
+    if (typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"])) return true;
+    // The prompt writer stores parsed context JSON directly. Keep that exact
+    // canonical envelope out of this policy cursor too, without dropping an
+    // ordinary policy answer merely because it happens to have selectedRefs.
+    return Object.keys(v).length === 3
+      && typeof v["slotId"] === "string" && v["slotId"].trim().length > 0
+      && (v["resolutionMode"] === "override" || v["resolutionMode"] === "accumulate")
+      && Array.isArray(v["selectedRefs"])
+      && v["selectedRefs"].every(ref => ref && typeof ref === "object"
+        && ["artifactId", "representationRevisionId", "semanticAssertionId"].every(key =>
+          typeof (ref as Record<string, unknown>)[key] === "string"
+          && ((ref as Record<string, unknown>)[key] as string).trim().length > 0));
   };
   const prompts = allPrompts.filter((p) => !isContextSubmission(p.submittedValues));
 
@@ -664,6 +728,47 @@ export async function buildSubmissionMapByStepIndex(
     }
   }
   return entries;
+}
+
+export type AnsweredContextRailReading = {
+  reviewTaskId: string; label: string;
+  answers: readonly {field: string; label: string; value: string}[];
+};
+
+/** Separate task-bound context history, never a policy prompt cursor entry. */
+export async function readAnsweredContextHistory(runId: string): Promise<AnsweredContextRailReading[]> {
+  const session=await requireAuthSession().catch(()=>null);
+  if(!session?.user?.id) return [];
+  const actor:PrimitiveActorContext={actorType:"human",source:"ui",userId:session.user.id};
+  const run=await readAgentRunById(runId,actor).catch(()=>null);
+  if(!run || run.id!==runId || !run.orgId) return [];
+  const {readAgentTemplateById}=await import("./store");
+  const template=await readAgentTemplateById(run.templateId).catch(()=>null);
+  if(!template?.packageName) return [];
+  const {readConfirmedContextGates}=await import("./agent-run-hitl-prompts");
+  const gates=await readConfirmedContextGates(run.id,run.orgId,template.packageName).catch(()=>[]);
+  const result:AnsweredContextRailReading[]=[];
+  for(const gate of gates){
+    const refs=gate.submittedValues.selectedRefs as unknown[];
+    const names:string[]=[];
+    if(refs.length){
+      try {
+        const viewer=await requireActorContext();
+        const {readArtifactForSettledReview}=await import("@/lib/artifacts/artifact-service");
+        for(const ref of refs){
+          const artifactId=(ref as {artifactId?:unknown})?.artifactId;
+          if(typeof artifactId!=="string") continue;
+          const access=readArtifactForSettledReview({artifactId,orgId:run.orgId,actor:viewer});
+          if(access.kind==="ok" && access.artifact.title?.trim()) names.push(access.artifact.title);
+        }
+      } catch { /* Reference labels remain private when their read is refused. */ }
+    }
+    const label=gate.label.replace(/([a-z0-9])([A-Z])/g,"$1 $2").replace(/^./,c=>c.toUpperCase());
+    result.push({reviewTaskId:gate.reviewTaskId,label,answers:[{field:"selectedRefs",label,
+      value:refs.length===0 ? "No context selected" : names.length===refs.length ? names.join(", ")
+        : [...names,"Selection unavailable"].join(", ")}]});
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

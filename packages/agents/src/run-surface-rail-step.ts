@@ -66,6 +66,8 @@ export type RunInputStepKey = `input:${number}`;
  * different things.
  */
 export type RunParkedGateStepKey = "gate";
+/** Settled context history is keyed to the exact task it answered. */
+export type RunAnsweredContextStepKey = `context:${string}`;
 
 /**
  * THE RUN'S LAST STEP — what the run made (cinatra#3029).
@@ -78,11 +80,56 @@ export type RunParkedGateStepKey = "gate";
  */
 export type RunMadeStepKey = "made";
 
+/**
+ * A REVIEW GATE ON THE RAIL, AS A STEP OF ITS OWN (cinatra#3693).
+ *
+ * The rail has always carried a run's review gates as entries -- one per gate,
+ * settled ones kept as read-only history -- and those entries were the one kind
+ * that NAVIGATED: they linked to a review page of their own. The ratified
+ * drawing gives them no such page: "a pending review renders the review gate in
+ * the run detail, under the same rail, never as a standalone document", and
+ * "there is no review page view outside the run's route".
+ *
+ * So a gate is a selection like every other step, keyed by the review task it
+ * belongs to. Keyed rather than named, for the reason an input form is
+ * (`RunInputStepKey`): a run may owe several reviews, each its own entry, and
+ * the reader presses ONE of them.
+ *
+ * THE PENDING GATE IS NOT ONE OF THESE. A run is paused at one place, and the
+ * gate it is paused at is already the run detail's own reading -- the screen
+ * hands it to the panel before first paint -- so that entry selects `"detail"`
+ * and this key stands for the gates the run has passed.
+ */
+export type RunReviewGateStepKey = `review:${string}`;
+
+/**
+ * A GATE'S POST-CHANGE AUDIT, AS A STEP OF ITS OWN (cinatra#3693).
+ *
+ * The rail weaves an "Audit" entry beneath each gate that has a verification
+ * record, and the run detail already draws that record's card. The entry used to
+ * deep-link into the review page's `?view=verification` reading; it selects the
+ * card beside it instead, for the same reason the gate row does.
+ */
+export type RunReviewAuditStepKey = `audit:${string}`;
+
+/** The key the rail's entry for this review gate answers to. */
+export function runReviewGateStepKey(reviewTaskId: string): RunReviewGateStepKey {
+  return `review:${reviewTaskId}`;
+}
+
+/** The key the rail's Audit entry for this review gate answers to. */
+export function runReviewAuditStepKey(reviewTaskId: string): RunReviewAuditStepKey {
+  return `audit:${reviewTaskId}`;
+}
+
 export type RunStepSelection =
   | RunSurfaceRailLabelledKey
   | RunInputStepKey
   | RunParkedGateStepKey
+  | RunAnsweredContextStepKey
   | RunMadeStepKey
+  | RunReviewGateStepKey
+  | RunReviewAuditStepKey
   | "detail";
 
 /** A step that HEADS the rail — every selection but the run's own detail. */
@@ -281,4 +328,71 @@ export function resolveRunSurfaceSelection(
   const named = steps.find((step) => step.key === want);
   if (named && isRunSurfaceStepSelectable(named, detail)) return want;
   return steps.find((step) => isRunSurfaceStepSelectable(step, detail))?.key ?? "detail";
+}
+
+/**
+ * THE STEP AN ADDRESS NAMES (cinatra#3693).
+ *
+ * A reader sent to one review -- from a notification, from the run engine's own
+ * interrupt, from the admin console -- arrives at the RUN's address with the
+ * step named on it (`src/lib/agent-url.ts`, `buildRunStepPath`). This is the
+ * reading of that name, and it is CLOSED: a value outside the vocabulary below
+ * answers `null`, and the screen then elects the step it would have elected
+ * anyway. Nothing about a run's reading may be decided by an arbitrary query
+ * value.
+ *
+ * A repeated query key arrives as an array; only one step can be open, so an
+ * array is refused rather than resolved to its first member.
+ *
+ * WHAT THIS DOES NOT DO: decide whether the named step can be OPENED. That is
+ * `resolveRunSurfaceSelection`, against the steps the screen actually composed,
+ * and it is what the frame asks on first paint -- so an address naming a review
+ * this run does not carry falls back exactly as a refused press does.
+ */
+export function parseRunStepSelection(
+  raw: string | readonly string[] | undefined | null,
+): RunStepSelection | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (value.length === 0) return null;
+  if (value === "detail") return "detail";
+  if (value === "gate" || value === "made") return value;
+  if (value === "recommendation" || value === "schedule" || value === "review") return value;
+  if (/^input:\d+$/.test(value)) return value as RunInputStepKey;
+  // A review task id is an opaque identifier; the only rule is that there IS
+  // one, so a bare `review:` names no gate and is refused with the rest.
+  const keyed = /^(review|audit|context):(.+)$/.exec(value);
+  if (keyed) return value as RunReviewGateStepKey | RunReviewAuditStepKey | RunAnsweredContextStepKey;
+  return null;
+}
+
+/**
+ * WHICH SELECTION DRAWS THE GATE AN ADDRESS NAMES (cinatra#3693, convergence
+ * round 1, finding 2).
+ *
+ * THE DEFECT THIS CLOSES. The address form names a review GATE
+ * (`review:<taskId>`), and both the run engine's interrupt and a review
+ * notification mint it while the gate is still PENDING. A pending gate has no
+ * step of its own: it is the run detail's own reading, handed to the panel before
+ * first paint, which is why the rail's row for it selects `"detail"`. So the
+ * named key matched no composed step, the frame fell back to the first row it
+ * could open -- a settled Skills or Schedule row -- and a reader following a
+ * review notification landed on somebody else's step with no sign that the
+ * review was anywhere.
+ *
+ * THE ADDRESS NAMES THE GATE; THE PAGE SAYS WHICH SELECTION DRAWS IT. That is
+ * the rule, and this is the whole of it: a `review:<taskId>` naming a gate the
+ * run is still holding resolves to the run detail. Every other value is returned
+ * as it came, and the frame still asks whether the step can be opened at all.
+ *
+ * Exported so the regression test can pin the table without a render.
+ */
+export function runStepDrawingTheAddressedGate(
+  addressed: RunStepSelection | null,
+  pendingReviewTaskIds: readonly string[],
+): RunStepSelection | null {
+  if (addressed === null) return null;
+  const gate = /^review:(.+)$/.exec(addressed);
+  if (!gate) return addressed;
+  return pendingReviewTaskIds.includes(gate[1]!) ? "detail" : addressed;
 }

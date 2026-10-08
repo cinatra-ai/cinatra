@@ -32,6 +32,9 @@ import {
   buildFinalizeMaterializationQuery,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  findFinalizedFanoutMessageMaterialization,
+  findFinalizedMidRunMaterialization,
+  recordFanoutReuseMaterialization,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -252,6 +255,65 @@ function readFanOutMemberTitle(
     };
   }
   return { ok: true, title };
+}
+
+/**
+ * A plain JSON object member — not an array, not null, not a class instance.
+ * The member-field fan-out (cinatra#3732) files exactly such a member.
+ */
+function isPlainObjectMember(member: unknown): member is Record<string, unknown> {
+  if (typeof member !== "object" || member === null || Array.isArray(member)) return false;
+  const proto = Object.getPrototypeOf(member);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Read a member-field fan-out member (cinatra#3732): the member ITSELF is the
+ * body, serialized as JSON unchanged, and its title is the value of the member's
+ * OWN field the binding names — trimmed, non-empty, never invented and never
+ * read from outside the member. Fail-closed on each count, for this member only.
+ */
+function readFanOutObjectMember(
+  member: unknown,
+  titleField: string,
+): { ok: true; title: string; body: string } | { ok: false; error: string } {
+  if (!isPlainObjectMember(member)) {
+    return {
+      ok: false,
+      error:
+        `it is not a plain object (got ${
+          member === null ? "null" : Array.isArray(member) ? "array" : typeof member
+        }) — a member-field fan-out files each object member as itself`,
+    };
+  }
+  const raw = Object.prototype.hasOwnProperty.call(member, titleField)
+    ? member[titleField]
+    : undefined;
+  if (typeof raw !== "string") {
+    return {
+      ok: false,
+      error:
+        raw === undefined
+          ? `its title field "${titleField}" is missing`
+          : `its title field "${titleField}" is not a string (got ${
+              raw === null ? "null" : Array.isArray(raw) ? "array" : typeof raw
+            })`,
+    };
+  }
+  const title = raw.trim();
+  if (title.length === 0) {
+    return { ok: false, error: `its title field "${titleField}" carries no non-empty title` };
+  }
+  let body: string;
+  try {
+    body = JSON.stringify(member);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `it could not be serialized as JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { ok: true, title, body };
 }
 
 function pool(): Pool {
@@ -568,7 +630,12 @@ export async function writeClaimedArtifact(input: {
   /** The calling node id, or null on the `derived_output` / `default_road`
    *  paths (no node). */
   nodeId: string | null;
-  path: "end_node_binding" | "materialize_tool" | "derived_output" | "default_road";
+  path:
+    | "end_node_binding"
+    | "materialize_tool"
+    | "derived_output"
+    | "default_road"
+    | "email_fanout";
   /** The detection ladder's recorded verdict (cinatra#3029, the `default_road`
    *  path only) — journalled on the ledger row this write claims, so the
    *  DECIDING RUNG of every default-road artifact is auditable. */
@@ -586,6 +653,14 @@ export async function writeClaimedArtifact(input: {
   resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   /** Per-path wording for the accepts-mismatch error message. */
   mimeDescription: string;
+  /** OPTIONAL physical origin of the revision (cinatra#3089). Absent ⇒
+   *  `agent_generated`, every pre-existing caller's origin; the email fan-out
+   *  passes `live_generator`, the origin the same-artifact revision already
+   *  carries. The creation path's produced event is emitted under it. */
+  originKind?: "agent_generated" | "live_generator";
+  /** OPTIONAL typed data for the object's own declared fields (cinatra#3089),
+   *  passed to the creation path's `typedData`; absent for every other caller. */
+  typedData?: Record<string, unknown>;
   /** OPTIONAL extra Tx2 queries composed into the SAME transaction as the
    *  artifact write + the ledger finalize (cinatra#1893). The derived_output
    *  path passes its token-guarded outbox `done`-settle here so the settle and
@@ -680,7 +755,8 @@ export async function writeClaimedArtifact(input: {
       visibility: input.ownership.visibility,
       title: input.title,
       declaredMime: input.mime,
-      originKind: "agent_generated",
+      originKind: input.originKind ?? "agent_generated",
+      ...(input.typedData ? { typedData: input.typedData } : {}),
       stream: asUtf8Stream(input.content),
       // Server-side provenance: the actually-executing run id. The
       // existing cross-org validation inside the creation path yields
@@ -947,10 +1023,13 @@ export async function materializeRunArtifacts(input: {
         continue;
       }
       // ------------------------------------------------------------------
-      // FAN-OUT (cinatra#3034, plan item 0.27): the bound output is a list of
-      // plain-text members and each member becomes ITS OWN artifact, titled
-      // from its own first line behind the declared prefix. One ledger
-      // identity, one outcome and one row per member — never a batch.
+      // FAN-OUT (cinatra#3034, plan item 0.27): the bound output is a list and
+      // each member becomes ITS OWN artifact. On the first-line road a member
+      // is plain text, titled from its own first line behind the declared
+      // prefix; on the member-field road (cinatra#3732) a member is an object,
+      // filed unchanged as its own JSON body and titled from the field the
+      // binding names. One ledger identity, one outcome and one row per member
+      // — never a batch.
       // ------------------------------------------------------------------
       if (binding.fanOut !== undefined) {
         const fanMime = resolveBindingMime(binding, outputs);
@@ -966,6 +1045,11 @@ export async function materializeRunArtifacts(input: {
                 ? " (output missing from the run's declared outputs)"
                 : ` (got ${typeof members})`),
           );
+          continue;
+        }
+        if (members.length === 0 && binding.fanOut.titleFrom === "member-field") {
+          // An empty list is a normal result for a feed (cinatra#3732): the run
+          // listed nothing new, so nothing is written and nothing fails.
           continue;
         }
         if (members.length === 0) {
@@ -986,6 +1070,18 @@ export async function materializeRunArtifacts(input: {
         for (const candidate of members) {
           if (typeof candidate === "string") {
             fanOutTotalBytes += new TextEncoder().encode(candidate).byteLength;
+          } else if (
+            binding.fanOut.titleFrom === "member-field" &&
+            isPlainObjectMember(candidate)
+          ) {
+            // The member-field road writes each object member serialized, so
+            // the list cap counts those serialized bytes. A member that cannot
+            // be serialized is never written: it fails alone in the member loop.
+            try {
+              fanOutTotalBytes += new TextEncoder().encode(JSON.stringify(candidate)).byteLength;
+            } catch {
+              // counted as nothing; readFanOutObjectMember fails this member alone
+            }
           }
         }
         if (fanOutTotalBytes > MAX_FAN_OUT_TOTAL_BYTES) {
@@ -1018,19 +1114,33 @@ export async function materializeRunArtifacts(input: {
             });
           };
           const member = members[index];
-          if (typeof member !== "string") {
-            failMember(
-              `member ${index} of "${contentFrom}" is not a plain string ` +
-                `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
-            );
-            continue;
+          let memberBody: string;
+          let memberTitleText: string;
+          if (binding.fanOut.titleFrom === "member-field") {
+            const objectMember = readFanOutObjectMember(member, binding.fanOut.titleField);
+            if (!objectMember.ok) {
+              failMember(`member ${index} of "${contentFrom}": ${objectMember.error}`);
+              continue;
+            }
+            memberBody = objectMember.body;
+            memberTitleText = objectMember.title;
+          } else {
+            if (typeof member !== "string") {
+              failMember(
+                `member ${index} of "${contentFrom}" is not a plain string ` +
+                  `(got ${Array.isArray(member) ? "array" : typeof member}) — a fanned-out list carries plain text`,
+              );
+              continue;
+            }
+            const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
+            if (!memberTitle.ok) {
+              failMember(`member ${index} of "${contentFrom}": ${memberTitle.error}`);
+              continue;
+            }
+            memberBody = member;
+            memberTitleText = memberTitle.title;
           }
-          const memberTitle = readFanOutMemberTitle(member, binding.fanOut.titlePrefix);
-          if (!memberTitle.ok) {
-            failMember(`member ${index} of "${contentFrom}": ${memberTitle.error}`);
-            continue;
-          }
-          const memberBytes = new TextEncoder().encode(member).byteLength;
+          const memberBytes = new TextEncoder().encode(memberBody).byteLength;
           if (memberBytes > MAX_AUTHORED_CONTENT_BYTES) {
             failMember(
               `member ${index} of "${contentFrom}" (${memberBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
@@ -1045,9 +1155,9 @@ export async function materializeRunArtifacts(input: {
             nodeId,
             path: "end_node_binding",
             extension: binding.extension,
-            title: memberTitle.title,
+            title: memberTitleText,
             mime: fanMime.mime,
-            content: member,
+            content: memberBody,
             ownership,
             resolvedTarget: resolvedFan.target,
             mimeDescription: "the binding resolved MIME",
@@ -1342,6 +1452,131 @@ export async function materializeToolArtifact(input: {
     return {
       ok: false,
       error: `materialization failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The send fan-out's per-message body revision (cinatra#3089, lifecycle-d W1).
+// ---------------------------------------------------------------------------
+
+/**
+ * Write ONE message body of a send as a markdown revision on the ledger: path
+ * `email_fanout`, the ledger output identity = the message identity, the
+ * content hash = the markdown's, origin `live_generator` (so the creation
+ * path's produced event carries it). A retry hits the finalized claim and
+ * returns its refs; a body the drafting step already filed mid-run in the same
+ * run with the same bytes, not yet bound to another message, is bound to this
+ * message and returned instead of writing a second one.
+ *
+ * The CALLER names the declared object type; the extension is the pack whose
+ * claim wins that type for the organisation (a declaration, never a pack name
+ * in this tree), and the type is then resolved exactly as the binding road
+ * resolves one. The row ownership is derived from the run exactly as the
+ * materializer derives it — from the run's template anchor, read off the run
+ * itself (the fan-out carries no template id). Never throws: a refusal is a
+ * returned error the send boundary makes a visible failure of the send.
+ */
+export async function materializeFanoutMessageRevision(input: {
+  runId: string;
+  orgId: string;
+  createdBy: string | null;
+  /** The declared object type the caller files the body under. */
+  objectTypeId: string;
+  /** The message identity — the ledger output id. */
+  outputId: string;
+  title: string;
+  markdown: string;
+  /** The type's own declared fields (`bodyMarkdown`, `subject`, …). */
+  typedData: Record<string, unknown>;
+}): Promise<ToolArtifactMaterialization> {
+  try {
+    ensurePostgresSchema();
+    const s = postgresSchema.replaceAll('"', '""');
+    const runRes = await pool().query(
+      `SELECT template_id FROM "${s}"."agent_runs" WHERE id = $1 AND org_id = $2 LIMIT 1`,
+      [input.runId, input.orgId],
+    );
+    const templateId = (runRes.rows[0] as { template_id?: string | null } | undefined)
+      ?.template_id;
+    if (typeof templateId !== "string" || templateId.length === 0) {
+      return {
+        ok: false,
+        error: `run ${input.runId} is not an agent run of organization ${input.orgId} — the message body has no run to be filed under`,
+      };
+    }
+    const ownership = await resolveRunScopeOwnership({
+      templateId,
+      runId: input.runId,
+      orgId: input.orgId,
+    });
+
+    // The pack that declares the type: the organisation's winning claim over it.
+    const [{ readArtifactTypeClaimsForOrg }, { resolveClaimWinner }] = await Promise.all([
+      import("@/lib/objects/artifact-claim-store"),
+      import("@cinatra-ai/objects/claims"),
+    ]);
+    const winner = resolveClaimWinner(readArtifactTypeClaimsForOrg(input.orgId), {
+      orgId: input.orgId,
+      objectTypeId: input.objectTypeId,
+    });
+    if (!winner) {
+      return {
+        ok: false,
+        error: `no installed pack claims the object type "${input.objectTypeId}" for organization ${input.orgId}`,
+      };
+    }
+    const extension = winner.extensionPackage;
+
+    // Warm the registry so declared-type resolution sees every installed type.
+    registerAllObjectTypes();
+    const resolved = await resolveBoundArtifactTarget({
+      orgId: input.orgId,
+      extension,
+      bindingObjectTypeId: input.objectTypeId,
+    });
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+
+    const contentHash = createHash("sha256").update(input.markdown, "utf8").digest("hex");
+    const messageKey = { orgId: input.orgId, runId: input.runId, extension, contentHash };
+    // A retried message keeps its own mapping before any mid-run lookup.
+    const own = await findFinalizedFanoutMessageMaterialization({
+      ...messageKey,
+      outputId: input.outputId,
+    });
+    if (own) return { ok: true, ...own, deduped: true };
+    // A mid-run body not yet bound to another message is bound to this one.
+    const prefiled = await findFinalizedMidRunMaterialization(messageKey);
+    if (prefiled) {
+      await recordFanoutReuseMaterialization({
+        ...messageKey,
+        outputId: input.outputId,
+        ...prefiled,
+      });
+      return { ok: true, ...prefiled, deduped: true };
+    }
+
+    return await writeClaimedArtifact({
+      runId: input.runId,
+      orgId: input.orgId,
+      createdBy: input.createdBy,
+      outputId: input.outputId,
+      nodeId: null,
+      path: "email_fanout",
+      extension,
+      title: input.title,
+      mime: "text/markdown",
+      content: input.markdown,
+      ownership,
+      resolvedTarget: resolved.target,
+      mimeDescription: "the fan-out message body MIME",
+      originKind: "live_generator",
+      typedData: input.typedData,
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `message body materialization failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

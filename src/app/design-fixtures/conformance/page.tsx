@@ -1,3 +1,4 @@
+import { AgentRunEligibilityFixtures } from "./agent-run-eligibility-fixtures";
 import type { Metadata } from "next";
 
 import { Main } from "@/components/layout/main";
@@ -30,6 +31,7 @@ import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
 import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
 import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixtures";
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
+import { ToastConformanceFixture } from "./toast-fixture";
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
 import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
@@ -38,6 +40,8 @@ import {
   PrimitiveWaveConformanceFixtures,
   PrimitiveWaveOverlayFixtures,
 } from "./primitive-wave-fixtures";
+import { PrimitiveWaveLeg2ConformanceFixtures } from "./primitive-wave-leg2-fixtures";
+import { ScopeAssignmentSkillsConformanceFixture } from "./scope-assignment-skills-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -111,6 +115,8 @@ export default function ConformanceHarnessPage() {
         description="Internal — real conformance-surface components mounted with deterministic fixtures for the manifest-driven functional-acceptance gate."
       />
       <PageContent className="flex flex-col gap-8 pb-12">
+        <ToastConformanceFixture />
+        <AgentRunEligibilityFixtures />
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>Status pills (surface: status-pills)</CardTitle>
@@ -427,6 +433,22 @@ export default function ConformanceHarnessPage() {
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
+              Shared primitives graded against the components drawing (cinatra#3189
+              leg 2: input OTP, scroll area, sidebar, switch, table, toggle)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* The REAL primitives, no substitution — the same method as the
+                leg 1 row above. Every clause of their drawing sections that
+                names a rendered value is read here, in the browser, under the
+                app's own palette, and in both palettes the product ships. */}
+            <PrimitiveWaveLeg2ConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
               Shared overlays graded against the components drawing (cinatra#3189
               leg 1: dialog, alert dialog, dropdown menu)
             </CardTitle>
@@ -436,6 +458,14 @@ export default function ConformanceHarnessPage() {
                 before it paints; the suite clicks the trigger, then reads the
                 panel. */}
             <PrimitiveWaveOverlayFixtures />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Agent assignment — Skills</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScopeAssignmentSkillsConformanceFixture />
           </CardContent>
         </Card>
       </PageContent>

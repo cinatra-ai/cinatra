@@ -1,10 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConformanceGate, CONFORMANCE_GATE_VERSION } from "../conformance-gate.mjs";
 import { loadLiveRules } from "../lib/conformance-rules.mjs";
+import * as conformanceRules from "../lib/conformance-rules.mjs";
+import * as gateModule from "../conformance-gate.mjs";
+import * as clientBundle from "@cinatra-ai/sdk-extensions/artifact-client-bundle";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
@@ -1811,4 +1815,320 @@ describe("conformance-gate — cinatra.logo is admitted for EVERY kind (cinatra#
       rmSync(without, { recursive: true, force: true });
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3867 — two false findings cured, the known older findings of
+// connectors on a floor.
+// ---------------------------------------------------------------------------
+
+// The files the reusable workflow's sparse checkout holds, READ FROM THE
+// WORKFLOW ITSELF: the rules must be derivable from these alone, or every
+// connector repository's run is an infra failure.
+const REUSABLE_WORKFLOW_TEXT = readFileSync(
+  join(REPO_ROOT, ".github", "workflows", "extension-conformance-gate-reusable.yml"),
+  "utf8",
+);
+
+function sparseCheckoutList(workflowText) {
+  const lines = workflowText.split("\n");
+  const start = lines.findIndex((l) => /^\s*sparse-checkout:\s*\|\s*$/.test(l));
+  if (start < 0) return [];
+  const keyIndent = lines[start].search(/\S/);
+  const out = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    if (line.search(/\S/) <= keyIndent) break;
+    out.push(line.trim());
+  }
+  return out;
+}
+
+function sdkRootFrom(transform = (files) => files, workflowText = REUSABLE_WORKFLOW_TEXT) {
+  const files = {};
+  for (const rel of sparseCheckoutList(workflowText)) files[rel] = readFileSync(join(REPO_ROOT, rel), "utf8");
+  return writeFixture(transform(files));
+}
+
+const HOST_MODULE = clientBundle.HOST_DESIGN_PRIMITIVES_MODULE;
+const importOf = (spec) => `import { Button } from "${spec}";\nexport const B = Button;\n`;
+
+describe("cinatra#3867 — the import rule admits exactly the host-served primitives module", () => {
+  it("derives the module from the SDK's own declaration, from the reusable workflow's files alone", () => {
+    const listed = sparseCheckoutList(REUSABLE_WORKFLOW_TEXT);
+    expect(listed).toContain("scripts/extensions/conformance-gate.mjs");
+    expect(listed).toContain("packages/sdk-extensions/src/artifact-client-bundle.ts");
+    const sdkRoot = sdkRootFrom();
+    const rules = loadLiveRules(sdkRoot);
+    expect(rules.ok).toBe(true);
+    expect(typeof HOST_MODULE).toBe("string");
+    expect(rules.hostDesignPrimitivesModule).toBe(HOST_MODULE);
+    expect(loadLiveRules(REPO_ROOT).hostDesignPrimitivesModule).toBe(HOST_MODULE);
+    rmSync(sdkRoot, { recursive: true, force: true });
+  });
+
+  it("answers infra, never a silent pass, when the workflow's checkout lacks the declaring file", () => {
+    const line = /^\s*packages\/sdk-extensions\/src\/artifact-client-bundle\.ts\n/m;
+    const withoutLine = REUSABLE_WORKFLOW_TEXT.replace(line, "");
+    expect(withoutLine).not.toBe(REUSABLE_WORKFLOW_TEXT);
+    const sdkRoot = sdkRootFrom(undefined, withoutLine);
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot });
+    expect(result.infra).toBe(true);
+    expect(result.message).toContain("artifact-client-bundle.ts");
+    rmSync(sdkRoot, { recursive: true, force: true });
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("answers infra, never a silent pass, when the SDK declares no host-served module", () => {
+    let removed = false;
+    const sdkRoot = sdkRootFrom((files) => {
+      const key = "packages/sdk-extensions/src/artifact-client-bundle.ts";
+      const without = files[key].replace(/export const HOST_DESIGN_PRIMITIVES_MODULE\b[^;]*;/, "");
+      removed = without !== files[key];
+      return { ...files, [key]: without };
+    });
+    const pkgDir = writeFixture(cleanConnectorFiles());
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot });
+    expect(removed).toBe(true);
+    expect(result.infra).toBe(true);
+    expect(result.message).toContain("HOST_DESIGN_PRIMITIVES_MODULE");
+    rmSync(sdkRoot, { recursive: true, force: true });
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("a connector that imports the host-served module passes the import rule AND the private-repository rule", () => {
+    const pkgDir = writeFixture({ ...cleanConnectorFiles(), "src/setup-page.tsx": importOf(HOST_MODULE) });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking).toEqual([]);
+    expect(result.known).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("the same connector run with the reusable workflow's SDK files alone passes too", () => {
+    const sdkRoot = sdkRootFrom();
+    const pkgDir = writeFixture({ ...cleanConnectorFiles(), "src/setup-page.tsx": importOf(HOST_MODULE) });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot });
+    expect(result.infra).toBe(false);
+    expect(result.blocking).toEqual([]);
+    rmSync(sdkRoot, { recursive: true, force: true });
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["a subpath of the host-served module", `${HOST_MODULE}/button`],
+    ["the design-token module", clientBundle.HOST_DESIGN_TOKEN_MODULE],
+    ["another package of the organisation", "@cinatra-ai/some-other-connector"],
+    ["a package whose name begins with the host-served module", `${HOST_MODULE}-extra`],
+  ])("%s still fails imports.non-sdk-first-party", (_label, spec) => {
+    const pkgDir = writeFixture({ ...cleanConnectorFiles(), "src/setup-page.tsx": importOf(spec) });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    const hit = result.blocking.filter((f) => f.rule === "imports.non-sdk-first-party");
+    expect(hit.map((f) => f.file)).toEqual(["src/setup-page.tsx"]);
+    expect(hit[0].detail).toContain(`"${spec}"`);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+});
+
+describe("cinatra#3867 — the private-repository rule matches whole repository names only", () => {
+  const privateHits = (text) => {
+    const pkgDir = writeFixture({ ...cleanConnectorFiles(), "src/notes.md": text });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    rmSync(pkgDir, { recursive: true, force: true });
+    return result.blocking.filter((f) => f.rule === "hygiene.private-repo-reference");
+  };
+
+  it("the list of private repositories is unchanged", () => {
+    expect(conformanceRules.PRIVATE_ORG_REPO_SLUGS).toHaveLength(4);
+  });
+
+  it.each(conformanceRules.PRIVATE_ORG_REPO_SLUGS)("a longer package or repository name that begins with %s is no reference", (slug) => {
+    for (const text of [
+      `import x from "@${slug}-primitives";\n`,
+      `see ${slug}-tools/README.md\n`,
+      `see ${slug}_archive for it\n`,
+      `see ${slug}.gitops today\n`,
+      `${slug}-x`,
+    ]) {
+      expect(privateHits(text), text).toEqual([]);
+    }
+  });
+
+  it.each(conformanceRules.PRIVATE_ORG_REPO_SLUGS)("the name %s itself fails in each boundary form", (slug) => {
+    for (const text of [
+      `see ${slug}`,
+      `see ${slug}/issues/1\n`,
+      `repo: "${slug}"\n`,
+      `repo: '${slug}'\n`,
+      `repo: \`${slug}\`\n`,
+      `see ${slug} for it\n`,
+      `see ${slug}\tfor it\n`,
+      `see ${slug}\n`,
+      `git clone ${slug}.git\n`,
+      `see ${slug}#12\n`,
+      `see ${slug}?tab=readme\n`,
+      `[the repo](${slug})\n`,
+      `[${slug}]\n`,
+      `see ${slug}.\n`,
+      `see ${slug}, then\n`,
+    ]) {
+      const hits = privateHits(text);
+      expect(hits.map((f) => f.file), JSON.stringify(text)).toEqual(["src/notes.md"]);
+      expect(hits[0].detail).toContain(`"${slug}"`);
+    }
+  });
+});
+
+// The test of record: the floor's exact lines. It only shrinks — a line is
+// removed by the change that cures its finding in the connector's repository.
+const EXPECTED_KNOWN_FINDINGS_FLOOR = {
+  "@cinatra-ai/anthropic-connector:src/telemetry.ts:fs-ban.direct-filesystem-access":
+    "fs-ban.direct-filesystem-access — removed by cinatra#3828",
+  "@cinatra-ai/openai-connector:src/adapter/openai-adapter.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/plane-connector:src/dev-setup.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+  "@cinatra-ai/plane-connector:src/plane-provision.ts:env-ban.direct-process-env-access":
+    "env-ban.direct-process-env-access — removed by cinatra#3828",
+};
+
+describe("cinatra#3867 — the floor of the known older findings of connectors", () => {
+  const PLANE = "@cinatra-ai/plane-connector";
+  const ENV_READ = "export const base = process.env.PLANE_BASE_URL;\n";
+  const plane = (extra) => writeFixture({ ...cleanConnectorFiles({ pkg: { name: PLANE } }), ...extra });
+
+  it("THE TEST OF RECORD: the floor holds exactly these lines, each naming the package, the file, the rule and the curing item", () => {
+    const floor = conformanceRules.CONNECTOR_KNOWN_FINDINGS_FLOOR;
+    expect(floor).toEqual(EXPECTED_KNOWN_FINDINGS_FLOOR);
+    expect(Object.isFrozen(floor)).toBe(true);
+    for (const [key, value] of Object.entries(floor)) {
+      const rule = key.split(":").at(-1);
+      expect(["fs-ban.direct-filesystem-access", "env-ban.direct-process-env-access"]).toContain(rule);
+      expect(value.startsWith(`${rule} — `)).toBe(true);
+      expect(value).toMatch(/cinatra#\d+/);
+    }
+  });
+
+  it("the allow lists do not grow: no floored file is on NODE_FS_ALLOWLIST or PROCESS_ENV_ALLOWLIST", () => {
+    for (const key of Object.keys(EXPECTED_KNOWN_FINDINGS_FLOOR)) {
+      const fileKey = key.split(":").slice(0, 2).join(":");
+      expect(conformanceRules.NODE_FS_ALLOWLIST.has(fileKey)).toBe(false);
+      expect(conformanceRules.PROCESS_ENV_ALLOWLIST.has(fileKey)).toBe(false);
+    }
+    expect(conformanceRules.NODE_FS_ALLOWLIST.size).toBe(9);
+    expect(conformanceRules.PROCESS_ENV_ALLOWLIST.size).toBe(3);
+  });
+
+  it("known findings on the floor are reported as known and the exit is 0 (strict fails them)", () => {
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": ENV_READ });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking).toEqual([]);
+    expect(result.conform).toBe(true);
+    expect(result.known.map((f) => `${f.rule} ${f.file}`).sort()).toEqual([
+      "env-ban.direct-process-env-access src/dev-setup.ts",
+      "env-ban.direct-process-env-access src/plane-provision.ts",
+    ]);
+    expect(result.known.every((f) => f.detail.includes("cinatra#3828"))).toBe(true);
+    const strict = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT, strict: true });
+    expect(strict.conform).toBe(false);
+    expect(strict.blocking.filter((f) => f.rule === "env-ban.direct-process-env-access")).toHaveLength(2);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("the checker's command line exits 0 on a package whose only findings are on the floor", () => {
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": ENV_READ });
+    const gate = join(REPO_ROOT, "scripts", "extensions", "conformance-gate.mjs");
+    const run = spawnSync(process.execPath, [gate, "--package", pkgDir, "--sdk-root", REPO_ROOT], { encoding: "utf8" });
+    expect(run.status, run.stdout + run.stderr).toBe(0);
+    expect(run.stdout).toContain("KNOWN [env-ban.direct-process-env-access] src/dev-setup.ts");
+    expect(run.stdout).toContain("KNOWN [env-ban.direct-process-env-access] src/plane-provision.ts");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("a second finding of the same rule in another file of the same package fails", () => {
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": ENV_READ, "src/other.ts": ENV_READ });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.map((f) => `${f.rule} ${f.file}`)).toEqual(["env-ban.direct-process-env-access src/other.ts"]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("a finding of another rule in a floored file fails", () => {
+    const fsImport = 'import { readFileSync } from "node:fs";\n';
+    const pkgDir = plane({ "src/dev-setup.ts": fsImport + ENV_READ, "src/plane-provision.ts": ENV_READ });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.map((f) => `${f.rule} ${f.file}`)).toEqual(["fs-ban.direct-filesystem-access src/dev-setup.ts"]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // A CURE MUST BE ABLE TO PASS: the connector's own repository runs the gate
+  // at a pinned commit of the application whose floor still holds the line.
+  it("a cured connector's SINGLE-PACKAGE run passes with a note for its line (also under --strict), and reads no other package's lines", () => {
+    const cured = "export const base = 'x';\n";
+    const pkgDir = plane({ "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": cured });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(result.blocking).toEqual([]);
+    expect(result.conform).toBe(true);
+    expect(result.known.map((f) => f.file)).toEqual(["src/dev-setup.ts"]);
+    expect(result.notes.map((f) => `${f.rule} ${f.file}`)).toEqual(["floor.connector-known-finding-cured src/plane-provision.ts"]);
+    expect(result.notes[0].detail).toContain(`${PLANE}:src/plane-provision.ts:env-ban.direct-process-env-access`);
+    expect(result.notes[0].detail).toContain("cured here");
+    const strict = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT, strict: true });
+    expect(strict.blocking.map((f) => f.file)).toEqual(["src/dev-setup.ts"]);
+    expect(strict.notes).toHaveLength(1);
+
+    const gate = join(REPO_ROOT, "scripts", "extensions", "conformance-gate.mjs");
+    const run = spawnSync(process.execPath, [gate, "--package", pkgDir, "--sdk-root", REPO_ROOT], { encoding: "utf8" });
+    expect(run.status, run.stdout + run.stderr).toBe(0);
+    expect(run.stdout).toContain("NOTE  [floor.connector-known-finding-cured] src/plane-provision.ts: cured here");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("a fully cured connector's single-package run passes with a note for every line of its own", () => {
+    const pkgDir = plane({});
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(true);
+    expect(result.notes.map((f) => f.file).sort()).toEqual(["src/dev-setup.ts", "src/plane-provision.ts"]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("the FLEET run over a materialized tree fails the same stale line, and a floored package that is not materialized", () => {
+    const cured = "export const base = 'x';\n";
+    const tree = writeFixture({});
+    const planeDir = join(tree, "plane-connector");
+    const planeFiles = { ...cleanConnectorFiles({ pkg: { name: PLANE } }), "src/dev-setup.ts": ENV_READ, "src/plane-provision.ts": cured };
+    for (const [rel, content] of Object.entries(planeFiles)) {
+      mkdirSync(dirname(join(planeDir, rel)), { recursive: true });
+      writeFileSync(join(planeDir, rel), content);
+    }
+    const report = gateModule.checkKnownFindingsFloorOverTree([planeDir], { sdkRoot: REPO_ROOT });
+    expect(report.infra).toEqual([]);
+    expect(report.checked).toEqual([PLANE]);
+    expect(report.stale.map((f) => `${f.rule} ${f.floorKey}`)).toEqual([
+      `floor.connector-known-finding-stale ${PLANE}:src/plane-provision.ts:env-ban.direct-process-env-access`,
+    ]);
+    const floorPackages = [...new Set(Object.keys(EXPECTED_KNOWN_FINDINGS_FLOOR).map((k) => k.split(":")[0]))];
+    expect(report.unmaterialized.sort()).toEqual(floorPackages.filter((n) => n !== PLANE).sort());
+
+    writeFileSync(join(planeDir, "src/plane-provision.ts"), ENV_READ);
+    const healed = gateModule.checkKnownFindingsFloorOverTree([planeDir], { sdkRoot: REPO_ROOT });
+    expect(healed.stale).toEqual([]);
+    rmSync(tree, { recursive: true, force: true });
+  });
+
+  it("a package of another kind under a floored name gets no floor", () => {
+    const files = cleanConnectorFiles({ pkg: { name: PLANE, cinatra: { apiVersion: "cinatra.ai/v1", kind: "skill" } } });
+    const pkgDir = writeFixture({ ...files, "src/dev-setup.ts": ENV_READ });
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "env-ban.direct-process-env-access" && f.file === "src/dev-setup.ts")).toBe(true);
+    expect(result.known).toEqual([]);
+    expect(result.notes ?? []).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
 });

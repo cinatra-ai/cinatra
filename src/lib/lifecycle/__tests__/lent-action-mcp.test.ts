@@ -372,6 +372,97 @@ describe("using the action IS pressing the button", () => {
     expect(said(out).outcome).toEqual({ kind: "blocked", reason: "gate-moved" });
   });
 
+  it("a request for changes answers with the review drawing's own reply", async () => {
+    const outcome = { kind: "changes-requested", status: "requested", idempotent: false };
+    submitReviewDecision = vi.fn(async () => outcome);
+    setFrame(grantFor());
+    const out = await handleLentAction({ ref: REF, control: "comment" }, deps());
+    expect(said(out).message).toBe(
+      "Changes requested. The reviewed work has been turned back for repair — a repair is now in flight.",
+    );
+    expect(said(out).outcome).toEqual(outcome);
+    expect(said(out).ok).toBe(true);
+  });
+
+  it("every other outcome of the card's comment path answers with its own sentence", async () => {
+    const ESCALATED =
+      "Changes requested. The reviewed work has been turned back — escalated because no automatic repair is available; the effect stays held.";
+    const REQUESTED =
+      "Changes requested. The reviewed work has been turned back for repair — a repair is now in flight.";
+    const rows: Array<[Record<string, unknown>, string]> = [
+      [{ kind: "changes-requested", status: "escalated", idempotent: false }, ESCALATED],
+      [
+        { kind: "changes-requested", status: "requested", idempotent: true },
+        `${REQUESTED} (This had already been recorded.)`,
+      ],
+      [
+        { kind: "changes-requested", status: "escalated", idempotent: true },
+        `${ESCALATED} (This had already been recorded.)`,
+      ],
+      [{ kind: "annotated" }, "Comment recorded. The gate stays open — nothing has resumed."],
+      [
+        { kind: "decided", disposition: "comment", idempotent: false },
+        "Your comment was recorded with the decision.",
+      ],
+      [
+        { kind: "decided", disposition: "approve", idempotent: false },
+        "Approved. The gate is resolved and the run has been released to continue.",
+      ],
+      [
+        { kind: "decided", disposition: "reject", idempotent: true },
+        "Rejected. The gate is resolved and the reviewed work has been turned back. (This decision had already been recorded.)",
+      ],
+      [
+        { kind: "blocked", reason: "no-longer-pending" },
+        "This review is no longer open, so the comment was not added.",
+      ],
+      [
+        { kind: "blocked", reason: "gate-moved" },
+        "This review is no longer open, so the comment was not added.",
+      ],
+      [{ kind: "not-permitted", message: "You may not decide this." }, "You may not decide this."],
+      [
+        { kind: "error", message: "Something went wrong." },
+        "Something went wrong. The decision did not commit — you can retry.",
+      ],
+    ];
+    for (const [outcome, sentence] of rows) {
+      submitReviewDecision = vi.fn(async () => outcome);
+      spent = new Set();
+      setFrame(grantFor({ messageId: `msg-${String(outcome.kind)}-${sentence.length}` }));
+      const out = await handleLentAction({ ref: REF, control: "comment" }, deps());
+      expect(said(out).message).toBe(sentence);
+      expect(said(out).outcome).toEqual(outcome);
+    }
+  });
+
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). W5a asserted the press with NO
+  // values, because filling a form had no road yet. It now has one, and the
+  // press carries what the screen was shown holding: the screen's own values
+  // with THIS MESSAGE's fills over them. Two consequences are asserted here —
+  // a press with nothing filled in this message is REFUSED (it would resume a
+  // run on values nobody was shown), and a press that follows a fill sends
+  // exactly what the fields showed.
+  it("the HITL screen's Continue is refused when this message filled nothing", async () => {
+    setFrame(grantFor({ control: "submit" }));
+    const out = await handleLentAction(
+      { ref: REF, control: "submit" },
+      deps({
+        resolve: vi.fn(async () => ({
+          kind: "hitl_screen",
+          runId: RUN,
+          screenRef: GATE,
+          xRenderer: "setup-field",
+          form: { schema: {}, values: { url: "x" }, fieldName: "url" },
+        })),
+        readFills: vi.fn(async () => []),
+        readAttachments: vi.fn(async () => null),
+      }),
+    );
+    expect(said(out).ok).toBe(false);
+    expect(approveScreen).not.toHaveBeenCalled();
+  });
+
   it("the HITL screen's Continue runs the gate's OWN actor-checked resume entry", async () => {
     setFrame(grantFor({ control: "submit" }));
     const out = await handleLentAction(
@@ -384,13 +475,19 @@ describe("using the action IS pressing the button", () => {
           xRenderer: "setup-field",
           form: { schema: {}, values: { url: "x" }, fieldName: "url" },
         })),
+        readFills: vi.fn(async () => [{ ref: REF, values: { url: "https://example.test" } }]),
+        readAttachments: vi.fn(async () => null),
+        buildPayload: ((args: { value: Record<string, unknown> }) => ({
+          payload: { ...args.value },
+          payloadFieldName: undefined,
+        })) as never,
       }),
     );
     expect(said(out).ok).toBe(true);
     expect(approveScreen).toHaveBeenCalledWith(
       GATE,
       PERSON.userId,
-      undefined,
+      { url: "https://example.test" },
       "url",
       null,
       OWN_CREDENTIAL.actor,

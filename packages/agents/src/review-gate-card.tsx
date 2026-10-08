@@ -134,7 +134,7 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -157,8 +157,10 @@ import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
+import { reviewGateHeaderTitle, reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
+  ReviewSettledOutcome,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
 
@@ -182,10 +184,8 @@ import {
   ReviewGateLoading,
   ReviewGateSettled,
 } from "./review-gate-states";
-import {
-  HitlConversationPanel,
-  type HitlConversationEntry,
-} from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { renderRunWindowMarkdown } from "./run-window-markdown";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 // Re-exported so a HOST that mounts the card does not have to reach into the
@@ -585,7 +585,33 @@ export function ReviewGateCard({
     enabled: present,
     reloadToken,
   });
-  const state: LifecycleCardState | null = resolved?.state ?? null;
+  // #4024: the canonical submit result is already a committed decision. A
+  // delayed/failed re-resolve must not leave its old pending header beside a
+  // second, local success notice. Bind that result to this ref and credential
+  // declaration; any newly resolved envelope takes precedence, including absent
+  // or blocked. No decision instant or remote effect is inferred here.
+  const [decisionBinding, setDecisionBinding] = useState({ ref: view.ref, auth, generation: 0 });
+  let binding = decisionBinding;
+  if (binding.ref !== view.ref || binding.auth !== auth) {
+    binding = { ref: view.ref, auth, generation: binding.generation + 1 };
+    setDecisionBinding(binding);
+  }
+  const [decisionReading, setDecisionReading] = useState({
+    binding, resolved, generation: 0, inFlight: false, outcome: null as ReviewSettledOutcome | null,
+  });
+  if (decisionReading.binding !== binding || decisionReading.resolved !== resolved) {
+    setDecisionReading({
+      binding, resolved, inFlight: false, outcome: null,
+      generation: decisionReading.generation +
+        (decisionReading.binding !== binding || decisionReading.inFlight || decisionReading.outcome !== null ? 1 : 0),
+    });
+  }
+  const serverState = resolved?.state ?? null;
+  const state: LifecycleCardState | null =
+    serverState?.state === "pending" && decisionReading.outcome !== null &&
+    decisionReading.binding === binding && decisionReading.resolved === resolved
+      ? { state: "settled", outcome: decisionReading.outcome }
+      : serverState;
   // §IV's target header(s), composed for this reader by the resolve answer
   // (cinatra#3141 item 7). The CARD draws them, in every island state, because
   // the island only exists in one of its three.
@@ -695,24 +721,38 @@ export function ReviewGateCard({
   // has no such re-render, so the refresh is explicit here — and it now applies
   // on the page too, keeping all three hosts identical.
   const submitAndRefresh: SubmitReviewDecisionAction = async (input) => {
-    const outcome = await (submitAction ?? refBoundSubmit)(input);
-    if (outcome.kind === "decided" || outcome.kind === "changes-requested") refresh();
+    setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+      ? { ...current, inFlight: true } : current);
+    let outcome: Awaited<ReturnType<SubmitReviewDecisionAction>>;
+    try {
+      outcome = await (submitAction ?? refBoundSubmit)(input);
+    } finally {
+      setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+        ? { ...current, inFlight: false } : current);
+    }
+    const settledOutcome = outcome.kind === "decided"
+      ? reviewSettledOutcomeFromDisposition(outcome.disposition)
+      : outcome.kind === "changes-requested"
+        ? reviewSettledOutcomeFromDisposition("changes_requested")
+        : null;
+    if (settledOutcome !== null) {
+      setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+        ? { ...current, outcome: settledOutcome }
+        : current);
+      refresh();
+    }
     return outcome;
   };
 
-  // THE WINDOW SUBMITS WITHOUT THE RE-RESOLVE, and the difference is the ruling
-  // the window itself carries: "a landed changes-request RESOLVES the base gate,
-  // but the EXCHANGE (the typed request + the repair/lineage reply) must stay
-  // visible — so we do NOT blank the surface to the resolved state". The
-  // decision bar has no exchange to lose and re-resolves; the window's whole
-  // reading is the exchange it just added, and a re-resolve would settle the
-  // card, unmount the pending branch and take the reader's own words off screen
-  // with it. The window keeps the one refresh it always kept — an UNEXPECTED
-  // block, the gate having moved under the reviewer — and takes it through
-  // `onGateMoved` so it re-resolves the card on a transcript host too, where
-  // `router.refresh()` re-renders no server component.
-  const promptWindowSubmit: SubmitReviewDecisionAction = async (input) =>
-    (submitAction ?? refBoundSubmit)(input);
+  // THE WINDOW TAKES NO DECISION ACTION AT ALL (cinatra#2934, lifecycle-b
+  // W5c). It used to be handed one — a closure that filed whatever was typed
+  // as a comment before any assistant read it — and that road is retired with
+  // the rest of the typed roads this slice removes: what is typed in the
+  // window now goes to the run's own assistant, and a request for changes is
+  // filed through the card's OWN Comment control, word for word, under the
+  // reader's own credential. The card still hands the window `onGateMoved`,
+  // because a turn that PRESSED that control settled the gate and a transcript
+  // host has no server component for `router.refresh()` to re-render.
 
   // #2566's COMPOSER COMMENT — the card's own comment path, published to the
   // composer rather than re-implemented by it.
@@ -739,11 +779,10 @@ export function ReviewGateCard({
         await submitAndRefresh({ disposition: "comment", comment: trimmed }),
       );
     },
-    // `submitAndRefresh` is rebuilt every render, but it closes over exactly
-    // these three — so listing them is listing it, and the callback is rebuilt
-    // whenever the transport it would use actually changes.
+    // Keep the composer submit bound to the current transport AND authorized
+    // reading, just like the decision bar's submit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [submitAction, refBoundSubmit, refresh],
+    [submitAction, refBoundSubmit, refresh, binding, resolved],
   );
 
   // The gate takes composer input only while the SERVER says it is open to this
@@ -846,6 +885,7 @@ export function ReviewGateCard({
   const serverIslandSrc = islandAddress.islandSrc;
   const body = renderState({
     state,
+    decisionGeneration: decisionReading.generation,
     targetHeaders,
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
@@ -871,7 +911,6 @@ export function ReviewGateCard({
       runId != null && runId !== "" && !insideConversation
         ? (canComment: boolean) => (
             <ReviewGatePromptWindow
-              submitAction={promptWindowSubmit}
               onGateMoved={refresh}
               canComment={canComment}
               runId={runId}
@@ -885,6 +924,13 @@ export function ReviewGateCard({
             />
           )
         : null,
+    // §VI's "The reviewer's request and the returned revision stay in the run,
+    // in order" (cinatra#2934): the decided gate keeps the exchange, read-only,
+    // on the same hosts the window is offered on and on no other.
+    settledExchange:
+      runId != null && runId !== "" && !insideConversation ? (
+        <ReviewGateSettledExchange runId={runId} boundCardRef={view.ref} />
+      ) : null,
     islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
     islandCredentialed: heldCredential !== null,
     submit: submitAndRefresh,
@@ -930,6 +976,7 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  decisionGeneration: number;
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
@@ -938,6 +985,9 @@ function renderState(args: {
    * the request road (cinatra#3481). Taken as a factory so the one permission
    * answer the card already read decides whether it is offered. */
   promptWindow: ((canComment: boolean) => ReactElement) | null;
+  /** The run's stored exchange drawn read-only under a gate decided as changes
+   * requested, or `null` where the window itself would be `null`. */
+  settledExchange: ReactElement | null;
   islandSrc: string;
   islandCredentialed: boolean;
   submit: SubmitReviewDecisionAction;
@@ -950,8 +1000,10 @@ function renderState(args: {
 }): ReactElement | null {
   const {
     state,
+    decisionGeneration,
     targetHeaders,
     promptWindow,
+    settledExchange,
     islandSrc,
     islandCredentialed,
     submit,
@@ -1017,10 +1069,11 @@ function renderState(args: {
       //     panel it always drew, and no island.
       return state.outcome ? (
         <>
-          <ReviewGateHeader pending={false} />
-          {/* §IV — the header the decision was taken on, kept over the reviewed
-              work: a settled gate names what was reviewed whether or not its
-              read-only preview has painted. */}
+          <ReviewGateHeader pending={false} outcome={state.outcome} />
+          {/* MERGE: the settled header keeps the recorded outcome it names, and
+              keeps the target header over the reviewed work: a settled gate
+              names what was reviewed whether or not its read-only preview has
+              painted. */}
           <ReviewTargetHeaders headers={targetHeaders} />
           {/* §III — the reviewed target(s), read-only, exactly as the pending
               reading drew them: one island, every pinned target, the renderer
@@ -1036,11 +1089,14 @@ function renderState(args: {
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
-          {/* The decision line — who decided, and how. Where the floor was. */}
-          <ReviewGateSettled
-            outcome={state.outcome}
-            decidedByName={state.decidedByName}
-          />
+          {/* §XIII.1's ONE settled marker — "Continued is the only settled
+              reading; there is no second status after it". It names nobody
+              (§VI); the disposition rides the element as a record. */}
+          <ReviewGateSettled outcome={state.outcome} />
+          {/* §VI — a typed request settled this gate: the request and its reply
+              stay, in order, read-only. Nothing can be typed into a decided
+              gate, so no field, no send and no permission to ask for. */}
+          {state.outcome === "changes_requested" ? settledExchange : null}
         </>
       ) : (
         <>
@@ -1098,6 +1154,7 @@ function renderState(args: {
           <ComposerFocusRow binding={focusBinding} />
           {/* §II/§IV — ONE gate-level decision floor, however many targets. */}
           <ReviewDecisionBar
+            key={decisionGeneration}
             permissions={permissions}
             submitAction={submit}
             suggestionDecisionsFor={suggestionDecisionsFor}
@@ -1583,13 +1640,25 @@ export function SuggestionChips({
  * + the awaiting-your-decision pill), now owned by the card so all three hosts
  * show the same thing. Markup and tokens are the page's, unchanged.
  */
-function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
+function ReviewGateHeader({
+  pending,
+  outcome,
+}: {
+  pending: boolean;
+  /** The recorded outcome, for a settled gate that has one. Absent on every
+   *  other reading, which keeps the request wording it always had. The title
+   *  itself is `reviewGateHeaderTitle`, shared with the settled line below so
+   *  the two cannot say different things about one gate (cinatra#3046). */
+  outcome?: ReviewSettledOutcome | null;
+}): ReactElement {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
         <ClipboardCheck aria-hidden="true" className="size-4" />
       </span>
-      <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
+      <span className="font-sans text-sm font-bold text-foreground">
+        {reviewGateHeaderTitle(outcome)}
+      </span>
       {pending ? (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-mustard/40 bg-brand-mustard/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
           <span className="size-[7px] rounded-full bg-brand-mustard" aria-hidden="true" />
@@ -1679,6 +1748,24 @@ function ReviewTargetIsland({
   }
 
   const frame = useRef<HTMLIFrameElement | null>(null);
+  const palette = useLifecycleCardColorScheme();
+  const previousPalette = useRef(palette);
+  const announcePalette = useCallback(() => {
+    const current = frame.current;
+    if (!current?.contentWindow || palette === null) return;
+    // Kept beside the sender, like the height message above; the DOM tests pin
+    // this fixed shape to the island listener. No selector or grant crosses.
+    current.contentWindow.postMessage(
+      { type: "cinatra.review-island.palette", scheme: palette },
+      new URL(current.src).origin,
+    );
+  }, [palette]);
+  useEffect(() => {
+    if (previousPalette.current === palette) return;
+    previousPalette.current = palette;
+    announcePalette();
+  }, [palette, announcePalette]);
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       // ONLY THIS FRAME'S OWN DOCUMENT. The island is same-origin, so the origin
@@ -1730,11 +1817,12 @@ function ReviewTargetIsland({
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() =>
+        onLoad={() => {
+          announcePalette();
           setLoad((current) =>
             current.identity === identity ? { ...current, loaded: true } : current,
-          )
-        }
+          );
+        }}
       />
       {/* Overlays the iframe's own box exactly (same height) — never the
           footer below, so neither state changes the card's footprint. The
@@ -1957,35 +2045,54 @@ export function ReviewTargetHeaders({
  * draws it beneath the decision bar, where the reader is already looking. The
  * panel keeps its own markup unchanged — only the element it lands in moved.
  *
- * The REAL conversational prompt window on the review surface (cinatra#2063): the changes-request channel is the same live
- * PromptField conversation the pre-migration review HITL used
- * (§X's reading for this surface: "Ask Cinatra about this review, or ask for
- * changes to the work…"), NOT the decision-bar
- * rationale box. It mounts the shared `HitlConversationPanel` (sticky, portalled
- * into <main>) and routes a typed request through the EXISTING Comment path
- * (`submitReviewDecisionAction` with disposition "comment") — which, on a fenced
- * single-target lifecycle gate, the action resolves as `changes_requested` and a
- * repair. It is NOT a fourth decision affordance: the Approve/Reject/Comment floor
- * is untouched; this is where the human asks for changes, and the exchange (the
- * typed request + the resulting repair/annotation state) is shown as conversation
- * entries. When the request resolves the gate (changes-requested / blocked) the
- * page is refreshed to the now-resolved live gate.
+ * AND WHAT IS TYPED HERE GOES TO THE ASSISTANT (cinatra#2934, lifecycle-b W5c).
+ * From the plan (PLAN: Agents Lifecycle (B), §4):
+ *
+ *   "On the review page, what you type goes to the assistant — and only a
+ *    request for changes requests changes. Today the box under a review is not a
+ *    conversation. Whatever you type there is filed at once, with no model
+ *    reading it, as a request for changes: the review closes and the work goes
+ *    back for repair — a question is treated exactly like an instruction …
+ *    When you ask for a change — 'tighten the opening paragraph' — the assistant
+ *    files it through the card's own Comment control, word for word, exactly as
+ *    pressing Comment with that text does today, and the work goes back for
+ *    repair. When you ask a question, you get an answer and nothing is filed.
+ *    The card's own buttons — Approve, Reject, Comment — keep working as they do
+ *    today, with no assistant in the way."
+ *
+ * WHAT WENT, AND WHAT REPLACED IT. The direct filing this window used to do on
+ * every send — the typed sentence handed straight to the review's decision
+ * action, before any model saw it — is GONE, with the platform outcome lines it
+ * composed. The filing now happens through the card's OWN Comment control,
+ * operated by the conversation's assistant under the person's own credential,
+ * with the person's own words read out of the server-held grant
+ * (`src/lib/lifecycle/lent-action-mcp.ts`). So a question is answered and files
+ * nothing, and a request for changes lands word for word.
+ *
+ * THE EXCHANGE IS NOT LOST BY THE RE-READ, which is what let the refresh move.
+ * The ruling this window carried — "the EXCHANGE must stay visible" — was met
+ * before by refusing to re-resolve, because the outcome line lived only in this
+ * component's own state. Since W5b the exchange is the RUN's, stored server side
+ * per turn and read back on mount (cinatra#2933), so a turn that PRESSED the
+ * Comment control can settle the card and the reader's own words are still on
+ * screen afterwards. A turn that only answered presses nothing and moves
+ * nothing.
+ *
+ * The decision bar is untouched: this is not a fourth affordance.
  */
 export function ReviewGatePromptWindow({
-  submitAction,
   onGateMoved,
   storageKey,
   canComment,
   runId,
   boundCardRef,
 }: {
-  submitAction: SubmitReviewDecisionAction;
   /**
-   * The gate MOVED under the reviewer — it was already decided, or the run went
-   * on — and the surface has to go back to the server for the live answer. It is
-   * the only outcome that refreshes: a landed change request keeps its exchange
-   * on screen. Given by the card so the re-resolve reaches a transcript host as
-   * well, where `router.refresh()` has no server component to re-render.
+   * The turn PRESSED a control of this gate — it asked for changes in so many
+   * words and the assistant filed it — so the surface has to go back to the
+   * server for the live answer. A turn that only answered moves nothing. Given
+   * by the card so the re-resolve reaches a transcript host as well, where
+   * `router.refresh()` has no server component to re-render.
    */
   onGateMoved?: () => void;
   storageKey: string;
@@ -2018,24 +2125,6 @@ export function ReviewGatePromptWindow({
       ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
       : {}),
   });
-  // The PLATFORM's own line about what the filing did. It is not the
-  // assistant's answer and is not stored with the conversation: #2934 moves the
-  // filing itself onto the card's Comment control, where the outcome becomes
-  // part of the answer. Until then it is shown after the stored exchange so the
-  // reviewer still sees what happened to their request.
-  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
-  const [promptPending, setPromptPending] = useState(false);
-  // Monotonic id source for conversation entries — a ref (not state) so two
-  // appends in one handler can never collide on a stale counter (which would
-  // mint duplicate React keys).
-  const idRef = useRef(0);
-
-  const appendOutcome = (content: string) => {
-    // Offset well past the stored positions so a platform line can never take a
-    // stored entry's React key.
-    const id = 1_000_000 + ++idRef.current;
-    setOutcomeLines((prev) => [...prev, { id, role: "assistant", content }]);
-  };
 
   // NO CHANNEL AT ALL FOR A READER WHO MAY NOT COMMENT. The window is the one
   // road to requesting changes, so an anchor drawn with nothing inside it would
@@ -2045,27 +2134,11 @@ export function ReviewGatePromptWindow({
   if (!canComment) return null;
 
   const handleSubmit = async (prompt: string) => {
-    // THE ONE ROAD: what was typed goes to the run's conversation with the
-    // assistant. The direct comment-submit below is today's behaviour, kept
-    // until #2934 retires it together with the review page's typed road.
-    void runWindow.send(prompt);
-    setPromptPending(true);
-    let refresh = false;
-    try {
-      const outcome = await submitAction({ disposition: "comment", comment: prompt });
-      const { reply, refreshToLive } = describeOutcome(outcome);
-      appendOutcome(reply);
-      refresh = refreshToLive;
-    } catch {
-      appendOutcome("The change request could not be recorded — please try again.");
-    } finally {
-      setPromptPending(false);
-    }
-    // A landed changes-request RESOLVES the base gate, but the EXCHANGE (the typed
-    // request + the repair/lineage reply) must stay visible per the ruling — so we
-    // do NOT blank the surface to the resolved/blocked state here. Only an
-    // UNEXPECTED block (the gate moved under the reviewer) refreshes to live.
-    if (refresh) {
+    const effect = await runWindow.send(prompt);
+    // THE CARD RE-READS ITSELF. A turn that pressed Comment resolved the gate and
+    // sent the work back for repair, so the surface must show the state the
+    // server now holds. A turn that only answered moves nothing.
+    if (effect.acted) {
       if (onGateMoved) onGateMoved();
       else router.refresh();
     }
@@ -2075,9 +2148,7 @@ export function ReviewGatePromptWindow({
     // The conversational prompt window (cinatra#2063): the
     // typed change request IS how changes are requested — there is no dedicated
     // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set;
-    // `handleSubmit` routes the typed feedback through the Comment path, which on a
-    // fenced single-target lifecycle gate resolves as `changes_requested`.
+    // The anchor marks this mount for the run-embedded conformance closed set.
     <div
       data-conformance-id="review-prompt-window"
       data-action="request-changes -> changes-requested"
@@ -2085,13 +2156,13 @@ export function ReviewGatePromptWindow({
     >
       <HitlConversationPanel
         portalTarget={portalTarget}
-        // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-        // `app-artifact-review.html` §X): the mount names its surface and the
-        // window reads the drawing's own sentence for it.
+        // WHICH READING OF THE ONE WINDOW THIS IS (the ratified artifact-review
+        // drawing, §X): the mount names its surface and the window reads the
+        // drawing's own sentence for it.
         surface="review"
         visible={!!portalTarget}
-        conversation={[...runWindow.entries, ...outcomeLines]}
-        promptPending={promptPending || runWindow.pending}
+        conversation={runWindow.entries}
+        promptPending={runWindow.pending}
         storageKey={storageKey}
         onSubmit={handleSubmit}
       />
@@ -2099,42 +2170,85 @@ export function ReviewGatePromptWindow({
   );
 }
 
-/** Map the review submit outcome to a conversational reply + whether the surface
- * should refresh to the live gate. A landed changes-request keeps the EXCHANGE
- * visible (no refresh); only an unexpected block refreshes. The copy mirrors the
- * decision bar's changes-requested / annotated / blocked notices. */
-function describeOutcome(outcome: ReviewSubmitOutcome): { reply: string; refreshToLive: boolean } {
-  switch (outcome.kind) {
-    case "changes-requested":
-      return outcome.status === "requested"
-        ? {
-            reply:
-              "Changes requested. The reviewed work has been turned back for repair — a repair is now in flight.",
-            refreshToLive: false,
-          }
-        : {
-            reply:
-              "Changes requested. The reviewed work has been turned back — escalated because no automatic repair is available; the effect stays held.",
-            refreshToLive: false,
-          };
-    case "annotated":
-      return {
-        reply: "Comment recorded. The gate stays open — nothing has resumed.",
-        refreshToLive: false,
-      };
-    case "decided":
-      return {
-        reply: "Recorded. The gate is resolved.",
-        refreshToLive: false,
-      };
-    case "blocked":
-      return {
-        reply: "This review is no longer open — the gate was already decided or the run moved on.",
-        refreshToLive: true,
-      };
-    case "not-permitted":
-      return { reply: outcome.message, refreshToLive: false };
-    case "error":
-      return { reply: `${outcome.message} The request did not commit — you can retry.`, refreshToLive: false };
-  }
+/**
+ * THE DECIDED GATE KEEPS ITS EXCHANGE, READ-ONLY (cinatra#2934, CELL10).
+ *
+ * The drawing, `specs/app-artifact-review.html` §VI: "The reviewer's request
+ * and the returned revision stay in the run, in order". A typed request that
+ * settles the gate re-reads the card, the resolver answers `settled`, and the
+ * window above leaves with the pending reading — although the run's store still
+ * holds the exchange. So the settled reading draws that exchange here: the same
+ * run's entries, read the way the window reads them, in the same order and the
+ * same markup as the panel above the window's field, WITHOUT the field and
+ * WITHOUT the send control. It registers no composer binding and never sends,
+ * and it asks for no permission: nothing can be typed into a decided gate.
+ * It carries no `review-prompt-window` anchor, because it is not the window: a
+ * settled gate carries no window.
+ */
+export function ReviewGateSettledExchange({
+  runId,
+  boundCardRef,
+}: {
+  runId: string;
+  boundCardRef?: string | null;
+}): ReactElement | null {
+  const runWindow = useRunWindowConversation({
+    runId,
+    surface: "review",
+    ...(boundCardRef
+      ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
+      : {}),
+  });
+  // THE SETTLED EXCHANGE HOLDS ITS NEWEST TURN IN VIEW (cinatra#2934, §IX:
+  // "The panel scrolls at its own cap and holds itself at the bottom, so the
+  // newest turn is the one in view"). This is that panel's exchange drawn
+  // read-only, so it holds the same way: the capped area is brought to its end
+  // when it mounts with the stored exchange and whenever the newest turn
+  // changes, before paint. The reader's own scroll is no dependency: a
+  // re-render that adds nothing leaves the area where the reader put it.
+  // Declared before the empty-exchange return, so the hooks run in one order.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastEntry = runWindow.entries[runWindow.entries.length - 1];
+  const lastEntryId = lastEntry?.id;
+  const lastEntryContent = lastEntry?.content;
+  useLayoutEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [runWindow.entries.length, lastEntryId, lastEntryContent]);
+  if (runWindow.entries.length === 0) return null;
+  return (
+    <div data-review-settled-exchange="" className="px-5 pb-4 pt-6">
+      <div className="mx-auto max-w-3xl">
+        <div className="rounded-panel border border-line bg-surface p-3 shadow-sm">
+          <div ref={scrollRef} className="flex max-h-52 flex-col gap-2 overflow-y-auto">
+            {runWindow.entries.map((entry) => (
+              <div
+                key={entry.id}
+                className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                {entry.role === "user" ? (
+                  // The person's own line stays their own characters.
+                  <div
+                    data-run-window-entry="person"
+                    className="rounded-control px-3 py-2 text-sm max-w-[80%] whitespace-pre-wrap bg-primary text-primary-foreground"
+                  >
+                    {entry.content}
+                  </div>
+                ) : (
+                  // The assistant's line is drawn through the window's own
+                  // escaping renderer, exactly as the panel draws it.
+                  <div
+                    data-run-window-entry="assistant"
+                    className="rounded-control px-3 py-2 text-sm max-w-[80%] bg-surface-muted text-foreground [&>:first-child]:mt-0 [&>:last-child]:mb-0"
+                    dangerouslySetInnerHTML={{ __html: renderRunWindowMarkdown(entry.content) }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }

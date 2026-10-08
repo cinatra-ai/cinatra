@@ -15,6 +15,7 @@
  * fail if someone regresses the file to tiles or adds a live card fetch.
  */
 import { describe, it, expect } from "vitest";
+import { buildUnavailableAction } from "../agent-unavailable-action";
 import { readFileSync, existsSync } from "node:fs";
 import * as path from "node:path";
 
@@ -108,7 +109,7 @@ describe("NewAgentPage merged discovery table", () => {
   // and empty state copy matches that scope.
   it("ships exact PageHeader copy", () => {
     const source = readSource();
-    expect(source).toMatch(/title="Run agent"/);
+    expect(source).toMatch(/title="Agent run"/);
     expect(source).toMatch(
       /Run an agent with a human-in-the-loop step, one of its sub-agents, or any agent from a connected external A2A server\./,
     );
@@ -248,13 +249,15 @@ describe("NewAgentPage merged discovery table", () => {
 
   it("builds a truthful CTA for an INSTALLED agent that cannot run (cinatra#2605)", () => {
     const source = readSource();
-    expect(source).toMatch(/function buildUnavailableAction/);
+    expect(source).toMatch(/import\s+\{\s*buildUnavailableAction\s*\}\s+from\s+"\.\/agent-unavailable-action"/);
+    const policy = readFileSync(path.resolve(__dirname, "..", "agent-unavailable-action.ts"), "utf8");
+    expect(policy).toMatch(/function buildUnavailableAction/);
     // The one remaining unavailable verdict a LISTED row can carry: a missing
     // required dependency → a DETAILS destination, never an install promise the
     // target page cannot keep.
-    expect(source).toMatch(/state\s*!==\s*"missing-required-dependency"\)\s*return null/);
-    expect(source).toMatch(/ctaLabel: "View requirements"/);
-    expect(source).toMatch(/ctaAriaLabel/);
+    expect(policy).toMatch(/state\s*!==\s*"missing-required-dependency"\)\s*return null/);
+    expect(policy).toMatch(/ctaLabel: "View requirements"/);
+    expect(policy).toMatch(/ctaAriaLabel/);
   });
 
   it("the card branches its primary action on the unavailable verdict (cinatra#2605)", () => {
@@ -284,4 +287,23 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).not.toMatch(/className="[^"]*\btext-gray-/);
     expect(source).not.toMatch(/className="[^"]*\bbg-slate-/);
   });
+});
+
+
+describe("the shared global and scope unavailable action", () => {
+  for (const displayName of [null, "", "   ", "Named Skill"]) {
+    it(`uses a nonblank product name or package fallback (${JSON.stringify(displayName)})`, () => {
+      const name = displayName?.trim() ? displayName : "@acme/skill";
+      const availability = { state: "missing-required-dependency" as const, missing: [{ packageName: "@acme/skill", displayName, kind: "skill", reason: "not-installed" as const }] };
+      expect(buildUnavailableAction("List Curator", availability, "/configuration/marketplace/acme/curator")).toEqual({
+        reason: `This agent cannot run: ${name} is not installed.`,
+        ctaLabel: "View requirements", ctaHref: "/configuration/marketplace/acme/curator",
+        ctaAriaLabel: `List Curator cannot run — ${name} not installed. View requirements`,
+      });
+      expect(buildUnavailableAction("List Curator", availability, null)).toEqual({
+        reason: `This agent cannot run: ${name} is not installed.`, ctaLabel: null, ctaHref: null,
+        ctaAriaLabel: `List Curator cannot run — ${name} not installed.`,
+      });
+    });
+  }
 });

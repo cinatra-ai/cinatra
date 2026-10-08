@@ -86,3 +86,46 @@ describe("0.16 — the compiler flags a step that saves an undeclared type", () 
   });
 });
 
+
+describe("0.16 — the definer comes from the registration when a resolver names it (cinatra#3597)", () => {
+  /** A minimal OAS with ONE passthrough `objects_save` node saving `typeId`. */
+  function oasSaving(typeId: string): Record<string, unknown> {
+    return {
+      component_type: "Flow",
+      id: "flow-1",
+      start_node: { $component_ref: "start" },
+      $referenced_components: {
+        start: { component_type: "StartNode", id: "start", inputs: [] },
+        save: {
+          component_type: "ApiNode",
+          id: "save",
+          url: "/api/agents/passthrough",
+          data: { tool: "objects_save", typeHint: typeId },
+          inputs: [],
+        },
+        end: { component_type: "EndNode", id: "end", outputs: [] },
+      },
+      data_flow_connections: [],
+    };
+  }
+
+  it("passes a save whose OWNER the resolver names, though the id's namespace does not match", () => {
+    expect(
+      scanOasForUndeclaredTypeSaves(oasSaving("@cinatra-ai/linkedin:post-draft"), {
+        produces: ["@cinatra-ai/linkedin-artifacts"],
+        dependsOn: [],
+        resolveTypeOwner: (typeId) =>
+          typeId === "@cinatra-ai/linkedin:post-draft" ? "@cinatra-ai/linkedin-artifacts" : null,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps today's id-namespace reading when no resolver is supplied", () => {
+    const findings = scanOasForUndeclaredTypeSaves(oasSaving("@cinatra-ai/linkedin:post-draft"), {
+      produces: ["@cinatra-ai/linkedin-artifacts"],
+      dependsOn: [],
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("@cinatra-ai/linkedin:post-draft");
+  });
+});

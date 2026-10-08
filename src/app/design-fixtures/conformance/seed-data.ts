@@ -32,10 +32,14 @@
 //   and distinct runs never share rows.
 // ---------------------------------------------------------------------------
 
+import { designPartition } from "@/lib/test-support/design-partition";
+
 /** Allowed run-id shape (also enforced server-side by the seed route). */
 export const CONFORMANCE_RUN_ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export function conformanceRunId(): string {
+  const partition = designPartition();
+  if (partition) return partition.runId;
   const raw = (process.env.CINATRA_CONFORMANCE_RUN_ID ?? "local").toLowerCase();
   return CONFORMANCE_RUN_ID_RE.test(raw) ? raw : "local";
 }

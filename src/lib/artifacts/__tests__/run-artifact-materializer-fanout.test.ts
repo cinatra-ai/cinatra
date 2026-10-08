@@ -284,3 +284,211 @@ describe("materializeRunArtifacts — fan-out over plain-text members", () => {
     expect(createSemanticArtifactMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The MEMBER-FIELD fan-out (cinatra#3732): "the fan-out accepts a list of
+// objects as members, files each member as one artifact of the declared type
+// with the member as its body, and takes the title from a declared field of the
+// member (the binding names the field); an empty list is a normal result for a
+// feed and must not fail the materialization". A feed lister's episodes are the
+// fixture: one JSON object per episode, each filed unchanged.
+// ---------------------------------------------------------------------------
+
+const PODCAST_EXT = "@cinatra-ai/podcast-artifacts";
+
+const EPISODES_BINDING = {
+  extension: PODCAST_EXT,
+  contentFrom: "episodes",
+  declaredMime: "application/json",
+  fanOut: { mode: "member", titleFrom: "member-field", titleField: "title" },
+};
+
+function episodesPackageFixture() {
+  return {
+    manifest: {
+      name: "@test/idea-agent",
+      cinatra: { produces: [{ extension: PODCAST_EXT }] },
+    },
+    payload: {
+      component_type: "Flow",
+      $referenced_components: {
+        endNode: {
+          component_type: "EndNode",
+          id: "endNode",
+          name: "End",
+          outputs: [
+            {
+              title: "episodes",
+              type: "array",
+              json_schema: {
+                items: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    audioUrl: { type: "string" },
+                    publishedAt: { type: "string" },
+                  },
+                },
+              },
+              default: [],
+              cinatra: { artifact: EPISODES_BINDING },
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+const EPISODE_ONE = {
+  title: "Episode 12: Shipping on a Friday",
+  audioUrl: "https://example.test/feed/12.mp3",
+  publishedAt: "2026-09-01T08:00:00Z",
+};
+const EPISODE_TWO = {
+  title: "Episode 13: The quiet release",
+  audioUrl: "https://example.test/feed/13.mp3",
+  publishedAt: "2026-09-08T08:00:00Z",
+};
+
+describe("materializeRunArtifacts — member-field fan-out over object members", () => {
+  beforeEach(() => {
+    getAgentPackageMock.mockResolvedValue(episodesPackageFixture());
+    resolveBoundArtifactTargetMock.mockResolvedValue({
+      ok: true,
+      target: {
+        objectTypeId: "@cinatra-ai/podcast-artifacts:artifact",
+        acceptedFileMimeTypes: ["application/json"],
+      },
+    });
+  });
+
+  it("files each object member as ONE artifact whose body is the member itself and whose title is the named field", async () => {
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: { episodes: [EPISODE_ONE, EPISODE_TWO] },
+    });
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.every((o) => o.ok)).toBe(true);
+    expect(outcomes.map((o) => o.outputId)).toEqual(["episodes[0]", "episodes[1]"]);
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(2);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      objectType: "@cinatra-ai/podcast-artifacts:artifact",
+      title: "Episode 12: Shipping on a Friday",
+      declaredMime: "application/json",
+    });
+    expect(createSemanticArtifactMock.mock.calls[1][0]).toMatchObject({
+      objectType: "@cinatra-ai/podcast-artifacts:artifact",
+      title: "Episode 13: The quiet release",
+      declaredMime: "application/json",
+    });
+    // The member's OWN JSON is the body — proven through the ledger's content
+    // hash over exactly the bytes the write core streams — and each member
+    // keeps its own ledger identity.
+    const claims = claimMaterializationMock.mock.calls.map(
+      (c: unknown[]) => c[0] as { contentHash: string; outputId: string },
+    );
+    expect(claims.map((c) => c.contentHash)).toEqual([
+      sha256(JSON.stringify(EPISODE_ONE)),
+      sha256(JSON.stringify(EPISODE_TWO)),
+    ]);
+    expect(claims.map((c) => c.outputId)).toEqual(["episodes[0]", "episodes[1]"]);
+  });
+
+  it("fails a member that is not a plain object ALONE, and files its siblings", async () => {
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: {
+        episodes: [EPISODE_ONE, "Episode 99 as plain text", null, [EPISODE_TWO], EPISODE_TWO],
+      },
+    });
+    expect(outcomes.map((o) => o.outputId)).toEqual([
+      "episodes[0]",
+      "episodes[1]",
+      "episodes[2]",
+      "episodes[3]",
+      "episodes[4]",
+    ]);
+    expect(outcomes.map((o) => o.ok)).toEqual([true, false, false, false, true]);
+    for (const failed of [outcomes[1]!, outcomes[2]!, outcomes[3]!]) {
+      expect(failed.ok === false && failed.error).toContain("not a plain object");
+    }
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails a member that cannot be serialized as JSON ALONE, and files its sibling", async () => {
+    // "files each member as one artifact of the declared type with the member
+    // as its body": a member whose body cannot be written fails under its own
+    // identity and never takes a healthy sibling down with it.
+    const circular: Record<string, unknown> = { title: "Episode 14: The loop" };
+    circular.self = circular;
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: { episodes: [circular, EPISODE_TWO] },
+    });
+    expect(outcomes.map((o) => o.outputId)).toEqual(["episodes[0]", "episodes[1]"]);
+    expect(outcomes.map((o) => o.ok)).toEqual([false, true]);
+    expect(outcomes[0]!.ok === false && outcomes[0]!.error).toContain("could not be serialized as JSON");
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      title: "Episode 13: The quiet release",
+    });
+  });
+
+  it("fails a member whose named title field is missing, empty or not a string ALONE — a title is never invented", async () => {
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: {
+        episodes: [
+          { audioUrl: "https://example.test/feed/1.mp3" },
+          { ...EPISODE_ONE, title: "   " },
+          { ...EPISODE_ONE, title: 12 },
+          EPISODE_TWO,
+        ],
+      },
+    });
+    expect(outcomes.map((o) => o.ok)).toEqual([false, false, false, true]);
+    for (const failed of outcomes.slice(0, 3)) {
+      expect(failed.ok === false && failed.error).toContain('title field "title"');
+    }
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
+    expect(createSemanticArtifactMock.mock.calls[0][0]).toMatchObject({
+      title: "Episode 13: The quiet release",
+    });
+  });
+
+  it("an EMPTY list is a normal result for a feed: nothing is written and no outcome fails", async () => {
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: { episodes: [] },
+    });
+    expect(outcomes.filter((o) => !o.ok)).toEqual([]);
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(claimMaterializationMock).not.toHaveBeenCalled();
+  });
+
+  it("the member cap refuses the whole object list — nothing is written", async () => {
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: {
+        episodes: Array.from({ length: 51 }, (_v, i) => ({ ...EPISODE_ONE, title: `Episode ${i}` })),
+      },
+    });
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.ok === false && outcomes[0]!.error).toContain("50-member cap");
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+  });
+
+  it("the list byte cap counts the serialized object members and refuses the whole list — nothing is written", async () => {
+    const big = { ...EPISODE_ONE, notes: "a".repeat(6 * 1024 * 1024) };
+    const outcomes = await materializeRunArtifacts({
+      ...BASE_INPUT,
+      endNodeOutputs: { episodes: [big, big] },
+    });
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.ok).toBe(false);
+    expect(outcomes[0]!.ok === false && outcomes[0]!.error).toContain("byte list cap");
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+  });
+});

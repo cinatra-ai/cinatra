@@ -88,6 +88,7 @@ export function UploadInstallScopePanel({
   return (
     <div
       data-testid="upload-install-scope"
+      data-conformance-id="upload-resolved-install-panel"
       className="mt-[-6px] flex flex-col gap-2.5 border-t border-line pt-3.5"
     >
       {header}

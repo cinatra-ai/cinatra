@@ -13,10 +13,14 @@ import {
   InstallAccessTargetSchema,
   WORKSPACE_ANCHOR_ROW_OWNERSHIP,
   accessTargetToInstallPolicy,
+  accessTargetToInstallPolicyForKind,
   accessTargetToRowOwnership,
+  installDefaultIsOwnerOnly,
   isInstallAccessTargetKind,
   resolveInstallAccessTargetContract,
+  OWNER_DEFAULT_INSTALL_KINDS,
 } from "../install-access-target";
+import { policyFieldAdmitsScopeVantage } from "../access-scope-vantage";
 import {
   DEFAULT_EXTENSION_ACCESS_POLICY,
   evaluateExtensionAccess,
@@ -78,6 +82,107 @@ describe("accessTargetToInstallPolicy", () => {
       runExecuteVisibility: ["admin"],
       allowRunSharing: false,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3785: the KIND-AWARE mapping. The kind-less helper above answers
+// `undefined` for the organization target so the kind's install default
+// applies. For a kind whose default is OWNER-ONLY that is a reach no
+// organization vantage admits (`policyFieldAdmitsScopeVantage` refuses the
+// `owner` token everywhere but a personal vantage), so an agent installed at
+// the organization target never reaches the organization's own tab. This helper
+// writes the explicit `org:<id>` token for exactly those kinds, and leaves every
+// other kind's established default alone.
+// ---------------------------------------------------------------------------
+describe("accessTargetToInstallPolicyForKind", () => {
+  const ORG_ID = "org-1";
+
+  it("organization target + an owner-default kind → org:<id> on all three tiers, sharing off", () => {
+    for (const kind of OWNER_DEFAULT_INSTALL_KINDS) {
+      expect(
+        accessTargetToInstallPolicyForKind({ level: "organization", id: ORG_ID }, kind),
+      ).toEqual({
+        runListVisibility: [`org:${ORG_ID}`],
+        runDataVisibility: [`org:${ORG_ID}`],
+        runExecuteVisibility: [`org:${ORG_ID}`],
+        allowRunSharing: false,
+      });
+    }
+  });
+
+  it("organization target + connector / artifact / workflow → undefined (their defaults are untouched)", () => {
+    for (const kind of ["connector", "artifact", "workflow"] as const) {
+      expect(
+        accessTargetToInstallPolicyForKind({ level: "organization", id: ORG_ID }, kind),
+      ).toBeUndefined();
+    }
+  });
+
+  it("an unrecognized kind keeps the deferred default (fail closed, never a wider reach)", () => {
+    expect(
+      accessTargetToInstallPolicyForKind({ level: "organization", id: ORG_ID }, "no-such-kind"),
+    ).toBeUndefined();
+  });
+
+  it("every OTHER level returns exactly what the kind-less helper returns", () => {
+    const targets = [
+      { level: "team" as const, id: TEAM_ID },
+      { level: "project" as const, id: PROJECT_ID },
+      { level: "workspace" as const, id: ORG_ID },
+      { level: "admin" as const, id: ORG_ID },
+    ];
+    for (const target of targets) {
+      for (const kind of [...OWNER_DEFAULT_INSTALL_KINDS, "connector", "artifact", "workflow"]) {
+        expect(accessTargetToInstallPolicyForKind(target, kind)).toEqual(
+          accessTargetToInstallPolicy(target),
+        );
+      }
+    }
+  });
+
+  it("installDefaultIsOwnerOnly names the owner-default kinds and nothing else", () => {
+    for (const kind of OWNER_DEFAULT_INSTALL_KINDS) {
+      expect(installDefaultIsOwnerOnly(kind)).toBe(true);
+    }
+    // "agent" is the CANONICAL ROW kind, not a permissions resource kind, so it
+    // has no install default of its own, so it is not owner-only either.
+    for (const kind of ["connector", "artifact", "workflow", "agent", ""]) {
+      expect(installDefaultIsOwnerOnly(kind)).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3785: the written `org:<id>` policy is ENFORCED where the bug was
+// observed: the scope-vantage projection the organization's own tab reads. The
+// owner-only default the organization target used to defer to is included so
+// the contrast is explicit rather than implied.
+// ---------------------------------------------------------------------------
+describe("the organization target's policy on an organization vantage", () => {
+  const ORG_ID = "org-1";
+  const OTHER_ORG = "org-2";
+  const orgVantage = (orgId: string) =>
+    ({ kind: "organization", orgId, scopeId: orgId }) as const;
+
+  it("admits the organization's own vantage and refuses another organization's", () => {
+    const policy = accessTargetToInstallPolicyForKind(
+      { level: "organization", id: ORG_ID },
+      "agent_template",
+    )!;
+    expect(policy).toBeDefined();
+    for (const field of [
+      policy.runListVisibility,
+      policy.runDataVisibility,
+      policy.runExecuteVisibility,
+    ]) {
+      expect(policyFieldAdmitsScopeVantage(field, orgVantage(ORG_ID))).toBe(true);
+      expect(policyFieldAdmitsScopeVantage(field, orgVantage(OTHER_ORG))).toBe(false);
+    }
+  });
+
+  it("the owner-only default it used to defer to admits NO organization vantage", () => {
+    expect(policyFieldAdmitsScopeVantage(["owner"], orgVantage(ORG_ID))).toBe(false);
   });
 });
 

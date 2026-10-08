@@ -40,6 +40,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { buildRunStepRail } from "../run-step-rail";
 import { Client } from "pg";
 import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 
@@ -212,28 +213,38 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // PIN — the emitting gate.
   // -------------------------------------------------------------------------
-  it("PIN: emits a pending gate with the canonical frozen target set", async () => {
+  it("PIN: emits a pending singleton gate and deduplicates identical pins", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    const a1 = `art-${randomUUID()}`;
     const a2 = `art-${randomUUID()}`;
-    // Deliberately UNSORTED + duplicated on input — emit canonicalizes + dedupes.
+    // Repeated identical pins describe one artifact revision, not another target.
     const emit = await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,
       reviewTaskId,
       targets: [
         { artifactId: a2, representationRevisionId: "rev-2" },
-        { artifactId: a1, representationRevisionId: "rev-1" },
         { artifactId: a2, representationRevisionId: "rev-2" },
       ],
     });
     expect(emit.idempotent).toBe(false);
-    expect(emit.targets).toHaveLength(2); // deduped
+    expect(emit.targets).toEqual([{ artifactId: a2, representationRevisionId: "rev-2" }]);
 
     const pinned = await gateStore.readGatePinnedTargets(runId, reviewTaskId);
     expect(pinned.status).toBe("pending");
     const state = await gateStore.readReviewGateState(runId, reviewTaskId);
     expect(state.status).toBe("pending");
+  });
+
+  it("PIN: refuses a new combined gate without storing a partial singleton", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    await expect(gateStore.emitArtifactReviewGate({
+      runId, orgId: ORG, reviewTaskId,
+      targets: [
+        { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" },
+        { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" },
+      ],
+    })).rejects.toMatchObject({ code: "invalid-targets" });
+    expect(await gateStore.readReviewGate(runId, reviewTaskId)).toBeNull();
   });
 
   it("PIN: re-emit of the SAME set is idempotent; a DIFFERENT set fails closed", async () => {
@@ -273,7 +284,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // DECIDE → CAS → AUDIT → RESUME-INTENT (the full path, real commit).
   // -------------------------------------------------------------------------
-  it("APPROVE: resolves the gate (CAS), writes audit rows with provenance, and enqueues ONE approve resume intent", async () => {
+  it("LEGACY APPROVE: a grandfathered combined gate settles as minted with both audits and one resume intent", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const aBuild = `art-${randomUUID()}`;
     const aRuntime = `art-${randomUUID()}`;
@@ -281,7 +292,18 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       { artifactId: aBuild, representationRevisionId: "rev-b" },
       { artifactId: aRuntime, representationRevisionId: "rev-r" },
     ];
+    // Historical gates remain valid decisions over their original whole set.
+    // Seed that already-minted row, rather than creating a new combined review.
+    const historicalGateId = randomUUID();
+    await client.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+         (id, run_id, org_id, review_task_id, status, pinned_targets)
+       VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`,
+      [historicalGateId, runId, ORG, reviewTaskId, JSON.stringify(targets)],
+    );
     const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+    expect(emit.idempotent).toBe(true);
+    expect(emit.gateId).toBe(historicalGateId);
 
     const ports = makeDecidePorts({
       provenance: {
@@ -731,6 +753,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // SLOT — what the run card draws where the review screen goes (cinatra#2997).
   //
+  // AND WHETHER THE RUN IS WAITING ON IT (cinatra#3046). None of the runs below
+  // has an `agent_runs` row at all, so none of them is parked and every reading
+  // here is the unparked one — which is the point: the third fact is a fact about
+  // the RUN, and it is false for a run that is not held by a review.
+  //
   // The run card is a placeholder for the review screen while the agent works
   // and becomes that screen when the work opens one, so it asks the run's own
   // rows: which gate is this run's, and might one still be opened for what it
@@ -742,6 +769,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -761,6 +789,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: true,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -776,6 +805,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
 
     // A RESOLVED gate is still the answer. The reader who decided in place must
@@ -795,6 +825,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -836,37 +867,52 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: true,
+      parkedOnProducedReview: false,
     });
   });
 
-  it("SLOT: the NEWEST gate is the run's answer when it has more than one", async () => {
+  it("SLOT: detail and rail advance in raise order through three actual decisions", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
-    });
-    // Age the first one so "newest" is decidable without depending on clock
-    // resolution between two inserts.
+    const tasks = [reviewTaskId, `${reviewTaskId}-second`, `${reviewTaskId}-third`];
+    const targets = tasks.map(task => [{ artifactId: `art-${task}`, representationRevisionId: "rev-1" }]);
+    for (let i = 0; i < tasks.length; i++) {
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: tasks[i], targets: targets[i] });
+      await client!.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+            SET created_at = timestamptz '2026-10-01 00:00:00+00' + $3 * interval '1 second'
+          WHERE run_id = $1 AND review_task_id = $2`,
+        [runId, tasks[i], i],
+      );
+    }
+    for (let i = 0; i < tasks.length; i++) {
+      const gates = await gateStore.listReviewGatesForRun(runId);
+      const rail = buildRunStepRail({ gates: gates.map(g => ({ gateId: g.id, reviewTaskId: g.reviewTaskId,
+        status: g.status, disposition: g.disposition, createdAt: g.createdAt })) });
+      expect(rail.entries.find(entry => entry.ordinal === rail.activeOrdinal)?.gate?.reviewTaskId).toBe(tasks[i]);
+      await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+        reviewTaskId: tasks[i], awaiting: false, parkedOnProducedReview: false,
+      });
+      const decision = await submitReviewDecisionCore(
+        mkDecision({ runId, reviewTaskId: tasks[i], disposition: "approve", targets: targets[i] }), makeDecidePorts(),
+      );
+      expect(decision.ok).toBe(true);
+    }
+    // All decided: retain the latest settled review rather than a completion flash.
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe(tasks[2]);
+  });
+
+  it("SLOT: simultaneous pending gates use the rail's task-key tie order", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const tasks = [`${reviewTaskId}-Z`, `${reviewTaskId}-a`, `${reviewTaskId}-A`, `${reviewTaskId}_2`, `${reviewTaskId}#2`];
+    for (const task of tasks) {
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: task,
+        targets: [{ artifactId: `art-${task}`, representationRevisionId: "rev-1" }] });
+    }
     await client!.query(
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
-          SET created_at = now() - interval '1 hour'
-        WHERE run_id = $1 AND review_task_id = $2`,
-      [runId, reviewTaskId],
+          SET created_at = timestamptz '2026-10-01 00:00:00+00' WHERE run_id = $1`, [runId],
     );
-    const second = `${reviewTaskId}-second`;
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId: second,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" }],
-    });
-
-    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
-      reviewTaskId: second,
-      awaiting: false,
-    });
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort((a, b) => a.localeCompare(b))[0]);
   });
 
   it("SLOT: another run's gate is never this run's answer", async () => {
@@ -882,6 +928,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(mine.runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 });

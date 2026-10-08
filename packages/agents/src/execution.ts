@@ -85,8 +85,8 @@ const isScopeDenial = (err: unknown): err is { reason: string } =>
 // then rides ONLY the boot graph, never a route). The seam's `emit` returns a
 // RESULT (never throws the store's typed error) so this file needs no store type
 // either. An unbound slot (boot hasn't run in this bundle — near-impossible)
-// makes a marked gate FAIL CLOSED to the review surface (never the legacy gate,
-// which could dual-path an already-pinned gate); see the branch below.
+// now fails through the existing execution error road before any mint or new
+// decision-path interrupt (cinatra#3944, App163); see the branch below.
 type ArtifactReviewGateSeam = {
   // cinatra#2929: the one review core, reached the same way the gate store is —
   // through the boot-bound slot, so this file gains no import edge for it.
@@ -113,10 +113,16 @@ type ArtifactReviewGateSeam = {
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
   >;
+  emitFamily?: ArtifactReviewGateSeam["emit"];
   readGate(
     runId: string,
     reviewTaskId: string,
-  ): Promise<{ orgId: string; status: string } | null>;
+  ): Promise<{ orgId: string; status: string; targets?: unknown } | null>;
+  /** cinatra#3035: every gate this run owns, so a per-artifact review can be
+   *  routed to the first artifact still waiting to be read. Older bundles may
+   *  lack this method; calling that unavailable inventory fails before minting
+   *  through the existing execution error road, rather than assuming absence. */
+  listGates?(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
 };
 function resolveArtifactReviewGateSeam(): ArtifactReviewGateSeam | null {
   return (
@@ -496,7 +502,7 @@ import {
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
-import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask } from "@cinatra-ai/a2a";
+import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, rememberWayflowGateNodeClaim } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
 // host-side caller injects the live `email-send` providers so sender-alias
@@ -512,6 +518,13 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import {
+  inventoryReviewTargets,
+  nextUnresolvedLeg,
+  normalizeReviewTargets,
+  planPerArtifactReviewGates,
+  resolveDeclaredReviewTargets,
+} from "@/lib/artifacts/artifact-review-target";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
 function enrichmentContextFor(userId: string | null) {
@@ -669,6 +682,72 @@ export function stripCinatraEndNodeOutputMessages(
   });
 }
 
+// ---------------------------------------------------------------------------
+// The step that paused a run (cinatra#3745).
+//
+// When a run pauses for a review, the WayFlow loader signs the id of the
+// pausing step (`{ node, attestation: "g1:<hex>" }`, over the context id, the
+// gate task id and the node id, with the runtime's dedicated key) and puts it
+// on the metadata of the last new agent message under this key. The interrupt
+// handler records it beside the gate's task id through the a2a gate store, as
+// signed; a reader verifies it with the key before it relies on the node.
+// ---------------------------------------------------------------------------
+
+export const CINATRA_GATE_NODE_METADATA_KEY = "cinatra_gate_node";
+
+type GateNodeHistoryMessage = HistoryMessage & { metadata?: unknown };
+
+/**
+ * Read the pause claim from the LAST agent message of `history`. Answers
+ * `{ node, attestation }` (both non-empty strings) or null for any other
+ * shape, including a claim on an earlier message.
+ */
+export function extractCinatraGateNodeClaim(
+  history: ReadonlyArray<GateNodeHistoryMessage> | undefined,
+): { node: string; attestation: string } | null {
+  if (!history || history.length === 0) return null;
+  const lastAgent = history
+    .slice()
+    .reverse()
+    .find((m) => m?.role === "agent" || m?.role === "assistant");
+  const metadata = lastAgent?.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const claim = (metadata as Record<string, unknown>)[CINATRA_GATE_NODE_METADATA_KEY];
+  if (!claim || typeof claim !== "object" || Array.isArray(claim)) return null;
+  const { node, attestation } = claim as { node?: unknown; attestation?: unknown };
+  if (typeof node !== "string" || node.length === 0) return null;
+  if (typeof attestation !== "string" || attestation.length === 0) return null;
+  return { node, attestation };
+}
+
+/**
+ * Return `history` with the pause claim removed from every message's metadata;
+ * every message and its other metadata stay. A message without the claim is
+ * returned as the same object. Applied before the run's step history is stored.
+ */
+export function stripCinatraGateNodeClaims<T extends GateNodeHistoryMessage>(
+  history: ReadonlyArray<T> | undefined,
+): ReadonlyArray<T> | undefined {
+  if (!history) return history;
+  return history.map((message) => {
+    const metadata = message?.metadata;
+    if (
+      !metadata ||
+      typeof metadata !== "object" ||
+      Array.isArray(metadata) ||
+      !(CINATRA_GATE_NODE_METADATA_KEY in metadata)
+    ) {
+      return message;
+    }
+    const rest = { ...(metadata as Record<string, unknown>) };
+    delete rest[CINATRA_GATE_NODE_METADATA_KEY];
+    const copy = { ...message } as T & { metadata?: unknown };
+    if (Object.keys(rest).length > 0) copy.metadata = rest;
+    else delete copy.metadata;
+    return copy;
+  });
+}
+
 /** Upper bound on the `agent_runs.error` message this module composes for a
  *  materialization failure — enough for every failing output's reason on a
  *  realistic binding set, short enough that a pathological error string can
@@ -776,6 +855,667 @@ const EXTERNAL_A2A_SUCCESS_STATE = "completed";
  * Exported for the honesty suite; the ONLY production call site is the external
  * dispatch branch in `runAgentBuilderExecutionJobInner`.
  */
+// ---------------------------------------------------------------------------
+// cinatra#3007 — THE REVIEW MOMENT COMES BEFORE THE TERMINAL STATUS.
+//
+// The artifacts a run produces are written mid-flow, and each write splices a
+// durable produced-event row into its own transaction. Whether one of those
+// outputs opens a review is decided by the orchestration core, which used to be
+// reached only by a recurring drain — so the gate was minted seconds AFTER the
+// terminal write, onto a run that had already finished and has no legal edge
+// back. The decided reading said the run had been released to continue when
+// there was nothing left to release.
+//
+// So the decision is taken BEFORE every terminal edge this file owns, through
+// the one seam below: the run's own production is drained inline (the same one
+// core, never a second copy of it), and if a review opens, the run parks in
+// `pending_approval` carrying the terminal write it is withholding.
+// `releaseHeldRun` performs that write when the decision lands. A run whose
+// output opens no review is untouched and takes its terminal edge immediately,
+// exactly as before.
+//
+// The seam is a DYNAMIC import for the same reason the materializer is: this
+// file sits in the locked dev-perf routes' reachable graph, and the hold module
+// reaches the review store.
+// ---------------------------------------------------------------------------
+
+/**
+ * The terminal write being withheld, carried STRUCTURALLY.
+ *
+ * Declared here rather than imported so this file adds no static edge to the
+ * hold module — the same duplication precedent the hold module itself keeps for
+ * `WithheldDerivationOutbox`. The value is handed over verbatim.
+ */
+type WithheldTerminalWrite = {
+  status: "completed" | "failed";
+  error?: string;
+  derivationOutbox?: {
+    orgId: string;
+    templateId: string;
+    packageVersion: string | null;
+    createdBy: string | null;
+    content: string;
+    contentIsJson: boolean;
+    contentHash: string;
+  };
+};
+
+/**
+ * The produced-review hold could not be recorded ANYWHERE — not as a park, not
+ * as anything else — so no later pass can see that this run still owes a review.
+ *
+ * Thrown rather than swallowed: the alternative is an attempt that reports
+ * success over a `running` row nothing will converge, which is the shape of the
+ * defect this fix exists to remove. The withheld write is put on its own delayed
+ * delivery before the throw, so the run still converges; the throw is what keeps
+ * the failed attempt visible instead of silently green.
+ */
+export const PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS = 15 * 1000;
+
+/**
+ * How many times a run may re-deliver on an unrecordable hold before the attempt
+ * fails for good. BOUNDED for the same reason the scope-recheck park is: a write
+ * fault is either a blip that clears in seconds, or permanent — and a permanent
+ * one must surface as a failed job with an operator signal rather than a run that
+ * re-delays forever. The run is NEVER landed terminal at the cap: a terminal
+ * write over an unproven review is the defect itself.
+ */
+export const MAX_PRODUCED_REVIEW_HOLD_PARKS = 5;
+
+/**
+ * How large the carried terminal payload may be before the re-delivery drops it.
+ *
+ * The park write failing means the run's OWN row never received the payload
+ * either, so the re-delivered attempt is the only thing that still has it — it
+ * has to travel on the job. But job data is a queue record, not a place to put
+ * an unbounded run output, so an oversized payload is left behind and the
+ * recovery lands the run with what its row already holds. Bounded loss on a rare
+ * write fault, against an unbounded queue record on every one.
+ *
+ * Measured on the SERIALIZED record in UTF-8 bytes, the unit the queue stores it
+ * in — not in string length, which counts UTF-16 code units and undercounts a
+ * multibyte payload by up to two thirds. The reduced record is bounded on its
+ * own too: an error text that alone exceeds the cap is cut and marked, so what
+ * the re-delivery carries is under the cap on every branch.
+ */
+export const PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES = 256_000;
+
+/** The terminal write still owed, as a re-delivered attempt carries it. */
+export type ProducedReviewRecovery = {
+  withheld: WithheldTerminalWrite;
+  /** The terminal step-results payload, when it fits (see the cap above). */
+  stepResults?: unknown[];
+};
+
+export class ProducedReviewHoldUnpersistedError extends Error {
+  readonly runId: string;
+  readonly delayMs: number;
+  /** Carried so the re-delivered attempt can finish the run without re-executing
+   *  it: the same verdict, payload and derivation capture the failed attempt was
+   *  withholding. */
+  readonly recovery: ProducedReviewRecovery;
+  /** Whether the recovery was handed to its durable delivery before this was
+   *  raised. `false` means the queue could not take it either, so nothing but an
+   *  operator can finish the run — which is why it is logged as an error there
+   *  and reported here rather than left implicit. */
+  readonly delivered: boolean;
+  /** True when the chain reached its cap, so NOTHING should re-deliver it: the
+   *  cap is the operator signal, and re-entering the road past it would loop. */
+  readonly capped: boolean;
+  /** The chain this raise belongs to, and the ordinal its delivery carries — so
+   *  a holder of an execution job can enter the SAME road in place, with the
+   *  same job data, when the producer connection could not queue it. */
+  readonly chain: string;
+  readonly nextPark: number;
+  constructor(args: {
+    runId: string;
+    recovery: ProducedReviewRecovery;
+    delivered?: boolean;
+    capped?: boolean;
+    chain?: string;
+    nextPark?: number;
+    delayMs?: number;
+  }) {
+    const delayMs = args.delayMs ?? PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS;
+    super(
+      `run ${args.runId}: the produced-output review hold could not be recorded — ` +
+        `the run keeps its non-terminal status and ` +
+        (args.delivered
+          ? `the terminal write it still owes is queued for delivery in ${delayMs}ms`
+          : `the terminal write it still owes could NOT be queued — it needs an operator`),
+    );
+    this.name = "ProducedReviewHoldUnpersistedError";
+    this.runId = args.runId;
+    this.delayMs = delayMs;
+    this.recovery = args.recovery;
+    this.delivered = args.delivered ?? false;
+    this.capped = args.capped ?? false;
+    this.chain = args.chain ?? "";
+    this.nextPark = args.nextPark ?? 1;
+  }
+}
+
+/**
+ * Ask the review question before a terminal write. `true` ⇒ the caller must
+ * write NO terminal status and announce NO terminal event: the run is waiting,
+ * and a run that is waiting has not finished.
+ *
+ * FAIL-CLOSED on a broken seam: `holdRunForProducedReview` is total by contract,
+ * so a throw here means the seam ITSELF is broken, and a broken seam cannot
+ * prove this run owes no review. Writing a terminal status on that is precisely
+ * the defect, so the run keeps its non-terminal status.
+ *
+ * @throws {ProducedReviewHoldUnpersistedError} when the hold is held but nothing
+ *   durable records it.
+ */
+async function producedReviewHoldsRun(args: {
+  runId: string;
+  orgId: string;
+  fromStatus: AgentRunStatus;
+  stepResults: readonly unknown[];
+  withheld: WithheldTerminalWrite;
+  authority: OrgWriteAuthority | undefined;
+  /** Which terminal edge is asking — log context only. */
+  where: string;
+  /** How many recovery deliveries this run's withheld write has already taken.
+   *  Only a recovery leg carries one; a first raise leaves it at zero. */
+  holdPark?: number;
+  /** Which recovery chain this raise belongs to. Only a recovery leg carries
+   *  one; a first raise mints a new chain. */
+  holdChain?: string;
+}): Promise<boolean> {
+  const { runId, where } = args;
+  let outcome: { held: boolean; reason: string };
+  try {
+    const { holdRunForProducedReview } = await import("./run-produced-review-hold");
+    outcome = await holdRunForProducedReview(
+      {
+        runId,
+        orgId: args.orgId,
+        fromStatus: args.fromStatus,
+        stepResults: args.stepResults,
+        withheld: args.withheld,
+      },
+      args.authority,
+    );
+  } catch (err) {
+    // The seam is total by contract, so reaching here means the seam ITSELF is
+    // broken — which records NOTHING. That is the same state as a failed park:
+    // the run keeps its non-terminal status, and the attempt must not report
+    // success over a hold nothing can see. So it takes the same exit.
+    console.error(
+      `[produced-review-hold] run=${runId} (${where}) hold seam threw — no terminal write (fail-closed):`,
+      err,
+    );
+    throw await unpersistedHoldSentinel(runId, args);
+  }
+  if (!outcome.held) return false;
+  // The one held outcome with nothing durable behind it (the park write itself
+  // failed). The literal is read rather than imported for the no-static-edge
+  // reason above; the hold module exports it as `UNPERSISTED_HOLD_REASON` and its
+  // own suite pins the two together.
+  if (outcome.reason === "hold-unpersisted") {
+    throw await unpersistedHoldSentinel(runId, args);
+  }
+  return true;
+}
+
+/**
+ * How many shrink passes the error-text cut may take before the recovery gives
+ * up on carrying any of it. Each pass subtracts the measured overage in code
+ * units and a dropped code unit is worth at least one serialized byte, so the
+ * cut converges in one or two; the bound only makes the function total.
+ *
+ * Deliberately conservative on multibyte text, where a code unit is worth two or
+ * three bytes and the first pass therefore cuts more than strictly needed: under
+ * the cap is the requirement, landing exactly on it is not.
+ */
+const PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES = 6;
+/** Slack for the marker the cut appends, so the usual case converges in one pass. */
+const PRODUCED_REVIEW_RECOVERY_ERROR_CUT_HEADROOM = 128;
+
+/**
+ * The size of the queue record this object becomes: its UTF-8 BYTES, which is
+ * the unit the record is stored and capped in. `JSON.stringify(x).length` counts
+ * UTF-16 code units instead, so a multibyte payload measures as little as a
+ * third of what it costs. `Infinity` when it cannot be serialized at all — then
+ * it cannot ride the queue at any size.
+ */
+function producedReviewRecoveryBytes(recovery: ProducedReviewRecovery): number {
+  try {
+    const serialized = JSON.stringify(recovery);
+    return serialized === undefined
+      ? Number.POSITIVE_INFINITY
+      : Buffer.byteLength(serialized, "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** `slice` cuts on code UNITS and can split a surrogate pair in half; drop the
+ *  orphan so the kept text stays well-formed. */
+function sliceWholeCharacters(text: string, keep: number): string {
+  if (keep <= 0) return "";
+  const cut = text.slice(0, keep);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/** Says the text was cut, and by how much — counted in the same unit the cap is
+ *  in, so a reader of the landed run never mistakes a cut error for the whole
+ *  one and never has to guess what the number counts. String length would not do
+ *  it: it counts UTF-16 code units, so an astral character reports as two. */
+function markCutError(kept: string, totalBytes: number): string {
+  const dropped = totalBytes - Buffer.byteLength(kept, "utf8");
+  return (
+    `${kept}\n[error text truncated to fit the recovery payload cap: ` +
+    `${dropped} of ${totalBytes} bytes dropped]`
+  );
+}
+
+/**
+ * What the oversized case carries, bounded on its OWN rather than by whatever
+ * the dropped payload happened to leave behind: the verdict, plus as much of the
+ * error text as fits under the cap. The verdict is what the re-delivered attempt
+ * needs to land the run, so the text is what gives way; the derivation capture
+ * and the step results go whole, because they are the unbounded parts and the
+ * run's row already holds them.
+ */
+function boundedProducedReviewFallback(withheld: WithheldTerminalWrite): {
+  recovery: ProducedReviewRecovery;
+  bytes: number;
+} {
+  const verdictOnly: ProducedReviewRecovery = { withheld: { status: withheld.status } };
+  const error = withheld.error;
+  if (error === undefined) {
+    return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };
+  }
+  const withError: ProducedReviewRecovery = { withheld: { status: withheld.status, error } };
+  const withErrorBytes = producedReviewRecoveryBytes(withError);
+  if (withErrorBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+    return { recovery: withError, bytes: withErrorBytes };
+  }
+  const totalErrorBytes = Buffer.byteLength(error, "utf8");
+  let keep = error.length;
+  let over = withErrorBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  for (let pass = 0; pass < PRODUCED_REVIEW_RECOVERY_ERROR_CUT_PASSES; pass++) {
+    keep = Math.max(0, keep - over - PRODUCED_REVIEW_RECOVERY_ERROR_CUT_HEADROOM);
+    const cut: ProducedReviewRecovery = {
+      withheld: {
+        status: withheld.status,
+        error: markCutError(sliceWholeCharacters(error, keep), totalErrorBytes),
+      },
+    };
+    const cutBytes = producedReviewRecoveryBytes(cut);
+    if (cutBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+      return { recovery: cut, bytes: cutBytes };
+    }
+    if (keep === 0) break;
+    over = cutBytes - PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES;
+  }
+  // None of the text fits. The marker alone still states the omission, so an
+  // omitted error is never silently indistinguishable from an absent one.
+  const omitted: ProducedReviewRecovery = {
+    withheld: { status: withheld.status, error: markCutError("", totalErrorBytes) },
+  };
+  const omittedBytes = producedReviewRecoveryBytes(omitted);
+  if (omittedBytes <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) {
+    return { recovery: omitted, bytes: omittedBytes };
+  }
+  // Not even the marker fits: the verdict alone still lands the run.
+  return { recovery: verdictOnly, bytes: producedReviewRecoveryBytes(verdictOnly) };
+}
+
+/** The terminal write reduced to what a re-delivered attempt can carry: the
+ *  whole thing when it fits the cap, else the verdict with its error text cut to
+ *  fit and marked. Measured in UTF-8 BYTES — the unit the queue record is stored
+ *  in — and under the cap on EVERY branch, the fallback included. */
+function buildProducedReviewRecovery(
+  runId: string,
+  withheld: WithheldTerminalWrite,
+  stepResults: readonly unknown[],
+): ProducedReviewRecovery {
+  const full: ProducedReviewRecovery = {
+    withheld,
+    ...(stepResults.length > 0 ? { stepResults: [...stepResults] } : {}),
+  };
+  const size = producedReviewRecoveryBytes(full);
+  if (size <= PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES) return full;
+  const bounded = boundedProducedReviewFallback(withheld);
+  console.warn(
+    `[produced-review-hold] run=${runId} terminal payload too large to carry on the re-delivery ` +
+      `(${size} bytes) — the recovery carries the verdict in ${bounded.bytes} bytes and lands the ` +
+      `run with the payload its row already holds`,
+  );
+  return bounded.recovery;
+}
+
+/** The id prefix a withheld terminal write's delivery is keyed on. */
+export const PRODUCED_REVIEW_RECOVERY_JOB_PREFIX = "produced-review-recovery__";
+
+/** The delivery id for one chain's nth attempt. Keyed on the run, the CHAIN and
+ *  the ordinal — never on the run and the ordinal alone. The queue keeps settled
+ *  jobs by count (see the runtime's `removeOnComplete`/`removeOnFail`) and an
+ *  add on an id that is still held is a silent no-op, so an id that repeated
+ *  across chains would report a delivery it never made. A chain is minted per
+ *  raise, so its ids are its own; within a chain the ordinal still collapses a
+ *  redelivered leg onto the one queued recovery. */
+export function producedReviewRecoveryJobId(
+  runId: string,
+  chain: string,
+  ordinal: number,
+): string {
+  return `${PRODUCED_REVIEW_RECOVERY_JOB_PREFIX}${runId}__${chain}__${ordinal}`;
+}
+
+/**
+ * Hand the withheld terminal write to the ONE road that can still finish the
+ * run: a delayed execution delivery carrying the recovery, consumed by the
+ * recovery leg at the top of the execution job (which re-executes nothing — it
+ * asks the review question again and finishes the run).
+ *
+ * Handed over HERE, at the single point the sentinel is raised, rather than by
+ * each caller. Four paths reach an unrecordable hold — the execution worker, the
+ * operator's resume, the resume primitive and the review-gate delivery sweep —
+ * and only the first owns a job it could re-deliver; the other three would each
+ * need their own hand-off, and a fifth path added later would silently drop the
+ * write again. Raised-point delivery means no caller holds the payload, so no
+ * caller can lose it, and there is exactly one carrier and one consumer.
+ *
+ * IDEMPOTENT: the delivery is keyed on the run, its chain and the ordinal, so a
+ * leg redelivered at the same ordinal collapses onto the one queued recovery
+ * instead of forking it. Two callers racing the SAME run raise two chains and
+ * queue two recoveries; that is deliberate — the alternative is a shared id that
+ * a settled job of an earlier chain still holds, which the queue would swallow
+ * silently. Both chains reach the same STATUS: the run is parked or terminal
+ * either way, and the terminal write is one CAS with one winner. They do not
+ * arbitrate the parked payload between them — `parkRun` writes the marker it was
+ * handed — so a run with two competing withheld writes lands the later one. Both
+ * are legitimate terminal writes for the same run, and the CAS would have picked
+ * one regardless; making the marker first-writer-wins belongs to the park itself.
+ *
+ * BOUNDED: it carries exactly what `buildProducedReviewRecovery` built, which is
+ * already under `PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES` on every branch.
+ *
+ * CAPPED: past `MAX_PRODUCED_REVIEW_HOLD_PARKS` nothing further is queued. A
+ * write fault that survives that many deliveries is permanent, and looping on it
+ * forever hides it. The run is NEVER landed terminal at the cap — a terminal
+ * write over an unproven review is the defect this path exists to prevent — so
+ * the cap surfaces as an operator signal over a run that is still non-terminal.
+ *
+ * Best-effort by necessity and never fail-open: a delivery that cannot be queued
+ * is reported on the sentinel and the sentinel is raised regardless. A holder of
+ * an execution job re-enters the SAME road in place when that happens — the
+ * producer connection is fail-fast by design while a worker's own connection
+ * rides a brief outage out, so the two are not interchangeable and the second
+ * on-ramp is not a second road.
+ */
+async function deliverProducedReviewRecovery(args: {
+  runId: string;
+  recovery: ProducedReviewRecovery;
+  park: number;
+  chain: string;
+}): Promise<{ delivered: boolean; capped: boolean }> {
+  const { runId, recovery, park, chain } = args;
+  if (park >= MAX_PRODUCED_REVIEW_HOLD_PARKS) {
+    console.error(
+      `[produced-review-hold] run=${runId} could not record its hold across ${park} deliveries — ` +
+        `no further recovery is queued; the run keeps its non-terminal status`,
+    );
+    return { delivered: false, capped: true };
+  }
+  const next = park + 1;
+  try {
+    const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+    const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+    await enqueueBackgroundJob(
+      BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
+      {
+        runId,
+        producedReviewHold: recovery,
+        producedReviewHoldPark: next,
+        producedReviewHoldChain: chain,
+      },
+      {
+        delay: PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS,
+        // One shot per delivery: the leg re-raises and queues the next ordinal
+        // itself, so a BullMQ-level retry would only double the chain.
+        attempts: 1,
+        jobId: producedReviewRecoveryJobId(runId, chain, next),
+        // The leg anchors the run's own org-scoped dispatch authority; it must
+        // not inherit the resuming principal's frame.
+        inheritActorContext: false,
+      },
+    );
+    console.warn(
+      `[produced-review-hold] run=${runId} hold unrecorded — recovery queued in ` +
+        `${PRODUCED_REVIEW_HOLD_RETRY_DELAY_MS}ms (delivery ${next})`,
+    );
+    return { delivered: true, capped: false };
+  } catch (err) {
+    console.error(
+      `[produced-review-hold] run=${runId} could not queue the recovery delivery — the run keeps ` +
+        `its non-terminal status and nothing is written over the unproven review:`,
+      err,
+    );
+    return { delivered: false, capped: false };
+  }
+}
+
+/** Build the bounded recovery, put it on its delivery, and return the sentinel
+ *  for the caller to throw. The one exit for a hold nothing durable records, so
+ *  both raise sites take the same road. Returned rather than thrown so the
+ *  `throw` stays at the call site, where it reads as the terminator it is. */
+async function unpersistedHoldSentinel(
+  runId: string,
+  args: {
+    withheld: WithheldTerminalWrite;
+    stepResults: readonly unknown[];
+    holdPark?: number;
+    holdChain?: string;
+  },
+): Promise<ProducedReviewHoldUnpersistedError> {
+  const recovery = buildProducedReviewRecovery(runId, args.withheld, args.stepResults);
+  const park = args.holdPark ?? 0;
+  const chain = args.holdChain ?? randomUUID();
+  const outcome = await deliverProducedReviewRecovery({ runId, recovery, park, chain });
+  return new ProducedReviewHoldUnpersistedError({
+    runId,
+    recovery,
+    delivered: outcome.delivered,
+    capped: outcome.capped,
+    chain,
+    nextPark: park + 1,
+  });
+}
+
+/**
+ * The re-delivered attempt for a run whose hold could not be recorded
+ * (cinatra#3007). It re-executes NOTHING: the run already did its work and is
+ * sitting non-terminal because the previous attempt could not write down that it
+ * still owed a review. This asks the question again and finishes it — a park if
+ * something holds the run, the withheld terminal write if nothing does.
+ *
+ * Raises `ProducedReviewHoldUnpersistedError` again while the write still fails,
+ * queueing the NEXT delivery of the same chain up to the chain's cap before it
+ * does. The run is never landed terminal on an unproven review.
+ */
+export async function recoverProducedReviewHold(args: {
+  runId: string;
+  run: { orgId: string; status: AgentRunStatus };
+  recovery: ProducedReviewRecovery;
+  authority: OrgWriteAuthority | undefined;
+  /** Which delivery this is, so a hold that still cannot be recorded queues the
+   *  NEXT one and the cap counts the chain rather than restarting it. */
+  park?: number;
+  /** The chain this delivery belongs to, so the next one keeps its identity. */
+  chain?: string;
+}): Promise<void> {
+  const { runId, run, recovery, authority } = args;
+  const withheld = recovery.withheld;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus: run.status,
+      // The payload the failed attempt was withholding, when it could travel.
+      // Empty ⇒ the park keeps the row's OWN step results (see `parkRun`), which
+      // is the most that survived.
+      stepResults: recovery.stepResults ?? [],
+      withheld,
+      authority,
+      where: "hold recovery",
+      holdPark: args.park,
+      holdChain: args.chain,
+    })
+  ) {
+    console.log(`[produced-review-hold] run=${runId} recovery recorded the hold`);
+    return;
+  }
+  // Nothing holds the run, so the terminal write the previous attempt never made
+  // is owed now — with its payload and, on the success edge, its derivation
+  // capture, exactly as the original transition would have carried them.
+  //
+  // The CAS comes FIRST and the announcement only after it LANDS: a terminal
+  // event published ahead of the write would tell every client the run ended
+  // even when a concurrent stop or release owned the row. That is the order
+  // every other terminal path here uses.
+  let transitioned = true;
+  await transitionRunStatus(
+    runId,
+    run.status,
+    withheld.status,
+    {
+      ...(withheld.error !== undefined ? { error: withheld.error } : {}),
+      ...(recovery.stepResults ? { stepResults: recovery.stepResults } : {}),
+      ...(withheld.status === "completed" ? { completedAt: new Date() } : {}),
+      ...(withheld.status === "completed" && withheld.derivationOutbox
+        ? { derivationOutbox: withheld.derivationOutbox }
+        : {}),
+    },
+    authority,
+  ).catch((e) => {
+    if (e instanceof RunTransitionError && e.code === "stale_from_status") {
+      transitioned = false;
+      console.log(
+        `[produced-review-hold] run=${runId} left ${run.status} concurrently — recovery announces nothing`,
+      );
+      return;
+    }
+    throw e;
+  });
+  if (!transitioned) return;
+  // The terminal-success tail, in the order the immediate edge takes it: the
+  // unbound-output derivation enqueue for a capture that committed with the CAS,
+  // then the announcement, then the autosave sidecar. A recovery that stopped at
+  // the announcement would land a run that is terminal but missing the sidecars
+  // every other run of the same verdict gets — the derivation waits on the sweep
+  // instead of the one-shot job, and the autosave, which has no sweep behind it,
+  // never happens at all.
+  if (withheld.status === "completed" && withheld.derivationOutbox) {
+    try {
+      const { enqueueBackgroundJob } = await import("@/lib/background-jobs");
+      const { BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs-names");
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.UNBOUND_OUTPUT_DERIVE,
+        { runId, orgId: run.orgId },
+        {
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5_000 },
+          jobId: `unbound-output-derive__${runId}`,
+          inheritActorContext: false,
+        },
+      );
+    } catch (e) {
+      console.warn(
+        `[unbound-output] derive enqueue threw for run=${runId} (outbox persisted; sweep backstops):`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+  await Promise.resolve(
+    publishAgUiEvent(
+      runId,
+      (withheld.status === "completed"
+        ? { type: "RUN_FINISHED", threadId: runId, runId, status: "completed", timestamp: Date.now() }
+        : {
+            type: "RUN_ERROR",
+            threadId: runId,
+            runId,
+            message: withheld.error ?? "the run ended without recording its result",
+            timestamp: Date.now(),
+          }) as never,
+    ),
+  ).catch(() => undefined);
+  if (withheld.status === "completed") {
+    runSkillAutosaveOnRunCompletion(runId).catch((e) => {
+      console.warn(`[skill-autosave] autosave failed, run=${runId}`, e);
+    });
+  }
+  console.log(
+    `[produced-review-hold] run=${runId} recovery performed the withheld ${withheld.status} write`,
+  );
+}
+
+/**
+ * Land a WayFlow DISPATCH failure — the transport never delivered the task, or
+ * `handleWayflowTaskState` itself threw — asking the review question first.
+ *
+ * cinatra#3007: `sendTask` is BLOCKING and the flow runs inside it, calling back
+ * into cinatra as it goes, so a transport failure can arrive AFTER the flow has
+ * already written an artifact. That output opens a review exactly as a completed
+ * run's does, and `failed` is just as terminal as `completed`. So this edge asks
+ * the same question at the same moment as the others: a held run announces no
+ * end, because it has not reached one.
+ */
+export async function failRunOnWayflowDispatchError(args: {
+  runId: string;
+  orgId: string;
+  runError: string;
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  const { runId, orgId, runError, authority } = args;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId,
+      fromStatus: "running",
+      stepResults: [],
+      withheld: { status: "failed", error: runError },
+      authority,
+      where: "wayflow dispatch",
+    })
+  ) {
+    return;
+  }
+  // Terminal-consistency for the durable AG-UI log (cinatra#809):
+  // RUN_STARTED was already published before sendTask, so a dispatch
+  // failure must also publish RUN_ERROR — otherwise the log ends on
+  // RUN_STARTED and every later page load replays the run into a phantom
+  // "running" state. Mirrors the handleWayflowTaskState failed branch
+  // (publish first, then transition). Best-effort like every publish —
+  // a Redis outage must not block the failed transition.
+  try {
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: runError,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+  } catch {
+    /* best-effort: an event log that throws synchronously must not block the transition */
+  }
+  await transitionRunStatus(runId, "running", "failed", { error: runError }, authority).catch(
+    (e) => {
+      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+      throw e;
+    },
+  );
+}
+
 export async function finalizeExternalA2ARun(args: {
   authority: OrgWriteAuthority | undefined;
   runId: string;
@@ -888,11 +1628,34 @@ export async function finalizeExternalA2ARun(args: {
         ]
       : undefined;
 
-  if (materializationFailures.length > 0) {
-    const error = describeMaterializationFailure(
-      materializationFailures,
-      recordedOutcomes.length,
-    );
+  const materializationError =
+    materializationFailures.length > 0
+      ? describeMaterializationFailure(materializationFailures, recordedOutcomes.length)
+      : null;
+
+  // cinatra#3007 — the review moment comes before the terminal status; see
+  // `producedReviewHoldsRun`. The artifacts this run produced were written
+  // above, and whether one of them opens a review is decided HERE, before either
+  // terminal edge.
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus: "running",
+      stepResults: terminalStepResults ?? [],
+      withheld:
+        materializationError !== null
+          ? { status: "failed", error: materializationError }
+          : { status: "completed" },
+      authority,
+      where: "external-a2a",
+    })
+  ) {
+    return;
+  }
+
+  if (materializationError !== null) {
+    const error = materializationError;
     let failedTransitioned = true;
     await transitionRunStatus(
       runId,
@@ -1207,18 +1970,114 @@ export type HandleWayflowTaskStateArgs = {
   };
 };
 
+/** The anchor version this build vouches for. Copy of
+ *  `LAUNCH_SCOPE_ANCHOR_VERSION`. */
+const LAUNCH_SCOPE_ANCHOR_VERSION = 1;
+
+/** The reserved id no scope may use. Copy of `WORKSPACE_SCOPE_SENTINEL`. */
+const WORKSPACE_SCOPE_SENTINEL = "__workspace__";
+
+/** The query name that carries the run detail's open step. Copy of
+ *  `RUN_STEP_QUERY_KEY`. */
+const RUN_STEP_QUERY_KEY = "step";
+
+/**
+ * THE RUN'S ADDRESS WITH ONE STEP OPEN, which is what a review's address IS
+ * (cinatra#3693). Verbatim copy of `src/lib/agent-url.ts`'s `buildRunStepPath`.
+ *
+ * The ratified drawing gives a review no page: "a pending review renders the
+ * review gate in the run detail, under the same rail, never as a standalone
+ * document", and "there is no review page view outside the run's route". So a
+ * reader sent to one review is sent to the RUN, with the gate's own rail
+ * selection named on the address, and the run detail opens there on first
+ * render.
+ */
+function buildRunStepPathCopy(runPath: string, step: string): string {
+  return `${runPath}?${RUN_STEP_QUERY_KEY}=${encodeURIComponent(step)}`;
+}
+
+/** The rail's selection key for one of a run's review gates. Copy of
+ *  `runReviewGateStepKey` (`packages/agents/src/run-surface-rail-step.ts`). */
+function runReviewGateStepKeyCopy(reviewTaskId: string): string {
+  return `review:${reviewTaskId}`;
+}
+
+/** The scope base each anchor kind addresses. Copy of
+ *  `launchScopeAnchorBase`'s four-kind map. The `user` kind is FLAT BY DESIGN:
+ *  `/personal` means "mine" to whoever reads it, so it is not an address. */
+const LAUNCH_SCOPE_ANCHOR_BASE: Readonly<Record<string, ((id: string) => string) | null>> = {
+  workspace: () => "/workspace",
+  organization: (id) => `/organizations/${encodeURIComponent(id)}`,
+  team: (id) => `/teams/${encodeURIComponent(id)}`,
+  project: (id) => `/projects/${encodeURIComponent(id)}`,
+  user: null,
+};
+
+/**
+ * The scope base a stored anchor addresses, or `null` for a flat run. That is
+ * both the personal anchor's answer and the answer for every payload this
+ * build cannot vouch for. Verbatim copy of the host's
+ * `launchScopeAnchorBase(parseLaunchScopeAnchor(raw))`, decoder included.
+ *
+ * Exported for the agreement test only; every caller here goes through
+ * `buildAgentInstancePath`.
+ */
+export function launchScopeAnchorBaseCopy(raw: unknown): string | null {
+  if (raw == null) return null;
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.v !== LAUNCH_SCOPE_ANCHOR_VERSION) return null;
+  if (typeof obj.kind !== "string") return null;
+  if (!Object.prototype.hasOwnProperty.call(LAUNCH_SCOPE_ANCHOR_BASE, obj.kind)) return null;
+  const base = LAUNCH_SCOPE_ANCHOR_BASE[obj.kind];
+  if (obj.kind === "workspace") {
+    // The union's workspace arm has NO `id` field, so a payload that carries
+    // the key at all, `null` included, is one no mint can have produced.
+    return Object.prototype.hasOwnProperty.call(obj, "id") ? null : base!("");
+  }
+  if (typeof obj.id !== "string") return null;
+  const id = obj.id.trim();
+  if (id.length === 0 || id === WORKSPACE_SCOPE_SENTINEL) return null;
+  return base ? base(id) : null;
+}
+
 /**
  * Build the run's canonical `/agents/{vendor}/{pkg}/{runId}` base path from a
- * scoped package name. A VERBATIM copy of `src/lib/agent-url.ts`'s
- * `buildAgentInstancePath` (4 lines, zero deps) — inlined so the universally-
- * reachable execution path grows no new first-party module edge (the route-graph
- * ratchet guards this hot path), mirroring the same duplication precedent in
+ * scoped package name, UNDER THE SCOPE BASE ITS ANCHOR NAMES (cinatra#3693).
+ * A VERBATIM copy of `src/lib/agent-url.ts`'s `buildAgentInstancePath` (zero
+ * deps), inlined so the universally-reachable execution path grows no new
+ * first-party module edge (the route-graph ratchet guards this hot path),
+ * mirroring the same duplication precedent in
  * packages/notifications/src/agent-run-href.ts.
+ *
+ * THE INTERRUPT'S ADDRESS IS THE RUN'S OWN HOME. Before this, a gate on a run
+ * launched from a scope emitted the BARE address, so the reader it notified was
+ * carried out of the scope with nothing said. The anchor is the run's immutable
+ * record of where it was launched from, so it decides the base. A run with no
+ * anchor keeps the bare address, unchanged.
+ *
+ * The copied rule above is the host decoder's, FAIL-CLOSED arms included, and
+ * its agreement with the host's originals, and with the identical copy in
+ * packages/notifications, is pinned by
+ * `src/lib/__tests__/launch-scope-copies-agree-3693.test.ts`.
  */
-function buildReviewRunBasePath(agentPackageName: string, instanceId: string): string {
+function buildReviewRunBasePath(
+  agentPackageName: string,
+  instanceId: string,
+  launchScopeAnchor?: unknown,
+): string {
+  const base = launchScopeAnchorBaseCopy(launchScopeAnchor) ?? "";
   const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
-  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
-  return `/agents/${agentPackageName}/${instanceId}`;
+  if (match) return `${base}/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `${base}/agents/${agentPackageName}/${instanceId}`;
 }
 
 /**
@@ -1383,6 +2242,21 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // updated" race). Redis is already load-bearing for gate resume (the
     // reverse-map fallback), so this is no new hard dependency.
     await rememberLatestWayflowGateTask(runId, task.id);
+    // cinatra#3745 — record which step of the flow paused the run, as the flow
+    // runtime signed it. Best-effort: a store fault is logged and the
+    // interrupt proceeds exactly as it does without a claim.
+    const gateNodeClaim = extractCinatraGateNodeClaim(
+      (task as { history?: ReadonlyArray<GateNodeHistoryMessage> }).history,
+    );
+    if (gateNodeClaim) {
+      try {
+        await rememberWayflowGateNodeClaim(runId, task.id, gateNodeClaim);
+      } catch (err) {
+        console.warn(
+          `[wayflow-gate-node] run=${runId} task=${task.id} record failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -1547,11 +2421,23 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       typeof wayflowArtifactReviewTargetsInput === "string" &&
       wayflowArtifactReviewTargetsInput.length > 0
     ) {
-      const reviewTaskId = `wayflow-${task.id}`;
-      const rawTargets =
-        (run.inputParams as Record<string, unknown> | null | undefined)?.[
-          wayflowArtifactReviewTargetsInput
-        ] ?? interruptPayload[wayflowArtifactReviewTargetsInput];
+      let reviewTaskId = `wayflow-${task.id}`;
+      // cinatra#3035 (epic #3023 W11) — THE MID-RUN TARGET SET. The pipeline's
+      // gate names references the materialize step minted DURING the run, so the
+      // value the gate's own pause carries is the one that matters; the run's
+      // start params are the fallback for a gate whose set is resolved at run
+      // start. Read the other way round (as `startParams ?? pausePayload` was), a
+      // start node that also lists the marked input — every compiled flow does,
+      // since a node input is a flow input with a default — shadowed the run's own
+      // projection with that default and the gate pinned nothing.
+      const rawTargets = resolveDeclaredReviewTargets({
+        inputName: wayflowArtifactReviewTargetsInput,
+        startParams: run.inputParams as Record<string, unknown> | null | undefined,
+        // cinatra#3035: the runtime hands a pause's inputs over only as its own
+        // message, so the gate's surfaced message is read too; the metadata's
+        // pendingApproval keeps precedence when it is present.
+        pausePayload: { ...spreadFromOutput, ...interruptPayload },
+      });
       // routeToReviewSurface is true when a USABLE pending gate for THIS run+org
       // is (or already was) pinned — so exactly ONE decision path exists (the
       // review surface + resume-delivery worker). On an emit failure we do NOT
@@ -1565,27 +2451,30 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // gate), a different-org conflict, or a vanished row all fall open to the
       // legacy HITL gate so the run degrades rather than dead-ends.
       // What the gate will pin. It starts as the marker's own value — which is
-      // what an unbound seam and a core that cannot answer both fall back to —
-      // and is replaced by the core's decided set when there is one.
+      // retained in the raw inventory even when approved policy filters it —
+      // and is replaced by a successful core's decided set when there is one.
       let pinnedTargets: unknown = rawTargets;
       let routeToReviewSurface = false;
+      // Inventory the original caller set BEFORE the approved policy filters
+      // it. Keep its exact pairs and every uncertain entry separately; a
+      // filtered-out ambiguity must remain observable without overruling the
+      // policy result. Log counts/positions only, never arbitrary raw values.
+      const rawPinInventory = inventoryReviewTargets(rawTargets);
+      console.log(`[artifact-review-gate] run=${runId} task=${task.id} raw target inventory`, {
+        rawTargetCount: rawPinInventory.rawTargetCount,
+        validOccurrenceCount: rawPinInventory.validOccurrenceCount,
+        distinctValidPairCount: rawPinInventory.distinctValidPairCount,
+        duplicateValidPairCount: rawPinInventory.duplicateValidPairCount,
+        distinctArtifactCount: new Set(rawPinInventory.validPairs.map((target) => target.artifactId)).size,
+        invalidOccurrenceCount: rawPinInventory.invalidOccurrenceCount,
+        invalidPositions: rawPinInventory.invalidEntries.map((entry) => entry.index),
+      });
       const gateSeam = resolveArtifactReviewGateSeam();
       if (!gateSeam) {
-        // Boot has not bound the gate store in this bundle (a near-impossible
-        // degraded state — the bind phase is a trivial boot step). We cannot pin
-        // NOR read the gate here. FAIL CLOSED against a DUAL decision path: route
-        // to the review surface (which reads the store on its own route) rather
-        // than ALSO emitting the legacy in-panel gate — if a PRIOR execution
-        // already pinned this gate, emitting the legacy gate now would create a
-        // SECOND resume path into the same paused context. A first-visit run whose
-        // gate was never pinned simply sees the review surface's graceful
-        // unavailable/blocked state until boot re-binds the seam; it can never
-        // double-resume. Mirrors the read-failure fail-closed branch below.
-        console.warn(
-          `[artifact-review-gate] run=${runId} task=${task.id} gate seam not bound — ` +
-            `routing to the review surface (fail-closed against a dual path)`,
-        );
-        routeToReviewSurface = true;
+        // App163: an absent seam also means the policy cannot be read. Leave
+        // any stored gate alone and surface the existing technical failure
+        // through execution's error road; do not emit a redirect/ordinary gate.
+        throw new TypeError(`[artifact-review-gate] run=${runId} task=${task.id} gate seam not bound`);
       } else {
         // ------------------------------------------------------------------
         // THE ONE REVIEW CORE (cinatra#2929, epic #2926 W2b) — the DECLARED
@@ -1603,35 +2492,16 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // branch is built around: the review surface OR the legacy gate, and
         // never both, because nothing is pinned when the core declines.
         //
-        // FAIL-OPEN, deliberately, on a core that THROWS: a decision that cannot
-        // be reached must not decide. The pre-#2929 behaviour is the fallback —
-        // pin and route — because a marked step is a step whose author asked for
-        // a review, and refusing one on a resolver fault would drop it silently.
-        let coreDecision: {
-          review: boolean;
-          why?: string;
-          reason?: string;
-          targets?: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
-        };
-        try {
-          coreDecision = await gateSeam.decideDeclaredReview({
-            orgId: run.orgId,
-            templateId: run.templateId,
-            // The version the RUN is pinned to. `agent_templates` is a mutable
-            // row a reinstall overwrites in place, so a template that has moved
-            // on must not supply a declared skip that takes this run's review
-            // away.
-            packageVersion: run.packageVersion ?? null,
-            targets: rawTargets,
-          });
-        } catch (coreErr) {
-          console.warn(
-            `[artifact-review-gate] run=${runId} task=${task.id} review core unavailable ` +
-              `(${coreErr instanceof Error ? coreErr.message : String(coreErr)}) — ` +
-              `opening the review the marked step asked for`,
-          );
-          coreDecision = { review: true };
-        }
+        // App163: an unavailable policy cannot authorize any mint or new
+        // decision path. Preserve the exact failure through the existing
+        // execution error road; do not convert a thrown/missing core to review.
+        const coreDecision = await gateSeam.decideDeclaredReview({
+          orgId: run.orgId,
+          templateId: run.templateId,
+          // The RUN's pinned version, never the template's mutable current row.
+          packageVersion: run.packageVersion ?? null,
+          targets: rawTargets,
+        });
         if (!coreDecision.review) {
           console.log(
             `[artifact-review-gate] run=${runId} task=${task.id} no review for this work ` +
@@ -1643,23 +2513,123 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // dropped any target the organization forbids a review for — emitting
         // the raw value again would put a refused artifact back under the gate
         // and ask the emitter to re-derive a set that had already been decided.
-        // The fail-open branch above resolves no set, so it keeps the raw value:
-        // a core that could not answer must not narrow what a person reviews.
+        // A successful policy decline keeps the raw inventory but opens no
+        // review. A failed core already exited through the existing error road.
         if (coreDecision.review && coreDecision.targets) {
           pinnedTargets = coreDecision.targets;
         }
-        const emitResult = coreDecision.review
-          ? await gateSeam.emit({
-              runId,
-              orgId: run.orgId,
-              reviewTaskId,
-              targets: pinnedTargets,
-            })
-          : ({
-              ok: false as const,
-              code: "invalid-targets" as const,
-              message: coreDecision.why ?? "the review core opened no review",
-            });
+        // Read the complete existing gate inventory BEFORE any mint. Failure is
+        // an existing execution error, not proof that no review remains. Reuse
+        // this reading for leg election; do not mint and only then discover that
+        // the inventory was unavailable (cinatra#3944, App160).
+        const known = coreDecision.review ? await gateSeam.listGates!(runId) : [];
+        const pinInventory = inventoryReviewTargets(pinnedTargets);
+        console.log(`[artifact-review-gate] run=${runId} task=${task.id} policy target inventory`, {
+          rawTargetCount: rawPinInventory.rawTargetCount,
+          rawDistinctValidPairCount: rawPinInventory.distinctValidPairCount,
+          policyReview: coreDecision.review,
+          policyTargetCount: pinInventory.rawTargetCount,
+          policyDistinctValidPairCount: pinInventory.distinctValidPairCount,
+          policyInvalidOccurrenceCount: pinInventory.invalidOccurrenceCount,
+        });
+        const legs = coreDecision.review
+          ? planPerArtifactReviewGates({ reviewTaskId, targets: pinnedTargets })
+          : [];
+        type GateEmitResult = Awaited<ReturnType<typeof gateSeam.emit>>;
+        let emitResult: GateEmitResult;
+        // A gate from before singleton minting keeps its complete original pins.
+        // Read it BEFORE emitting any leg: a conflict on the first scalar must
+        // never be followed by a new sibling overlapping that combined review.
+        // Missing pin metadata (including an older seam) is not proof of absence.
+        let original: Awaited<ReturnType<typeof gateSeam.readGate>> | "read-failed" = null;
+        if (coreDecision.review) {
+          try {
+            original = await gateSeam.readGate(runId, reviewTaskId);
+          } catch {
+            original = "read-failed";
+          }
+        }
+        const originalPins = original && original !== "read-failed" && original.orgId === run.orgId
+          ? normalizeReviewTargets(original.targets)
+          : null;
+        if (original === "read-failed") {
+          pinnedTargets = null;
+          emitResult = { ok: false, code: "pin-conflict", message: "the original review could not be read" };
+        } else if (original && (original.orgId !== run.orgId || !originalPins?.ok)) {
+          pinnedTargets = null;
+          emitResult = { ok: false, code: "pin-conflict", message: "the original review's ownership and complete pins could not be verified" };
+        } else if (pinInventory.distinctValidPairCount > new Set(pinInventory.validPairs.map((target) => target.artifactId)).size) {
+          // Two exact revisions of one artifact are distinct inventory entries,
+          // not two artifact reviews. No decided partial-set rule authorizes
+          // dropping that artifact and minting the rest, so refuse the WHOLE
+          // ambiguous set before any emit. This uses the existing held road;
+          // first/latest-wins and re-pin remain product policy (App162).
+          emitResult = { ok: false, code: "invalid-targets", message: "the review target set names different revisions of the same artifact" };
+        } else if (original && pinInventory.invalidOccurrenceCount > 0) {
+          // An uncertain caller set cannot reuse its valid-looking subset or
+          // mint siblings. Keep the original immutable gate and hold this step
+          // through the same refusal/re-read road below. The inventory retains
+          // every malformed/unknown entry separately, without rewriting pins.
+          emitResult = { ok: false, code: "invalid-targets", message: "the review target set contains unverified pins" };
+        } else if (originalPins?.ok && originalPins.targets.length === 1 && pinInventory.validPairs.length > 0 && (
+          pinInventory.validPairs[0].artifactId !== originalPins.targets[0].artifactId ||
+          pinInventory.validPairs[0].representationRevisionId !== originalPins.targets[0].representationRevisionId ||
+          pinInventory.validPairs.some((target) => target.artifactId === originalPins.targets[0].artifactId && target.representationRevisionId !== originalPins.targets[0].representationRevisionId)
+        )) {
+          // Reusing the first leg requires its exact original pair, and no
+          // second revision of that artifact may hide behind first-wins dedup.
+          // Refuse BEFORE any emit, so no later sibling is minted. Never re-pin
+          // the original or let the newer revision's step run past this hold.
+          emitResult = { ok: false, code: "pin-conflict", message: "the original review pins a different revision" };
+        } else if (originalPins?.ok && originalPins.targets.length > 1) {
+          // Replay through the SAME central emitter with the caller's whole set.
+          // It validates org and exact immutable pins, and leaves an existing
+          // pending/resolved gate and its decision/outbox untouched. Never mint
+          // scalar legs or replace the caller's set with the stored set to make
+          // a mismatched request pass. The route describes the actual old gate.
+          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          pinnedTargets = originalPins.targets;
+        } else if (legs.length > 1) {
+          // Freeze the whole original pause through the existing store transaction.
+          // A later refusal leaves no newly-visible actionable partial family.
+          // Older bundles without this binding fail before any singleton mint.
+          if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
+          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          if (!emitResult.ok) {
+            // An old combined review may commit after the preflight. The atomic
+            // attempt inserted nothing; only the same complete original pins
+            // can replay as minted, never a scalar success from a partial set.
+            const raced = await gateSeam.readGate(runId, reviewTaskId);
+            const racedPins = raced?.orgId === run.orgId ? normalizeReviewTargets(raced.targets) : null;
+            if (!racedPins?.ok || racedPins.targets.length < 2) {
+              throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
+            }
+            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            if (!emitResult.ok) throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
+            pinnedTargets = racedPins.targets;
+          } else {
+            const next = nextUnresolvedLeg({ planned: legs, gates: known }) ?? legs[0];
+            reviewTaskId = next.reviewTaskId;
+            pinnedTargets = next.targets;
+          }
+        } else {
+          if (legs.length === 1) pinnedTargets = legs[0].targets;
+          if (legs.length === 1 && !original) {
+            if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
+            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          } else emitResult = coreDecision.review
+            ? await gateSeam.emit({
+                runId,
+                orgId: run.orgId,
+                reviewTaskId,
+                targets: pinnedTargets,
+              })
+            : ({
+                ok: false as const,
+                code: "invalid-targets" as const,
+                message: coreDecision.why ?? "the review core opened no review",
+              });
+        }
         if (emitResult.ok) {
           routeToReviewSurface = true;
         } else {
@@ -1670,7 +2640,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // missing gate) rather than ALSO emitting the legacy gate. Only a re-read
           // that DEFINITIVELY resolves to no usable gate for THIS run (null,
           // resolved, or a foreign org) falls open to the legacy HITL gate.
-          let reread: { orgId: string; status: string } | null | "read-failed";
+          let reread: Awaited<ReturnType<typeof gateSeam.readGate>> | "read-failed";
           try {
             reread = await gateSeam.readGate(runId, reviewTaskId);
           } catch {
@@ -1684,6 +2654,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             );
             routeToReviewSurface = true;
           } else if (reread && reread.orgId === run.orgId && reread.status === "pending") {
+            const actualPins = normalizeReviewTargets(reread.targets);
+            pinnedTargets = actualPins.ok ? actualPins.targets : null;
             console.warn(
               `[artifact-review-gate] run=${runId} task=${task.id} emit ${emitResult.code} ` +
                 `(${emitResult.message}) — a usable pending gate for this run already exists; ` +
@@ -1699,27 +2671,41 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }
       }
       if (routeToReviewSurface) {
-        // The review surface lives UNDER the agent run (owner ruling 2026-07-25
-        // (3), cinatra#2063): `/agents/[vendor]/[packageName]/[instanceId]/review/
-        // [reviewTaskId]`, where instanceId == this run. Build the run's canonical
-        // `/agents/{vendor}/{pkg}/{runId}` base from the template packageName (the
-        // same resolution the notification deep-link + run-detail redirect use),
-        // then append the review sub-path. packageName is present for a marked
-        // reviewer gate (a published orchestrator/flow template); the fallback must
-        // still emit the route's FIVE-segment shape (…/[vendor]/[packageName]/
-        // [instanceId]/review/[reviewTaskId]) with the runId in the instanceId slot,
-        // because the review page keys ONLY on instanceId (== runId) — a shorter
-        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades to
-        // placeholder vendor+package segments, never a dead/misrouted link.
+        // THE REVIEW IS READ IN THE RUN (owner ruling 2026-07-25 (3),
+        // cinatra#2063, and the in-place reading of cinatra#3693). The address is
+        // the run's own — `/agents/{vendor}/{pkg}/{runId}` under the scope base
+        // its anchor names — with the gate's rail selection carried as a query,
+        // and no sub-path of its own. Build the base from the template
+        // packageName (the same resolution the notification deep-link and the
+        // run-detail redirect use). packageName is present for a marked reviewer
+        // gate (a published orchestrator/flow template); the fallback must still
+        // emit the route's vendor/package/instance shape with the runId in the
+        // instance slot, because the run page keys ONLY on that slot — a shorter
+        // `/agents/{runId}/…` would 404. So an unresolved/absent package degrades
+        // to placeholder vendor+package segments, never a dead/misrouted link.
         const reviewTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
         const reviewPackageName =
           typeof reviewTemplate?.packageName === "string" && reviewTemplate.packageName.trim().length > 0
             ? reviewTemplate.packageName.trim()
             : null;
+        // The run's own home decides the base (cinatra#3693). The degraded
+        // arm keeps the bare shape: with no package name there is no canonical
+        // address to scope, and a run page still has to be addressable by the
+        // vendor/package/instance grammar the route is built on.
         const reviewRunBase = reviewPackageName
-          ? buildReviewRunBasePath(reviewPackageName, runId)
+          ? buildReviewRunBasePath(reviewPackageName, runId, run.launchScopeAnchor)
           : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
-        const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
+        // AND THE ADDRESS IS THE RUN'S, WITH THE GATE SELECTED (cinatra#3693).
+        // It used to be a `/review/<taskId>` sub-path -- a standalone review
+        // document, which the drawing gives the review nowhere: "a pending
+        // review renders the review gate in the run detail, under the same rail,
+        // never as a standalone document". Whoever this interrupt reaches is
+        // sent to the run itself now, with the gate's own rail selection on the
+        // address, so the run detail opens on that gate at first render.
+        const reviewSurfaceUrl = buildRunStepPathCopy(
+          reviewRunBase,
+          runReviewGateStepKeyCopy(reviewTaskId),
+        );
         // cinatra#2566 (epic #2564 S2) — the gate's LIFECYCLE CARD REF. The run
         // card draws the review with the same `ReviewGateCard` the chat thread
         // and the review page mount, and a card is only ever addressed by a
@@ -1918,11 +2904,30 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           });
         }
       },
-      failRun: (error) =>
-        transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
+      failRun: async (error) => {
+        // cinatra#3007 — even here, `failed` is terminal. A run that wrote an
+        // artifact in an earlier node has produced output a review may be open
+        // on, and the invariant does not make an exception for an
+        // infrastructure failure: the run holds at that review and the decision
+        // releases it to the failure it was going to reach anyway.
+        if (
+          await producedReviewHoldsRun({
+            runId,
+            orgId: run.orgId,
+            fromStatus,
+            stepResults: [],
+            withheld: { status: "failed", error },
+            authority,
+            where: "human gate",
+          })
+        ) {
+          return;
+        }
+        await transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        });
+      },
     });
     // AND ON A RE-EMIT, WHICH PARKS NOTHING. A gate that arrives while the run is
     // ALREADY `pending_approval` performs no transition — `pending_approval ->
@@ -1945,6 +2950,23 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   if (taskState === "failed") {
     const firstFailPart = task.status?.message?.parts?.[0] as { text?: string } | undefined;
     const errMsg = firstFailPart?.text ?? "WayFlow task failed";
+    // cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
+    // mid-flow and then failed has produced output a review may be open on, so
+    // the same question is asked here, BEFORE the terminal announcement: a run
+    // that parks announces no end, because it has not reached one.
+    if (
+      await producedReviewHoldsRun({
+        runId,
+        orgId: run.orgId,
+        fromStatus,
+        stepResults: [],
+        withheld: { status: "failed", error: errMsg },
+        authority,
+        where: "wayflow failed",
+      })
+    ) {
+      return;
+    }
     await Promise.resolve(
       publishAgUiEvent(runId, {
         type: "RUN_ERROR",
@@ -1974,7 +2996,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // the real last-assistant text message (`lastAgentMessage` below) or
   // leak into the persisted `scrubbedHistory` payload.
   const endNodeOutputs = extractCinatraEndNodeOutputs(rawHistory);
-  const history = stripCinatraEndNodeOutputMessages(rawHistory);
+  // The pause claims (cinatra#3745) are recorded at their interrupts; the
+  // stored history keeps its messages and drops only the claims.
+  const history = stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory));
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
   // Narrow parts at access time — the signature accepts `unknown[]` so all three
@@ -2204,15 +3228,45 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     },
   ];
 
+  // The failure verdict is settled BEFORE the review hold below, because the hold
+  // has to carry whichever terminal write it is withholding — a failed run's just
+  // as much as a green one's.
+  const materializationError =
+    materializationFailures.length > 0
+      ? describeMaterializationFailure(materializationFailures, artifactMaterializations.length)
+      : null;
+
+  // cinatra#3007 — the review moment comes before the terminal status; see
+  // `producedReviewHoldsRun`. The artifacts this run produced were written
+  // above, and whether one of them opens a review is decided HERE, before either
+  // terminal edge.
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus,
+      stepResults: terminalStepResults,
+      withheld:
+        materializationError !== null
+          ? { status: "failed", error: materializationError }
+          // cinatra#3029 (PR 3311) RETIRED the response-text derivation outbox on
+          // this terminal path, so the terminal write this hold is withholding has
+          // no outbox to carry: the withheld payload mirrors the write below
+          // (`completedAt` + `stepResults`) exactly, as it must.
+          : { status: "completed" },
+      authority,
+      where: "wayflow completed",
+    })
+  ) {
+    return;
+  }
+
   // cinatra#2486 — the surfaced-failure edge. Both `running->failed` and
   // `pending_approval->failed` are legal, matching the two terminal-success
   // edges below (the `fromStatus === "completed"` re-entry already returned
   // above, so no illegal `completed->failed` edge is reachable here).
-  if (materializationFailures.length > 0) {
-    const error = describeMaterializationFailure(
-      materializationFailures,
-      artifactMaterializations.length,
-    );
+  if (materializationError !== null) {
+    const error = materializationError;
     let failedTransitioned = true;
     await transitionRunStatus(
       runId,
@@ -2490,6 +3544,11 @@ export async function runAgentBuilderExecutionJob(
     // Marks this leg as "the user just submitted the setup form", which is the
     // one leg that owes the trigger step before it may dispatch.
     resumedFromSetup?: boolean;
+    // cinatra#3007: set ONLY by the worker's unrecordable-hold re-delivery. Its
+    // presence makes this leg a hold recovery rather than a dispatch.
+    producedReviewHold?: ProducedReviewRecovery;
+    producedReviewHoldPark?: number;
+    producedReviewHoldChain?: string;
   },
   jobId: string,
 ): Promise<void> {
@@ -2532,6 +3591,10 @@ async function runAgentBuilderExecutionJobInner(
     scopeRecheckPark?: number;
     // cinatra#2523 — see the outer signature.
     resumedFromSetup?: boolean;
+    // cinatra#3007 — see the outer signature.
+    producedReviewHold?: ProducedReviewRecovery;
+    producedReviewHoldPark?: number;
+    producedReviewHoldChain?: string;
   },
   jobId: string,
 ): Promise<void> {
@@ -2558,6 +3621,30 @@ async function runAgentBuilderExecutionJobInner(
   // this worker drives — dispatch (run.execute) and terminal finalize
   // (run.complete) — including handleWayflowTaskState below.
   const executionAuthority = mintAgentRunExecutionAuthority(run.orgId);
+  // cinatra#3007 — a RE-DELIVERY that exists only to record a hold the previous
+  // attempt could not write. It dispatches nothing: the run already ran, and it
+  // is sitting non-terminal because that attempt could not write down that it
+  // still owed a produced-output review. Placed before the not-queued skip
+  // because the run this leg is for is precisely NOT queued.
+  const holdRecovery = data.producedReviewHold;
+  if (holdRecovery) {
+    if (run.status === "completed" || run.status === "failed" || run.status === "stopped") {
+      console.log(
+        `[produced-review-hold] run ${runId} already ${run.status} — recovery leg has nothing to do`,
+      );
+      return;
+    }
+    await recoverProducedReviewHold({
+      runId,
+      run: { orgId: run.orgId, status: run.status as AgentRunStatus },
+      recovery: holdRecovery,
+      authority: executionAuthority,
+      park:
+        typeof data.producedReviewHoldPark === "number" ? data.producedReviewHoldPark : 0,
+      chain: data.producedReviewHoldChain,
+    });
+    return;
+  }
   if (run.status !== "queued") {
     // Federated children parked by WaitingForHumanError may retry
     // after resume transitions them to a terminal state. If the child reached
@@ -3521,6 +4608,12 @@ async function runAgentBuilderExecutionJobInner(
         streamCompletedCleanly: externalStreamCompletedCleanly,
       });
     } catch (err) {
+      // cinatra#3007 — an unrecordable hold is a decision this catch must not
+      // overrule: `finalizeExternalA2ARun` threw it precisely because no terminal
+      // status may be written for this run yet. Re-throwing keeps the attempt
+      // re-deliverable instead of converting it into the `failed` write the hold
+      // exists to prevent. (Same discrimination as the WayFlow dispatch catch.)
+      if (err instanceof ProducedReviewHoldUnpersistedError) throw err;
       // Stream error OR an unexpected transition error from the finalize path.
       // Apply the same discrimination on the failed-branch transition.
       const failure = err instanceof Error ? err.message : String(err);
@@ -3753,33 +4846,26 @@ async function runAgentBuilderExecutionJobInner(
           ? { cause: (err as { cause?: unknown }).cause }
           : "",
       );
+      // cinatra#3007 — an unrecordable hold is already a decision this catch
+      // must not overrule: `handleWayflowTaskState` threw it precisely because
+      // no terminal status may be written for this run yet. Re-throwing keeps
+      // the attempt a retryable failure instead of converting it into the
+      // `failed` write the hold exists to prevent.
+      if (err instanceof ProducedReviewHoldUnpersistedError) throw err;
       const runError = describeWayflowDispatchError(err, wayflowUrl, {
         // Read here (the single I/O point) and threaded in: the guidance
         // must match what THIS install recorded, not assume every install
         // owns a local runtime it can "start".
         runtimeMode: process.env.CINATRA_WAYFLOW_RUNTIME,
       });
-      // Terminal-consistency for the durable AG-UI log (cinatra#809):
-      // RUN_STARTED was already published before sendTask, so a dispatch
-      // failure must also publish RUN_ERROR — otherwise the log ends on
-      // RUN_STARTED and every later page load replays the run into a phantom
-      // "running" state. Mirrors the handleWayflowTaskState failed branch
-      // (publish first, then transition). Best-effort like every publish —
-      // a Redis outage must not block the failed transition.
-      await Promise.resolve(
-        publishAgUiEvent(runId, {
-          type: "RUN_ERROR",
-          threadId: runId,
-          runId,
-          message: runError,
-          timestamp: Date.now(),
-        } as never),
-      ).catch(() => undefined);
-      await transitionRunStatus(runId, "running", "failed", {
-        error: runError,
-      }, executionAuthority).catch((e) => {
-        if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-        throw e;
+      // cinatra#3007 — the review question comes first here too: `sendTask` is
+      // blocking, so the flow may already have produced an artifact when the
+      // transport failed. A held run gets no RUN_ERROR and no terminal write.
+      await failRunOnWayflowDispatchError({
+        runId,
+        orgId: run.orgId,
+        runError,
+        authority: executionAuthority,
       });
     }
     return;

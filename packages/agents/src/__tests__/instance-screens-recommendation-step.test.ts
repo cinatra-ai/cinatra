@@ -369,10 +369,11 @@ describe("screenDrawsPageRail — the gate row is drawn AHEAD OF the work steps,
   it("the screen asks the predicate rather than restating it inline", () => {
     expect(SCREEN_SRC).toContain("const railDraws = screenDrawsPageRail({");
     // The count is every row the frame draws (cinatra#3478): the rows already
-    // pushed, plus the run's own record, which is composed after this answer and
-    // makes the frame draw a column just as they do.
+    // pushed, plus an upcoming review row (cinatra#3679), plus the run's own
+    // record, plus the review rows' own steps (cinatra#3693) — all four composed
+    // after this answer, and each of them makes the frame draw a column.
     expect(SCREEN_SRC).toMatch(
-      /gateStepCount: railSteps\.length \+ \(railCarriesMadeStep \? 1 : 0\),/,
+      /gateStepCount:\s*\n\s*railSteps\.length \+\s*\n\s*\(upcomingNumberedKeys\.includes\("review"\) \? 1 : 0\) \+\s*\n\s*\(railCarriesMadeStep \? 1 : 0\) \+\s*\n\s*reviewSelectionSteps\.length,/,
     );
     expect(SCREEN_SRC).not.toMatch(/run\.status !== "pending_input" &&/);
   });

@@ -29,6 +29,11 @@ const reconstructThreadPayload = vi.fn();
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
   isPlatformAdmin: (s: unknown) => isPlatformAdmin(s),
+  // cinatra#2815 S3: the save now resolves this caller's grants and teams
+  // ONCE, to gate the body's project and to freeze the creator's teams. These
+  // cases are about the session and org anchoring, so the resolution answers
+  // "resolved, none" and the project gate below is never reached.
+  resolveActorGrantsForUserInOrg: async () => ({ projectGrants: [], teamIds: [] }),
 }));
 vi.mock("@/lib/database", () => ({
   upsertChatThreadInDatabase: (...a: unknown[]) => upsertChatThreadInDatabase(...a),
@@ -164,7 +169,15 @@ describe("POST /api/assistants/threads (save)", () => {
       // ...and the SESSION's user as the acting writer (cinatra#2823 S9j) —
       // the truncation tombstone authorizes against it, so it must come from
       // the session and never from the body.
-      { orgId: "org-9", assistantMirrorOrgId: "org-9", actorUserId: "user-self" },
+      // cinatra#2815 S3 adds the creator's teams to the same options object.
+      // They are the membership read above, resolved under this very org, and
+      // the mirror reads them only on the INSERT that creates the row.
+      {
+        orgId: "org-9",
+        assistantMirrorOrgId: "org-9",
+        actorUserId: "user-self",
+        creatorTeamIds: [],
+      },
     );
   });
 });

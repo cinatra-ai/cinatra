@@ -65,7 +65,12 @@ export function normalizeOrgRole(role: unknown): "owner" | "admin" | "member" {
   return "member";
 }
 
-function getActor(actor: PrimitiveActorContext): DashboardActor | null {
+/** The MCP actor ALWAYS carries an organization (an MCP request without one
+ *  resolves to no actor at all), so its handlers keep a string tenant even
+ *  though a session actor's may be null (cinatra#2811). */
+type McpDashboardActor = DashboardActor & { readonly organizationId: string };
+
+function getActor(actor: PrimitiveActorContext): McpDashboardActor | null {
   const ext = actor as unknown as Record<string, unknown>;
   const orgId = (ext["orgId"] as string | null | undefined) ?? null;
   const userId = actor.userId;
@@ -123,7 +128,8 @@ export type DashboardDto = {
   readonly description: string | null;
   readonly ownerLevel: string;
   readonly ownerId: string;
-  readonly organizationId: string;
+  /** NULL only for the caller's own workspace dashboard (cinatra#2811). */
+  readonly organizationId: string | null;
   readonly status: string;
   readonly configVersion: string;
   readonly dashboardVersion: number;

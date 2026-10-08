@@ -158,6 +158,10 @@ const INVENTORY: Record<string, Entry> = {
     why: "RegistryPermissionsScreen + AgentBuilderImportScreen — both mount under /configuration only.",
     disposition: "admin-only-mount",
   },
+  "packages/agents/src/upload-extension-screen-body.tsx": {
+    why: "The Upload Extension screen's extracted JSX body; AgentBuilderImportScreen renders it under /configuration/extensions/upload only.",
+    disposition: "admin-only-mount",
+  },
   "packages/sdk-ui/src/nango-managed-api-card.tsx": {
     why: "Renders on /configuration/llm only.",
     disposition: "admin-only-mount",

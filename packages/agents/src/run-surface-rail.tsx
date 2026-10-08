@@ -325,6 +325,9 @@ export function RunSurfaceRailRow({
   // that cannot be opened never gets it — and neither does a row its page has
   // said the run has not reached.
   const emphasised = Boolean(selected) && selectable && reached !== false;
+  // Only confirmed, successfully continued context gates get a settlement
+  // word. Ordinary answered inputs keep their plain Setup/field label.
+  const title = settled && selectionKey.startsWith("context:") ? `${label} · continued` : label;
   return (
     <Button
       type="button"
@@ -339,6 +342,7 @@ export function RunSurfaceRailRow({
       data-conformance-id={conformanceId}
       data-action={action}
       aria-current={selected ? "step" : undefined}
+      aria-label={displayStep !== null && !runSurfaceStepDrawsGlyph(selectionKey) ? `${displayStep} ${title}` : undefined}
       // `aria-disabled`, NOT the native `disabled`. Native `disabled` takes the
       // row out of the tab order, so keyboard focus could not reach the row —
       // and "its row stays on the rail, so the series is visible" is precisely
@@ -374,11 +378,10 @@ export function RunSurfaceRailRow({
           displayStep
         )}
       </span>
-      {/* THE TITLE IS NOT EMPHASISED BY THE SETTLING, only by the selection —
-          "the completed circle in place of the numeral, the title
-          unhighlighted". No status word is added beside it: the drawing shows
-          none. */}
-      <span className={runSurfaceRailTitleClass(emphasised)}>{label}</span>
+      {/* Settled context gates record how they settled, in the same title
+          form as review gates. Settling does not emphasise the title; only
+          selection does. Ordinary answered Setup keeps its plain label. */}
+      <span className={runSurfaceRailTitleClass(emphasised)}>{title}</span>
     </Button>
   );
 }
@@ -456,8 +459,17 @@ export function RunSurfaceRail({
   // The rows that HEAD the rail, and the one that CLOSES it — see
   // `RunSurfaceRailStep.tail`. The selection reads `steps` whole, so splitting
   // the ROWS moves nothing about what can be opened.
-  const headSteps = steps.filter((step) => !step.tail);
-  const tailSteps = steps.filter((step) => step.tail);
+  // AND A STEP WHOSE ROW THE RAIL ALREADY DRAWS CONTRIBUTES NO SECOND ROW
+  // (cinatra#3693). A run's review gates and their audits are entries the rail
+  // draws itself, from the run's own gate list (`run-step-rail-extra-entry`),
+  // and they are ALSO selections with a surface of their own. The screen hands
+  // them here for the selection and the surface, with no row -- so the row is
+  // drawn once, where it always was, and the mark between two entries still
+  // counts only the rows a reader can see. Counting a rowless step would draw a
+  // separator over nothing, which is a gap in the rail's rhythm and an entry a
+  // capture cannot address.
+  const headSteps = steps.filter((step) => !step.tail && runSurfaceNodeExists(step.row));
+  const tailSteps = steps.filter((step) => step.tail && runSurfaceNodeExists(step.row));
 
   // THE ONE PLACE A SELECTION CHANGES, so it is the one place that can refuse
   // one (cinatra#2970). A row drawn by any module reaches this; a key naming a

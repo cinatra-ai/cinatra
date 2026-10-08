@@ -26,8 +26,8 @@ import {
   // statement the WayFlow gate is claimed with, mirroring the org-scoped CAS the
   // setup- branch already runs through `resumeRunFromSetupApproval`.
   transitionRunStatus,
-  writeHitlPrompt,
 } from "./store";
+import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
@@ -1083,11 +1083,15 @@ export async function approveReviewTaskInternal(
     // A failure OF the dispatch is not released: WayFlow may already have taken
     // the message, and re-opening the gate there is the double resume this whole
     // section exists to prevent.
+    // Read only THIS pre-dispatch materialization, never the latest gate later.
+    let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
+    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
     let dispatchStarted = false;
+    let capturedPromptId: string | null = null;
     try {
       // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
       // ""). Bare-approval flagged excluded=true.
-      await writeHitlPrompt({
+      capturedPromptId = await captureHitlPromptForContinue({
         runId: run.id,
         agentId: template.packageName,
         stepKey: taskId,
@@ -1099,6 +1103,7 @@ export async function approveReviewTaskInternal(
         // The first argument of a console call is a CONSTANT: a caller-derived
         // value in it is read as a format string, not as text (cinatra#3423).
         console.warn("[approveReviewTaskInternal] writeHitlPrompt failed", { runId: run.id }, e);
+        return null;
       });
 
       // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
@@ -1167,7 +1172,8 @@ export async function approveReviewTaskInternal(
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
       // Past this line the answer is on the wire.
       dispatchStarted = true;
-      const task = await client.sendTask({
+      const deadline = Date.now() + WAYFLOW_A2A_TIMEOUT_MS;
+      const initialTask = await client.sendTask({
         message: {
           role: "user",
           kind: "message",
@@ -1176,8 +1182,9 @@ export async function approveReviewTaskInternal(
           parts: [{ kind: "text", text: resumeText }],
           metadata: resumeMetadata,
         },
-        configuration: { acceptedOutputModes: ["text"] },
-      });
+        configuration: { acceptedOutputModes: ["text"], blocking: true },
+      }, {timeoutMs: Math.max(1,deadline-Date.now())});
+      const task = await awaitContinueTaskOutcome(initialTask,client,run.a2aContextId,deadline);
 
       // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
       // index.ts ← @cinatra-ai/a2a).
@@ -1191,6 +1198,17 @@ export async function approveReviewTaskInternal(
       const { handleWayflowTaskState } = await import("./execution");
       await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
 
+      const state=task.status?.state;
+      if(capturedPromptId && gateSnapshot && submittedValues !== null
+        && task.contextId===run.a2aContextId && typeof task.id==="string"
+        && (state==="completed" || (state==="input-required" && task.id!==taskId))){
+        await recordSuccessfulContinue({promptId:capturedPromptId,gate:gateSnapshot,submittedValues,
+          receipt:{version:1,runId:run.id,orgId:run.orgId,agentId:template.packageName,
+            reviewTaskId,contextId:run.a2aContextId,returnedTaskId:task.id,returnedState:state,
+            materializedAt:gateSnapshot.materializedAt,schemaDigest:continueGateDigest(gateSnapshot),
+            answerDigest:continueBindingDigest(submittedValues),acknowledgedAt:new Date().toISOString()}
+        }).catch(error=>console.warn("[approveReviewTaskInternal] Continue receipt unavailable",error));
+      }
       console.log("[approveReviewTaskInternal] wayflow-path resumed", {
         runId: run.id,
         taskId,
@@ -1229,4 +1247,49 @@ export async function approveReviewTaskInternal(
     `real UUID paths are not supported after review task row removal. ` +
     `Use synthetic prefix (setup-, wayflow-) for post-migration runs.`,
   );
+}
+
+/** Internal: an accepted async reply is not yet a settled answer. */
+export async function awaitContinueTaskOutcome<T extends {
+  id: string; contextId?: string; status?: {state: string};
+}>(initial: T, client: {getTask(id:string,options?:{signal?:AbortSignal}):Promise<T>},
+  contextId: string, deadline: number): Promise<T> {
+  // Direct replies cross the same boundary as polled replies. The canonical
+  // handler treats an unknown state as completed, so identity and state must
+  // be accepted BEFORE it can mutate the run, not only before writing history.
+  const validate = (value: T): void => {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || typeof value.id !== "string" || value.id.trim().length === 0
+      || /[\u0000-\u001f\u007f]/.test(value.id) || value.contextId !== contextId) {
+      throw new Error("Continue task identity mismatch");
+    }
+    if (!value.status || typeof value.status !== "object" || Array.isArray(value.status)
+      || !["submitted", "working", "input-required", "completed", "failed"].includes(value.status.state)) {
+      throw new Error("Continue outcome is not confirmed");
+    }
+  };
+  validate(initial);
+  if(initial.status?.state!=="working" && initial.status?.state!=="submitted") return initial;
+  // The first reply may legitimately name a NEW next task: the outgoing
+  // message carries a context, not the paused task ID. Subsequent reads must
+  // remain bound to precisely this accepted first task ID and run context.
+  const taskId=initial.id;
+  let task=initial;
+  let pause=250;
+  while(task.status?.state==="working" || task.status?.state==="submitted"){
+    const remaining=deadline-Date.now();
+    if(remaining<=0) throw new Error("Continue outcome deadline exceeded");
+    await new Promise<void>(resolve=>setTimeout(resolve,Math.min(pause,remaining)));
+    const budget=deadline-Date.now();
+    if(budget<=0) throw new Error("Continue outcome deadline exceeded");
+    // getTask has no default timeout. Cancel its actual HTTP call at the
+    // ORIGINAL send deadline, rather than racing an uncancelled promise.
+    task=await client.getTask(taskId,{signal:AbortSignal.timeout(budget)});
+    validate(task);
+    if(task.id!==taskId) throw new Error("Continue task identity mismatch");
+    pause=Math.min(2000,pause*2);
+  }
+  if(task.status?.state!=="completed" && task.status?.state!=="input-required" && task.status?.state!=="failed")
+    throw new Error("Continue outcome is not confirmed");
+  return task;
 }
