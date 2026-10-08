@@ -1,25 +1,6 @@
 {
   "note": "Self-rendering extensions border floor (cinatra-ai/cinatra#3471, epic #2926 — decision 407 of 2026-09-13: connectors render the setup page themselves, artifacts render the artifact view themselves, and the host shares its primitives with extension bundles at run time). Each entry is a design-primitive BYTE COPY a synced kind:connector / kind:artifact package still carries under src/components/ui/. SHRINK-ONLY: a new copy fails the gate immediately; a removed one makes this file stale until it is ratcheted down with `node scripts/extensions/self-rendering-extensions-border-gate.mjs --write-baseline` (which refuses to write a baseline that grows). The floor empties as packages move to the run-time-shared primitives (slice 2 of #3471).",
   "copies": {
-    "apollo-connector": [
-      "src/components/ui/button.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/paginated-table.tsx",
-      "src/components/ui/pagination.tsx",
-      "src/components/ui/table.tsx"
-    ],
-    "drupal-mcp-connector": [
-      "src/components/ui/alert.tsx",
-      "src/components/ui/badge.tsx",
-      "src/components/ui/button.tsx",
-      "src/components/ui/field.tsx",
-      "src/components/ui/input-group.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/label.tsx",
-      "src/components/ui/separator.tsx",
-      "src/components/ui/textarea.tsx"
-    ],
     "email-artifacts": [
       "src/components/ui/button.tsx",
       "src/components/ui/checkbox.tsx",
