@@ -34,6 +34,9 @@ vi.mock("../../../../../packages/agents/src/agent-hitl-screen-actions", () => ({
 // generic-input fixture; fail fast rather than installing any extension.
 vi.mock("../../../../../packages/agents/src/email-outreach-stage-actions", () => new Proxy({}, { get: (_target, name) => name === "then" ? undefined : () => { throw new Error("Unexpected outreach action"); } }));
 vi.mock("../../../../../packages/agents/src/list-picker-actions", () => ({ fetchAvailableLists: vi.fn(async () => { throw new Error("Unexpected list read"); }) }));
+// External MCP action registration is not part of this static UI fixture.
+// Keep the catalog fail-fast guard below for any actual renderer install read.
+vi.mock("@/lib/mcp-server-write-actions", () => ({}));
 vi.mock("@/lib/generated/extensions.server", () => ({
   get STATIC_EXTENSION_MANIFEST() { throw new Error("Unexpected runtime install catalog read in static ownership fixture"); },
 }));
