@@ -21,6 +21,7 @@
 
 import { isRunStartToolName } from "./run-start-tool-names";
 import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -642,7 +643,13 @@ function AgentRunTurnSlot({
       return next;
     });
   }, []);
-  const turnCarriesSettledSchedule = settledScheduleCards.size > 0;
+  // A durable view without a producing-step stamp is drawn by the turn's
+  // sibling view list. Associate it only through the admitted body's run ID,
+  // never through its opaque reference or the first run in the transcript.
+  const scheduleTurn = useContext(ScheduleWaitContext);
+  const turnLevelSettledSchedule = scheduleTurn !== null &&
+    [...scheduleTurn.settledScheduleRuns.values()].includes(runId);
+  const turnCarriesSettledSchedule = settledScheduleCards.size > 0 || turnLevelSettledSchedule;
 
   const [gateSignal, setGateSignal] = useState<string | null>(null);
   const onGateChange = useCallback(
@@ -946,6 +953,13 @@ function AgentRunTurnSlot({
   // such card, this container does not exist and the turn is exactly what it
   // always was.
   if (!turnCarriesSettledSchedule) return turn;
+  if (turnLevelSettledSchedule && scheduleTurn?.screenContainer) {
+    return <>{turn}{createPortal(
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>,
+      scheduleTurn.screenContainer,
+      runId,
+    )}</>;
+  }
   return (
     <>
       {turn}
@@ -1982,15 +1996,28 @@ function MessageRenderableViews({
    *  changes which card renders. */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
+  const { settledScheduleRuns, setScreenContainer } = useContext(ScheduleWaitContext) ?? {};
   const views = message.dataParts ?? [];
   if (views.length === 0) return null;
-  return views.map((view, i) => (
+  const cards = views.map((view, i) => (
     <RenderableViewCard
       key={`view-${message.id}-${i}`}
       data={view}
       {...(onApplyIntent ? { onApplyIntent } : {})}
     />
   ));
+  if (!views.some((view) => view.viewType === SPENT_MOMENT_CARD_VIEW_TYPE)) return cards;
+  // The durable schedule and its next screen use the live trace's same flex
+  // column. Keep the cards' own margins separate with the ordinary slot gap;
+  // independent block containers would collapse them after a reload.
+  return (
+    <div className="flex flex-col gap-2">
+      {cards}
+      {settledScheduleRuns && settledScheduleRuns.size > 0 ? (
+        <div ref={setScreenContainer} data-agent-run-follow-up-slots="" />
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -2033,16 +2060,33 @@ const ScheduleWaitContext = createContext<{
   reportWaitingRunIds: (runIds: readonly string[]) => void;
   reportFiredRunIds: (runIds: readonly string[]) => void;
   reportFiredRecurringRunIds: (runIds: readonly string[]) => void;
+  settledScheduleRuns: ReadonlyMap<string, string>;
+  screenContainer: HTMLDivElement | null;
+  setScreenContainer: (container: HTMLDivElement | null) => void;
 } | null>(null);
 
 /** The assistant turn's body, and the scope of the correction inside it. */
 function ScheduleWaitTurnBody({
   className,
   children,
+  responseActions,
 }: {
   className?: string;
   children: ReactNode;
+  responseActions?: ReactNode;
 }) {
+  const [settledScheduleRuns, setSettledScheduleRuns] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const [screenContainer, setScreenContainer] = useState<HTMLDivElement | null>(null);
+  const registerSettledSchedule = useCallback((cardId: string, settled: boolean, runId?: string | null) => {
+    const admittedRunId = settled && typeof runId === "string" && runId.trim() !== "" ? runId : null;
+    setSettledScheduleRuns((previous) => {
+      if ((previous.get(cardId) ?? null) === admittedRunId) return previous;
+      const next = new Map(previous);
+      if (admittedRunId === null) next.delete(cardId);
+      else next.set(cardId, admittedRunId);
+      return next;
+    });
+  }, []);
   const [waitingRunIds, setWaitingRunIds] = useState<readonly string[]>([]);
   const [firedRunIds, setFiredRunIds] = useState<readonly string[]>([]);
   const [firedRecurringRunIds, setFiredRecurringRunIds] = useState<readonly string[]>([]);
@@ -2071,6 +2115,9 @@ function ScheduleWaitTurnBody({
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
+      settledScheduleRuns,
+      screenContainer,
+      setScreenContainer,
     }),
     [
       waitingRunIds,
@@ -2079,11 +2126,20 @@ function ScheduleWaitTurnBody({
       reportWaitingRunIds,
       reportFiredRunIds,
       reportFiredRecurringRunIds,
+      settledScheduleRuns,
+      screenContainer,
     ],
   );
   return (
     <ScheduleWaitContext.Provider value={value}>
-      <div className={className}>{children}</div>
+      <SettledScheduleRegisterProvider register={registerSettledSchedule}>
+        <div className={className}>
+          {children}
+          {/* Whole-response actions follow every card in this turn, including
+              the next screen rehydrated into the sibling portal (#3984). */}
+          {responseActions}
+        </div>
+      </SettledScheduleRegisterProvider>
     </ScheduleWaitContext.Provider>
   );
 }
@@ -2513,7 +2569,19 @@ export function ChatMessagesView({
                     mentionables={mentionables}
                   />
                 ) : (
-                  <ScheduleWaitTurnBody className="group min-w-0 max-w-full flex-1">
+                  <ScheduleWaitTurnBody
+                    className="group min-w-0 max-w-full flex-1"
+                    responseActions={!message.error && !(message.parts && message.parts.length > 0) && message.content ? (
+                      <ResponseActionBar
+                        message={message}
+                        messages={messages}
+                        hasActiveStream={hasActiveStream}
+                        isSlackMode={isSlackMode}
+                        isStreaming={isStreaming}
+                        onEditAndResend={onEditAndResend}
+                      />
+                    ) : null}
+                  >
                     {/* Ordered parts: when an assistant message
                         has a `parts` trace, render text + tool badges
                         chronologically interleaved. Replaces the
@@ -2615,14 +2683,6 @@ export function ChatMessagesView({
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
                         )}
-                        <ResponseActionBar
-                          message={message}
-                          messages={messages}
-                          hasActiveStream={hasActiveStream}
-                          isSlackMode={isSlackMode}
-                          isStreaming={isStreaming}
-                          onEditAndResend={onEditAndResend}
-                        />
                       </>
                     ) : turnCarriesLifecycleItems(message) ? (
                       // cinatra#2825 (S9l) — a turn with no prose and no trace,
@@ -2691,7 +2751,19 @@ export function ChatMessagesView({
                 mentionables={mentionables}
               />
             ) : (
-              <ScheduleWaitTurnBody className="group min-w-0 max-w-full flex-1">
+              <ScheduleWaitTurnBody
+                className="group min-w-0 max-w-full flex-1"
+                responseActions={!message.error && !(message.parts && message.parts.length > 0) && message.content ? (
+                  <ResponseActionBar
+                    message={message}
+                    messages={messages}
+                    hasActiveStream={hasActiveStream}
+                    isSlackMode={isSlackMode}
+                    isStreaming={isStreaming}
+                    onEditAndResend={onEditAndResend}
+                  />
+                ) : null}
+              >
                 {/* Ordered parts — see comment at the first render site
                     above. Same conditional applies here in slack-mode
                     view. */}
@@ -2797,14 +2869,6 @@ export function ChatMessagesView({
                         </div>
                       );
                     })()}
-                    <ResponseActionBar
-                      message={message}
-                      messages={messages}
-                      hasActiveStream={hasActiveStream}
-                      isSlackMode={isSlackMode}
-                      isStreaming={isStreaming}
-                      onEditAndResend={onEditAndResend}
-                    />
                   </>
                 ) : turnCarriesLifecycleItems(message) ? (
                   // cinatra#2825 (S9l) — the card-only turn, in this layout too:
