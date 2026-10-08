@@ -1153,9 +1153,26 @@ export async function awaitContinueTaskOutcome<T extends {
   id: string; contextId?: string; status?: {state: string};
 }>(initial: T, client: {getTask(id:string,options?:{signal?:AbortSignal}):Promise<T>},
   contextId: string, deadline: number): Promise<T> {
+  // Direct replies cross the same boundary as polled replies. The canonical
+  // handler treats an unknown state as completed, so identity and state must
+  // be accepted BEFORE it can mutate the run, not only before writing history.
+  const validate = (value: T): void => {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || typeof value.id !== "string" || value.id.trim().length === 0
+      || /[\u0000-\u001f\u007f]/.test(value.id) || value.contextId !== contextId) {
+      throw new Error("Continue task identity mismatch");
+    }
+    if (!value.status || typeof value.status !== "object" || Array.isArray(value.status)
+      || !["submitted", "working", "input-required", "completed", "failed"].includes(value.status.state)) {
+      throw new Error("Continue outcome is not confirmed");
+    }
+  };
+  validate(initial);
   if(initial.status?.state!=="working" && initial.status?.state!=="submitted") return initial;
+  // The first reply may legitimately name a NEW next task: the outgoing
+  // message carries a context, not the paused task ID. Subsequent reads must
+  // remain bound to precisely this accepted first task ID and run context.
   const taskId=initial.id;
-  if(!taskId || initial.contextId!==contextId) throw new Error("Continue task identity mismatch");
   let task=initial;
   let pause=250;
   while(task.status?.state==="working" || task.status?.state==="submitted"){
@@ -1167,10 +1184,11 @@ export async function awaitContinueTaskOutcome<T extends {
     // getTask has no default timeout. Cancel its actual HTTP call at the
     // ORIGINAL send deadline, rather than racing an uncancelled promise.
     task=await client.getTask(taskId,{signal:AbortSignal.timeout(budget)});
-    if(task.id!==taskId || task.contextId!==contextId) throw new Error("Continue task identity mismatch");
+    validate(task);
+    if(task.id!==taskId) throw new Error("Continue task identity mismatch");
     pause=Math.min(2000,pause*2);
   }
-  if(task.status?.state!=="completed" && task.status?.state!=="input-required")
+  if(task.status?.state!=="completed" && task.status?.state!=="input-required" && task.status?.state!=="failed")
     throw new Error("Continue outcome is not confirmed");
   return task;
 }

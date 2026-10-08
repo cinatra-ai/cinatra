@@ -85,9 +85,38 @@ describe("receipt failures cannot turn the pre-send capture into a continued gat
     ports.handle.mockImplementation(async()=>{expect(ports.rows[0].submittedValues).toEqual(answer);throw new Error("handler failed");});
     await expect(submit()).rejects.toThrow("handler failed");expect(ports.events).not.toContain("receipt");
   });
-  it.each([task("input-required","old-task"),task("completed","next-task","foreign"),task("failed"),task("unknown")])(
-    "does not confirm a same gate, foreign context or unaccepted outcome %#",async(reply)=>{
-      ports.send.mockResolvedValue(reply);await submit();expect(ports.events).not.toContain("receipt");
+  it.each([task("input-required","old-task"),task("failed")])(
+    "keeps canonical same-gate and failure handling without confirming Continue %#",async(reply)=>{
+      ports.send.mockResolvedValue(reply);await submit();
+      expect(ports.handle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({task:reply}));
+      expect(ports.events).not.toContain("receipt");
+    });
+  it.each([
+    ["foreign completed context",task("completed","next-task","foreign")],
+    ["foreign next-gate context",task("input-required","next-task","foreign")],
+    ["unknown state",task("unknown")],
+    ["missing state",{id:"next-task",contextId:"context",status:{}}],
+    ["missing status",{id:"next-task",contextId:"context"}],
+    ["missing task ID",{contextId:"context",status:{state:"completed"}}],
+    ["empty task ID",task("completed","")],
+    ["blank task ID",task("completed","  ")],
+    ["control character task ID",task("completed","bad\nID")],
+    ["nonstring task ID",{id:7,contextId:"context",status:{state:"completed"}}],
+    ["malformed status",{id:"next-task",contextId:"context",status:"completed"}],
+    ["null task",null],
+    ["non-task message",{kind:"message",contextId:"context",parts:[]}],
+  ])("rejects direct %s BEFORE the canonical run handler",async(_label,reply)=>{
+    ports.send.mockResolvedValue(reply);
+    await expect(submit()).rejects.toThrow(/Continue (task identity mismatch|outcome is not confirmed)/);
+    expect(ports.handle).not.toHaveBeenCalled();expect(ports.events).not.toContain("receipt");
+    expect(ports.status).toBe("running");expect(ports.send).toHaveBeenCalledTimes(1);
+  });
+  it.each([task("completed","new-completion-task"),task("input-required","new-review-task")])(
+    "accepts a well-formed direct new task ID in the exact run context %#",async(reply)=>{
+      ports.send.mockResolvedValue(reply);await submit();
+      expect(ports.handle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({task:reply}));
+      expect(ports.events).toEqual(["capture","handle","receipt"]);
+      expect(ports.rows[0].dispatchReceipt).toEqual(expect.objectContaining({returnedTaskId:reply.id}));
     });
   it("a failed capture creates no receipt ID while the existing best-effort dispatch behavior survives",async()=>{
     const db=(await import("../db")).db;
@@ -113,6 +142,12 @@ describe("one original deadline and one exact async task/context",()=>{
       const observed=submit().catch(error=>error);await vi.runAllTimersAsync();expect(await observed).toBeInstanceOf(Error);
       expect(ports.handle).not.toHaveBeenCalled();expect(ports.events).not.toContain("receipt");expect(ports.status).toBe("running");
     });
+  it("keeps an exact-context async failure on the canonical failure path without a Continue receipt",async()=>{
+    vi.useFakeTimers();ports.send.mockResolvedValue(task("working"));ports.get.mockResolvedValue(task("failed"));
+    const observed=submit();await vi.runAllTimersAsync();await observed;
+    expect(ports.handle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({task:task("failed")}));
+    expect(ports.events).not.toContain("receipt");expect(ports.send).toHaveBeenCalledTimes(1);
+  });
   it("stops at the original absolute deadline without resetting a budget or leaving an unbounded getTask",async()=>{
     vi.useFakeTimers();const get=vi.fn().mockResolvedValue(task("working"));const deadline=Date.now()+300;
     const observed=awaitContinueTaskOutcome(task("working"),{getTask:get},"context",deadline).catch(error=>error);

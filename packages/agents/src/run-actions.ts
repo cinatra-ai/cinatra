@@ -677,7 +677,18 @@ export async function buildSubmissionMapByStepIndex(
       }
     }
     const slotMeta = v["slotMeta"] as { slotId?: unknown } | undefined;
-    return typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"]);
+    if (typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"])) return true;
+    // The prompt writer stores parsed context JSON directly. Keep that exact
+    // canonical envelope out of this policy cursor too, without dropping an
+    // ordinary policy answer merely because it happens to have selectedRefs.
+    return Object.keys(v).length === 3
+      && typeof v["slotId"] === "string" && v["slotId"].trim().length > 0
+      && (v["resolutionMode"] === "override" || v["resolutionMode"] === "accumulate")
+      && Array.isArray(v["selectedRefs"])
+      && v["selectedRefs"].every(ref => ref && typeof ref === "object"
+        && ["artifactId", "representationRevisionId", "semanticAssertionId"].every(key =>
+          typeof (ref as Record<string, unknown>)[key] === "string"
+          && ((ref as Record<string, unknown>)[key] as string).trim().length > 0));
   };
   const prompts = allPrompts.filter((p) => !isContextSubmission(p.submittedValues));
 
