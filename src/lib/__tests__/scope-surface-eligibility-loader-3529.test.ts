@@ -52,6 +52,9 @@ const mocks = vi.hoisted(() => ({
   readProjectAgentTemplateBindings: vi.fn(),
   readInstalledAgentTemplates: vi.fn(),
   listInstalledExtensions: vi.fn(),
+  readEffectiveStatusByPackageNames: vi.fn(),
+  isPlatformAdmin: vi.fn(),
+  catalog: {} as Record<string, unknown>,
   readExtensionAccessPolicies: vi.fn(),
   readExtensionCoOwners: vi.fn(),
   readExtensionInstalledBy: vi.fn(),
@@ -60,6 +63,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: mocks.getAuthSession,
+  isPlatformAdmin: mocks.isPlatformAdmin,
   requireActorContext: mocks.requireActorContext,
   resolveActorGrantsForUserInOrg: mocks.resolveActorGrantsForUserInOrg,
 }));
@@ -74,7 +78,9 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 }));
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   listInstalledExtensions: mocks.listInstalledExtensions,
+  readEffectiveStatusByPackageNames: mocks.readEffectiveStatusByPackageNames,
 }));
+vi.mock("@/lib/generated/extensions.server", () => ({ STATIC_EXTENSION_MANIFEST: mocks.catalog }));
 // The permissions STORE is a read; the evaluator that consumes it
 // (`@cinatra-ai/extensions/enforce-extension-access`) is NOT mocked.
 vi.mock("@cinatra-ai/extensions/permissions-store", () => ({
@@ -237,6 +243,9 @@ function signIn(userId: string, options: { activeOrg?: string; platformAdmin?: b
 beforeEach(() => {
   vi.clearAllMocks();
   signIn(MEMBER);
+  mocks.isPlatformAdmin.mockImplementation((session) => session?.user?.role === "admin");
+  for (const key of Object.keys(mocks.catalog)) delete mocks.catalog[key];
+  mocks.readEffectiveStatusByPackageNames.mockResolvedValue(new Map(FIXTURES.map((f) => [pkg(f.slug), f.status === "archived" ? "archived" : "active"])));
 
   mocks.resolveActorGrantsForUserInOrg.mockImplementation(async (userId: string, orgId: string) => {
     const grants = GRANTS[userId]?.[orgId];
@@ -607,5 +616,89 @@ describe("the viewed organization differs from the active one", () => {
     // Nothing tells which organization's installs belong on it, so the tab
     // lists nothing rather than an arbitrary organization's rows.
     expect(await listed({ kind: "project", id: PROJECT_LEGACY })).toEqual([]);
+  });
+});
+
+// Only read ports are mocked. The shared provisioning resolver and the access
+// evaluator both make their real production decisions for these scope reads.
+function missingRuntimeDependency(slug = "org-a-wide") {
+  mocks.catalog[pkg(slug)] = {
+    packageName: pkg(slug), kind: "agent", version: "1.0.0", resolution: "required",
+    dependencies: [{ packageName: "@acme/list-skill", kind: "skill", edgeType: "runtime", requirement: "required", versionConstraint: { kind: "semver-range", range: "^1.0.0" } }],
+  };
+  mocks.catalog["@acme/list-skill"] = {
+    packageName: "@acme/list-skill", kind: "skill", version: "1.0.0", resolution: "guardedOptional", displayName: "List Curation Skill", dependencies: [],
+  };
+  const templates = FIXTURES.map((f) => ({ id: templateId(f.slug), name: f.slug, description: `${f.slug} description`, packageName: pkg(f.slug), packageVersion: "1.0.0" }));
+  mocks.readInstalledAgentTemplates.mockResolvedValue(templates);
+  return templates;
+}
+
+describe("#3960 runtime availability after scope authorization", () => {
+  const scopes: ScopeSurfaceRef[] = [
+    { kind: "personal" }, { kind: "workspace" }, { kind: "organization", id: ORG_A },
+    { kind: "team", id: TEAM_A }, { kind: "project", id: PROJECT_A1 },
+  ];
+  for (const scope of scopes) {
+    it(`${scope.kind}: an authorized installed agent missing its required skill has no runnable card action`, async () => {
+      missingRuntimeDependency();
+      const result = await readScopeSurfaceAgentTab(scope);
+      expect(result.read).toBe(true);
+      const row = result.rows.find((r) => r.packageName === pkg("org-a-wide"));
+      expect(row).toBeDefined();
+      expect(row!.unavailable).toEqual({
+        reason: "This agent cannot run: List Curation Skill is not installed.", ctaLabel: null, ctaHref: null,
+        ctaAriaLabel: "org-a-wide cannot run — List Curation Skill not installed.",
+      });
+      expect(row!.detailHref).toBeNull();
+      expect(mocks.readInstalledAgentTemplates).toHaveBeenCalledTimes(1);
+      expect(mocks.readEffectiveStatusByPackageNames).toHaveBeenCalledWith(expect.arrayContaining([pkg("org-a-wide"), "@acme/list-skill"]));
+    });
+  }
+  it("only a platform admin receives the requirements destination; scoped side links stay unchanged", async () => {
+    missingRuntimeDependency();
+    signIn(PLATFORM_ADMIN, { platformAdmin: true });
+    const row = (await readScopeSurfaceAgentRows({ kind: "workspace" })).find((r) => r.packageName === pkg("org-a-wide"))!;
+    expect(row.unavailable?.ctaHref).toBe("/configuration/marketplace/acme/org-a-wide");
+    expect(row.unavailable?.ctaLabel).toBe("View requirements");
+    expect(row.unavailable?.ctaAriaLabel).toBe("org-a-wide cannot run — List Curation Skill not installed. View requirements");
+    expect(row.detailHref).toBeNull();
+    expect(row.settingsHref).toBe(scopeSurfaceAgentSettingsHref({ kind: "workspace" }, row.packageName));
+  });
+  it("availability never admits an ACL-denied agent or a hidden project binding", async () => {
+    missingRuntimeDependency("admin-only");
+    const result = await readScopeSurfaceAgentTab({ kind: "project", id: PROJECT_A1 });
+    expect(result.rows.some((r) => r.packageName === pkg("admin-only"))).toBe(false);
+    expect(result.rows.some((r) => r.packageName === pkg("hidden-platform"))).toBe(false);
+    const requested = mocks.readEffectiveStatusByPackageNames.mock.calls[0]?.[0] ?? [];
+    expect(requested).not.toContain(pkg("admin-only"));
+    expect(requested).not.toContain(pkg("hidden-platform"));
+  });
+  it("uses the template build, not the unrelated canonical install version, for dependency edges", async () => {
+    const templates = missingRuntimeDependency();
+    mocks.readInstalledAgentTemplates.mockResolvedValue(templates.map((t) => t.packageName === pkg("org-a-wide") ? { ...t, packageVersion: "2.0.0" } : t));
+    const row = (await readScopeSurfaceAgentRows({ kind: "workspace" })).find((r) => r.packageName === pkg("org-a-wide"))!;
+    expect(row.unavailable ?? null).toBeNull();
+  });
+  it("preserves the global conservative rule when one package has templates at different versions", async () => {
+    const templates = missingRuntimeDependency();
+    mocks.readInstalledAgentTemplates.mockResolvedValue([...templates, { ...templates[0], id: "alternate-build", packageVersion: "2.0.0" }]);
+    const row = (await readScopeSurfaceAgentRows({ kind: "workspace" })).find((r) => r.packageName === pkg("org-a-wide"))!;
+    expect(row.unavailable ?? null).toBeNull();
+  });
+  it("an external A2A template does not change the local package's dependency-version decision", async () => {
+    const templates = missingRuntimeDependency();
+    mocks.readInstalledAgentTemplates.mockResolvedValue([...templates, { ...templates[0], id: "external-template", sourceType: "external", packageVersion: "2.0.0" }]);
+    const row = (await readScopeSurfaceAgentRows({ kind: "workspace" })).find((r) => r.packageName === pkg("org-a-wide"))!;
+    expect(row.unavailable?.reason).toBe("This agent cannot run: List Curation Skill is not installed.");
+  });
+  it("a fresh installed dependency restores Run, without changing the eligibility set", async () => {
+    missingRuntimeDependency();
+    const before = await readScopeSurfaceAgentRows({ kind: "workspace" });
+    expect(before.find((r) => r.packageName === pkg("org-a-wide"))!.unavailable).toBeTruthy();
+    mocks.readEffectiveStatusByPackageNames.mockResolvedValue(new Map([...FIXTURES.map((f) => [pkg(f.slug), f.status === "archived" ? "archived" : "active"] as const), ["@acme/list-skill", "active"]]));
+    const after = await readScopeSurfaceAgentRows({ kind: "workspace" });
+    expect(after.map((r) => r.key)).toEqual(before.map((r) => r.key));
+    expect(after.find((r) => r.packageName === pkg("org-a-wide"))!.unavailable ?? null).toBeNull();
   });
 });

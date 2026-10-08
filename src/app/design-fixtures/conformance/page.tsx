@@ -1,3 +1,4 @@
+import { AgentRunEligibilityFixtures } from "./agent-run-eligibility-fixtures";
 import type { Metadata } from "next";
 import { RunWindowOwnershipFixture } from "./run-window-ownership-fixtures";
 import { runWindowOwnershipHost } from "./run-window-ownership-fixture-data";
@@ -124,6 +125,7 @@ export default async function ConformanceHarnessPage({ searchParams }: {
       />
       <PageContent className="flex flex-col gap-8 pb-12">
         <ToastConformanceFixture />
+        <AgentRunEligibilityFixtures />
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>Status pills (surface: status-pills)</CardTitle>
