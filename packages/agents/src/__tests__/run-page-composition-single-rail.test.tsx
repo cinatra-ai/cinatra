@@ -34,7 +34,7 @@
  */
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -643,7 +643,10 @@ describe("the run page draws exactly one step rail (cinatra#3478)", () => {
     // The gate the run is stopped at, then the steps still to come — one list,
     // one series of numerals, in the run's own order. Before the fix these were
     // two lists in two columns, each numbered from 1.
-    expect(entries).toEqual(["1Setup", "2Stored Ideas", "3Draft the post", "4Pick the image"]);
+    // Settled Setup retains ordinal 1 accessibly and draws its completed check.
+    expect(entries).toEqual(["Setup", "2Stored Ideas", "3Draft the post", "4Pick the image"]);
+    const setup = within(column).getByRole("button", { name: "1 Setup" });
+    expect(setup.getAttribute("data-run-surface-rail-settled")).toBe("true");
     expect(new Set(entries).size).toBe(entries.length);
   });
 
