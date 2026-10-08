@@ -506,7 +506,7 @@ export function RunSurfaceRail({
       <div
         data-conformance-id="run-step-rail-column"
         data-run-step-rail-column=""
-        className="flex shrink-0 flex-col pt-1"
+        className="flex w-[196px] shrink-0 flex-col pt-1"
       >
         {/* ROW, MARK, ROW — SIBLINGS IN NORMAL FLOW (cinatra#3225 items 2 and
             3, fix leg 10). That is how the drawing composes the rail, and the
