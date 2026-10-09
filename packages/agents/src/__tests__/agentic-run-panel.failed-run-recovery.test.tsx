@@ -29,6 +29,10 @@
  *     src/__tests__/agentic-run-panel.failed-run-recovery.test.tsx
  */
 import React from "react";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { compile } from "tailwindcss";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
@@ -135,6 +139,43 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
+
+// Compile the shipped stylesheet for the utilities on the actual buttons.
+// jsdom does not measure Tailwind or browser layout; no mock dimensions are
+// applied to the nodes. Only unconditional sizing declarations are compared.
+async function shippedSizingSignature(element: HTMLElement) {
+  const root = resolve(process.cwd(), "../..");
+  const stylesheet = resolve(root, "src/app/globals.css");
+  const require = createRequire(resolve(root, "package.json"));
+  const compiler = await compile(await readFile(stylesheet, "utf8"), {
+    base: dirname(stylesheet),
+    loadStylesheet: async (id, base) => {
+      let path: string;
+      if (id === "tw-animate-css") {
+        const packageRoot = resolve(root, "node_modules", id);
+        const manifest = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8"));
+        path = resolve(packageRoot, manifest.exports["."].style);
+      } else {
+        path = id.startsWith(".") ? resolve(base, id) : require.resolve(id, { paths: [base] });
+      }
+      return { path, base: dirname(path), content: await readFile(path, "utf8") };
+    },
+  });
+  const css = compiler.build([...element.classList]);
+  const properties = ["height", "padding-inline", "font-size", "line-height"];
+  const signature: Record<string, string> = {};
+  for (const rule of css.matchAll(/^\s*(\.(?:\\.|[\w-])+)\s*\{([^{}]+)\}/gm)) {
+    if (!element.matches(rule[1])) continue;
+    for (const property of properties) {
+      const value = rule[2].match(new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+);`))?.[1];
+      if (value) signature[property] = value.trim();
+    }
+  }
+  for (const property of properties) {
+    expect(signature[property], `Shipped CSS must declare ${property}`).toBeTruthy();
+  }
+  return signature;
+}
 
 function baseProps(overrides: Record<string, unknown> = {}) {
   return {
@@ -328,14 +369,19 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
     expect(reloadMock).not.toHaveBeenCalled();
   });
 
-  // cinatra#2734: these are DOM component-size contracts, not measured pixels.
+  // Approved app-artifact-review §I, run-failed-recovery: the two recovery
+  // buttons "share one size". This compares their shipped CSS declarations;
+  // the drawing does not prescribe a 32px height or the default variant name.
   it.each(["agent-detail", "chat"])(
-    "gives the real failed-run recovery pair the same default size on %s",
+    "§I run-failed-recovery: gives the real recovery pair equal sizing styles on %s",
     async (surface) => {
       const { AgenticRunPanel } = await import("../agentic-run-panel");
       render(<AgenticRunPanel {...baseProps({ surface, agentId: "cinatra-ai/blog-draft-writer-agent" })} />);
       const retry = screen.getByRole("button", { name: /^retry$/i });
       const successor = screen.getByRole("button", { name: /^start new run$/i });
+      const retrySizing = await shippedSizingSignature(retry);
+      const successorSizing = await shippedSizingSignature(successor);
+      expect(retrySizing).toEqual(successorSizing);
       expect(successor.getAttribute("data-size")).toBe("default");
       expect(retry.getAttribute("data-size")).toBe(successor.getAttribute("data-size"));
       expect(retry.classList.contains("h-8")).toBe(true);
