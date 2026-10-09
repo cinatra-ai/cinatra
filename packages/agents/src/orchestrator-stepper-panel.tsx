@@ -149,6 +149,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -442,16 +443,23 @@ function ReviewGateStepCard({
 }) {
   if (cardRef) {
     return (
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard
-          view={{
-            viewType: "artifact_review_gate",
-            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-            ref: cardRef,
-          }}
-          runId={runId}
-        />
-      </LifecycleCardSurfaceProvider>
+      // The step rail is the layout; this is its one review .runcard (§I).
+      // ReviewGateCard draws content inside the slot, with no second frame.
+      <section
+        className="rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+        data-run-review-slot="review"
+      >
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard
+            view={{
+              viewType: "artifact_review_gate",
+              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+              ref: cardRef,
+            }}
+            runId={runId}
+          />
+        </LifecycleCardSurfaceProvider>
+      </section>
     );
   }
   return (
@@ -1694,7 +1702,7 @@ function StepperColumn({
         data-conformance-id="run-step-rail"
         data-action="open-run-step -> step-detail"
         aria-label="Agent run steps"
-        className="flex shrink-0 flex-col pt-1"
+        className="flex w-[196px] shrink-0 flex-col pt-1"
       >
         <Stepper
           value={activeStep}
@@ -1758,7 +1766,7 @@ function StepperColumn({
                       <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                         {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
                       </StepperIndicator>
-                      <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
+                      <StepperTitle className={RUN_PAGE_RAIL_TITLE_COLOUR_CLASS}>
                         {s.label}
                       </StepperTitle>
                     </StepperTrigger>
@@ -2860,7 +2868,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard = reviewSlot.ref ? (
       <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
     ) : (
-      <Card data-run-review-slot="working">
+      <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
         <CardContent className="p-6">
           {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
               reading took this exact box on both themes and found "a large
@@ -3056,7 +3064,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         reviewSlot.ref ? (
           <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
         ) : reviewMayStillOpen ? (
-          <Card data-run-review-slot="working">
+          <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
             <CardContent className="p-6">
               <ReviewGatePlaceholder />
             </CardContent>
@@ -3082,7 +3090,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // for the same reason every other wordless box on this page does.
   if (stageCard === null && status === "pending_approval" && reviewStillReading) {
     stageCard = (
-      <Card data-run-review-slot="working">
+      <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
         <CardContent className="p-6">
           {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
               reading took this exact box on both themes and found "a large
