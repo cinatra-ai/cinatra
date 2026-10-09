@@ -1073,6 +1073,14 @@ function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
  *
  * It is the ELECTION's own node, so a reading with no sentence draws nothing at
  * all rather than an empty paragraph.
+ *
+ * ITS PLACE ABOVE THE CARD (cinatra#3281). Section VI draws this line 8 px above
+ * the card it stands for: the turn's 6 px gap plus the line's own 2 px margin.
+ * The card that follows carries its conversation frame's own 12 px top margin,
+ * which stays inside its column or its slot on the reloaded and the live flat
+ * turn, and collapses with this line's margin in the ordered slot. So the line
+ * takes -4 px, and the card lands 8 px below it on every road; the card's
+ * frame, its column and the next card's place are not changed.
  */
 function StandingScheduleLine({
   reading,
@@ -1086,7 +1094,7 @@ function StandingScheduleLine({
       // Passive: it names WHICH reading drew the line, for a test and for
       // a rendered reading of the screen. The words are what is drawn.
       data-schedule-standing-line={reading}
-      className="max-w-none text-[15px] leading-relaxed text-foreground"
+      className="-mb-1 max-w-none text-[15px] leading-relaxed text-foreground"
     >
       {line}
     </p>

@@ -734,3 +734,368 @@ it("withdraws the old reading while a replacement reference resolves", async () 
   await waitFor(() => expect(view.container.querySelector('[data-conformance-id="schedule-proposal-card"]')?.getAttribute("data-schedule-reading")).toBe("configured"));
   expect(assistantProseBlocks(view.container).at(-1)?.textContent).toBe(MODEL_LEAD_IN);
 });
+
+describe("cinatra#3281 — the line stands where section VI draws it, 8 px above its card", () => {
+  /**
+   * THE DRAWING. Section VI's "a one-off schedule that has fired" draws the
+   * turn as a flex column with a 6 px gap (`.turn { display: flex;
+   * flex-direction: column; gap: 6px; }`) and the line as
+   * `<div class="prose" style="margin-bottom:2px;">` directly above the card's
+   * slot. A flex column's margins never collapse, so the line's foot stands
+   * 6 + 2 = 8 px above the card's top border.
+   *
+   * THE INSTRUMENT. jsdom lays nothing out, so the distance is RESOLVED from
+   * the utility tokens the rendered nodes carry, the way the run page's rail
+   * rhythm suite resolves its pitch: every box on the path from the line's
+   * foot to the card's top border is read for its margins, paddings, borders
+   * and gaps, and the margins that adjoin are collapsed the way the stylesheet
+   * would collapse them. Anything the instrument cannot read on that path
+   * throws, rather than reading as a distance.
+   */
+  const LINE = '[data-schedule-standing-line="spent-one-off"]';
+  const CARD = '[data-conformance-id="schedule-proposal-card"]';
+  const MESSAGE =
+    "the spent line's foot stands this far above its card; section VI draws 8 px (the turn's 6 px gap plus the line's 2 px margin)";
+
+  /** The spacing scale, in px. */
+  const SCALE: Record<string, number> = {
+    "0": 0, px: 1, "0.5": 2, "1": 4, "1.5": 6, "2": 8, "2.5": 10, "3": 12, "4": 16, "5": 20, "6": 24, "8": 32,
+  };
+  /** The frames are 1440 px wide: these breakpoints apply, `2xl:` does not. */
+  const COUNTED_VARIANTS = ["sm", "md", "lg", "xl"];
+  const IGNORED_VARIANTS = ["2xl"];
+  /** Every utility this instrument reads as vertical spacing. */
+  const SPACING_UTILITY =
+    /^(?:(?:m|mt|mb|my|p|pt|pb|py|space-y)-|gap-(?!x-)|border(?:-[tby])?(?:-(?:0|2|4|\[\d+(?:\.\d+)?px\]))?$)/;
+  const DISPLAYS = new Set([
+    "block", "inline-block", "inline", "flex", "inline-flex", "grid", "inline-grid", "flow-root", "contents", "hidden",
+  ]);
+  const DIRECTIONS = new Set(["flex-col", "flex-row", "flex-col-reverse", "flex-row-reverse"]);
+  const POSITIONS = new Set(["static", "relative", "absolute", "fixed", "sticky"]);
+
+  type Token = { utility: string; raw: string; important: boolean; negative: boolean; tier: number; index: number };
+  type Step = { kind: "margin" | "separator"; px: number };
+
+  /** Split a class token on its variant colons, never inside an arbitrary `[...]`. */
+  function splitVariants(raw: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of raw) {
+      if (ch === "[") depth += 1;
+      if (ch === "]") depth -= 1;
+      if (ch === ":" && depth === 0) {
+        parts.push(current);
+        current = "";
+      } else current += ch;
+    }
+    parts.push(current);
+    return parts;
+  }
+
+  /** The element's tokens that apply in a 1440 px frame, in stylesheet order. */
+  function tokensOf(el: Element): Token[] {
+    const out: Token[] = [];
+    (el.getAttribute("class") ?? "").split(/\s+/).filter(Boolean).forEach((raw, index) => {
+      const parts = splitVariants(raw);
+      let utility = parts.pop()!;
+      let important = false;
+      if (utility.startsWith("!")) {
+        important = true;
+        utility = utility.slice(1);
+      }
+      if (utility.endsWith("!")) {
+        important = true;
+        utility = utility.slice(0, -1);
+      }
+      const negative = utility.startsWith("-");
+      if (negative) utility = utility.slice(1);
+      if (parts.some((variant) => IGNORED_VARIANTS.includes(variant))) return;
+      if (parts.some((variant) => !COUNTED_VARIANTS.includes(variant))) {
+        if (SPACING_UTILITY.test(utility)) throw new Error(`an unread variant on the path: ${raw}`);
+        return;
+      }
+      const tier = Math.max(0, ...parts.map((variant) => COUNTED_VARIANTS.indexOf(variant) + 1));
+      out.push({ utility, raw, important, negative, tier, index });
+    });
+    return out;
+  }
+
+  /** Lexicographic rank: true when `a` outranks `b`. */
+  function outranks(a: readonly number[], b: readonly number[]): boolean {
+    for (let i = 0; i < a.length; i += 1) {
+      if (a[i]! !== b[i]!) return a[i]! > b[i]!;
+    }
+    return false;
+  }
+
+  /**
+   * The token that wins among `families` (ordered from the least to the most
+   * specific, as the stylesheet orders them): an `!` token outright, then a
+   * later breakpoint, then the more specific family, then the later token.
+   */
+  function winner(el: Element, families: readonly string[], pattern: RegExp): { token: Token; value: string | undefined } | null {
+    let best: { token: Token; value: string | undefined; rank: number[] } | null = null;
+    for (const token of tokensOf(el)) {
+      const m = token.utility.match(pattern);
+      if (!m) continue;
+      const family = families.indexOf(m[1]!);
+      if (family < 0) continue;
+      const rank = [token.important ? 1 : 0, token.tier, family, token.index];
+      if (best === null || outranks(rank, best.rank)) best = { token, value: m[2], rank };
+    }
+    return best;
+  }
+
+  function scaled(token: Token, value: string): number {
+    const arbitrary = value.match(/^\[(-?\d+(?:\.\d+)?)px\]$/);
+    const px = arbitrary ? Number(arbitrary[1]) : SCALE[value];
+    if (px === undefined) throw new Error(`an unread spacing value on the path: ${token.raw}`);
+    return token.negative ? -px : px;
+  }
+
+  function spacing(el: Element, families: readonly string[]): number {
+    // `gap-x-*` and `space-y-reverse` are not vertical lengths.
+    const alternatives = [...families].sort((a, b) => b.length - a.length).join("|");
+    const pattern = new RegExp(`^(${alternatives})-(?!x-|reverse$)(.+)$`);
+    const won = winner(el, families, pattern);
+    return won ? scaled(won.token, won.value!) : 0;
+  }
+
+  function border(el: Element, families: readonly string[]): number {
+    const won = winner(el, families, /^(border|border-[tby])(?:-(0|2|4|\[\d+(?:\.\d+)?px\]))?$/);
+    if (!won) return 0;
+    if (won.value === undefined) return 1;
+    return scaled(won.token, won.value);
+  }
+
+  /** The keyword utility of one property that wins (a display, a direction, a position). */
+  function keyword(el: Element, words: ReadonlySet<string>): string | null {
+    let best: { token: Token; rank: number[] } | null = null;
+    for (const token of tokensOf(el)) {
+      if (!words.has(token.utility)) continue;
+      const rank = [token.important ? 1 : 0, token.tier, token.index];
+      if (best === null || outranks(rank, best.rank)) best = { token, rank };
+    }
+    return best?.token.utility ?? null;
+  }
+
+  const display = (el: Element) => keyword(el, DISPLAYS);
+  const isFlex = (el: Element | null) => el !== null && ["flex", "inline-flex"].includes(display(el) ?? "");
+  const isGrid = (el: Element | null) => el !== null && ["grid", "inline-grid"].includes(display(el) ?? "");
+  const isColumn = (el: Element) => keyword(el, DIRECTIONS) === "flex-col";
+
+  function skipped(el: Element): boolean {
+    return (
+      el.hasAttribute("hidden") ||
+      display(el) === "hidden" ||
+      /(?:^|;)\s*display\s*:\s*none/i.test(el.getAttribute("style") ?? "")
+    );
+  }
+
+  function skippedNode(node: Node): boolean {
+    if (node.nodeType === 3) return (node.textContent ?? "").trim() === "";
+    if (node.nodeType !== 1) return true;
+    return skipped(node as Element);
+  }
+
+  /** A node's own markup, for a throw to name what it found. */
+  function shown(node: Node): string {
+    return (node.nodeType === 1 ? (node as Element).outerHTML : node.textContent ?? "").slice(0, 120);
+  }
+
+  /** A box that is a formatting context of its own keeps its children's margins inside it. */
+  function ownContext(el: Element): boolean {
+    if (display(el) === "contents") throw new Error(`an unread display on the path: ${shown(el)}`);
+    if (isFlex(el) || isGrid(el) || isFlex(el.parentElement) || isGrid(el.parentElement)) return true;
+    if (["flow-root", "inline-block"].includes(display(el) ?? "")) return true;
+    const tokens = tokensOf(el).map((token) => token.utility);
+    if (tokens.some((t) => /^overflow(?:-[xy])?-(?:hidden|auto|scroll|clip)$/.test(t))) return true;
+    return ["absolute", "fixed"].includes(keyword(el, POSITIONS) ?? "");
+  }
+
+  /** It DRAWS when it holds text or a drawn control, or carries a size, a padding or a border. */
+  function draws(el: Element): boolean {
+    if (skipped(el)) return false;
+    if (["IMG", "SVG", "INPUT", "BUTTON", "TEXTAREA", "SELECT"].includes(el.tagName.toUpperCase())) return true;
+    const own = tokensOf(el).some((token) => {
+      const m = token.utility.match(/^(?:h|min-h|size|p|pt|pb|py)-(.+)$/);
+      if (m) return m[1] !== "0";
+      const b = token.utility.match(/^border(?:-[tby])?(?:-(.+))?$/);
+      return b !== null && b[1] !== "0" && (b[1] === undefined || /^(?:2|4|\[\d+(?:\.\d+)?px\])$/.test(b[1]));
+    });
+    if (own) return true;
+    return Array.from(el.childNodes).some((node) =>
+      node.nodeType === 3 ? (node.textContent ?? "").trim() !== "" : node.nodeType === 1 && draws(node as Element),
+    );
+  }
+
+  function laterChild(el: Element): boolean {
+    const parent = el.parentElement;
+    if (parent === null) return false;
+    const drawn = Array.from(parent.children).filter((child) => !skipped(child));
+    return drawn.indexOf(el) > 0;
+  }
+
+  function marginTop(el: Element): number {
+    const space = el.parentElement ? spacing(el.parentElement, ["space-y"]) : 0;
+    if (space !== 0 && laterChild(el)) return space;
+    return spacing(el, ["m", "my", "mt"]);
+  }
+  const marginBottom = (el: Element) => spacing(el, ["m", "my", "mb"]);
+  const paddingTop = (el: Element) => spacing(el, ["p", "py", "pt"]);
+  const paddingBottom = (el: Element) => spacing(el, ["p", "py", "pb"]);
+  const borderTop = (el: Element) => border(el, ["border", "border-y", "border-t"]);
+  const borderBottom = (el: Element) => border(el, ["border", "border-y", "border-b"]);
+  const rowGap = (el: Element) => spacing(el, ["gap", "gap-y"]);
+
+  function lineFootToCardTop(line: Element, card: Element): number {
+    let common: Element | null = line.parentElement;
+    while (common !== null && !common.contains(card)) common = common.parentElement;
+    if (common === null || line.contains(card) || card.contains(line)) {
+      throw new Error("the line and the card share no box the instrument can read");
+    }
+    if (!(line.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      throw new Error("the card does not stand below the line");
+    }
+    const up: Element[] = [];
+    for (let el: Element | null = line; el !== common; el = el!.parentElement) up.push(el!);
+    const down: Element[] = [];
+    for (let el: Element | null = card; el !== common; el = el!.parentElement) down.unshift(el!);
+
+    const steps: Step[] = [];
+    const margin = (px: number) => steps.push({ kind: "margin", px });
+    const separator = (px: number) => steps.push({ kind: "separator", px });
+
+    // From the line up to the common box's child that holds it.
+    up.forEach((el, i) => {
+      if (i > 0) {
+        const child = up[i - 1]!;
+        const nodes = Array.from(el.childNodes);
+        const below = nodes.slice(nodes.indexOf(child) + 1).find((node) => !skippedNode(node));
+        if (below) throw new Error(`something stands below the line inside its own box: ${shown(below)}`);
+        if (ownContext(el)) separator(0);
+        if (paddingBottom(el) !== 0) separator(paddingBottom(el));
+        if (borderBottom(el) !== 0) separator(borderBottom(el));
+      }
+      margin(marginBottom(el));
+    });
+
+    // Between the common box's two children.
+    const flow = isFlex(common) || isGrid(common);
+    if (isFlex(common) && !isColumn(common)) {
+      throw new Error(`the line and the card stand side by side: ${shown(common)}`);
+    }
+    const gap = flow ? rowGap(common) : 0;
+    const nodes = Array.from(common.childNodes);
+    const between = nodes.slice(nodes.indexOf(up[up.length - 1]!) + 1, nodes.indexOf(down[0]!));
+    for (const node of between) {
+      if (skippedNode(node)) continue;
+      if (node.nodeType !== 1 || draws(node as Element)) {
+        throw new Error(`something draws between the line and the card: ${shown(node)}`);
+      }
+      const empty = node as Element;
+      if (flow) separator(gap);
+      margin(marginTop(empty));
+      if (flow || ownContext(empty)) separator(0);
+      margin(marginBottom(empty));
+    }
+    if (flow) separator(gap);
+
+    // From the common box's child that holds the card down to the card.
+    down.forEach((el, j) => {
+      if (j > 0) {
+        const parent = down[j - 1]!;
+        const siblings = Array.from(parent.childNodes);
+        const above = siblings.slice(0, siblings.indexOf(el)).find((node) => !skippedNode(node));
+        if (above) throw new Error(`something stands above the card inside its own box: ${shown(above)}`);
+        if (ownContext(parent)) separator(0);
+        if (borderTop(parent) !== 0) separator(borderTop(parent));
+        if (paddingTop(parent) !== 0) separator(paddingTop(parent));
+      }
+      margin(marginTop(el));
+    });
+
+    // Adjoining margins collapse to the largest positive plus the most negative.
+    let total = 0;
+    let run: number[] = [];
+    const close = () => {
+      total += Math.max(0, ...run) + Math.min(0, ...run);
+      run = [];
+    };
+    for (const step of steps) {
+      if (step.kind === "margin") run.push(step.px);
+      else {
+        close();
+        total += step.px;
+      }
+    }
+    close();
+    return total;
+  }
+
+  /** A detached fixture: the line is its `p`, the card the box whose own text is `K`. */
+  function fixture(html: string): { line: Element; card: Element } {
+    const root = document.createElement("div");
+    root.innerHTML = html;
+    const line = root.querySelector("p")!;
+    const card = Array.from(root.querySelectorAll("*")).find(
+      (el) => el.childElementCount === 0 && el.textContent === "K",
+    )!;
+    return { line, card };
+  }
+
+  const read = (html: string) => {
+    const { line, card } = fixture(html);
+    return lineFootToCardTop(line, card);
+  };
+
+  it("the instrument reads the drawing's composition and the margin rules", () => {
+    // Two block margins collapse.
+    expect(read('<div><p class="mb-0.5">L</p><div class="my-3">K</div></div>')).toBe(12);
+    // The drawing's own turn: a 6 px gap and the line's 2 px margin.
+    expect(read('<div class="flex flex-col gap-1.5"><p class="mb-0.5">L</p><div>K</div></div>')).toBe(8);
+    // The head's reloaded column: the card's margin stays inside it.
+    expect(read('<div><p>L</p><div class="flex flex-col gap-2"><div class="my-3">K</div></div></div>')).toBe(12);
+    expect(read('<div><p class="-mb-1">L</p><div class="flex flex-col gap-2"><div class="my-3">K</div></div></div>')).toBe(8);
+    // Collapse through a plain block.
+    expect(read('<div><p class="-mb-1">L</p><div><div class="my-3">K</div></div></div>')).toBe(8);
+    expect(() => read('<div><p>L</p> <span>x</span><div class="my-3">K</div></div>')).toThrow(
+      "something draws between the line and the card",
+    );
+    // The walk reads downward only: a card above the line is no reading.
+    expect(() => read('<div><div class="my-3">K</div><p class="-mb-1">L</p></div>')).toThrow(
+      "the card does not stand below the line",
+    );
+  });
+
+  function theOne(container: HTMLElement): { line: Element; card: Element } {
+    expect(container.querySelectorAll(LINE)).toHaveLength(1);
+    expect(container.querySelectorAll(CARD)).toHaveLength(1);
+    return { line: container.querySelector(LINE)!, card: container.querySelector(CARD)! };
+  }
+
+  it("the live flat turn (the round's live cell)", async () => {
+    serveReading(ONE_OFF_BODY, true);
+    const { container } = await mountFlatTurn("fired-one-off");
+    await waitFor(() => expect(container.querySelector(LINE)).not.toBeNull());
+    const { line, card } = theOne(container);
+    expect(lineFootToCardTop(line, card), MESSAGE).toBe(8);
+  });
+
+  for (const [title, ordered, slackMode] of [
+    ["after a reload, the flat road in the Slack layout (the round's reloaded cell)", false, true],
+    ["after a reload, the flat road in the plain layout", false, false],
+    ["after a reload, the ordered road", true, false],
+  ] as const) {
+    it(title, async () => {
+      serveReading(ONE_OFF_BODY, true);
+      const messages = reloadedProposalTurn(ordered);
+      const { container } = await mountSurface("chat", { messages, slackMode });
+      await waitFor(() => expect(container.querySelector(CARD)?.getAttribute("data-schedule-reading")).toBe("fired-one-off"));
+      await waitFor(() => expect(container.querySelector(LINE)).not.toBeNull());
+      const { line, card } = theOne(container);
+      expect(lineFootToCardTop(line, card), MESSAGE).toBe(8);
+    });
+  }
+});
