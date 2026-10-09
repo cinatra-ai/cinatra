@@ -825,7 +825,7 @@
     {
       "primitiveName": "lifecycle_bound_card_decide",
       "file": "src/lib/lifecycle/lent-action-mcp.ts",
-      "line": 881
+      "line": 1178
     },
     {
       "primitiveName": "lifecycle_bound_screen_fill",
