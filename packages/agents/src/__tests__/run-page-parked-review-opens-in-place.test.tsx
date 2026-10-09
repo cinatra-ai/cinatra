@@ -526,6 +526,7 @@ describe("the parked review opens in the run detail, under the same rail (cinatr
     // is: an entry marks its state on the ROW it draws inside its wrapper, so a
     // spine row is a marked row that stands inside no entry at all.
     expect(control.getAttribute("aria-current")).toBe("step");
+    // Approved artifact-review drawing §I.3: one entry is highlighted at a time.
     expect(control.getAttribute("data-run-surface-rail-selected")).toBe("true");
     const current = Array.from(
       columnAfter.querySelectorAll<HTMLElement>(

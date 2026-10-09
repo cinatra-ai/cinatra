@@ -778,6 +778,8 @@ describe("every kind of rail entry marks its state on its own row (cinatra#3449)
         ...(entry.matches("[data-run-surface-rail-step]") ? [entry] : []),
         ...Array.from(entry.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]")),
       ];
+      // Approved artifact-review drawing §I.3: each artifact has its own rail entry;
+      // this census pins exactly one marking node for each drawn entry kind.
       expect(marked, `${kind.name}: exactly one marked node in the entry`).toHaveLength(1);
       const row = marked[0]!;
 
