@@ -18,7 +18,8 @@
   "inputs": [
     {
       "title": "user",
-      "type": "string"
+      "type": "string",
+      "default": "Return a short response for this telemetry test."
     }
   ],
   "outputs": [
@@ -97,7 +98,8 @@
       "inputs": [
         {
           "title": "user",
-          "type": "string"
+          "type": "string",
+          "default": "Return a short response for this telemetry test."
         }
       ]
     },
