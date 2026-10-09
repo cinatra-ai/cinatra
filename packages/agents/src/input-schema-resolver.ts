@@ -181,7 +181,7 @@ function deriveFullSchemaFromOas(
     // fix on the persisted compiled inputSchema path.
     const inputAny = input as Record<string, unknown>;
     const inputJsonSchema = inputAny.json_schema as
-      | { items?: unknown; properties?: unknown; required?: unknown }
+      | { items?: unknown; properties?: unknown; required?: unknown; minLength?: unknown }
       | undefined;
     const inputItems = inputAny.items ?? inputJsonSchema?.items;
     if (inputItems !== undefined) prop.items = inputItems;
@@ -216,6 +216,17 @@ function deriveFullSchemaFromOas(
       )) {
         if (hintKey.startsWith("x-")) prop[hintKey] = hintValue;
       }
+    }
+    // cinatra#3582 — the DERIVED road carries the declared minimum too. The two
+    // pipelines must agree: a constraint that survived only one of them would
+    // be honoured on a freshly compiled template and dropped on a derived one.
+    const declaredMinLength = inputAny.minLength ?? inputJsonSchema?.minLength;
+    if (
+      typeof declaredMinLength === "number" &&
+      Number.isInteger(declaredMinLength) &&
+      declaredMinLength > 0
+    ) {
+      prop.minLength = declaredMinLength;
     }
     properties[input.title] = prop;
   }
