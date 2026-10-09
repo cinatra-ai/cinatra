@@ -2181,12 +2181,20 @@ describe("the island's two-bound load protocol", () => {
   });
 
   it("a repeated island-ready does not restart the idle-progress bound", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const container = await renderIslandCard();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await advance(0);
+    expect(container.querySelector("iframe")).not.toBeNull();
     postProgress(container, "island-ready");
     await advance(8_000);
+    expect(islandState(container)).toBe("loading");
     postProgress(container, "island-ready");
-    await advance(5_000);
+    // The first ready still owns the twelve-second deadline. Cross it only by
+    // advancing the fake clock, never by allowing wall time to move the bound.
+    await advance(3_999);
+    expect(islandState(container)).toBe("loading");
+    await advance(1);
     expect(islandState(container)).toBe("timed-out");
   });
 
