@@ -304,11 +304,17 @@ export const SCOPE_SURFACE_TAB_ACTION: Record<
  *     shell's leaf-crumb rule takes the page heading, which on an entity page is
  *     the entity — so /workspace/assistants read "Workspace > Workspace" and an
  *     organization tab repeated the org's name after its own truncated id.
+ *   - the LEAF crumb of the Agents strip's Executions tab carries the strip's
+ *     own word. Without it the shell's leaf-crumb rule takes the page heading,
+ *     which on a scope page is the entity — so /personal/agents/executions read
+ *     "Personal > Agents > Personal" (cinatra#3693). The drawing's Breadcrumb
+ *     rule: the trail is the route the page sits on.
  */
 export function scopeSurfaceCrumbEntries(
   scope: ScopeSurfaceRef,
   tab: ScopeSurfaceTab | "dashboards",
   title?: string,
+  agentsTab: "all" | "executions" = "all",
 ): { prefix: string; label: string }[] {
   const base = scopeSurfaceBase(scope);
   const entityLabel =
@@ -319,6 +325,9 @@ export function scopeSurfaceCrumbEntries(
   const entries = [{ prefix: base, label: entityLabel }];
   if (tab !== "dashboards") {
     entries.push({ prefix: `${base}/${tab}`, label: SCOPE_SURFACE_TAB_LABEL[tab] });
+  }
+  if (tab === "agents" && agentsTab === "executions") {
+    entries.push({ prefix: `${base}/agents/executions`, label: "Executions" });
   }
   return entries;
 }
