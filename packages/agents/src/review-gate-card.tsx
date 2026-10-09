@@ -157,7 +157,7 @@ import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
-import { reviewGateHeaderTitle } from "@/lib/artifacts/review-surface-model";
+import { reviewGateHeaderTitle, reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
   ReviewSettledOutcome,
@@ -416,6 +416,67 @@ type IslandLoadState = "loading" | "loaded" | "timed-out";
  */
 const ISLAND_LOAD_TIMEOUT_MS = 12_000;
 
+/**
+ * THE IDLE-PROGRESS BOUND (cinatra#3334) — the second of the card's two bounds.
+ *
+ * The bound above answers one question only: did the island answer AT ALL? Once
+ * it has (the early, data-free `island-ready` the document posts before any
+ * panel work), the card stops asking that and starts asking whether the island
+ * is still making progress: every panel that mounts posts `panel-mounted`, and
+ * every one of them restarts this bound. A gate whose targets keep arriving is
+ * therefore never plated, however many it has, while a document that goes quiet
+ * — a hung render, a panel that never resolves — still fails inside one bound.
+ *
+ * Same twelve seconds as the initial bound, for the same reason: long enough
+ * that a slow but live step never misfires, short enough that a genuine hang
+ * does not strand the reviewer on a skeleton.
+ */
+const ISLAND_IDLE_PROGRESS_TIMEOUT_MS = 12_000;
+
+/**
+ * The island's progress channel and frame-name stamp. MIRRORED from
+ * `src/app/lifecycle/review-island/island-height-report.ts`, exactly as the island's
+ * `ic` and `scheme` query keys are mirrored here: this package cannot import
+ * from the application, and the island's own suite pins the server side of the
+ * same two literals.
+ */
+const REVIEW_ISLAND_PROGRESS_CHANNEL = "cinatra-review-island-progress";
+const REVIEW_ISLAND_FRAME_NAME_PREFIX = "cinatra-review-island";
+
+/** The name this card stamps on the frame it is currently showing. The island
+ *  reads it as `window.name` and names the attempt back, so the card can tell a
+ *  live frame's message from one a replaced frame is still sending — without
+ *  putting anything into the island's address. */
+function reviewIslandFrameName(attempt: number): string {
+  return `${REVIEW_ISLAND_FRAME_NAME_PREFIX}:${attempt}`;
+}
+
+/**
+ * Narrow an arbitrary `message` payload to one of the island's two signals.
+ *
+ * The provenance checks (origin, source frame, attempt) are the caller's; this
+ * is the shape check, and it is a closed one: an unknown channel, an unknown
+ * type or a non-numeric attempt is not a signal. Nothing is read out of the
+ * payload beyond these three fields, because the island puts nothing else in
+ * one — no ref, no target id, no credential.
+ */
+function readIslandProgress(
+  data: unknown,
+): { type: "island-ready" | "panel-mounted"; attempt: number } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const keys = Object.keys(data);
+  if (keys.length !== 3 || !keys.every((key) => ["channel", "type", "attempt"].includes(key))) return null;
+  const { channel, type, attempt } = data as {
+    channel?: unknown;
+    type?: unknown;
+    attempt?: unknown;
+  };
+  if (channel !== REVIEW_ISLAND_PROGRESS_CHANNEL) return null;
+  if (type !== "island-ready" && type !== "panel-mounted") return null;
+  if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 0) return null;
+  return { type, attempt };
+}
+
 export type ReviewGateCardView = {
   viewType: "artifact_review_gate";
   schemaVersion: number;
@@ -585,7 +646,33 @@ export function ReviewGateCard({
     enabled: present,
     reloadToken,
   });
-  const state: LifecycleCardState | null = resolved?.state ?? null;
+  // #4024: the canonical submit result is already a committed decision. A
+  // delayed/failed re-resolve must not leave its old pending header beside a
+  // second, local success notice. Bind that result to this ref and credential
+  // declaration; any newly resolved envelope takes precedence, including absent
+  // or blocked. No decision instant or remote effect is inferred here.
+  const [decisionBinding, setDecisionBinding] = useState({ ref: view.ref, auth, generation: 0 });
+  let binding = decisionBinding;
+  if (binding.ref !== view.ref || binding.auth !== auth) {
+    binding = { ref: view.ref, auth, generation: binding.generation + 1 };
+    setDecisionBinding(binding);
+  }
+  const [decisionReading, setDecisionReading] = useState({
+    binding, resolved, generation: 0, inFlight: false, outcome: null as ReviewSettledOutcome | null,
+  });
+  if (decisionReading.binding !== binding || decisionReading.resolved !== resolved) {
+    setDecisionReading({
+      binding, resolved, inFlight: false, outcome: null,
+      generation: decisionReading.generation +
+        (decisionReading.binding !== binding || decisionReading.inFlight || decisionReading.outcome !== null ? 1 : 0),
+    });
+  }
+  const serverState = resolved?.state ?? null;
+  const state: LifecycleCardState | null =
+    serverState?.state === "pending" && decisionReading.outcome !== null &&
+    decisionReading.binding === binding && decisionReading.resolved === resolved
+      ? { state: "settled", outcome: decisionReading.outcome }
+      : serverState;
   // §IV's target header(s), composed for this reader by the resolve answer
   // (cinatra#3141 item 7). The CARD draws them, in every island state, because
   // the island only exists in one of its three.
@@ -695,8 +782,26 @@ export function ReviewGateCard({
   // has no such re-render, so the refresh is explicit here — and it now applies
   // on the page too, keeping all three hosts identical.
   const submitAndRefresh: SubmitReviewDecisionAction = async (input) => {
-    const outcome = await (submitAction ?? refBoundSubmit)(input);
-    if (outcome.kind === "decided" || outcome.kind === "changes-requested") refresh();
+    setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+      ? { ...current, inFlight: true } : current);
+    let outcome: Awaited<ReturnType<SubmitReviewDecisionAction>>;
+    try {
+      outcome = await (submitAction ?? refBoundSubmit)(input);
+    } finally {
+      setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+        ? { ...current, inFlight: false } : current);
+    }
+    const settledOutcome = outcome.kind === "decided"
+      ? reviewSettledOutcomeFromDisposition(outcome.disposition)
+      : outcome.kind === "changes-requested"
+        ? reviewSettledOutcomeFromDisposition("changes_requested")
+        : null;
+    if (settledOutcome !== null) {
+      setDecisionReading((current) => current.binding === binding && current.resolved === resolved
+        ? { ...current, outcome: settledOutcome }
+        : current);
+      refresh();
+    }
     return outcome;
   };
 
@@ -735,11 +840,10 @@ export function ReviewGateCard({
         await submitAndRefresh({ disposition: "comment", comment: trimmed }),
       );
     },
-    // `submitAndRefresh` is rebuilt every render, but it closes over exactly
-    // these three — so listing them is listing it, and the callback is rebuilt
-    // whenever the transport it would use actually changes.
+    // Keep the composer submit bound to the current transport AND authorized
+    // reading, just like the decision bar's submit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [submitAction, refBoundSubmit, refresh],
+    [submitAction, refBoundSubmit, refresh, binding, resolved],
   );
 
   // The gate takes composer input only while the SERVER says it is open to this
@@ -842,6 +946,7 @@ export function ReviewGateCard({
   const serverIslandSrc = islandAddress.islandSrc;
   const body = renderState({
     state,
+    decisionGeneration: decisionReading.generation,
     targetHeaders,
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
@@ -932,6 +1037,7 @@ export function ReviewGateCard({
  */
 function renderState(args: {
   state: LifecycleCardState;
+  decisionGeneration: number;
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
@@ -955,6 +1061,7 @@ function renderState(args: {
 }): ReactElement | null {
   const {
     state,
+    decisionGeneration,
     targetHeaders,
     promptWindow,
     settledExchange,
@@ -1108,6 +1215,7 @@ function renderState(args: {
           <ComposerFocusRow binding={focusBinding} />
           {/* §II/§IV — ONE gate-level decision floor, however many targets. */}
           <ReviewDecisionBar
+            key={decisionGeneration}
             permissions={permissions}
             submitAction={submit}
             suggestionDecisionsFor={suggestionDecisionsFor}
@@ -1672,20 +1780,100 @@ function ReviewTargetIsland({
   // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
   // KEYED BY THE TARGET, NOT BY THE PALETTE. `islandTargetIdentity` drops the
   // scheme parameter, so repainting the surface navigates the frame that is
-  // already up instead of resetting this bag and blanking the work.
+  // already up instead of resetting this bag and blanking the work — and, since
+  // cinatra#3334, without throwing away the protocol state the frame that is
+  // already up has reported.
   const identity = islandTargetIdentity(src);
-  const [load, setLoad] = useState({ identity, attempt: 0, loaded: false, timedOut: false });
+  const [load, setLoad] = useState({
+    identity,
+    attempt: 0,
+    loaded: false,
+    timedOut: false,
+    /** Has the island answered at all yet (`island-ready`)? */
+    ready: false,
+    /** How many panels it has reported since — the idle bound's restart count. */
+    progress: 0,
+  });
   if (load.identity !== identity) {
-    setLoad({ identity, attempt: 0, loaded: false, timedOut: false });
+    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0 });
   }
 
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const protocolClock = useRef({ navigation: 0, progress: 0 });
+  // The callback runs when React assigns this mounted frame and its src,
+  // including a lazy frame. An effect may run later; it must not grant another
+  // twelve seconds after navigation has already begun.
+  const attachFrame = useCallback((node: HTMLIFrameElement | null) => {
+    frameRef.current = node;
+    if (node) protocolClock.current.navigation = Date.now();
+  }, []);
+
+  /**
+   * THE ISLAND'S ORIGIN — the only origin whose messages this card reads. On a
+   * first-party page it is this document's own; inside the widget the card is
+   * on a third-party CMS page and the island is still Cinatra's, so it is
+   * resolved from the address the frame was actually pointed at rather than
+   * assumed to be either one.
+   */
+  const islandOrigin = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return new URL(src, window.location.href).origin;
+    } catch {
+      return null;
+    }
+  }, [src]);
+
+  // THE ISLAND'S OWN PROGRESS (cinatra#3334). Three checks, all of them
+  // required, before a message may touch a bound: it came from the ISLAND'S
+  // ORIGIN, it came from the FRAME THIS CARD IS SHOWING (never a sibling frame
+  // on the same origin), and it names THIS ATTEMPT (a frame the card has
+  // already replaced cannot hold the live one open). The payload itself is
+  // data-free, so accepting one grants nothing but the timer it restarts.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (islandOrigin === null || event.origin !== islandOrigin) return;
+      const frame = frameRef.current;
+      if (!frame || event.source !== frame.contentWindow) return;
+      const progress = readIslandProgress(event.data);
+      if (!progress || progress.attempt !== load.attempt) return;
+      setLoad((current) => {
+        if (current.loaded || current.attempt !== progress.attempt) return current;
+        if (progress.type === "island-ready") {
+          if (current.ready) return current;
+          protocolClock.current.progress = Date.now();
+          return { ...current, ready: true };
+        }
+        // Only island-ready cancels the initial-response bound. An unsolicited
+        // panel message before that cannot manufacture a ready document.
+        if (!current.ready) return current;
+        protocolClock.current.progress = Date.now();
+        return { ...current, progress: current.progress + 1 };
+      });
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [islandOrigin, load.attempt]);
+
+  // THE TWO BOUNDS, as one restarting timer (cinatra#3334). Before
+  // `island-ready` it is the INITIAL-RESPONSE bound, running from the moment
+  // the card pointed the frame at the island — a lazy frame included, which is
+  // the known residual above. `island-ready` cancels it and starts the
+  // IDLE-PROGRESS bound in its place, and every `panel-mounted` restarts that
+  // one. The plate is painted ONLY when a bound expires, and the frame's own
+  // `load` still cancels whichever is running and heals the plate.
+  const bound = load.ready ? ISLAND_IDLE_PROGRESS_TIMEOUT_MS : ISLAND_LOAD_TIMEOUT_MS;
   useEffect(() => {
     if (load.loaded) return;
+    const started = load.ready ? protocolClock.current.progress : protocolClock.current.navigation;
+    const remaining = Math.max(0, bound - (Date.now() - started));
     const timer = setTimeout(() => {
-      setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
-    }, ISLAND_LOAD_TIMEOUT_MS);
+      setLoad((current) =>
+        current.loaded || current.timedOut ? current : { ...current, timedOut: true },
+      );
+    }, remaining);
     return () => clearTimeout(timer);
-  }, [load.identity, load.attempt, load.loaded]);
+  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound]);
 
   // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
   // load bag is keyed on, and for the same reason: a palette repaint is the SAME
@@ -1700,11 +1888,10 @@ function ReviewTargetIsland({
     setMeasured({ identity, height: null });
   }
 
-  const frame = useRef<HTMLIFrameElement | null>(null);
   const palette = useLifecycleCardColorScheme();
   const previousPalette = useRef(palette);
   const announcePalette = useCallback(() => {
-    const current = frame.current;
+    const current = frameRef.current;
     if (!current?.contentWindow || palette === null) return;
     // Kept beside the sender, like the height message above; the DOM tests pin
     // this fixed shape to the island listener. No selector or grant crosses.
@@ -1725,7 +1912,7 @@ function ReviewTargetIsland({
       // check is exact; the source check is what stops any other document on the
       // page — or the page itself — from naming this frame's height.
       if (event.origin !== window.location.origin) return;
-      const current = frame.current;
+      const current = frameRef.current;
       if (!current || !current.contentWindow || event.source !== current.contentWindow) return;
       const reported = islandReportedHeight(event.data);
       if (reported === null) return;
@@ -1751,8 +1938,14 @@ function ReviewTargetIsland({
         // real remount — a re-render alone would leave the SAME iframe element
         // sitting on whatever connection already stalled or failed.
         key={`${load.identity}:${load.attempt}`}
-        ref={frame}
+        ref={attachFrame}
         src={src}
+        // THE ATTEMPT STAMP (cinatra#3334). A frame's `name` is readable as
+        // `window.name` inside the document it holds, so the island can name
+        // this attempt back to the card without anything being added to the
+        // island's ADDRESS — which stays the ref and, where there is one, the
+        // server's credential, and nothing else.
+        name={reviewIslandFrameName(load.attempt)}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
         // withhold top-navigation, form submission and popups from a document
@@ -1801,6 +1994,10 @@ function ReviewTargetIsland({
                   attempt: current.attempt + 1,
                   loaded: false,
                   timedOut: false,
+                  // A fresh frame is a fresh protocol: the new attempt has not
+                  // answered yet, and the old one's messages no longer name it.
+                  ready: false,
+                  progress: 0,
                 }));
               }}
             />

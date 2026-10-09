@@ -6,13 +6,18 @@
 # status fails when the pull request changes a file that a labelled pull
 # request changes too, and names that pull request and the first shared paths.
 # A push to a labelled pull request ends its hold: the first job takes the
-# label off and says so in one comment. The script is
+# label off and says so in one comment. A hold lasts at most 24 hours from the
+# time its label was set: after that the labelled pull request holds nothing,
+# the statuses of the pull requests that share its files succeed and name the
+# expired hold, and the label stays on. The script is
 # scripts/ci/files-hold.mjs; it reads the platform's listings only.
 #
 # An event that changes no holder evaluates its own pull request alone; an
 # event that changes the holders, and a run by hand, evaluate every open pull
-# request. The script decides which, and also takes in any head whose status
-# is missing or no longer fits the holders.
+# request. The hourly schedule evaluates no pull request of its own: it renews
+# what the time changed, so that an expiry takes effect without an event. The
+# script decides which, and also takes in any head whose status is missing or
+# no longer fits the holders.
 #
 # Why pull_request_target: the status goes on every open head, the heads of
 # pull requests from forks too, on the events of any pull request, and that
@@ -29,6 +34,13 @@ name: files-hold
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled, closed]
+  # A hold lasts at most 24 hours: this run applies an expiry without a pull
+  # request event. Hourly is the smallest schedule that keeps the lag under an
+  # hour for a 24-hour rule; minute 17 keeps off the top of the hour, when
+  # scheduled runs are delayed most. A scheduled run reads the default branch:
+  # the workflow file and the checkout below both come from it.
+  schedule:
+    - cron: "17 * * * *"
   # A maintainer renews every status by hand.
   workflow_dispatch:
 

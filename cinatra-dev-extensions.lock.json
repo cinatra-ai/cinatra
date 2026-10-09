@@ -15,7 +15,7 @@
     {
       "packageName": "@cinatra-ai/apollo-connector",
       "repo": "cinatra-ai/apollo-connector",
-      "resolvedSha": "800f505e1ba4f309c2333d0586f3b1b7d2b9bf56"
+      "resolvedSha": "cb01be46c95f40c21f46c84c4fd168d56050faf4"
     },
     {
       "packageName": "@cinatra-ai/apollo-prospecting-agent",
@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "6dd400f3bc155081d39a34bbf73df59c2f3e6004"
+      "resolvedSha": "865aa5982476665c6355ebede711b5c13b506786"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
@@ -260,7 +260,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
       "repo": "cinatra-ai/linkedin-artifacts",
-      "resolvedSha": "9f9874b53c010361b7ae8c7a865df66c65b6f33f"
+      "resolvedSha": "b8e02a74da506fb0dacf307c693936f3c6fc136b"
     },
     {
       "packageName": "@cinatra-ai/linkedin-connector",

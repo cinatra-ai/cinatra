@@ -2609,31 +2609,16 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
-          // eleventh set). The drawn card frame is
-          // `border:1px solid var(--line); border-radius:12px;
-          //  background:var(--surface-strong)`. `.soft-panel` grounds on
-          // `var(--surface)` — one token light of it — and the review card's
-          // `run_card` frame draws no background of its own, so this section is
-          // the ground a reader actually sees. Only the WORKING reading is
-          // redrawn here: the review reading is the graded cell it already was
-          // and keeps the class string it was measured on.
-          //
-          // AND THE FRAME'S OWNER OWNS THIS BOX'S CHROME TOO (fix leg 14).
-          // Section I of the review drawing rules the run detail as a whole:
-          // "two cards are never stacked in one detail". This box is drawn in
-          // that same detail, so when the rail already draws the frame beside
-          // it the box gives up its card chrome for exactly the reason the
-          // progress plate below does — the chrome belongs to whoever draws the
-          // frame, and a card of our own around the gate's card is the second
-          // card section I forbids. Off the frame BOTH readings keep the class
-          // string each was measured on, untouched.
+          // The rail owns the two-column layout; this slot owns the one
+          // .runcard frame and strong ground in both working and review readings
+          // (cinatra#3242, App262, approved drawing §I). The gate and placeholder
+          // inside it draw content only, so the swap cannot lose the ground or
+          // stack a second card inside it. Progress/input frame ownership below
+          // retains its existing railDrawsTheFrame contract.
           className={
             railDrawsTheFrame
-              ? "flex flex-col gap-4"
-              : reviewCardDrawn
-                ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
-                : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+              ? "rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           }
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
@@ -2646,11 +2631,9 @@ export function AgenticRunPanel({
           {reviewCardDrawn ? null : (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
-              // THE CARD FRAME IS THE PLACEHOLDER'S OWN where the rail draws the
-              // frame and this box gives its chrome up (fix leg 20): "the card
-              // frame, and a spinning icon". Off the frame the box above draws
-              // it, and a second one would be a card inside a card.
-              framed={railDrawsTheFrame}
+              // The slot owns the frame on every run host, including the rail.
+              // Its placeholder must not draw another border or ground.
+              framed={false}
               // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
               // WAITS IN (fix leg 7). Measured on the sixth graded reading: the pair
               // shot for this card was taken with the run already completed and
@@ -3270,7 +3253,6 @@ export function AgenticRunPanel({
               example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
-              size="sm"
               variant="outline"
               disabled={isRetrying}
               onClick={handleRetryFailedRun}

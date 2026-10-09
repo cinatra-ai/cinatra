@@ -38,7 +38,7 @@ function makeTemplate(overrides: Partial<AgentTemplateRecord> = {}): AgentTempla
     compiledPlan: [],
     inputSchema: {
       type: "object",
-      required: ["company"],
+      required: ["company", "depth"],
       properties: {
         company: { type: "string", title: "Company", description: "Target company" },
         depth: { type: "string", title: "Depth", "x-renderer": "@test/x:depth-picker" },

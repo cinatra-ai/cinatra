@@ -8,7 +8,7 @@
 import { expect, test } from "@playwright/test";
 
 for (const palette of ["cinatra", "dark"] as const) {
-  test(`Separator hairline matches its content column in ${palette}`, async ({ page }) => {
+  test(`specs/app-components.html — Separator: "1px low-alpha hairline for rows" matches its content column in ${palette}`, async ({ page }) => {
     await page.goto("/design-fixtures", { waitUntil: "domcontentloaded" });
     await page.evaluate((theme) => window.localStorage.setItem("theme", theme), palette);
     await page.reload({ waitUntil: "networkidle" });
