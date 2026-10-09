@@ -145,6 +145,7 @@ export function RunStepRailGeometryFixtures() {
       </div>
     </div>
     <RunPageRailWidthFixtures />
+    <RunGateCardGroundFixture />
     </>
   );
 }
@@ -202,6 +203,36 @@ export function RunPageRailWidthFixtures() {
           canRespondInWindow={false}
         />
       </section>
+    </section>
+  );
+}
+
+/**
+ * A separate parked-review mount for the run card's computed ground (#3242).
+ * The browser test answers the existing resolve/read seams; all card DOM and
+ * its outer frame are drawn by the actual OrchestratorStepperPanel.
+ * The two width mounts above retain their original props and controls.
+ */
+function RunGateCardGroundFixture() {
+  return (
+    <section data-testid="run-gate-card-ground-host">
+      <h2>Run review card ground</h2>
+      <OrchestratorStepperPanel
+        runId="review-ground-3242"
+        initialStatus="pending_approval"
+        initialReviewGate={{
+          ref: "conformance-suggestion-floor",
+          awaiting: true,
+          producedReviewPark: true,
+        }}
+        initialError={null}
+        agUiEnabled={false}
+        agentId="review-ground-fixture"
+        templateId="review-ground-fixture"
+        lgThreadId={null}
+        stepperSteps={[]}
+        canRespondInWindow={false}
+      />
     </section>
   );
 }

@@ -28,7 +28,8 @@
 // The real-boot half of the same sentence is the browser spec
 // tests/e2e/artifact-markdown-editor/markdown-editor.spec.ts, which needs a dev
 // server, a sign-in and an upload, and is not run in this tier.
-import { Children, cloneElement, isValidElement, StrictMode, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { act, Children, cloneElement, isValidElement, StrictMode, Suspense, type ComponentType, type ReactElement, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
@@ -260,35 +261,86 @@ describe("the markdown display at the required pin, on a review target (read-onl
   });
 });
 
+const isThenable = (value: unknown): value is PromiseLike<unknown> =>
+  typeof (value as { then?: unknown } | null | undefined)?.then === "function";
+
+// The decided island streams each review target under its own Suspense
+// boundary: the element inside the boundary carries the PROMISE of the
+// target's prepared display and of its pinned pair, and its component unwraps
+// both with React's `use`. Only a React render can run `use`, so this renders
+// that element's OWN component, under a boundary, in a throwaway root, captures
+// what it returns, and unmounts the root at once.
+async function evaluateStreamedBody(
+  component: (props: Record<string, unknown>) => ReactNode,
+  props: Record<string, unknown>,
+): Promise<ReactNode> {
+  const capture: { done: boolean; body: ReactNode } = { done: false, body: null };
+  function StreamedBodyProbe(): null {
+    capture.body = component(props);
+    capture.done = true;
+    return null;
+  }
+  // React's `act` asks for the act environment flag; it is set for this
+  // evaluation alone and put back as it was.
+  const scope = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = scope.IS_REACT_ACT_ENVIRONMENT;
+  scope.IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => {
+      root.render(
+        <Suspense fallback={null}>
+          <StreamedBodyProbe />
+        </Suspense>,
+      );
+    });
+  } finally {
+    act(() => root.unmount());
+    if (previousActEnvironment === undefined) delete scope.IS_REACT_ACT_ENVIRONMENT;
+    else scope.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+  }
+  if (!capture.done) throw new Error("the streamed review target never rendered its body");
+  return capture.body;
+}
+
 // Native RSC apparatus: evaluate the actual pure panel and actual async server
-// components, then give the resulting client tree to React. Hooks/client display
-// components remain React's work. Nothing replaces a production component.
+// components, and the island's actual streamed target body under React, then
+// give the resulting client tree to React. Hooks/client display components
+// remain React's work. Nothing replaces a production component. Every panel
+// evaluated is recorded with the props it was given.
 async function resolveSettledServerTree(
   node: ReactNode,
   panel: typeof import("@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel").ReviewTargetPanel,
   seen: string[],
+  panelCalls: Array<Record<string, unknown>>,
 ): Promise<ReactNode> {
   if (Array.isArray(node)) {
-    return Promise.all(node.map((child) => resolveSettledServerTree(child, panel, seen)));
+    return Promise.all(node.map((child) => resolveSettledServerTree(child, panel, seen, panelCalls)));
   }
   if (!isValidElement<Record<string, unknown>>(node)) return node;
-  if (typeof node.type === "function" &&
-      (node.type === panel || node.type.constructor.name === "AsyncFunction")) {
+  const streamedBody = typeof node.type === "function" && isThenable(node.props.prepared);
+  if (typeof node.type === "function" && (streamedBody ||
+      node.type === panel || node.type.constructor.name === "AsyncFunction")) {
     seen.push(node.type.name);
+    if (node.type === panel) panelCalls.push(node.props);
     const server = node.type as (props: Record<string, unknown>) => ReactNode | Promise<ReactNode>;
-    const result = await server(node.props);
+    const result = streamedBody
+      ? await evaluateStreamedBody(server as (props: Record<string, unknown>) => ReactNode, node.props)
+      : await server(node.props);
     // Retain the server element's sibling identity while resolving its body.
     return resolveSettledServerTree(
       isValidElement(result) && node.key !== null ? cloneElement(result, { key: node.key }) : result,
-      panel, seen,
+      panel, seen, panelCalls,
     );
   }
   if (!("children" in node.props)) return node;
   return cloneElement(node as ReactElement<Record<string, unknown>>, {
-    children: await resolveSettledServerTree(Children.toArray(node.props.children as ReactNode), panel, seen),
+    children: await resolveSettledServerTree(Children.toArray(node.props.children as ReactNode), panel, seen, panelCalls),
   });
 }
 
+// The decided island streams each target under its own boundary, so this case
+// finds the target inside its boundary and reads the panel through it.
 describe("the settled review island composes the actual pinned markdown display", () => {
   it("keeps Preview and Code on one frozen read-only target, with one panel and no save", async () => {
     process.env.BETTER_AUTH_SECRET ??= "native-settled-markdown-ref-secret";
@@ -319,45 +371,63 @@ describe("the settled review island composes the actual pinned markdown display"
       edit: readOnlyArtifactEdit("read-only-surface"),
     });
     const target = { artifactId: artifact.artifactId, representationRevisionId: frozenRevision };
+    // The settled surface streams: each target carries the promise of its
+    // prepared display and of its pinned pair, as the loader hands them over.
     settledBoundary.loadSurface.mockResolvedValue({
       kind: "settled",
       agentSummary: null,
-      targets: [{ target, props, mount: {
-        kind: "build-map", slot: "detail", packageName: "@cinatra-ai/markdown-artifact",
-        generatedKey: MARKDOWN_DETAIL_KEY,
-      } }],
-      pinnedCapturePairs: {},
+      targets: [{
+        target,
+        prepared: Promise.resolve({ target, props, mount: {
+          kind: "build-map", slot: "detail", packageName: "@cinatra-ai/markdown-artifact",
+          generatedKey: MARKDOWN_DETAIL_KEY,
+        } }),
+        capturePair: Promise.resolve(null),
+      }],
     });
     const ref = encodeLifecycleGateRef({ runId: "run_md_1", reviewTaskId: "review_md_decided" });
     expect(ref).not.toBeNull();
     const island = await ReviewTargetIslandPage({ searchParams: Promise.resolve({ ref: ref! }) });
-    const panels: Array<ReactElement<{ prepared: {
-      target: typeof target; props: ArtifactRendererProps;
-    }; orgId: string }>> = [];
+    // The island puts one streamed target per boundary in its tree: the element
+    // whose props hold the `prepared` promise. The panel is read through it.
+    const streamed: Array<ReactElement<{
+      prepared: Promise<{ target: typeof target; props: ArtifactRendererProps }>;
+      capturePair: Promise<unknown>;
+      orgId: string;
+    }>> = [];
     const collect = (node: ReactNode): void => {
       if (Array.isArray(node)) { node.forEach(collect); return; }
       if (!isValidElement<Record<string, unknown>>(node)) return;
-      if (node.type === ReviewTargetPanel) panels.push(node as unknown as typeof panels[number]);
+      if (isThenable(node.props.prepared)) streamed.push(node as unknown as typeof streamed[number]);
       collect(node.props.children as ReactNode);
     };
     collect(island);
-    expect(panels).toHaveLength(1);
-    expect(panels[0].props.orgId).toBe("org_1");
-    expect(panels[0].props.prepared.target).toEqual(target);
-    expect(panels[0].props.prepared.props.representation?.revisionId).toBe(frozenRevision);
-    expect(panels[0].props.prepared.props.content).toMatchObject({
+    expect(streamed).toHaveLength(1);
+    expect(streamed[0].props.orgId).toBe("org_1");
+    const prepared = await streamed[0].props.prepared;
+    expect(prepared.target).toEqual(target);
+    expect(prepared.props.representation?.revisionId).toBe(frozenRevision);
+    expect(prepared.props.content).toMatchObject({
       kind: "text", representationRevisionId: frozenRevision, text: DOCUMENT,
     });
     // The production builder narrows its current v2 refusal to the display's
     // negotiated v1 edit-channel shape; the refusal semantics stay exact.
-    expect(panels[0].props.prepared.props.edit).toMatchObject({
+    expect(prepared.props.edit).toMatchObject({
       channelVersion: 1, kind: "read-only", reason: "read-only-surface",
     });
+    expect(await streamed[0].props.capturePair).toBeNull();
     const seen: string[] = [];
-    const { container } = render(await resolveSettledServerTree(island, ReviewTargetPanel, seen));
+    const panelCalls: Array<Record<string, unknown>> = [];
+    const { container } = render(await resolveSettledServerTree(island, ReviewTargetPanel, seen, panelCalls));
     expect(seen).toEqual(expect.arrayContaining([
-      "ReviewTargetPanel", "ReviewTargetMount", "ExtensionRendererSlot",
+      "StreamedReviewTarget", "ReviewTargetPanel", "ReviewTargetMount", "ExtensionRendererSlot",
     ]));
+    // The streamed body composed exactly one panel, fed the very value the
+    // boundary's promise carried, the trusted organization and no pinned pair.
+    expect(panelCalls).toHaveLength(1);
+    expect(panelCalls[0].orgId).toBe("org_1");
+    expect(panelCalls[0].prepared).toBe(prepared);
+    expect(panelCalls[0].capturePair).toBeNull();
     expect(settledBoundary.loadSurface).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run_md_1", reviewTaskId: "review_md_decided",
     }));
