@@ -142,6 +142,13 @@ export default defineConfig({
         root,
         "packages/agents/src/run-status.ts",
       ),
+      // The durable transcript projector uses these existing pure subpaths.
+      // Keep the agents subpath before the prefix-matching package barrel.
+      "@cinatra-ai/agents/assignment-scope-snapshot": path.join(
+        root,
+        "packages/agents/src/assignment-scope-snapshot.ts",
+      ),
+      "@cinatra-ai/chat/thread-slug": path.join(root, "packages/chat/src/thread-slug.ts"),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",
