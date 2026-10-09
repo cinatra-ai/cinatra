@@ -455,8 +455,17 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER_SMOKE || '"ubuntu-latest"') }}
     # Generous: the build installs the whole pnpm workspace and runs esbuild.
     timeout-minutes: 30
+    env:
+      DOCKERHUB_AUTH_AVAILABLE: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Login to Docker Hub (pulls)
+        if: ${{ env.DOCKERHUB_AUTH_AVAILABLE == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
