@@ -2594,7 +2594,7 @@ export function useRunReviewSlot({
             // and, past the belt, at the recovery spacing, while the surface
             // falls back to the run's own terminal rendering (fix leg 9).
           } finally {
-            window.clearTimeout(deadline);
+            globalThis.clearTimeout(deadline);
             if (lookEpochRef.current === epoch) {
               inFlightRef.current = false;
               setProbe((prev) => ({
