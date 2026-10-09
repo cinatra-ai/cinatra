@@ -32,6 +32,7 @@ import React from "react";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { compile } from "tailwindcss";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -144,7 +145,7 @@ afterEach(() => {
 // jsdom does not measure Tailwind or browser layout; no mock dimensions are
 // applied to the nodes. Only unconditional sizing declarations are compared.
 async function shippedSizingSignature(element: HTMLElement) {
-  const root = resolve(process.cwd(), "../..");
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
   const stylesheet = resolve(root, "src/app/globals.css");
   const require = createRequire(resolve(root, "package.json"));
   const compiler = await compile(await readFile(stylesheet, "utf8"), {
@@ -161,7 +162,11 @@ async function shippedSizingSignature(element: HTMLElement) {
       return { path, base: dirname(path), content: await readFile(path, "utf8") };
     },
   });
-  const css = compiler.build([...element.classList]);
+  const ancestry: HTMLElement[] = [];
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    ancestry.push(node);
+  }
+  const css = compiler.build(ancestry.flatMap((node) => [...node.classList]));
   const properties = ["height", "padding-inline", "font-size", "line-height"];
   const signature: Record<string, string> = {};
   for (const rule of css.matchAll(/^\s*(\.(?:\\.|[\w-])+)\s*\{([^{}]+)\}/gm)) {
@@ -169,6 +174,23 @@ async function shippedSizingSignature(element: HTMLElement) {
     for (const property of properties) {
       const value = rule[2].match(new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+);`))?.[1];
       if (value) signature[property] = value.trim();
+    }
+  }
+  // Arbitrary font-size utilities do not declare line-height: the old small
+  // button inherits it. Read an actual ancestor utility first, then the
+  // shipped html/:host preflight declaration, never a handwritten fallback.
+  if (!signature["line-height"]) {
+    for (const ancestor of ancestry.slice(1)) {
+      for (const rule of css.matchAll(/^\s*(\.(?:\\.|[\w-])+)\s*\{([^{}]+)\}/gm)) {
+        if (!ancestor.matches(rule[1])) continue;
+        const value = rule[2].match(/(?:^|;)\s*line-height:\s*([^;]+);/)?.[1];
+        if (value) signature["line-height"] = value.trim();
+      }
+      if (signature["line-height"]) break;
+    }
+    if (!signature["line-height"]) {
+      const preflight = css.match(/(?:^|\n)\s*html,\s*:host\s*\{([^{}]+)\}/)?.[1];
+      signature["line-height"] = preflight?.match(/line-height:\s*([^;]+);/)?.[1]?.trim() ?? "";
     }
   }
   for (const property of properties) {
