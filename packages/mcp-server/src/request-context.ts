@@ -1,6 +1,72 @@
+import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { OboCeilingChain } from "./obo-ceiling";
 import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission";
+
+/** A host-verified production snapshot, carried only with authenticated run
+ * identity. Version 1 step-only claims cannot represent this version 2 claim. */
+export type VerifiedProducerStepBinding = {
+  version: 2;
+  producerKind: "llm";
+  producerStepId: string;
+  noteInputPath: string;
+  sourceSha256: string;
+  graphSha256: string;
+  effectiveInputsJson: string;
+  effectiveInputsSha256: string;
+  inputParams: Record<string, unknown>;
+  inputParamsSha256: string;
+};
+
+function producerJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype || Object.hasOwn(value,"toJSON")) throw new Error("not plain JSON");
+    const entries: string[] = [];
+    for (let i=0; i<value.length; i++) {
+      if (!Object.hasOwn(value,i)) throw new Error("not dense JSON");
+      entries.push(producerJson(value[i]));
+    }
+    return `[${entries.join(",")}]`;
+  }
+  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${producerJson((value as Record<string,unknown>)[k])}`).join(",")}}`;
+  }
+  throw new Error("not finite JSON");
+}
+
+/** Schema/integrity check, NOT authentication. Only OBO verification or the
+ * authenticated durable resolver may supply this value to the request frame. */
+export function validateProducerStepBinding(value: unknown, stepId?: string): VerifiedProducerStepBinding | null {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const v=value as Record<string,unknown>;
+    if (v.version !== 2 || v.producerKind !== "llm" || typeof v.producerStepId !== "string" || !v.producerStepId.trim()
+      || (stepId !== undefined && stepId !== v.producerStepId)
+      || typeof v.noteInputPath !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(v.noteInputPath)
+      || v.noteInputPath.split(".").some(k=>["__proto__","prototype","constructor"].includes(k))
+      || typeof v.effectiveInputsJson !== "string" || v.effectiveInputsJson.length>49152) return null;
+    for (const key of ["sourceSha256","graphSha256","effectiveInputsSha256","inputParamsSha256"]) {
+      if (typeof v[key] !== "string" || !/^[a-f0-9]{64}$/.test(v[key] as string)) return null;
+    }
+    if (createHash("sha256").update(v.effectiveInputsJson,"utf8").digest("hex") !== v.effectiveInputsSha256) return null;
+    const parsed=JSON.parse(v.effectiveInputsJson);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !v.inputParams || typeof v.inputParams !== "object" || Array.isArray(v.inputParams)) return null;
+    const canonical=producerJson(parsed);
+    if (producerJson(v.inputParams)!==canonical || createHash("sha256").update(canonical,"utf8").digest("hex")!==v.inputParamsSha256) return null;
+    let note: unknown=parsed;
+    for (const key of v.noteInputPath.split(".")) {
+      if (!note || typeof note !== "object" || !Object.hasOwn(note,key)) return null;
+      note=(note as Record<string,unknown>)[key];
+    }
+    if (typeof note !== "string") return null;
+    // Return parsed JSON, not an input object with user-defined prototypes.
+    return {version:2,producerKind:"llm",producerStepId:v.producerStepId,noteInputPath:v.noteInputPath,
+      sourceSha256:v.sourceSha256 as string,graphSha256:v.graphSha256 as string,effectiveInputsJson:v.effectiveInputsJson,
+      effectiveInputsSha256:v.effectiveInputsSha256 as string,inputParams:parsed,inputParamsSha256:v.inputParamsSha256 as string};
+  } catch {return null;}
+}
 
 /**
  * Discriminated union of the two delegated MCP actor flavors.
@@ -74,6 +140,7 @@ export type DelegatedMcpActor =
        * no step. The transport stamps it on the frame as `verifiedStepId`.
        */
       verifiedStepId?: string;
+      verifiedProducerBinding?: VerifiedProducerStepBinding;
     }
   | {
       delegation: "public_site_widget";
@@ -367,6 +434,7 @@ export type McpRequestContext = {
    * for every call that carries no verified step.
    */
   verifiedStepId?: string;
+  verifiedProducerBinding?: VerifiedProducerStepBinding;
   /**
    * The LENT-ACTION GRANT this turn presented (cinatra#2932, lifecycle-b W5a).
    *
@@ -512,6 +580,7 @@ export type DurableRunContextResolution =
         agentSpecVersion?: string;
         /** The binding's verified step (cinatra#3745), when it carries one. */
         stepId?: string;
+        verifiedProducerBinding?: VerifiedProducerStepBinding;
       };
     }
   | { outcome: "invalid" }
@@ -538,6 +607,7 @@ export type ResolvedRequestRunContext = {
    * verified run id and never read from a header.
    */
   stepId?: string;
+  verifiedProducerBinding?: VerifiedProducerStepBinding;
   /** Which channel supplied the run id (the cutover metric dimension). */
   servedBy: RunContextServedBy;
   /** True when a durable "invalid" outcome suppressed the legacy channels. */
@@ -566,6 +636,7 @@ export function resolveRequestRunContext(input: {
   /** delegatedActor.verifiedStepId when delegation === "agent_run"; else
    *  undefined (cinatra#3745). Used only when the delegated run id serves. */
   delegatedStepId?: string;
+  delegatedProducerBinding?: VerifiedProducerStepBinding;
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
@@ -653,6 +724,14 @@ export function resolveRequestRunContext(input: {
       ? nonEmpty(durableCtx?.stepId)
       : undefined;
 
+  // A stronger channel cannot borrow a weaker channel's production snapshot.
+  const rawProducerBinding = nonEmpty(input.delegatedRunId)
+    ? input.delegatedProducerBinding
+    : nonEmpty(durableCtx?.runId) ? durableCtx?.verifiedProducerBinding : undefined;
+  const verifiedProducerBinding = stepId && verifiedRunId
+    ? validateProducerStepBinding(rawProducerBinding, stepId) ?? undefined
+    : undefined;
+
   const servedBy: RunContextServedBy = input.delegatedRunId
     ? "obo"
     : durableCtx?.runId
@@ -667,9 +746,22 @@ export function resolveRequestRunContext(input: {
     packageVersion: durableCtx?.packageVersion ?? effHeaderPackageVersion,
     agentSpecVersion: durableCtx?.agentSpecVersion ?? effHeaderAgentSpecVersion,
     ...(stepId ? { stepId } : {}),
+    ...(verifiedProducerBinding ? { verifiedProducerBinding } : {}),
     servedBy,
     suppressed,
     denied,
     deniedChannel,
   };
+}
+
+/** Replay admission must explicitly require v2 and the exact recorded graph.
+ * Ordinary authenticated calls without a production snapshot stay ordinary. */
+export function requireRunProducerBinding(context: ResolvedRequestRunContext, expectedGraphSha256: string):
+  | {ok:true;binding:VerifiedProducerStepBinding}
+  | {ok:false;reason:"missing_producer_binding"|"invalid_producer_binding"|"wrong_graph_pin"} {
+  if (context.denied || !["obo","durable"].includes(context.servedBy) || !context.runId || !context.stepId || !context.verifiedProducerBinding) return {ok:false,reason:"missing_producer_binding"};
+  const binding=validateProducerStepBinding(context.verifiedProducerBinding,context.stepId);
+  if (!binding) return {ok:false,reason:"invalid_producer_binding"};
+  if (binding.graphSha256!==expectedGraphSha256) return {ok:false,reason:"wrong_graph_pin"};
+  return {ok:true,binding};
 }
