@@ -106,6 +106,7 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/ren
 import {
   RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
   RUN_START_SCHEDULE_FIRED_SENTENCE,
+  RUN_START_SCHEDULE_PROPOSAL_SENTENCE,
 } from "@cinatra-ai/agents/run-status";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
 import { mountSurface } from "./conversation-column-harness";
@@ -299,17 +300,19 @@ describe("criterion 4 — a fired recurring schedule's turn says so, on the real
 });
 
 describe("criterion 4 — the never-fired turn is not the fired turn", () => {
-  it("draws the proposal standing line over a recurring schedule that has never fired", async () => {
+  it("draws the section's proposal sentence, not the fired one, over a recurring schedule that has never fired", async () => {
     serveReading(RECURRING_BODY, false);
     const { container } = await mountProposalTurn("configured");
     const line = await waitFor(() => {
-      const el = container.querySelector("[data-schedule-standing-line=proposal]");
-      if (el === null) throw new Error("the proposal sentence never drew");
+      const el = container.querySelector('[data-schedule-standing-line="never-fired"]');
+      if (el === null) throw new Error("the never-fired reading's own line never drew");
       return el;
     });
-    expect(line.textContent).toBe("Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.");
+    expect(line.textContent).toBe(RUN_START_SCHEDULE_PROPOSAL_SENTENCE);
     expect(visibleText(container)).not.toContain(RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE);
-    // The fired and never-fired turns retain distinct approved words.
+    // And the two turns still do not read the same: the never-fired turn draws
+    // the section's proposal sentence in place of the model's lead-in, and the
+    // fired turn draws its own.
     expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
   });
 });

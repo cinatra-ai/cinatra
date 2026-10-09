@@ -424,15 +424,22 @@ function installResolveStub() {
 // The observation — production DOM to the contract's model
 // ---------------------------------------------------------------------------
 
-/** The ordered list through its text hook, or a schedule slot whose standing
- *  sentence replaces that text (cinatra#3287). The slot itself still names the
- *  producing call, and its parent remains the list the carriage observer reads. */
+/**
+ * The ordered-parts list, resolved through the transcript's own slot marker.
+ *
+ * Every part container of the list wears `data-transcript-slot` and sits
+ * directly in it, so the list is the ONE common parent of every marked slot. The
+ * text part's hook is no anchor: a schedule that has not fired draws the
+ * section's own line and no model text part, so the old text-part hook would
+ * find nothing.
+ */
 function orderedPartsList(root: HTMLElement): HTMLElement {
-  const text = root.querySelector<HTMLElement>("[data-embed-content]");
-  if (text?.parentElement) return text.parentElement;
-  const scheduleSlot = root.querySelector("[data-schedule-standing-line]")?.closest("[data-transcript-slot]");
-  if (!scheduleSlot?.parentElement) throw new Error("no ordered-parts list in the rendered transcript");
-  return scheduleSlot.parentElement;
+  const parents = new Set(
+    Array.from(root.querySelectorAll("[data-transcript-slot]")).map((el) => el.parentElement),
+  );
+  const [only] = parents;
+  if (parents.size !== 1 || !only) throw new Error("no ordered-parts list in the rendered transcript");
+  return only;
 }
 
 /**

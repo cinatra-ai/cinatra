@@ -66,7 +66,9 @@
 // ---------------------------------------------------------------------------
 
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import { LIFECYCLE_CARD_REPLACEMENT_PART_KIND } from "@cinatra-ai/agent-ui-protocol";
 import {
+  recognizeLifecycleReplacementAnnouncement,
   recognizeLifecycleViewEnvelope,
   type LifecycleViewDataPart,
 } from "./lifecycle-view-envelope";
@@ -464,6 +466,46 @@ export function createAgUiSinkAdapter(params: {
             id,
             lifecycleView.provenance,
           );
+        }
+        // THE CARD-REPLACEMENT ANNOUNCEMENT (cinatra#2853, the second fix leg).
+        //
+        // A typed schedule change presses the card's own `adjust`, which
+        // RE-PROPOSES — a new ref, the old one still addressable. The mounted
+        // card is drawn from the old one, so the page needs to be told which ref
+        // it is now looking at or it keeps offering the schedule the person just
+        // asked to change. This is that word, recognized under the same
+        // producer bind the view envelope takes.
+        //
+        // NOT DURABLE, DELIBERATELY. `emitDurableDataPart` is for what a turn
+        // PRODUCED; this describes what a MOUNTED card should do now. Keeping it
+        // would also put a fourth payload shape in front of the reload parser
+        // for no reader: on a reload every card is drawn from the transcript's
+        // own refs again, which is exactly what the card's own Adjust button
+        // already leaves behind. Same-session only, same as the settle bus it
+        // feeds.
+        //
+        // IT DRAWS NOTHING. A renderable view here would mint a SECOND card,
+        // which is the defect this closes rather than the fix.
+        const replaced = recognizeLifecycleReplacementAnnouncement({
+          serverLabel: d.serverLabel,
+          toolName: d.name,
+          result: d.result,
+        });
+        if (replaced) {
+          emit({
+            type: "DATA_PART",
+            data: {
+              kind: LIFECYCLE_CARD_REPLACEMENT_PART_KIND,
+              // `cardViewType`, never `viewType`: the renderer draws every data
+              // part carrying a non-empty `viewType`, and a drawn announcement
+              // IS the second card this closes. The protocol's own guard
+              // refuses a payload that carries one.
+              cardViewType: replaced.viewType,
+              supersededRef: replaced.supersededRef,
+              ref: replaced.ref,
+            },
+            timestamp: Date.now(),
+          });
         }
         return;
       }

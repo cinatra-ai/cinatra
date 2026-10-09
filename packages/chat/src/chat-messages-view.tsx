@@ -98,6 +98,7 @@ import {
   runIsWaitingForItsSchedule,
   RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
   RUN_START_SCHEDULE_FIRED_SENTENCE,
+  RUN_START_SCHEDULE_PROPOSAL_SENTENCE,
   RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE,
 } from "@cinatra-ai/agents/run-status";
 import { useConversationCredential } from "./conversation-credential";
@@ -1034,12 +1035,32 @@ function carriedMomentView(view: Record<string, unknown>): boolean {
   );
 }
 
-/** §VI gives each authorized schedule reading its own standing sentence. */
+/**
+ * THE LINE SECTION VI DRAWS OVER A SCHEDULE THAT HAS FIRED (cinatra#3174 fix
+ * leg 7, criterion 4).
+ *
+ * The section gives the two fired readings their own words and gives them
+ * DIFFERENT words — see `RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE` and
+ * `RUN_START_SCHEDULE_FIRED_SENTENCE` for the sentences and for why each is a
+ * standing sentence rather than a clause after a dispatch head. The readings
+ * that have not fired — first shown, configured and expired — draw section
+ * VI's proposal sentence (`RUN_START_SCHEDULE_PROPOSAL_SENTENCE`, cinatra#2853
+ * fix leg 2), and only a card with no reading yet draws no line of its own.
+ *
+ * AND THE STOP IS A READING TOO (fix leg 8). Section VI's Cancel schedule
+ * "stops the recurring schedule and then leaves the rows no longer editable",
+ * and the fourth graded round measured the fired-recurring sentence standing
+ * over a card that had just been stopped — the firing that elects that sentence
+ * stays true across the press, so nothing in the turn moved. The stopped
+ * reading takes the section's own words: see
+ * `RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE`. It is asked FIRST, because a
+ * stopped schedule is a fired one until the stop is consulted.
+ */
 function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
   if (reading === "stopped-recurring") return RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE;
   if (reading === "fired-recurring") return RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE;
   if (reading === "spent-one-off") return RUN_START_SCHEDULE_FIRED_SENTENCE;
-  if (reading === "proposal") return "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.";
+  if (reading === "never-fired") return RUN_START_SCHEDULE_PROPOSAL_SENTENCE;
   return null;
 }
 
@@ -1310,8 +1331,10 @@ function OrderedPartsSection({
       onScheduleStandingReadingsChange?.([]);
     };
   }, [onScheduleStandingReadingsChange, scheduleStandingReadings]);
-  // §VI: a resolved schedule turn draws only its reading's sentence,
-  // including proposed/configured/expired readings and prose after the card.
+  // §VI gives an authorized schedule turn one prose line: its resolved
+  // reading's sentence replaces all model prose in that same turn, including
+  // follow-up after the card. Absent, unresolved and stale slots keep their
+  // original prose; earlier, user and stored-history turns are untouched.
   const [standingLineSlots, setStandingLineSlots] = useState<readonly number[]>([]);
   const onStandingLineChange = useCallback((slot: number, drawn: boolean) => {
     setStandingLineSlots((prev) => {

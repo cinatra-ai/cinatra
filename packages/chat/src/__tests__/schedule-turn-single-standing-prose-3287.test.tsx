@@ -438,7 +438,7 @@ describe.each<TurnRoad>(["ordered", "flat-views", "ordered-unpositioned"])(
     ])("uses the drawn proposal line for %s", async (reading, body) => {
       serveReading(body, false);
       const { container } = await mountProposalTurn(reading, road);
-      await expectOneProseLine(container, PROPOSAL_SENTENCE, "proposal");
+      await expectOneProseLine(container, PROPOSAL_SENTENCE, "never-fired");
     });
 
     it("waits for authorization and drops the previous reference's sentence", async () => {
@@ -450,7 +450,7 @@ describe.each<TurnRoad>(["ordered", "flat-views", "ordered-unpositioned"])(
       await act(async () => answer(jsonResponse({
         kind: "trigger_schedule_proposal", state: { state: "pending", canDecide: true, canComment: false }, body: PROPOSAL_BODY,
       })));
-      await expectOneProseLine(view.container, PROPOSAL_SENTENCE, "proposal");
+      await expectOneProseLine(view.container, PROPOSAL_SENTENCE, "never-fired");
       view.rerender(chatSurfaceElement({ messages: proposalTurn(road, "new-unresolved-ref") }));
       await waitFor(() => expect(view.container.querySelector("[data-schedule-standing-line]")).toBeNull());
       expect(visibleText(view.container)).toContain(MODEL_LEAD_IN);
