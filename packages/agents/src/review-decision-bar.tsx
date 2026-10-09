@@ -60,9 +60,12 @@ export function ReviewDecisionBar({
   submitAction,
   suggestionDecisionsFor,
   suggestionSummary,
+  recordedPrompt = null,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
+  /** Authorized producer words from the finalized pinned revision. */
+  recordedPrompt?: string | null;
   /**
    * The partition THIS decision would carry, asked PER DISPOSITION (cinatra#2572;
    * reworked by cinatra#2852). Owned by the CARD that draws the suggestions above
@@ -90,7 +93,8 @@ export function ReviewDecisionBar({
   suggestionSummary?: { accepted: number; total: number };
 }) {
   const router = useRouter();
-  const [comment, setComment] = useState("");
+  const [comment, setComment] = useState(recordedPrompt ?? "");
+  const [noteEdited, setNoteEdited] = useState(false);
   const [pending, startTransition] = useTransition();
   const [outcome, setOutcome] = useState<ReviewSubmitOutcome | null>(null);
 
@@ -105,7 +109,8 @@ export function ReviewDecisionBar({
     startTransition(async () => {
       const result = await submitAction({
         disposition,
-        comment: comment.trim() === "" ? null : comment.trim(),
+        // A producer prefill is not an annotation signed by the reader.
+        comment: !noteEdited || comment.trim() === "" ? null : comment.trim(),
         // TERMINAL ONLY, and OMITTED rather than nulled otherwise.
         //
         // A COMMENT does not resolve the gate, so it cannot carry the terminal
@@ -184,7 +189,7 @@ export function ReviewDecisionBar({
           id="review-rationale"
           data-testid="review-rationale"
           value={comment}
-          onChange={(e) => setComment(e.target.value)}
+          onChange={(e) => { setComment(e.target.value); setNoteEdited(true); }}
           disabled={pending || settled}
           placeholder="Add a note for the run and the audit trail…"
           className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"

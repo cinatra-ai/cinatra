@@ -559,6 +559,10 @@ export async function submitReviewDecisionCore(
   if (!SUPPORTED_DECISION_API_VERSIONS.has(decision.decisionApiVersion)) {
     return invalid(`Unsupported decisionApiVersion ${decision.decisionApiVersion}.`);
   }
+  // §VI: legacy Reject rows stay readable, but no new operation may produce one.
+  if (decision.disposition === "reject") {
+    return invalid("There is no Reject decision. Leave the review open, Comment, or Continue.");
+  }
   if (!VALID_DISPOSITIONS.has(decision.disposition)) {
     return invalid(`Unknown disposition "${decision.disposition}".`);
   }

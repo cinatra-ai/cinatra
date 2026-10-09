@@ -1226,6 +1226,8 @@ export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
     /** The reviewed target(s)' headers (cinatra#3141 item 7), or `null` when the
      * answer carried none. See {@link LifecycleTargetHeader}. */
     targetHeaders: LifecycleTargetHeader[] | null;
+    /** §VI producer prefill; envelope-only, absent on older readers/answers. */
+    recordedPrompt?: string | null;
   };
 
 /**
@@ -1372,6 +1374,10 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     if (islandSrc === undefined) return null;
     const targetHeaders = readTargetHeaders(record.targetHeaders);
     if (targetHeaders === undefined) return null;
+    const recordedPrompt = record.recordedPrompt;
+    if (recordedPrompt !== undefined && recordedPrompt !== null && typeof recordedPrompt !== "string") return null;
+    if (recordedPrompt !== undefined && recordedPrompt !== null &&
+        (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
     // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
     // a wrong body is. Only the review gate has a review target, so a header
     // arriving beside a verification summary or a schedule proposal is an answer
@@ -1409,6 +1415,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         body: null,
         islandSrc,
         targetHeaders,
+        ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
         aside,
       } as LifecycleResolveAnswerFor<K>;
     }
@@ -1422,6 +1429,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       body: body.data,
       islandSrc,
       targetHeaders,
+      ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
       aside,
     } as LifecycleResolveAnswerFor<K>;
   } catch {

@@ -310,3 +310,17 @@ describe("the suggestion partition", () => {
     );
   });
 });
+
+
+describe("§VI Continue transport compatibility without a drawn floor change", () => {
+  it("accepts Continue against only the signed gate and retains the canonical actor/outcome", async () => {
+    const res = await POST(post({ ref: REF, disposition: "continue", comment: null }));
+    expect(res.status).toBe(200);
+    expect(submitReviewDecisionAction).toHaveBeenCalledExactlyOnceWith("run-1", "task-1", "continue", null, ACTOR, null);
+    expect(await res.json()).toEqual({ outcome: { kind: "decided", disposition: "approve", idempotent: false } });
+  });
+  it("does not create a new Regenerate transport before its durable contract", async () => {
+    expect((await POST(post({ ref: REF, disposition: "regenerate", comment: "words" }))).status).toBe(400);
+    expect(submitReviewDecisionAction).not.toHaveBeenCalled();
+  });
+});

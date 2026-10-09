@@ -190,3 +190,24 @@ describe("§I — the rationale plumbing is untouched (#2865 acceptance 4)", () 
     expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: null });
   });
 });
+
+
+describe("§VI authorized producer prefill is not a reader annotation", () => {
+  for (const action of ["Comment", "Approve"] as const) {
+    it(`does not sign untouched producer words as the reader's ${action}`, async () => {
+      const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
+      render(<ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} recordedPrompt="a red fox in snow" />);
+      expect((noteField() as HTMLTextAreaElement).value).toBe("a red fox in snow");
+      fireEvent.click(screen.getByRole("button", { name: action }));
+      await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: action === "Approve" ? "approve" : "comment", comment: null }));
+    });
+  }
+  it("preserves an explicitly edited reader note without changing the visible floor", async () => {
+    const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
+    render(<ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} recordedPrompt="producer words" />);
+    fireEvent.change(noteField(), { target: { value: "  actual reader words  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: "actual reader words" }));
+    expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Reject", "Approve"]);
+  });
+});
