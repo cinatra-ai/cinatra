@@ -219,7 +219,7 @@ export const RUN_PRODUCER_BINDING_HEADER = "x-cinatra-producer-binding";
 export const RUN_PRODUCER_ATTESTATION_HEADER = "x-cinatra-producer-attestation";
 export type VerifiedRunProducerBinding = VerifiedProducerStepBinding;
 const PRODUCER_SHA = /^[a-f0-9]{64}$/;
-const PRODUCER_PATH = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const PRODUCER_PATH = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PRODUCER_UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function producerCanonicalJson(value: unknown): string {
@@ -263,7 +263,7 @@ export function verifyRunProducerBinding(input: {
       || typeof claim.effectiveInputsSha256 !== "string" || !PRODUCER_SHA.test(claim.effectiveInputsSha256)
       || typeof claim.effectiveInputsJson !== "string"
       || typeof claim.noteInputPath !== "string" || !PRODUCER_PATH.test(claim.noteInputPath)
-      || claim.noteInputPath.split(".").some(k => PRODUCER_UNSAFE_KEYS.has(k))) return null;
+      || PRODUCER_UNSAFE_KEYS.has(claim.noteInputPath)) return null;
     if (input.expectedGraphSha256 !== undefined && input.expectedGraphSha256 !== claim.graphSha256) return null;
     const rawDigest = createHash("sha256").update(claim.effectiveInputsJson, "utf8").digest("hex");
     if (rawDigest !== claim.effectiveInputsSha256) return null;
@@ -271,12 +271,8 @@ export function verifyRunProducerBinding(input: {
     if (!hexEquals(match[2]!, hmacHex(key!, material))) return null;
     const inputs = JSON.parse(claim.effectiveInputsJson) as Record<string, unknown>;
     if (!inputs || Array.isArray(inputs) || typeof inputs !== "object") return null;
-    let note: unknown = inputs;
-    for (const segment of claim.noteInputPath.split(".")) {
-      if (!note || typeof note !== "object" || !Object.hasOwn(note, segment)) return null;
-      note = (note as Record<string, unknown>)[segment];
-    }
-    if (typeof note !== "string") return null;
+    // WayFlow external Step inputs use declared top-level keys, not paths.
+    if (!Object.hasOwn(inputs, claim.noteInputPath) || typeof inputs[claim.noteInputPath] !== "string") return null;
     const inputParamsSha256 = createHash("sha256").update(producerCanonicalJson(inputs), "utf8").digest("hex");
     return validateProducerStepBinding({ version: 2, producerKind: "llm", producerStepId: node!, noteInputPath: claim.noteInputPath,
       sourceSha256: claim.sourceSha256, graphSha256: claim.graphSha256, inputParams: inputs,

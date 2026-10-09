@@ -44,8 +44,8 @@ export function validateProducerStepBinding(value: unknown, stepId?: string): Ve
     const v=value as Record<string,unknown>;
     if (v.version !== 2 || v.producerKind !== "llm" || typeof v.producerStepId !== "string" || !v.producerStepId.trim()
       || (stepId !== undefined && stepId !== v.producerStepId)
-      || typeof v.noteInputPath !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(v.noteInputPath)
-      || v.noteInputPath.split(".").some(k=>["__proto__","prototype","constructor"].includes(k))
+      || typeof v.noteInputPath !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(v.noteInputPath)
+      || ["__proto__","prototype","constructor"].includes(v.noteInputPath)
       || typeof v.effectiveInputsJson !== "string" || v.effectiveInputsJson.length>49152) return null;
     for (const key of ["sourceSha256","graphSha256","effectiveInputsSha256","inputParamsSha256"]) {
       if (typeof v[key] !== "string" || !/^[a-f0-9]{64}$/.test(v[key] as string)) return null;
@@ -55,12 +55,8 @@ export function validateProducerStepBinding(value: unknown, stepId?: string): Ve
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !v.inputParams || typeof v.inputParams !== "object" || Array.isArray(v.inputParams)) return null;
     const canonical=producerJson(parsed);
     if (producerJson(v.inputParams)!==canonical || createHash("sha256").update(canonical,"utf8").digest("hex")!==v.inputParamsSha256) return null;
-    let note: unknown=parsed;
-    for (const key of v.noteInputPath.split(".")) {
-      if (!note || typeof note !== "object" || !Object.hasOwn(note,key)) return null;
-      note=(note as Record<string,unknown>)[key];
-    }
-    if (typeof note !== "string") return null;
+    // Producer declarations name a top-level external Step input key.
+    if (!Object.hasOwn(parsed,v.noteInputPath) || typeof parsed[v.noteInputPath] !== "string") return null;
     // Return parsed JSON, not an input object with user-defined prototypes.
     return {version:2,producerKind:"llm",producerStepId:v.producerStepId,noteInputPath:v.noteInputPath,
       sourceSha256:v.sourceSha256 as string,graphSha256:v.graphSha256 as string,effectiveInputsJson:v.effectiveInputsJson,

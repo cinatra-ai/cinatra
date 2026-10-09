@@ -244,6 +244,12 @@ describe("producer step production binding v2", () => {
     expect(verify(claim(binding, "s2", NOW_S + 601))).toBeNull();
     expect(verify(claim(binding, "s2", NOW_S - 59))).not.toBeNull();
   });
+  it("rejects a signed dotted Note path instead of inferring nested Step inputs", () => {
+    const nestedJson = JSON.stringify({ inputs: { note: "draft the reviewed story" } });
+    const nested = { ...binding, noteInputPath: "inputs.note", effectiveInputsJson: nestedJson, effectiveInputsSha256: sha(nestedJson) };
+    expect(verify(claim(nested))).toBeNull();
+    expect(verify()).not.toBeNull();
+  });
   it("unknown versions, nonobject inputs, malformed Note paths and hostile oversized payloads fail closed", () => {
     for (const changed of [{ ...binding, version: 1 }, { ...binding, noteInputPath: "__proto__.note" }, { ...binding, effectiveInputsJson: "[]", effectiveInputsSha256: sha("[]") }, { ...binding, effectiveInputsJson: '{"note":null}', effectiveInputsSha256: sha('{"note":null}') }]) expect(verify(claim(changed))).toBeNull();
     expect(verify({ ...claim(), binding: "a".repeat(100_000) })).toBeNull();
