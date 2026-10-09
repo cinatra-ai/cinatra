@@ -226,6 +226,10 @@ describe("ensureBundledAgentTemplateRecord", () => {
 it("refuses an undeclared visible input before bundled seeding creates a record", async () => {
   const oas = JSON.parse(OAS_FIXTURE);
   oas.$referenced_components.start.metadata = { cinatra: { required: [] } };
+  // This negative fixture removes both defaults that permit user omission.
+  for (const input of [...oas.inputs, ...oas.$referenced_components.start.inputs]) {
+    if (input.title === "user") delete input.default;
+  }
   const { seedDir } = await stageSeed({ oas: JSON.stringify(oas) });
   await expect(ensureBundledAgentTemplateRecord({ packageName: PACKAGE_NAME, packageVersion: VERSION, seedDir })).rejects.toThrow(/user/);
   expect(createLocalAgentTemplateVersion).not.toHaveBeenCalled();

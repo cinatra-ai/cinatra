@@ -8,7 +8,30 @@ import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 // (REQUIRED kind:"agent" edges only, as a bare range). Optional agent edges and
 // kind-less edges are NOT projected. Mirrors the mock scaffold of
 // install-from-package-edge-persistence.test.ts.
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let extractDir = "";
+
+// The real pre-install guard reads the extracted Flow before the compiler mock.
+// This fixture has no visible inputs, matching the compiled input schema below.
+beforeEach(async () => {
+  extractDir = await mkdtemp(join(tmpdir(), "cinatra-install-oas-"));
+  await mkdir(join(extractDir, "cinatra"));
+  await writeFile(join(extractDir, "cinatra", "oas.json"), JSON.stringify({
+    component_type: "Flow", id: "install-fixture", inputs: [],
+    start_node: { $component_ref: "start" },
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start", inputs: [] },
+    },
+  }));
+});
+afterEach(async () => {
+  if (extractDir) await rm(extractDir, { recursive: true, force: true });
+  extractDir = "";
+});
 
 const EDGES = [
   {
@@ -79,7 +102,7 @@ vi.mock("@cinatra-ai/registries", () => ({
   extractAgentPackage: async () => ({
     packageName: "@cinatra-ai/pkg",
     packageVersion: "1.0.0",
-    tempDir: "/tmp/extract-fixture",
+    tempDir: extractDir,
     manifest: {
       name: "@cinatra-ai/pkg",
       version: "1.0.0",
