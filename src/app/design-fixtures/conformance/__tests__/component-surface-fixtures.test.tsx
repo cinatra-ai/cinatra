@@ -102,4 +102,15 @@ describe("component surfaces of the components drawing on the conformance harnes
     expect(separator).not.toBeNull();
     expect(separator?.classList.contains("h-px")).toBe(true);
   });
+
+  // Every surface shares one harness page, so a mount that scrolls at load moves the boxes other suites read; the spy names each element scrolled into view.
+  it("mounts the component surfaces without scrolling the harness page, the command menu with no row chosen", () => {
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { container } = render(<ComponentSurfaceConformanceFixtures />);
+    expect(scrolled.mock.contexts.map((element) => (element as Element).textContent)).toEqual([]);
+    expect(container.querySelectorAll('[data-surface-id="command"] [data-slot="command-item"]')).toHaveLength(2);
+    expect(
+      container.querySelectorAll('[data-surface-id="command"] [data-slot="command-item"][data-selected="true"]'),
+    ).toHaveLength(0);
+  });
 });

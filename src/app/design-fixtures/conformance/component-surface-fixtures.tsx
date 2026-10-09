@@ -85,6 +85,9 @@ const COMBOBOX_OPTIONS = [
 
 const SCROLL_ROWS = ["First run", "Second run", "Third run", "Fourth run", "Fifth run", "Sixth run", "Seventh run", "Eighth run"];
 
+/** A value no command row carries: cmdk then chooses no row at mount and scrolls nothing into view. */
+const COMMAND_NO_ROW_AT_LOAD = "no-row-chosen-at-load";
+
 /** The form primitive's item, label and control under its own form context. */
 function FormSurface() {
   const form = useForm<{ workspace: string }>({ defaultValues: { workspace: "" } });
@@ -283,8 +286,11 @@ export function ComponentSurfaceConformanceFixtures() {
         </Table>
       </div>
 
+      {/* cmdk chooses the first row when the menu has no value and scrolls it into view at mount, which scrolls the whole harness
+          page under every other surface's reading; this mount gives the menu a value no row carries, so no row is chosen at load
+          and the page stays where the reader left it - the shipped primitive, input, group heading and both rows stay as they are. */}
       <div data-surface-id="command">
-        <Command label="Command menu">
+        <Command label="Command menu" value={COMMAND_NO_ROW_AT_LOAD}>
           <CommandInput aria-label="Type a command" placeholder="Type a command" />
           <CommandList>
             <CommandEmpty>No results.</CommandEmpty>
