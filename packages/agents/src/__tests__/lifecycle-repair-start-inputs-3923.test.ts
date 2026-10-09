@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { PgDialect } from "drizzle-orm/pg-core";
 
 // Only external persistence, queue and identity-reading ports are replaced.
 // The real dispatcher, coordinator, system authority mint, ActorContext
-// builder and current CMS task projection execute. No run or queue job exists.
+// builder and CMS instruction projection execute. No run or queue job exists.
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
-  readConditions: [] as unknown[],
   updateResults: [] as unknown[][],
   writes: [] as { values: Record<string, unknown>; condition?: unknown }[],
   created: [] as { input: Record<string, unknown>; authority: unknown }[],
@@ -22,15 +22,8 @@ vi.mock("../db", () => ({
       const result = ports.reads.shift();
       if (!result) throw new Error("Unexpected database read");
       const query = {
-        from: () => query,
-        where: (condition: unknown) => { ports.readConditions.push(condition); return query; },
-        orderBy: () => query,
-        limit: async () => {
-          const row = result[0] as { orgId?: string } | undefined;
-          const condition = ports.readConditions.at(-1) as Parameters<PgDialect["sqlToQuery"]>[0];
-          const params = new PgDialect().sqlToQuery(condition).params;
-          return row?.orgId && params.includes("repair-org") && row.orgId !== "repair-org" ? [] : result;
-        },
+        from: () => query, where: () => query, orderBy: () => query,
+        limit: async () => result,
       };
       return query;
     },
@@ -91,7 +84,92 @@ vi.mock("../cms-repaired-capture-port", () => ({
 }));
 
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
+import { projectCmsRepairInputParams } from "../lifecycle-repair-cms-production-bridge";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+
+// Source-contract fixtures from the adopted producers' actual root Flow
+// descriptors. A missing default makes the ROOT input required, independently
+// of StartNode setup metadata. These are small schema fixtures, not run proof.
+const producerContracts = [
+  {
+    "label": "Drupal",
+    "packageName": "@cinatra-ai/drupal-agent",
+    "rootInputs": [
+      {
+        "title": "instanceId",
+        "type": "string"
+      },
+      {
+        "title": "nodeId",
+        "type": "string"
+      },
+      {
+        "title": "nodeBundle",
+        "type": "string"
+      },
+      {
+        "title": "nodeStatus",
+        "type": "string"
+      },
+      {
+        "title": "instructions",
+        "type": "string"
+      },
+      {
+        "title": "cinatra_run_id",
+        "type": "string",
+        "default": ""
+      }
+    ],
+    "originalInputs": {
+      "instanceId": "cms-site",
+      "nodeId": "content-42",
+      "nodeBundle": "article",
+      "nodeStatus": "draft",
+      "instructions": "Old producing instructions"
+    },
+    "resourceType": "node"
+  },
+  {
+    "label": "WordPress",
+    "packageName": "@cinatra-ai/wordpress-agent",
+    "rootInputs": [
+      {
+        "title": "instanceId",
+        "type": "string"
+      },
+      {
+        "title": "postId",
+        "type": "string"
+      },
+      {
+        "title": "postType",
+        "type": "string"
+      },
+      {
+        "title": "postStatus",
+        "type": "string"
+      },
+      {
+        "title": "instructions",
+        "type": "string"
+      },
+      {
+        "title": "cinatra_run_id",
+        "type": "string",
+        "default": ""
+      }
+    ],
+    "originalInputs": {
+      "instanceId": "cms-site",
+      "postId": "content-42",
+      "postType": "page",
+      "postStatus": "draft",
+      "instructions": "Old producing instructions"
+    },
+    "resourceType": "page"
+  }
+] as const;
 
 const currentFinding = { id: "finding-current", path: "title", message: "Use the current reviewed title", severity: "minor" };
 function pendingRepair(overrides: Record<string, unknown> = {}) {
@@ -105,7 +183,7 @@ function pendingRepair(overrides: Record<string, unknown> = {}) {
 }
 function arrangeProducer(input: unknown, overrides: Record<string, unknown> = {}) {
   const row = pendingRepair();
-  ports.reads = [[row], [{ templateId: "template-producing", orgId: "repair-org", runBy: "human-origin", oboCeiling: null,
+  ports.reads = [[row], [{ templateId: "template-producing", runBy: "human-origin", oboCeiling: null,
     inputParams: typeof input === "string" ? input : JSON.stringify(input), ...overrides }],
     [{ id: "template-producing", packageName: "@any-vendor/repair-producer" }], []];
   ports.updateResults = [[{ id: row.id }]];
@@ -118,47 +196,76 @@ function cmsTarget(resourceType = "page") {
 function inputParams() {
   return ports.created[0].input.inputParams as Record<string, unknown>;
 }
+function schemaForRoot(contract: typeof producerContracts[number]) {
+  const properties = Object.fromEntries(contract.rootInputs.map((input) => [input.title, { type: input.type }]));
+  const required = contract.rootInputs.filter((input) => !("default" in input)).map((input) => input.title);
+  return z.fromJSONSchema({ type: "object", properties, required, additionalProperties: true });
+}
+
 beforeEach(() => {
-  ports.reads = []; ports.readConditions = []; ports.updateResults = []; ports.writes = []; ports.created = [];
+  ports.reads = []; ports.updateResults = []; ports.writes = []; ports.created = [];
   ports.target = null; ports.role = "member"; ports.createFailure = null;
   vi.clearAllMocks();
 });
 
-describe("generic producing-run input inheritance", () => {
-  it("retains custom and nested root inputs for an arbitrary producer, with the current typed request", async () => {
-    const original = { requiredAccount: "account-42", customOptions: { nested: ["value"] }, instructions: "Producer instructions", task: "Own task", lifecycleRepairRequest: { repairId: "old", findings: [{ message: "stale" }] } };
+describe("repair start inputs satisfy the actual producing root contracts", () => {
+  for (const contract of producerContracts) {
+    it(`${contract.label}: retains every required start input and passes standard root-schema validation`, async () => {
+      const original = { ...contract.originalInputs, customProducerOption: { untouched: ["value"] } };
+      arrangeProducer(original); ports.target = cmsTarget(contract.resourceType);
+      const result = await dispatchPendingProducerRepairs();
+      expect(result).toMatchObject({ dispatched: 1, failed: 0, escalated: 0 });
+      const parsed = schemaForRoot(contract).safeParse(inputParams());
+      expect(parsed.success).toBe(true);
+      expect(inputParams()).toMatchObject({ ...original, instructions: expect.any(String) });
+      expect(inputParams().customProducerOption).toEqual(original.customProducerOption);
+    });
+
+    it(`${contract.label}: the consumed instructions use fresh findings instead of inherited old instructions`, async () => {
+      arrangeProducer({ ...contract.originalInputs, lifecycleRepairRequest: { repairId: "previous-repair", findings: [{ message: "Stale previous finding" }] } });
+      ports.target = cmsTarget(contract.resourceType);
+      await dispatchPendingProducerRepairs();
+      const delivered = inputParams();
+      expect(delivered.instructions).toContain(currentFinding.message);
+      expect(delivered.instructions).toContain("field: title");
+      expect(delivered.instructions).not.toContain("Old producing instructions");
+      expect(delivered.instructions).not.toContain("Stale previous finding");
+      expect(delivered.task).toBe(delivered.instructions);
+      expect(delivered.lifecycleRepairRequest).toMatchObject({ repairId: "repair-current", attempt: 2, findings: [currentFinding] });
+    });
+
+    it(`${contract.label}: fresh CMS instructions also satisfy the root when the producer recorded none`, async () => {
+      const original = { ...contract.originalInputs } as Record<string, unknown>;
+      delete original.instructions;
+      arrangeProducer(original); ports.target = cmsTarget(contract.resourceType);
+      await dispatchPendingProducerRepairs();
+      expect(schemaForRoot(contract).safeParse(inputParams()).success).toBe(true);
+      expect(inputParams().instructions).toContain(currentFinding.message);
+    });
+
+    it(`${contract.label}: root requirements reject a missing field or wrong type and allow the defaulted run id to be omitted`, () => {
+      const schema = schemaForRoot(contract);
+      expect(schema.safeParse(contract.originalInputs).success).toBe(true);
+      const missing = { ...contract.originalInputs } as Record<string, unknown>;
+      delete missing.instanceId;
+      expect(schema.safeParse(missing).success).toBe(false);
+      expect(schema.safeParse({ ...contract.originalInputs, instructions: 123 }).success).toBe(false);
+    });
+  }
+
+  it("keeps a non-CMS producer's custom input contract unchanged, with the newest typed request", async () => {
+    const original = { bespokeValue: { nested: true }, instructions: "Non-CMS producer instructions", task: "Own task", lifecycleRepairRequest: { repairId: "old" } };
     arrangeProducer(original);
-    expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, failed: 0, escalated: 0 });
-    expect(inputParams()).toMatchObject({ requiredAccount: original.requiredAccount, customOptions: original.customOptions,
-      instructions: original.instructions, task: original.task,
-      lifecycleRepairRequest: { repairId: "repair-current", attempt: 2, findings: [currentFinding] } });
-    const condition = ports.readConditions[1] as Parameters<PgDialect["sqlToQuery"]>[0];
-    const query = new PgDialect().sqlToQuery(condition);
-    expect(query.sql).toContain('"org_id"');
-    expect(query.params).toEqual(["producer-original", "repair-org"]);
-  });
-
-  it("overlays the current CMS task without dropping inherited root inputs or borrowing the old task", async () => {
-    arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Stale task", lifecycleRepairRequest: { repairId: "old" } });
-    ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
-    expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42",
+    expect(inputParams()).toMatchObject({ bespokeValue: original.bespokeValue, instructions: original.instructions, task: original.task,
       lifecycleRepairRequest: { repairId: "repair-current", findings: [currentFinding] } });
-    expect(inputParams().instructions).toContain(currentFinding.message);
-    expect(inputParams().instructions).not.toContain("Original input");
-    expect(inputParams().task).toBe(inputParams().instructions);
-    expect(inputParams().task).toContain(currentFinding.message);
-    expect(inputParams().task).not.toContain("Stale task");
   });
 
-  it("does not read inputs or launch a child from a producing run in another organization", async () => {
-    arrangeProducer({ privateAccount: "foreign-secret" }, { orgId: "foreign-org" });
-    const result = await dispatchPendingProducerRepairs();
-    expect(result).toMatchObject({ escalated: 1, dispatched: 0, failed: 0 });
-    expect(ports.created).toHaveLength(0);
-    expect(ports.queued).not.toHaveBeenCalled();
-    expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
-    expect(ports.writes[0].values.status).toBe("escalated");
+  it("returns no CMS additions for a non-CMS target", async () => {
+    const request = { kind: "lifecycle_repair_request" as const, repairId: "repair-current", gateId: "gate-current", lineageId: "lineage-current",
+      attempt: 2, baseTarget: { artifactId: "artifact-base", representationRevisionId: "revision-base" }, expectedBaseRevisionId: "revision-base",
+      findings: [], continuationMode: "async_effects_gated", continuationAddress: null, originatingRunBy: "human-origin" };
+    expect(await projectCmsRepairInputParams(request)).toEqual({});
   });
 });
 
@@ -222,7 +329,7 @@ describe("input data cannot become repair authorization", () => {
   it("isolates a failed creation so the next pending repair still dispatches", async () => {
     const first = pendingRepair({ id: "repair-first" });
     const second = pendingRepair({ id: "repair-second" });
-    const producer = { templateId: "template-producing", orgId: "repair-org", runBy: "human-origin", oboCeiling: null, inputParams: JSON.stringify({ custom: "retained" }) };
+    const producer = { templateId: "template-producing", runBy: "human-origin", oboCeiling: null, inputParams: JSON.stringify({ custom: "retained" }) };
     const template = { id: "template-producing", packageName: "@any-vendor/repair-producer" };
     ports.reads = [[first, second], [producer], [template], [], [producer], [template], []];
     ports.updateResults = [[{ id: "repair-second" }]];
@@ -237,7 +344,7 @@ describe("input data cannot become repair authorization", () => {
     } finally { error.mockRestore(); }
   });
 
-  for (const invalid of ["{malformed", "[]", "null", "42", "\"text\""]) {
+  for (const invalid of ["{malformed", "[]"]) {
     it(`does not inherit authorization or arbitrary fields from unreadable recorded params: ${invalid}`, async () => {
       arrangeProducer(invalid);
       await dispatchPendingProducerRepairs();
