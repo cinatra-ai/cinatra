@@ -2101,19 +2101,24 @@ export async function SetupScreen({
           reached: true,
           settled: true,
           surface: (
-            <LifecycleCardSurfaceProvider host="run_card">
-              <ReviewGateCard
-                view={{
-                  viewType: "artifact_review_gate",
-                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-                  ref: entry.ref,
-                }}
-                // §VI — the gate's conversational prompt window keeps its
-                // exchange with the RUN (cinatra#3141 item 1), so the mount that
-                // names the gate names the run it opened on too.
-                runId={run.id}
-              />
-            </LifecycleCardSurfaceProvider>
+            <section
+              className="rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+              data-run-review-slot="review"
+            >
+              <LifecycleCardSurfaceProvider host="run_card">
+                <ReviewGateCard
+                  view={{
+                    viewType: "artifact_review_gate",
+                    schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                    ref: entry.ref,
+                  }}
+                  // §VI — the gate's conversational prompt window keeps its
+                  // exchange with the RUN (cinatra#3141 item 1), so the mount that
+                  // names the gate names the run it opened on too.
+                  runId={run.id}
+                />
+              </LifecycleCardSurfaceProvider>
+            </section>
           ),
         }))
     : [];
@@ -4059,7 +4064,7 @@ export async function TriggerScreen({
       : null;
     return (
       <section
-        className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+        className="rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
         data-run-review-slot={gateRef ? "review" : "working"}
       >
         {gateRef ? (
