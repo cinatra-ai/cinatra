@@ -485,6 +485,7 @@ export async function readRunReviewSlot(
 ): Promise<{
   reviewTaskId: string | null;
   awaiting: boolean;
+  pending: boolean;
   parkedOnProducedReview: boolean;
 }> {
   const [pendingProduced] = await db
@@ -541,6 +542,13 @@ export async function readRunReviewSlot(
     return {
       reviewTaskId: gate?.reviewTaskId ?? null,
       awaiting: Boolean(pendingProduced),
+      // IS THE QUESTION STILL OPEN? (cinatra#3051.) The slot has always carried
+      // the run's most recent gate whether it was pending or settled, because the
+      // reader who decided one must keep seeing what they decided. A surface that
+      // has to choose between the gate and the run's own current rendering needs
+      // the other half of that fact, and it is one column of a row this read
+      // already selects — never a second query, and never inferred from the run.
+      pending: gate?.status === "pending",
       parkedOnProducedReview: false,
     };
   }
@@ -623,6 +631,8 @@ export async function readRunReviewSlot(
   return {
     reviewTaskId: heldGate?.reviewTaskId ?? null,
     awaiting: Boolean(pendingProduced),
+    // The same fact of the gate this branch names: the one the park holds.
+    pending: heldGate?.status === "pending",
     parkedOnProducedReview: true,
   };
 }

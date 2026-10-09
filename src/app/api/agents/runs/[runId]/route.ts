@@ -160,6 +160,7 @@ async function seedResponse(
   const reviewSlot = await readRunReviewSlot(run.id).catch(() => ({
     reviewTaskId: null,
     awaiting: false,
+    pending: false,
     parkedOnProducedReview: false,
   }));
   // AND THE PARK IS READ OFF THE RUN ROW THIS RESPONSE IS ABOUT (cinatra#3046).
@@ -232,9 +233,15 @@ async function seedResponse(
       createdAt: m.createdAt.toISOString(),
     })),
     hitlContext,
+    // AND WHETHER THE QUESTION IS STILL OPEN (cinatra#3051). The gate the slot
+    // names is the run's most recent one, pending or settled; a surface that
+    // has to choose between drawing it and drawing the run's own current
+    // rendering cannot make that choice from the ref alone. Same fail-soft
+    // reading as the ref above: an unread slot answers "not open".
     reviewGate: {
       ref: reviewGateRef,
       awaiting: reviewSlot.awaiting,
+      pending: reviewSlot.pending,
       // THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). A third fact about the
       // same slot, and the one that says the pause belongs to the review rather
       // than to a question: a run whose output opened a review does not reach a

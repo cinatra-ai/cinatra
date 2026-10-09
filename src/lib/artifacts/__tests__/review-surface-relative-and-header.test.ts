@@ -81,7 +81,7 @@ describe("reviewTargetRowFacts — the meta line's updated time", () => {
       // line reads "… · Team · Private · text/html · updated 8 min ago". An
       // earlier reading prefixed each fact with "Ownership:" / "Visibility:";
       // the drawing puts neither there, so the pin is re-taken on the drawn line.
-      "organization · organization · text/markdown · updated 8 min ago",
+      "Organization · Organization · text/markdown · updated 8 min ago",
     );
     expect(line).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });

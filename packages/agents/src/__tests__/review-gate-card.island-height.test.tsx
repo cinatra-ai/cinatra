@@ -106,6 +106,22 @@ const frameIn = (container: HTMLElement): HTMLIFrameElement => {
   return frame;
 };
 
+/** THE FRAME'S LOAD, WITH THE ISLAND'S OWN BODY IN IT (the forward of the
+ *  widget-review work onto this suite, cinatra#3051). The card now reads WHICH
+ *  document arrived — only the island's own body anchor is a painted target —
+ *  so a load fired over jsdom's empty document is a frame that did not paint.
+ *  These cases are about the palette and the height of a frame that DID paint,
+ *  so they hand it the anchored document a real navigation delivers. */
+function loadPaintedIsland(frame: HTMLIFrameElement): void {
+  const doc = frame.contentDocument!;
+  doc.open();
+  doc.write(
+    '<html><body><div data-conformance-id="review-target-island-body"></div></body></html>',
+  );
+  doc.close();
+  fireEvent.load(frame);
+}
+
 const frameHeightIn = (container: HTMLElement): number =>
   Number.parseFloat(frameIn(container).style.height);
 
@@ -149,7 +165,7 @@ describe("the frame height is the island document's own reported height", () => 
       const { container } = mountCard();
       await settle();
       await act(async () => {
-        fireEvent.load(frameIn(container));
+        loadPaintedIsland(frameIn(container));
       });
 
       // One header per pinned target — the card's reading of the pinned set is
@@ -219,7 +235,7 @@ describe("no target body is clipped and no empty panel is drawn", () => {
     const { container } = mountCard();
     await settle();
     await act(async () => {
-      fireEvent.load(frameIn(container));
+      loadPaintedIsland(frameIn(container));
     });
 
     // The island document's own scrollHeight, as its reporter measures it.
@@ -255,7 +271,7 @@ describe("a dark-palette island paints the same rows as light at the same scroll
     const { container } = mountCard();
     await settle();
     await act(async () => {
-      fireEvent.load(frameIn(container));
+      loadPaintedIsland(frameIn(container));
     });
     await islandReports(container, 1772);
 

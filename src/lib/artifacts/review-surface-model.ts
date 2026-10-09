@@ -30,6 +30,7 @@ import type {
   ReviewDisposition,
   SubmitDecisionResult,
 } from "@/lib/artifacts/artifact-review-decision";
+import { artifactScopeWord } from "@/lib/artifacts/artifact-kind-label";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 
@@ -332,42 +333,53 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
  * drawing names: "the read-only row facts the host authorized — owner level /
  * visibility, MIME, and updated time".
  *
- * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
- * meta line in the ratified drawings prints the two scope facts with no label at
- * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
- * line again over §V.1's read-only review target. The labelled form this line
- * carried came from a local reading of a plan sentence ("the line gets labels or
- * drops the storage fact") rather than from the drawing, and the graded proof frames
- * measured it as a departure. The drawing decides: the labels go, both facts
- * stay, and the order is the drawing's.
+ * THE LINE IS THE DRAWING'S LINE (cinatra#3051, re-shoot grade). The drawing
+ * draws "… · Team · Private · text/html · updated 8 min ago"
+ * (specs/app-lifecycle-cards.html §II, and §IV's own row-fact clause): the two
+ * scope facts as BARE words in the host's own vocabulary, and the instant as a
+ * RELATIVE reading. The line printed neither — it carried labelled raw enum
+ * values ("Ownership: organization · Visibility: organization") and the raw ISO
+ * instant the row was stored with ("updated 2026-08-29T03:07:18.778Z"), which
+ * is a machine's reading of a header a person reads.
+ *
+ * The earlier honesty concern — that two BARE scope words read as the same word
+ * twice for an organization-owned, organization-visible artifact — is answered
+ * by the vocabulary rather than by labels: the words are the ones the host's
+ * other cards already print for these two facts, and the drawing's own line is
+ * what a reader is entitled to see. Nothing is dropped; both facts stay, in the
+ * drawing's order.
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
 export function reviewTargetRowFacts(
   artifact: {
-    ownerLevel: string;
-    visibility: string;
-    mime: string;
-    updatedAt: string;
+    ownerLevel: string | null;
+    visibility: string | null;
+    mime: string | null;
+    updatedAt: string | null;
   },
-  /** The instant to read `updatedAt` against. Injected so the reading is
-   *  testable; defaults to now, which is what every caller wants. */
+  /** The instant the line is read AT. Defaults to now; a caller passes one so a
+   *  rendering can be pinned. */
   now: Date = new Date(),
 ): string[] {
-  return [
-    artifact.ownerLevel,
-    artifact.visibility,
-    artifact.mime,
-    // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
-    // writes "updated 8 min ago"; the decided target printed the stored column
-    // straight through — `2026-08-29T06:18:07.421Z`, milliseconds and all — which
-    // is a machine's reading of the same fact and is not what §IV draws. One
-    // formatter does it, for this line and for the header row facts the sibling
-    // leg (pull request 3058) draws from the same projection, so the two surfaces
-    // cannot render one column two ways.
-    `updated ${relativeInstant(artifact.updatedAt, now)}`,
-  ];
+  // NULLABLE SINCE cinatra#3051, and the fields are DROPPED rather than printed
+  // as absences. The page always has all four, so this is a no-op there; the
+  // card draws the same line from the gate's own rows, where a target whose
+  // artifact this reader may not read (or which is gone) carries ids and
+  // nothing else — and an empty scope word is worse than a shorter true line.
+  const facts: string[] = [];
+  if (artifact.ownerLevel) facts.push(artifactScopeWord(artifact.ownerLevel));
+  if (artifact.visibility) facts.push(artifactScopeWord(artifact.visibility));
+  if (artifact.mime) facts.push(artifact.mime);
+  if (artifact.updatedAt) {
+    facts.push(`updated ${relativeInstant(artifact.updatedAt, now)}`);
+  }
+  return facts;
 }
+
+/* The scope fact is READ, not derived here: the host holds ONE scope word
+ * (`@/lib/artifacts/artifact-scope-word`), exactly as it holds one kind label.
+ * The review surface model keeps no string projection of its own. */
 
 /** How the drawn readings step, longest first. Minutes are the drawing's own
  *  unit ("8 min ago"); the rungs above it exist so a week-old artifact does not
@@ -408,6 +420,72 @@ export function relativeInstant(value: string, now: Date = new Date()): string {
   }
   return "just now";
 }
+
+// ---------------------------------------------------------------------------
+// The PREVIEW floor (§V, cinatra#3051) — the never-blank line the CARD draws
+// under the target header while the representation is not on screen.
+// ---------------------------------------------------------------------------
+
+/**
+ * Why the representation is not on screen. A closed set, and every member is a
+ * state of the PREVIEW rather than of the gate: the gate is exactly as open as
+ * it was, and the floor never says otherwise.
+ *
+ *   `preview-loading`      — the frame has not painted yet.
+ *   `preview-unavailable`  — the frame's bound was reached.
+ */
+export type ReviewPreviewFloorReason =
+  | "preview-loading"
+  | "preview-unavailable"
+  // THE TWO READINGS OF A FRAME THAT ARRIVED AND IS NOT SHOWING THE WORK
+  // (cinatra#3051, fix leg 9). §V owes its one line "whenever a target does not
+  // resolve to a type renderer", and a frame that failed to ARRIVE is only one
+  // of the ways that happens. These two are the others, and they are separate
+  // because they are different facts: the host resolved no renderer at all and
+  // drew its own floor over the generic read-only view, or a renderer resolved
+  // and answered with its own named floor instead of the representation. Both
+  // are closed members of this set, sanitized by construction like the two above
+  // — a reason, never an error, a value or a manifest string.
+  | "renderer-unresolved"
+  | "representation-unavailable";
+
+/**
+ * The §V diagnostic, in the drawing's own shape: `package · slot · reason`, and
+ * nothing else. Sanitized and telemetry-safe by construction — it composes only
+ * a package name the host resolved, the slot literal, and a member of the closed
+ * set above. No error text, no value, no href.
+ */
+export function reviewPreviewFloorDiagnostic(
+  packageName: string | null,
+  slot: string,
+  reason: ReviewPreviewFloorReason,
+): string {
+  const pkg = packageName ? `package "${packageName}" · ` : "";
+  return `${pkg}slot "${slot}" · reason "${reason}"`;
+}
+
+/*
+ * REMOVED (cinatra#3058, fix leg 8; the convergence round on the reconciled
+ * merge): `reviewTargetPackageName`, which read the `package` half of §V's floor
+ * line off a host-resolved renderer package or, failing that, off the artifact
+ * type id.
+ *
+ * Its one caller was the review card, and it had exactly one honest argument to
+ * pass it: the RESOLVED package the branch's own target rows carried on the
+ * wire. The card-owned header wire this reading now stands on carries no such
+ * field, and §V fixes where that name may come from — "The resolution is
+ * host-derived, never a claim the client or the model can forge" — so the card
+ * can no longer name a package at all, and its floor line drops that half (the
+ * slot and the reason stay: the floor is never a blank). Inferring the package
+ * from the type id instead would report a package that had no part in the
+ * failure, which is the invented value "never a raw error or manifest value"
+ * keeps off this line.
+ *
+ * The package-NAMED floor is still drawn where the host resolved a renderer and
+ * can say so — `reviewTargetFloorDiagnostic` on the artifact page's own mount —
+ * and a card-side package would return the day the header wire carries the
+ * host's resolution as a fact rather than as a guess.
+ */
 
 /** A short, stable revision marker for the header (§II) — the mono revision id,
  * truncated for display, with the exact id preserved for the title attribute. */

@@ -39,10 +39,10 @@ afterEach(cleanup);
 describe("the existing seed parser's optional display-refresh identity", () => {
   it("retains the current seed shape and preserves a new seed's stable identity", () => {
     expect(parseRunReviewSlot({ reviewGate: { ref: "opaque", awaiting: false } })).toEqual({
-      ref: "opaque", awaiting: false, producedReviewPark: false,
+      ref: "opaque", awaiting: false, pending: false, producedReviewPark: false,
     });
     expect(parseRunReviewSlot(seed("task-1", "opaque"))).toEqual({
-      ref: "opaque", awaiting: true, producedReviewPark: false, reviewTaskId: "task-1",
+      ref: "opaque", awaiting: true, pending: false, producedReviewPark: false, reviewTaskId: "task-1",
     });
   });
 
@@ -50,13 +50,13 @@ describe("the existing seed parser's optional display-refresh identity", () => {
     expect(parseRunReviewSlot({ reviewGate: {
       ref: "opaque", awaiting: true, producedReviewPark: true, reviewTaskId: "task-1",
     } })).toEqual({
-      ref: "opaque", awaiting: true, producedReviewPark: true, reviewTaskId: "task-1",
+      ref: "opaque", awaiting: true, pending: false, producedReviewPark: true, reviewTaskId: "task-1",
     });
   });
 
   it.each([null, false, 42, "", "   ", {}, []])("rejects malformed identity %j without inventing a task", (reviewTaskId) => {
     expect(parseRunReviewSlot({ reviewGate: { ref: "opaque", awaiting: false, reviewTaskId } })).toEqual({
-      ref: "opaque", awaiting: false, producedReviewPark: false, reviewTaskId: null,
+      ref: "opaque", awaiting: false, pending: false, producedReviewPark: false, reviewTaskId: null,
     });
   });
 

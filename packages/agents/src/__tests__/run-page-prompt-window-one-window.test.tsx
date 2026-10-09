@@ -60,6 +60,10 @@ const captured = vi.hoisted(() => ({ fields: [] as Array<Record<string, unknown>
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
+  // The review-gate placeholder draws the design system's own arc, so a TOTAL
+  // factory for this module has to declare it too — an undeclared export is a
+  // mock that no longer stands for the module it replaces.
+  SpinnerArc: () => null,
   PromptField: (props: Record<string, unknown>) => {
     captured.fields.push(props);
     const p = props as CapturedFieldProps;

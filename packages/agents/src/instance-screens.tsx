@@ -2039,6 +2039,11 @@ export async function SetupScreen({
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // The server-rendered seed carries the gate's own openness too, so the
+        // first paint draws the same reading the surface's later re-read does
+        // rather than one frame of the run's terminal rendering in front of an
+        // open review (cinatra#3051).
+        pending: Boolean(runReviewSlot?.pending),
         // AND WHETHER THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). The page
         // already knows — it read the run and it read the slot — so the panel is
         // handed the answer rather than made to discover it, exactly as the two

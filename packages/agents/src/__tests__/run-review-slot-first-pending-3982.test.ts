@@ -102,7 +102,7 @@ describe("detail and rail elect the first pending review in raise order", () => 
     if (parked) link("first", "second", "third");
     for (const expected of ["first", "second", "third"]) {
       expect(await activeRailTask()).toBe(expected);
-      expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: expected, awaiting: false, parkedOnProducedReview: parked });
+      expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: expected, awaiting: false, pending: true, parkedOnProducedReview: parked });
       // Persisted decision state: the real CAS/decision transaction itself is
       // separately exercised against PostgreSQL by the integration suite.
       data.tables.artifact_review_gates.find(row => row.review_task_id === expected)!.status = "resolved";
@@ -129,7 +129,7 @@ describe("detail and rail elect the first pending review in raise order", () => 
   it("keeps outbox-first awaiting without substituting an unlinked gate", async () => {
     seed(true); data.tables.artifact_review_gates = [gate("unlinked", 0), gate("old", 1, "resolved")]; link("old");
     data.tables.artifact_produced_outbox.push({ event_id: "waiting", producer_run_id: "run", status: "pending", continuation_address: null });
-    expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: null, awaiting: true, parkedOnProducedReview: true });
+    expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: null, awaiting: true, pending: false, parkedOnProducedReview: true });
     expect(data.reads[0]).toBe("artifact_produced_outbox");
   });
   it("retains the latest linked settled gate before release", async () => {
@@ -138,6 +138,6 @@ describe("detail and rail elect the first pending review in raise order", () => 
   });
   it.each([false, true])("no owned gate remains an empty slot, parked=%s", async parked => {
     seed(parked); data.tables.artifact_review_gates = [gate("foreign", 1, "pending", "other-run")];
-    expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: null, awaiting: false, parkedOnProducedReview: parked });
+    expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: null, awaiting: false, pending: false, parkedOnProducedReview: parked });
   });
 });

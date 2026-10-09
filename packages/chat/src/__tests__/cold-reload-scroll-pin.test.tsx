@@ -35,7 +35,7 @@
 // ---------------------------------------------------------------------------
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 // The mounted list reaches two cookie-bound server actions and the AG-UI run
 // panel. Replaced here for the reasons set out in
@@ -83,10 +83,45 @@ vi.mock("../undo-actions", () => ({
 vi.mock("@/components/data-safety/undo-toast", () => ({
   undoDeepLink: (id: string) => `/objects?undo=${id}`,
 }));
-vi.mock("../inline-agent-run-card", () => ({ InlineAgentRunCard: () => null }));
+// Stands for the run card's own reads (cinatra#4011): a card it draws by itself,
+// with no message change. It draws nothing until a test asks, so every case that
+// mounts no `agent_run` part mounts exactly what it mounted before.
+const runCardDraws = vi.hoisted(() => {
+  let count = 0;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    read: () => count,
+    drawNext() {
+      count += 1;
+      for (const listener of listeners) listener();
+    },
+    reset() {
+      count = 0;
+    },
+  };
+});
+vi.mock("../inline-agent-run-card", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    InlineAgentRunCard: () => {
+      const count = useSyncExternalStore(
+        runCardDraws.subscribe,
+        runCardDraws.read,
+        runCardDraws.read,
+      );
+      return count > 0 ? <div data-drawn-by-the-run-card={String(count)} /> : null;
+    },
+  };
+});
 
 import { startScrollSettlePin, type ScrollSettleEnv } from "../scroll-settle";
-import { chatSurfaceElement, mountSurface } from "./conversation-column-harness";
+import { chatSurfaceElement, mountSurface, parityAgentRunMessages } from "./conversation-column-harness";
 
 afterEach(cleanup);
 
@@ -543,4 +578,127 @@ describe("the conversation column arms the settle pass on a cold thread load", (
     expect(settleObservers()[0]!.disconnected).toBe(true);
     expect(frames.pending).toBe(0);
   });
+});
+
+// A card the run card draws by its own reads grows the thread with no message
+// change, after the cold-load settle pass has ended: nothing the pin is keyed on
+// moves. The thread must still re-pin to its foot, unless the reader scrolled
+// away (cinatra#4011).
+describe("the column re-pins when a turn it already has grows (cinatra#4011)", () => {
+  let frames: ReturnType<typeof createFrameQueue>;
+  let observers: ReturnType<typeof createObserverFactory>;
+  let originalRaf: typeof globalThis.requestAnimationFrame;
+  let originalCancel: typeof globalThis.cancelAnimationFrame;
+  let originalObserver: unknown;
+
+  beforeEach(() => {
+    frames = createFrameQueue();
+    observers = createObserverFactory();
+    originalRaf = globalThis.requestAnimationFrame;
+    originalCancel = globalThis.cancelAnimationFrame;
+    originalObserver = (globalThis as Record<string, unknown>).ResizeObserver;
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      frames.requestFrame(() => callback(0))) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((handle: number) =>
+      frames.cancelFrame(handle)) as typeof globalThis.cancelAnimationFrame;
+    // jsdom ships no ResizeObserver, so the column would otherwise run the
+    // frame-loop-only path. The double is what a browser gives it.
+    (globalThis as Record<string, unknown>).ResizeObserver = class {
+      private readonly api: { observe(t: Element): void; disconnect(): void };
+      constructor(callback: () => void) {
+        this.api = observers.factory(callback);
+      }
+      observe(target: Element) {
+        this.api.observe(target);
+      }
+      unobserve() {}
+      disconnect() {
+        this.api.disconnect();
+      }
+    };
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = originalRaf;
+    globalThis.cancelAnimationFrame = originalCancel;
+    (globalThis as Record<string, unknown>).ResizeObserver = originalObserver;
+    runCardDraws.reset();
+  });
+
+  /** Mount `/chat` on a turn that ran an agent, measurable and pinned once. */
+  async function mountRunThread(threadId: string) {
+    const view = await mountSurface("chat", { messages: parityAgentRunMessages(), threadId });
+    const scroller = view.container.querySelector<HTMLElement>(
+      "[data-parity-surface='chat'] > div > div.overflow-y-auto",
+    );
+    expect(scroller, "the column's scroll container").not.toBeNull();
+    const metrics = stubScrollMetrics(scroller!, 600, 400);
+    frames.flush();
+    expect(metrics.scrollTop, "the settle pass's first pin").toBe(600);
+    return { view, scroller: scroller!, metrics };
+  }
+
+  /** The stream the column scrolls, as mounted. */
+  const stream = (): HTMLElement =>
+    document.querySelector<HTMLElement>(
+      "[data-parity-surface='chat'] > div > div.overflow-y-auto",
+    )!;
+
+  /** The cold-load settle pass has ended on its own deadline, in real time. */
+  const settleEnded = () =>
+    waitFor(
+      () => {
+        const settle = observers.created.filter((observer) =>
+          observer.targets.includes(stream()),
+        );
+        expect(settle.length, "the settle pass observed the stream").toBeGreaterThan(0);
+        expect(settle.every((observer) => observer.disconnected)).toBe(true);
+      },
+      { timeout: 6_000 },
+    );
+
+  /** Every live observer of the stream's element children reports a late layout. */
+  const fireContentObservers = () => {
+    const scroller = stream();
+    for (const observer of observers.created) {
+      if (observer.disconnected) continue;
+      if (!observer.targets.some((target) => target.parentElement === scroller)) continue;
+      observer.fire();
+    }
+    frames.flush();
+  };
+
+  it("pins the thread to its foot when the run card draws a new card inside a turn the column already has", async () => {
+    const { scroller, metrics } = await mountRunThread("thread-4011-a");
+    await settleEnded();
+
+    act(() => runCardDraws.drawNext());
+    await waitFor(() =>
+      expect(scroller.querySelector("[data-drawn-by-the-run-card]")).not.toBeNull(),
+    );
+    metrics.growTo(1400);
+    fireContentObservers();
+
+    expect(
+      metrics.scrollTop,
+      "the thread was not pinned to its foot after the run card drew a new card",
+    ).toBe(1400);
+  }, 20_000);
+
+  it("holds the reader's place when they scrolled up: a card drawn below them does not pull the thread down", async () => {
+    const { scroller, metrics } = await mountRunThread("thread-4011-b");
+    await settleEnded();
+
+    metrics.scrollTop = 150;
+    fireEvent.scroll(scroller);
+
+    act(() => runCardDraws.drawNext());
+    await waitFor(() =>
+      expect(scroller.querySelector("[data-drawn-by-the-run-card]")).not.toBeNull(),
+    );
+    metrics.growTo(1400);
+    fireContentObservers();
+
+    expect(metrics.scrollTop, "the thread was pinned over a reader who had scrolled up").toBe(150);
+  }, 20_000);
 });

@@ -33,6 +33,7 @@ import {
   type ChatGateDescriptor,
   type HitlGateContext,
 } from "@cinatra-ai/agents/client-entry";
+import type { RunPollResponse } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   useConversationCredential,
@@ -144,6 +145,8 @@ type SeedData = {
   reviewGate?: {
     ref: string | null;
     awaiting: boolean;
+    /** Whether the gate the ref names is still open (cinatra#3051). */
+    pending?: boolean;
     /** The run is parked on the review of what it produced (cinatra#3046), so
      *  the card draws that review where the run is drawn rather than redrawing
      *  the question the run already moved past. */
@@ -186,19 +189,25 @@ function reviewSlotReader(
     ) => Promise<{
       ref: string | null;
       awaiting: boolean;
+      pending: boolean;
       producedReviewPark: boolean;
       reviewTaskId?: string | null;
     } | null>)
   | undefined {
-  const request = seedRequest(credential, runId);
-  if (!request) return undefined;
+  if (credential.kind === "refused") return undefined;
   return async (signal) => {
+    // The request is built at EACH read, never once when the reader is made: the
+    // widget's credential renews in place and the server deletes the old token,
+    // so a request built once would ask with a deleted token (cinatra#3051).
+    const request = seedRequest(credential, runId);
+    if (!request) return null;
     const res = await fetch(request.url, { ...request.init, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       reviewGate?: {
         ref?: string | null;
         awaiting?: boolean;
+        pending?: boolean;
         producedReviewPark?: boolean;
         reviewTaskId?: unknown;
       } | null;
@@ -209,6 +218,10 @@ function reviewSlotReader(
         ? data.reviewGate.ref
         : null,
       awaiting: Boolean(data.reviewGate.awaiting),
+      // The widget's own re-read carries the SAME facts the seed does — a
+      // surface that drops one of them cannot draw the reading the other two
+      // hosts draw (cinatra#3051).
+      pending: Boolean(data.reviewGate.pending),
       // cinatra#3046 — the third fact of the same slot, carried on the SAME
       // credential as the other two. Without it the conversation's card cannot
       // tell a run parked on its own review from a run parked on a question, and
@@ -223,6 +236,36 @@ function reviewSlotReader(
             : null,
       } : {}),
     };
+  };
+}
+
+/**
+ * THE RUN'S OWN RE-READ (cinatra#3051).
+ *
+ * The panel keeps the run current on its own tick — that is how a run which
+ * parks for review while the page is open reaches its review with nobody
+ * re-opening the page. Until this change the panel could not use that tick on
+ * the widget: its live status came from the app's cookie-session run stream,
+ * which cannot carry a broker credential, and the tick's status write stood
+ * aside for it. The tick is authoritative on this host now, so the read it makes
+ * has to travel on the SAME credential the seed and the slot do — built by the
+ * one shared builder, so a widget frame keeps `credentials: "omit"` and never
+ * sends an ambient cookie, and a host that cannot say who is asking reads
+ * nothing at all.
+ */
+function runSnapshotReader(
+  credential: ConversationCredential,
+  runId: string,
+): (() => Promise<RunPollResponse | null>) | undefined {
+  if (credential.kind === "refused") return undefined;
+  return async () => {
+    // Built at EACH read, for the reason the slot reader above gives: the
+    // widget's credential renews in place (cinatra#3051).
+    const request = seedRequest(credential, runId);
+    if (!request) return null;
+    const res = await fetch(request.url, request.init);
+    if (!res.ok) return null;
+    return (await res.json()) as RunPollResponse;
   };
 }
 
@@ -275,6 +318,13 @@ export function InlineAgentRunCard({
   // restart the panel's slot reader on every render.
   const slotReader = useMemo(
     () => reviewSlotReader(credential, runId),
+    [credential, runId],
+  );
+  // Memoized on the same two values, and for the same reason: it is a hook
+  // input inside the panel, and a fresh function every render would restart the
+  // panel's tick on every render.
+  const runSnapshot = useMemo(
+    () => runSnapshotReader(credential, runId),
     [credential, runId],
   );
 
@@ -403,6 +453,7 @@ export function InlineAgentRunCard({
         surface="chat"
         initialReviewGate={seed.reviewGate ?? null}
         readReviewSlot={slotReader}
+        readRunSnapshot={runSnapshot}
       />
     </div>
   );

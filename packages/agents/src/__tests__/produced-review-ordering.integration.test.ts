@@ -1249,6 +1249,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(parked).toEqual({
         reviewTaskId: taskId,
         awaiting: false,
+        pending: true,
         parkedOnProducedReview: true,
       });
       expect(runReviewStepReading(parked)).toBe("review");
@@ -1268,6 +1269,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(decidedButHeld).toEqual({
         reviewTaskId: taskId,
         awaiting: false,
+        pending: false,
         parkedOnProducedReview: true,
       });
       expect(runReviewStepReading(decidedButHeld)).toBe("review");
@@ -1284,6 +1286,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(released).toEqual({
         reviewTaskId: taskId,
         awaiting: false,
+        pending: false,
         parkedOnProducedReview: false,
       });
       expect(runReviewStepReading(released)).toBe("review");
@@ -1302,6 +1305,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(slot).toEqual({
         reviewTaskId: null,
         awaiting: true,
+        pending: false,
         parkedOnProducedReview: true,
       });
       expect(runReviewStepReading(slot)).toBe("working");
@@ -1320,6 +1324,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(slot).toEqual({
         reviewTaskId: null,
         awaiting: false,
+        pending: false,
         parkedOnProducedReview: true,
       });
       expect(runReviewStepReading(slot)).toBe("working");
@@ -1347,6 +1352,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(slot).toEqual({
         reviewTaskId: linkedTask.review_task_id,
         awaiting: false,
+        pending: true,
         parkedOnProducedReview: true,
       });
     });
@@ -1369,6 +1375,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(slot).toEqual({
         reviewTaskId: null,
         awaiting: true,
+        pending: false,
         parkedOnProducedReview: true,
       });
       expect(runReviewStepReading(slot)).toBe("working");
@@ -1411,6 +1418,7 @@ describe.skipIf(!HAS_DB)("cinatra#3007 — the review moment precedes the termin
       expect(parked).toEqual({
         reviewTaskId: null,
         awaiting: true,
+        pending: false,
         parkedOnProducedReview: true,
       });
       expect(runReviewStepReading(parked)).toBe("working");
