@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 let extractDir = "";
 
-// The real pre-install guard reads the extracted Flow before the compiler mock.
+// The real pre-install guard reads the extracted Flow after the compiler mock succeeds.
 // This fixture has no visible inputs, matching the compiled input schema below.
 beforeEach(async () => {
   extractDir = await mkdtemp(join(tmpdir(), "cinatra-install-oas-"));
