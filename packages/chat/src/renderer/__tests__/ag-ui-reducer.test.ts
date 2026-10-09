@@ -7,9 +7,14 @@
 import { describe, expect, it } from "vitest";
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
 import {
+  LIFECYCLE_CARD_REPLACEMENT_PART_KIND,
+  isLifecycleCardReplacementDataPart,
+} from "@cinatra-ai/agent-ui-protocol";
+import {
   agUiReduce,
   initialConversationState,
   reduceAgUiEvents,
+  renderableViewTypeOf,
   type ConversationViewState,
 } from "../ag-ui-reducer";
 import {
@@ -485,5 +490,51 @@ describe("agUiReduce — terminal events clear an open interrupt", () => {
     s = agUiReduce(s, { type: "RUN_FINISHED", threadId: "thread-1", runId: "run-1", status: "completed" });
     expect(s.interrupt).toBeNull();
     expect(s.status).toBe("finished");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CARD-REPLACEMENT ANNOUNCEMENT DRAWS NOTHING (cinatra#2853).
+//
+// The reducer classifies ANY data part carrying a non-empty string `viewType`
+// as a renderable view and hands it to the interactive dispatch, which draws it
+// — the safe fallback at worst. An announcement that gets drawn IS the second
+// card the leg exists to remove, so the payload carries `cardViewType` instead
+// and the protocol's own guard refuses a payload that carries `viewType`.
+// ---------------------------------------------------------------------------
+
+describe("agUiReduce — the card-replacement announcement", () => {
+  const announcement = {
+    kind: LIFECYCLE_CARD_REPLACEMENT_PART_KIND,
+    cardViewType: "trigger_schedule_proposal",
+    supersededRef: "ref-0900",
+    ref: "ref-0800",
+  };
+
+  it("is consumed — it never reaches the turn's renderable data parts", () => {
+    const s = reduceAgUiEvents([
+      runStarted(),
+      { type: "DATA_PART", data: announcement, partIndex: 0 } as AgUiEvent,
+    ]);
+    expect(isLifecycleCardReplacementDataPart(announcement)).toBe(true);
+    expect(renderableViewTypeOf(announcement)).toBeUndefined();
+    expect(s.dataParts).toHaveLength(0);
+  });
+
+  it("a replayed announcement is a no-op", () => {
+    let s = reduceAgUiEvents([
+      runStarted(),
+      { type: "DATA_PART", data: announcement, partIndex: 0 } as AgUiEvent,
+    ]);
+    const before = s;
+    s = agUiReduce(s, { type: "DATA_PART", data: announcement, partIndex: 3 } as AgUiEvent);
+    expect(s).toBe(before);
+    expect(s.dataParts).toHaveLength(0);
+  });
+
+  it("a payload that WOULD be drawn is not an announcement at all", () => {
+    const drawable = { ...announcement, viewType: "trigger_schedule_proposal" };
+    expect(isLifecycleCardReplacementDataPart(drawable)).toBe(false);
+    expect(renderableViewTypeOf(drawable)).toBe("trigger_schedule_proposal");
   });
 });
