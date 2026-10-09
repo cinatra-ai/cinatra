@@ -510,8 +510,9 @@ export function findUnsatisfiableHiddenInputs(input: {
  * hiddenness, which the stored schema already established: re-proving hiddenness
  * against possibly-drifted OAS metadata would clear a suspicion that is real.
  *
- * The extra I/O is paid ONLY on the path that is about to fail a run, and a
- * package whose OAS cannot be read is given the benefit of the doubt: this guard
+ * The mounted declaration is read once per guard call: a stale stored schema
+ * cannot reveal new visible inputs. A package whose OAS cannot be read is
+ * given the benefit of the doubt: this guard
  * exists to turn a late runtime refusal into an early named one, never to invent
  * a new way for a working run to die.
  */
@@ -527,11 +528,15 @@ export async function assertUnsatisfiableHiddenInputs(input: {
    */
   readOas?: (packageName: string) => Promise<Record<string, unknown> | null>;
 }): Promise<void> {
-  const suspected = findUnsatisfiableHiddenInputs(input);
-  if (suspected.length === 0) return;
-
+  // One mounted snapshot confirms actual declarations, including inputs absent
+  // from a stale stored schema. Keep the public caught-predispatch API unchanged.
   const read = input.readOas ?? readInstalledOasAsync;
   const oas = await read(input.packageName);
+  const suspected = findUnsatisfiableHiddenInputs(input);
+  if (suspected.length === 0) {
+    assertUnsatisfiableVisibleInputs(input, oas);
+    return;
+  }
   const flowInputs = Array.isArray((oas as { inputs?: unknown } | null)?.inputs)
     ? ((oas as { inputs: unknown[] }).inputs.filter(
         (i): i is Record<string, unknown> =>
@@ -546,7 +551,10 @@ export async function assertUnsatisfiableHiddenInputs(input: {
     if (!declared) return false; // the Flow does not declare it — cannot confirm
     return !("default" in declared);
   });
-  if (bad.length === 0) return;
+  if (bad.length === 0) {
+    assertUnsatisfiableVisibleInputs(input, oas);
+    return;
+  }
   const names = bad.map((b) => `"${b.input}"`).join(", ");
   throw new Error(
     `Run cannot start: ${bad[0].agent} declares hidden input(s) ${names} with ` +
@@ -559,4 +567,45 @@ export async function assertUnsatisfiableHiddenInputs(input: {
       `it. Naming it in metadata.cinatra.required does NOT work: the setup ` +
       `loop drops every hidden field whether or not it is required.`,
   );
+}
+
+
+/**
+ * cinatra#3759: already-installed visible inputs are checked against the mounted
+ * root Flow, without the install-only legacy ceiling. Requiredness comes from
+ * the package's actual StartNode declaration, not an inferred host requirement.
+ */
+function assertUnsatisfiableVisibleInputs(input: {
+  properties: Record<string, Record<string, unknown>>;
+  alreadySupplied: Record<string, unknown>;
+  packageName: string;
+  packageVersion?: string | null;
+}, oas: Record<string, unknown> | null): void {
+  if (!oas || oas.component_type !== "Flow" || !Array.isArray(oas.inputs)) return;
+  let schema: ResolvedInputSchema | null;
+  try {
+    schema = deriveFullSchemaFromOas(oas);
+  } catch {
+    // Malformed readable descriptors cannot confirm a new visible refusal.
+    // Deliberate missing-input errors below stay outside this narrow catch.
+    return;
+  }
+  if (!schema) return; // Preserve the existing unreadable/unconfirmable mount road.
+  const bad: string[] = [];
+  for (const declared of oas.inputs as unknown[]) {
+    if (!declared || typeof declared !== "object" || Array.isArray(declared)) continue;
+    const field = declared as Record<string, unknown>;
+    const name = field.title;
+    if (typeof name !== "string") continue;
+    if (schema.required.includes(name) || schema.hidden?.includes(name)) continue;
+    if ((PLATFORM_SUPPLIED_FLOW_INPUTS as readonly string[]).includes(name)) continue;
+    if (Object.prototype.hasOwnProperty.call(input.alreadySupplied ?? {}, name)) continue;
+    // Actual Flow defaults are authoritative even when stored properties,
+    // hiddenness, or the StartNode copy drift. Presence admits null/empty/false.
+    if (Object.prototype.hasOwnProperty.call(field, "default")) continue;
+    bad.push(name);
+  }
+  if (bad.length === 0) return;
+  const agent = input.packageVersion ? `${input.packageName}@${input.packageVersion}` : input.packageName;
+  throw new Error(`Run cannot start: ${agent} declares visible input(s) ${bad.map(name => `"${name}"`).join(", ")} with no default, not marked required, and not supplied on this run. Declare these inputs required or give the Flow and StartNode an explicit default and reinstall the package. The application cannot choose a value for them.`);
 }
