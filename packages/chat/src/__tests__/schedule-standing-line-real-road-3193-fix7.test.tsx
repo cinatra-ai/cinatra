@@ -299,14 +299,18 @@ describe("criterion 4 — a fired recurring schedule's turn says so, on the real
 });
 
 describe("criterion 4 — the never-fired turn is not the fired turn", () => {
-  it("draws no standing line over a recurring schedule that has never fired", async () => {
+  it("draws the proposal standing line over a recurring schedule that has never fired", async () => {
     serveReading(RECURRING_BODY, false);
     const { container } = await mountProposalTurn("configured");
-    expect(container.querySelector("[data-schedule-standing-line]")).toBeNull();
+    const line = await waitFor(() => {
+      const el = container.querySelector("[data-schedule-standing-line=proposal]");
+      if (el === null) throw new Error("the proposal sentence never drew");
+      return el;
+    });
+    expect(line.textContent).toBe("Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.");
     expect(visibleText(container)).not.toContain(RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE);
-    // And the graded round's own measurement, as an assertion: the two turns
-    // may not read the same.
-    expect(visibleText(container)).toContain(MODEL_LEAD_IN);
+    // The fired and never-fired turns retain distinct approved words.
+    expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
   });
 });
 

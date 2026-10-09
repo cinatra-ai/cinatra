@@ -1082,6 +1082,7 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
  * still-recurring claim standing over a card that had just gone read-only.
  */
 export type ScheduleCardReading =
+  | "proposal"
   | "spent-one-off"
   | "fired-recurring"
   | "stopped-recurring"

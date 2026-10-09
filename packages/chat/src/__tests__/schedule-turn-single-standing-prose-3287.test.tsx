@@ -21,27 +21,19 @@
  * primitive's own tool result, the real card, the real refetch seam). One block,
  * and it carries the drawn sentence.
  *
- * WHAT IT DOES NOT CHANGE: the transcript's own history. The reader's request
- * above the turn is untouched, and a reading with no sentence of its own — a
- * schedule that has never fired — keeps the model's lead-in as its one line,
- * which is what the section's first-shown and configured examples draw.
- *
- * AND THE STOPPED READING'S ONE LINE IS ITS OWN PAST-TENSE REPORT
- * (cinatra#3304). Section VI says "Once it is stopped, the turn says so in the
- * past tense", and the one line it fixes for that reading is "The recurring
- * schedule was stopped; its rows are no longer editable." The sentence about
- * pressing the control is the fired-recurring note's description of Cancel
- * schedule — it speaks of a press still to come — and is not this reading's
- * sentence, so it is not what this file measures over a stopped card.
+ * The same rule covers first-shown, configured and expired readings (#3287),
+ * spent one-offs and stopped recurring schedules. The reader's
+ * request and stored transcript remain unchanged. Only an authorized resolved
+ * card elects a line; unresolved, absent and stale references do not.
  *
  *   pnpm --filter @cinatra-ai/chat exec vitest run \
- *     src/__tests__/schedule-standing-line-single-prose-3193-fix9.test.tsx
+ *     src/__tests__/schedule-turn-single-standing-prose-3287.test.tsx
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, configure, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, waitFor } from "@testing-library/react";
 
-configure({ asyncUtilTimeout: 15_000 });
+configure({ asyncUtilTimeout: 2_000 });
 
 import type { UiMessage } from "../types";
 
@@ -103,20 +95,22 @@ vi.mock("../inline-agent-run-card", () => ({
 }));
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE } from "@cinatra-ai/agents/run-status";
 import { LIFECYCLE_VIEW_DECIDE_PATH } from "@cinatra-ai/agents/schedule-proposal-card";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
-import { mountSurface } from "./conversation-column-harness";
+import { chatSurfaceElement, mountSurface } from "./conversation-column-harness";
 
 /**
  * SECTION VI IS QUOTED HERE RATHER THAN IMPORTED, on purpose: the words are the
  * drawing's, so a constant edited in place cannot make this file pass.
  */
+const PROPOSAL_SENTENCE =
+  "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.";
 const FIRED_RECURRING_SENTENCE =
   "It is still recurring, so the rows below still take a change — it applies to the runs still to come.";
 const SPENT_ONE_OFF_SENTENCE =
   "It ran at the time you set. A one-time schedule is spent once it fires, so the rows below are the record of it and cannot be changed.";
-const STOPPED_RECURRING_SENTENCE =
-  "The recurring schedule was stopped; its rows are no longer editable.";
+const STOPPED_RECURRING_SENTENCE = RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE;
 
 const RUN_ID = "1d3a7c60-8b21-4f0e-9a55-6c2b4d0f7a13";
 const CARD_REF = "schedule-ref-3193-fix9";
@@ -158,6 +152,16 @@ const RECURRING_BODY = {
   canSave: true,
   canCancel: true,
   arming: false,
+};
+
+const PROPOSAL_BODY = {
+  phase: "proposal", version: 1, agentName: "Q3 cohort sweep",
+  schedule: RECURRING_BODY.schedule, durationCopy: "About 45s – 3.4 hr.",
+  canConfirm: true, restrictedReason: null,
+};
+const EXPIRED_BODY = {
+  phase: "expired", version: 1, agentName: "Q3 cohort sweep",
+  schedule: RECURRING_BODY.schedule, scheduleCopy: RECURRING_BODY.scheduleCopy,
 };
 
 const ONE_OFF_BODY = {
@@ -246,8 +250,10 @@ afterEach(() => {
 });
 
 /** The turn the schedule proposal primitive really produces. */
-function proposalTurn(): UiMessage[] {
-  return [
+type TurnRoad = "ordered" | "flat-views" | "ordered-unpositioned";
+
+function proposalTurn(road: TurnRoad = "ordered", ref = CARD_REF): UiMessage[] {
+  const messages: UiMessage[] = [
     { id: "u1", role: "user", content: READER_REQUEST },
     {
       id: "a1",
@@ -264,13 +270,22 @@ function proposalTurn(): UiMessage[] {
             {
               viewType: "trigger_schedule_proposal",
               schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-              ref: CARD_REF,
+              ref,
             },
           ],
         },
       ],
     } as unknown as UiMessage,
   ];
+  const assistant = messages[1]!;
+  if (road !== "ordered") {
+    assistant.content = MODEL_LEAD_IN;
+    const tool = assistant.parts![1]!;
+    if (tool.kind === "tool_call") assistant.dataParts = tool.views;
+    if (road === "ordered-unpositioned") assistant.parts = [assistant.parts![0]!];
+    else delete assistant.parts;
+  }
+  return messages;
 }
 
 /** The text a reader can actually see, with every hidden subtree left out. */
@@ -296,8 +311,8 @@ function assistantProseBlocks(container: HTMLElement): Element[] {
 }
 
 /** Mount the turn and wait for the card to settle on the reading named. */
-async function mountProposalTurn(reading: string) {
-  const result = await mountSurface("chat", { messages: proposalTurn() });
+async function mountProposalTurn(reading: string, road: TurnRoad = "ordered", slackMode = false) {
+  const result = await mountSurface("chat", { messages: proposalTurn(road), slackMode });
   await waitFor(() => {
     const card = result.container.querySelector(
       '[data-conformance-id="schedule-proposal-card"]',
@@ -353,7 +368,7 @@ async function expectOneProseLine(
           .join(" | ")}`,
       );
     }
-  });
+  }, { timeout: 2_000 });
   const blocks = assistantProseBlocks(container);
   expect(blocks).toHaveLength(1);
   expect(blocks[0]!.getAttribute("data-schedule-standing-line")).toBe(reading);
@@ -364,33 +379,143 @@ async function expectOneProseLine(
   expect(visibleText(container)).toContain(READER_REQUEST);
 }
 
-describe("section VI — a settled schedule turn draws one prose line", () => {
-  it("draws only the fired-recurring sentence over a recurring schedule that has fired", async () => {
-    serveReading(RECURRING_BODY, true);
-    const { container } = await mountProposalTurn("fired-recurring");
-    await expectOneProseLine(container, FIRED_RECURRING_SENTENCE, "fired-recurring");
-  }, 60_000);
+describe.each<TurnRoad>(["ordered", "flat-views", "ordered-unpositioned"])(
+  "section VI — %s schedule turn draws one prose line",
+  (road) => {
+    it.each([false, true])("draws only the fired-recurring sentence (slackMode=%s)", async (slackMode) => {
+      serveReading(RECURRING_BODY, true);
+      const { container } = await mountProposalTurn("fired-recurring", road, slackMode);
+      await expectOneProseLine(container, FIRED_RECURRING_SENTENCE, "fired-recurring");
+    }, 60_000);
 
-  it("draws only the spent one-off's sentence over a one-off that has fired", async () => {
-    serveReading(ONE_OFF_BODY, true);
-    const { container } = await mountProposalTurn("fired-one-off");
-    await expectOneProseLine(container, SPENT_ONE_OFF_SENTENCE, "spent-one-off");
-  }, 60_000);
+    it.each([false, true])("draws only the spent one-off's sentence (slackMode=%s)", async (slackMode) => {
+      serveReading(ONE_OFF_BODY, true);
+      const { container } = await mountProposalTurn("fired-one-off", road, slackMode);
+      await expectOneProseLine(container, SPENT_ONE_OFF_SENTENCE, "spent-one-off");
+    }, 60_000);
 
-  it("draws only the stopped sentence once the reader stops the schedule", async () => {
-    serveUntilStopped();
-    const { container } = await mountProposalTurn("fired-recurring");
-    await stopTheSchedule(container);
-    await expectOneProseLine(container, STOPPED_RECURRING_SENTENCE, "stopped-recurring");
-  }, 60_000);
+    it("replaces the fired sentence when the reader stops the schedule", async () => {
+      serveUntilStopped();
+      const { container } = await mountProposalTurn("fired-recurring", road);
+      await stopTheSchedule(container);
+      await expectOneProseLine(container, STOPPED_RECURRING_SENTENCE, "stopped-recurring");
+    }, 60_000);
+
+    it("reports a stopped recurring schedule that never fired", async () => {
+      serveReading(STOPPED_RECURRING_BODY, false);
+      const { container } = await mountProposalTurn("configured", road);
+      await expectOneProseLine(container, STOPPED_RECURRING_SENTENCE, "stopped-recurring");
+    }, 60_000);
+
+    it("does not replace prose for an absent schedule", async () => {
+      globalThis.fetch = (async () => jsonResponse({
+        kind: "trigger_schedule_proposal", state: { state: "absent" }, body: null,
+      })) as typeof fetch;
+      const { container } = await mountSurface("chat", { messages: proposalTurn(road) });
+      await waitFor(() => expect(visibleText(container)).toContain(MODEL_LEAD_IN));
+      expect(container.querySelector("[data-schedule-standing-line]")).toBeNull();
+      expect(container.querySelector('[data-conformance-id="schedule-proposal-card"]')).toBeNull();
+    });
+  },
+);
+
+it("drops a model follow-up after the schedule card", async () => {
+  serveReading(RECURRING_BODY, true);
+  const messages = proposalTurn();
+  messages[1]!.parts!.push({ kind: "text", content: "Your proposal is ready to review." });
+  const { container } = await mountSurface("chat", { messages });
+  await expectOneProseLine(container, FIRED_RECURRING_SENTENCE, "fired-recurring");
 });
 
-describe("section VI — a configured reading has its own proposal sentence", () => {
-  it("replaces the never-fired model lead-in with the approved proposal sentence", async () => {
-    serveReading(RECURRING_BODY, false);
-    const { container } = await mountProposalTurn("configured");
-    await expectOneProseLine(container,
-      "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.",
-      "proposal");
-  }, 60_000);
+describe.each<TurnRoad>(["ordered", "flat-views", "ordered-unpositioned"])(
+  "section VI — %s authorized proposal readings",
+  (road) => {
+    it.each([
+      ["first-shown", PROPOSAL_BODY],
+      ["configured", RECURRING_BODY],
+      ["configured", ONE_OFF_BODY],
+      ["expired", EXPIRED_BODY],
+    ])("uses the drawn proposal line for %s", async (reading, body) => {
+      serveReading(body, false);
+      const { container } = await mountProposalTurn(reading, road);
+      await expectOneProseLine(container, PROPOSAL_SENTENCE, "proposal");
+    });
+
+    it("waits for authorization and drops the previous reference's sentence", async () => {
+      let answer: (response: Response) => void = () => {};
+      globalThis.fetch = vi.fn(async () => new Promise<Response>((resolve) => { answer = resolve; }));
+      const view = await mountSurface("chat", { messages: proposalTurn(road) });
+      expect(view.container.querySelector("[data-schedule-standing-line]")).toBeNull();
+      expect(visibleText(view.container)).toContain(MODEL_LEAD_IN);
+      await act(async () => answer(jsonResponse({
+        kind: "trigger_schedule_proposal", state: { state: "pending", canDecide: true, canComment: false }, body: PROPOSAL_BODY,
+      })));
+      await expectOneProseLine(view.container, PROPOSAL_SENTENCE, "proposal");
+      view.rerender(chatSurfaceElement({ messages: proposalTurn(road, "new-unresolved-ref") }));
+      await waitFor(() => expect(view.container.querySelector("[data-schedule-standing-line]")).toBeNull());
+      expect(visibleText(view.container)).toContain(MODEL_LEAD_IN);
+      await act(async () => answer(jsonResponse({
+        kind: "trigger_schedule_proposal", state: { state: "absent" }, body: null,
+      })));
+      expect(view.container.querySelector("[data-schedule-standing-line]")).toBeNull();
+      expect(view.container.querySelector('[data-conformance-id="schedule-proposal-card"]')).toBeNull();
+    });
+
+    it("ignores a stale reference's late authorized response", async () => {
+      const answers = new Map<string, (response: Response) => void>();
+      globalThis.fetch = vi.fn(async (_input, init) => new Promise<Response>((resolve) => {
+        const { ref } = JSON.parse(String(init?.body));
+        answers.set(ref, resolve);
+      }));
+      const view = await mountSurface("chat", { messages: proposalTurn(road) });
+      await waitFor(() => expect(answers.has(CARD_REF)).toBe(true));
+      view.rerender(chatSurfaceElement({ messages: proposalTurn(road, "new-unresolved-ref") }));
+      await waitFor(() => expect(answers.has("new-unresolved-ref")).toBe(true));
+      await act(async () => answers.get(CARD_REF)!(jsonResponse({
+        kind: "trigger_schedule_proposal", state: { state: "pending", canDecide: true, canComment: false }, body: PROPOSAL_BODY,
+      })));
+      expect(view.container.querySelector("[data-schedule-standing-line]")).toBeNull();
+      expect(view.container.querySelector('[data-conformance-id="schedule-proposal-card"]')).toBeNull();
+      expect(visibleText(view.container)).toContain(MODEL_LEAD_IN);
+    });
+  },
+);
+
+// Actual unmerged #3304 copy dependency: keep this drawing assertion honest
+// until its separate change lands; no unowned source overlay.
+it("section VI preserves the shipped historical stopped wording from cinatra#3304", async () => {
+  serveReading(STOPPED_RECURRING_BODY, true);
+  const { container } = await mountProposalTurn("fired-recurring");
+  const line = await waitFor(() => {
+    const el = container.querySelector("[data-schedule-standing-line=stopped-recurring]");
+    if (el === null) throw new Error("the stopped sentence never drew");
+    return el;
+  });
+  expect(line.textContent).toBe("The recurring schedule was stopped; its rows are no longer editable.");
+});
+
+it("preserves earlier turns and the stored schedule transcript", async () => {
+  serveReading(RECURRING_BODY, true);
+  const messages: UiMessage[] = [
+    { id: "earlier-user", role: "user", content: "Earlier user request." },
+    { id: "earlier-assistant", role: "assistant", content: "Earlier assistant answer.",
+      parts: [{ kind: "text", content: "Earlier assistant answer." }] },
+    ...proposalTurn(),
+  ];
+  const stored = structuredClone(messages);
+  const { container } = await mountSurface("chat", { messages });
+  await waitFor(() => expect(container.querySelector("[data-schedule-standing-line=fired-recurring]")).not.toBeNull());
+  expect(visibleText(container)).toContain("Earlier user request.");
+  expect(visibleText(container)).toContain("Earlier assistant answer.");
+  expect(visibleText(container)).toContain(READER_REQUEST);
+  expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
+  expect(messages).toEqual(stored);
+});
+
+it("leaves an ordinary assistant turn's prose alone", async () => {
+  const messages: UiMessage[] = [{ id: "ordinary", role: "assistant", content: MODEL_LEAD_IN,
+    parts: [{ kind: "text", content: MODEL_LEAD_IN }] }];
+  const { container } = await mountSurface("chat", { messages });
+  expect(visibleText(container)).toContain(MODEL_LEAD_IN);
+  expect(container.querySelector("[data-schedule-standing-line]")).toBeNull();
 });

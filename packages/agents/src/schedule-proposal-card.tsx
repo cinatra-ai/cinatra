@@ -586,7 +586,7 @@ export function ScheduleProposalCard({
   // The signal is the body's own `stopped`, which is exactly what the rows
   // freeze on below, so the sentence and the rows cannot come to two answers.
   useReportScheduleReading(
-    body === null
+    !present || body === null || state === null || state.state === "absent"
       ? "other"
       : stoppedRecurringSchedule(body)
         ? "stopped-recurring"
@@ -594,7 +594,7 @@ export function ScheduleProposalCard({
           ? "spent-one-off"
           : scheduleReadingOf(body, firedOnce) === "fired-recurring"
             ? "fired-recurring"
-            : "other",
+            : "proposal",
   );
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);

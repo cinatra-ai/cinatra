@@ -1034,30 +1034,12 @@ function carriedMomentView(view: Record<string, unknown>): boolean {
   );
 }
 
-/**
- * THE LINE SECTION VI DRAWS OVER A SCHEDULE THAT HAS FIRED (cinatra#3174 fix
- * leg 7, criterion 4).
- *
- * The section gives the two fired readings their own words and gives them
- * DIFFERENT words — see `RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE` and
- * `RUN_START_SCHEDULE_FIRED_SENTENCE` for the sentences and for why each is a
- * standing sentence rather than a clause after a dispatch head. Every other
- * reading draws no line of its own: a schedule that has never run says nothing
- * extra above its rows, and a graded round measured that as correct.
- *
- * AND THE STOP IS A READING TOO (fix leg 8). Section VI's Cancel schedule
- * "stops the recurring schedule and then leaves the rows no longer editable",
- * and the fourth graded round measured the fired-recurring sentence standing
- * over a card that had just been stopped — the firing that elects that sentence
- * stays true across the press, so nothing in the turn moved. The stopped
- * reading takes the section's own words: see
- * `RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE`. It is asked FIRST, because a
- * stopped schedule is a fired one until the stop is consulted.
- */
+/** §VI gives each authorized schedule reading its own standing sentence. */
 function standingScheduleLineFor(reading: ScheduleCardReading): string | null {
   if (reading === "stopped-recurring") return RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE;
   if (reading === "fired-recurring") return RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE;
   if (reading === "spent-one-off") return RUN_START_SCHEDULE_FIRED_SENTENCE;
+  if (reading === "proposal") return "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.";
   return null;
 }
 
@@ -1328,30 +1310,8 @@ function OrderedPartsSection({
       onScheduleStandingReadingsChange?.([]);
     };
   }, [onScheduleStandingReadingsChange, scheduleStandingReadings]);
-  // WHICH SLOTS IN THIS TURN DRAW SECTION VI's OWN SENTENCE (cinatra#3174 fix
-  // leg 9). Section VI draws every one of its example turns the same way: one
-  // prose line, then the card. The settled readings — fired one-off, fired
-  // recurring, stopped — have a sentence OF THEIR OWN, and it is the turn's one
-  // line; the example turn for a recurring schedule that has fired carries
-  // "It is still recurring, so the rows below still take a change — it applies
-  // to the runs still to come." and nothing above it.
-  //
-  // Fix leg 7 drew that sentence BESIDE the model's own lead-in rather than in
-  // its place, on the reasoning that prose the model wrote is not this
-  // renderer's to touch. A graded round then measured the shipped turn drawing
-  // TWO prose lines on every settled reading, which is more than the drawing
-  // gives — and the drawing, not the reasoning, is the anchor. So the lead-in
-  // is not rewritten here either: it is not DRAWN, because the reading's own
-  // sentence is what this turn says.
-  //
-  // A LIST OF SLOTS, not a boolean, and the FIRST one decides: a turn can carry
-  // more than one produced-views slot, and what §VI rules out is prose standing
-  // ABOVE the sentence. Prose below a slot is not what this measured, and is
-  // left exactly as it was drawn.
-  //
-  // AND ONLY THE READINGS THAT HAVE A SENTENCE. A schedule that has never fired
-  // draws no line of its own, so its lead-in is the turn's ONE line and stays —
-  // which is what §VI's first-shown and configured examples draw.
+  // §VI: a resolved schedule turn draws only its reading's sentence,
+  // including proposed/configured/expired readings and prose after the card.
   const [standingLineSlots, setStandingLineSlots] = useState<readonly number[]>([]);
   const onStandingLineChange = useCallback((slot: number, drawn: boolean) => {
     setStandingLineSlots((prev) => {
@@ -1378,16 +1338,10 @@ function OrderedPartsSection({
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
       {parts.map((part, idx) => {
         if (part.kind === "text") {
-          // THE TURN'S ONE PROSE LINE IS THE DRAWN SENTENCE (cinatra#3174 fix
-          // leg 9) — see the note on `standingLineSlots`. Nothing is read,
-          // matched or rewritten: a text part standing above the slot that
-          // draws §VI's sentence is simply not drawn, and the transcript's own
-          // history — the reader's request, every earlier turn — is untouched
-          // because this decision is scoped to the parts of THIS turn.
-          if (firstStandingLineSlot !== null && idx < firstStandingLineSlot) return null;
-          // A restored card without a producing slot stands after this trace.
-          // Its current reading owns the lead-in only when no earlier slot does.
-          if (!slottedStandingLine && carriedStandingLine) return null;
+          // §VI: the authorized schedule reading owns this turn's one prose
+          // sentence. Neither a lead-in nor a follow-up accompanies it; the
+          // stored transcript and every other turn remain unchanged.
+          if (slottedStandingLine || carriedStandingLine) return null;
           let raw = trimContent ? trimContent(part.content) : part.content;
           // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
           // construction: only the sentence this platform minted, only for a
