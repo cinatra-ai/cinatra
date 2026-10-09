@@ -35,6 +35,13 @@ import {
   RunStepRailPanel,
   type RunStepRailEntry,
 } from "@cinatra-ai/agents/run-step-rail-panel";
+import { RunSurfaceRail } from "@cinatra-ai/agents/run-surface-rail";
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  OrchestratorStepperPanel,
+  type StepperStep,
+} from "../../../../packages/agents/src/orchestrator-stepper-panel";
 
 // The verbatim shape the decision lattice emits when a policy moved after a
 // decision was taken — the string the report was filed against. Long enough to
@@ -113,6 +120,7 @@ const PLAIN_ENTRIES: RunStepRailEntry[] = [
 
 export function RunStepRailGeometryFixtures() {
   return (
+    <>
     <div className="flex flex-row items-start gap-16">
       <div data-surface-id="run-step-rail-wrapped">
         <RunStepRailPanel
@@ -136,5 +144,64 @@ export function RunStepRailGeometryFixtures() {
         />
       </div>
     </div>
+    <RunPageRailWidthFixtures />
+    </>
+  );
+}
+
+/**
+ * The two REAL outer rail hosts (cinatra#3241), under the application's CSS.
+ * Changing the props on the same mounts reduces three ordinary rows to one
+ * transient row and restores them. No fixture width or grid can make either
+ * production column pass the browser's computed-width assertions.
+ */
+export function RunPageRailWidthFixtures() {
+  const [transient, setTransient] = useState(false);
+  const labels = transient ? ["Go"] : ["Collect sources", "Draft the change", "Publish"];
+  const entries: RunStepRailEntry[] = labels.map((label, index) =>
+    step(index + 1, label, "upcoming"),
+  );
+  const stepperSteps: StepperStep[] = labels.map((label, index) => ({
+    index: index + 1,
+    stepNumber: index,
+    label,
+  }));
+
+  return (
+    <section className="flex flex-col gap-8">
+      <h2>Run rail column width — both real hosts</h2>
+      <Button type="button" onClick={() => setTransient((value) => !value)}>
+        {transient ? "Restore ordinary rails" : "Show transient rails"}
+      </Button>
+      <section data-testid="run-surface-rail-width-host">
+        <h3>RunSurfaceRail</h3>
+        <RunSurfaceRail
+          steps={[]}
+          initialSelection="detail"
+          rail={
+            <RunStepRailPanel
+              entries={entries}
+              activeOrdinal={null}
+              reviewHrefBase="/design-fixtures/run-step-rail/review"
+            />
+          }
+          detail={<p>The run detail stays beside its rail.</p>}
+        />
+      </section>
+      <section data-testid="orchestrator-rail-width-host">
+        <h3>OrchestratorStepperPanel</h3>
+        <OrchestratorStepperPanel
+          runId="rail-width-3241"
+          initialStatus="running"
+          initialError={null}
+          agUiEnabled={false}
+          agentId="rail-width-fixture"
+          templateId="rail-width-fixture"
+          lgThreadId={null}
+          stepperSteps={stepperSteps}
+          canRespondInWindow={false}
+        />
+      </section>
+    </section>
   );
 }

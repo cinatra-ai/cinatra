@@ -181,6 +181,51 @@ async function assertRunScopeOrDeny(
   }
 }
 
+/**
+ * cinatra#3582 — "the person gave this field NOTHING", the same reading the
+ * setup screen takes (`isBlankSubValue` in schema-field-renderer.tsx): absent,
+ * null, a string that trims to empty, or an empty list. `0` and `false` are
+ * ANSWERS, never blank.
+ */
+function isBlankSetupValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/**
+ * cinatra#3582 — a declared MINIMUM LENGTH, refused here as well as on the
+ * screen, because the screen is only one door into a run's inputs. Measured on
+ * the trimmed value and only on a value that is not blank: emptiness is the
+ * blank reading's business, never the minimum's.
+ */
+function assertSetupValuesSatisfyDeclaredMinLength(
+  properties: Record<string, Record<string, unknown>>,
+  values: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value !== "string") continue;
+    const declared = Object.prototype.hasOwnProperty.call(properties, key)
+      ? properties[key]
+      : undefined;
+    const declaredMinLength = declared?.minLength;
+    if (
+      typeof declaredMinLength !== "number" ||
+      !Number.isInteger(declaredMinLength) ||
+      declaredMinLength <= 0
+    ) {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length === 0 || trimmed.length >= declaredMinLength) continue;
+    throw new Error(
+      `Setup approval rejected: fieldName "${key}" is shorter than the minimum length of ${declaredMinLength} the agent declares`,
+    );
+  }
+}
+
+
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
   actorId: string,
@@ -426,7 +471,14 @@ export async function approveReviewTaskInternal(
           submitted === null ||
           !submittedCarriesKey ||
           submitted[fieldName] === null ||
-          submitted[fieldName] === undefined;
+          submitted[fieldName] === undefined ||
+          // cinatra#3582 — a BLANK answer is not an answer. An empty string, a
+          // whitespace-only string and an empty list reach the SAME three
+          // declared readings below as an absent key: a declared default
+          // answers it, a declared-optional field is settled, and a
+          // declared-required field is refused by name. `0` and `false` are
+          // answers, never blank.
+          isBlankSetupValue(submitted[fieldName]);
         if (noValueGiven) {
           const schema = await resolvedInputSchema();
           // cinatra#3452 (convergence round) — an OWN declaration only. A bare
@@ -455,8 +507,17 @@ export async function approveReviewTaskInternal(
                 [fieldName]: submitted[fieldName],
               });
             }
+            // cinatra#3582 — a value that ARRIVED and was empty is told as a
+            // blank rather than as an absence; either way the field is named.
+            const submittedBlankValue =
+              submittedCarriesKey &&
+              submitted !== null &&
+              submitted[fieldName] !== null &&
+              submitted[fieldName] !== undefined;
             throw new Error(
-              `Setup approval rejected: fieldName "${fieldName}" is not present in the submitted values`,
+              submittedBlankValue
+                ? `Setup approval rejected: fieldName "${fieldName}" was submitted blank and the agent declares it required`
+                : `Setup approval rejected: fieldName "${fieldName}" is not present in the submitted values`,
             );
           }
           emptyFieldSettled = true;
@@ -499,6 +560,11 @@ export async function approveReviewTaskInternal(
         const singleFieldProperties = await declaredProperties();
         if (singleFieldProperties) {
           assertSetupValuesMatchDeclaredObjectTypes(singleFieldProperties, {
+            [fieldName]: fieldValue,
+          });
+          // cinatra#3582 — a declared minimum length is refused here too: the
+          // setup screen is only ONE door into a run's inputs.
+          assertSetupValuesSatisfyDeclaredMinLength(singleFieldProperties, {
             [fieldName]: fieldValue,
           });
         }
@@ -550,11 +616,46 @@ export async function approveReviewTaskInternal(
               );
             }
           }
+          // cinatra#3582 — A BLANK ANSWER IS NOT AN ANSWER, on this road too.
+          // The grouped form submits every field at once, so the single-field
+          // reading above never sees these values. A field the schema declares
+          // required and for which it declares no default cannot be merged
+          // blank; a declared default answers it (cinatra#3452) and a field
+          // declared optional is left exactly as it is.
+          const groupedSchema = await resolvedInputSchema();
+          if (groupedSchema) {
+            for (const [key, submittedValue] of Object.entries(fieldValues)) {
+              // An `undefined` value is not a field this road MERGES: the
+              // serialization below drops the key, so this submission writes
+              // nothing for it — whatever the run already carries stands, and a
+              // required field the run carries blank or not at all is still the
+              // setup loop's to ask for (cinatra#2484's reading of an untouched
+              // object field). A BLANK value is the opposite — it would be
+              // written.
+              if (submittedValue === undefined) continue;
+              if (!groupedSchema.required.includes(key)) continue;
+              const declaredGroupedField = Object.prototype.hasOwnProperty.call(
+                groupedSchema.properties,
+                key,
+              )
+                ? groupedSchema.properties[key]
+                : undefined;
+              if (declaredGroupedField?.default !== undefined) continue;
+              if (isBlankSetupValue(submittedValue)) {
+                throw new Error(
+                  `Setup approval rejected: fieldName "${key}" was submitted blank and the agent declares it required`,
+                );
+              }
+            }
+          }
           // cinatra#2484 — same type gate as the single-field path above. Runs
           // AFTER the allowlist so an unknown key still reports as unknown.
           const groupedProperties = await declaredProperties();
           if (groupedProperties) {
             assertSetupValuesMatchDeclaredObjectTypes(groupedProperties, fieldValues);
+            // cinatra#3582 — the grouped form reaches THIS road too, so the
+            // declared minimum is read here as well as on the screen.
+            assertSetupValuesSatisfyDeclaredMinLength(groupedProperties, fieldValues);
           }
           inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
         }

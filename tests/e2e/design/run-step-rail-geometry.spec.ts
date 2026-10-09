@@ -152,7 +152,7 @@ async function rowBoxAndIndicator(row: Locator) {
  * Two viewports: the desktop width the report names, and a narrow one.
  *
  * Be accurate about what the narrow arm buys. It does NOT wrap the reason to
- * more lines: the rail is a FIXED-WIDTH column (`w-52` on the panel's root,
+ * more lines: the rail is a FIXED-WIDTH column (`w-[196px]` on the panel's root,
  * run-step-rail-panel.tsx:73) and the reason column inside it is a fixed
  * `max-w-36`, so the wrap point does not move with the viewport. Measured on
  * this fixture, the row heights at 900px are IDENTICAL to those at 1440px
