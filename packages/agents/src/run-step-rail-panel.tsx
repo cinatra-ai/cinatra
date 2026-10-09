@@ -103,7 +103,7 @@ export function RunStepRailPanel({
       // proof round photographed. The column owns the rail's top offset; a
       // panel drawn as the whole rail is wrapped by a column that states it
       // (`instance-screens`), exactly as this one is.
-      className="flex w-52 shrink-0 flex-col"
+      className="flex w-[196px] shrink-0 flex-col"
       aria-label="Agent run steps"
     >
       <Stepper

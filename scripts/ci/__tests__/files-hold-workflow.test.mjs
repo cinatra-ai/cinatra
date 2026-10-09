@@ -2,15 +2,16 @@
 //
 // It runs on pull_request_target, so it runs with a token that can write and
 // for pull requests from forks too. What keeps that safe is pinned here: it
-// runs on exactly the seven pull request events and by hand, with exactly
-// three permissions and each job with the least of them; it checks out the
-// default branch only and runs the script from there, never a pull request's
-// head or merge ref; no value of the event reaches a shell; every action is
-// pinned by commit. The order is pinned too: a first job takes the label off a
-// pushed pull request, in a group of its own for each pull request, and the
-// evaluation runs after it, one at a time for the whole repository. The
-// workflow is read LINE-BASED with the repository's own parsers rather than
-// through a yaml dependency, as the other workflow tests read theirs.
+// runs on exactly the seven pull request events, by hand and on an hourly
+// schedule, with exactly three permissions and each job with the least of
+// them; it checks out the default branch only and runs the script from there,
+// never a pull request's head or merge ref; no value of the event reaches a
+// shell; every action is pinned by commit. The order is pinned too: a first
+// job takes the label off a pushed pull request, in a group of its own for
+// each pull request, and the evaluation runs after it, one at a time for the
+// whole repository. The workflow is read LINE-BASED with the repository's own
+// parsers rather than through a yaml dependency, as the other workflow tests
+// read theirs.
 
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -100,11 +101,15 @@ describe("the files-hold workflow", () => {
     expect(parseJobs(text).map((j) => j.key)).toEqual([END_HOLD, EVALUATION]);
   });
 
-  it("runs on pull_request_target, on exactly the seven pull request events, and by hand", () => {
-    expect(parseTriggers(read())).toEqual(["pull_request_target", "workflow_dispatch"]);
+  it("runs on pull_request_target, on exactly the seven pull request events, by hand and on a schedule", () => {
+    expect(parseTriggers(read())).toEqual(["pull_request_target", "schedule", "workflow_dispatch"]);
     expect([...targetTypes()].sort()).toEqual(
       ["closed", "labeled", "opened", "ready_for_review", "reopened", "synchronize", "unlabeled"],
     );
+  });
+
+  it("runs on an hourly schedule of exactly one cron line, so that an expiry takes effect without an event", () => {
+    expect(block(lines(), "schedule", 2)).toEqual(['    - cron: "17 * * * *"']);
   });
 
   it("holds exactly three permissions, and each job only the ones it needs", () => {
