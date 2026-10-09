@@ -696,6 +696,48 @@ the checker's own suite asserts both halves of the finding: that the superseded
 body still classifies as `drift` in both hashes, and that the body adopted in
 its place declares the same six surfaces.
 
+## Reconciliation record — 2026-10-09
+
+Measured 2026-10-09 against the manifests published under `publishedBaseUrl`,
+for the shared-primitives conformance wave (cinatra#3189) and the coloured-panel
+hover of the agent card (cinatra#2851). All five bodies were fetched with one
+anonymous `curl -sS` each into a scratch directory outside every repository
+tree, and their hashes were compared with the five pins as this change leaves
+them: every published body is byte-identical to the artifact its pin names.
+`app`, `app-connectors` and `app-notifications` came back byte-identical to the
+artifacts their pins already named. `app-components` and `app-extensions` had
+republished after their drawings gained surfaces, and each adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces. For
+`app-components`, `schemaVersion` and `spec` are unchanged, the four surfaces
+the copy already declared (`toast`, `breadcrumb-entity-resolution`,
+`scheduling-step`, `scheduling-step-configured`) are field-for-field identical,
+twenty-nine surfaces are added, and `contentHash` moved. For `app-extensions`,
+`schemaVersion` and `spec` are unchanged, the nineteen surfaces the copy already
+declared are field-for-field identical, one surface is added
+(`agent-card-accent-hover`, between `agent-start-refused` and
+`install-config-needs-callout`), and `contentHash` moved. Each committed
+artifact is now the verbatim published body, and both hashes of both entries in
+`conformance-pins.json` were re-derived from the adopted bytes on the branch —
+the manifest hash over the file's bytes, the spec-content hash read back out of
+the adopted body's own `contentHash` field — never typed; both entries now read
+`source: "published"`. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | 29 new surfaces: `button`, `card`, `input`, `select`, `dialog`, `badge`, `tabs`, `toolbar`, `toolbar-nested`, `sidebar`, `sidebar-group-label`, `tooltip`, `avatar`, `form`, `checkbox`, `alert`, `table`, `command`, `breadcrumb`, `pagination`, `skeleton`, `empty`, `accordion`, `separator`, `toggle`, `calendar`, `combobox`, `scroll-area`, `input-otp` | 29 drivers, 29 harness mounts, 29 test-id contract rows |
+| `app-extensions` | `drift` | 1 new surface (`agent-card-accent-hover`) | 1 driver, 1 harness mount, 1 test-id contract row |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+Every surface the two bodies add is driven by a literal entry of the driver
+table and mounted once on the conformance harness, so
+`tests/e2e/design/conformance/allowlist.json` is untouched. The adoption record
+of the two bodies stays outside the repository: no body is frozen under the
+checker's fixtures, because the frozen-capture road ended with the suite header
+the toast adoption wrote.
+
 ## Running it locally
 
 ```sh

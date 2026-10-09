@@ -21,7 +21,10 @@
       "src/app/design-fixtures/conformance/breadcrumb-conformance-seed.ts",
       "tests/e2e/design/conformance/toast-driver.ts",
       "src/app/design-fixtures/conformance/toast-fixture.tsx",
-      "src/app/design-fixtures/conformance/toast-fixture-data.ts"
+      "src/app/design-fixtures/conformance/toast-fixture-data.ts",
+      "tests/e2e/design/conformance/component-surface-drivers.ts",
+      "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+      "src/app/design-fixtures/conformance/__tests__/component-surface-fixtures.test.tsx"
     ],
     "app-extensions": [
       "tests/e2e/design/conformance/manifests/app-extensions.json",
@@ -46,7 +49,10 @@
       "src/components/scope-assignment/scope-assignment-skills.tsx",
       "src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data.ts",
       "src/app/design-fixtures/conformance/agent-run-eligibility-fixtures.tsx",
-      "src/app/design-fixtures/conformance/__tests__/agent-run-eligibility-fixtures.test.tsx"
+      "src/app/design-fixtures/conformance/__tests__/agent-run-eligibility-fixtures.test.tsx",
+      "tests/e2e/design/conformance/agent-card-accent-hover-driver.ts",
+      "src/app/design-fixtures/conformance/agent-card-accent-hover-fixture.tsx",
+      "src/app/design-fixtures/conformance/__tests__/agent-card-accent-hover-fixture.test.tsx"
     ],
     "app-connectors": [
       "tests/e2e/design/conformance/manifests/app-connectors.json",

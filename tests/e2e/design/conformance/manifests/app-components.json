@@ -1,8 +1,104 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-components.html",
-  "contentHash": "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c",
+  "contentHash": "sha256:e408e9f6cf4bdaf119861dbc2ac7ccda69e9cd3c20d4c790ddba9a95e0b602cd",
   "surfaces": [
+    {
+      "id": "button",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "card",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "input",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "select",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "dialog",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "badge",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "tabs",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "toolbar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "toolbar-nested",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "sidebar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "sidebar-group-label",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "tooltip",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "avatar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "form",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "checkbox",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "alert",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
     {
       "id": "toast",
       "fields": [
@@ -21,6 +117,24 @@
           "outcome": "toast-dismissed"
         }
       ],
+      "states": []
+    },
+    {
+      "id": "table",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "command",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "breadcrumb",
+      "fields": [],
+      "actions": [],
       "states": []
     },
     {
@@ -44,6 +158,66 @@
       "states": [
         "loading"
       ]
+    },
+    {
+      "id": "pagination",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "skeleton",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "empty",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "accordion",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "separator",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "toggle",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "calendar",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "combobox",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "scroll-area",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "input-otp",
+      "fields": [],
+      "actions": [],
+      "states": []
     },
     {
       "id": "scheduling-step",
