@@ -193,7 +193,7 @@ export const REVIEW_DECISION_FLOOR: Readonly<
     states: ["loading"],
     awaitingPullRequest: null,
     readiness:
-      "the window ships on the default branch and carries this anchor together with the drawing's own action and outcome, since the change that moved it into the review gate card landed. It is drawn INSIDE that card: mounting it composes the decision floor the one-card gate keeps to one place, and its submit is a server action on a fenced gate that a harness would have to stand in for — a transport substitution this road forbids",
+      "the window ships on the default branch and carries this anchor. Since cinatra#3487 it is drawn by the RUN PAGE'S CHROME and never inside the card: the ruling of 2026-09-14 puts it there, the anchor stays the drawing's own, and the conformance reading is that it is a descendant of the page chrome and never of a lifecycle card. Mounting it in a harness still composes the run page's own frame, and its submit is a server action on a fenced gate a harness would have to stand in for — a transport substitution this road forbids",
   },
   "review-decision-disabled": {
     surface: "review-decision-disabled",

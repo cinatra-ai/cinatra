@@ -104,8 +104,13 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     // visibility gained a SECOND term in the same wave — the run's own access,
     // "no window shown to a person whose message it would refuse" — so the
     // single-line literal was replaced by the two terms that must both hold.
-    const visible = SRC.match(/visible=\{([\s\S]*?)\}\n/);
-    expect(visible, "the panel must declare a visible expression").toBeTruthy();
+    // AMENDED AGAIN by cinatra#3487. The rule is unchanged and so are its two
+    // terms; what moved is WHO reads them. The screen no longer mounts a window
+    // of its own — it publishes "has this screen anything to manipulate" to the
+    // run page's chrome, which draws the one window — so the expression is read
+    // off `canManipulate` in the registration rather than off a `visible` prop.
+    const visible = SRC.match(/canManipulate:([\s\S]*?),\n\s*storageKey/);
+    expect(visible, "the screen must declare what it can manipulate").toBeTruthy();
     expect(visible![1]).toMatch(/!isGenericObjectSchema/);
     expect(visible![1]).toMatch(/canRespondInWindow !== false/);
   });

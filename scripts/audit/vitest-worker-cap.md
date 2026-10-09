@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 18 workflow files carry a test-runner step;
-11 of them are governed. 139 invocations:
-97 governed, 13 hosted-pinned,
+11 of them are governed. 140 invocations:
+98 governed, 13 hosted-pinned,
 20 node:test, 8 playwright,
 1 extension-suite-gate.
 
@@ -208,24 +208,25 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | perpetual-core | name%3AObject-history%20unit%20tests | 2812 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3AData-safety%20UI%20unit%20tests | 2821 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3AAuthz%20inventory%20drift%20gate | 2826 | CI_RUNNER_POOL | vitest | governed | 3 |
-| build-image.yml | perpetual-extension-suites | name%3AExtension%20suites%20%E2%80%94%20discovery%20gate%20(every%20materialized%20suite) | 2931 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
-| build-image.yml | steps-browser | name%3AStep%20tests%20on%20the%20page%20double | 3037 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | steps-browser | name%3AStep%20tests%20with%20E2E_STEPS_UNIT_BROWSER%3D1 | 3054 | CI_RUNNER_E2E | vitest | governed | 3 |
-| build-image.yml | e2e-rbac | id%3Ae2e | 3362 | CI_RUNNER_E2E | playwright | playwright | 3 |
-| build-image.yml | chat-hitl-held-turn-e2e | id%3Ae2e | 3688 | ubuntu-latest | playwright | playwright | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ALifecycle-moment%20triple%20%E2%80%94%20real-DB%20tier%20(cinatra%232928%2C%20W2a) | 3837 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ALent-action%20grant%20ledger%20%E2%80%94%20real-DB%20tier%20(cinatra%232932%2C%20W5a) | 3842 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ANamed-agent%20start%20%E2%80%94%20real-DB%20tier%20(cinatra%232935%2C%20W5d) | 3847 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun-window%20conversation%20%E2%80%94%20real-DB%20tier%20(cinatra%232933%2C%20W5b) | 3852 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ABound-screen%20fill%20%E2%80%94%20real-DB%20tier%20(cinatra%232934%2C%20W5c) | 3864 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ANon-file%20revision%20reader%20%E2%80%94%20real-DB%20tier%20(cinatra%233027%2C%20lifecycle-c%20W3) | 3876 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20editor's%20save%20with%20an%20expected%20base%20%E2%80%94%20real-DB%20tier%20(cinatra%233026%2C%20lifecycle-c%20W2) | 3888 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AExtension%20tables%2C%20data%20tool%20and%20artifact%20reads%20%E2%80%94%20real-DB%20tier%20(cinatra%233031%2C%20W7) | 3902 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AObject-backed%20contract%20%2B%20typed%20promotion%20%E2%80%94%20real-DB%20tier%20(cinatra%233028%2C%20lifecycle-c%20W4) | 3917 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun%20folder%20pickup%20%2B%20file%20bindings%20%2B%20mid-run%20revision%20%E2%80%94%20real-DB%20tier%20(cinatra%233030%2C%20lifecycle-c%20W6) | 3935 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20image%20tool%20%E2%80%94%20real-DB%20tier%20(cinatra%233032%2C%20lifecycle-c%20W8) | 3951 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | chat-hitl-held-turn-e2e | name%3AWidget%20schedule%20grant%20%E2%80%94%20real-DB%20tier%20(cinatra%233052) | 3965 | ubuntu-latest | vitest | hosted-pinned | 1 |
-| build-image.yml | presence-degraded-build | name%3ADegradation%20suites%20(guard%20%2B%20consumers%20%2B%20generated%20classification%20%2B%20readiness%20fail-soft) | 4888 | CI_RUNNER_HEAVY | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3APrompt-window%20structural%20invariants%20(run%20page%20chrome) | 2845 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-extension-suites | name%3AExtension%20suites%20%E2%80%94%20discovery%20gate%20(every%20materialized%20suite) | 2953 | CI_RUNNER_HEAVY | vitest | extension-suite-gate | 3 |
+| build-image.yml | steps-browser | name%3AStep%20tests%20on%20the%20page%20double | 3059 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | steps-browser | name%3AStep%20tests%20with%20E2E_STEPS_UNIT_BROWSER%3D1 | 3076 | CI_RUNNER_E2E | vitest | governed | 3 |
+| build-image.yml | e2e-rbac | id%3Ae2e | 3384 | CI_RUNNER_E2E | playwright | playwright | 3 |
+| build-image.yml | chat-hitl-held-turn-e2e | id%3Ae2e | 3710 | ubuntu-latest | playwright | playwright | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ALifecycle-moment%20triple%20%E2%80%94%20real-DB%20tier%20(cinatra%232928%2C%20W2a) | 3859 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ALent-action%20grant%20ledger%20%E2%80%94%20real-DB%20tier%20(cinatra%232932%2C%20W5a) | 3864 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ANamed-agent%20start%20%E2%80%94%20real-DB%20tier%20(cinatra%232935%2C%20W5d) | 3869 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun-window%20conversation%20%E2%80%94%20real-DB%20tier%20(cinatra%232933%2C%20W5b) | 3874 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ABound-screen%20fill%20%E2%80%94%20real-DB%20tier%20(cinatra%232934%2C%20W5c) | 3886 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ANon-file%20revision%20reader%20%E2%80%94%20real-DB%20tier%20(cinatra%233027%2C%20lifecycle-c%20W3) | 3898 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20editor's%20save%20with%20an%20expected%20base%20%E2%80%94%20real-DB%20tier%20(cinatra%233026%2C%20lifecycle-c%20W2) | 3910 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AExtension%20tables%2C%20data%20tool%20and%20artifact%20reads%20%E2%80%94%20real-DB%20tier%20(cinatra%233031%2C%20W7) | 3924 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AObject-backed%20contract%20%2B%20typed%20promotion%20%E2%80%94%20real-DB%20tier%20(cinatra%233028%2C%20lifecycle-c%20W4) | 3939 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3ARun%20folder%20pickup%20%2B%20file%20bindings%20%2B%20mid-run%20revision%20%E2%80%94%20real-DB%20tier%20(cinatra%233030%2C%20lifecycle-c%20W6) | 3957 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AThe%20image%20tool%20%E2%80%94%20real-DB%20tier%20(cinatra%233032%2C%20lifecycle-c%20W8) | 3973 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | chat-hitl-held-turn-e2e | name%3AWidget%20schedule%20grant%20%E2%80%94%20real-DB%20tier%20(cinatra%233052) | 3987 | ubuntu-latest | vitest | hosted-pinned | 1 |
+| build-image.yml | presence-degraded-build | name%3ADegradation%20suites%20(guard%20%2B%20consumers%20%2B%20generated%20classification%20%2B%20readiness%20fail-soft) | 4910 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3AOAS%20banned-primitives%20gate%20tests | 153 | CI_RUNNER_HEAVY | vitest | governed | 3 |
 | crm-migration-gate.yml | gate | name%3ACRM%20pointer-row%20gate%20tests | 156 | CI_RUNNER_HEAVY | node:test | node:test | 3 |
 | dashboard-live-verify.yml | smoke | id%3Ae2e | 441 | CI_RUNNER_E2E | playwright | playwright | none |

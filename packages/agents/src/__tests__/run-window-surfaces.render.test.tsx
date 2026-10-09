@@ -31,6 +31,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+// THE PAGE OWNS THE WINDOW (cinatra#3487). Every screen below is drawn inside
+// the run page's chrome, which is the one module that mounts a prompt window;
+// the screens themselves mount none. What this suite asserts is unchanged — the
+// window is drawn, it carries the reading's own sentence, and a person the run
+// would refuse is shown none — only the frame it is drawn in moved.
+import { RunPageChrome } from "../run-page-chrome";
 
 /**
  * IS A BOX DRAWN AT ALL. Every reading of the window opens its sentence the
@@ -354,12 +360,14 @@ describe("the armed schedule's window keeps no second road", () => {
     vi.stubGlobal("fetch", anyCall);
     const { SchedulePromptWindow } = await import("../schedule-prompt-window");
     render(
-      <SchedulePromptWindow
-        templateId="tmpl-2933"
-        runId="run-2933"
-        canRespondInWindow={true}
-        readOnly={false}
-      />,
+      <RunPageChrome>
+        <SchedulePromptWindow
+          templateId="tmpl-2933"
+          runId="run-2933"
+          canRespondInWindow={true}
+          readOnly={false}
+        />
+      </RunPageChrome>,
     );
     await settle();
     await act(async () => {
@@ -380,12 +388,14 @@ describe("the armed schedule's window is withdrawn once the schedule is over", (
   it("draws no box for a reader WITH access when the schedule can no longer change", async () => {
     const { SchedulePromptWindow } = await import("../schedule-prompt-window");
     render(
-      <SchedulePromptWindow
-        templateId="tmpl-2933"
-        runId="run-2933"
-        canRespondInWindow={true}
-        readOnly={true}
-      />,
+      <RunPageChrome>
+        <SchedulePromptWindow
+          templateId="tmpl-2933"
+          runId="run-2933"
+          canRespondInWindow={true}
+          readOnly={true}
+        />
+      </RunPageChrome>,
     );
     await settle();
     expect(screen.queryByText(ANY_WINDOW_SENTENCE)).toBeNull();
@@ -395,7 +405,7 @@ describe("the armed schedule's window is withdrawn once the schedule is over", (
 describe("AC1 — each window outside the chat is DRAWN, with the ratified placeholder", () => {
   for (const s of SURFACES) {
     it(`${s.name} ("${s.surface}") draws the window`, async () => {
-      render(await s.mount(true));
+      render(<RunPageChrome>{await s.mount(true)}</RunPageChrome>);
       await settle();
       expect(screen.queryByText(ANY_WINDOW_SENTENCE)).not.toBeNull();
     });
@@ -405,7 +415,7 @@ describe("AC1 — each window outside the chat is DRAWN, with the ratified place
 describe("AC3 — a person the run would refuse is shown no box", () => {
   for (const s of SURFACES) {
     it(`${s.name} ("${s.surface}") draws NO window without respond access`, async () => {
-      render(await s.mount(false));
+      render(<RunPageChrome>{await s.mount(false)}</RunPageChrome>);
       await settle();
       expect(screen.queryByText(ANY_WINDOW_SENTENCE)).toBeNull();
     });
@@ -426,7 +436,7 @@ describe("AC3 — a person the run would refuse is shown no box", () => {
 describe("§X — the sentence in the empty field names what the window does where it stands", () => {
   for (const s of SURFACES) {
     it(`${s.name} ("${s.surface}") reads: "${s.sentence}"`, async () => {
-      render(await s.mount(true));
+      render(<RunPageChrome>{await s.mount(true)}</RunPageChrome>);
       await settle();
       // The drawing's own string, character for character — an ellipsis
       // spelled with three dots is a different sentence and fails here.
@@ -434,7 +444,7 @@ describe("§X — the sentence in the empty field names what the window does whe
     });
 
     it(`${s.name} ("${s.surface}") no longer reads any other reading's sentence`, async () => {
-      render(await s.mount(true));
+      render(<RunPageChrome>{await s.mount(true)}</RunPageChrome>);
       await settle();
       for (const other of SURFACES) {
         if (other.surface === s.surface) continue;
@@ -456,7 +466,7 @@ describe("the refusal is the run's answer, not an accident of the mount", () => 
   // and the two outcomes must DIFFER.
   for (const s of SURFACES) {
     it(`${s.name} answers differently with and without access`, async () => {
-      const withAccess = render(await s.mount(true));
+      const withAccess = render(<RunPageChrome>{await s.mount(true)}</RunPageChrome>);
       await settle();
       const drawn = screen.queryByText(ANY_WINDOW_SENTENCE) !== null;
       withAccess.unmount();
@@ -464,7 +474,7 @@ describe("the refusal is the run's answer, not an accident of the mount", () => 
       document.body.innerHTML = "";
       document.body.appendChild(document.createElement("main"));
 
-      render(await s.mount(false));
+      render(<RunPageChrome>{await s.mount(false)}</RunPageChrome>);
       await settle();
       const refused = screen.queryByText(ANY_WINDOW_SENTENCE) !== null;
 

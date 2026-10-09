@@ -64,6 +64,9 @@ import {
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+// THE RUN PAGE'S CHROME (cinatra#3487) — the one module that mounts a prompt
+// window, and the frame every run-detail screen registers with.
+import { RunPageChrome } from "./run-page-chrome";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
 // mount below for what it draws and what it deliberately does not.
 import { VerificationSummaryCard } from "./verification-summary-card";
@@ -2495,6 +2498,10 @@ export async function SetupScreen({
           // different panel — which is exactly why the width is declared here
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
+          {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487).
+              The screens inside register what they are and what they lend; the
+              chrome draws the window below them, in this same column. */}
+          <RunPageChrome>
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
@@ -3285,6 +3292,7 @@ export async function SetupScreen({
               );
             })()}
           </div>
+          </RunPageChrome>
           </AgentPanelBody>
         ) : (
           // An empty-state notice is neither a form nor a control stack, so it
@@ -4289,13 +4297,16 @@ export async function TriggerScreen({
              The surface takes the FRAME width because it is a two-column frame,
              not a form; the schedule step inside it declares Narrow for itself. */
           <AgentPanelBody role="frame">
-            <div
-              className="flex items-start gap-6"
-              data-run-detail-contract=""
-              data-conformance-id="run-surface"
-            >
-              <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
-            </div>
+            {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487). */}
+            <RunPageChrome>
+              <div
+                className="flex items-start gap-6"
+                data-run-detail-contract=""
+                data-conformance-id="run-surface"
+              >
+                <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
+              </div>
+            </RunPageChrome>
           </AgentPanelBody>
         ) : (
           /* No run to name steps for (`/trigger` reached with `new`): the form

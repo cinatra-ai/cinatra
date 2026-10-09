@@ -1,5 +1,7 @@
 import { AgentRunEligibilityFixtures } from "./agent-run-eligibility-fixtures";
 import type { Metadata } from "next";
+import { RunWindowOwnershipFixture } from "./run-window-ownership-fixtures";
+import { runWindowOwnershipHost } from "./run-window-ownership-fixture-data";
 
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -106,7 +108,14 @@ export const metadata: Metadata = {
  * tests/e2e/design/conformance-pins.json) generated from the annotated
  * design specs at https://docs.cinatra.ai/references/design/.
  */
-export default function ConformanceHarnessPage() {
+export default async function ConformanceHarnessPage({ searchParams }: {
+  searchParams?: Promise<{ runWindowHost?: string | string[] }>;
+} = {}) {
+  const host = runWindowOwnershipHost((await searchParams)?.runWindowHost);
+  if (host !== null) return <Main className="min-h-screen">
+    <PageHeader label="Design system" title="Run window ownership" />
+    <PageContent><RunWindowOwnershipFixture host={host} /></PageContent>
+  </Main>;
   return (
     <Main className="min-h-screen">
       <PageHeader

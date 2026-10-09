@@ -52,6 +52,7 @@ vi.mock("../run-window-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import { RunPageChrome } from "../run-page-chrome";
 import { ReviewGateCard } from "../review-gate-card";
 
 const VIEW = {
@@ -172,15 +173,35 @@ describe("#3481 — no prompt window is drawn inside a conversation", () => {
     // THE RULING IS SCOPED TO THE CONVERSATION. The run detail, the review page's
     // gate region and the widget carry the window the drawing gives them, so the
     // gate above is a host division and never a retirement of the window.
+    //
+    // WHERE THE BOX IS READ, SINCE cinatra#3487. The window is no longer the
+    // card's own markup: the run page's CHROME owns it and the card registers
+    // with it, so the reading outside a conversation is taken with the chrome in
+    // place — one window on the page, and none inside the card. The sentence
+    // this case exists for is unchanged; only the node that draws the box moved,
+    // which is why the count below is still one and never zero.
     for (const host of ["run_card", "page_gate_region", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
-      const { container } = renderOn(host);
+      const { container } = render(
+        <RunPageChrome>
+          <LifecycleCardSurfaceProvider
+            host={host}
+            auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+          >
+            <ReviewGateCard view={VIEW} runId="run-3481" />
+          </LifecycleCardSurfaceProvider>
+        </RunPageChrome>,
+      );
       await waitFor(() =>
         expect(
           container.querySelectorAll('[data-conformance-id="review-prompt-window"]'),
         ).toHaveLength(1),
       );
       expect(container.textContent).toContain(OFFER);
+      // And it is the PAGE's box, never the card's (cinatra#3487).
+      expect(
+        cardRoot(container)!.querySelectorAll('[data-conformance-id="review-prompt-window"]'),
+      ).toHaveLength(0);
       cleanup();
     }
   });
