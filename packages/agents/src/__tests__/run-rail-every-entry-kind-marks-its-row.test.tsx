@@ -835,7 +835,7 @@ describe("the run page rail's own vertical nav spans the rail column (cinatra#34
     expect(
       tokens(column.className),
       "the rail column states its own width, which the nav is asked to span",
-    ).toContain("w-52");
+    ).toContain("w-[196px]");
 
     const nav = only(column, '[data-slot="stepper-nav"][data-orientation="vertical"]');
     expect(
