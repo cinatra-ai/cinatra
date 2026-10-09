@@ -1348,13 +1348,69 @@ function OrderedPartsSection({
   const firstStandingLineSlot = standingLineSlots.length === 0 ? null : standingLineSlots[0]!;
   const scheduleSentences = useContext(ScheduleWaitContext);
   const reportSlottedStandingLine = scheduleSentences?.reportSlottedStandingLine;
-  const slottedStandingLine = firstStandingLineSlot !== null || scheduleStandingReadings.length > 0;
+  const slottedStandingLine = firstStandingLineSlot !== null;
   useEffect(() => {
     reportSlottedStandingLine?.(slottedStandingLine);
     return () => reportSlottedStandingLine?.(false);
   }, [reportSlottedStandingLine, slottedStandingLine]);
   const carriedStandingLine = (scheduleSentences?.carriedStandingReadings ?? []).some(
     (reading) => standingScheduleLineFor(reading) !== null,
+  );
+  // A run slot paints the card without a StandingScheduleLine. Its reported
+  // reading still owns one platform-corrected sentence in the text slots.
+  const runStandingLine = scheduleStandingReadings
+    .map(({ reading }) => standingScheduleLineFor(reading))
+    .find((line) => line !== null) ?? null;
+  const correctPlatformScheduleText = (text: string): string => {
+    let raw = trimContent ? trimContent(text) : text;
+    // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
+    // construction: only the sentence this platform minted, only for a
+    // run this turn is drawing a schedule card for, and only while that
+    // run is waiting. Prose the model wrote is not touched.
+    // THE SPENT ONE-OFF'S LINE FIRST. Its correction replaces the whole
+    // platform sentence rather than its clause, so a run corrected here
+    // leaves nothing for the wait correction below to match — which is
+    // what keeps the two from ever composing into one line.
+    for (const firedRunId of scheduleFiredRunIds) {
+      raw = correctRunStartSentenceForFiredSchedule({
+        text: raw,
+        runId: firedRunId,
+        // THE TURN'S OWN SCHEDULE RUNS, so the headless fallback can tell
+        // whether a standing clause is provably this run's line.
+        scheduleRunIds: [
+          ...scheduleFiredRunIds,
+          ...scheduleFiredRecurringRunIds,
+          ...scheduleWaitRunIds,
+        ],
+        // AND WHICH OF THEM HAVE FIRED (converge round), so a turn whose
+        // schedule runs have ALL fired is corrected rather than left
+        // permanently saying that runs which have all started have not.
+        // THE READING'S OWN LIST (fix leg 3): the lift is taken only where
+        // every schedule run in the turn is in THIS reading, so the two
+        // fired sentences can never both claim one standing clause.
+        firedScheduleRunIds: scheduleFiredRunIds,
+      });
+    }
+    // THE FIRED RECURRING LINE, ON THE SAME TERMS (cinatra#3174 fix leg 3).
+    for (const firedRunId of scheduleFiredRecurringRunIds) {
+      raw = correctRunStartSentenceForFiredRecurringSchedule({
+        text: raw,
+        runId: firedRunId,
+        scheduleRunIds: [
+          ...scheduleFiredRunIds,
+          ...scheduleFiredRecurringRunIds,
+          ...scheduleWaitRunIds,
+        ],
+        firedScheduleRunIds: scheduleFiredRecurringRunIds,
+      });
+    }
+    for (const waitingRunId of scheduleWaitRunIds) {
+      raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
+    }
+    return raw;
+  };
+  const firstRunStandingTextSlot = runStandingLine === null ? -1 : parts.findIndex(
+    (part) => part.kind === "text" && correctPlatformScheduleText(part.content).includes(runStandingLine),
   );
   if (parts.length === 0) return null;
   return (
@@ -1365,50 +1421,12 @@ function OrderedPartsSection({
           // sentence. Neither a lead-in nor a follow-up accompanies it; the
           // stored transcript and every other turn remain unchanged.
           if (slottedStandingLine || carriedStandingLine) return null;
-          let raw = trimContent ? trimContent(part.content) : part.content;
-          // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
-          // construction: only the sentence this platform minted, only for a
-          // run this turn is drawing a schedule card for, and only while that
-          // run is waiting. Prose the model wrote is not touched.
-          // THE SPENT ONE-OFF'S LINE FIRST. Its correction replaces the whole
-          // platform sentence rather than its clause, so a run corrected here
-          // leaves nothing for the wait correction below to match — which is
-          // what keeps the two from ever composing into one line.
-          for (const firedRunId of scheduleFiredRunIds) {
-            raw = correctRunStartSentenceForFiredSchedule({
-              text: raw,
-              runId: firedRunId,
-              // THE TURN'S OWN SCHEDULE RUNS, so the headless fallback can tell
-              // whether a standing clause is provably this run's line.
-              scheduleRunIds: [
-                ...scheduleFiredRunIds,
-                ...scheduleFiredRecurringRunIds,
-                ...scheduleWaitRunIds,
-              ],
-              // AND WHICH OF THEM HAVE FIRED (converge round), so a turn whose
-              // schedule runs have ALL fired is corrected rather than left
-              // permanently saying that runs which have all started have not.
-              // THE READING'S OWN LIST (fix leg 3): the lift is taken only where
-              // every schedule run in the turn is in THIS reading, so the two
-              // fired sentences can never both claim one standing clause.
-              firedScheduleRunIds: scheduleFiredRunIds,
-            });
-          }
-          // THE FIRED RECURRING LINE, ON THE SAME TERMS (cinatra#3174 fix leg 3).
-          for (const firedRunId of scheduleFiredRecurringRunIds) {
-            raw = correctRunStartSentenceForFiredRecurringSchedule({
-              text: raw,
-              runId: firedRunId,
-              scheduleRunIds: [
-                ...scheduleFiredRunIds,
-                ...scheduleFiredRecurringRunIds,
-                ...scheduleWaitRunIds,
-              ],
-              firedScheduleRunIds: scheduleFiredRecurringRunIds,
-            });
-          }
-          for (const waitingRunId of scheduleWaitRunIds) {
-            raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
+          let raw = correctPlatformScheduleText(part.content);
+          if (runStandingLine !== null) {
+            // Keep the existing platform correction, once, rather than model
+            // lead-in or follow-up beside the resolved schedule card.
+            if (idx !== firstRunStandingTextSlot) return null;
+            raw = runStandingLine;
           }
           // Skip pure-whitespace text parts (they're separator artifacts).
           if (!raw.replace(/\s+/g, "").length) return null;
