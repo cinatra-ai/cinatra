@@ -42,7 +42,13 @@ function parseRenderInputs(value: unknown, bindingId: string, reviewTaskId: stri
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const v = value as Record<string, unknown>;
   if (v.bindingId !== bindingId || v.reviewTaskId !== reviewTaskId || typeof v.instanceField !== "string" || !/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(v.instanceField) || typeof v.instanceId !== "string" || !v.instanceId || v.instanceId.length > 256 || typeof v.siteHost !== "string" || !v.siteHost || v.siteHost.length > 512) return;
-  try { if (new URL(`https://${v.siteHost}`).host !== v.siteHost) return; } catch { return; }
+  const canonicalHost = ["http:", "https:"].some(protocol => {
+    try {
+      const parsed = new URL(`${protocol}//${v.siteHost}`);
+      return parsed.host === v.siteHost && !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+    } catch { return false; }
+  });
+  if (!canonicalHost) return;
   if (!v.identityValues || typeof v.identityValues !== "object" || Array.isArray(v.identityValues)) return;
   const entries = Object.entries(v.identityValues);
   if (entries.length === 0 || entries.length > 8 || entries.some(([k, v]) => !/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(k) || typeof v !== "string" || !v || v.length > 512)) return;

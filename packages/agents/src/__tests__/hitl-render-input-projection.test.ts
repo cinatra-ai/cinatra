@@ -26,6 +26,24 @@ describe("authorized destination display only", () => {
   it("returns only the exact sanitized host after live USE for the SAME viewing actor", async () => { const before = JSON.stringify(gate); const result = await projectHitlRenderInputs(run, gate, who); expect(result).toEqual({ bindingId: id, reviewTaskId: "task-1", instanceField: "wordpressInstanceId", instanceId: "instance-1", identityValues: { postArtifactId: "artifact-1", postRepresentationRevisionId: "revision-1" }, siteHost: "blog.acme.example" }); expect(JSON.stringify(result)).not.toMatch(/secret|username|applicationPassword|some\/path/); expect(ports.use).toHaveBeenCalledWith(expect.objectContaining({ userId: "viewer-1", orgId: "org-1", actor: expect.objectContaining({ principalId: "viewer-1", organizationId: "org-1" }) }), { instanceId: "instance-1", primitiveName: "hitl_destination_host" }); expect(ports.use.mock.invocationCallOrder[0]).toBeLessThan(ports.row.mock.invocationCallOrder[0]); expect(JSON.stringify(gate)).toBe(before); });
   const fixtureHost = [127, 0, 0, 1].join(".");
   it.each([`http://${fixtureHost}:3188/path`, "https://[::1]:8443/path"])("preserves the stored host/port %s", async siteUrl => { ports.row.mockReturnValue({ id: "instance-1", orgId: "org-1", siteUrl }); expect((await projectHitlRenderInputs(run, gate, who))?.siteHost).toBe(new URL(siteUrl).host); });
+  it.each(["http://blog.acme.example:443/path", "http://[::1]:443/path", "http://blog.acme.example:80/path", "https://[::1]:443/path"])("roundtrips the canonical stored host through optional transport for %s", async siteUrl => {
+    ports.row.mockReturnValue({ id: "instance-1", orgId: "org-1", siteUrl });
+    const renderInputs = await projectHitlRenderInputs(run, gate, who);
+    expect(renderInputs?.siteHost).toBe(new URL(siteUrl).host);
+    const parsed = parseAgentHitlScreenState({ state: "asking", runId: "run-1", gate: { ...gate, renderInputs } });
+    expect(parsed?.state).toBe("asking");
+    expect(parsed?.state === "asking" && parsed.gate.renderInputs).toEqual(renderInputs);
+    expect(parsed?.state === "asking" && parsed.gate.currentValues).toEqual(gate.currentValues);
+    expect(ports.use).toHaveBeenCalledTimes(1);
+  });
+  it.each(["user:secret@blog.acme.example", "blog.acme.example/path", "blog.acme.example?token=secret", "blog.acme.example#fragment", "blog.acme.example\\path", " blog.acme.example", "blog.acme.example ", "BLOG.acme.example", "blog.acme.example:0443", "[::1", "blog.acme.example:65536", "https://blog.acme.example"])("discards a noncanonical or non-host transport value %s without changing the gate", async siteHost => {
+    const trusted = await projectHitlRenderInputs(run, gate, who);
+    expect(trusted).toBeDefined();
+    const parsed = parseAgentHitlScreenState({ state: "asking", runId: "run-1", gate: { ...gate, renderInputs: { ...trusted, siteHost } } });
+    expect(parsed?.state).toBe("asking");
+    expect(parsed?.state === "asking" && parsed.gate.renderInputs).toBeUndefined();
+    expect(parsed?.state === "asking" && parsed.gate.currentValues).toEqual(gate.currentValues);
+  });
   it("rechecks USE for a changed viewing actor rather than borrowing the prior viewer's permission", async () => {
     expect((await projectHitlRenderInputs(run, gate, who))?.siteHost).toBe("blog.acme.example");
     ports.use.mockRejectedValue(new Error("second viewer denied")); ports.row.mockClear();
