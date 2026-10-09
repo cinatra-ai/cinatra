@@ -2661,6 +2661,7 @@ jobs:
       # again. Whole-dir means the battery becomes enforced the moment the lock
       # pin moves to the commit that carries it — no further change here.
       - name: Anthropic connector tests
+        id: connector-request-translation-tests
         run: cd extensions/cinatra-ai/anthropic-connector && pnpm exec vitest run --no-coverage
 
       - name: Gemini connector tests
