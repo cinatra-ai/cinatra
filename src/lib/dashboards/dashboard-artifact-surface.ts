@@ -25,6 +25,7 @@ import {
   type ExtensionLivenessOracle,
 } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import type { ScopeLevel } from "@/components/scope-badge";
+import { ARTIFACT_SCOPE_LEVEL_WORD } from "@/lib/artifacts/artifact-owner-label";
 
 /**
  * The `objects.type` a dashboard artifact carries — the self-registered,
@@ -90,13 +91,11 @@ export type DashboardArtifactPointer = {
   readonly scopeChips: readonly DashboardScopeChip[];
 };
 
-const SCOPE_LABEL: Readonly<Record<ScopeLevel, string>> = {
-  user: "Personal",
-  team: "Team",
-  organization: "Organization",
-  workspace: "Workspace",
-  project: "Project",
-};
+// ONE scope vocabulary (cinatra#3475). The drawn level words live with the
+// owner-label composer the library row and the dashboard row both read, so a
+// scope chip and a meta line can never word the same locus two ways — and a
+// stored enum value can never reach either.
+const SCOPE_LABEL: Readonly<Record<ScopeLevel, string>> = ARTIFACT_SCOPE_LEVEL_WORD;
 
 const SCOPE_LEVELS: readonly ScopeLevel[] = [
   "user",

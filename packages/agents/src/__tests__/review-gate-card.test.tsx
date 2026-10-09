@@ -777,11 +777,16 @@ function decideBodies(fetchMock: ReturnType<typeof vi.fn>): Record<string, unkno
 }
 
 function mockResolveAndDecide(state: LifecycleCardState) {
-  const fetchMock = vi.fn(async (input: unknown) => {
+  const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+      // Match the production mapper: Comment annotates, never resolves.
+      const { disposition } = JSON.parse(String(init?.body));
+      const outcome = disposition === "comment"
+        ? { kind: "annotated" }
+        : { kind: "decided", disposition, idempotent: false };
       return new Response(
-        JSON.stringify({ outcome: { kind: "decided", disposition: "approve", idempotent: false } }),
+        JSON.stringify({ outcome }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
