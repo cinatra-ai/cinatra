@@ -172,6 +172,8 @@ import {
   useInsideConversation,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  useLifecycleCardSettleBus,
+  useLifecycleCardSettleSignal,
   type ComposerCommentAction,
   type ComposerCommentResult,
   type ComposerFocusBinding,
@@ -640,11 +642,19 @@ export function ReviewGateCard({
   // The review kind's envelope carries STATE and no body: §III's target arrives
   // through the island, server-rendered against the reader, so there is nothing
   // for a body to add and a body beside this kind is refused at the parse.
+  // THE SAME-SESSION SETTLE (cinatra#2853, the picture leg). A decision taken
+  // anywhere but this card's own button used to reach it only on a re-open: the
+  // resolve ran on mount and on window focus and on nothing else. The bus adds
+  // the third occasion — "this ref was decided" — and it is folded into the
+  // reload token rather than into the identity, so the settled answer replaces
+  // the pending one with no frame of blankness in between.
+  const settleSignal = useLifecycleCardSettleSignal(view.ref);
+  const settleBus = useLifecycleCardSettleBus();
   const resolved = useLifecycleCardResolve({
     viewType: "artifact_review_gate",
     ref: view.ref,
     enabled: present,
-    reloadToken,
+    reloadToken: reloadToken + settleSignal,
   });
   // #4024: the canonical submit result is already a committed decision. A
   // delayed/failed re-resolve must not leave its old pending header beside a
@@ -801,6 +811,11 @@ export function ReviewGateCard({
         ? { ...current, outcome: settledOutcome }
         : current);
       refresh();
+      // AND EVERY OTHER COPY OF THIS CARD (cinatra#2853, the picture leg). One
+      // gate can be drawn twice in one page — the run card and the thread card
+      // for the same run — and refreshing only the copy that was pressed left
+      // the other one offering a decision over a gate that is already resolved.
+      settleBus?.announceSettled(view.ref);
     }
     return outcome;
   };
@@ -1325,14 +1340,25 @@ export function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding })
           data-conformance-id="review-composer-bound"
           className="text-xs leading-relaxed text-muted-foreground"
         >
-          Your next chat message becomes a comment on this review. Press again to chat normally.
+          {
+            "Your next chat message goes to Cinatra, which can use this review's own controls for you. Press again to chat normally."
+          }
         </span>
       ) : binding.ambiguous ? (
         // The refusal the composer will give, said BEFORE the reader types it.
         <span
           role="status"
           data-conformance-id="review-composer-ambiguous"
-          className="text-xs leading-relaxed text-mustard-ink"
+          // THE STATE COLOUR, and a real token (cinatra#2853, the picture leg).
+          // The drawing turns this line mustard while — and only while — more
+          // than one review is waiting to be chosen. It was written
+          // `text-mustard-ink`, which names nothing the theme declares, so the
+          // utility was never emitted and the line inherited the body ink: the
+          // one state that is supposed to look different looked identical.
+          // `warning` is the status palette's own mustard (`--warning`, the same
+          // hex the brand mustard carries and the one status semantics own), so
+          // the state reads as a state on both palettes.
+          className="text-xs leading-relaxed text-warning"
         >
           More than one review is waiting. Choose the one you want to reply to — chat messages
           are not routed until you do.
@@ -1963,10 +1989,29 @@ function ReviewTargetIsland({
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         style={{ height }}
-        onLoad={() => {
+        onLoad={(event) => {
           announcePalette();
           setLoad((current) =>
-            current.identity === identity ? { ...current, loaded: true } : current,
+            current.identity === identity
+              ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
+                // leg). Every denial this island serves is an EMPTY painted
+                // rectangle — that is the shape §IV requires, so that a reader
+                // who may not see the item is indistinguishable from one looking
+                // at an item that is not there. But `onLoad` fires for that
+                // document exactly as it does for a drawn target, so the
+                // skeleton came down and the reader was left looking at a flat
+                // panel: no content, no skeleton and no reason. Plan (A) §4.1:
+                // the card "always shows you something; it is never blank".
+                //
+                // ONLY THE DENIAL TURNS IT, and nothing else: a document this
+                // card cannot read is left exactly where it always was, so the
+                // one thing that changes is the one case that produced a blank
+                // panel. A preview that is not there is drawn as a preview that
+                // is not there, which is a state that HAS a drawing.
+                islandFrameServedTheDenial(event.currentTarget)
+                ? { ...current, loaded: false, timedOut: true }
+                : { ...current, loaded: true }
+              : current,
           );
         }}
       />
@@ -2018,6 +2063,39 @@ function ReviewTargetIsland({
  * one bar-skeleton language the card family already ships rather than
  * inventing a second one.
  */
+/**
+ * Did the frame's own document serve the island's DENIAL — the empty painted
+ * rectangle every refusal draws?
+ *
+ * The frame is same-origin by construction (the island is this app's own route,
+ * and the sandbox carries `allow-same-origin`), so the card can ask. It asks one
+ * question, about one marker: no reading of content, no traversal, no message
+ * channel, and nothing that could tell one refusal from another — the denial is
+ * ONE element for every reason there could be, and this reads only that it is
+ * the denial.
+ *
+ * FAILS TOWARDS THE SHIPPED BEHAVIOUR. Anything this cannot read — a
+ * cross-origin document, a document that has not parsed yet, an accessor that
+ * throws — answers `false` and leaves the card exactly where it has always
+ * been. Only a document that positively SAYS it is the denial changes anything,
+ * so the one case that changes is the one that drew a flat empty panel.
+ */
+export function islandFrameServedTheDenial(frame: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = frame?.contentDocument;
+    if (!doc) return false;
+    // Single-quoted: this READS the island's marker; it renders no anchor of this card.
+    return doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_EMPTY_MARKER}']`) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The marker the island's DENIAL carries. The server half of this literal lives
+ *  on the island route, and the two are pinned to each other by this card's own
+ *  suite. */
+export const REVIEW_ISLAND_EMPTY_MARKER = "review-target-island-empty";
+
 function IslandLoadingSkeleton(): ReactElement {
   return (
     <div
