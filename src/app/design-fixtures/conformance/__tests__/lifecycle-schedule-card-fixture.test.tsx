@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { LifecycleScheduleCardFixtures } from "../lifecycle-schedule-card-fixtures";
 import {
@@ -160,6 +160,31 @@ describe("the conformance harness mounts for the schedule card", () => {
     );
     // What was saved is what is armed, so the control goes quiet again.
     await waitFor(() => expect(save.disabled).toBe(true));
+  });
+
+  it("drives the native modal and the declared cancelled/stopped transport reading", async () => {
+    const root = mount("schedule-card-fired-recurring-floor");
+    const drawn = card(root);
+    const cancel = drawn.querySelector('[data-action="cancel-trigger-schedule"]') as HTMLElement;
+    fireEvent.click(cancel);
+    let dialog = screen.getByRole("alertdialog", { name: "Stop this recurring schedule?" });
+    expect(root.contains(dialog)).toBe(false);
+    expect(dialog.getAttribute("data-slot")).toBe("alert-dialog-content");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep schedule" }));
+    expect(roads(root)).toEqual([]);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    fireEvent.click(cancel);
+    dialog = screen.getByRole("alertdialog", { name: "Stop this recurring schedule?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel schedule" }));
+    await waitFor(() => expect(roads(root)).toEqual(["cancel"]));
+    await waitFor(() => expect(drawn.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull());
+    expect(drawn.textContent).toContain("Hour: 09:00");
+    expect(drawn.textContent).toContain("Europe/Berlin");
+    expect(drawn.querySelectorAll("button, input, [role=combobox]")).toHaveLength(0);
+    expect(drawn.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull();
+    for (const field of drawn.querySelectorAll("button, input, [role=combobox]")) {
+      expect(field.hasAttribute("disabled") || field.getAttribute("aria-disabled") === "true").toBe(true);
+    }
   });
 
   it("says the FIRING on the row, and only on the two fired readings", () => {

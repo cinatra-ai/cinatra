@@ -97,6 +97,12 @@ export type LifecycleScheduleCardFixture = {
    * card then draws is the card's.
    */
   answer: ScheduleDecisionOutcome;
+  /** The cancel endpoint's answer and the subsequent resolver readback. These
+   *  are declared wire values, not UI derived from a successful decision. */
+  cancel?: {
+    answer: ScheduleDecisionOutcome;
+    readback: { state: LifecycleCardState; body: TriggerScheduleProposalViewBody };
+  };
   /**
    * How long the answer is outstanding, in milliseconds. It is what makes the
    * card's own in-flight presentation observable — the state the drawing's
@@ -228,6 +234,13 @@ const FIRED_RECURRING_BODY: TriggerScheduleProposalViewBody = {
 
 const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComment: true };
 const SETTLED: LifecycleCardState = { state: "settled" };
+const CANCELLED_RECURRING = {
+  answer: { kind: "cancelled" } as const,
+  readback: {
+    state: SETTLED,
+    body: { ...FIRED_RECURRING_BODY, canSave: false, canCancel: false, stopped: true },
+  },
+};
 
 /** The generic refusal the endpoint answers with, verbatim from the shipped
  *  transport's own constant — a non-2xx is deliberately uninformative. */
@@ -330,6 +343,7 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     firedOnce: true,
     durationCopy: DURATION_COPY,
     answer: { kind: "saved", runId: RUN_ID },
+    cancel: CANCELLED_RECURRING,
     answerDelayMs: 1_200,
   },
   {
@@ -341,6 +355,7 @@ export const LIFECYCLE_SCHEDULE_CARD_FIXTURES: readonly LifecycleScheduleCardFix
     firedOnce: true,
     durationCopy: DURATION_COPY,
     answer: { kind: "saved", runId: RUN_ID },
+    cancel: CANCELLED_RECURRING,
     answerDelayMs: 0,
   },
 ];

@@ -180,6 +180,17 @@ import type {
 // 1). Tier-neutral: pure functions, no React, no server-only import, no DB.
 
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -1169,6 +1180,10 @@ function SettledPhase({
 
   return (
     <div className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
+      <AlertDialog
+        open={!frozen && confirming === "cancel"}
+        onOpenChange={(open) => setConfirming(open ? "cancel" : null)}
+      >
       {/* NOTHING IS DRAWN ABOVE THE ROWS for an ordinary settled card, and an
           ADJUSTED-THEN-CONFIRMED one is an ordinary settled card. Plan (A)
           §7.2: "the same card, with the same option rows, shows the schedule as
@@ -1298,83 +1313,43 @@ function SettledPhase({
               fired yet, and one already stopped. There is no Run now beside it
               (cinatra#2972). */}
           {body.canCancel ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              data-action="cancel-trigger-schedule"
-              disabled={pending !== null}
-              onClick={() => setConfirming("cancel")}
-            >
-              {pending === "cancel" ? "Stopping…" : "Cancel schedule"}
-            </Button>
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                data-action="cancel-trigger-schedule"
+                disabled={pending !== null}
+              >
+                {pending === "cancel" ? "Stopping…" : "Cancel schedule"}
+              </Button>
+            </AlertDialogTrigger>
           ) : null}
         </div>
       )}
 
-      {/* THE WORDS SAY WHAT THE ACT NOW IS (cinatra#2972). The old copy — "The
+      {/* Section VI.1 uses the shared destructive modal (cinatra#3280).
+          THE WORDS SAY WHAT THE ACT NOW IS (cinatra#2972). The old copy — "The
           run will stay paused" — described the DELETE this control used to
           perform, and the plan withdrew both halves of it: Cancel schedule
           "never deletes the schedule or pauses the run". */}
-      {!frozen && confirming === "cancel" ? (
-        <ConfirmStrip
-          conformanceId="schedule-cancel-confirm"
-          title="Stop this recurring schedule?"
-          description="No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards."
-          dismissLabel="Keep schedule"
-          confirmLabel="Cancel schedule"
-          onDismiss={() => setConfirming(null)}
-          onConfirm={() => void act("cancel")}
-        />
+      {!frozen ? (
+          <AlertDialogContent data-conformance-id="schedule-cancel-confirm" aria-modal="true">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Stop this recurring schedule?</AlertDialogTitle>
+              <AlertDialogDescription>
+                No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-action="keep-schedule">Keep schedule</AlertDialogCancel>
+              <AlertDialogAction data-action="cancel-schedule" onClick={() => void act("cancel")}>
+                Cancel schedule
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * The ask-first strip.
- *
- * IN THE CARD, NOT IN A MODAL. The Trigger tab asks through an AlertDialog,
- * which portals to the document body — correct on a page it owns, wrong inside a
- * chat transcript and inside the widget's frame, where a portalled overlay
- * escapes the card's own box and the embed's scroll. The WORDS are the Trigger
- * tab's, verbatim; only the container differs, which is the "host supplies a
- * frame, never a second drawing" rule applied to a confirmation.
- */
-function ConfirmStrip({
-  conformanceId,
-  title,
-  description,
-  dismissLabel,
-  confirmLabel,
-  onDismiss,
-  onConfirm,
-}: {
-  conformanceId: string;
-  title: string;
-  description: string;
-  dismissLabel: string;
-  confirmLabel: string;
-  onDismiss: () => void;
-  onConfirm: () => void;
-}): ReactElement {
-  return (
-    <div
-      role="alertdialog"
-      aria-label={title}
-      data-conformance-id={conformanceId}
-      className="flex flex-col gap-2 rounded-control border border-line-strong bg-surface-muted p-3"
-    >
-      <p className="text-sm font-medium text-foreground">{title}</p>
-      <p className="text-sm text-muted-foreground">{description}</p>
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
-          {dismissLabel}
-        </Button>
-        <Button type="button" size="sm" data-action="confirm-destructive" onClick={onConfirm}>
-          {confirmLabel}
-        </Button>
-      </div>
+      </AlertDialog>
     </div>
   );
 }
@@ -1416,8 +1391,8 @@ function browserTimezone(): string {
  * portals its listbox to the document body. Inside a chat transcript and inside
  * the widget's iframe that overlay escapes the card, so the rows here use the
  * platform's own select and input with the step's classes. The STRUCTURE, the
- * copy and the selection vocabulary are the step's; only the widget primitive
- * differs, for the same reason the confirmation strip is not a modal.
+ * copy and the selection vocabulary are the step's; only the row's picker
+ * primitive differs. The destructive confirmation uses the shared modal.
  */
 function ScheduleOptionRows({
   schedule,

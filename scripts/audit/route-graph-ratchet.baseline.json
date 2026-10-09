@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1308,
-    "/chat": 1407,
+    "/chat": 1408,
     "/api/a2a": 1316,
     "/api/llm-bridge": 1326
   },
@@ -27,10 +27,10 @@
       "pr": 3046
     },
     "/chat": {
-      "from": 1405,
-      "to": 1407,
-      "reason": "This pull request's two new core modules, packages/agents/src/run-produced-review-hold.ts (reached through packages/agents/src/execution.ts) and packages/agents/src/use-run-row-watch.ts (reached through packages/agents/src/orchestrator-stepper-panel.tsx), both changed by this pull request.",
-      "pr": 3046
+      "from": 1407,
+      "to": 1408,
+      "reason": "the Cancel schedule dialog uses the shared AlertDialog that the approved lifecycle-cards drawing names (§VI.1); one existing shared primitive module, no duplicate modal",
+      "pr": 0
     },
     "/sign-in": {
       "from": 164,
