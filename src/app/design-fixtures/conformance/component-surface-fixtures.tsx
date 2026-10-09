@@ -353,8 +353,11 @@ export function ComponentSurfaceConformanceFixtures() {
         </Accordion>
       </div>
 
+      {/* The components drawing's Separator section draws the row divider as a one-pixel hairline; the primitive states
+          that height with a variant Radix's orientation attribute never matches (src/components/ui/separator.tsx:25), so
+          the mount states it itself until the primitive does, and the pixel suite and the driver read a real box. */}
       <div data-surface-id="separator">
-        <Separator />
+        <Separator className="h-px" />
       </div>
 
       <div data-surface-id="toggle">

@@ -94,4 +94,12 @@ describe("component surfaces of the components drawing on the conformance harnes
       expect(mounts[0].querySelectorAll(`[data-slot="${marker}"]`).length, `${id} holds ${marker}`).toBeGreaterThan(0);
     }
   });
+
+  // jsdom computes no style, so the case pins the height utility the mount states and the pixel suite measures the box.
+  it("draws the separator mount as a one-pixel hairline, so the surface has a box to be read", () => {
+    const { container } = render(<ComponentSurfaceConformanceFixtures />);
+    const separator = container.querySelector('[data-surface-id="separator"] [data-slot="separator"]');
+    expect(separator).not.toBeNull();
+    expect(separator?.classList.contains("h-px")).toBe(true);
+  });
 });
