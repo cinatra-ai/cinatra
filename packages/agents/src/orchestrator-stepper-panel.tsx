@@ -1701,7 +1701,7 @@ function StepperColumn({
         data-conformance-id="run-step-rail"
         data-action="open-run-step -> step-detail"
         aria-label="Agent run steps"
-        className="flex shrink-0 flex-col pt-1"
+        className="flex w-[196px] shrink-0 flex-col pt-1"
       >
         <Stepper
           value={activeStep}
