@@ -142,8 +142,11 @@ describe("generic producing-run input inheritance", () => {
     arrangeProducer({ instanceId: "site-42", contentId: "content-42", instructions: "Original input", task: "Stale task", lifecycleRepairRequest: { repairId: "old" } });
     ports.target = cmsTarget();
     await dispatchPendingProducerRepairs();
-    expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42", instructions: "Original input",
+    expect(inputParams()).toMatchObject({ instanceId: "site-42", contentId: "content-42",
       lifecycleRepairRequest: { repairId: "repair-current", findings: [currentFinding] } });
+    expect(inputParams().instructions).toContain(currentFinding.message);
+    expect(inputParams().instructions).not.toContain("Original input");
+    expect(inputParams().task).toBe(inputParams().instructions);
     expect(inputParams().task).toContain(currentFinding.message);
     expect(inputParams().task).not.toContain("Stale task");
   });
