@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { compileOasAgentJson } from "./oas-compiler";
+import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
 import {
   readManifestLifecycle,
   serializeLifecycleConfig,
@@ -215,12 +216,16 @@ export async function buildAgentTemplateInstallSeed(input: {
   // already validated the doc is well-formed JSON + structurally valid, so this
   // re-read is parse-safe. The OAS name is the human title; the compiler does not
   // surface it on CompiledAgentOas.
-  let oasDoc: OasDoc = {};
+  let oasDoc: OasDoc & Record<string, unknown>;
   try {
-    oasDoc = JSON.parse(await readFile(oasPath, "utf8")) as OasDoc;
-  } catch {
-    // Unreachable in practice — the compiler already read+parsed this file.
-    // Fall through with empty doc; name falls back to packageName below.
+    oasDoc = JSON.parse(await readFile(oasPath, "utf8")) as OasDoc & Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Cannot verify start inputs for ${input.packageName}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Refuse before registry installation or bundled seeding can write a row.
+  const inputFindings = scanOasForVisibleInputContractFindings(oasDoc, input.packageName);
+  if (inputFindings.length > 0) {
+    throw new Error(`Cannot install ${input.packageName}: ${inputFindings.map(finding => finding.message).join("\n")}`);
   }
 
   const oasName = typeof oasDoc.name === "string" ? oasDoc.name.trim() : "";
