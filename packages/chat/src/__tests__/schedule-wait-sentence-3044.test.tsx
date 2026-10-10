@@ -147,6 +147,16 @@ const PENDING_BODY = {
 };
 
 function scheduleEnvelope() {
+  // The genuine run resolver returns absence when an immediate run is already
+  // running, has no schedule moment and has no trigger/intent. Both transport
+  // fixtures must agree with that row instead of returning a pending proposal.
+  if (runReading.current === RUN_PAST_SCHEDULE) {
+    return {
+      kind: "trigger_schedule_proposal",
+      state: { state: "absent" },
+      body: null,
+    };
+  }
   return {
     kind: "trigger_schedule_proposal",
     state: { state: "pending", canDecide: true, canComment: true },

@@ -22,9 +22,9 @@
  * and it carries the drawn sentence.
  *
  * WHAT IT DOES NOT CHANGE: the transcript's own history. The reader's request
- * above the turn is untouched, and a reading with no sentence of its own — a
- * schedule that has never fired — keeps the model's lead-in as its one line,
- * which is what the section's first-shown and configured examples draw.
+ * above the turn is untouched, and the readings that have not fired — first
+ * shown, configured and expired — draw section VI's proposal sentence as their
+ * one line in place of the model's lead-in.
  *
  * AND THE STOPPED READING'S ONE LINE IS ITS OWN PAST-TENSE REPORT
  * (cinatra#3304). Section VI says "Once it is stopped, the turn says so in the
@@ -117,6 +117,8 @@ const SPENT_ONE_OFF_SENTENCE =
   "It ran at the time you set. A one-time schedule is spent once it fires, so the rows below are the record of it and cannot be changed.";
 const STOPPED_RECURRING_SENTENCE =
   "The recurring schedule was stopped; its rows are no longer editable.";
+const PROPOSAL_SENTENCE =
+  "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.";
 
 const RUN_ID = "1d3a7c60-8b21-4f0e-9a55-6c2b4d0f7a13";
 const CARD_REF = "schedule-ref-3193-fix9";
@@ -183,6 +185,24 @@ const STOPPED_RECURRING_BODY = {
   canCancel: false,
 };
 
+const FIRST_SHOWN_BODY = {
+  phase: "proposal",
+  version: 1,
+  agentName: "Q3 cohort sweep",
+  schedule: { kind: "recurring", selection: WEEKDAYS_AT_NINE, timezone: "Europe/Berlin" },
+  durationCopy: null,
+  canConfirm: true,
+  restrictedReason: null,
+};
+
+const EXPIRED_BODY = {
+  phase: "expired",
+  version: 1,
+  agentName: "Q3 cohort sweep",
+  schedule: { kind: "recurring", selection: WEEKDAYS_AT_NINE, timezone: "Europe/Berlin" },
+  scheduleCopy: "Every weekday at 9:00 AM",
+};
+
 let restoreFetch: typeof globalThis.fetch;
 let cancelPresses = 0;
 
@@ -194,13 +214,17 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 /** Stand a server up that answers the card's resolve with ONE reading. */
-function serveReading(body: Record<string, unknown>, firedOnce: boolean): void {
+function serveReading(
+  body: Record<string, unknown>,
+  firedOnce: boolean,
+  state: Record<string, unknown> = { state: "settled" },
+): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === LIFECYCLE_VIEW_RESOLVE_PATH) {
       return jsonResponse({
         kind: "trigger_schedule_proposal",
-        state: { state: "settled" },
+        state,
         body,
         firedOnce,
       });
@@ -385,13 +409,22 @@ describe("section VI — a settled schedule turn draws one prose line", () => {
   }, 60_000);
 });
 
-describe("section VI — a reading with no sentence of its own keeps the model's line", () => {
-  it("leaves the never-fired turn drawing exactly the model's own lead-in", async () => {
+describe("section VI — a schedule that has not fired draws the section's proposal sentence", () => {
+  it("draws only the proposal sentence over a first-shown schedule", async () => {
+    serveReading(FIRST_SHOWN_BODY, false, { state: "pending", canDecide: true, canComment: false });
+    const { container } = await mountProposalTurn("first-shown");
+    await expectOneProseLine(container, PROPOSAL_SENTENCE, "never-fired");
+  }, 60_000);
+
+  it("draws only the proposal sentence over a configured schedule that has never fired", async () => {
     serveReading(RECURRING_BODY, false);
     const { container } = await mountProposalTurn("configured");
-    const blocks = assistantProseBlocks(container);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]!.hasAttribute("data-schedule-standing-line")).toBe(false);
-    expect(visibleText(container)).toContain(MODEL_LEAD_IN);
+    await expectOneProseLine(container, PROPOSAL_SENTENCE, "never-fired");
+  }, 60_000);
+
+  it("draws only the proposal sentence over an expired schedule", async () => {
+    serveReading(EXPIRED_BODY, false, { state: "pending", canDecide: true, canComment: false });
+    const { container } = await mountProposalTurn("expired");
+    await expectOneProseLine(container, PROPOSAL_SENTENCE, "never-fired");
   }, 60_000);
 });
