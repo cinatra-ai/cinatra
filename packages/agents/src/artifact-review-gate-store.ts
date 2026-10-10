@@ -1,4 +1,5 @@
 import "server-only";
+import { electCurrentReviewGate } from "./run-step-rail";
 
 // ---------------------------------------------------------------------------
 // artifact-review-gate-store (cinatra#1796, epic #1620 S13)
@@ -502,21 +503,12 @@ export async function readRunReviewSlot(
   // tie on the rail's behalf. Keep SQL's old DESC order for settled history.
   // This reads each run-scoped gate's small metadata projection instead of one
   // row; the common path still makes three queries, without loading targets.
-  const firstPendingReview = <T extends { status: string; createdAt: Date; reviewTaskId: string }>(rows: readonly T[]): T | undefined => {
-    let first: T | undefined;
-    for (const row of rows) {
-      if (row.status !== "pending") continue;
-      const time = first ? row.createdAt.valueOf() - first.createdAt.valueOf() : 0;
-      if (!first || time < 0 || (time === 0 && row.reviewTaskId.localeCompare(first.reviewTaskId) < 0)) first = row;
-    }
-    return first;
-  };
   const gates = await db
     .select({ reviewTaskId: artifactReviewGates.reviewTaskId, status: artifactReviewGates.status, createdAt: artifactReviewGates.createdAt })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
-  const gate = firstPendingReview(gates) ?? gates[0];
+  const gate = electCurrentReviewGate(gates) ?? gates[0];
   // AND IS THE RUN ITSELF WAITING ON THIS REVIEW? (cinatra#3046.)
   //
   // The two facts above describe the REVIEW. This one describes the RUN, and no
@@ -618,7 +610,7 @@ export async function readRunReviewSlot(
             ),
           )
           .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
-  const undecided = firstPendingReview(linkedGates);
+  const undecided = electCurrentReviewGate(linkedGates);
   const heldGate = undecided ?? (pendingProduced ? undefined : linkedGates[0]);
   return {
     reviewTaskId: heldGate?.reviewTaskId ?? null,

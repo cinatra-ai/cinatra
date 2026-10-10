@@ -1682,6 +1682,8 @@ export type RunReviewSlot = {
   reviewTaskId?: string | null;
   /** SSR-only identities actually composed into the run rail (#3942). */
   railReviewTaskIds?: readonly string[];
+  /** SSR-only current rail marking; separate from the live slot identity. */
+  railCurrentReviewTaskId?: string | null;
 };
 
 /**
@@ -2749,19 +2751,21 @@ export function useRunReviewRailRefresh({
   runId,
   reviewTaskId,
   initialReviewTaskIds,
+  railCurrentReviewTaskId,
   refresh,
 }: {
   runId: string;
   reviewTaskId: string | null | undefined;
   initialReviewTaskIds: readonly string[] | undefined;
+  railCurrentReviewTaskId?: string | null;
   /** Supplied by the actual page owner; this hook needs no router context. */
   refresh: (() => void) | undefined;
 }): void {
-  const observed = useRef({ runId, tasks: new Set<string>() });
+  const observed = useRef({ runId, tasks: new Set<string>(), refreshed: new Set<string>() });
 
   useEffect(() => {
     if (observed.current.runId !== runId) {
-      observed.current = { runId, tasks: new Set<string>() };
+      observed.current = { runId, tasks: new Set<string>(), refreshed: new Set<string>() };
     }
     const tasks = observed.current.tasks;
     // Seed only gates actually included in the server's rail query. The later
@@ -2769,8 +2773,11 @@ export function useRunReviewRailRefresh({
     // that slot's identity as already painted would lose its rail refresh.
     // This also seeds refreshed/remounted trees without a refresh loop.
     for (const taskId of initialReviewTaskIds ?? []) tasks.add(taskId);
-    if (!refresh || !reviewTaskId || tasks.has(reviewTaskId)) return;
+    if (!refresh || !reviewTaskId || observed.current.refreshed.has(reviewTaskId)) return;
+    const markingIsStale = railCurrentReviewTaskId !== undefined && railCurrentReviewTaskId !== reviewTaskId;
+    if (tasks.has(reviewTaskId) && !markingIsStale) return;
     tasks.add(reviewTaskId);
+    observed.current.refreshed.add(reviewTaskId);
     refresh();
-  }, [initialReviewTaskIds, refresh, reviewTaskId, runId]);
+  }, [initialReviewTaskIds, railCurrentReviewTaskId, refresh, reviewTaskId, runId]);
 }
