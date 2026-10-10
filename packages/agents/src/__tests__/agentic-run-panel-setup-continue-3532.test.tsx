@@ -30,7 +30,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { Input } from "@/components/ui/input";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { registerFieldRendererBindings, ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
@@ -382,4 +382,41 @@ describe("AgenticRunPanel — a setup field whose renderer draws no control (cin
     expect(entry).not.toBeNull();
     expect(entry!.drawsOwnSubmit).toBe(true);
   });
+});
+
+
+// The real binding, list renderer, staging and product-owned Continue.
+vi.mock("../list-picker-actions", () => ({ fetchAvailableLists: vi.fn() }));
+const MULTI_PICKER = "@cinatra-test/pack-agent:multiple-picks";
+async function registerMultiplePicker() {
+  const { fetchAvailableLists } = await import("../list-picker-actions");
+  vi.mocked(fetchAvailableLists).mockResolvedValue([
+    { id: "one", name: "First view", memberCount: null, lastUpdated: null, memberType: "contact" },
+    { id: "two", name: "Second list", memberCount: null, lastUpdated: null, memberType: "account" },
+  ]);
+  registerFieldRendererBindings([{
+    id: MULTI_PICKER, kind: "list-picker", priority: 200,
+    params: { selection: "multiple", minSelected: 1, question: "Pick entries", emptyState: "Create an entry first." },
+  }]);
+}
+
+it("keeps its one Continue unavailable with no list ticked and submits every tick under the gate field", async () => {
+  await registerMultiplePicker();
+  await setGate(MULTI_PICKER, "accountScope", { type: "string" });
+  const view = await renderPanel();
+  await view.findByRole("checkbox", { name: "First view" });
+  expect(productContinue()!.disabled).toBe(true);
+  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
+  expect(productContinue()!.disabled).toBe(false);
+  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
+  expect(productContinue()!.disabled).toBe(true);
+  fireEvent.click(productContinue()!);
+  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
+  fireEvent.click(view.getByRole("checkbox", { name: "First view" }));
+  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  fireEvent.click(productContinue()!);
+  await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+    "setup-run-3532", { accountScope: JSON.stringify({ type: "list", listIds: ["two", "one"], listNames: ["Second list", "First view"] }) }, "accountScope",
+  ));
 });

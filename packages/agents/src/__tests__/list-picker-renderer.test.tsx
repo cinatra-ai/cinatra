@@ -3,7 +3,7 @@
  * Unit tests for ListPickerRenderer.
  *
  * Locks the renderer contract:
- *   - Mount renders heading-equivalent label + "Create new list" CTA + search input.
+ *   - Mount renders heading-equivalent label + search input, with no agent road.
  *   - Lists from fetchAvailableLists() render as clickable cards with name +
  *     member count + memberType badge.
  *   - Search input filters by name (case-insensitive substring).
@@ -76,27 +76,19 @@ describe("ListPickerRenderer", () => {
     );
 
     // The "Create new list" affordance was retired with the lists_* MCP
-    // family; list creation flows through the list-curator-agent CTA below.
+    // family; the picker no longer offers a separate agent road either.
     expect(
       screen.queryByRole("link", { name: /create new list/i }),
     ).toBeNull();
     expect(screen.getByPlaceholderText(/search lists/i)).toBeTruthy();
   });
 
-  it("renders 'Build a list with AI' CTA deep-linking to list-curator-agent", async () => {
+  it("offers no road to a list-building agent", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     render(<ListPickerRenderer {...makeProps()} />);
-
-    await waitFor(() =>
-      expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
-    );
-
-    const cta = screen.getByTestId("build-list-with-ai-cta");
-    expect(cta).toBeTruthy();
-    expect(cta.getAttribute("href")).toBe(
-      "/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker",
-    );
-    expect(cta.textContent?.toLowerCase()).toContain("build a list with ai");
+    await waitFor(() => expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByTestId("build-list-with-ai-cta")).toBeNull();
   });
 
   it("renders all returned lists with both contact and mixed member types", async () => {

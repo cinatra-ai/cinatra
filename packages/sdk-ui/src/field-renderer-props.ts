@@ -72,6 +72,8 @@ export type FieldRendererProps = {
    * SetupWorkspace disables "Save & continue" while any field is busy.
    */
   onBusyChange?: (busy: boolean) => void;
+  /** Report whether the current field value can be submitted by its host. */
+  onValidityChange?: (valid: boolean) => void;
   /**
    * Immediately persist the given value to the DB (bypasses the normal
    * "Save & continue" flow). Use for values that must survive a page reload,

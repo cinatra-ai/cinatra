@@ -25,9 +25,8 @@ import { readAgentRunById } from "./store";
 //   lastUpdated : not part of the CrmList shape; surfaces as null.
 //   memberType  : derived from CrmList.objectType ("contact" / "account").
 //                 The legacy "mixed" branch is gone — Twenty Views are
-//                 single-type. Downstream `mixed` consumers fall back to
-//                 the "contact" branch (the picker's only callers today
-//                 work with contact lists).
+//                 single-type. Both account and contact views are returned;
+//                 downstream consumers retain their existing memberType handling.
 
 export type AvailableListSummary = {
   id: string;
@@ -109,18 +108,12 @@ export async function fetchAvailableLists(
 
   let lists;
   try {
-    // Picker shows contact-eligible lists. Twenty's `get_views` is
-    // workspace-scoped; the crm-connector surface post-filters by objectType
-    // when the per-type object-metadata cache has resolved (lazy-loaded by
-    // the connector on first call).
-    //
-    // SCOPE IS UNCHANGED by the run-access gate (cinatra#3050): the call and
-    // its arguments are byte-identical to what the administrator-gated loader
-    // issued, so an admitted caller sees exactly the set an administrator saw
-    // — no widening. The reader contract takes only `query` + `objectType`
-    // (packages/sdk-extensions/src/crm-list-reader-contract.ts), so it carries
-    // no actor; per-actor list scoping is a separate change.
-    lists = await reader.searchLists({ query: "", objectType: "contact" });
+    // Every view in the workspace's connected CRM belongs in this picker
+    // (cinatra#3562), so do not narrow the provider read to contacts. The run's
+    // existing read-access gate above still authorizes the caller first. The
+    // provider remains workspace-scoped; this adds no per-run or per-actor
+    // connector selection.
+    lists = await reader.searchLists({ query: "" });
   } catch {
     // No CRM provider registered, no Twenty row yet, no bearer attached, or
     // upstream unreachable — degrade to "no lists available" rather than

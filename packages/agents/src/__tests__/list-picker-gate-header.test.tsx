@@ -367,7 +367,7 @@ describe("list-picker gate header — the declared question (cinatra#3720)", () 
 });
 
 describe("list-picker gate header — nothing else of the list step changes (cinatra#3720)", () => {
-  it("keeps the helper sentence, the search field and the 'Build a list with AI' link", async () => {
+  it("keeps the helper sentence and search field, with no road to a list-building agent", async () => {
     const { container } = render(
       <ListPickerRenderer {...baseProps({ mode: "edit" })} />,
     );
@@ -377,11 +377,8 @@ describe("list-picker gate header — nothing else of the list step changes (cin
     const search = screen.getByPlaceholderText("Search lists by name");
     expect(search.getAttribute("aria-label")).toBe("Search lists by name");
     expect(search.getAttribute("type")).toBe("search");
-    const cta = screen.getByTestId("build-list-with-ai-cta");
-    expect(cta.getAttribute("href")).toBe(
-      "/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker",
-    );
-    expect(cta.textContent).toBe("Build a list with AI");
+    expect(screen.queryByTestId("build-list-with-ai-cta")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
     expect(container.querySelector("[data-conformance-id]")).toBeNull();
   });
 

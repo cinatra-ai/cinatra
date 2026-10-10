@@ -105,6 +105,8 @@ export type FieldRendererEntry = {
    * component is mounted.
    */
   drawsOwnSubmit?: boolean;
+  /** Keep the host's Continue blocked until this renderer reports a valid value. */
+  requiresValidValue?: boolean;
 };
 
 class FieldRendererRegistryImpl {

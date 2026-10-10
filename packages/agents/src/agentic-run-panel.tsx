@@ -1227,11 +1227,19 @@ export function AgenticRunPanel({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
+  const [setupValidity, setSetupValidity] = useState<{ key: string; valid: boolean } | null>(null);
+  const setupValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  const reportSetupValidity = useCallback((key: string, valid: boolean) => {
+    setupValidityRef.current = { key, valid };
+    setSetupValidity((previous) => previous?.key === key && previous.valid === valid
+      ? previous : { key, valid });
+  }, []);
   const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
     setupFlushRef.current = { key, fn };
   }, []);
   const submitStagedSetupAnswer = useCallback(
-    async (key: string, reviewTaskId: string, xRenderer: string) => {
+    async (key: string, reviewTaskId: string, xRenderer: string, requiresValidValue: boolean) => {
+      if (requiresValidValue && (setupValidityRef.current?.key !== key || !setupValidityRef.current.valid)) return;
       // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
       // the flush is asynchronous and `isApproving` is React state, so two
       // presses in one tick would both reach the submit core.
@@ -3010,6 +3018,8 @@ export function AgenticRunPanel({
                       // its own Continue must skip it), and the card's Continue
                       // asks the field for its value through the same flush the
                       // renderer's own button would have used.
+                      onValidityChange={productOwnsSetupSend
+                        ? (valid) => reportSetupValidity(setupGateKey, valid) : undefined}
                       hideSubmit={productOwnsSetupSend}
                       registerFlush={
                         productOwnsSetupSend
@@ -3027,12 +3037,14 @@ export function AgenticRunPanel({
                     {productOwnsSetupSend ? (
                       <AgentHitlScreenSetupContinue
                         submitting={isApproving}
-                        blocked={false}
+                        blocked={hitlRendererEntry.entry.requiresValidValue === true
+                          && (setupValidity?.key !== setupGateKey || !setupValidity.valid)}
                         onContinue={() =>
                           submitStagedSetupAnswer(
                             setupGateKey,
                             effectiveHitlContext.reviewTaskId,
                             effectiveHitlContext.xRenderer,
+                            hitlRendererEntry.entry?.requiresValidValue === true,
                           )
                         }
                       />

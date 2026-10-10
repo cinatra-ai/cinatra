@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -29,25 +28,15 @@ import type {
 // Value shape
 // ---------------------------------------------------------------------------
 
-type ListPickerValue = {
-  scope: "list";
-  listId: string;
-  listName: string;
-  memberCount: number;
-};
-
-function toListPickerValue(value: unknown): ListPickerValue {
-  // Defensive value normalization for the HITL renderer payload.
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const v = value as Record<string, unknown>;
-    return {
-      scope: "list",
-      listId: typeof v.listId === "string" ? v.listId : "",
-      listName: typeof v.listName === "string" ? v.listName : "",
-      memberCount: typeof v.memberCount === "number" ? v.memberCount : 0,
-    };
+function selectedListIds(value: unknown): string[] {
+  let decoded = value;
+  if (typeof decoded === "string") {
+    try { decoded = JSON.parse(decoded); } catch { return []; }
   }
-  return { scope: "list", listId: "", listName: "", memberCount: 0 };
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return [];
+  const source = decoded as Record<string, unknown>;
+  const ids = Array.isArray(source.listIds) ? source.listIds : [source.listId];
+  return [...new Set(ids.filter((id): id is string => typeof id === "string" && id.length > 0))];
 }
 
 function formatLastUpdated(iso: string | null): string {
@@ -74,16 +63,31 @@ export function ListPickerRenderer({
   label,
   description,
   context,
-  mode,
+  schema,
   bindingParams,
+  mode,
+  onValidityChange,
+  registerFlush,
 }: FieldRendererProps) {
-  const [lists, setLists] = useState<AvailableListSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  const runId = context?.runId;
+  const [loaded, setLoaded] = useState<{ runId: string | undefined; lists: AvailableListSummary[] } | null>(null);
+  const lists = useMemo(() => loaded !== null && loaded.runId === runId ? loaded.lists : [], [loaded, runId]);
+  const loading = loaded?.runId !== runId || loaded === null;
   const [search, setSearch] = useState("");
-  const current = toListPickerValue(value);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    current.listId ? current.listId : null,
-  );
+  const multiple = bindingParams?.selection === "multiple";
+  const declaredMinimum = bindingParams?.minSelected;
+  const minimum = typeof declaredMinimum === "number" && Number.isSafeInteger(declaredMinimum)
+    ? Math.max(1, declaredMinimum) : 1;
+  const idsFromValue = selectedListIds(value);
+  const selectionSource = JSON.stringify([runId, idsFromValue]);
+  const [selection, setSelection] = useState({ source: selectionSource, ids: idsFromValue });
+  const selectedIds = selection.source === selectionSource ? selection.ids : idsFromValue;
+  function setSelectedIds(ids: string[]) { setSelection({ source: selectionSource, ids }); }
+  const checkboxId = useId();
+  const readOnly = disabled || mode === "view";
+  const valid = !loading && selectedIds.length >= (multiple ? minimum : 1)
+    && selectedIds.every((id) => lists.some((list) => list.id === id));
+  useEffect(() => { onValidityChange?.(valid); }, [onValidityChange, valid]);
 
   // Stable ref to onChange so the effect below doesn't re-fire on every
   // parent re-render.
@@ -98,8 +102,6 @@ export function ListPickerRenderer({
   // loader (cinatra#3050): the lists are loaded with the RUN's access, not with
   // a platform-administrator session, so the run's own non-administrator owner
   // is no longer redirected to `/not-authorized` at this step.
-  const runId = context?.runId;
-
   // Mount-once fetch, guarded with a cancellation flag so React Strict Mode's
   // double-mount in dev does not double-fetch. Keyed on the run identity so a
   // runId that only arrives after mount re-issues the (now authorized) load.
@@ -108,13 +110,12 @@ export function ListPickerRenderer({
     fetchAvailableLists(runId ?? "")
       .then((items) => {
         if (!cancelled) {
-          setLists(items);
-          setLoading(false);
+          setLoaded({ runId, lists: items });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setLoading(false);
+          setLoaded({ runId, lists: [] });
           toast.error("Could not load lists.");
         }
       });
@@ -133,8 +134,38 @@ export function ListPickerRenderer({
     return lists.filter((l) => l.name.toLowerCase().includes(q));
   }, [lists, search]);
 
+  const selectedValue = multiple ? {
+    type: "list", listIds: selectedIds,
+    listNames: selectedIds.map((id) => lists.find((item) => item.id === id)?.name ?? ""),
+  } : (() => {
+    const list = lists.find((item) => item.id === selectedIds[0]);
+    return { scope: "list", listId: list?.id ?? "", listName: list?.name ?? "", memberCount: list?.memberCount ?? null };
+  })();
+  const serializedSelection = JSON.stringify(selectedValue);
+  useEffect(() => {
+    registerFlush?.(async () => {
+      if (valid) onChangeRef.current(multiple && schema.type === "string"
+        ? serializedSelection : JSON.parse(serializedSelection));
+    });
+  }, [registerFlush, valid, multiple, schema.type, serializedSelection]);
+
   function handleSelect(list: AvailableListSummary) {
-    setSelectedId(list.id);
+    if (multiple) {
+      const liveIds = selectedIds.filter((id) => lists.some((item) => item.id === id));
+      const nextIds = liveIds.includes(list.id)
+        ? liveIds.filter((id) => id !== list.id) : [...liveIds, list.id];
+      setSelectedIds(nextIds);
+      const next = {
+        type: "list",
+        listIds: nextIds,
+        listNames: nextIds.map((id) => lists.find((item) => item.id === id)!.name),
+      };
+      // A declared string input carries JSON, rather than accidentally taking
+      // the setup submit's grouped-object road and losing the field name.
+      onChangeRef.current(schema.type === "string" ? JSON.stringify(next) : next);
+      return;
+    }
+    setSelectedIds([list.id]);
     onChangeRef.current({
       scope: "list",
       listId: list.id,
@@ -203,38 +234,11 @@ export function ListPickerRenderer({
           placeholder="Search lists by name"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          disabled={disabled || loading}
+          disabled={readOnly || loading}
           className="sm:max-w-sm"
           aria-label="Search lists by name"
         />
-        {/*
-          "Create new list" affordance retired. CRM lists are scoped to the
-          provider (Twenty Views); operators create them via the Twenty UI
-          or via the list-curator-agent run dispatched below. Direct CRUD
-          on lists from a cinatra route was removed alongside the
-          `lists_*` MCP retirement.
-        */}
-        {/*
-          "Build a list with AI" CTA.
-          Deep-links to a NEW list-curator-agent run. The operator completes
-          the curator's two HITL gates (scrape-schema-review + final-list-review)
-          there; on completion they return to this picker with the new listId
-          pre-selected via the ?onComplete query param.
 
-          Separate-run UX (not nested HITL): the WayFlow runtime does not yet
-          support surfacing child HITL gates in a parent run, so deep-linking
-          keeps the child run's review gates visible and actionable.
-        */}
-        <Button asChild type="button" variant="default" disabled={disabled}>
-          <Link
-            href="/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker"
-            target="_blank"
-            rel="noreferrer"
-            data-testid="build-list-with-ai-cta"
-          >
-            Build a list with AI
-          </Link>
-        </Button>
       </div>
 
       {loading ? (
@@ -243,26 +247,27 @@ export function ListPickerRenderer({
         <Card className="border-line bg-surface">
           <CardContent className="py-6 text-center text-sm text-muted-foreground">
             {lists.length === 0
-              ? "No lists yet. Create one to get started."
+              ? (typeof bindingParams?.emptyState === "string"
+                ? bindingParams.emptyState : "No lists yet. Create one to get started.")
               : "No lists match your search."}
           </CardContent>
         </Card>
       ) : (
         <div className="flex flex-col gap-2">
           {filteredLists.map((list) => {
-            const isSelected = selectedId === list.id;
+            const isSelected = selectedIds.includes(list.id);
             return (
               <Card
                 key={list.id}
-                role="button"
-                tabIndex={disabled ? -1 : 0}
-                aria-pressed={isSelected}
+                role={multiple ? undefined : "button"}
+                tabIndex={multiple ? undefined : readOnly ? -1 : 0}
+                aria-pressed={multiple ? undefined : isSelected}
                 data-selected={isSelected ? "true" : "false"}
                 onClick={() => {
-                  if (!disabled) handleSelect(list);
+                  if (!readOnly) handleSelect(list);
                 }}
                 onKeyDown={(e) => {
-                  if (disabled) return;
+                  if (readOnly || multiple) return;
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     handleSelect(list);
@@ -273,13 +278,23 @@ export function ListPickerRenderer({
                   isSelected
                     ? "border-primary bg-primary/5"
                     : "border-line bg-surface hover:border-primary/50",
-                  disabled ? "opacity-50 cursor-not-allowed" : "",
+                  readOnly ? "opacity-50 cursor-not-allowed" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
               >
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    {multiple ? (
+                      <Checkbox
+                        id={`${checkboxId}-${list.id}`}
+                        aria-label={list.name}
+                        checked={isSelected}
+                        disabled={readOnly}
+                        onClick={(event) => event.stopPropagation()}
+                        onCheckedChange={() => handleSelect(list)}
+                      />
+                    ) : null}
                     <span className="flex-1 truncate">{list.name}</span>
                     <Badge variant="secondary">{list.memberType}</Badge>
                   </CardTitle>

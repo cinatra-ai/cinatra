@@ -522,6 +522,7 @@ function setupGateIdentity(gate: {
 function SetupFieldContinue({
   submitting,
   alreadySent,
+  blocked,
   onContinue,
 }: {
   submitting: boolean;
@@ -529,6 +530,7 @@ function SetupFieldContinue({
   // The control stays drawn until the stream advances the card, but it is dead:
   // a second press must never send the same approval twice.
   alreadySent: boolean;
+  blocked: boolean;
   onContinue: () => Promise<void>;
 }): ReactElement {
   // ONE PRESS IS ONE DRAWN STATE (cinatra#3532, fix leg 3). The control was
@@ -543,7 +545,7 @@ function SetupFieldContinue({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={busy}
+        disabled={busy || blocked}
         onClick={() => void onContinue()}
       >
         {busy ? "Continuing…" : "Continue"}
@@ -1113,6 +1115,13 @@ function HitlApprovalCard({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
+  const [setupValidity, setSetupValidity] = useState<{ key: string; valid: boolean } | null>(null);
+  const setupValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  const reportSetupValidity = useCallback((key: string, valid: boolean) => {
+    setupValidityRef.current = { key, valid };
+    setSetupValidity((previous) => previous?.key === key && previous.valid === valid
+      ? previous : { key, valid });
+  }, []);
   // cinatra#3532 (convergence) — THE GATE WHOSE ANSWER WAS ALREADY ACCEPTED.
   // The submit core returns without throwing for an accepted answer, for the
   // blocked outcome and for an already-resolved gate; in every one of those the
@@ -1180,6 +1189,8 @@ function HitlApprovalCard({
   // value the way the renderer's own button would, then submits what the change
   // road staged — nothing more.
   const submitStagedSetupAnswer = async (key: string): Promise<void> => {
+    if (entry?.requiresValidValue === true
+      && (setupValidityRef.current?.key !== key || !setupValidityRef.current.valid)) return;
     // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
     // the flush is asynchronous and `isApproving` is React state, so two presses
     // in one tick would both reach the submit core.
@@ -1414,6 +1425,8 @@ function HitlApprovalCard({
             // says a renderer that draws its own Continue must skip it), and the
             // product's Continue asks the field for its value through the same
             // flush the renderer's own button would have used.
+            onValidityChange={productOwnsSetupSend
+              ? (valid) => reportSetupValidity(setupGateKey, valid) : undefined}
             hideSubmit={productOwnsSetupSend}
             registerFlush={
               productOwnsSetupSend
@@ -1436,6 +1449,8 @@ function HitlApprovalCard({
           <SetupFieldContinue
             submitting={isApproving}
             alreadySent={setupSentKey === setupGateKey}
+            blocked={entry?.requiresValidValue === true
+              && (setupValidity?.key !== setupGateKey || !setupValidity.valid)}
             onContinue={() => submitStagedSetupAnswer(setupGateKey)}
           />
         ) : null}

@@ -102,6 +102,7 @@ const RENDERER_KIND_TABLE: Record<
      * setup surface then draws the product's Continue beside the field.
      */
     drawsOwnSubmit?: true;
+    requiresValidValue?: true;
     /**
      * Optional custom condition factory for kinds whose match logic goes
      * beyond strict ID equality (e.g. gmail-sender's context gating +
@@ -186,7 +187,7 @@ const RENDERER_KIND_TABLE: Record<
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review above.
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
-  "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
+  "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"], requiresValidValue: true },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
   "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
@@ -345,6 +346,7 @@ export function registerFieldRendererBindings(
       // kind inherits its kind's declaration. The extension branch above
       // declares its own (true) — see the note there.
       drawsOwnSubmit: kindEntry.drawsOwnSubmit === true,
+      requiresValidValue: kindEntry.requiresValidValue === true,
       midRunHitl: b.midRunHitl === true,
     });
   }
