@@ -27,6 +27,7 @@ import {
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
+import { RunStartedRuns } from "./run-started-runs";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor, buildActorContextFromPrimitive } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
@@ -39,7 +40,7 @@ import {
   type ReviewGateRow,
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
-import { buildRunStepRail, type RailGate, type RailMessage } from "./run-step-rail";
+import { buildRunStepRail, electCurrentReviewGate, type RailGate, type RailMessage } from "./run-step-rail";
 import { reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
@@ -1613,6 +1614,9 @@ export async function SetupScreen({
     }
   }
 
+  const { readVisibleStartedRuns } = await import("./visible-started-runs");
+  const startedRuns = run ? await readVisibleStartedRuns(run, setupActor, setupRoles) : [];
+
   // cinatra#2933 — the window's own access answer for this run. `true` with no
   // run: there is nothing to ask, and the screen keeps the box it has today.
   const canRespondInWindow = run ? await canRespondInRunWindow(run.id) : true;
@@ -2051,6 +2055,7 @@ export async function SetupScreen({
         // The rail's earlier query is authoritative for what it actually drew.
         // A gate may open before this later slot read in the SAME render.
         railReviewTaskIds: railGates.map((gate) => gate.reviewTaskId),
+        railCurrentReviewTaskId: electCurrentReviewGate(reviewRailGates)?.reviewTaskId ?? null,
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────
@@ -3285,6 +3290,7 @@ export async function SetupScreen({
               );
             })()}
           </div>
+          <RunStartedRuns rows={startedRuns} />
           </AgentPanelBody>
         ) : (
           // An empty-state notice is neither a form nor a control stack, so it

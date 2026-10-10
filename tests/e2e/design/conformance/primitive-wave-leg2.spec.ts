@@ -22,6 +22,7 @@
  * the same expectation correct in both palettes.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { waitForHydration } from "../../config/hydration";
 
 const HARNESS = "/design-fixtures/conformance";
 
@@ -262,6 +263,19 @@ async function open(page: Page, theme: string, path = HARNESS) {
   }, theme);
   await page.goto(path, { waitUntil: "domcontentloaded" });
   await expect(page.locator(seam("leg2-root"))).toBeVisible();
+  try {
+    await waitForHydration(page, { selectors: [seam("leg2-root")] });
+  } catch {
+    // A lost script chunk can leave this otherwise visible page unhydrated.
+    // Reload once before any interaction; a second failure is not a slot race.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator(seam("leg2-root"))).toBeVisible();
+    try {
+      await waitForHydration(page, { selectors: [seam("leg2-root")] });
+    } catch (cause) {
+      throw new Error("page did not hydrate after one reload", { cause });
+    }
+  }
   // Assert the palette actually took, so a reading can never be silently
   // attributed to a palette the page is not in.
   await expect

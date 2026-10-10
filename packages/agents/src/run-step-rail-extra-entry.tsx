@@ -369,7 +369,7 @@ export function RailExtraEntry({
   // detail is where the parked gate's own surface stands, so a detail-selected
   // frame IS this row's screen being shown -- the reader is standing on this
   // step, and the rail says so in the vocabulary its spine rows already use.
-  const gateIsTheOpenScreen = gateOpensInTheRunDetail && selection?.selected === "detail";
+  const gateIsTheOpenScreen = gateOpensInTheRunDetail && selection?.selected === "detail" && entry.gate?.current === true;
 
   // AND EVERY OTHER REVIEW ROW OPENS IN PLACE TOO (cinatra#3693).
   //
