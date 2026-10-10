@@ -13,7 +13,11 @@
 //   "Tooltips are navy with cream type; popovers are surface-strong with navy
 //    text. Tooltips read at 12px."
 //
-// NO DEPARTURE FOUND.
+// The approved example also specifies padding 6px 10px. Native checks pin
+// that recipe on actual Radix DOM; browser-computed geometry is separate.
+// Its content corner is 6px. The corner checks below read the actual Radix
+// recipe and caller merge behavior; cached Tailwind declaration evidence and
+// the authored browser case separately cover the geometry contract.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
@@ -46,12 +50,12 @@ if (!Element.prototype.scrollIntoView) {
 
 afterEach(cleanup);
 
-function renderTooltip() {
+function renderTooltip({ className, shortcut = false }: { className?: string; shortcut?: boolean } = {}) {
   render(
     <TooltipProvider>
       <Tooltip open>
         <TooltipTrigger>Approve</TooltipTrigger>
-        <TooltipContent>Approve and send to all 12 prospects</TooltipContent>
+        <TooltipContent className={className}>Approve and send to all 12 prospects{shortcut ? <kbd data-slot="kbd">⌘K</kbd> : null}</TooltipContent>
       </Tooltip>
     </TooltipProvider>,
   );
@@ -91,6 +95,61 @@ describe('clause: "12px tooltip" / "Tooltips read at 12px"', () => {
     // The clause pairs 12px with the tooltip's role; `max-w-xs` is what stops a
     // tooltip growing into the popover's job.
     expect(renderTooltip().className).toContain("max-w-xs");
+  });
+});
+
+describe('approved example: "padding: 6px 10px"', () => {
+  it("renders the default ten-pixel horizontal and six-pixel vertical recipe", () => {
+    const classes = renderTooltip().className.split(/\s+/);
+    // jsdom has no generated Tailwind stylesheet: this pins the shipped recipe,
+    // not computed geometry. The companion both-palette browser case reads it.
+    expect(classes).toContain("px-2.5");
+    expect(classes).not.toContain("px-3");
+    expect(classes).toContain("py-1.5");
+  });
+
+  it("preserves a caller's horizontal override while retaining vertical padding", () => {
+    const classes = renderTooltip({ className: "px-5" }).className.split(/\s+/);
+    expect(classes).toContain("px-5");
+    expect(classes).not.toContain("px-2.5");
+    expect(classes).not.toContain("px-3");
+    expect(classes).toContain("py-1.5");
+  });
+
+  it("preserves the keyboard shortcut's existing right-padding exception", () => {
+    const content = renderTooltip({ shortcut: true });
+    expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
+    expect(content.className.split(/\s+/)).toContain("has-data-[slot=kbd]:pr-1.5");
+    expect(content.className.split(/\s+/)).toContain("px-2.5");
+  });
+});
+
+describe('approved example: "border-radius: 6px"', () => {
+  it("renders a fixed six-pixel content corner instead of the palette-dependent step", () => {
+    const classes = renderTooltip().className.split(/\s+/);
+    expect(classes).toContain("rounded-[6px]");
+    expect(classes).not.toContain("rounded-md");
+  });
+
+  it("lets a caller choose its corner without changing the arrow recipe", () => {
+    const content = renderTooltip({ className: "rounded-xl" });
+    const classes = content.className.split(/\s+/);
+    expect(classes).toContain("rounded-xl");
+    expect(classes).not.toContain("rounded-[6px]");
+    expect(classes).not.toContain("rounded-md");
+    expect(content.querySelector("svg")?.getAttribute("class")?.split(/\s+/))
+      .toContain("rounded-[2px]");
+  });
+
+  it("keeps keyboard corners, semantic colors and the real focusable trigger", () => {
+    const content = renderTooltip({ shortcut: true });
+    expect(content.className.split(/\s+/)).toContain("**:data-[slot=kbd]:rounded-sm");
+    expect(content.className.split(/\s+/)).toContain("bg-foreground");
+    expect(content.className.split(/\s+/)).toContain("text-background");
+    const trigger = screen.getByRole("button", { name: /^Approve$/ });
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+    expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
   });
 });
 
