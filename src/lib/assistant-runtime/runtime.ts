@@ -75,7 +75,7 @@ import {
   buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
-import type { LlmTool, LlmProvider, LlmCapabilityRequirement } from "@cinatra-ai/llm";
+import type { LlmTool, LlmProvider, LlmCapabilityRequirement, LlmToolReduction } from "@cinatra-ai/llm";
 // cinatra#2091 (epic #2086 S4): the assistant runtime routes through the ONE
 // typed injection contract + the provider delivery seam. Its former direct
 // `buildSkillTools` call was the last production bypass of that seam.
@@ -1134,6 +1134,8 @@ export async function runAssistantTurn(
   // so it never carries the requirement either and its request stays
   // byte-identical to before.
   let selfMcpCapabilityRequired: LlmCapabilityRequirement | undefined;
+  let platformMcpLabel: string | undefined;
+  let platformToolsUnavailable = false;
   // cinatra#2932 (lifecycle-b W5a) — declared at TURN scope because two places
   // read it: the tool assembly, which puts the grant on the self-MCP reference,
   // and the system fragments below, which tell the model what it may press. A
@@ -1459,6 +1461,7 @@ export async function runAssistantTurn(
   // agent-run LLM bridge forwards an agent's own `capabilityRequired`);
   // field-absent is not an opt-in.
   selfMcpCapabilityRequired = "native_mcp";
+  platformMcpLabel = chatCinatraMcpTool.serverLabel;
 
   // cinatra#2019 S4: cookie-chat and widget-principal turns share this
   // external-tool assembly, so the build context carries the REAL surface —
@@ -1866,6 +1869,17 @@ export async function runAssistantTurn(
         ? AbortSignal.any([signal, AbortSignal.timeout(120_000), noProgressAbort.signal])
         : AbortSignal.any([AbortSignal.timeout(120_000), noProgressAbort.signal]),
       logLabel: "chat",
+      // Only the toolbox identity this turn issued establishes platform loss.
+      // Other tools may remain, so this is not a conversation-only transition.
+      ...(platformMcpLabel ? {
+        onToolsReduced: ({ removed }: LlmToolReduction) => {
+          if (platformToolsUnavailable || !removed.some(
+            (tool) => tool.type === "mcp" && tool.serverLabel === platformMcpLabel,
+          )) return;
+          platformToolsUnavailable = true;
+          send("turn_capability", { platformToolsUnavailable: true });
+        },
+      } : {}),
       onTextDelta: (delta) => {
         // cinatra#2240 — provider engagement: this can only fire once the
         // request carrying these skills actually reached the provider.
