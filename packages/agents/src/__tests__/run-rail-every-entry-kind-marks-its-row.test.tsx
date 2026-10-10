@@ -576,7 +576,7 @@ const KINDS: EntryKind[] = [
           label: "Review",
           status: "pending",
           sources: [],
-          gate: { gateId: "g2", reviewTaskId: "task-pending", disposition: null, resolved: false },
+          gate: { gateId: "g2", reviewTaskId: "task-pending", disposition: null, resolved: false, current: true },
         } as RunStepRailEntry,
         "detail",
       ),
