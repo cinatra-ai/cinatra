@@ -16,6 +16,7 @@
  * content is fixture text. Each carries a stable `data-wave-seam` name so a
  * reading can be labelled by the clause it answers rather than by a selector.
  */
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import * as React from "react";
 
 import {
@@ -119,6 +120,23 @@ export function PrimitiveWaveConformanceFixtures() {
         <Avatar size="sm" data-wave-size="sm">
           <AvatarFallback accent="rust">R</AvatarFallback>
         </Avatar>
+      </div>
+
+      {/* Card: real presentation and interactive forms, with layout only.
+          Their ground, border and hover behaviour come from the primitive. */}
+      <div className="flex flex-wrap items-start gap-4" data-wave-seam="card">
+        <Card data-wave-state="presentation">
+          <CardHeader><CardTitle>Run summary</CardTitle></CardHeader>
+          <CardContent>One run finished.</CardContent>
+        </Card>
+        <Card interactive data-wave-state="interactive">
+          <CardHeader><CardTitle>Clickable card</CardTitle></CardHeader>
+          <CardContent>Hover lifts it 1px.</CardContent>
+        </Card>
+        <Card interactive size="sm" data-wave-state="interactive-small">
+          <CardHeader><CardTitle>Small clickable card</CardTitle></CardHeader>
+          <CardContent>The same interaction.</CardContent>
+        </Card>
       </div>
 
       {/* Badge — "surface-muted bg", "line border", "9999px radius",
