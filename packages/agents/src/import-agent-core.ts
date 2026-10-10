@@ -36,6 +36,7 @@ import {
 } from "@/lib/lifecycle/lifecycle-policy";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
+import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
   detectSpdxLicense,
@@ -307,10 +308,10 @@ export async function importAgentTemplateCore(
 
   let compiled;
   try {
+    const installPackageName = siblingPkgName ??
+      `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`;
     const compileResult = await compileOasAgentJson({
-      packageName:
-        siblingPkgName ??
-        `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`,
+      packageName: installPackageName,
       oasSourcePath: tmpOasJson,
     });
     if (!compileResult.ok) {
@@ -319,6 +320,14 @@ export async function importAgentTemplateCore(
       );
     }
     compiled = compileResult.value;
+    // Use the ZIP manifest/compiler identity, never the OAS's claimed identity.
+    const inputFindings = scanOasForVisibleInputContractFindings(
+      agent as unknown as Record<string, unknown>,
+      installPackageName,
+    );
+    if (inputFindings.length > 0) {
+      throw new Error(`Cannot install imported agent: ${inputFindings.map(finding => finding.message).join("\n")}`);
+    }
   } catch (compileErr) {
     // cinatra#3493 — the staging directory used to be removed on EVERY compile
     // outcome, which is precisely why there was never anything left to
