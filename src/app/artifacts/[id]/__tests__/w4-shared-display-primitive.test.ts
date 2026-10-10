@@ -24,6 +24,7 @@ import type { AdmittedClientBundleTuple } from "@cinatra-ai/sdk-extensions/artif
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 
 import { _resetFirstPartySeedForTests } from "../renderer-resolution";
@@ -63,6 +64,9 @@ function summary(
   } as unknown as ArtifactSummary;
 }
 
+// Both roads are driven at the ceiling the page and the review core pass (the
+// host's newest props version), because the build-map arm floors a display that
+// declares more than its ceiling (#3978).
 /** THE PAGE ROAD — the shared primitive, called as the page calls it. */
 function pageRoad(artifact: ArtifactSummary, mime: string) {
   return resolveArtifactDisplayMount({
@@ -70,14 +74,14 @@ function pageRoad(artifact: ArtifactSummary, mime: string) {
     baseType: artifact.objectType,
     identity: artifact.presentationIdentity,
     mime,
-    propsApiVersion: 1,
+    propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
   });
 }
 
 /** THE REVIEW ROAD — the binder's own port, as the review core calls it. */
 function reviewRoad(artifact: ArtifactSummary, mime: string) {
   const { resolveMount } = bindArtifactReviewPorts({ orgId: ORG, actor });
-  return Promise.resolve(resolveMount({ artifact, mime, propsApiVersion: 1 }));
+  return Promise.resolve(resolveMount({ artifact, mime, propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION }));
 }
 
 /** The three things the acceptance sentence names, and nothing else — each road

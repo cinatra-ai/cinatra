@@ -104,10 +104,13 @@ export interface ReviewActorContext {
 /** Bind the run/gate ports (agents-domain) for the preparation core. */
 export function bindReviewRunGatePorts(ctx: ReviewActorContext): ReviewRunGatePorts {
   return {
-    verifyRunAccess: (runId: string) =>
-      enforceReviewRunAccess(runId, ctx.actor, "read", ctx.roleHints),
+    verifyRunAccess: async (runId: string) => {
+      const access = await enforceReviewRunAccess(runId, ctx.actor, "read", ctx.roleHints, { includeOrgId: true });
+      if (access.ok && access.orgId !== ctx.orgId) return { ok: false, status: 403 };
+      return access;
+    },
     readGatePinnedTargets: (runId: string, reviewTaskId: string) =>
-      readGatePinnedTargets(runId, reviewTaskId),
+      readGatePinnedTargets(runId, reviewTaskId, { decisionFactsForOrgId: ctx.orgId }),
   };
 }
 
