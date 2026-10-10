@@ -1,4 +1,5 @@
 import "server-only";
+import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";
 
 // The SERVER BINDERS that wire the #1795/#1807 PURE review cores (preparation +
 // decision) to the LIVE artifact-review GATE store (cinatra#1796, epic #1620
@@ -344,6 +345,26 @@ export async function readReviewGatePinnedTargets(
     artifactId: t.artifactId,
     representationRevisionId: t.representationRevisionId,
   }));
+}
+
+/** The pending review's producer words for every card host (§VI). Re-check
+ * run READ, then the frozen target's actor/org-scoped artifact membership before
+ * reading the finalized ledger. No client prompt or live revision is accepted. */
+export async function readReviewGateRecordedPrompt(args: {
+  runId: string;
+  reviewTaskId: string;
+  actorCtx: ReviewActorContext;
+}): Promise<string | null> {
+  const access = await enforceReviewRunAccess(args.runId, args.actorCtx.actor, "read", args.actorCtx.roleHints);
+  if (!access.ok) return null;
+  const gate = await readReviewGateState(args.runId, args.reviewTaskId);
+  if (gate.status !== "pending" || gate.targets.length !== 1) return null;
+  const target = gate.targets[0];
+  const actor = buildActorContextFromPrimitive(args.actorCtx.actor, args.actorCtx.orgId, args.actorCtx.roleHints);
+  const ports = bindArtifactReviewPorts({ orgId: args.actorCtx.orgId, actor });
+  if ((await ports.readArtifact(target.artifactId)).kind !== "ok") return null;
+  if (!await ports.revisionMember(target.artifactId, target.representationRevisionId)) return null;
+  return readRevisionImagePrompt({ orgId: args.actorCtx.orgId, artifactId: target.artifactId, representationRevisionId: target.representationRevisionId });
 }
 
 // ---------------------------------------------------------------------------

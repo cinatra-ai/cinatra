@@ -21,7 +21,12 @@
 // it does not reword the field.
 // ---------------------------------------------------------------------------
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { compile } from "tailwindcss";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // The shipped bar calls `router.refresh()` after a landed decision; jsdom has
@@ -32,6 +37,7 @@ vi.mock("next/navigation", () => ({
 
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { ReviewDecisionBar } from "../review-decision-bar";
+import { LifecycleCardSurfaceProvider, LifecycleComposerFocusProvider, createComposerFocusStore } from "../lifecycle-card-runtime";
 
 afterEach(() => {
   cleanup();
@@ -46,7 +52,11 @@ function renderBar(
 ) {
   const submitAction = vi.fn(async () => outcome);
   const result = render(
-    <ReviewDecisionBar permissions={permissions} submitAction={submitAction} />,
+    <LifecycleCardSurfaceProvider host="chat_thread">
+      <LifecycleComposerFocusProvider store={createComposerFocusStore()}>
+        <ReviewDecisionBar permissions={permissions} submitAction={submitAction} />
+      </LifecycleComposerFocusProvider>
+    </LifecycleCardSurfaceProvider>,
   );
   return { ...result, submitAction };
 }
@@ -189,4 +199,151 @@ describe("§I — the rationale plumbing is untouched (#2865 acceptance 4)", () 
     await waitFor(() => expect(submitAction).toHaveBeenCalledTimes(1));
     expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: null });
   });
+});
+
+
+describe("§VI authorized producer prefill is not a reader annotation", () => {
+  for (const action of ["Comment", "Approve"] as const) {
+    it(`does not sign untouched producer words as the reader's ${action}`, async () => {
+      const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
+      render(<ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} recordedPrompt="a red fox in snow" />);
+      expect((noteField() as HTMLTextAreaElement).value).toBe("a red fox in snow");
+      fireEvent.click(screen.getByRole("button", { name: action }));
+      await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: action === "Approve" ? "approve" : "comment", comment: null }));
+    });
+  }
+  it("preserves an explicitly edited reader note without changing the visible floor", async () => {
+    const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
+    render(<ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} recordedPrompt="producer words" />);
+    fireEvent.change(noteField(), { target: { value: "  actual reader words  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: "actual reader words" }));
+    expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Reject", "Approve"]);
+  });
+});
+
+// Compile the shipped stylesheet and real cached imports. Resolve from this
+// test file, so package and repository-root invocations read the same inputs.
+// These are CSS declaration values at real DOM selectors, not jsdom geometry.
+let primaryRules: { selector: string; declarations: string }[];
+let readingSize: string;
+beforeAll(async () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+  const stylesheet = resolve(root, "src/app/globals.css");
+  const require = createRequire(resolve(root, "package.json"));
+  const globals = await readFile(stylesheet, "utf8");
+  const compiled = await compile(globals, {
+    base: dirname(stylesheet),
+    loadStylesheet: async (id, base) => {
+      let path: string;
+      if (id === "tw-animate-css") {
+        const packageRoot = resolve(root, "node_modules", id);
+        const manifest = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8"));
+        path = resolve(packageRoot, manifest.exports["."].style);
+      } else {
+        path = id.startsWith(".") ? resolve(base, id) : require.resolve(id, { paths: [base] });
+      }
+      return { path, base: dirname(path), content: await readFile(path, "utf8") };
+    },
+  });
+  const css = compiled.build(["border", "border-line", "rounded-[7px]", "bg-surface", "min-h-[44px]", "px-[11px]", "py-[9px]", "text-reading"]);
+  const reading = globals.match(/--text-reading:\s*([^;]+);/);
+  if (!reading) throw new Error("Missing shipped text-reading token");
+  readingSize = reading[1].trim();
+  primaryRules = [...css.matchAll(/([^{}]+)\{([^{}]+)\}/g)]
+    .filter((rule) => rule[1].trim().startsWith("."))
+    .map((rule) => ({ selector: rule[1].trim(), declarations: rule[2] }));
+});
+
+function declaredPrimaryValue(element: HTMLElement, property: string): string {
+  const values = primaryRules.filter((rule) => element.matches(rule.selector))
+    .flatMap((rule) => [...rule.declarations.matchAll(/([a-z-]+):\s*([^;]+);/g)]
+      .filter((match) => match[1] === property).map((match) => match[2].trim()));
+  expect(values, `nonempty unambiguous shipped ${property} declaration`).toHaveLength(1);
+  return values[0] === "var(--text-reading)" ? readingSize : values[0];
+}
+
+// App654: app-lifecycle-cards §I "Exactly one primary input" and
+// app-artifact-review §VI boxed Note. Real host providers select the same
+// semantic conversation frame and optional composer binding, including nesting.
+// These DOM/declaration pins are native checks, not painted browser evidence.
+describe("§I / §VI — Note hierarchy follows the actual surface (App654)", () => {
+  for (const palette of ["light", "dark"] as const) {
+    for (const host of ["run_card", "page_gate_region", "chat_thread", "site_widget"] as const) {
+      it(`${palette} ${host} without focus provider: §I conversation is subordinate; §VI run/page is primary`, () => {
+        const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
+        const { container } = render(
+          <div className={palette === "dark" ? "dark" : ""}>
+            <LifecycleCardSurfaceProvider host={host} auth={host === "site_widget" ? { headers: () => ({}), credentials: "omit" } : undefined}>
+              <ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} />
+            </LifecycleCardSurfaceProvider>
+          </div>,
+        );
+        const field = noteField();
+        const classes = classesOf(field);
+        if (host === "chat_thread" || host === "site_widget") {
+          // §I / V.1 draw the chat or widget conversation's primary chatbox.
+          // The widget deliberately has no review-focus provider; neither
+          // absent focus provider turns its card Note into a second input.
+          expect(container.querySelector(NOTE_FIELD)?.contains(field)).toBe(true);
+          for (const token of ["border-0", "border-b", "border-dashed", "rounded-none", "bg-transparent", "dark:bg-transparent"]) expect(classes).toContain(token);
+          for (const token of ["border", "rounded-[7px]", "bg-surface", "dark:bg-surface"]) expect(classes).not.toContain(token);
+        } else {
+        expect(container.querySelector(NOTE_FIELD), "run/page without conversation has no subordinate claim").toBeNull();
+        for (const token of ["border", "border-line", "rounded-[7px]", "bg-surface", "dark:bg-surface", "min-h-[44px]", "px-[11px]", "py-[9px]", "text-reading"]) {
+          expect(classes, `§VI primary declaration ${token}`).toContain(token);
+        }
+        for (const token of ["border-0", "border-b", "border-dashed", "rounded-none", "bg-transparent", "dark:bg-transparent"]) {
+          expect(classes, `§I no subordinate declaration ${token}`).not.toContain(token);
+        }
+        expect(declaredPrimaryValue(field, "min-height")).toBe("44px");
+        expect(declaredPrimaryValue(field, "border-radius")).toBe("7px");
+        expect(declaredPrimaryValue(field, "border-width")).toBe("1px");
+        expect(declaredPrimaryValue(field, "padding-inline")).toBe("11px");
+        expect(declaredPrimaryValue(field, "padding-block")).toBe("9px");
+        expect(declaredPrimaryValue(field, "font-size")).toBe("12.5px");
+        expect(declaredPrimaryValue(field, "background-color")).toBe("var(--surface)");
+        }
+        expect(container.querySelectorAll("textarea")).toHaveLength(1);
+        expect(field.getAttribute("placeholder")).toBe("Add a note for the run and the audit trail…");
+        expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Reject", "Approve"]);
+      });
+    }
+    it(`${palette} refused widget declaration: no semantic conversation or chatbox is inferred`, () => {
+      const { container } = render(
+        <div className={palette === "dark" ? "dark" : ""}>
+          <LifecycleCardSurfaceProvider host="site_widget">
+            <ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }))} />
+          </LifecycleCardSurfaceProvider>
+        </div>,
+      );
+      expect(container.querySelector(NOTE_FIELD)).toBeNull();
+      expect(classesOf(noteField())).toContain("bg-surface");
+      expect(classesOf(noteField())).not.toContain("border-dashed");
+      expect(container.querySelectorAll("textarea")).toHaveLength(1);
+    });
+    for (const nested of [false, true]) {
+      for (const focusBound of [false, true]) {
+      it(`${palette} conversation${nested ? " nested run card" : ""}, focus provider ${focusBound ? "bound" : "absent"}: §I chatbox remains primary`, () => {
+        const bar = <ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }))} />;
+        const { container } = render(
+          <div className={palette === "dark" ? "dark" : ""}>
+            <LifecycleCardSurfaceProvider host="chat_thread">
+              {focusBound ? (
+                <LifecycleComposerFocusProvider store={createComposerFocusStore()}>
+                  {nested ? <LifecycleCardSurfaceProvider host="run_card">{bar}</LifecycleCardSurfaceProvider> : bar}
+                </LifecycleComposerFocusProvider>
+              ) : nested ? <LifecycleCardSurfaceProvider host="run_card">{bar}</LifecycleCardSurfaceProvider> : bar}
+            </LifecycleCardSurfaceProvider>
+          </div>,
+        );
+        expect(container.querySelector(NOTE_FIELD)?.contains(noteField())).toBe(true);
+        const classes = classesOf(noteField());
+        for (const token of ["border-0", "border-b", "border-dashed", "rounded-none", "bg-transparent", "dark:bg-transparent"]) expect(classes).toContain(token);
+        expect(classes).not.toContain("border");
+        expect(container.querySelectorAll("textarea")).toHaveLength(1);
+      });
+      }
+    }
+  }
 });

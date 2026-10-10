@@ -963,6 +963,7 @@ export function ReviewGateCard({
     state,
     decisionGeneration: decisionReading.generation,
     targetHeaders,
+    recordedPrompt: resolved?.recordedPrompt ?? null,
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
     // composer: Agent run & review §VI fixes typing a request as the whole
@@ -1056,6 +1057,7 @@ function renderState(args: {
   /** §IV's header(s) for the pinned target(s), or `null` when the answer
    * carried none — see `ReviewTargetHeaders`. */
   targetHeaders: LifecycleTargetHeader[] | null;
+  recordedPrompt: string | null;
   /** §VI's prompt window, bound to the run, or `null` on a host that named no
    * run and anywhere inside a conversation, where the thread's own composer is
    * the request road (cinatra#3481). Taken as a factory so the one permission
@@ -1078,6 +1080,7 @@ function renderState(args: {
     state,
     decisionGeneration,
     targetHeaders,
+    recordedPrompt,
     promptWindow,
     settledExchange,
     islandSrc,
@@ -1233,6 +1236,7 @@ function renderState(args: {
             key={decisionGeneration}
             permissions={permissions}
             submitAction={submit}
+            recordedPrompt={recordedPrompt}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
