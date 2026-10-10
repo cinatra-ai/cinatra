@@ -2065,8 +2065,11 @@ describe("the island's two-bound load protocol", () => {
   });
 
   it("each panel-mounted restarts the idle bound — a steadily streaming island is never plated", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const container = await renderIslandCard();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await advance(0);
+    expect(container.querySelector("iframe")).not.toBeNull();
 
     postProgress(container, "island-ready");
     for (let panel = 0; panel < 3; panel += 1) {
@@ -2074,7 +2077,7 @@ describe("the island's two-bound load protocol", () => {
       expect(islandState(container)).toBe("loading");
       postProgress(container, "panel-mounted");
     }
-    // Twenty-four seconds of real progress, no plate.
+    // Advance only the fake clock: twenty-four seconds of progress, no plate.
     expect(islandState(container)).toBe("loading");
 
     // The moment progress stops, the idle bound expires like any other.
@@ -2181,12 +2184,20 @@ describe("the island's two-bound load protocol", () => {
   });
 
   it("a repeated island-ready does not restart the idle-progress bound", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const container = await renderIslandCard();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await advance(0);
+    expect(container.querySelector("iframe")).not.toBeNull();
     postProgress(container, "island-ready");
     await advance(8_000);
+    expect(islandState(container)).toBe("loading");
     postProgress(container, "island-ready");
-    await advance(5_000);
+    // The first ready still owns the twelve-second deadline. Cross it only by
+    // advancing the fake clock, never by allowing wall time to move the bound.
+    await advance(3_999);
+    expect(islandState(container)).toBe("loading");
+    await advance(1);
     expect(islandState(container)).toBe("timed-out");
   });
 
