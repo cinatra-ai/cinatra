@@ -7,12 +7,17 @@
  * mode (the §V running-agent chip) is unchanged and keeps its accessible name.
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { JSDOM } from "jsdom";
+import { dirname, join, resolve } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { compile } from "tailwindcss";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { ExtensionCard } from "../extension-card";
+import { ExtensionCard, ExtensionCardListingBanner } from "../extension-card";
+import { compositeOver, contrastAgainst, contrastRatio, parseCssColor } from "@/lib/color-contrast";
 
 const SquareEmblem = () => <svg data-testid="kind-emblem" />;
 
@@ -217,5 +222,149 @@ describe("italic overhang safe-area (cinatra#2409)", () => {
     expect(sdkUiSrc).toMatch(
       /badges \? "pr-20" : "italic-overhang-safe"/,
     );
+  });
+});
+
+// REAL SSR and declared inherited ink; no browser computed style or hover grade.
+describe("ExtensionCard rose ground Source contract (cinatra#2851)", () => {
+  it.each(["button", "chip", "listing"] as const)(
+    "%s renders the approved opaque rose/white pair around the actual name",
+    (mode) => {
+      const html = renderToStaticMarkup(
+        <ExtensionCard
+          name="Rose workspace"
+          accentColor="clay"
+          emblem={<SquareEmblem />}
+          {...(mode === "button" ? {} : { description: "Category body" })}
+          {...(mode === "listing"
+            ? { variant: "listing" as const, byline: <span data-testid="rose-byline">Agent by Vendor</span> }
+            : {})}
+        />,
+      );
+      const doc: Document = new JSDOM(html).window.document;
+      const band = Array.from(doc.querySelectorAll<HTMLElement>("[style]")).find(
+        (element) => element.style.background !== "" && element.textContent?.includes("Rose workspace"),
+      );
+      expect(band, "the real name belongs to the colored chip/listing banner").toBeDefined();
+      expect(band!.style.background).toBe("rgb(162, 102, 109)");
+      expect(band!.style.color).toBe("rgb(255, 255, 255)");
+      expect(contrastAgainst(band!.style.color, band!.style.background)).toBeGreaterThanOrEqual(4.5);
+      if (mode === "listing") {
+        const byline = band!.querySelector<HTMLElement>('[data-testid="rose-byline"]');
+        const name = band!.querySelector<HTMLElement>('[data-slot="extension-card-name"]');
+        expect(byline?.textContent).toBe("Agent by Vendor");
+        expect(byline?.style.color).toBe("");
+        expect(name?.style.color).toBe("");
+        expect(name?.className).not.toMatch(/\btext-(?:muted-foreground|foreground|background)\b/);
+      }
+      expect(html).toContain("Rose workspace");
+    },
+  );
+});
+
+// Approved app-extensions §IV.3: native SSR + real shipped CSS declarations.
+// This models the declared wash and contrast; it does not measure browser
+// cascade, pointer paint, or independent light/dark picture acceptance.
+let accentCss: string;
+let accentGlobals: string;
+beforeAll(async () => {
+  const stylesheet = resolve(process.cwd(), "src/app/globals.css");
+  accentGlobals = await readFile(stylesheet, "utf8");
+  const require = createRequire(resolve(process.cwd(), "package.json"));
+  const compiled = await compile(accentGlobals, {
+    base: dirname(stylesheet),
+    loadStylesheet: async (id, base) => {
+      let path: string;
+      if (id === "tw-animate-css") {
+        const root = resolve(process.cwd(), "node_modules", id);
+        const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+        path = resolve(root, manifest.exports["."].style);
+      } else {
+        path = id.startsWith(".") ? resolve(base, id) : require.resolve(id, { paths: [base] });
+      }
+      return { path, base: dirname(path), content: await readFile(path, "utf8") };
+    },
+  });
+  accentCss = compiled.build(["bg-foreground/5", "bg-[#15213a]/5", "duration-150", "opacity-0", "group-hover/accent:opacity-100", "pointer-events-none"]);
+});
+
+function declaredWash(element: Element, palette: "cinatra" | "dark") {
+  const matches: string[] = [];
+  for (const rule of accentCss.matchAll(/(\.bg[^{}]+)\s*\{/g)) {
+    if (!element.matches(rule[1].trim())) continue;
+    // Read the complete generated rule, including Tailwind's @supports
+    // colour-mix override. This is a supported-declaration model, not paint.
+    const start = rule.index! + rule[0].length;
+    let depth = 1;
+    let end = start;
+    while (depth > 0 && end < accentCss.length) {
+      if (accentCss[end] === "{") depth++;
+      if (accentCss[end] === "}") depth--;
+      end++;
+    }
+    for (const declaration of accentCss.slice(start, end).matchAll(/background-color:\s*([^;]+);/g)) {
+      matches.push(declaration[1]);
+    }
+  }
+  expect(matches.length).toBeGreaterThan(0);
+  const declaration = matches[matches.length - 1];
+  const mix = declaration.match(/^color-mix\(in oklab, (#[0-9a-f]+|var\(--foreground\)) ([\d.]+)%, transparent\)$/i);
+  if (!mix) throw new Error(`Unsupported generated wash: ${declaration}`);
+  const theme = accentGlobals.match(new RegExp(`\\.${palette}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1];
+  const token = theme?.match(/--foreground:\s*([^;]+);/)?.[1];
+  const color = parseCssColor(mix[1].startsWith("var(") ? token! : mix[1]);
+  if (!color) throw new Error("Missing shipped palette foreground");
+  return { ...color, a: Number(mix[2]) / 100 };
+}
+
+describe("app-extensions §IV.3 — clay rest and navy hover in both palettes (cinatra#2851)", () => {
+  it.each(["cinatra", "dark"] as const)("%s declares the exact ground, inherited white name/byline, five-percent navy wash and contrast floors", (palette) => {
+    const html = renderToStaticMarkup(
+      <div className={palette}>
+        <ExtensionCardListingBanner name="Clay agent" accentColor="clay" emblem={<SquareEmblem />}
+          byline={<span data-testid="clay-byline">Agent by Cinatra</span>}
+          detailHref="/agents/clay-agent" activateLabel="View details for Clay agent" />
+      </div>,
+    );
+    const doc = new JSDOM(html).window.document;
+    const panel = doc.querySelector<HTMLAnchorElement>('a[href="/agents/clay-agent"]')!;
+    const name = panel.querySelector<HTMLElement>('[data-slot="extension-card-name"]')!;
+    const byline = panel.querySelector<HTMLElement>('[data-testid="clay-byline"]')!;
+    expect(panel.style.background).toBe("rgb(162, 102, 109)");
+    expect(panel.style.color).toBe("rgb(255, 255, 255)");
+    expect(name.style.color).toBe("");
+    expect(byline.style.color).toBe("");
+    expect(name.className).not.toMatch(/\btext-(?:foreground|muted-foreground|background)\b/);
+    const wash = panel.querySelector('[data-slot="extension-card-accent-hover"]')!;
+    const ink = declaredWash(wash, palette);
+    expect(ink).toEqual({ r: 21, g: 33, b: 58, a: 0.05 });
+    const background = parseCssColor(panel.style.background)!;
+    const white = parseCssColor(panel.style.color)!;
+    expect(contrastRatio(white, background)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(white, background)).toBeCloseTo(4.5, 1);
+    expect(contrastRatio(white, compositeOver(ink, background))).toBeGreaterThanOrEqual(4.8);
+    expect(contrastRatio(white, compositeOver(ink, background))).toBeCloseTo(4.8, 1);
+    // Wash remains passive, starts hidden, and fades only on panel hover.
+    expect(wash.getAttribute("aria-hidden")).toBe("true");
+    expect(wash.classList.contains("pointer-events-none")).toBe(true);
+    expect(wash.classList.contains("opacity-0")).toBe(true);
+    expect(wash.classList.contains("transition-opacity")).toBe(true);
+    expect(wash.classList.contains("duration-150")).toBe(true);
+    expect(wash.classList.contains("group-hover/accent:opacity-100")).toBe(true);
+    expect(accentCss).toMatch(/transition-duration:\s*150ms/);
+    expect(panel.getAttribute("aria-label")).toBe("View details for Clay agent");
+    expect(panel.getAttribute("href")).toBe("/agents/clay-agent");
+    expect(panel.classList.contains("focus-visible:ring-inset")).toBe(true);
+  });
+
+  it("keeps non-interactive and muted panels, other grounds, and caller styling intact", () => {
+    const html = renderToStaticMarkup(<ExtensionCardListingBanner name="Archived" accentColor="clay" muted
+      emblem={<SquareEmblem />} className="caller-card" />);
+    const doc = new JSDOM(html).window.document;
+    expect(doc.querySelector('[data-slot="extension-card-accent-hover"]')).toBeNull();
+    expect(doc.querySelector("a")).toBeNull();
+    expect(doc.querySelector(".caller-card")).not.toBeNull();
+    expect(doc.querySelector(".bg-muted.text-muted-foreground")).not.toBeNull();
+    expect(html).not.toContain("rgb(162, 102, 109)");
   });
 });
