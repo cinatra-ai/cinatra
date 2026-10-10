@@ -284,6 +284,8 @@ export async function callHostPrimitive(
         primitiveName,
         ctx,
         delegatedRestricted: !!ctx?.delegatedRestricted,
+        // The outward declaration of the captured primitive's planned entry.
+        declaresOutward: captured.planned.declaredOutward !== null,
       });
     } catch (err) {
       throw new Error(
