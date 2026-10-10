@@ -580,11 +580,10 @@ A base that holds the gate script but not its floor fails closed.
 was written by the gate's own `node scripts/audit/extension-rendering-gate.mjs
 --write-baseline` on the materialized tree. With a committed floor the writer
 removes the entries that no longer apply and never adds one; an extension that
-gains its own detail display is removed from the floor by the writer in a
-change of its own, and so is an extension the content-type rule resolves: the
-change that resolves it leaves the floor as it is (its entry reads as a stale
-warning in warn mode), and the writer's own change removes the entry
-afterwards. A new entry fails against the base branch.
+gains its own detail display, or that the content-type rule resolves, is
+removed from the floor by the writer in the same change: the gate itself only
+warns about a stale entry in warn mode, and the real-tree test of record fails
+while the checked-in floor holds one. A new entry fails against the base branch.
 
 ## Floors compared with the base branch (cinatra#3832)
 
