@@ -1667,53 +1667,11 @@ textarea:focus::placeholder {
   padding-right: 0;
 }
 
-/* =====================================================================
-   THE BADGE LINE BORDER — the components drawing's Badge / Pill section,
-   chrome line "surface-muted bg · line border · 9999px radius · icon-led".
-
-   THE DEFECT. `badge.tsx` reserves the 1px border box on every variant
-   (`border border-transparent`) but only the `outline` variant ever gives it a
-   colour, so the neutral chip the chrome line describes — `secondary`, the one
-   variant grounded on `--secondary`, which resolves to the surface-muted the
-   same line names — renders with no visible stroke at all. The clause asks for
-   a line border on that chip, and the box for it is already there: this is a
-   colour, not a reflow.
-
-   WHY IT IS A SCOPE ON THE SEAM AND NOT A CLASS ON THE PRIMITIVE. `badge.tsx`
-   is vendored verbatim into six extension packages held in their own
-   repositories, behind the same provenance gate named at the table seam above.
-   Spelling `border-line` in the primitive's class string drifts all six at once
-   and cannot go green until each has re-vendored and the pins have been raised.
-   The seam reaches the host copy and every vendored copy alike.
-
-   SCOPED TO THE NEUTRAL CHIP. The `default` chip is a solid indigo fill and the
-   `ghost` and `link` chips are chromeless by their own recipes; the drawing
-   draws its line border around the surface-muted chip, and the status variants
-   take their stroke from their own status colour under the V section, which is
-   the StatusPill primitive's clause and is graded at that primitive.
-
-   Graded as a recipe in
-   src/components/ui/__tests__/badge-drawing-conformance.test.tsx; read at the
-   DOM seam in BOTH palettes on the live boot by
-   tests/e2e/design/conformance/primitive-wave-leg2.spec.ts.
-   ===================================================================== */
-/* SCOPED TO THE CHIP THAT STILL CARRIES THE PRIMITIVE'S OWN BORDER TOKEN.
-   `border-transparent` is what the base recipe spells, and `cn()` is
-   tailwind-merge: a call site that states a border colour of its own is in the
-   same conflict group, so the primitive's `border-transparent` is REMOVED from
-   the class list and only the call site's colour remains. Requiring the token
-   to still be present is therefore an exact reading of "this chip asked for no
-   stroke of its own", the same discriminator the table seam uses.
-
-   MEASURED, on this head:
-     twMerge("border border-transparent px-2", "border-success/30 bg-success/10")
-       -> "border px-2 border-success/30 bg-success/10"      (token gone)
-     twMerge("border border-transparent px-2", "bg-success/10")
-       -> "border border-transparent px-2 bg-success/10"     (token kept)
-   Without this arm the unlayered seam beat the call site's own utility and
-   repainted it neutral — packages/objects/src/screens/sync-adapter-settings-tab.tsx
-   draws its Enabled chip `variant="secondary" className="border-success/30 ..."`
-   and lost its success stroke. It keeps it now. */
+/* Badge Secondary uses a transparent border in the approved neutral example.
+   Keep the existing seam restricted to the primitive's untouched base token:
+   explicit caller border utilities remove that token through cn(), so their
+   own border colors still win. This is an existing role in both palettes;
+   the border box, grounds, typography and other variants are unchanged. */
 [data-slot="badge"][data-variant="secondary"][class~="border-transparent"] {
-  border-color: var(--line);
+  border-color: transparent;
 }

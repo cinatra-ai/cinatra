@@ -1,77 +1,11 @@
 // @vitest-environment jsdom
-//
-// Badge — the graded checklist for the components drawing's "Badge / Pill"
-// section (cinatra#3189, shared-primitives wave, leg 1).
-//
-//   pnpm exec vitest run src/components/ui/__tests__/badge-drawing-conformance.test.tsx
-//
-// The section's clauses, quoted verbatim:
-//
-//   "surface-muted bg"
-//   "line border"
-//   "9999px radius"
-//   "icon-led"
-//   "Status pills (see V) use bg tinted from the status colour, text in the
-//    same colour, border at higher alpha. Use icon-led pills; never just dots."
-//
-// TWO CORRECTIONS THIS FILE RECORDS, both made after round 1 of this leg.
-//
-// 1. THE STATUS-PILL CLAUSE IS NOT GRADED HERE. The section names two
-//    components, and the status pill is its own primitive — `status-pill.tsx`.
-//    That component already implements the clause's three-part recipe exactly
-//    (tinted ground, same-colour text, higher-alpha border, icon-led, capsule),
-//    and it is graded in status-pill-drawing-conformance.test.tsx. Round 1
-//    graded the clause at THIS file's status variants instead and edited
-//    `badge.tsx` to add `border-success/30` and its siblings. That edit was
-//    reverted: it was the wrong seam.
-//
-// 2. `badge.tsx` IS NOT EDITED BY THIS LEG AT ALL, and the reason is a standing
-//    boundary rather than a judgement about the drawing. This file is vendored
-//    verbatim (modulo import rewriting) into five extension packages by
-//    scripts/extensions/vendor-extension-primitives.mjs. Those packages are
-//    separate repositories — `/extensions/` is git-ignored here and holds zero
-//    tracked files — so any edit to this primitive desynchronises five repos
-//    that this lane cannot write to, and the repository carries two standing
-//    guards that fail the moment it drifts:
-//      - packages/connectors/src/__tests__/connector-badge.test.ts, which pins
-//        the success and destructive variant strings byte-for-byte under the
-//        title "the badge is SOLID via a className override, not a
-//        shared-primitive edit" (cinatra#1014); and
-//      - scripts/extensions/__tests__/vendor-extension-primitives.test.mjs,
-//        which asserts every vendored copy still equals transform(source).
-//    Repairing a badge clause is therefore a cross-repository transaction, not
-//    a leg-1 source fix. The one clause below that does not hold is recorded
-//    with that road named, not fixed and not loosened.
-//
-//    THE BLOCK IS MEASURED, NOT ARGUED, and the measurement narrowed it. The
-//    repair was applied to this primitive on a throwaway edit (`border-line`
-//    added to the `secondary` variant) and the two guards were run against it:
-//      - vendor-extension-primitives.test.mjs FAILS, at its provenance case
-//        "every planned vendored file on disk equals transform(source)", with
-//        `extensions/.../badge.tsx drifted from src/components/ui/badge.tsx`.
-//        Re-running the vendoring writer would silence it in a checkout, but
-//        only by writing into repositories this lane does not own, and every
-//        consumer still pinned at its current release stays red until it has
-//        re-vendored. That is the whole block, and it is a real one.
-//      - connector-badge.test.ts PASSES (29 of 29). The cinatra#1014 guard
-//        pins the `success` and `destructive` variant strings byte-for-byte,
-//        and the clause below touches neither. Round 1 of this leg recorded
-//        that guard as part of the follow-up; it is NOT, and the follow-up is
-//        correspondingly smaller than it was first written to be.
-//    The edit was reverted after the reading; badge.tsx is byte-identical to
-//    the base commit in this leg's diff.
-//
-// 3. LEG 2 RE-MEASURED THAT COUNT, and it has moved. The same throwaway edit,
-//    run on THIS head, drifts SIX vendored copies rather than five: the
-//    vendoring provenance gate
-//    (`node scripts/extensions/vendor-extension-primitives.mjs --check`)
-//    answers PROVENANCE DRIFT and names six `badge.tsx` copies under
-//    `/extensions/`. Leg 1's reading is left above in its own words rather
-//    than rewritten, because it was correct when it was taken; six is the
-//    number this leg builds against, and it is the number the seam recipe at
-//    the end of src/app/globals.css states. The boundary the count measures
-//    did not change — it only got wider, which is the direction that makes
-//    the seam MORE necessary, not less.
+// Badge neutral borders, cinatra#3189 / App424.
+// Approved components: Secondary transparent border; Outline --line-strong.
+// These are existing theme roles in both palettes. DOM checks bind real Badge
+// behavior and caller precedence; stylesheet reads bind the cascade recipe.
+// Actual browser values and the composite grade remain separate proof.
+// The old six-copy vendor road is retired; status/destructive/default recipes
+// and StatusPill's separate contract remain outside this correction.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -148,7 +82,7 @@ describe('clause: "9999px radius"', () => {
 describe('clause: "surface-muted bg"', () => {
   it("grounds the neutral chip on the muted surface", () => {
     // --secondary resolves to --surface-muted, so the `secondary` variant IS
-    // the chip the section's chrome line describes.
+    // the chip the section's approved neutral example describes.
     expect(renderBadge("secondary").className).toContain("bg-secondary");
   });
 });
@@ -171,26 +105,16 @@ describe('clause: "icon-led"', () => {
   });
 });
 
-describe('clause: "line border"', () => {
-  // FIXED ON THE DOM SEAM, not in `badge.tsx`, for the boundary reason
-  // correction 2 in this file's header measures: the primitive is vendored into
-  // six extension packages in their own repositories behind a provenance gate
-  // that fails the moment the host copy drifts. A scope on the DOM seam at the
-  // end of src/app/globals.css reaches the host copy and every vendored copy
-  // alike, by containment, and changes no file that gate reads. It is the same
-  // road leg 1 took for the card corner, in the same file.
-  //
-  // MEASURED BEFORE: the base is `border border-transparent` — a 1px border box
-  // is reserved, but no variant except `outline` ever gives it a colour, so the
-  // neutral chip the chrome line describes rendered with no visible stroke at
-  // all. The fix is therefore a colour and not a reflow.
-  it("strokes the neutral chip with the hairline the chrome line names", () => {
+describe('clause: "Secondary transparent border; Outline line-strong"', () => {
+  // The existing unlayered seam must preserve transparency without stealing
+  // explicit caller borders. Outline obtains its stroke in the primitive.
+  it("keeps the neutral chip border transparent in the host cascade", () => {
     expect(globals()).toMatch(
-      /\[data-slot="badge"\]\[data-variant="secondary"\]\[class~="border-transparent"\]\s*\{\s*border-color:\s*var\(--line\);/,
+      /\[data-slot="badge"\]\[data-variant="secondary"\]\[class~="border-transparent"\]\s*\{\s*border-color:\s*transparent;/,
     );
   });
 
-  it("supplies the primitive's default stroke and never overrides a call site's own", () => {
+  it("preserves explicit caller border colors on Secondary and Outline", () => {
     // THE SEAM IS UNLAYERED, so it beats a call site's own `border-*` utility
     // unless it declines to match. `border-transparent` is the token the base
     // recipe spells, and `cn()` is tailwind-merge: a caller that states a
@@ -225,14 +149,21 @@ describe('clause: "line border"', () => {
       "a caller's own border colour must drop the token, so the seam declines",
     ).not.toContain("border-transparent");
     expect(overridden).toContain("border-success/30");
+    cleanup();
+    const outline = render(
+      <Badge variant="outline" className="border-success/30" aria-label="Custom outline">
+        Outline
+      </Badge>,
+    ).getByLabelText("Custom outline");
+    expect(outline.textContent).toBe("Outline");
+    expect(outline.className.split(/\s+/)).toContain("border-success/30");
+    expect(outline.className).not.toContain("border-[var(--line-strong)]");
+
   });
 
-  it("scopes the stroke to the chip the chrome line describes", () => {
-    // `--secondary` resolves to the surface-muted the same line names, so
-    // `secondary` IS that chip. The `default` chip is a solid indigo fill and
-    // the `ghost` and `link` chips are chromeless by their own recipes; the
-    // status variants take their stroke from their own status colour under the
-    // V section, which is the StatusPill primitive's clause and is graded there.
+  it("scopes the stroke to the chip the approved neutral example describes", () => {
+    // Only the untouched secondary base token matches this rule. Other
+    // variants and explicit caller borders retain their own recipes.
     const source = globals();
     expect(source).toContain(
       '[data-slot="badge"][data-variant="secondary"][class~="border-transparent"]',
@@ -246,7 +177,7 @@ describe('clause: "line border"', () => {
     expect(renderBadge("secondary").getAttribute("data-variant")).toBe("secondary");
   });
 
-  it("states the stroke where the cascade lets it win, with no !important", () => {
+  it("states transparency where the cascade lets it win, with no !important", () => {
     expect(depthOfRule('[data-slot="badge"][data-variant="secondary"]')).toBe(0);
     const source = globals();
     const rule = source.slice(
@@ -264,21 +195,20 @@ describe('clause: "line border"', () => {
     }
   });
 
-  it("leaves the vendored primitive byte-identical to its registry source", () => {
-    // The reason the recipe is a scope and not a class, held as a test: the
-    // moment `border-line` is spelled in badge.tsx, six extension repositories
-    // drift from it and the provenance gate
-    // (scripts/extensions/vendor-extension-primitives.mjs --check) fails until
-    // every one of them has re-vendored and its pin has been raised. The
-    // cinatra#1014 guard in
-    // packages/connectors/src/__tests__/connector-badge.test.ts pins the
-    // success and destructive strings, which this clause does not touch either.
-    const source = readFileSync(
-      join(process.cwd(), "src/components/ui/badge.tsx"),
-      "utf8",
+  it("draws the real Outline chip with the strong hairline and preserves its composed element", () => {
+    const { getByRole } = render(
+      <Badge variant="outline" asChild>
+        <a href="#agents">Outline</a>
+      </Badge>,
     );
-    expect(source).toContain("border border-transparent");
-    expect(source).not.toContain("border-line");
+    const chip = getByRole("link", { name: "Outline" });
+    expect(chip.getAttribute("href")).toBe("#agents");
+    expect(chip.getAttribute("data-slot")).toBe("badge");
+    expect(chip.getAttribute("data-variant")).toBe("outline");
+    expect(chip.className.split(/\s+/)).toContain("border-[var(--line-strong)]");
+    expect(chip.className.split(/\s+/)).not.toContain("border-border");
+    expect(chip.className).toContain("text-foreground");
+    expect(chip.className).toContain("h-5");
   });
 });
 
