@@ -111,7 +111,7 @@ jobs:
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
+        uses: renovatebot/github-action@230ce922b08968d0a4f6f70f295601daff09ef1d # v46.3.7
         with:
           # `x-access-token:` is how Renovate is told the token is a GitHub App
           # installation token rather than a PAT; it then resolves its own bot
@@ -168,7 +168,7 @@ jobs:
       # silently). Uploaded even when Renovate fails.
       - name: Upload Renovate log
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: renovate-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/renovate-log.ndjson

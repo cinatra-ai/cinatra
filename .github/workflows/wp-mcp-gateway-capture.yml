@@ -78,7 +78,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Resolve pins + adapter API map (static — no fixture boot)
@@ -89,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }} # unauthenticated API is rate-limited; use the run token for release lookups
         run: node tests/e2e/wp-mcp-gateway/capture-bringup.mjs
       - name: Upload api-map artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wp-mcp-gateway-api-map
           path: bringup-out/adapter-0.5.0-api-map.json
@@ -146,7 +146,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Boot pinned WordPress fixture (wordpress profile — WP + db only)
@@ -227,7 +227,7 @@ jobs:
         run: node --test tests/e2e/wp-mcp-gateway/repair-roundtrip.spec.ts
       - name: Upload captures
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wp-mcp-gateway-captures
           path: tests/e2e/wp-mcp-gateway/captures/**
@@ -239,7 +239,7 @@ jobs:
           docker compose --profile wordpress logs > compose-logs.txt 2>&1 || true
       - name: Upload compose logs
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wp-mcp-gateway-compose-logs
           path: compose-logs.txt
