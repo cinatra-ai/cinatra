@@ -2774,7 +2774,7 @@ export function useRunReviewRailRefresh({
     // This also seeds refreshed/remounted trees without a refresh loop.
     for (const taskId of initialReviewTaskIds ?? []) tasks.add(taskId);
     if (!refresh || !reviewTaskId || observed.current.refreshed.has(reviewTaskId)) return;
-    const markingIsStale = railCurrentReviewTaskId !== undefined && railCurrentReviewTaskId !== reviewTaskId;
+    const markingIsStale = railCurrentReviewTaskId != null && railCurrentReviewTaskId !== reviewTaskId;
     if (tasks.has(reviewTaskId) && !markingIsStale) return;
     tasks.add(reviewTaskId);
     observed.current.refreshed.add(reviewTaskId);
