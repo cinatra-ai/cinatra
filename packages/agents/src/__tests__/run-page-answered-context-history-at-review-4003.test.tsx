@@ -45,6 +45,7 @@ vi.mock("../use-ag-ui-run-stream",()=>({useAgUiRunStream:(_runId:string,options:
  dataPartFrames:[],isLive:true,error:null,
 })}));
 vi.mock("../db", ()=>({agentBuilderPool:{query:async()=>({rows:proof.rows}),on:()=>{},listenerCount:()=>1},db:{}}));
+vi.mock('../started-run-store', () => ({ readStartedRunsFor: async () => [] }));
 
 const artifactReads = vi.hoisted(() => ({ live: vi.fn(), historical: vi.fn() }));
 vi.mock("@/lib/artifacts/artifact-service", () => ({

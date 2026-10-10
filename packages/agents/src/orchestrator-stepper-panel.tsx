@@ -2781,6 +2781,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     runId,
     reviewTaskId,
     initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: embedMode ? undefined : router.refresh,
   });
 
