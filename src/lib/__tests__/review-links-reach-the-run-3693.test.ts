@@ -96,7 +96,7 @@ describe("B4: every review link is the run's address with the gate selected (cin
     // the base is still built, and still built under the run's own scope.
     const screens = read("packages/agents/src/instance-screens.tsx");
     expect(screens).toContain(
-      "`${buildAgentInstancePath(agentId, encodeURIComponent(run.id), { scopeBase: scopeBase ?? null })}/review`",
+      "`${buildAgentInstancePath(agentId, run.id, { scopeBase: scopeBase ?? null })}/review`",
     );
     const rail = read("packages/agents/src/run-step-rail-extra-entry.tsx");
     expect(rail).toContain("${reviewHrefBase}/");
