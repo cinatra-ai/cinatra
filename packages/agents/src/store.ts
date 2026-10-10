@@ -1471,7 +1471,7 @@ export async function createAgentRun(
   // Asserted BEFORE any derivation or insert, so an out-of-scope actor's run
   // never exists. Imported dynamically: `store.ts` is reachable from every
   // locked route, and this is only ever needed on a run WRITE.
-  const { assertAgentRunScopeAuthorized } = await import("./agent-run-serde");
+  const { assertAgentRunScopeAuthorized, assertStarterRun } = await import("./agent-run-serde");
   await assertAgentRunScopeAuthorized({
     stage: "create",
     templateId: input.templateId,
@@ -1480,7 +1480,6 @@ export async function createAgentRun(
     runBy: input.runBy ?? null,
     actor: input.scopeActor ?? null,
   });
-  const { assertStarterRun } = await import("./started-run-store");
   await assertStarterRun(input);
   const oboCeilingJson = await deriveRunOboCeilingJson({
     templateId: input.templateId,
@@ -3134,7 +3133,7 @@ export async function createAgentRunPendingInput(
   const id = randomUUID();
   // cinatra#2485 C (layer 1): the SAME gate — a `pending_input` run is a run,
   // and the Run button dispatches it later without re-entering `createAgentRun`.
-  const { assertAgentRunScopeAuthorized } = await import("./agent-run-serde");
+  const { assertAgentRunScopeAuthorized, assertStarterRun } = await import("./agent-run-serde");
   await assertAgentRunScopeAuthorized({
     stage: "create",
     templateId: input.templateId,
@@ -3147,7 +3146,6 @@ export async function createAgentRunPendingInput(
   // persist-at-dispatch OBO ceiling — same derivation as createAgentRun, so a
   // pending-input run (incl. the recurring-trigger clone) carries the chain the
   // mint path re-derives. A copied projectId (recurring clone) flows in here.
-  const { assertStarterRun } = await import("./started-run-store");
   await assertStarterRun({ ...input, id });
   const oboCeilingJson = await deriveRunOboCeilingJson({
     templateId: input.templateId,

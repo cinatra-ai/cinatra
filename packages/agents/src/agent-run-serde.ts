@@ -12,7 +12,8 @@
 // (fully erased at runtime — no runtime import cycle; store.ts imports the three
 // values one-directionally).
 // ---------------------------------------------------------------------------
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import type { McpRequestContext } from "@cinatra-ai/mcp-server";
 import {
   deriveOboCeilingChain,
   parseOboCeilingChain,
@@ -38,6 +39,36 @@ import {
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { AgentAuthPolicy } from "./auth-policy";
 import type { AgentRunRecord } from "./store";
+
+/** Trusted create input still has to name a real same-organization starter.
+ * Historical starter IDs are not backfilled or rewritten if the run disappears. */
+export async function assertStarterRun(input: { id: string; orgId: string; startedByRunId?: string | null }): Promise<void> {
+  const starter = input.startedByRunId;
+  if (starter == null) return;
+  if (typeof starter !== "string" || !starter.trim() || starter !== starter.trim() || starter === input.id) {
+    throw new Error("The starter run is invalid; no child was created.");
+  }
+  const rows = await db.select({ id: agentRuns.id }).from(agentRuns)
+    .where(and(eq(agentRuns.id, starter), eq(agentRuns.orgId, input.orgId))).limit(1);
+  if (!rows.length) throw new Error("The starter run is absent from this organization; no child was created.");
+}
+
+/** #3749: only the signed OBO or trusted run-bound seam can name a starter.
+ * Ordinary chats and ambient run headers do not name a run that started one. */
+export function runStartedByFromFrame(frame: McpRequestContext | undefined): string | null {
+  const signed = frame?.delegatedActor?.delegation === "agent_run"
+    ? frame.delegatedActor.runId : undefined;
+  const seam = frame?.verifiedRunScopeId;
+  for (const id of [signed, seam]) {
+    if (id !== undefined && (typeof id !== "string" || id.trim().length === 0 || id !== id.trim())) {
+      throw new Error("The verified starter run is invalid; no child was started.");
+    }
+  }
+  if (signed && seam && signed !== seam) {
+    throw new Error("The verified starter run contexts disagree; no child was started.");
+  }
+  return signed ?? seam ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Defensive AgentAuthPolicy JSON parser.
