@@ -212,7 +212,8 @@ function gateRow(status: "pending" | "resolved") {
     pinnedTargets: [] as Array<{ artifactId: string; representationRevisionId: string }>,
     reviewTaskId: "task-review-1",
     status,
-    disposition: status === "resolved" ? "approved" : null,
+    // The stored decision is the wire verb; the real rail derives Continued.
+    disposition: status === "resolved" ? "approve" : null,
     createdAt: new Date("2026-09-13T12:00:00Z"),
   };
 }
@@ -537,7 +538,7 @@ function railEntries(column: HTMLElement): string[] {
         "[data-schedule-rail-step],[data-recommendation-rail-step]",
     ),
   )
-    .filter((el) => el.parentElement?.closest("[data-run-surface-rail-step]") == null)
+    .filter((el) => el.parentElement?.closest("[data-rail-kind]") == null)
     .map((el) => (el.textContent ?? "").trim())
     .filter((text) => text.length > 0);
 }
@@ -1596,4 +1597,70 @@ it("keeps the round's schema policy row third when its answer is captured and th
   expect(schemaAfter!.getAttribute("data-rail-status")).toBe("completed");
   expect(railEntries(afterColumn)).toContain("4Approve the list");
   expect(capturedSubmissions.rows).toEqual(snapshot);
+});
+
+/**
+ * THE RAIL HALF OF cinatra#3449, PINNED — NOT REBUILT.
+ *
+ * The issue measured two readings at once on 2026-09-13 (head 8cae6989b2ca):
+ * the finished run's page never drew the run's output, AND "the rail loses its
+ * resolved steps at the same time". The second reading is ALREADY CLOSED on
+ * main: the one-rail composition landed as 95b85a4b0 (cinatra#3478 via pull
+ * request #3489), and the suite above pins a finished run's single column.
+ *
+ * What those pins do NOT cover is the case the issue actually measured — a
+ * finished run that SETTLED A REVIEW GATE before it ended. The drawing
+ * (specs/app-artifact-review.html §I, the step rail): "A resolved gate stays on
+ * the rail as read-only history — its entry keeps its place and records how it
+ * was settled (continued, superseded by a regeneration, changes requested), so
+ * the rail is the run's whole lifecycle at a glance, not just its live tip."
+ *
+ * So this case is a REGRESSION PIN, not a repair: it is expected green before
+ * the output change of this lane and green after it, which is what proves the
+ * completion card's evidence road left the rail alone.
+ */
+describe("a finished run keeps its resolved gate on the one rail (cinatra#3449)", () => {
+  it("keeps the resolved review entry in its own place, as read-only history, above the record", async () => {
+    row.status = "completed";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("resolved")];
+
+    const { container } = await renderRunPage();
+
+    // ONE rail, not the second column the issue's frame carried.
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const [column] = columns;
+
+    // The run's whole lifecycle at a glance: the work steps, the settled gate
+    // in the place it was settled at, and the run's own record last.
+    expect(railEntryLabels(column)).toEqual([
+      "Draft the post",
+      "Pick the image",
+      "Review · continued",
+      "What this run made",
+    ]);
+
+    // …and the settled gate is drawn AS history — it records how it was
+    // settled and is no longer the run's live tip.
+    const history = column.querySelector<HTMLElement>('[data-rail-gate-history="true"]');
+    expect(history).not.toBeNull();
+    expect(history!.getAttribute("data-rail-kind")).toBe("gate");
+    expect(history!.getAttribute("data-rail-status")).toBe("resolved");
+
+    // The record still closes the rail, reached and settled, for a run that is
+    // over with nothing holding it.
+    const made = Array.from(
+      column.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    ).find((el) => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
+  });
 });
