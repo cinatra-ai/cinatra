@@ -872,6 +872,430 @@
           "literals": ["<ReviewGateBlocked reason={REVIEW_GATE_BLOCKED_FIXTURE_REASON}"]
         }
       ]
+    },
+    "button": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"button\"] on the conformance harness mounts the shipped Button; the driver reads the primitive's own [data-slot=\"button\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"button\""]
+        },
+        {
+          "file": "src/components/ui/button.tsx",
+          "literals": ["data-slot=\"button\""]
+        }
+      ]
+    },
+    "card": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"card\"] on the conformance harness mounts the shipped Card; the driver reads the primitive's own [data-slot=\"card\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"card\""]
+        },
+        {
+          "file": "src/components/ui/card.tsx",
+          "literals": ["data-slot=\"card\""]
+        }
+      ]
+    },
+    "input": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"input\"] on the conformance harness mounts the shipped Input; the driver reads the primitive's own [data-slot=\"input\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"input\""]
+        },
+        {
+          "file": "src/components/ui/input.tsx",
+          "literals": ["data-slot=\"input\""]
+        }
+      ]
+    },
+    "select": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"select\"] on the conformance harness mounts the shipped Select, closed, whose trigger the driver presses to read the open content on the page before Escape closes it; the driver reads the primitive's own [data-slot=\"select-trigger\"], [data-slot=\"select-content\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"select\""]
+        },
+        {
+          "file": "src/components/ui/select.tsx",
+          "literals": ["data-slot='select-trigger'", "data-slot='select-content'"]
+        }
+      ]
+    },
+    "dialog": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"dialog\"] on the conformance harness mounts the shipped Dialog, closed, whose trigger the driver presses to read the open content on the page before Escape closes it; the driver reads the primitive's own [data-slot=\"dialog-trigger\"], [data-slot=\"dialog-content\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"dialog\""]
+        },
+        {
+          "file": "src/components/ui/dialog.tsx",
+          "literals": ["data-slot=\"dialog-trigger\"", "data-slot=\"dialog-content\""]
+        }
+      ]
+    },
+    "badge": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"badge\"] on the conformance harness mounts the shipped Badge; the driver reads the primitive's own [data-slot=\"badge\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"badge\""]
+        },
+        {
+          "file": "src/components/ui/badge.tsx",
+          "literals": ["data-slot=\"badge\""]
+        }
+      ]
+    },
+    "tabs": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"tabs\"] on the conformance harness mounts the shipped Tabs with their list and triggers; the driver reads the primitive's own [data-slot=\"tabs\"], [data-slot=\"tabs-list\"], [data-slot=\"tabs-trigger\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"tabs\""]
+        },
+        {
+          "file": "src/components/ui/tabs.tsx",
+          "literals": ["data-slot='tabs'", "data-slot='tabs-list'", "data-slot='tabs-trigger'"]
+        }
+      ]
+    },
+    "toolbar": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"toolbar\"] on the conformance harness mounts the shipped Toolbar; the driver reads the primitive's own [data-slot=\"toolbar\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"toolbar\""]
+        },
+        {
+          "file": "src/components/ui/toolbar.tsx",
+          "literals": ["data-slot=\"toolbar\""]
+        }
+      ]
+    },
+    "toolbar-nested": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"toolbar-nested\"] on the conformance harness mounts the shipped Toolbar with its level-2 ToolbarChild beneath it; the driver reads the primitive's own [data-slot=\"toolbar\"], [data-slot=\"toolbar-child\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"toolbar-nested\""]
+        },
+        {
+          "file": "src/components/ui/toolbar.tsx",
+          "literals": ["data-slot=\"toolbar\"", "data-slot=\"toolbar-child\""]
+        }
+      ]
+    },
+    "sidebar": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"sidebar\"] on the conformance harness mounts the shipped Sidebar (collapsible none) inside its SidebarProvider; the driver reads the primitive's own [data-slot=\"sidebar\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"sidebar\""]
+        },
+        {
+          "file": "src/components/ui/sidebar.tsx",
+          "literals": ["data-slot=\"sidebar\""]
+        }
+      ]
+    },
+    "sidebar-group-label": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"sidebar-group-label\"] on the conformance harness mounts the shipped SidebarGroupLabel inside its SidebarProvider; the driver reads the primitive's own [data-slot=\"sidebar-group-label\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"sidebar-group-label\""]
+        },
+        {
+          "file": "src/components/ui/sidebar.tsx",
+          "literals": ["data-slot=\"sidebar-group-label\""]
+        }
+      ]
+    },
+    "tooltip": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"tooltip\"] on the conformance harness mounts the shipped Tooltip, closed, whose trigger the driver hovers to read the open content on the page before Escape closes it; the driver reads the primitive's own [data-slot=\"tooltip-trigger\"], [data-slot=\"tooltip-content\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"tooltip\""]
+        },
+        {
+          "file": "src/components/ui/tooltip.tsx",
+          "literals": ["data-slot=\"tooltip-trigger\"", "data-slot=\"tooltip-content\""]
+        }
+      ]
+    },
+    "avatar": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"avatar\"] on the conformance harness mounts the shipped Avatar with its fallback; the driver reads the primitive's own [data-slot=\"avatar\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"avatar\""]
+        },
+        {
+          "file": "src/components/ui/avatar.tsx",
+          "literals": ["data-slot=\"avatar\""]
+        }
+      ]
+    },
+    "form": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"form\"] on the conformance harness mounts the shipped form item, label and control under their own form context; the driver reads the primitive's own [data-slot=\"form-item\"], [data-slot=\"form-label\"], [data-slot=\"form-control\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"form\""]
+        },
+        {
+          "file": "src/components/ui/form.tsx",
+          "literals": ["data-slot='form-item'", "data-slot='form-label'", "data-slot='form-control'"]
+        }
+      ]
+    },
+    "checkbox": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"checkbox\"] on the conformance harness mounts the shipped Checkbox; the driver reads the primitive's own [data-slot=\"checkbox\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"checkbox\""]
+        },
+        {
+          "file": "src/components/ui/checkbox.tsx",
+          "literals": ["data-slot='checkbox'"]
+        }
+      ]
+    },
+    "alert": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"alert\"] on the conformance harness mounts the shipped Alert; the driver reads the primitive's own [data-slot=\"alert\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"alert\""]
+        },
+        {
+          "file": "src/components/ui/alert.tsx",
+          "literals": ["data-slot='alert'"]
+        }
+      ]
+    },
+    "table": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"table\"] on the conformance harness mounts the shipped Table; the driver reads the primitive's own [data-slot=\"table\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"table\""]
+        },
+        {
+          "file": "src/components/ui/table.tsx",
+          "literals": ["data-slot=\"table\""]
+        }
+      ]
+    },
+    "command": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"command\"] on the conformance harness mounts the shipped Command menu; the driver reads the primitive's own [data-slot=\"command\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"command\""]
+        },
+        {
+          "file": "src/components/ui/command.tsx",
+          "literals": ["data-slot=\"command\""]
+        }
+      ]
+    },
+    "breadcrumb": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"breadcrumb\"] on the conformance harness mounts the shipped Breadcrumb; the driver reads the primitive's own [data-slot=\"breadcrumb\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"breadcrumb\""]
+        },
+        {
+          "file": "src/components/ui/breadcrumb.tsx",
+          "literals": ["data-slot=\"breadcrumb\""]
+        }
+      ]
+    },
+    "pagination": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"pagination\"] on the conformance harness mounts the shipped Pagination; the driver reads the primitive's own [data-slot=\"pagination\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"pagination\""]
+        },
+        {
+          "file": "src/components/ui/pagination.tsx",
+          "literals": ["data-slot=\"pagination\""]
+        }
+      ]
+    },
+    "skeleton": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"skeleton\"] on the conformance harness mounts the shipped Skeleton; the driver reads the primitive's own [data-slot=\"skeleton\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"skeleton\""]
+        },
+        {
+          "file": "src/components/ui/skeleton.tsx",
+          "literals": ["data-slot=\"skeleton\""]
+        }
+      ]
+    },
+    "empty": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"empty\"] on the conformance harness mounts the shipped Empty state; the driver reads the primitive's own [data-slot=\"empty\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"empty\""]
+        },
+        {
+          "file": "src/components/ui/empty.tsx",
+          "literals": ["data-slot=\"empty\""]
+        }
+      ]
+    },
+    "accordion": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"accordion\"] on the conformance harness mounts the shipped Accordion; the driver reads the primitive's own [data-slot=\"accordion\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"accordion\""]
+        },
+        {
+          "file": "src/components/ui/accordion.tsx",
+          "literals": ["data-slot=\"accordion\""]
+        }
+      ]
+    },
+    "separator": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"separator\"] on the conformance harness mounts the shipped Separator; the driver reads the primitive's own [data-slot=\"separator\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"separator\""]
+        },
+        {
+          "file": "src/components/ui/separator.tsx",
+          "literals": ["data-slot=\"separator\""]
+        }
+      ]
+    },
+    "toggle": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"toggle\"] on the conformance harness mounts the shipped Toggle; the driver reads the primitive's own [data-slot=\"toggle\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"toggle\""]
+        },
+        {
+          "file": "src/components/ui/toggle.tsx",
+          "literals": ["data-slot=\"toggle\""]
+        }
+      ]
+    },
+    "calendar": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"calendar\"] on the conformance harness mounts the shipped Calendar on a fixed month; the driver reads the primitive's own [data-slot=\"calendar\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"calendar\""]
+        },
+        {
+          "file": "src/components/ui/calendar.tsx",
+          "literals": ["data-slot=\"calendar\""]
+        }
+      ]
+    },
+    "combobox": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"combobox\"] on the conformance harness mounts the shipped Combobox, closed, whose trigger the driver presses to read the open content on the page before Escape closes it; the driver reads the primitive's own [data-slot=\"combobox-trigger\"], [data-slot=\"combobox-content\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"combobox\""]
+        },
+        {
+          "file": "src/components/ui/combobox.tsx",
+          "literals": ["data-slot=\"combobox-trigger\"", "data-slot=\"combobox-content\""]
+        }
+      ]
+    },
+    "scroll-area": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"scroll-area\"] on the conformance harness mounts the shipped ScrollArea; the driver reads the primitive's own [data-slot=\"scroll-area\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"scroll-area\""]
+        },
+        {
+          "file": "src/components/ui/scroll-area.tsx",
+          "literals": ["data-slot=\"scroll-area\""]
+        }
+      ]
+    },
+    "input-otp": {
+      "manifest": "app-components",
+      "selector": "[data-surface-id=\"input-otp\"] on the conformance harness mounts the shipped InputOTP with its slots; the driver reads the primitive's own [data-slot=\"input-otp\"], [data-slot=\"input-otp-slot\"] inside the mount.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/component-surface-fixtures.tsx",
+          "literals": ["data-surface-id=\"input-otp\""]
+        },
+        {
+          "file": "src/components/ui/input-otp.tsx",
+          "literals": ["data-slot='input-otp'", "data-slot='input-otp-slot'"]
+        }
+      ]
+    },
+    "agent-card-accent-hover": {
+      "manifest": "app-extensions",
+      "selector": "[data-surface-id=\"agent-card-accent-hover\"] on the conformance harness mounts the real AgentAllCard with a scoped listing row; the driver reads its coloured panel [data-slot=\"extension-card-banner\"][data-accent-detail] with the hover layer [data-slot=\"extension-card-accent-hover\"] inside it, opens the detail modal in place by pressing the panel, and reads the kind label [data-slot=\"installed-extension-kind-label\"].",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/agent-card-accent-hover-fixture.tsx",
+          "literals": ["data-surface-id=\"agent-card-accent-hover\"", "AgentAllCard"]
+        },
+        {
+          "file": "src/components/extension-card.tsx",
+          "literals": ["data-slot=\"extension-card-banner\"", "data-accent-detail=\"\"", "data-slot=\"extension-card-accent-hover\""]
+        },
+        {
+          "file": "src/components/extensions/installed-extension-card.tsx",
+          "literals": ["data-slot=\"installed-extension-kind-label\""]
+        }
+      ]
     }
   },
   "shared": {

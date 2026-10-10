@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-extensions.html",
-  "contentHash": "sha256:6cef4dce99482754c7ffc7ec879c1fe43ff0c321db6c7057f7e4d04ac4402187",
+  "contentHash": "sha256:7b92cb200116a444434d63f28c04cdb2e8f8113674f96302a8085bf3fcc6e2c9",
   "surfaces": [
     {
       "id": "extension-listing-grid",
@@ -230,6 +230,19 @@
       ],
       "states": [
         "error",
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "agent-card-accent-hover",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-details",
+          "outcome": "detail-modal-open"
+        }
+      ],
+      "states": [
         "kind:agent"
       ]
     },

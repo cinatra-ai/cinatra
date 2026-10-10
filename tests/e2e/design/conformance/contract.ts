@@ -23,6 +23,38 @@ import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/
 import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
+import {
+  BUTTON_SURFACE_DRIVER,
+  CARD_SURFACE_DRIVER,
+  INPUT_SURFACE_DRIVER,
+  SELECT_SURFACE_DRIVER,
+  DIALOG_SURFACE_DRIVER,
+  BADGE_SURFACE_DRIVER,
+  TABS_SURFACE_DRIVER,
+  TOOLBAR_SURFACE_DRIVER,
+  TOOLBAR_NESTED_SURFACE_DRIVER,
+  SIDEBAR_SURFACE_DRIVER,
+  SIDEBAR_GROUP_LABEL_SURFACE_DRIVER,
+  TOOLTIP_SURFACE_DRIVER,
+  AVATAR_SURFACE_DRIVER,
+  FORM_SURFACE_DRIVER,
+  CHECKBOX_SURFACE_DRIVER,
+  ALERT_SURFACE_DRIVER,
+  TABLE_SURFACE_DRIVER,
+  COMMAND_SURFACE_DRIVER,
+  BREADCRUMB_SURFACE_DRIVER,
+  PAGINATION_SURFACE_DRIVER,
+  SKELETON_SURFACE_DRIVER,
+  EMPTY_SURFACE_DRIVER,
+  ACCORDION_SURFACE_DRIVER,
+  SEPARATOR_SURFACE_DRIVER,
+  TOGGLE_SURFACE_DRIVER,
+  CALENDAR_SURFACE_DRIVER,
+  COMBOBOX_SURFACE_DRIVER,
+  SCROLL_AREA_SURFACE_DRIVER,
+  INPUT_OTP_SURFACE_DRIVER,
+} from "./component-surface-drivers";
+import { AGENT_CARD_ACCENT_HOVER_DRIVER } from "./agent-card-accent-hover-driver";
 
 import { CONFORMANCE_SEED_REFUSAL_HEADER } from "../../../../src/lib/test-support/conformance-seed-fence";
 import {
@@ -7738,6 +7770,7 @@ const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER,
   "agent-start-refused": AGENT_START_REFUSED_DRIVER,
+  "agent-card-accent-hover": AGENT_CARD_ACCENT_HOVER_DRIVER, // The coloured-panel hover of the extensions drawing (cinatra#2851).
   toast: TOAST_DRIVER,
   "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -7781,6 +7814,35 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
+  "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).
+  "card": CARD_SURFACE_DRIVER,
+  "input": INPUT_SURFACE_DRIVER,
+  "select": SELECT_SURFACE_DRIVER,
+  "dialog": DIALOG_SURFACE_DRIVER,
+  "badge": BADGE_SURFACE_DRIVER,
+  "tabs": TABS_SURFACE_DRIVER,
+  "toolbar": TOOLBAR_SURFACE_DRIVER,
+  "toolbar-nested": TOOLBAR_NESTED_SURFACE_DRIVER,
+  "sidebar": SIDEBAR_SURFACE_DRIVER,
+  "sidebar-group-label": SIDEBAR_GROUP_LABEL_SURFACE_DRIVER,
+  "tooltip": TOOLTIP_SURFACE_DRIVER,
+  "avatar": AVATAR_SURFACE_DRIVER,
+  "form": FORM_SURFACE_DRIVER,
+  "checkbox": CHECKBOX_SURFACE_DRIVER,
+  "alert": ALERT_SURFACE_DRIVER,
+  "table": TABLE_SURFACE_DRIVER,
+  "command": COMMAND_SURFACE_DRIVER,
+  "breadcrumb": BREADCRUMB_SURFACE_DRIVER,
+  "pagination": PAGINATION_SURFACE_DRIVER,
+  "skeleton": SKELETON_SURFACE_DRIVER,
+  "empty": EMPTY_SURFACE_DRIVER,
+  "accordion": ACCORDION_SURFACE_DRIVER,
+  "separator": SEPARATOR_SURFACE_DRIVER,
+  "toggle": TOGGLE_SURFACE_DRIVER,
+  "calendar": CALENDAR_SURFACE_DRIVER,
+  "combobox": COMBOBOX_SURFACE_DRIVER,
+  "scroll-area": SCROLL_AREA_SURFACE_DRIVER,
+  "input-otp": INPUT_OTP_SURFACE_DRIVER,
   // The Workspace surfaces the ratified drawing adds (epic cinatra#2806). Their
   // manifest is not pinned yet, so these generate no test today; they are what
   // the recorded pin advance is waiting for, and they SKIP with a reason until
