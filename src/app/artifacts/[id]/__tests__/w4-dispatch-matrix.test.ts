@@ -27,7 +27,7 @@ import {
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
-import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION, type ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 
 import { _resetFirstPartySeedForTests } from "../renderer-resolution";
@@ -76,18 +76,21 @@ function summary(objectType: string, identity: EffectiveIdentity): ArtifactSumma
   } as unknown as ArtifactSummary;
 }
 
+// Both roads are driven at the ceiling the page and the review core pass (the
+// host's newest props version), because the build-map arm floors a display that
+// declares more than its ceiling (#3978).
 function pageRoad(artifact: ArtifactSummary, mime: string) {
   return resolveArtifactDisplayMount({
     orgId: ORG,
     baseType: artifact.objectType,
     identity: artifact.presentationIdentity,
     mime,
-    propsApiVersion: 1,
+    propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
   });
 }
 function reviewRoad(artifact: ArtifactSummary, mime: string) {
   const { resolveMount } = bindArtifactReviewPorts({ orgId: ORG, actor });
-  return Promise.resolve(resolveMount({ artifact, mime, propsApiVersion: 1 }));
+  return Promise.resolve(resolveMount({ artifact, mime, propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION }));
 }
 
 /** label, objectType, identity, mime, the package that must answer (null = a
