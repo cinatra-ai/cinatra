@@ -40,7 +40,7 @@ import {
   type ReviewGateRow,
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
-import { buildRunStepRail, type RailGate, type RailMessage } from "./run-step-rail";
+import { buildRunStepRail, electCurrentReviewGate, type RailGate, type RailMessage } from "./run-step-rail";
 import { reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
@@ -2055,6 +2055,7 @@ export async function SetupScreen({
         // The rail's earlier query is authoritative for what it actually drew.
         // A gate may open before this later slot read in the SAME render.
         railReviewTaskIds: railGates.map((gate) => gate.reviewTaskId),
+        railCurrentReviewTaskId: electCurrentReviewGate(reviewRailGates)?.reviewTaskId ?? null,
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────

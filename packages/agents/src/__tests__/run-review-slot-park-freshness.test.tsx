@@ -40,7 +40,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, act } from "@testing-library/react";
 
-import { useRunReviewSlot, type RunReviewSlot } from "../lifecycle-card-runtime";
+import { encodeLifecycleGateRef, decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import { useRunReviewRailRefresh, useRunReviewSlot, type RunReviewSlot } from "../lifecycle-card-runtime";
 
 const NOT_PARKED: RunReviewSlot = { ref: null, awaiting: false, producedReviewPark: false };
 const PARKED_NO_GATE: RunReviewSlot = { ref: null, awaiting: false, producedReviewPark: true };
@@ -86,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe("useRunReviewSlot under the parked status", () => {
@@ -313,4 +315,22 @@ describe("useRunReviewSlot: the park's own belts", () => {
       "the reader was stopped along with the drawing, so a later gate row is invisible",
     ).toBeGreaterThan(spentAtTheCeiling);
   });
+});
+
+it("§I.3 SSR A then polled B keeps the live B reference and refreshes its stale rail once", async () => {
+  const refresh = vi.fn();
+  vi.stubEnv("BETTER_AUTH_SECRET", "3976-native-fixture-key-only");
+  const initial = { ref: encodeLifecycleGateRef({ runId: "run", reviewTaskId: "A" }), awaiting: false, producedReviewPark: true, reviewTaskId: "A" };
+  const reader = countedReader(() => ({ ref: encodeLifecycleGateRef({ runId: "run", reviewTaskId: "B" }), awaiting: false, producedReviewPark: true, reviewTaskId: "B" }));
+  const { result } = renderHook(() => {
+    const live = useRunReviewSlot({ status: "pending_approval", initial, read: reader.read });
+    useRunReviewRailRefresh({ runId: "run", reviewTaskId: live.slot.reviewTaskId, initialReviewTaskIds: ["A", "B"], railCurrentReviewTaskId: "A", refresh });
+    return live;
+  });
+  await letItLook(50);
+  expect(result.current.slot.reviewTaskId).toBe("B");
+  expect(decodeLifecycleGateRef(result.current.slot.ref!)).toEqual({ runId: "run", reviewTaskId: "B" });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await letItLook(5000);
+  expect(refresh).toHaveBeenCalledTimes(1);
 });

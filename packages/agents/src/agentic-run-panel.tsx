@@ -2447,6 +2447,7 @@ export function AgenticRunPanel({
     runId,
     reviewTaskId,
     initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: widgetHostedPanel ? undefined : refreshReviewRail,
   });
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);

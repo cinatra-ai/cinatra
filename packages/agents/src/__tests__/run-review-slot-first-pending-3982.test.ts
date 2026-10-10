@@ -91,7 +91,9 @@ function link(...tasks: string[]) {
 async function activeRailTask(): Promise<string | null> {
   const gates = await listReviewGatesForRun("run");
   const rail = buildRunStepRail({ gates: gates.map(g => ({ gateId: g.id, reviewTaskId: g.reviewTaskId, status: g.status, disposition: g.disposition, createdAt: g.createdAt })) });
-  return rail.entries.find(entry => entry.ordinal === rail.activeOrdinal)?.gate?.reviewTaskId ?? null;
+  const current = rail.entries.filter(entry => entry.gate?.current);
+  expect(current).toHaveLength(gates.some(g => g.status === "pending") ? 1 : 0);
+  return current[0]?.gate?.reviewTaskId ?? null;
 }
 beforeEach(() => { data.tables = { artifact_review_gates: [], artifact_produced_outbox: [], agent_runs: [] }; data.reads = []; seed(); });
 
@@ -140,4 +142,11 @@ describe("detail and rail elect the first pending review in raise order", () => 
     seed(parked); data.tables.artifact_review_gates = [gate("foreign", 1, "pending", "other-run")];
     expect(await readRunReviewSlot("run")).toEqual({ reviewTaskId: null, awaiting: false, parkedOnProducedReview: parked });
   });
+});
+
+// App674 explicitly names this reachable discrepancy; SQL/park linkage is preserved.
+it("pins the unlinked-A ahead of linked-B parked-run gap without broadening the slot", async () => {
+  seed(true); data.tables.artifact_review_gates = [gate("unlinked-A", 1), gate("linked-B", 2)]; link("linked-B");
+  expect(await activeRailTask()).toBe("unlinked-A");
+  expect((await readRunReviewSlot("run")).reviewTaskId).toBe("linked-B");
 });
