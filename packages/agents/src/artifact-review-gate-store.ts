@@ -693,8 +693,9 @@ export async function readVerificationRecordsForGates(
 export async function readGatePinnedTargets(
   runId: string,
   reviewTaskId: string,
+  options?: { decisionFactsForOrgId?: string; executor?: GateStoreExecutor },
 ): Promise<GatePinnedOutcome> {
-  const gate = await readReviewGate(runId, reviewTaskId);
+  const gate = await readReviewGateVia(options?.executor ?? db, runId, reviewTaskId);
   if (!gate) return { status: "not-found" };
   // A DECIDED gate still names its frozen pinned set, because the reviewed work
   // stays on screen after the decision: "A resolved gate opens read-only: what
@@ -704,7 +705,17 @@ export async function readGatePinnedTargets(
   // artifact's latest. Preparing from it is OPT-IN at the core
   // (`acceptResolvedGate`), so every decision path still fails closed here.
   if (gate.status !== "pending") {
-    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets) };
+    const time = gate.resolvedAt;
+    const decision = gate.status === "resolved" &&
+      typeof options?.decisionFactsForOrgId === "string" && options.decisionFactsForOrgId.length > 0 &&
+      gate.orgId === options.decisionFactsForOrgId && gate.runId === runId && gate.reviewTaskId === reviewTaskId &&
+      typeof gate.id === "string" && gate.id.length > 0 && gate.disposition === "approve" &&
+      typeof gate.fingerprint === "string" && /^[a-f0-9]{64}$/.test(gate.fingerprint) &&
+      time instanceof Date && Number.isFinite(time.getTime())
+      ? { gateId: gate.id, orgId: gate.orgId, runId: gate.runId, reviewTaskId: gate.reviewTaskId,
+          fingerprint: gate.fingerprint, disposition: "approve" as const, decidedAt: time.toISOString() }
+      : undefined;
+    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets), ...(decision ? { decision } : {}) };
   }
   return { status: "pending", targets: rowsToTargets(gate.pinnedTargets) };
 }
@@ -1397,6 +1408,7 @@ export async function enforceReviewRunAccess(
   actor: PrimitiveActorContext,
   op: "read" | ReviewRunAccessOp,
   roles?: ActorRoleHints,
+  options?: { includeOrgId: true },
 ): Promise<RunAccessOutcome> {
   // Plain fetch (no actor ⇒ no internal enforce) — this helper OWNS the gate.
   const run = await readAgentRunById(runId);
@@ -1422,7 +1434,7 @@ export async function enforceReviewRunAccess(
   }
   try {
     await enforceRunAccess(runForCheck, actor, op, roles);
-    return { ok: true };
+    return { ok: true, ...(options?.includeOrgId && run ? { orgId: run.orgId } : {}) };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, status: err.statusCode };
     throw err;
