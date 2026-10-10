@@ -50,7 +50,7 @@ class ObservedResize {
 
 const messages = [{ id: "idle-run", role: "assistant" as const, content: "" }];
 const props: ConversationColumnProps = {
-  host: CHAT_THREAD_HOST, messages, isSlackMode: false, animating: false, theme: "light",
+  host: CHAT_THREAD_HOST, messages, isSlackMode: false, animating: false, theme: "github-light",
   activeThreadId: "thread-4011", assistantHandleMap: new Map(), taggedAssistantUserIds: [],
   mentionables: [], pausedParticipants: [], onTogglePause: vi.fn(), requestEditMessageId: null,
   onRequestEditMessage: vi.fn(), onEditStarted: vi.fn(), streamingCount: 0,
