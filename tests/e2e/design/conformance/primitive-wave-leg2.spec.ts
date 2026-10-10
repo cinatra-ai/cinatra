@@ -907,13 +907,43 @@ for (const { name: palette, theme } of PALETTES) {
       });
     });
 
+    test.describe("button — seven host names and distinct primary/default paint", () => {
+      test("the actual host roster answers all seven names", async ({ page }) => {
+        await open(page, theme);
+        const roster = page.locator(`${seam("button-roster")} [data-slot="button"]`);
+        const names = ["primary", "default", "outline", "secondary", "destructive", "ghost", "link"];
+        await expect(roster).toHaveCount(names.length);
+        for (const name of names) {
+          const button = roster.filter({ hasText: new RegExp(`^${name}$`) });
+          await expect(button).toBeVisible();
+          await expect(button).toBeEnabled();
+          await expect(button).toHaveAttribute("data-variant", name);
+        }
+      });
+
+      test("indigo primary and ink-bordered default use the live palette", async ({ page }) => {
+        await open(page, theme);
+        const primary = page.locator(`${seam("button-roster")} [data-variant="primary"]`);
+        const base = page.locator(`${seam("button-roster")} [data-variant="default"]`);
+        await expect(primary).toBeVisible();
+        await expect(base).toBeVisible();
+        expect(await style(primary, "background-color")).toBe(await token(page, "--primary"));
+        expect(await style(primary, "color")).toBe(await token(page, "--primary-foreground"));
+        expect(await style(primary, "border-top-color")).toBe(await token(page, "--primary"));
+        expect(await style(base, "background-color")).toBe(await token(page, "--surface-strong"));
+        expect(await style(base, "color")).toBe(await token(page, "--foreground"));
+        expect(await style(base, "border-top-color")).toBe(await token(page, "--line-strong"));
+        expect(await style(primary, "background-color")).not.toBe(await style(base, "background-color"));
+        for (const button of [primary, base]) {
+          for (const side of ["top", "right", "bottom", "left"]) {
+            expect(await px(button, `border-${side}-width`)).toBe(1);
+          }
+        }
+      });
+    });
+
     test.describe("select — the chrome clause this leg absorbs", () => {
-      // The section's other absorbed clause — the Button roster's missing
-      // "Primary" name — is not read here and has no seam on the page: it is a
-      // name the recipe does not answer to rather than a rendered value, so
-      // there is nothing to measure in a browser. It is recorded, with its
-      // cross-repository road, in
-      // src/components/ui/__tests__/button-variant-set.test.tsx.
+      // The host Button roster and its primary/default paint are read separately above.
       test('"Trigger mirrors Input chrome.": the trigger measures the same chrome as the live Input beside it', async ({
         page,
       }) => {
