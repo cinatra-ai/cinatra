@@ -71,6 +71,8 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  buildGateContinuePayload,
+  mergeGateRendererValues,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -1948,18 +1950,20 @@ export function AgenticRunPanel({
           // `onChange({userResponse: ...})` — see auditor / campaign /
           // email-drafts renderers). Three cases:
           //   1. setup gate => no userResponse at all;
-          //   2. non-setup, no attachments => keep whatever the renderer wrote
-          //      (or omit if it wrote none; review-task-actions falls back to
-          //      "[Approved by operator]");
+          //   2. non-setup, no attachments => keep whatever the renderer wrote;
+          //      serialize a refusal if it wrote none, otherwise the server
+          //      falls back to "[Approved by operator]";
           //   3. non-setup, attachments present => wrap the renderer's text (or
           //      the server's default text) with the envelope
           //      (applyAttachmentEnvelopeUserResponseOnly).
           // Compute payload synchronously from current state to avoid a setState read race.
-          let nextBuffered: Record<string, unknown> = {
-            ...bufferedHitlValue,
-            approved: true,
-            approvedAt: new Date().toISOString(),
-          };
+          let nextBuffered = buildGateContinuePayload(
+            effectiveHitlContext.reviewTaskId,
+            // Continue carries the stored choice; bare Approve is explicit.
+            opts?.withReject === true
+              ? { ...bufferedHitlValue, approved: true }
+              : bufferedHitlValue,
+          );
           if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
             nextBuffered = applyAttachmentEnvelopeUserResponseOnly(
               nextBuffered,
@@ -2941,7 +2945,7 @@ export function AgenticRunPanel({
                         let nextBuffered = bufferedHitlValue;
                         if (next && typeof next === "object" && !Array.isArray(next)) {
                           const newValues = next as Record<string, unknown>;
-                          nextBuffered = { ...bufferedHitlValue, ...newValues };
+                          nextBuffered = mergeGateRendererValues(effectiveHitlContext.reviewTaskId, bufferedHitlValue, newValues);
                           setBufferedHitlValue(nextBuffered); // visual update
                         }
                         // Grouped-setup forms: approve immediately on form submit so the
@@ -2950,7 +2954,7 @@ export function AgenticRunPanel({
                           await performGateSubmit({
                             reviewTaskId: effectiveHitlContext.reviewTaskId,
                             xRenderer: effectiveHitlContext.xRenderer,
-                            payload: { ...nextBuffered, approved: true, approvedAt: new Date().toISOString() },
+                            payload: buildGateContinuePayload(effectiveHitlContext.reviewTaskId, nextBuffered),
                             trackApproving: true,
                             suppressGate: true,
                             clearAttachmentsOnSuccess: false,
