@@ -348,6 +348,14 @@ export function RailExtraEntry({
   // the header and the settled line already read.
   const gateSettlement = reviewGateRailSettlement(entry.gate?.disposition);
   const isPending = entry.status === "pending";
+  // THE ENTRY IS MARKED THE WAY THE FRAME'S OWN ROWS MARK THEIRS, which is what
+  // this file already says it intends below: "one reading of the rail answers
+  // for every row of it". An entry the run has not got to yet is not reached;
+  // an entry whose state is terminal -- resolved, completed or skipped -- is
+  // settled. The vocabulary is `RailStatus`'s own, not a second one.
+  const railReached = entry.status !== "upcoming";
+  const railSettled =
+    entry.status === "resolved" || entry.status === "completed" || entry.status === "skipped";
 
   // THE GATE THE RUN IS PARKED ON OPENS IN PLACE (cinatra#3478, the click leg).
   // The run detail is where a gate's own surface is drawn, so the row that
@@ -503,6 +511,14 @@ export function RailExtraEntry({
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-gate-open={entry.gate.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           // THE STEP THE SCREEN BELONGS TO IS MARKED, and marked the way the
           // frame's own rows mark theirs, so one reading of the rail answers
           // for every row of it.
@@ -539,6 +555,9 @@ export function RailExtraEntry({
           // suite address this row by the task it settles, and that is the same
           // fact whether the row navigates or selects.
           data-rail-gate-open={entry.gate.reviewTaskId}
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           aria-current={selection?.selected === settledGateKey ? "step" : undefined}
           data-run-surface-rail-selected={
             selection?.selected === settledGateKey ? "true" : "false"
@@ -574,6 +593,21 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-gate-link={entry.gate.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -588,6 +622,9 @@ export function RailExtraEntry({
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-verification-open={entry.verification.reviewTaskId}
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           aria-current={selection?.selected === verificationKey ? "step" : undefined}
           data-run-surface-rail-selected={
             selection?.selected === verificationKey ? "true" : "false"
@@ -614,6 +651,21 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-verification-link={entry.verification.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -634,6 +686,21 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_INERT_ROW_CLASS
           )}
           data-rail-inert=""
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -662,6 +729,21 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           tabIndex={-1}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
