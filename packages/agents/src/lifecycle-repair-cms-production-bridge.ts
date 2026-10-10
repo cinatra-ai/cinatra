@@ -108,8 +108,8 @@ export function buildCmsRepairTaskText(
 }
 
 /**
- * Project the CMS-generic task-construction addition onto a dispatched repair
- * run's `inputParams`. Returns `{}` (no addition) when the delivered repair's
+ * Project fresh CMS-generic instructions onto a dispatched repair
+ * run's `inputParams`, retaining the task alias. Returns `{}` (no addition) when the delivered repair's
  * base target is not a captured CMS snapshot — byte-identical dispatch for the
  * blog pipeline and any future non-CMS repairing producer.
  */
@@ -118,7 +118,8 @@ export async function projectCmsRepairInputParams(
 ): Promise<Record<string, unknown>> {
   const target = await resolveCmsRepairBaseTarget(delivered);
   if (!target) return {};
-  return { task: buildCmsRepairTaskText(delivered, target) };
+  const instructions = buildCmsRepairTaskText(delivered, target);
+  return { task: instructions, instructions };
 }
 
 // ---------------------------------------------------------------------------
