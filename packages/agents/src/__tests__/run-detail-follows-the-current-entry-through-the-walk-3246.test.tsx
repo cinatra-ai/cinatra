@@ -68,6 +68,12 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+// This rail-state fixture has no started-run history. Keep the unrelated
+// reader at the data boundary; the composed page and rail stay real.
+vi.mock("../visible-started-runs", () => ({
+  readVisibleStartedRuns: async () => [],
+}));
+
 const RUN_ID = "run-3246-detail";
 
 /** THE RUN, AS THE STORE HOLDS IT — one row, moved from moment to moment. */

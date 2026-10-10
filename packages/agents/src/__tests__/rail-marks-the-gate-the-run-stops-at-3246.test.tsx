@@ -70,6 +70,12 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+// This rail-state fixture has no started-run history. Keep the unrelated
+// reader at the data boundary; the composed page and rail stay real.
+vi.mock("../visible-started-runs", () => ({
+  readVisibleStartedRuns: async () => [],
+}));
+
 // Storage rows remain raw: the real task-bound receipt reader validates them.
 const history = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
 vi.mock("../db", () => ({
