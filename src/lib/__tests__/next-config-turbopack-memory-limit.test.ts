@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 async function loadConfig(mode: string | undefined, limit: string | undefined) {
   vi.stubEnv("NODE_ENV", mode);
   vi.stubEnv("CINATRA_DEV_TURBOPACK_MEMORY_LIMIT", limit);
-  vi.stubEnv("SUPABASE_DB_URL", "postgres://fixture:fixture@example.invalid:1/fixture");
+  vi.stubEnv("SUPABASE_DB_URL", "configuration-test-fixture");
   vi.stubEnv("SENTRY_AUTH_TOKEN", undefined);
   vi.stubEnv("CINATRA_BUILD_CPUS", undefined);
   vi.resetModules();
