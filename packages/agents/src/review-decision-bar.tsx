@@ -17,7 +17,7 @@ import {
 } from "@/lib/artifacts/review-surface-model";
 
 import { ReviewGateBlocked } from "./review-gate-states";
-import { useComposerFocusStore } from "./lifecycle-card-runtime";
+import { useComposerFocusStore, useInsideConversation, useLifecycleCardHost } from "./lifecycle-card-runtime";
 
 export type SubmitReviewDecisionAction = (input: {
   disposition: ReviewDisposition;
@@ -94,7 +94,10 @@ export function ReviewDecisionBar({
   suggestionSummary?: { accepted: number; total: number };
 }) {
   const router = useRouter();
-  const hasPrimaryChatInput = useComposerFocusStore() !== null;
+  const insideConversation = useInsideConversation();
+  const hasComposerBinding = useComposerFocusStore() !== null;
+  const validatedHost = useLifecycleCardHost();
+  const hasPrimaryChatInput = insideConversation || validatedHost === "site_widget" || hasComposerBinding;
   const [comment, setComment] = useState(recordedPrompt ?? "");
   const [noteEdited, setNoteEdited] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -165,8 +168,10 @@ export function ReviewDecisionBar({
           its card Note stays subordinate, including nested run cards.
           Without a chat box, the run/review page Note is the primary input
           and uses the boxed app-artifact-review §VI drawing. The host's
-          existing composer binding declaration decides this, not the
-          nearest card type or the reader's permission to submit. */}
+          validated conversation frame remains authoritative before the
+          optional focus binding mounts, including nested run cards.
+          Outside it, an actual composer binding also declares a chatbox;
+          the reader's permission to submit never chooses input weight. */}
       <div data-conformance-id={hasPrimaryChatInput ? "review-note-field-subordinate" : undefined} className="px-4 pt-3">
         <label
           htmlFor="review-rationale"

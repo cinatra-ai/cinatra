@@ -258,7 +258,9 @@ describe("one renderer, four first-party hosts", () => {
   // has to be driven here by name. A host nothing drives has no counted proof.
   const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
 
-  it("draws the SAME card on every first-party host, differing only in the frame", async () => {
+  it("§I / §V.1 / §VI: draws the SAME card on every host except its frame and asserted Note hierarchy", async () => {
+    const subordinateNoteClass = "flex field-sizing-content w-full py-2 transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent";
+    const primaryNoteClass = "flex field-sizing-content w-full text-base transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input-fill/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:disabled:bg-input-fill/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 min-h-[44px] rounded-[7px] border border-line bg-surface px-[11px] py-[9px] text-reading shadow-none md:text-reading dark:bg-surface";
     const drawn: Record<string, string> = {};
     for (const host of HOSTS) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
@@ -268,11 +270,42 @@ describe("one renderer, four first-party hosts", () => {
       );
       const root = container.querySelector('[data-conformance-id="review-gate-card"]');
       expect(root?.getAttribute("data-lifecycle-card-host")).toBe(host);
-      // Normalize away the frame (the ONE thing a host may change) and the host
-      // marker; what remains must be byte-identical across the three.
+      const floor = root!.querySelector('[data-conformance-id="review-decision-bar"]')!;
+      const note = floor.querySelector<HTMLTextAreaElement>('[data-testid="review-rationale"]')!;
+      const wrapper = note.parentElement!;
+      const subordinate = host === "chat_thread" || host === "site_widget";
+      // Approved lifecycle-cards §I / §V.1: each conversation already has its
+      // primary chatbox; app-artifact-review §VI boxes the run/page Note.
+      // Assert every permitted difference BEFORE touching the cloned DOM.
+      expect(wrapper.getAttribute("data-conformance-id")).toBe(
+        subordinate ? "review-note-field-subordinate" : null,
+      );
+      expect(wrapper.className).toBe("px-4 pt-3");
+      expect(note.className).toBe(subordinate ? subordinateNoteClass : primaryNoteClass);
+      expect(note.id).toBe("review-rationale");
+      expect(note.getAttribute("data-slot")).toBe("textarea");
+      expect(note.getAttribute("placeholder")).toBe("Add a note for the run and the audit trail…");
+      expect(note.value).toBe("");
+      expect(note.disabled).toBe(false);
+      const label = wrapper.querySelector<HTMLLabelElement>("label")!;
+      expect(label.htmlFor).toBe(note.id);
+      expect(label.textContent).toBe("Decision rationale (optional on approve, expected on reject)");
+      expect(Array.from(floor.querySelectorAll<HTMLButtonElement>("button")).map((button) => ({
+        label: button.textContent?.trim(), action: button.getAttribute("data-action"), disabled: button.disabled,
+      }))).toEqual([
+        { label: "Comment", action: "comment-review -> annotated", disabled: false },
+        { label: "Reject", action: "reject-review -> resolved", disabled: false },
+        { label: "Approve", action: "approve-review -> resolved", disabled: false },
+      ]);
+      // Keep the original frame normalization, then normalize ONLY the two
+      // exact Note attributes asserted above. Every other card byte, including
+      // Note labels/values and action/permission chrome, remains compared.
       const clone = root!.cloneNode(true) as HTMLElement;
       clone.removeAttribute("class");
       clone.removeAttribute("data-lifecycle-card-host");
+      const clonedNote = clone.querySelector('[data-testid="review-rationale"]')!;
+      clonedNote.parentElement!.removeAttribute("data-conformance-id");
+      clonedNote.setAttribute("class", subordinateNoteClass);
       drawn[host] = clone.innerHTML;
       unmount();
       cleanup();

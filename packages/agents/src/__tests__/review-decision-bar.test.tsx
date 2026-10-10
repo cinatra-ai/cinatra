@@ -265,23 +265,31 @@ function declaredPrimaryValue(element: HTMLElement, property: string): string {
 
 // App654: app-lifecycle-cards §I "Exactly one primary input" and
 // app-artifact-review §VI boxed Note. Real host providers select the same
-// composer binding read used by the shipped conversation, including nesting.
+// semantic conversation frame and optional composer binding, including nesting.
 // These DOM/declaration pins are native checks, not painted browser evidence.
 describe("§I / §VI — Note hierarchy follows the actual surface (App654)", () => {
   for (const palette of ["light", "dark"] as const) {
-    for (const host of ["run_card", "page_gate_region", "chat_thread"] as const) {
-      it(`${palette} ${host} without composer: the sole Note is primary and boxed with §VI values`, () => {
+    for (const host of ["run_card", "page_gate_region", "chat_thread", "site_widget"] as const) {
+      it(`${palette} ${host} without focus provider: §I conversation is subordinate; §VI run/page is primary`, () => {
         const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
         const { container } = render(
           <div className={palette === "dark" ? "dark" : ""}>
-            <LifecycleCardSurfaceProvider host={host}>
+            <LifecycleCardSurfaceProvider host={host} auth={host === "site_widget" ? { headers: () => ({}), credentials: "omit" } : undefined}>
               <ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} />
             </LifecycleCardSurfaceProvider>
           </div>,
         );
         const field = noteField();
         const classes = classesOf(field);
-        expect(container.querySelector(NOTE_FIELD), "no subordinate claim without a chatbox").toBeNull();
+        if (host === "chat_thread" || host === "site_widget") {
+          // §I / V.1 draw the chat or widget conversation's primary chatbox.
+          // The widget deliberately has no review-focus provider; neither
+          // absent focus provider turns its card Note into a second input.
+          expect(container.querySelector(NOTE_FIELD)?.contains(field)).toBe(true);
+          for (const token of ["border-0", "border-b", "border-dashed", "rounded-none", "bg-transparent", "dark:bg-transparent"]) expect(classes).toContain(token);
+          for (const token of ["border", "rounded-[7px]", "bg-surface", "dark:bg-surface"]) expect(classes).not.toContain(token);
+        } else {
+        expect(container.querySelector(NOTE_FIELD), "run/page without conversation has no subordinate claim").toBeNull();
         for (const token of ["border", "border-line", "rounded-[7px]", "bg-surface", "dark:bg-surface", "min-h-[44px]", "px-[11px]", "py-[9px]", "text-reading"]) {
           expect(classes, `§VI primary declaration ${token}`).toContain(token);
         }
@@ -295,20 +303,37 @@ describe("§I / §VI — Note hierarchy follows the actual surface (App654)", ()
         expect(declaredPrimaryValue(field, "padding-block")).toBe("9px");
         expect(declaredPrimaryValue(field, "font-size")).toBe("12.5px");
         expect(declaredPrimaryValue(field, "background-color")).toBe("var(--surface)");
+        }
         expect(container.querySelectorAll("textarea")).toHaveLength(1);
         expect(field.getAttribute("placeholder")).toBe("Add a note for the run and the audit trail…");
         expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Reject", "Approve"]);
       });
     }
+    it(`${palette} refused widget declaration: no semantic conversation or chatbox is inferred`, () => {
+      const { container } = render(
+        <div className={palette === "dark" ? "dark" : ""}>
+          <LifecycleCardSurfaceProvider host="site_widget">
+            <ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }))} />
+          </LifecycleCardSurfaceProvider>
+        </div>,
+      );
+      expect(container.querySelector(NOTE_FIELD)).toBeNull();
+      expect(classesOf(noteField())).toContain("bg-surface");
+      expect(classesOf(noteField())).not.toContain("border-dashed");
+      expect(container.querySelectorAll("textarea")).toHaveLength(1);
+    });
     for (const nested of [false, true]) {
-      it(`${palette} conversation${nested ? " nested run card" : ""}: chatbox remains primary`, () => {
+      for (const focusBound of [false, true]) {
+      it(`${palette} conversation${nested ? " nested run card" : ""}, focus provider ${focusBound ? "bound" : "absent"}: §I chatbox remains primary`, () => {
         const bar = <ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }))} />;
         const { container } = render(
           <div className={palette === "dark" ? "dark" : ""}>
             <LifecycleCardSurfaceProvider host="chat_thread">
-              <LifecycleComposerFocusProvider store={createComposerFocusStore()}>
-                {nested ? <LifecycleCardSurfaceProvider host="run_card">{bar}</LifecycleCardSurfaceProvider> : bar}
-              </LifecycleComposerFocusProvider>
+              {focusBound ? (
+                <LifecycleComposerFocusProvider store={createComposerFocusStore()}>
+                  {nested ? <LifecycleCardSurfaceProvider host="run_card">{bar}</LifecycleCardSurfaceProvider> : bar}
+                </LifecycleComposerFocusProvider>
+              ) : nested ? <LifecycleCardSurfaceProvider host="run_card">{bar}</LifecycleCardSurfaceProvider> : bar}
             </LifecycleCardSurfaceProvider>
           </div>,
         );
@@ -318,6 +343,7 @@ describe("§I / §VI — Note hierarchy follows the actual surface (App654)", ()
         expect(classes).not.toContain("border");
         expect(container.querySelectorAll("textarea")).toHaveLength(1);
       });
+      }
     }
   }
 });
