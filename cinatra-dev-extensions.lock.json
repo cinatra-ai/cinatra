@@ -255,7 +255,7 @@
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
       "repo": "cinatra-ai/google-oauth-connector",
-      "resolvedSha": "f631752b491ac0f31ee48f126b2647e07e6f59af"
+      "resolvedSha": "eebe77650ddf1d53cf0bb734ce7c9d7a96041ba7"
     },
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
@@ -335,7 +335,7 @@
     {
       "packageName": "@cinatra-ai/plane-connector",
       "repo": "cinatra-ai/plane-connector",
-      "resolvedSha": "42ca4f3bd9e50f7082cee2eb66070d86fb378383"
+      "resolvedSha": "652498fb4535e3b20e633e421c5a6266ec24ff7e"
     },
     {
       "packageName": "@cinatra-ai/podcast-artifacts",
