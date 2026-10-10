@@ -34,6 +34,12 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
+vi.mock("../field-renderer-components", async importOriginal => ({
+  ...await importOriginal<typeof import("../field-renderer-components")>(),
+  loadFieldRendererComponent: async (input: { bindingId: string }) => input.bindingId !== "@cinatra-ai/fixture-publish-agent:confirm" ? (await importOriginal<typeof import("../field-renderer-components")>()).loadFieldRendererComponent(input) : ({ ok: true, Component: ({ value }: { value: Record<string, unknown> }) => <span data-testid="destination-host">{String(value.siteHost ?? "no-host")}</span> }),
+}));
+import { makeExtensionFieldRenderer } from "../extension-field-renderer";
+
 const screenStateMock = vi.fn();
 vi.mock("../agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: (input: { runId: string }) => screenStateMock(input),
@@ -820,5 +826,94 @@ describe("the broker submit", () => {
     ).toBeNull();
     expect(requests).toHaveLength(0);
     expect(approveMock).not.toHaveBeenCalled();
+  });
+});
+
+// The production extension wrapper receives presentation data through the card,
+// including when the run page supplies its own screen. Only its external module
+// loader is stubbed: the provider, wrapper, scope check and DOM are real.
+describe("trusted render-only destination on both screen paths", () => {
+  const bindingId = "@cinatra-ai/fixture-publish-agent:confirm";
+  const Extension = makeExtensionFieldRenderer(bindingId);
+  const value = { wordpressInstanceId: "instance-1", postArtifactId: "artifact-1", postRepresentationRevisionId: "revision-1", siteHost: "forged.example" };
+  const bindingParams = { renderInputs: { siteHost: { provider: "connector-destination-host", instanceField: "wordpressInstanceId", identityFields: ["postArtifactId", "postRepresentationRevisionId"] } } };
+  const display = { bindingId, reviewTaskId: "task-1", instanceField: "wordpressInstanceId", instanceId: "instance-1", identityValues: { postArtifactId: "artifact-1", postRepresentationRevisionId: "revision-1" }, siteHost: "blog.acme.example" };
+  const state = { ...ASKING, gate: { ...ASKING.gate, reviewTaskId: "task-1", xRenderer: bindingId, currentValues: value, renderInputs: display } };
+  const inline = <Extension fieldName="confirmation" schema={{ type: "object", "x-renderer": bindingId }} value={value} onChange={() => undefined} context={{ runId: RUN_ID, connectedApps: [], allFieldValues: value }} bindingParams={bindingParams} />;
+
+  it("projects the trusted host into a supplied screen without replacing its controls", async () => {
+    screenStateMock.mockResolvedValue(state);
+    const mounted = render(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={<div>Original control{inline}</div>} /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("blog.acme.example"));
+    expect(mounted.container.textContent).toContain("Original control");
+    expect(mounted.container.textContent).not.toContain("forged.example");
+    expect(screenStateMock).toHaveBeenCalledWith({ runId: RUN_ID });
+  });
+  it("a failed optional read leaves the original screen actionable and clears hostile input", async () => {
+    screenStateMock.mockRejectedValue(new Error("display read denied"));
+    const mounted = render(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={<div>Original control{inline}</div>} /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("no-host"));
+    expect(mounted.container.textContent).toContain("Original control");
+  });
+  it("the card's own fields receive the same host without adding it to answers or allFieldValues", async () => {
+    let observedAllFields: unknown;
+    fieldRendererRegistry.register({ id: bindingId, priority: 1000, condition: (_f, _s, ctx) => ctx.xRenderer === bindingId, credentialSafe: true,
+      renderer: props => { observedAllFields = props.context.allFieldValues; return <Extension {...props} bindingParams={bindingParams} />; } });
+    screenStateMock.mockResolvedValue(state);
+    const mounted = render(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("blog.acme.example"));
+    expect(observedAllFields).toEqual(value);
+    expect((observedAllFields as typeof value).siteHost).toBe("forged.example");
+    expect(approveMock).not.toHaveBeenCalled();
+  });
+  it("denied projection or mismatching artifact identity cannot preserve hostile siteHost", async () => {
+    screenStateMock.mockResolvedValue({ ...state, gate: { ...state.gate, renderInputs: undefined } });
+    const mounted = render(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={inline} wireRef="gate-version-0" /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("no-host"));
+    const readsBefore = screenStateMock.mock.calls.length;
+    screenStateMock.mockResolvedValue({ ...state, gate: { ...state.gate, renderInputs: { ...display, identityValues: { ...display.identityValues, postArtifactId: "other-artifact" } } } });
+    mounted.rerender(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={inline} wireRef="gate-version-1" /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(screenStateMock.mock.calls.length).toBeGreaterThan(readsBefore));
+    expect(mounted.getByTestId("destination-host").textContent).toBe("no-host");
+  });
+  it("without a host display context the extension cannot use a hostile model field", async () => {
+    const mounted = render(inline);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("no-host"));
+  });
+  it("focus reauthorization clears the old optional host without withholding inline controls", async () => {
+    screenStateMock.mockResolvedValue(state);
+    const mounted = render(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={<div>Original control{inline}</div>} /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("blog.acme.example"));
+    screenStateMock.mockRejectedValue(new Error("focus denied"));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(mounted.getByTestId("destination-host").textContent).toBe("no-host");
+    expect(mounted.container.textContent).toContain("Original control");
+  });
+  it("a changed widget credential never keeps the prior actor's host or calls a cookie action", async () => {
+    fieldRendererRegistry.register({ id: bindingId, priority: 1000, condition: (_f, _s, ctx) => ctx.xRenderer === bindingId, credentialSafe: true, renderer: props => <Extension {...props} bindingParams={bindingParams} /> });
+    const firstAuth = { headers: () => ({ Authorization: "Bearer cwu_first" }), credentials: "omit" as const };
+    const nextAuth = { headers: () => ({ Authorization: "Bearer cwu_next" }), credentials: "omit" as const };
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      expect(init?.credentials).toBe("omit");
+      const headers = new Headers(init?.headers);
+      if (headers.get("Authorization") !== "Bearer cwu_first") throw new Error("new actor denied");
+      return new Response(JSON.stringify(state), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    screenStateMock.mockClear(); rendererContextMock.mockClear();
+    const mounted = render(<LifecycleCardSurfaceProvider host="site_widget" auth={firstAuth}><AgentHitlScreenCard runId={RUN_ID} /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("blog.acme.example"));
+    mounted.rerender(<LifecycleCardSurfaceProvider host="site_widget" auth={nextAuth}><AgentHitlScreenCard runId={RUN_ID} /></LifecycleCardSurfaceProvider>);
+    expect(mounted.getByTestId("destination-host").textContent).toBe("no-host");
+    expect(screenStateMock).not.toHaveBeenCalled(); expect(rendererContextMock).not.toHaveBeenCalled();
+  });
+  it("run change and pending/failed refresh drop previous host while preserving the screen", async () => {
+    screenStateMock.mockResolvedValue(state);
+    const mounted = render(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={inline} wireRef="gate-version-0" /></LifecycleCardSurfaceProvider>);
+    await waitFor(() => expect(mounted.getByTestId("destination-host").textContent).toBe("blog.acme.example"));
+    screenStateMock.mockRejectedValue(new Error("refresh failed"));
+    mounted.rerender(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId={RUN_ID} screen={inline} wireRef="gate-version-1" /></LifecycleCardSurfaceProvider>);
+    expect(mounted.getByTestId("destination-host").textContent).toBe("no-host");
+    mounted.rerender(<LifecycleCardSurfaceProvider host="run_card"><AgentHitlScreenCard runId="run-2" screen={inline} wireRef="gate-version-2" /></LifecycleCardSurfaceProvider>);
+    expect(mounted.getByTestId("destination-host").textContent).toBe("no-host");
   });
 });
