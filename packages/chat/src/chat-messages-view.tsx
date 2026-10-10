@@ -1331,30 +1331,10 @@ function OrderedPartsSection({
       onScheduleStandingReadingsChange?.([]);
     };
   }, [onScheduleStandingReadingsChange, scheduleStandingReadings]);
-  // WHICH SLOTS IN THIS TURN DRAW SECTION VI's OWN SENTENCE (cinatra#3174 fix
-  // leg 9). Section VI draws every one of its example turns the same way: one
-  // prose line, then the card. The settled readings — fired one-off, fired
-  // recurring, stopped — have a sentence OF THEIR OWN, and it is the turn's one
-  // line; the example turn for a recurring schedule that has fired carries
-  // "It is still recurring, so the rows below still take a change — it applies
-  // to the runs still to come." and nothing above it.
-  //
-  // Fix leg 7 drew that sentence BESIDE the model's own lead-in rather than in
-  // its place, on the reasoning that prose the model wrote is not this
-  // renderer's to touch. A graded round then measured the shipped turn drawing
-  // TWO prose lines on every settled reading, which is more than the drawing
-  // gives — and the drawing, not the reasoning, is the anchor. So the lead-in
-  // is not rewritten here either: it is not DRAWN, because the reading's own
-  // sentence is what this turn says.
-  //
-  // A LIST OF SLOTS, not a boolean, and the FIRST one decides: a turn can carry
-  // more than one produced-views slot, and what §VI rules out is prose standing
-  // ABOVE the sentence. Prose below a slot is not what this measured, and is
-  // left exactly as it was drawn.
-  //
-  // AND EVERY READING NOW HAS A SENTENCE. §VI's first-shown, configured and
-  // expired examples draw the proposal sentence as the turn's ONE line, so the
-  // lead-in stands only while the card has not yet reported (fix leg 2, #2853).
+  // §VI gives an authorized schedule turn one prose line: its resolved
+  // reading's sentence replaces all model prose in that same turn, including
+  // follow-up after the card. Absent, unresolved and stale slots keep their
+  // original prose; earlier, user and stored-history turns are untouched.
   const [standingLineSlots, setStandingLineSlots] = useState<readonly number[]>([]);
   const onStandingLineChange = useCallback((slot: number, drawn: boolean) => {
     setStandingLineSlots((prev) => {
@@ -1368,7 +1348,7 @@ function OrderedPartsSection({
   const firstStandingLineSlot = standingLineSlots.length === 0 ? null : standingLineSlots[0]!;
   const scheduleSentences = useContext(ScheduleWaitContext);
   const reportSlottedStandingLine = scheduleSentences?.reportSlottedStandingLine;
-  const slottedStandingLine = firstStandingLineSlot !== null || scheduleStandingReadings.length > 0;
+  const slottedStandingLine = firstStandingLineSlot !== null;
   useEffect(() => {
     reportSlottedStandingLine?.(slottedStandingLine);
     return () => reportSlottedStandingLine?.(false);
@@ -1376,65 +1356,77 @@ function OrderedPartsSection({
   const carriedStandingLine = (scheduleSentences?.carriedStandingReadings ?? []).some(
     (reading) => standingScheduleLineFor(reading) !== null,
   );
+  // A run slot paints the card without a StandingScheduleLine. Its reported
+  // reading still owns one platform-corrected sentence in the text slots.
+  const runStandingLine = scheduleStandingReadings
+    .map(({ reading }) => standingScheduleLineFor(reading))
+    .find((line) => line !== null) ?? null;
+  const correctPlatformScheduleText = (text: string): string => {
+    let raw = trimContent ? trimContent(text) : text;
+    // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
+    // construction: only the sentence this platform minted, only for a
+    // run this turn is drawing a schedule card for, and only while that
+    // run is waiting. Prose the model wrote is not touched.
+    // THE SPENT ONE-OFF'S LINE FIRST. Its correction replaces the whole
+    // platform sentence rather than its clause, so a run corrected here
+    // leaves nothing for the wait correction below to match — which is
+    // what keeps the two from ever composing into one line.
+    for (const firedRunId of scheduleFiredRunIds) {
+      raw = correctRunStartSentenceForFiredSchedule({
+        text: raw,
+        runId: firedRunId,
+        // THE TURN'S OWN SCHEDULE RUNS, so the headless fallback can tell
+        // whether a standing clause is provably this run's line.
+        scheduleRunIds: [
+          ...scheduleFiredRunIds,
+          ...scheduleFiredRecurringRunIds,
+          ...scheduleWaitRunIds,
+        ],
+        // AND WHICH OF THEM HAVE FIRED (converge round), so a turn whose
+        // schedule runs have ALL fired is corrected rather than left
+        // permanently saying that runs which have all started have not.
+        // THE READING'S OWN LIST (fix leg 3): the lift is taken only where
+        // every schedule run in the turn is in THIS reading, so the two
+        // fired sentences can never both claim one standing clause.
+        firedScheduleRunIds: scheduleFiredRunIds,
+      });
+    }
+    // THE FIRED RECURRING LINE, ON THE SAME TERMS (cinatra#3174 fix leg 3).
+    for (const firedRunId of scheduleFiredRecurringRunIds) {
+      raw = correctRunStartSentenceForFiredRecurringSchedule({
+        text: raw,
+        runId: firedRunId,
+        scheduleRunIds: [
+          ...scheduleFiredRunIds,
+          ...scheduleFiredRecurringRunIds,
+          ...scheduleWaitRunIds,
+        ],
+        firedScheduleRunIds: scheduleFiredRecurringRunIds,
+      });
+    }
+    for (const waitingRunId of scheduleWaitRunIds) {
+      raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
+    }
+    return raw;
+  };
+  const firstRunStandingTextSlot = runStandingLine === null ? -1 : parts.findIndex(
+    (part) => part.kind === "text" && correctPlatformScheduleText(part.content).includes(runStandingLine),
+  );
   if (parts.length === 0) return null;
   return (
     <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
       {parts.map((part, idx) => {
         if (part.kind === "text") {
-          // THE TURN'S ONE PROSE LINE IS THE DRAWN SENTENCE (cinatra#3174 fix
-          // leg 9) — see the note on `standingLineSlots`. Nothing is read,
-          // matched or rewritten: a text part standing above the slot that
-          // draws §VI's sentence is simply not drawn, and the transcript's own
-          // history — the reader's request, every earlier turn — is untouched
-          // because this decision is scoped to the parts of THIS turn.
-          if (firstStandingLineSlot !== null && idx < firstStandingLineSlot) return null;
-          // A restored card without a producing slot stands after this trace.
-          // Its current reading owns the lead-in only when no earlier slot does.
-          if (!slottedStandingLine && carriedStandingLine) return null;
-          let raw = trimContent ? trimContent(part.content) : part.content;
-          // THE PLATFORM'S OWN SENTENCE, CORRECTED AT THE CARD. Narrow by
-          // construction: only the sentence this platform minted, only for a
-          // run this turn is drawing a schedule card for, and only while that
-          // run is waiting. Prose the model wrote is not touched.
-          // THE SPENT ONE-OFF'S LINE FIRST. Its correction replaces the whole
-          // platform sentence rather than its clause, so a run corrected here
-          // leaves nothing for the wait correction below to match — which is
-          // what keeps the two from ever composing into one line.
-          for (const firedRunId of scheduleFiredRunIds) {
-            raw = correctRunStartSentenceForFiredSchedule({
-              text: raw,
-              runId: firedRunId,
-              // THE TURN'S OWN SCHEDULE RUNS, so the headless fallback can tell
-              // whether a standing clause is provably this run's line.
-              scheduleRunIds: [
-                ...scheduleFiredRunIds,
-                ...scheduleFiredRecurringRunIds,
-                ...scheduleWaitRunIds,
-              ],
-              // AND WHICH OF THEM HAVE FIRED (converge round), so a turn whose
-              // schedule runs have ALL fired is corrected rather than left
-              // permanently saying that runs which have all started have not.
-              // THE READING'S OWN LIST (fix leg 3): the lift is taken only where
-              // every schedule run in the turn is in THIS reading, so the two
-              // fired sentences can never both claim one standing clause.
-              firedScheduleRunIds: scheduleFiredRunIds,
-            });
-          }
-          // THE FIRED RECURRING LINE, ON THE SAME TERMS (cinatra#3174 fix leg 3).
-          for (const firedRunId of scheduleFiredRecurringRunIds) {
-            raw = correctRunStartSentenceForFiredRecurringSchedule({
-              text: raw,
-              runId: firedRunId,
-              scheduleRunIds: [
-                ...scheduleFiredRunIds,
-                ...scheduleFiredRecurringRunIds,
-                ...scheduleWaitRunIds,
-              ],
-              firedScheduleRunIds: scheduleFiredRecurringRunIds,
-            });
-          }
-          for (const waitingRunId of scheduleWaitRunIds) {
-            raw = correctRunStartSentenceForScheduleWait({ text: raw, runId: waitingRunId });
+          // §VI: the authorized schedule reading owns this turn's one prose
+          // sentence. Neither a lead-in nor a follow-up accompanies it; the
+          // stored transcript and every other turn remain unchanged.
+          if (slottedStandingLine || carriedStandingLine) return null;
+          let raw = correctPlatformScheduleText(part.content);
+          if (runStandingLine !== null) {
+            // Keep the existing platform correction, once, rather than model
+            // lead-in or follow-up beside the resolved schedule card.
+            if (idx !== firstRunStandingTextSlot) return null;
+            raw = runStandingLine;
           }
           // Skip pure-whitespace text parts (they're separator artifacts).
           if (!raw.replace(/\s+/g, "").length) return null;

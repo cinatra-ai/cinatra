@@ -639,7 +639,7 @@ export function ScheduleProposalCard({
   // turn can draw section VI's proposal sentence; a card with no body still
   // reports `other`.
   useReportScheduleReading(
-    body === null
+    !present || body === null || state === null || state.state === "absent"
       ? "other"
       : stoppedRecurringSchedule(body)
         ? "stopped-recurring"
