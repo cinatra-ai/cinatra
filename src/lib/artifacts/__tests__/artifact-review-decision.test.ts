@@ -2,7 +2,7 @@
  * The artifact-review DECISION core (cinatra#1795, epic #1620 S12, items 4 + 5;
  * AC-3). Proves submit-time re-validation, TRUE idempotency (sequential retry +
  * concurrent race), SERVER-derived audit provenance (never client-supplied),
- * reject → tombstone (never hard-delete), the terminal resume folded into the
+ * new Reject refusal (legacy fingerprints remain readable), the terminal resume folded into the
  * atomic commit as an exactly-once outbox intent, and — the load-bearing
  * invariant — ZERO PARTIAL COMMIT: any re-validation or persistence failure
  * commits nothing.
@@ -89,19 +89,12 @@ describe("submitReviewDecisionCore — terminal approve", () => {
   });
 });
 
-describe("submitReviewDecisionCore — terminal reject", () => {
-  it("records a TOMBSTONE disposition per target (never hard-delete) + a REJECT resume intent", async () => {
+describe("submitReviewDecisionCore — §VI Reject is no longer produced", () => {
+  it("refuses a tombstoning Reject without a resume intent or any commit", async () => {
     const p = ports();
     const r = await submitReviewDecisionCore(decision({ disposition: "reject", comment: "no" }), p);
-    expect(r.ok).toBe(true);
-    const plan = p.commit.mock.calls[0][0];
-    expect(plan.dispositionOps).toEqual([
-      { artifactId: "a", representationRevisionId: "1", kind: "tombstone" },
-      { artifactId: "b", representationRevisionId: "2", kind: "tombstone" },
-    ]);
-    expect(plan.resumeIntent.kind).toBe("reject");
-    expect(plan.resumeIntent.rejectResponse).not.toContain('"approved"');
-    expect(plan.resumeIntent.userResponse).toBeUndefined();
+    expect(r.ok).toBe(false);
+    expect(p.commit).not.toHaveBeenCalled();
   });
 });
 
@@ -150,8 +143,8 @@ describe("submitReviewDecisionCore — idempotency", () => {
   it("reordered targets emit a BYTE-IDENTICAL plan (canonical order matches the order-independent fingerprint)", async () => {
     const fwd = ports();
     const rev = ports();
-    await submitReviewDecisionCore(decision({ disposition: "reject", reviewedTargets: [t("a", "1"), t("b", "2")] }), fwd);
-    await submitReviewDecisionCore(decision({ disposition: "reject", reviewedTargets: [t("b", "2"), t("a", "1")] }), rev);
+    await submitReviewDecisionCore(decision({ disposition: "approve", reviewedTargets: [t("a", "1"), t("b", "2")] }), fwd);
+    await submitReviewDecisionCore(decision({ disposition: "approve", reviewedTargets: [t("b", "2"), t("a", "1")] }), rev);
     const planFwd = fwd.commit.mock.calls[0][0];
     const planRev = rev.commit.mock.calls[0][0];
     // Same fingerprint AND same audit-row / disposition / resume-intent bytes.
@@ -280,11 +273,10 @@ describe("submitReviewDecisionCore — the deciding actor is recorded", () => {
     expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-V");
   });
 
-  it("stamps the acting actor on a REJECT too (every terminal decision has a decider)", async () => {
+  it("does not stamp a new Reject audit row", async () => {
     const p = ports({ actingActorId: () => "user-V" });
-    const r = await submitReviewDecisionCore(decision({ disposition: "reject" }), p);
-    expect(r.ok).toBe(true);
-    expect(p.commit.mock.calls[0][0].decidedBy).toBe("user-V");
+    expect((await submitReviewDecisionCore(decision({ disposition: "reject" }), p)).ok).toBe(false);
+    expect(p.commit).not.toHaveBeenCalled();
   });
 
   it("takes the actor from the PORT, never from the client decision payload", async () => {
@@ -547,21 +539,11 @@ describe("S6b — a partition can only ride a decision that can carry it", () =>
     expect(p.commit).not.toHaveBeenCalled();
   });
 
-  it("ALLOWS dismissals on a reject — the reviewer looked and declined", async () => {
+  it("refuses Reject even with legitimate dismissals; they cannot revive the retired operation", async () => {
     const p = suggestionPorts();
-    const r = await submitReviewDecisionCore(
-      decision({
-        disposition: "reject",
-        suggestionDecisions: { accepted: [], dismissed: ["sug_1"] },
-      }),
-      p,
-    );
-    expect(r.ok).toBe(true);
-    expect(p.commit.mock.calls[0][0].suggestionPlan).toEqual({
-      snapshotId: SURFACED.snapshotId,
-      accepted: [],
-      dismissed: ["sug_1"],
-    });
+    const r = await submitReviewDecisionCore(decision({ disposition: "reject", suggestionDecisions: { accepted: [], dismissed: ["sug_1"] } }), p);
+    expect(r.ok).toBe(false);
+    expect(p.commit).not.toHaveBeenCalled();
   });
 
   it("REFUSES an id that is both accepted and dismissed", async () => {
@@ -619,5 +601,17 @@ describe("S6b — the commit plan carries the ledger + intent inputs", () => {
       p,
     );
     expect(p.commit.mock.calls[0][0].suggestionPlan).toBeNull();
+  });
+});
+
+
+describe("approved app-artifact-review §VI new Reject refusal", () => {
+  it("refuses Reject before authorization reads or any mutation", async () => {
+    const access = vi.fn(async () => ({ ok: true as const }));
+    const gate = vi.fn(async (): Promise<ReviewGateState> => ({ status: "pending", targets: PINNED }));
+    const p = ports({ verifyRunAccess: access, readGateState: gate });
+    const r = await submitReviewDecisionCore(decision({ disposition: "reject", comment: "no" }), p);
+    expect(r.ok).toBe(false);
+    expect(p.commit).not.toHaveBeenCalled(); expect(access).not.toHaveBeenCalled(); expect(gate).not.toHaveBeenCalled();
   });
 });
