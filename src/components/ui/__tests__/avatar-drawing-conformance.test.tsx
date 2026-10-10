@@ -19,20 +19,14 @@
 // asks for an avatar without naming a size. It now draws 36px, the bottom of
 // the band and the value the section's own example draws.
 //
-// ONE READING RECORDED RATHER THAN ACTED ON, and the reason. The section's
-// example draws its four avatars with an 8px corner, so a strict reading of
-// the example makes the avatar a rounded square; the product has drawn a
-// circle since it shipped. The clause's own words are "36–40px square", which
-// states the BOX — a square rather than a rectangle — and the section's prose
-// states no corner rule at all. Turning every avatar in the product from a
-// circle into a rounded square is an identity change, not a chrome repair, and
-// it is recorded here for a reading rather than taken on a reading of example
-// CSS. This follows the same disposition this wave already used for the select
-// panel's hairline.
-import { afterEach, describe, expect, it } from "vitest";
+// The approved section also draws four 36px avatars with 8px corners.
+// These native assertions enforce the Source utility/prop contract; they do
+// not measure browser paint. The standalone browser spec reads the actual
+// default/fallback/pseudo geometry in both palettes; App image proof is owed.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
-import { Avatar, AvatarFallback, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
+import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount, AvatarImage } from "@/components/ui/avatar";
 import { ACCENT_PALETTE, EXTENSION_ACCENTS } from "@/lib/extension-accent";
 
 afterEach(cleanup);
@@ -103,11 +97,14 @@ describe('clause: "36–40px square"', () => {
     () => {},
   );
 
-  // Recorded, not fixed: the corner. See the file header.
-  it.skip(
-    "recorded reading, not fixed here: the section's example draws an 8px corner while the primitive draws a circle — an identity change, not a chrome repair",
-    () => {},
-  );
+  it("follows the four approved 8px corner examples and inherits their border/fallback shape", () => {
+    const { root, fallback } = renderAvatar();
+    expect(root.className.split(/\s+/)).toContain("rounded-[8px]");
+    expect(root.className.split(/\s+/)).toContain("after:rounded-[inherit]");
+    expect(fallback.className.split(/\s+/)).toContain("rounded-[inherit]");
+    expect(root.className.split(/\s+/)).not.toContain("rounded-full");
+  });
+
 });
 
 describe('clause: "random accent ground" / "never indigo or navy"', () => {
@@ -154,5 +151,99 @@ describe('clause: "italic 800 initial" / "Archivo italic 800"', () => {
   it("keeps the initial legible on the accent ground it is given", () => {
     const { fallback } = renderAvatar("default", "burgundy");
     expect(fallback.style.color).not.toBe("");
+  });
+});
+
+// Only the external browser image readiness port is supplied: the actual
+// Radix Root/Image/Fallback components and their loading dispatch execute.
+function loadedImagePort() {
+  const image = document.createElement("img");
+  Object.defineProperties(image, {
+    complete: { get: () => true }, naturalWidth: { get: () => 36 },
+  });
+  return image;
+}
+
+describe("corner inheritance and preserved caller contracts", () => {
+  it("honors root circle classes and inline corner styles without changing child defaults", () => {
+    const { container } = render(
+      <Avatar className="h-8 w-8 rounded-full" style={{ borderRadius: "13px" }} aria-label="Owner">
+        <AvatarFallback accent="plum">O</AvatarFallback>
+      </Avatar>,
+    );
+    const root = container.querySelector('[data-slot="avatar"]') as HTMLElement;
+    const fallback = container.querySelector('[data-slot="avatar-fallback"]') as HTMLElement;
+    expect(root.className.split(/\s+/)).toContain("rounded-full");
+    expect(root.className.split(/\s+/)).not.toContain("rounded-[8px]");
+    expect(root.style.borderRadius).toBe("13px");
+    expect(root.getAttribute("aria-label")).toBe("Owner");
+    expect(fallback.className.split(/\s+/)).toContain("rounded-[inherit]");
+  });
+
+  it("keeps the deliberate nav-menu rounded-lg override and all size props", () => {
+    for (const size of ["default", "sm", "lg"] as const) {
+      const { container, unmount } = render(<Avatar size={size} className="rounded-lg" data-owner="menu"><AvatarFallback>O</AvatarFallback></Avatar>);
+      const root = container.querySelector('[data-slot="avatar"]') as HTMLElement;
+      expect(root.className.split(/\s+/)).toContain("rounded-lg");
+      expect(root.className.split(/\s+/)).not.toContain("rounded-[8px]");
+      expect(root.getAttribute("data-size")).toBe(size);
+      expect(root.getAttribute("data-owner")).toBe("menu");
+      unmount();
+    }
+  });
+
+  it("preserves explicit fallback class/style precedence over inherited shape and accent", () => {
+    const { container } = render(<Avatar><AvatarFallback accent="plum" className="rounded-none" style={{ borderRadius: "3px", background: "red", color: "white" }}>O</AvatarFallback></Avatar>);
+    const fallback = container.querySelector('[data-slot="avatar-fallback"]') as HTMLElement;
+    expect(fallback.className.split(/\s+/)).toContain("rounded-none");
+    expect(fallback.className.split(/\s+/)).not.toContain("rounded-[inherit]");
+    expect(fallback.style.borderRadius).toBe("3px");
+    expect(fallback.style.background).toBe("red");
+    expect(fallback.style.color).toBe("white");
+    expect(fallback.getAttribute("data-accent")).toBe("plum");
+  });
+
+  it("renders the real loaded Radix image with inherited corners and forwarded asset props", () => {
+    vi.stubGlobal("Image", loadedImagePort);
+    try {
+      const { container } = render(<Avatar className="rounded-lg"><AvatarImage src="/owner.png" alt="Owner" crossOrigin="anonymous" /><AvatarFallback>O</AvatarFallback></Avatar>);
+      const image = container.querySelector('[data-slot="avatar-image"]') as HTMLImageElement;
+      expect(image).not.toBeNull();
+      expect(image.tagName).toBe("IMG");
+      expect(image.className.split(/\s+/)).toContain("rounded-[inherit]");
+      expect(image.getAttribute("src")).toBe("/owner.png");
+      expect(image.getAttribute("alt")).toBe("Owner");
+      expect(image.crossOrigin).toBe("anonymous");
+      expect(container.querySelector('[data-slot="avatar-fallback"]')).toBeNull();
+    } finally {
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("preserves explicit image class and inline style overrides through real loading", () => {
+    vi.stubGlobal("Image", loadedImagePort);
+    try {
+      const { container } = render(<Avatar><AvatarImage src="/owner.png" className="rounded-full" style={{ borderRadius: "5px" }} /></Avatar>);
+      const image = container.querySelector('[data-slot="avatar-image"]') as HTMLImageElement;
+      expect(image).not.toBeNull();
+      expect(image.className.split(/\s+/)).toContain("rounded-full");
+      expect(image.className.split(/\s+/)).not.toContain("rounded-[inherit]");
+      expect(image.style.borderRadius).toBe("5px");
+    } finally {
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("leaves undrawn group counters and status badges circular with caller precedence", () => {
+    const { container } = render(<AvatarGroup><Avatar><AvatarFallback>O</AvatarFallback><AvatarBadge data-status="online" /></Avatar><AvatarGroupCount>+3</AvatarGroupCount></AvatarGroup>);
+    const count = container.querySelector('[data-slot="avatar-group-count"]') as HTMLElement;
+    const badge = container.querySelector('[data-slot="avatar-badge"]') as HTMLElement;
+    expect(count.className.split(/\s+/)).toContain("rounded-full");
+    expect(count.className.split(/\s+/)).toContain("size-9");
+    expect(badge.className.split(/\s+/)).toContain("rounded-full");
+    expect(badge.getAttribute("data-status")).toBe("online");
+    expect(count.textContent).toBe("+3");
   });
 });
