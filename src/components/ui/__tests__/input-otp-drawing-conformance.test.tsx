@@ -50,6 +50,14 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// input-otp checks this browser hit-test port only to detect password-manager
+// badges after focus. jsdom has no hit testing; supply null at that port.
+// The library can then classify a badge as present. This test does not grade
+// badge detection or layout; focus, selection and OTP state remain real.
+if (!document.elementFromPoint) {
+  document.elementFromPoint = () => null;
+}
+
 // The primitive schedules three UNCANCELLED timers on mount (0ms, 10ms and
 // 50ms) whose callback pushes the input's selection back into React state; the
 // effect that starts them returns no cleanup, so they outlive the unmount. On a
@@ -92,15 +100,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function renderOTP() {
+function renderOTP(options: { slotClassName?: string; separatorClassName?: string; defaultValue?: string; disabled?: boolean } = {}) {
   const { container } = render(
-    <InputOTP maxLength={6}>
+    <InputOTP maxLength={6} defaultValue={options.defaultValue} disabled={options.disabled} aria-label="Verification code">
       <InputOTPGroup>
-        <InputOTPSlot index={0} />
+        <InputOTPSlot index={0} className={options.slotClassName} data-caller-slot="kept" />
         <InputOTPSlot index={1} />
         <InputOTPSlot index={2} />
       </InputOTPGroup>
-      <InputOTPSeparator />
+      <InputOTPSeparator className={options.separatorClassName} data-caller-separator="kept" />
       <InputOTPGroup>
         <InputOTPSlot index={3} />
         <InputOTPSlot index={4} />
@@ -170,7 +178,8 @@ describe('clause: "middle dash separator" / "Split groups with a short navy dash
     const { separator } = renderOTP();
     const dash = separator.querySelector('[data-slot="input-otp-separator-dash"]');
     const cls = dash?.className ?? "";
-    expect(cls).toContain("w-2");
+    expect(cls).toMatch(/(^|\s)w-2\.5(\s|$)/);
+    expect(cls).not.toMatch(/(^|\s)w-2(\s|$)/);
     expect(cls).toContain("h-0.5");
     expect(cls).toContain("bg-foreground/40");
   });
@@ -186,32 +195,23 @@ describe('clause: "middle dash separator" / "Split groups with a short navy dash
   });
 });
 
-describe('FIXED IN LEG 2: clause "40px white slots"', () => {
-  // DEPARTURE RETIRED IN LEG 2. Leg 1 recorded this clause as a documented
-  // expected failure and spelled out, in the MEASURED and FOLLOW-UP notes
-  // below, the exact value the fix had to reach. Leg 2 applies that fix in the
-  // primitive itself, so the SAME assertion — unchanged, not relaxed — now runs
-  // as a plain regression test: it fails on leg 1's head and passes here, and
-  // that is what retires the record. Leg 1's own reading is kept verbatim below
-  // so the checklist still says what was wrong and why the value is this one.
-  it('FIXED IN LEG 2: draws each slot at the stated 40px — clause "40px white slots"', () => {
-    // LEG 1'S READING, KEPT VERBATIM — beyond the first ten rows of issue #3189's table.
-    //
-    // MEASURED: each slot is `h-9 w-9` = 36px square, 4px under the 40px the
-    // clause names. 40px is `size-10`, an exact step on the scale, so this is
-    // a plain value drift rather than a scale-rounding reading.
-    //
-    // FOLLOW-UP: leg 2 takes the slot to `h-10 w-10` and re-reads the caret,
-    // which is `h-4` and centred inside the slot — the caret's proportion to
-    // the slot changes with the box and should be re-measured, not assumed.
-    expect(renderOTP().slots[0].className).toMatch(/(^|\s)h-10(\s|$)/);
+describe('approved example: 40px width and 44px height', () => {
+  // The prose specifies 40px slots; all six examples explicitly set
+  // width:40px;height:44px (831, app-components.html lines1153–1159).
+  // Leg2's h-10 interpreted the prose as a square. Preserve width40 while
+  // correcting height to the example. These are native recipe assertions;
+  // computed CSS geometry is reserved for the browser controls.
+  it('matches all six slots to the explicit 44px example height', () => {
+    for (const slot of renderOTP().slots) {
+      expect(slot.className).toMatch(/(^|\s)h-11(\s|$)/);
+      expect(slot.className).not.toMatch(/(^|\s)h-10(\s|$)/);
+    }
   });
 
-  it("takes the slot's WIDTH to the same 40px, so the slot is the square the clause names", () => {
-    // Leg 1's follow-up note names `h-10 w-10` together: the clause says "40px
-    // white slot" of the slot as a whole, and moving only the height would
-    // leave a 36x40 box that is neither the drawn shape nor the stated value.
-    expect(renderOTP().slots[0].className).toMatch(/(^|\s)w-10(\s|$)/);
+  it('preserves the stated 40px width for every slot', () => {
+    for (const slot of renderOTP().slots) {
+      expect(slot.className).toMatch(/(^|\s)w-10(\s|$)/);
+    }
   });
 
   // THE CARET, RE-READ. Leg 1 asked for this explicitly: "re-reads the caret,
@@ -258,5 +258,58 @@ describe('FIXED IN LEG 2: clause "mono 18px digit" / "Digits set in mono"', () =
     const cls = renderOTP().slots[0].className;
     expect(cls).toContain("font-mono");
     expect(cls).toContain("text-[18px]");
+  });
+});
+
+
+describe('geometry change preserves caller and OTP behavior', () => {
+  it('lets a caller override slot height while preserving width and props', () => {
+    const { slots } = renderOTP({ slotClassName: 'h-12' });
+    expect(slots[0].className).toMatch(/(^|\s)h-12(\s|$)/);
+    expect(slots[0].className).not.toMatch(/(^|\s)h-11(\s|$)/);
+    expect(slots[0].className).toMatch(/(^|\s)w-10(\s|$)/);
+    expect(slots[0].getAttribute('data-caller-slot')).toBe('kept');
+  });
+
+  it('preserves separator caller styling and props without changing its dash', () => {
+    const { separator } = renderOTP({ separatorClassName: 'px-3 [&_[data-slot=input-otp-separator-dash]]:w-4' });
+    expect(separator.className).toContain('px-3');
+    expect(separator.className).not.toMatch(/(^|\s)px-1(\s|$)/);
+    expect(separator.className).toContain('[&_[data-slot=input-otp-separator-dash]]:w-4');
+    expect(separator.getAttribute('data-caller-separator')).toBe('kept');
+    expect(separator.getAttribute('role')).toBe('separator');
+    // The existing API styles the wrapper. A caller can target the dash
+    // through a descendant utility; no new dash-class API is introduced.
+    const dash = separator.querySelector('[data-slot="input-otp-separator-dash"]');
+    expect(dash?.className).toMatch(/(^|\s)w-2\.5(\s|$)/);
+    expect(dash?.className).toContain('h-0.5');
+  });
+
+  it('keeps real input props, digits and two groups of three slots', () => {
+    const { container, slots } = renderOTP({ defaultValue: '391', disabled: true });
+    const input = container.querySelector('input')!;
+    expect(input.value).toBe('391');
+    expect(input.maxLength).toBe(6);
+    expect(input.disabled).toBe(true);
+    expect(input.getAttribute('aria-label')).toBe('Verification code');
+    expect(slots.slice(0, 3).map(slot => slot.textContent).join('')).toBe('391');
+    const groups = container.querySelectorAll('[data-slot="input-otp-group"]');
+    expect(groups).toHaveLength(2);
+    for (const group of groups) expect(group.querySelectorAll('[data-slot="input-otp-slot"]')).toHaveLength(3);
+  });
+
+  it('keeps active focus, ring and caret recipes on the real OTP input', () => {
+    const { container, slots } = renderOTP({ defaultValue: '391' });
+    const input = container.querySelector('input')!;
+    act(() => { input.focus(); vi.runOnlyPendingTimers(); });
+    expect(document.activeElement).toBe(input);
+    const active = slots.find(slot => slot.getAttribute('data-active') === 'true');
+    expect(active).toBeDefined();
+    expect(active?.className).toContain('data-[active=true]:ring-[3px]');
+    expect(active?.className).toContain('data-[active=true]:ring-ring/50');
+    const caret = active?.querySelector('.animate-caret-blink');
+    expect(caret).not.toBeNull();
+    expect(caret?.className).toContain('h-5');
+    expect(caret?.className).toContain('w-px');
   });
 });
