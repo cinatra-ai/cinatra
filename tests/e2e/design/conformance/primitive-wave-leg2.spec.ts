@@ -338,6 +338,7 @@ for (const { name: palette, theme } of PALETTES) {
         page,
       }) => {
         await open(page, theme);
+        await page.evaluate(() => document.fonts.ready);
         const slot = page
           .locator(`${seam("input-otp")} [data-slot="input-otp-slot"]`)
           .first();
