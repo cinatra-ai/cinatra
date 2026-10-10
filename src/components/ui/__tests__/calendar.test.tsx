@@ -14,7 +14,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-import { Calendar, formatDayKey, fromDayKey, toDayKey } from "@/components/ui/calendar";
+import { Calendar, DatePicker, formatDayKey, fromDayKey, toDayKey } from "@/components/ui/calendar";
 
 afterEach(() => cleanup());
 
@@ -126,5 +126,115 @@ describe("the arrows walk the month", () => {
     );
     fireEvent.click(dayEl("2027-03-12"));
     expect(onValueChange).toHaveBeenCalledWith("2027-03-12");
+  });
+});
+
+/** Additive controlled range reading (cinatra#3189); the original cases above stay unchanged. */
+type DayRange = { from: string; to: string | null };
+function RangeCalendar({ initial = null }: { initial?: DayRange | null }) {
+  const [range, setRange] = React.useState<DayRange | null>(initial);
+  return <Calendar mode="range" range={range} onRangeChange={setRange} today="2026-05-15" />;
+}
+function RangePicker() {
+  const [range, setRange] = React.useState<DayRange | null>(null);
+  return <DatePicker mode="range" range={range} onRangeChange={setRange} today="2026-05-15" />;
+}
+const rangeDay = (key: string) => document.querySelector<HTMLButtonElement>(`[data-slot="calendar-day"][data-day="${key}"]`)!;
+
+describe("the controlled range carries the approved tint reading", () => {
+  it("first click starts an incomplete range; second sorts and completes it", () => {
+    render(<RangeCalendar />);
+    fireEvent.click(rangeDay("2026-05-18"));
+    expect(rangeDay("2026-05-18").getAttribute("data-range-start")).toBe("");
+    expect(document.querySelectorAll("[data-range-end]").length).toBe(0);
+    fireEvent.click(rangeDay("2026-05-15"));
+    expect(rangeDay("2026-05-15").getAttribute("data-range-start")).toBe("");
+    expect(rangeDay("2026-05-18").getAttribute("data-range-end")).toBe("");
+    expect(rangeDay("2026-05-16").getAttribute("data-in-range")).toBe("");
+    expect(rangeDay("2026-05-17").getAttribute("data-in-range")).toBe("");
+  });
+  it("the interior has soft tint, the start is outlined and the end is filled", () => {
+    render(<RangeCalendar initial={{ from: "2026-05-15", to: "2026-05-18" }} />);
+    expect(rangeDay("2026-05-16").className).toContain("bg-primary/[0.12]");
+    expect(rangeDay("2026-05-16").className).toContain("rounded-none");
+    expect(rangeDay("2026-05-15").getAttribute("aria-pressed")).toBe("true");
+    expect(rangeDay("2026-05-15").className).toContain("ring-primary");
+    expect(rangeDay("2026-05-15").className).not.toContain("bg-primary");
+    expect(rangeDay("2026-05-18").className).toContain("bg-primary");
+    expect(rangeDay("2026-05-14").hasAttribute("data-in-range")).toBe(false);
+    expect(rangeDay("2026-05-19").hasAttribute("data-in-range")).toBe(false);
+  });
+  it("a third click replaces a complete range with a new start", () => {
+    render(<RangeCalendar initial={{ from: "2026-05-15", to: "2026-05-18" }} />);
+    fireEvent.click(rangeDay("2026-05-21"));
+    expect(rangeDay("2026-05-21").hasAttribute("data-range-start")).toBe(true);
+    expect(document.querySelectorAll("[data-in-range], [data-range-end]").length).toBe(0);
+    expect(rangeDay("2026-05-15").getAttribute("aria-pressed")).toBe("false");
+  });
+  it("an equal second endpoint completes a one-day range without an interior", () => {
+    render(<RangeCalendar />);
+    fireEvent.click(rangeDay("2026-05-15"));
+    fireEvent.click(rangeDay("2026-05-15"));
+    expect(rangeDay("2026-05-15").hasAttribute("data-range-start")).toBe(true);
+    expect(rangeDay("2026-05-15").hasAttribute("data-range-end")).toBe(true);
+    expect(document.querySelectorAll("[data-in-range]").length).toBe(0);
+  });
+  it("sorts reversed controlled endpoints without mutating their value", () => {
+    const initial = { from: "2026-05-18", to: "2026-05-15" };
+    render(<RangeCalendar initial={initial} />);
+    expect(rangeDay("2026-05-15").hasAttribute("data-range-start")).toBe(true);
+    expect(rangeDay("2026-05-18").hasAttribute("data-range-end")).toBe(true);
+    expect(initial).toEqual({ from: "2026-05-18", to: "2026-05-15" });
+  });
+  it("invalid start names no range; an invalid end leaves only the valid start", () => {
+    const a = render(<RangeCalendar initial={{ from: "2026-02-30", to: "2026-05-18" }} />);
+    expect(a.container.querySelectorAll("[data-range-start], [data-range-end], [data-in-range]").length).toBe(0);
+    cleanup();
+    render(<RangeCalendar initial={{ from: "2026-05-15", to: "2026-05-99" }} />);
+    expect(rangeDay("2026-05-15").hasAttribute("data-range-start")).toBe(true);
+    expect(document.querySelectorAll("[data-range-end], [data-in-range]").length).toBe(0);
+  });
+  it("reports day-key endpoints and does not change an externally controlled value", () => {
+    const onRangeChange = vi.fn();
+    render(<Calendar mode="range" range={{ from: "2026-05-15", to: null }} onRangeChange={onRangeChange} today="2026-05-15" />);
+    fireEvent.click(rangeDay("2026-05-18"));
+    expect(onRangeChange).toHaveBeenCalledWith({ from: "2026-05-15", to: "2026-05-18" });
+    expect(document.querySelectorAll("[data-range-end]").length).toBe(0);
+  });
+  it("preserves one tab stop and keyboard focus across a month boundary", () => {
+    render(<RangeCalendar initial={{ from: "2026-05-31", to: null }} />);
+    expect(document.querySelectorAll('[data-slot="calendar-day"][tabindex="0"]').length).toBe(1);
+    fireEvent.keyDown(rangeDay("2026-05-31"), { key: "ArrowRight" });
+    expect(document.activeElement?.getAttribute("data-day")).toBe("2026-06-01");
+    fireEvent.click(rangeDay("2026-06-02"));
+    expect(rangeDay("2026-06-01").hasAttribute("data-in-range")).toBe(true);
+    expect(rangeDay("2026-06-02").hasAttribute("data-range-end")).toBe(true);
+  });
+});
+
+describe("DatePicker preserves single selection and closes a range only when complete", () => {
+  it("keeps the popover open after the first range day and closes after the second", () => {
+    render(<RangePicker />);
+    fireEvent.click(document.querySelector('[data-slot="date-picker-trigger"]')!);
+    fireEvent.click(screen.getByRole("button", { name: "May 15, 2026" }));
+    expect(screen.queryByRole("button", { name: "May 18, 2026" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "May 18, 2026" }));
+    expect(screen.queryByRole("button", { name: "May 18, 2026" })).toBeNull();
+    expect(document.querySelector('[data-slot="date-picker-trigger"]')?.textContent).toContain("May 15, 2026 – May 18, 2026");
+  });
+  it("omitted mode still reports one string and closes on one selection", () => {
+    const onValueChange = vi.fn();
+    render(<DatePicker id="scheduled-day" value="2026-05-15" today="2026-05-15" onValueChange={onValueChange} className="existing-caller" />);
+    fireEvent.click(document.querySelector('[data-slot="date-picker-trigger"]')!);
+    fireEvent.click(screen.getByRole("button", { name: "May 18, 2026" }));
+    expect(onValueChange).toHaveBeenCalledWith("2026-05-18");
+    expect(screen.queryByRole("button", { name: "May 18, 2026" })).toBeNull();
+    expect(document.querySelector('#scheduled-day')).not.toBeNull();
+    expect(document.querySelector('#scheduled-day')?.className).toContain("existing-caller");
+  });
+  it("the existing disabled trigger opens no picker in either mode", () => {
+    render(<DatePicker mode="range" today="2026-05-15" disabled />);
+    expect((document.querySelector('[data-slot="date-picker-trigger"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector('[data-slot="calendar"]')).toBeNull();
   });
 });
