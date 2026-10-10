@@ -7,8 +7,16 @@ import { describe, expect, it } from "vitest";
 const rootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const contractPath = path.join(rootPath, "tests/e2e/design/conformance/contract.ts");
 const contract = ts.createSourceFile(contractPath, readFileSync(contractPath, "utf8"), ts.ScriptTarget.Latest, true);
-const helper = contract.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "resolveUploadReference");
-if (!helper) throw new Error("The actual upload-reference driver helper is missing");
+const helpers = ["waitForControlHydration", "resolveUploadReference"].map((name) => {
+  const helper = contract.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+  if (!helper) throw new Error(`The actual driver helper ${name} is missing`);
+  return helper;
+});
+const hydrationPath = path.join(rootPath, "tests/e2e/config/hydration.ts");
+const hydration = ts.createSourceFile(hydrationPath, readFileSync(hydrationPath, "utf8"), ts.ScriptTarget.Latest, true);
+const hydrationTimeout = hydration.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : [])
+  .find((node) => ts.isIdentifier(node.name) && node.name.text === "HYDRATION_TIMEOUT_MS");
+if (!hydrationTimeout?.initializer) throw new Error("The actual hydration timeout binding is missing");
 
 function literal(source, name) {
   const declaration = source.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : [])
@@ -25,15 +33,18 @@ const url = literal(fixture, "UPLOAD_CONFORMANCE_REPO_URL");
 const panelSelector = literal(contract, "UPLOAD_PANEL_NODE");
 const clickSelector = literal(contract, "UPLOAD_RESOLVE_CONTROL");
 
-// Execute the exact committed helper, not a second implementation of its
-// fill/click/assert/retry sequence. Only its browser locator and expectation
+// Execute both exact committed helpers and the imported timeout initializer,
+// including the real React-fiber predicate. Only their locator and expectation
 // ports are deterministic doubles: no page, application, server or database.
-const compiledHelper = ts.transpileModule(helper.getText(contract), {
+const compiledHelpers = ts.transpileModule([
+  `const HYDRATION_TIMEOUT_MS = ${hydrationTimeout.initializer.getText(hydration)};`,
+  ...helpers.map((helper) => helper.getText(contract)),
+].join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-const instantiate = new Function("expect", "UPLOAD_PANEL_NODE", "UPLOAD_RESOLVE_CONTROL", "UPLOAD_CONFORMANCE_REPO_URL", `${compiledHelper}\nreturn resolveUploadReference;`);
+const instantiate = new Function("expect", "UPLOAD_PANEL_NODE", "UPLOAD_RESOLVE_CONTROL", "UPLOAD_CONFORMANCE_REPO_URL", `${compiledHelpers}\nreturn { resolveUploadReference, hydrationTimeoutMs: HYDRATION_TIMEOUT_MS };`);
 
-function harness({ lostFirstFill = false, firstFillTimeout = false, swallowedFirstClick = false, disabled = false, missingPanel = false, initiallyVisible = false } = {}) {
+function harness({ lostFirstFill = false, firstFillTimeout = false, swallowedFirstClick = false, disabled = false, missingPanel = false, initiallyVisible = false, inputHydratesAfter = 0, submitHydratesAfter = 0, inputReactKey = "__reactFiber$input", submitReactKey = "__reactFiber$submit" } = {}) {
   const events = [];
   let elapsed = 0;
   let deadline = Infinity;
@@ -48,8 +59,19 @@ function harness({ lostFirstFill = false, firstFillTimeout = false, swallowedFir
     elapsed += options?.timeout > 0 ? Math.min(options.timeout, remaining) : remaining;
     throw new Error(reason);
   }
+  function evaluateControl(control, hydratesAfter, reactKey) {
+    let samples = 0;
+    return async (predicate) => {
+      samples += 1;
+      const element = samples > hydratesAfter ? { [reactKey]: {} } : {};
+      const hydrated = predicate(element);
+      events.push({ kind: "evaluate", control, hydrated });
+      return hydrated;
+    };
+  }
   const panel = { kind: "actual panel locator" };
   const input = {
+    evaluate: evaluateControl("input", inputHydratesAfter, inputReactKey),
     async fill(next, options) {
       fills += 1;
       events.push({ kind: "fill", value: next, options });
@@ -59,6 +81,7 @@ function harness({ lostFirstFill = false, firstFillTimeout = false, swallowedFir
     },
   };
   const submit = {
+    evaluate: evaluateControl("submit", submitHydratesAfter, submitReactKey),
     async click(options) {
       clicks += 1;
       events.push({ kind: "click", options });
@@ -94,8 +117,19 @@ function harness({ lostFirstFill = false, firstFillTimeout = false, swallowedFir
       if (!visible) waitThenFail(options, "Resolved panel is not visible");
     },
   };
-  const run = instantiate(browserExpect, panelSelector, clickSelector, url);
-  return { run: () => run(root), events, panel, fills: () => fills, elapsed: () => elapsed };
+  browserExpect.poll = (sample, options) => ({
+    async toBe(expected) {
+      events.push({ kind: "poll", options });
+      const pollDeadline = elapsed + options.timeout;
+      do {
+        if (await sample() === expected) return;
+        elapsed += Math.min(100, pollDeadline - elapsed);
+      } while (elapsed < pollDeadline);
+      throw new Error(options.message);
+    },
+  });
+  const { resolveUploadReference: run, hydrationTimeoutMs } = instantiate(browserExpect, panelSelector, clickSelector, url);
+  return { run: () => run(root), events, panel, fills: () => fills, clicks: () => clicks, elapsed: () => elapsed, hydrationTimeoutMs };
 }
 
 describe("upload reference retry retains its acceptance and overall budget", () => {
@@ -146,11 +180,51 @@ describe("upload reference retry retains its acceptance and overall budget", () 
   it("returns the resolved locator after a normal fill and click", async () => {
     const h = harness();
     await expect(h.run()).resolves.toBe(h.panel);
-    expect(h.events.map((event) => event.kind)).toEqual(["retry", "fill", "click", "visible"]);
+    expect(h.events.filter((event) => !["poll", "evaluate"].includes(event.kind)).map((event) => event.kind)).toEqual(["retry", "fill", "click", "visible"]);
   });
 
   it("does not accept a panel left over from an earlier resolution", async () => {
     const h = harness({ initiallyVisible: true, missingPanel: true });
     await expect(h.run()).rejects.toThrow("Resolved panel is not visible");
+  });
+});
+
+
+describe("upload reference waits for each control's real React hydration predicate", () => {
+  it("polls both controls to hydration before the first fill or click", async () => {
+    const h = harness({ inputHydratesAfter: 2, submitHydratesAfter: 1 });
+    await expect(h.run()).resolves.toBe(h.panel);
+    const firstAction = h.events.findIndex((event) => ["fill", "click"].includes(event.kind));
+    const preceding = h.events.slice(0, firstAction);
+    expect(preceding.filter((event) => event.kind === "evaluate").map(({ control, hydrated }) => [control, hydrated])).toEqual([
+      ["input", false], ["input", false], ["input", true], ["submit", false], ["submit", true],
+    ]);
+    const polls = preceding.filter((event) => event.kind === "poll");
+    expect(polls).toHaveLength(2);
+    for (const poll of polls) {
+      expect(poll.options).toEqual({ timeout: h.hydrationTimeoutMs, message: "the control did not hydrate before interaction" });
+      expect(poll.options.timeout).toBeGreaterThan(0);
+    }
+    expect(h.fills()).toBe(1);
+    expect(h.clicks()).toBe(1);
+  });
+
+  it.each([
+    ["input", { inputHydratesAfter: Infinity }],
+    ["Continue", { submitHydratesAfter: Infinity }],
+  ])("refuses an unhydrated %s before any fill or click", async (_name, options) => {
+    const h = harness(options);
+    await expect(h.run()).rejects.toThrow("the control did not hydrate before interaction");
+    expect(h.elapsed()).toBe(h.hydrationTimeoutMs);
+    expect(h.fills()).toBe(0);
+    expect(h.clicks()).toBe(0);
+    expect(h.events.some((event) => ["retry", "visible"].includes(event.kind))).toBe(false);
+  });
+
+  it("does not treat a similarly named element key as a React fiber", async () => {
+    const h = harness({ inputReactKey: "__reactFiberWithoutDollar" });
+    await expect(h.run()).rejects.toThrow("the control did not hydrate before interaction");
+    expect(h.fills()).toBe(0);
+    expect(h.clicks()).toBe(0);
   });
 });

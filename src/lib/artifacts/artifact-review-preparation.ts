@@ -98,7 +98,7 @@ export interface PreparedReviewTarget {
 // Port outcomes.
 // ---------------------------------------------------------------------------
 
-export type RunAccessOutcome = { ok: true } | { ok: false; status: number };
+export type RunAccessOutcome = { ok: true; orgId?: string } | { ok: false; status: number };
 
 export type GatePinnedOutcome =
   | { status: "pending"; targets: ArtifactReviewTarget[] }
@@ -108,7 +108,10 @@ export type GatePinnedOutcome =
    * from it (`acceptResolvedGate`); to every decision path it is exactly as
    * closed as `not-pending`.
    */
-  | { status: "resolved"; targets: ArtifactReviewTarget[] }
+  | { status: "resolved"; targets: ArtifactReviewTarget[]; decision?: {
+      gateId: string; orgId: string; runId: string; reviewTaskId: string;
+      fingerprint: string; disposition: "approve"; decidedAt: string;
+    } }
   /** A port that cannot name a non-pending gate's set. Always closed. */
   | { status: "not-pending" }
   | { status: "not-found" };
@@ -287,6 +290,7 @@ export interface PrepareReviewPorts {
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
+    review?: ArtifactRendererProps["review"];
   }): Promise<ArtifactRendererProps> | ArtifactRendererProps;
 }
 
@@ -434,6 +438,20 @@ export async function beginReviewTargetsCore(
     return { ok: false, error: { kind: "target-substitution", substituted } };
   }
 
+  // Facts come only from the canonical gate after the same viewer's run check.
+  // The old pipeline passed no review input; keep that absence below v5.
+  const decision = gate.status === "resolved" ? gate.decision : undefined;
+  const decidedAt = settledReading && decision && typeof access.orgId === "string" &&
+    access.orgId.length > 0 && decision.orgId === access.orgId &&
+    decision.runId === input.runId && decision.reviewTaskId === input.reviewTaskId &&
+    typeof decision.gateId === "string" && decision.gateId.length > 0 &&
+    decision.disposition === "approve" && /^[a-f0-9]{64}$/.test(decision.fingerprint) &&
+    typeof decision.decidedAt === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(decision.decidedAt) &&
+    Number.isFinite(Date.parse(decision.decidedAt)) &&
+    new Date(decision.decidedAt).toISOString() === decision.decidedAt
+    ? decision.decidedAt : undefined;
+
   // 5. Per (pinned, member) target: resolve the never-blank display —
   //    CONCURRENTLY, capped, and in the caller's order (cinatra#3334). The
   //    targets of one gate are independent of each other: each reads its own
@@ -441,7 +459,7 @@ export async function beginReviewTargetsCore(
   //    answers changes what another may be shown. Preparing them one after
   //    another was therefore pure latency, and it was the whole of it — the
   //    measured gate spent 4 795 ms of its 5 452 ms here.
-  const prepared = prepareWithFanOut(member, ports, settledReading);
+  const prepared = prepareWithFanOut(member, ports, settledReading, decidedAt);
   return { ok: true, targets: member.map((target, index) => ({ target, prepared: prepared[index] })) };
 }
 
@@ -475,6 +493,7 @@ function prepareWithFanOut(
   targets: readonly ArtifactReviewTarget[],
   ports: PrepareReviewPorts,
   settled: boolean,
+  decidedAt?: string,
 ): Promise<PreparedReviewTarget>[] {
   const settlers: Array<{
     resolve: (value: PreparedReviewTarget) => void;
@@ -495,7 +514,7 @@ function prepareWithFanOut(
     next += 1;
     void (async () => {
       try {
-        settlers[index].resolve(await prepareOneTarget(targets[index], ports, settled));
+        settlers[index].resolve(await prepareOneTarget(targets[index], ports, settled, decidedAt));
       } catch (err) {
         settlers[index].reject(err);
       }
@@ -511,6 +530,7 @@ async function prepareOneTarget(
   target: ArtifactReviewTarget,
   ports: PrepareReviewPorts,
   settled: boolean,
+  decidedAt?: string,
 ): Promise<PreparedReviewTarget> {
   // Artifact-level floors (props null — nothing authorized to render props from).
   //
@@ -577,6 +597,9 @@ async function prepareOneTarget(
     mime,
     propsApiVersion: resolved.propsApiVersion ?? ARTIFACT_RENDERER_PROPS_API_VERSION,
     member,
+    ...((resolved.propsApiVersion ?? ARTIFACT_RENDERER_PROPS_API_VERSION) >= 5 && decidedAt
+      ? { review: { reading: "continued" as const, openLive: artifact.sourceUrl ?? null, decidedAt } }
+      : {}),
   });
 
   if (resolved.kind === "build-map") {

@@ -951,7 +951,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: 60478d7f605273a176b23a36f59659211ccced22fdd63af0f03b469380f56b4a
+  # Source job SHA256: e14d96e24dfe90d62d57ef4d2d4dd0e67724164fa1b33e1ab0240e7cbff8a5b6
   image:
     name: trial / image / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'image' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -983,6 +983,8 @@ jobs:
     # failure (artifacts/logs preserved) instead of letting it eat the
     # workflow budget invisibly. Same defensive class as the RBAC globalTimeout.
     timeout-minutes: 45
+    env:
+      DOCKERHUB_AUTH_AVAILABLE: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
@@ -1087,6 +1089,13 @@ jobs:
             sudo rm -f "$SWAPFILE" || true
           fi
           exit 0
+
+      - name: Login to Docker Hub (pulls)
+        if: ${{ env.DOCKERHUB_AUTH_AVAILABLE == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 

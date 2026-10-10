@@ -664,6 +664,9 @@ jobs:
     services:
       postgres:
         image: postgres:18
+        credentials:
+          username: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_TOKEN || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -1001,6 +1004,9 @@ jobs:
     services:
       postgres:
         image: postgres:18
+        credentials:
+          username: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_TOKEN || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -2998,6 +3004,9 @@ jobs:
     services:
       postgres:
         image: postgres:18
+        credentials:
+          username: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_TOKEN || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -3097,6 +3106,9 @@ jobs:
     services:
       postgres:
         image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' && 'postgres:18' || '' }}
+        credentials:
+          username: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_TOKEN || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -3427,6 +3439,9 @@ jobs:
       # a docs-only run must reach its green stub without provisioning sidecars.
       postgres:
         image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip_runtime != 'true' && 'postgres:18' || '' }}
+        credentials:
+          username: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME || '' }}
+          password: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_TOKEN || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
@@ -4059,6 +4074,8 @@ jobs:
     # failure (artifacts/logs preserved) instead of letting it eat the
     # workflow budget invisibly. Same defensive class as the RBAC globalTimeout.
     timeout-minutes: 45
+    env:
+      DOCKERHUB_AUTH_AVAILABLE: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
@@ -4165,6 +4182,13 @@ jobs:
           fi
           exit 0
 
+      - name: Login to Docker Hub (pulls)
+        if: ${{ env.DOCKERHUB_AUTH_AVAILABLE == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
@@ -4201,7 +4225,7 @@ jobs:
 
       # Build → boot-gate (issue #81). The image is FIRST built and loaded into
       # the local docker daemon, then booted by the prod-boot e2e below. This
-      # `build` job is now PUBLISH-FREE: it logs in to nothing and pushes
+      # `build` job is now PUBLISH-FREE: it authenticates Docker Hub pulls and pushes
       # nothing. It runs on EVERY trigger (PR / merge_group / push / dispatch)
       # to prove the boots-without-private-extensions path before merge, and its
       # `cache-to` below populates the shared build cache (`type=gha` on a
