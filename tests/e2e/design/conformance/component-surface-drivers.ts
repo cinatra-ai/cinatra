@@ -88,7 +88,20 @@ export const PAGINATION_SURFACE_DRIVER = componentSurfaceDriver("pagination", ["
 export const SKELETON_SURFACE_DRIVER = componentSurfaceDriver("skeleton", ["skeleton"]);
 export const EMPTY_SURFACE_DRIVER = componentSurfaceDriver("empty", ["empty"]);
 export const ACCORDION_SURFACE_DRIVER = componentSurfaceDriver("accordion", ["accordion"]);
-export const SEPARATOR_SURFACE_DRIVER = componentSurfaceDriver("separator", ["separator"]);
+export const SEPARATOR_SURFACE_DRIVER: SurfaceDriver = {
+  ...componentSurfaceDriver("separator", ["separator"]),
+  present: async (page, root) => {
+    await componentSurfaceDriver("separator", ["separator"]).present(page, root);
+    // specs/app-components.html Separator: a visible 1px horizontal hairline.
+    const separator = page.locator('[data-surface-id="separator"] [data-slot="separator"]');
+    await expect(separator, "specs/app-components.html Separator: 1px height").toHaveCSS("height", "1px");
+    await expect(separator, "specs/app-components.html Separator: visible hairline").toBeVisible();
+    await expect.poll(async () => {
+      const box = await separator.boundingBox();
+      return box !== null && box.width > 0 && box.height > 0;
+    }, { message: "specs/app-components.html Separator: nonempty visible box" }).toBe(true);
+  },
+};
 export const TOGGLE_SURFACE_DRIVER = componentSurfaceDriver("toggle", ["toggle"]);
 export const CALENDAR_SURFACE_DRIVER = componentSurfaceDriver("calendar", ["calendar"]);
 export const COMBOBOX_SURFACE_DRIVER = componentSurfaceDriver("combobox", ["combobox-trigger"], {
