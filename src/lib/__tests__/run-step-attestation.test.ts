@@ -10,7 +10,7 @@
  * node id or null. These cases drive the real functions.
  */
 import { afterAll, describe, it, expect, vi } from "vitest";
-import { createHmac } from "node:crypto";
+import { createHmac, createHash } from "node:crypto";
 
 vi.mock("server-only", () => ({}));
 
@@ -200,4 +200,58 @@ describe("recorded pause step verification", () => {
 afterAll(() => {
   vi.doUnmock("server-only");
   vi.resetModules();
+});
+
+
+describe("producer step production binding v2", () => {
+  const inputsJson = JSON.stringify({ note: "draft the reviewed story", topic: "Launch" });
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const binding = { version: 2, producerStepId: NODE, noteInputPath: "note", sourceSha256: "a".repeat(64), graphSha256: "b".repeat(64), effectiveInputsJson: inputsJson, effectiveInputsSha256: sha(inputsJson) };
+  function claim(value = binding, prefix = "s2", expiry = NOW_S + 300) {
+    const material = `${prefix}\n${CTX}\n${value.producerStepId}\n${expiry}\n${value.sourceSha256}\n${value.graphSha256}\n${value.noteInputPath}\n${value.effectiveInputsSha256}`;
+    return { binding: Buffer.from(JSON.stringify(value)).toString("base64url"), attestation: `${prefix}:${expiry}:${hmacHex(KEY, material)}` };
+  }
+  function verify(pair = claim(), opts = {}) {
+    expect(typeof runToken.verifyRunProducerBinding).toBe("function");
+    return runToken.verifyRunProducerBinding({ key: KEY, contextId: CTX, node: NODE, ...pair, nowMs: NOW_MS, ...opts });
+  }
+  it("records actual effective inputs and immutable graph pin from the separately signed v2 claim", () => {
+    expect(verify()).toMatchObject({ version: 2, producerStepId: NODE, inputParams: { note: "draft the reviewed story", topic: "Launch" }, graphSha256: binding.graphSha256 });
+  });
+  it("v1 offered as v2 fails rather than manufacturing production inputs", () => {
+    expect(verify({ ...claim(), attestation: stepPair({}).attestation })).toBeNull();
+    expect(verify(claim(binding, "s1"))).toBeNull();
+    const s2 = claim();
+    expect(api.verifyRunStepAttestation({ key: KEY, contextId: CTX, node: NODE, attestation: s2.attestation, nowMs: NOW_MS })).toBeNull();
+  });
+  it("tampered effective inputs or digest cannot verify", () => {
+    const signed = claim();
+    for (const changed of [{ ...binding, effectiveInputsJson: JSON.stringify({ note: "different" }) }, { ...binding, effectiveInputsSha256: "c".repeat(64) }]) {
+      expect(verify({ ...signed, binding: Buffer.from(JSON.stringify(changed)).toString("base64url") })).toBeNull();
+    }
+  });
+  it("wrong recorded graph pin, altered producer, Note declaration or source pin cannot verify", () => {
+    const signed = claim();
+    expect(verify(signed, { expectedGraphSha256: "c".repeat(64) })).toBeNull();
+    expect(verify(signed, { expectedGraphSha256: binding.graphSha256 })).not.toBeNull();
+    for (const changed of [{ ...binding, graphSha256: "c".repeat(64) }, { ...binding, sourceSha256: "c".repeat(64) }, { ...binding, noteInputPath: "topic" }, { ...binding, producerStepId: "other" }]) {
+      expect(verify({ ...signed, binding: Buffer.from(JSON.stringify(changed)).toString("base64url") })).toBeNull();
+    }
+  });
+  it("retains context, key and unchanged expiry-window refusal", () => {
+    for (const opts of [{ contextId: "other" }, { key: OTHER_KEY }, { key: "" }, { node: "other" }]) expect(verify(claim(), opts)).toBeNull();
+    expect(verify(claim(binding, "s2", NOW_S - 61))).toBeNull();
+    expect(verify(claim(binding, "s2", NOW_S + 601))).toBeNull();
+    expect(verify(claim(binding, "s2", NOW_S - 59))).not.toBeNull();
+  });
+  it("rejects a signed dotted Note path instead of inferring nested Step inputs", () => {
+    const nestedJson = JSON.stringify({ inputs: { note: "draft the reviewed story" } });
+    const nested = { ...binding, noteInputPath: "inputs.note", effectiveInputsJson: nestedJson, effectiveInputsSha256: sha(nestedJson) };
+    expect(verify(claim(nested))).toBeNull();
+    expect(verify()).not.toBeNull();
+  });
+  it("unknown versions, nonobject inputs, malformed Note paths and hostile oversized payloads fail closed", () => {
+    for (const changed of [{ ...binding, version: 1 }, { ...binding, noteInputPath: "__proto__.note" }, { ...binding, effectiveInputsJson: "[]", effectiveInputsSha256: sha("[]") }, { ...binding, effectiveInputsJson: '{"note":null}', effectiveInputsSha256: sha('{"note":null}') }]) expect(verify(claim(changed))).toBeNull();
+    expect(verify({ ...claim(), binding: "a".repeat(100_000) })).toBeNull();
+  });
 });

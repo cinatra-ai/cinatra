@@ -1,4 +1,5 @@
 import "server-only";
+import { validateProducerStepBinding, type VerifiedProducerStepBinding } from "@cinatra-ai/mcp-server/request-context";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
@@ -107,6 +108,7 @@ export type AgentRunMcpActor = {
    * carried to the tool server's frame; it grants nothing on its own.
    */
   verifiedStepId?: string;
+  verifiedProducerBinding?: VerifiedProducerStepBinding;
 };
 
 type AgentRunMcpActorTokenClaims = {
@@ -126,6 +128,7 @@ type AgentRunMcpActorTokenClaims = {
   /** The verified step of the calling model step (cinatra#3745) — optional;
    *  see `AgentRunMcpActor.verifiedStepId`. */
   stp?: string;
+  prb?: VerifiedProducerStepBinding;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -192,6 +195,10 @@ function issueIssuer(): string {
 }
 
 export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
+  const producerBinding = input.verifiedProducerBinding !== undefined
+    ? validateProducerStepBinding(input.verifiedProducerBinding, input.verifiedStepId ?? "")
+    : undefined;
+  if (input.verifiedProducerBinding !== undefined && !producerBinding) throw new Error("invalid verified producer binding");
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
   const payload: AgentRunMcpActorTokenClaims = {
@@ -215,6 +222,7 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
     // The verified step of the calling model step (cinatra#3745), written only
     // when the bridge verified one.
     ...(input.verifiedStepId ? { stp: input.verifiedStepId } : {}),
+    ...(producerBinding ? { prb: producerBinding } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -324,6 +332,10 @@ export function verifyAgentRunMcpActorToken(input: {
     }
     if (payload.exp < now) return null;
 
+    const producerBinding = Object.hasOwn(payload,"prb")
+      ? validateProducerStepBinding(payload.prb, typeof payload.stp === "string" ? payload.stp : "")
+      : undefined;
+    if (Object.hasOwn(payload,"prb") && !producerBinding) return null;
     return {
       delegation: "agent_run",
       userId: payload.sub,
@@ -352,6 +364,7 @@ export function verifyAgentRunMcpActorToken(input: {
       ...(typeof payload.stp === "string" && payload.stp.length > 0
         ? { verifiedStepId: payload.stp }
         : {}),
+      ...(producerBinding ? { verifiedProducerBinding: producerBinding } : {}),
     };
   } catch {
     return null;

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   resolveRequestRunContext,
+  requireRunProducerBinding,
   type DelegatedMcpActor,
   type DurableRunContextResolution,
   type McpRequestContext,
@@ -178,5 +180,39 @@ describe("the frame's verified step", () => {
     });
     expect(mixed.runId).toBe(RUN);
     expect(mixed.stepId).toBeUndefined();
+  });
+});
+
+const producerInputsJson = '{"note":"draft the reviewed story","topic":"Launch"}';
+const producerHash = (s: string) => createHash("sha256").update(s).digest("hex");
+const productionBinding = { version: 2 as const, producerKind: "llm" as const, producerStepId: "step-node-1", noteInputPath: "note", sourceSha256: "a".repeat(64), graphSha256: "b".repeat(64), effectiveInputsJson: producerInputsJson, effectiveInputsSha256: producerHash(producerInputsJson), inputParams: JSON.parse(producerInputsJson), inputParamsSha256: producerHash(producerInputsJson) };
+
+describe("production binding uses only the authenticated run-serving frame", () => {
+  it("OBO wins with its own production claim and cannot borrow a durable claim", () => {
+    const result=resolveRequestRunContext({delegatedRunId:RUN,delegatedStepId:"step-node-1",delegatedProducerBinding:productionBinding,durable:{outcome:"resolved",ctx:{runId:"other",stepId:"step-node-1",verifiedProducerBinding:{...productionBinding,graphSha256:"c".repeat(64)}}}});
+    expect(result.verifiedProducerBinding).toEqual(productionBinding);
+    expect(requireRunProducerBinding(result,"b".repeat(64))).toEqual({ok:true,binding:productionBinding});
+    const missing=resolveRequestRunContext({delegatedRunId:RUN,delegatedStepId:"step-node-1",durable:{outcome:"resolved",ctx:{runId:"other",stepId:"step-node-1",verifiedProducerBinding:productionBinding}}});
+    expect(requireRunProducerBinding(missing,"b".repeat(64))).toEqual({ok:false,reason:"missing_producer_binding"});
+  });
+  it("authenticated durable fallback carries claim; wrong recorded graph pin refuses replay", () => {
+    const result=resolveRequestRunContext({durable:{outcome:"resolved",ctx:{runId:RUN,stepId:"step-node-1",verifiedProducerBinding:productionBinding}}});
+    expect(requireRunProducerBinding(result,"b".repeat(64)).ok).toBe(true);
+    expect(requireRunProducerBinding(result,"c".repeat(64))).toEqual({ok:false,reason:"wrong_graph_pin"});
+  });
+  it("missing, v1, tampered and orphan claims never permit replay or recover from headers", () => {
+    const missing=resolveRequestRunContext({delegatedRunId:RUN,delegatedStepId:"step-node-1"});
+    expect(requireRunProducerBinding(missing,"b".repeat(64)).ok).toBe(false);
+    for(const delegatedProducerBinding of [{...productionBinding,version:1},{...productionBinding,inputParamsSha256:"c".repeat(64)}]) {
+      const result=resolveRequestRunContext({delegatedRunId:RUN,delegatedStepId:"step-node-1",delegatedProducerBinding} as never);
+      expect(requireRunProducerBinding(result,"b".repeat(64)).ok).toBe(false);
+    }
+    const orphan=resolveRequestRunContext({delegatedProducerBinding:productionBinding,headerRunId:RUN,failClosed:true});
+    expect(requireRunProducerBinding(orphan,"b".repeat(64)).ok).toBe(false);
+    expect(orphan.denied).toBe(true);
+  });
+  it("real transport call and frame explicitly thread only the authenticated binding", () => {
+    expect(resolverCall()).toContain('delegatedProducerBinding: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedProducerBinding : undefined');
+    expect(frameLiteral()).toContain('verifiedProducerBinding: runContext.verifiedProducerBinding');
   });
 });
