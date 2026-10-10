@@ -2065,8 +2065,11 @@ describe("the island's two-bound load protocol", () => {
   });
 
   it("each panel-mounted restarts the idle bound — a steadily streaming island is never plated", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const container = await renderIslandCard();
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await advance(0);
+    expect(container.querySelector("iframe")).not.toBeNull();
 
     postProgress(container, "island-ready");
     for (let panel = 0; panel < 3; panel += 1) {
@@ -2074,7 +2077,7 @@ describe("the island's two-bound load protocol", () => {
       expect(islandState(container)).toBe("loading");
       postProgress(container, "panel-mounted");
     }
-    // Twenty-four seconds of real progress, no plate.
+    // Advance only the fake clock: twenty-four seconds of progress, no plate.
     expect(islandState(container)).toBe("loading");
 
     // The moment progress stops, the idle bound expires like any other.
