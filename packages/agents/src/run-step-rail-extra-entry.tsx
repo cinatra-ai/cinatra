@@ -555,6 +555,9 @@ export function RailExtraEntry({
           // suite address this row by the task it settles, and that is the same
           // fact whether the row navigates or selects.
           data-rail-gate-open={entry.gate.reviewTaskId}
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           aria-current={selection?.selected === settledGateKey ? "step" : undefined}
           data-run-surface-rail-selected={
             selection?.selected === settledGateKey ? "true" : "false"
@@ -619,6 +622,9 @@ export function RailExtraEntry({
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-verification-open={entry.verification.reviewTaskId}
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           aria-current={selection?.selected === verificationKey ? "step" : undefined}
           data-run-surface-rail-selected={
             selection?.selected === verificationKey ? "true" : "false"

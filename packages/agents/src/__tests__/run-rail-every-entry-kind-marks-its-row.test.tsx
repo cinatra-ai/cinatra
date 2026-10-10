@@ -75,7 +75,7 @@
 import React from "react";
 import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 
 // The rail's rows draw the design system's icons; the panel mount below pulls
 // the whole run surface with them. Stubbed to nothing — this file reads
@@ -799,6 +799,61 @@ describe("every kind of rail entry marks its state on its own row (cinatra#3449)
       // selection and carries none by design.
       expect(row.getAttribute("data-run-surface-rail-step-key")).toBe(kind.stepKey);
     });
+  }
+});
+
+describe("approved artifact-review §I.3 real-provider settled rows retain marks and activation", () => {
+  for (const kind of ["gate", "verification"] as const) {
+    for (const selected of [false, true]) {
+      it(`${kind} ${selected ? "selected" : "unselected"}: one reached/settled row opens in place by pointer, Enter and Space`, () => {
+        const select = vi.fn();
+        const target = kind === "gate" ? "review:task-resolved" : "audit:task-resolved";
+        const entry: RunStepRailEntry = {
+          key: `${kind}:task-resolved`,
+          ordinal: 3,
+          kind,
+          label: kind === "gate" ? "Review" : "Audit",
+          status: kind === "gate" ? "resolved" : "completed",
+          sources: [],
+          ...(kind === "gate"
+            ? { gate: { gateId: "g1", reviewTaskId: "task-resolved", disposition: "approved", resolved: true } }
+            : { verification: { gateId: "g1", reviewTaskId: "task-resolved", outcome: "verified" } }),
+        };
+        const { container } = render(
+          <RunStepSelectionProvider value={{ selected: selected ? target : "detail", select }}>
+            <Stepper value={1} orientation="vertical">
+              <StepperNav>
+                <StepperItem step={1} completed>
+                  <RailExtraEntry entry={entry} reviewHrefBase="/agents/v/p/run/review" displayStep={1} />
+                </StepperItem>
+              </StepperNav>
+            </Stepper>
+          </RunStepSelectionProvider>,
+        );
+        const wrapper = entryWrapper(container);
+        // Find the actual row by its control and shared box, independently of its marks.
+        const rows = Array.from(wrapper.querySelectorAll<HTMLElement>(ROW_CANDIDATES)).filter(
+          (node) => tokens(RUN_PAGE_RAIL_ROW_CLASS).every((token) => tokens(node.className).includes(token)),
+        );
+        expect(rows).toHaveLength(1);
+        const row = rows[0]!;
+        expect(row.getAttribute("data-slot")).toBe("stepper-trigger");
+        expect(wrapper.querySelectorAll("[data-run-surface-rail-step]")).toHaveLength(1);
+        expect(wrapper.querySelector("[data-run-surface-rail-step]")).toBe(row);
+        expect(row.getAttribute("data-run-surface-rail-reached")).toBe("true");
+        expect(row.getAttribute("data-run-surface-rail-settled")).toBe("true");
+        expect(row.getAttribute("data-run-surface-rail-selected")).toBe(String(selected));
+        expect(row.getAttribute("aria-current")).toBe(selected ? "step" : null);
+        expect(wrapper.querySelector("a")).toBeNull();
+        expect(select).not.toHaveBeenCalled();
+        fireEvent.click(row);
+        fireEvent.keyDown(row, { key: "Enter" });
+        fireEvent.keyDown(row, { key: " " });
+        expect(select.mock.calls).toEqual([[target], [target], [target]]);
+        fireEvent.keyDown(row, { key: "Escape" });
+        expect(select).toHaveBeenCalledTimes(3);
+      });
+    }
   }
 });
 
