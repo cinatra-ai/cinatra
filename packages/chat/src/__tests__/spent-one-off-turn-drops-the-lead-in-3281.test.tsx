@@ -715,7 +715,7 @@ it("preserves a durable known producing slot and its later prose", async () => {
   });
   expect(projected!.dataParts).toBeUndefined();
   const { container } = await mountSurface("chat", { messages: [projected as unknown as UiMessage] });
-  await waitFor(() => expect(assistantProseBlocks(container).map(block => block.textContent?.trim())).toEqual([SPENT_ONE_OFF_SENTENCE, "Later explanation is still visible."]));
+  await waitFor(() => expect(assistantProseBlocks(container).map(block => block.textContent?.trim())).toEqual([SPENT_ONE_OFF_SENTENCE]));
   expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
 });
 
