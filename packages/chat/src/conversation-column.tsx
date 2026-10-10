@@ -304,6 +304,7 @@ export function ConversationColumn({
   const hasActiveStream = streamingCount > 0;
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
   // Scroll lock: true when user has scrolled up intentionally. Auto-scroll is suppressed until
   // streaming ends OR user scrolls back to the bottom.
   const userScrolledUpRef = useRef(false);
@@ -329,6 +330,18 @@ export function ConversationColumn({
       requestAnimationFrame(() => { isProgrammaticScrollRef.current = false; });
     }
   }, []);
+
+  // Run cards can grow while the transcript and stream count stay unchanged,
+  // after the bounded cold-load settle pass has ended. Observe the growing
+  // content box, not the fixed scroll viewport. The existing pin owns the
+  // reader's scroll lock, so a late resize never pulls a scrolled-up reader.
+  useEffect(() => {
+    const content = messagesContentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(scrollToBottom);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
 
   // -------------------------------------------------------------------------
   // THE ROOM THE COMPOSER STANDS IN (cinatra#3044).
@@ -465,37 +478,39 @@ export function ConversationColumn({
           userScrolledUpRef.current = distanceFromBottom > 5;
         }}
       >
-        <ChatMessagesView
-          messages={messages}
-          isSlackMode={isSlackMode}
-          animating={animating}
-          theme={theme}
-          userId={userId}
-          sessionUser={sessionUser}
-          activeThreadId={activeThreadId}
-          activeAssistantHandle={activeAssistantHandle}
-          assistantHandleMap={assistantHandleMap}
-          taggedAssistantUserIds={taggedAssistantUserIds}
-          mentionables={mentionables}
-          pausedParticipants={pausedParticipants}
-          onTogglePause={onTogglePause}
-          requestEditMessageId={requestEditMessageId}
-          onRequestEditMessage={onRequestEditMessage}
-          onEditStarted={onEditStarted}
-          hasActiveStream={hasActiveStream}
-          isStreaming={isStreaming}
-          onEditAndResend={onEditAndResend}
-          onActivateResource={onActivateResource}
-          widgetRuntime={widgetRuntime}
-          widgetSubmitRef={widgetSubmitRef}
-          widgetRefreshKey={widgetRefreshKey}
-          onActiveGateChange={onActiveGateChange}
-          pendingExternalHandle={pendingExternalHandle}
-          typingIndicators={typingIndicators}
-          chatViews={chatViews}
-          lifecycleSurface={host.lifecycleSurface}
-          {...(host.onApplyIntent ? { onApplyIntent: host.onApplyIntent } : {})}
-        />
+        <div ref={messagesContentRef}>
+          <ChatMessagesView
+            messages={messages}
+            isSlackMode={isSlackMode}
+            animating={animating}
+            theme={theme}
+            userId={userId}
+            sessionUser={sessionUser}
+            activeThreadId={activeThreadId}
+            activeAssistantHandle={activeAssistantHandle}
+            assistantHandleMap={assistantHandleMap}
+            taggedAssistantUserIds={taggedAssistantUserIds}
+            mentionables={mentionables}
+            pausedParticipants={pausedParticipants}
+            onTogglePause={onTogglePause}
+            requestEditMessageId={requestEditMessageId}
+            onRequestEditMessage={onRequestEditMessage}
+            onEditStarted={onEditStarted}
+            hasActiveStream={hasActiveStream}
+            isStreaming={isStreaming}
+            onEditAndResend={onEditAndResend}
+            onActivateResource={onActivateResource}
+            widgetRuntime={widgetRuntime}
+            widgetSubmitRef={widgetSubmitRef}
+            widgetRefreshKey={widgetRefreshKey}
+            onActiveGateChange={onActiveGateChange}
+            pendingExternalHandle={pendingExternalHandle}
+            typingIndicators={typingIndicators}
+            chatViews={chatViews}
+            lifecycleSurface={host.lifecycleSurface}
+            {...(host.onApplyIntent ? { onApplyIntent: host.onApplyIntent } : {})}
+          />
+        </div>
       </div>
 
       {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
