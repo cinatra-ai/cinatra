@@ -413,3 +413,47 @@ describe("agent_run owner-only execute gate", () => {
     expect(enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 });
+
+
+// #3749: stamp every child from a VERIFIED run frame, never caller claims.
+describe("agent_run records its verified starter independently of an orchestrator parent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authPolicyMock.enforceRunAccess.mockResolvedValue(undefined);
+    authSessionMock.getAuthSession.mockResolvedValue(SESSION_WITH_ORG);
+    authSessionMock.isPlatformAdmin.mockReturnValue(false);
+  });
+
+  it.each(["verified-seam", "signed-obo"] as const)("records each child for %s", async (source) => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server");
+    const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+    const frame = source === "verified-seam"
+      ? { verifiedRunScopeId: "curator-3749" }
+      : { delegatedActor: { delegation: "agent_run" as const, runId: "curator-3749", userId: "owner-1", orgId: "org-1", platformRole: "member" as const, oboCeiling: [] } };
+    for (let i = 0; i < 3; i++) {
+      const result = await mcpRequestContextStorage.run(frame, () => createAgentBuilderPrimitiveHandlers().agent_run({
+        primitiveName: "agent_run", input: { templateId: "tpl-1" },
+        actor: { actorType: "model", source: "agent", userId: "owner-1" }, mode: "deterministic",
+      }));
+      expect(result).toMatchObject({ status: "queued" });
+    }
+    expect(storeMock.createAgentRun).toHaveBeenCalledTimes(3);
+    for (const [input] of storeMock.createAgentRun.mock.calls) {
+      expect(input).toMatchObject({ startedByRunId: "curator-3749" });
+      expect(input).not.toHaveProperty("parentRunId");
+    }
+  });
+
+  it("ignores the ambient run header and a caller-supplied starter", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server");
+    const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+    const input = { templateId: "tpl-1", startedByRunId: "forged-input", parentRunId: "forged-parent" };
+    const result = await mcpRequestContextStorage.run({ runId: "ambient-header" }, () => createAgentBuilderPrimitiveHandlers().agent_run({
+      primitiveName: "agent_run", input, actor: { actorType: "model", source: "agent", userId: "owner-1" }, mode: "deterministic",
+    }));
+    expect(result).toMatchObject({ status: "queued" });
+    const created = storeMock.createAgentRun.mock.calls[0]?.[0];
+    expect(created).toMatchObject({ startedByRunId: null });
+    expect(created).not.toHaveProperty("parentRunId");
+  });
+});
