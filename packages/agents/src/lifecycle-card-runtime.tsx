@@ -218,6 +218,9 @@ const LifecycleCardFrameContext = createContext<LifecycleCardFrame | null>(null)
  * affordance on it draws nothing and issues no request rather than guessing.
  */
 const LifecycleCardCookieSessionContext = createContext<boolean>(false);
+// A refused declaration is distinct from no provider: a nested cookie host
+// must not recover the identity that an enclosing broker declaration refused.
+const LifecycleCardDeclarationRefusedContext = createContext<boolean>(false);
 
 /**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
@@ -268,10 +271,11 @@ export function LifecycleCardSurfaceProvider({
   // declaration (the inline run panel's `run_card`) stays inside the thread it
   // is drawn in (cinatra#3481).
   const outerInsideConversation = useContext(InsideConversationContext);
+  const outerDeclarationRefused = useContext(LifecycleCardDeclarationRefusedContext);
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
-  const credentialOk = cookieHost
+  const credentialOk = !outerDeclarationRefused && (cookieHost
     ? auth === undefined
-    : auth !== undefined && auth.credentials === "omit";
+    : auth !== undefined && auth.credentials === "omit");
   // Both fields must be present and non-empty; a half-declared frame is no
   // frame, so the island falls back to the first-party wall rather than being
   // asked to resolve half a binding.
@@ -296,7 +300,9 @@ export function LifecycleCardSurfaceProvider({
             <InsideConversationContext.Provider
               value={outerInsideConversation || (credentialOk && host === "chat_thread")}
             >
-              {children}
+              <LifecycleCardDeclarationRefusedContext.Provider value={!credentialOk}>
+                {children}
+              </LifecycleCardDeclarationRefusedContext.Provider>
             </InsideConversationContext.Provider>
           </LifecycleCardCookieSessionContext.Provider>
         </LifecycleCardFrameContext.Provider>
@@ -315,6 +321,11 @@ export function LifecycleCardSurfaceProvider({
  */
 export function useCookieSessionSurface(): boolean {
   return useContext(LifecycleCardCookieSessionContext);
+}
+
+/** A malformed enclosing declaration stays refused across nested providers. */
+export function useLifecycleCardDeclarationRefused(): boolean {
+  return useContext(LifecycleCardDeclarationRefusedContext);
 }
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {

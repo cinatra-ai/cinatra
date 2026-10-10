@@ -273,6 +273,11 @@ export default defineConfig({
         root,
         "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts",
       ),
+      // ChatMessagesView uses this leaf; it must precede the barrel prefix.
+      "@cinatra-ai/agent-ui-protocol/renderable-views/chart": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/chart.ts",
+      ),
       "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
         root,
         "packages/agent-ui-protocol/src/renderable-views/index.ts",
