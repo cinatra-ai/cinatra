@@ -1,4 +1,23 @@
 {
   "note": "Records of the rows added to scripts/audit/system-writer-manifest.json (cinatra#3832). A new or raised row passes in the pull request that carries it, with its record here in the same change: { list: \"system-writer-manifest\", row: { file, ref } (the manifest row's file and reference), reason (a sentence of at least six words of three letters or more, at least four of them different), pr (the pull request's number) }. A record is carried forward unchanged while its row stands and goes when its row goes; a record without its row fails the gate.",
-  "permits": []
+  "permits": [
+    {
+      "list": "system-writer-manifest",
+      "row": {
+        "file": "scripts/fixtures/lib/file-screenshot.ts",
+        "ref": "write-registry:createSemanticArtifact"
+      },
+      "reason": "The development screenshot fixture files measured bytes through the existing canonical artifact writer.",
+      "pr": 3615
+    },
+    {
+      "list": "system-writer-manifest",
+      "row": {
+        "file": "scripts/fixtures/seed-screenshot-run.mts",
+        "ref": "raw-sql:agent_runs"
+      },
+      "reason": "The isolated development fixture queues run creation for the real worker without fabricating terminal results.",
+      "pr": 3615
+    }
+  ]
 }
