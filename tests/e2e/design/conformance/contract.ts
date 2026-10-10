@@ -1014,25 +1014,6 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
 
     case "schedule-card-save-floor":
     case "schedule-card-fired-recurring-floor":
-      // NO `cancel-schedule` DRIVER — AND THE REASON CHANGED (cinatra#3174 fix
-      // leg 5). It used to be that the shipped card drew that control only on
-      // the two page hosts, so the in-conversation floor had no such control to
-      // drive. That is no longer the product: the ratified drawing's own
-      // fired-recurring example draws the card IN A CHAT THREAD with "Save
-      // changes" and "Cancel schedule" side by side, and the second graded proof
-      // round failed the floor against it, so the host map was retired and the
-      // control is now drawn wherever `canCancel` says the schedule is
-      // recurring — this host included.
-      //
-      // What is missing now is the HARNESS's half, not the product's: a fixture
-      // row declares ONE answer for its decision endpoint, and this row's is
-      // `saved`, so a cancel press here could only ever be answered with the
-      // outcome of a save. Giving the row a per-op answer is its own change with
-      // its own proof, and this leg is a forward-merge; the act stays on the
-      // wave's readiness list, now for the harness to answer rather than the
-      // drawing. It is still NOT approximated through the run-card host — these
-      // nine surfaces are the conversation's readings, and asserting one of them
-      // on another host would prove something the drawing never said.
       driver.actions["save-schedule"] = {
         outcome: "rearmed",
         run: async (_page, root) => {
@@ -1064,6 +1045,44 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
           await expect(save).toBeDisabled();
         },
       };
+      if (fixture.surfaceId === "schedule-card-fired-recurring-floor") {
+        driver.actions["cancel-schedule"] = {
+          outcome: "stopped",
+          run: async (page, root) => {
+            const card = scheduleCard(root);
+            const cancel = scheduleFloor(root).locator('[data-action="cancel-trigger-schedule"]');
+            const dialog = page.getByRole("alertdialog", { name: "Stop this recurring schedule?" });
+            await pressScheduleUntil(cancel, async () => {
+              await expect(dialog).toBeVisible({ timeout: 2_000 });
+            });
+            await expect(dialog).toHaveAttribute("data-slot", "alert-dialog-content");
+            await expect(dialog).toHaveAttribute("aria-modal", "true");
+            await expect(card.locator('[data-conformance-id="schedule-cancel-confirm"]')).toHaveCount(0);
+            await expect(page.locator('[data-slot="alert-dialog-overlay"]')).toBeVisible();
+            await dialog.getByRole("button", { name: "Keep schedule" }).click();
+            await expect(dialog).toHaveCount(0);
+            await expect(decisionRoads(root)).toHaveCount(0);
+            await expect(cancel).toBeEnabled();
+            await cancel.click();
+            await expect(dialog).toBeVisible();
+            const confirm = dialog.getByRole("button", { name: "Cancel schedule" });
+            await expect(confirm).toHaveClass(/bg-destructive/);
+            await confirm.click();
+            await expect(decisionRoads(root)).toHaveCount(1);
+            await expect(decisionRoads(root)).toHaveAttribute("data-harness-road", "cancel");
+            await expect(decisionRoads(root)).toHaveAttribute("data-harness-carried-rows", "none");
+            await expect(dialog).toHaveCount(0);
+            await expect(scheduleFloor(root)).toHaveCount(0);
+            await expect(card.locator('[data-conformance-id="schedule-option-rows"]')).toBeVisible();
+            await expect(card.getByText("Hour: 09:00", { exact: true })).toBeVisible();
+            await expect(card.getByText("Europe/Berlin", { exact: true })).toBeVisible();
+            await expect(card.locator('button, input, [role="combobox"]')).toHaveCount(0);
+            for (const control of await card.locator('button, input, [role="combobox"]').all()) {
+              await expect(control).toBeDisabled();
+            }
+          },
+        };
+      }
       break;
 
     case "schedule-card-expired":
