@@ -39,14 +39,16 @@ import IORedis from "ioredis";
 // credential).
 //
 // Classification contract (converged with Codex, #1195 round-1..3):
-//   - redis GET null or redis transport failure        ⇒ "absent"
+//   - successful redis GET null                        ⇒ "absent"
 //     (no binding; post-flip there is no legacy channel to fall back TO — a
 //     request with no verified run identity simply carries none, and a
 //     header-only claim is REFUSED at the transport)
-//   - present but malformed / schema-invalid / non-64-hex
+//   - redis GET unavailable / present but malformed /
+//     schema-invalid / non-64-hex
 //     token hash / DB miss / DB error after a binding
 //     was found                                        ⇒ "invalid"
-//     (FAIL CLOSED: the caller must suppress the header fallback and every
+//     (FAIL CLOSED: GET failure cannot establish that a binding is absent.
+//     The caller must suppress the header fallback and every
 //     provenance field — a positive stale-credential signal is never
 //     downgraded into a weaker, forgeable channel)
 //   - unique-index hit                                 ⇒ "resolved"
@@ -115,9 +117,9 @@ declare global {
  *  through the initial connect instead of being rejected cold (lazyConnect +
  *  enableOfflineQueue:false would deterministically fail the first healthy
  *  write). Outage behavior stays bounded — maxRetriesPerRequest:1 +
- *  commandTimeout fail a command fast when redis is down — and every caller
- *  treats a transport failure as "absent" (write skipped / no run
- *  attribution), so the bridge and the MCP handler are never held hostage. */
+ *  commandTimeout fail a command fast when redis is down. A failed read is
+ *  invalid rather than absent: an unavailable correlation store must not
+ *  downgrade a run-bound machine caller to an ordinary runless caller. */
 function getClient(): DurableBindingRedis {
   if (!globalThis.__cinatraDurableRunCtxRedis) {
     globalThis.__cinatraDurableRunCtxRedis = new IORedis(
@@ -337,11 +339,10 @@ export async function resolveDurableRunContext(
   try {
     raw = await client.get(durableRunContextKey(rawBearerToken));
   } catch {
-    // redis transport failure ⇒ absent (availability policy: a redis outage
-    // must not fail every MCP call; the request simply carries no run
-    // attribution — there is no weaker channel left to fall back to).
-    bump(counters().durableOutcome, "absent_transport");
-    return { outcome: "absent" };
+    // The GET did not establish absence. Refuse fallback rather than let a
+    // run-bound machine credential become an ordinary runless caller.
+    bump(counters().durableOutcome, "invalid_transport");
+    return { outcome: "invalid" };
   }
   if (raw === null) {
     bump(counters().durableOutcome, "absent");
