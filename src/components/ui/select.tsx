@@ -98,7 +98,9 @@ function SelectContent({
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport
           className={cn(
-            'p-1',
+            // Radix hides native scrollbars on this viewport, not on Content.
+            // Keep its scrolling/focus machinery and expose the approved thin track.
+            'p-1 [scrollbar-width:thin]! [scrollbar-color:var(--border)_transparent] [&::-webkit-scrollbar]:block! [&::-webkit-scrollbar]:w-[6px]! [&::-webkit-scrollbar]:h-[6px]! [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border',
             position === 'popper' &&
               'h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1'
           )}

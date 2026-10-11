@@ -946,4 +946,53 @@ for (const { name: palette, theme } of PALETTES) {
       });
     });
   });
+
+  test.describe("Select long-list viewport — specs/app-components.html#Select", () => {
+    test("exposes the actual overflowing viewport's thin track", async ({ page }) => {
+      await open(page, theme);
+      await seam(page, "select-long-list").getByRole("combobox").click();
+      const listbox = page.getByRole("listbox");
+      const viewport = listbox.locator("[data-radix-select-viewport]");
+      await expect(listbox.getByRole("option")).toHaveCount(48);
+      await expect.poll(() => viewport.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      const track = await viewport.evaluate((el) => {
+        const css = getComputedStyle(el);
+        const bar = getComputedStyle(el, "::-webkit-scrollbar");
+        const thumb = getComputedStyle(el, "::-webkit-scrollbar-thumb");
+        const track = getComputedStyle(el, "::-webkit-scrollbar-track");
+        return {
+          width: css.scrollbarWidth,
+          display: bar.display,
+          webkitWidth: bar.width,
+          webkitHeight: bar.height,
+          thumb: thumb.backgroundColor,
+          track: track.backgroundColor,
+        };
+      });
+      expect(track.width).toBe("thin");
+      expect(track.display).toBe("block");
+      // WebKit recipe pin: standard thin width remains browser-controlled.
+      expect(track.webkitWidth).toBe("6px");
+      expect(track.webkitHeight).toBe("6px");
+      expect(track.thumb).toBe(await computedColor(page, await token(page, "--border")));
+      expect(alphaOf(track.track)).toBe(0);
+      await viewport.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+      await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+      await expect(listbox.getByRole("option", { name: "List item 48" })).toBeInViewport();
+    });
+
+    test("retains keyboard selection and restores trigger focus", async ({ page }) => {
+      await open(page, theme);
+      const trigger = seam(page, "select-long-list").getByRole("combobox");
+      await trigger.focus();
+      await trigger.press("ArrowDown");
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await page.keyboard.press("End");
+      await expect(page.getByRole("option", { name: "List item 48" })).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+      await expect(trigger).toContainText("List item 48");
+      await expect(trigger).toBeFocused();
+    });
+  });
 }
