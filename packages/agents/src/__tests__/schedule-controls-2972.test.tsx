@@ -377,7 +377,7 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     const { container } = mount(BODIES.recurringFired, "run_card");
     await waitFor(() => expect(cancel(container)).not.toBeNull());
     fireEvent.click(cancel(container)!);
-    const strip = container.querySelector(
+    const strip = document.querySelector(
       '[data-conformance-id="schedule-cancel-confirm"]',
     );
     expect(strip).not.toBeNull();
@@ -392,7 +392,7 @@ describe("point 3 — Cancel schedule, and only where the plan puts it", () => {
     await waitFor(() => expect(cancel(container)).not.toBeNull());
     fireEvent.click(cancel(container)!);
     fireEvent.click(
-      container.querySelector(
+      document.querySelector(
         '[data-conformance-id="schedule-cancel-confirm"] button:last-of-type',
       )!,
     );
