@@ -77,6 +77,7 @@ import {
 } from "@/lib/dev-fixture-secret";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { upsertConnectSiteAndMintCredential } from "@/lib/connect-provisioning";
+import { isPreviewInstance } from "@/lib/install-profile";
 
 type Status =
   | { status: "created"; siteUrl: string; detail?: string }
@@ -1076,6 +1077,20 @@ export async function runDevAutoSetup(): Promise<{
   // direct import must never run the docker/credential provisioning + fixture
   // seeding outside strict development. A no-op skipped result off dev.
   if (!isStrictDevelopmentRuntime()) {
+    // cinatra#4098: a preview instance (the `preview` install profile on a
+    // production runtime) is not a production deployment, so it runs the
+    // connector-owned devSetup hooks. Nothing else of the development setup
+    // runs there: no fixture account (`ensureDevConnectActor` and the `cnx_`
+    // mint keep their strict-development gate) and no connector-policy fixture.
+    if (isPreviewInstance(process.env)) {
+      const hooks = await runDevSetupHooks();
+      const connectorPolicies: Status = {
+        status: "skipped",
+        reason: "preview instance: connector hooks only, no development fixtures",
+      };
+      logResult("connector-policy", connectorPolicies);
+      return { hooks, connectorPolicies };
+    }
     return { hooks: [], connectorPolicies: { status: "skipped", reason: "not development" } };
   }
 
