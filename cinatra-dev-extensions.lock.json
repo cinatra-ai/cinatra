@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "6721f1e83b385be506ad1dab842d900503925444"
+      "resolvedSha": "fe936a27b6aae6e4e985a1baf6e4747d7ea0a6d8"
     },
     {
       "packageName": "@cinatra-ai/email-body-matcher-skill",
@@ -230,7 +230,7 @@
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "ed23ebd806809bbf6bc71ef84c94f4df11428561"
+      "resolvedSha": "29e0909da0e056097f0d82345e25ca8f44bdaaae"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
@@ -260,7 +260,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
       "repo": "cinatra-ai/linkedin-artifacts",
-      "resolvedSha": "9f9874b53c010361b7ae8c7a865df66c65b6f33f"
+      "resolvedSha": "b8e02a74da506fb0dacf307c693936f3c6fc136b"
     },
     {
       "packageName": "@cinatra-ai/linkedin-connector",
@@ -330,7 +330,7 @@
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
       "repo": "cinatra-ai/media-transcript-agent",
-      "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
+      "resolvedSha": "dad157fbc8e6809035c734d6f463218e48f257b7"
     },
     {
       "packageName": "@cinatra-ai/plane-connector",

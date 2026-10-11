@@ -355,7 +355,7 @@ describe("a chat turn writes EXACTLY ONE delivery record, keyed to the turn the 
 
   it("records the inline (Gemini) vehicle and its budget drops", async () => {
     state.provider = "gemini";
-    state.defaultModel = "gemini-2.5-pro";
+    state.defaultModel = "gemini-3.5-flash";
     const ids = bundleSkillIds();
     const [dropped, ...inlined] = ids;
     state.inlineResult = {

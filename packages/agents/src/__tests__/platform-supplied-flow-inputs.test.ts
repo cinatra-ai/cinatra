@@ -351,7 +351,7 @@ describe("assertUnsatisfiableHiddenInputs — confirm before refuse", () => {
     ).rejects.toThrow(/"packageSlug"/);
   });
 
-  it("clears once the caller supplies the value, without reading any OAS", async () => {
+  it("clears the supplied hidden value after one mounted declaration confirmation", async () => {
     let reads = 0;
     await expect(
       assertUnsatisfiableHiddenInputs({
@@ -365,7 +365,32 @@ describe("assertUnsatisfiableHiddenInputs — confirm before refuse", () => {
         },
       }),
     ).resolves.toBeUndefined();
-    // The confirm read is paid ONLY on the path that is about to fail a run.
-    expect(reads).toBe(0);
+    // Confirm actual mounted inputs, including any additions absent from stored schema.
+    expect(reads).toBe(1);
+  });
+});
+
+
+describe("cinatra#3759 — install-only floor never grows", () => {
+  it("has only exact historical package/input tuples and rejects inherited package identities", async () => {
+    const { VISIBLE_UNDEFAULTED_INPUT_BASELINE: floor, isOnVisibleInputInstallBaseline: allowed } = await import("../../../../scripts/extensions/platform-supplied-flow-inputs.mjs");
+    expect(floor).toBeDefined();
+    const ceiling: Record<string, string[]> = {
+      "@cinatra-ai/drupal-agent": ["instanceId", "nodeId", "nodeBundle", "nodeStatus", "instructions"],
+      "@cinatra-ai/wordpress-agent": ["instanceId", "postId", "postType", "postStatus", "instructions"],
+      "@cinatra-ai/project-manager-agent": ["as_of", "configured_provider_id", "project_id"],
+    };
+    for (const [name, titles] of Object.entries(floor ?? {})) {
+      expect(Object.hasOwn(ceiling, name)).toBe(true);
+      expect(Object.isFrozen(titles)).toBe(true);
+      for (const title of titles) expect(ceiling[name]).toContain(title);
+      expect(allowed(name, "new_input")).toBe(false);
+    }
+    expect(Object.isFrozen(floor)).toBe(true);
+    expect(floor).not.toHaveProperty("@cinatra-ai/project-manager-agent");
+    expect(allowed("@cinatra-ai/project-manager-agent", "as_of")).toBe(false);
+    expect(Object.values(floor).flat()).toHaveLength(10);
+    expect(allowed("@other/wordpress-agent", "postId")).toBe(false);
+    expect(allowed("constructor", "postId")).toBe(false);
   });
 });

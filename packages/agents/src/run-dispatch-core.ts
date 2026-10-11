@@ -290,15 +290,22 @@ export async function dispatchRunStartForPrincipal(
     return { ok: false, error: "run is not in pending_input state" };
   }
 
-  // 7. Enqueue with jobId=runId for BullMQ-level dedup. If this throws,
-  //    compensate by reverting to pending_input so the run does not get
-  //    stuck in 'queued' forever.
+  // A completed setup job can still occupy run.id in BullMQ. A decided
+  // recommendation is a new execution leg: bind its job to the released park
+  // so that retained setup completion cannot swallow it, while retries of
+  // this SAME decision still deduplicate. Other starts keep their identity.
+  const jobId = livePark?.status === "released"
+    ? `run-start-${args.runId}-${livePark.id}`
+    : args.runId;
+
+  // 7. Enqueue with the start's stable identity. If this throws, compensate
+  //    back to the waiting rung so the run does not stay queued without a job.
   try {
     await enqueueAgentRun(
       { runId: args.runId },
       // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity,
       // projected so the run-start connector + LLM-provider preflights both fire.
-      { jobId: args.runId, ...enqueueDepsForTemplate(template) },
+      { jobId, ...enqueueDepsForTemplate(template) },
     );
   } catch (err) {
     // Compensation: undo the queued transition. We use the conditional

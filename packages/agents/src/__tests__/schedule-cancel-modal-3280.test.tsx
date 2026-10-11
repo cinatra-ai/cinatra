@@ -120,6 +120,39 @@ describe("#3280 — the shared destructive schedule-cancel modal", () => {
     });
   }
 
+  // Approved lifecycle-cards §VI.1: the shared modal has one drawing in both
+  // palettes. Pin every measurable class/copy the replacement introduces;
+  // actual computed paint and geometry are asserted by the fixture driver.
+  it.each(["light", "dark"] as const)("§VI.1 %s: pins shared modal geometry, copy and destructive controls", async (palette) => {
+    document.documentElement.className = palette === "dark" ? "dark" : "";
+    try {
+      mount("run_card");
+      const dialog = await open();
+      expect(dialog.className.split(/\s+/)).toEqual(expect.arrayContaining([
+        "fixed", "grid", "gap-4", "w-full", "sm:max-w-lg", "rounded-lg",
+        "border", "border-line", "bg-background", "p-6", "shadow-lg", "z-[150]",
+      ]));
+      const overlay = document.querySelector('[data-slot="alert-dialog-overlay"]')!;
+      expect(overlay.className.split(/\s+/)).toEqual(expect.arrayContaining([
+        "fixed", "inset-x-0", "bottom-0", "top-16", "z-[145]", "bg-black/50",
+      ]));
+      const title = dialog.querySelector('[data-slot="alert-dialog-title"]')!;
+      const description = dialog.querySelector('[data-slot="alert-dialog-description"]')!;
+      expect(title.textContent).toBe(TITLE);
+      expect(title.className.split(/\s+/)).toEqual(expect.arrayContaining(["text-lg", "font-semibold"]));
+      expect(description.textContent?.trim()).toBe(DESCRIPTION);
+      expect(description.className.split(/\s+/)).toEqual(expect.arrayContaining(["text-sm", "text-muted-foreground"]));
+      const buttons = within(dialog).getAllByRole("button");
+      expect(buttons.map((button) => button.textContent)).toEqual(["Keep schedule", "Cancel schedule"]);
+      expect(buttons[0].className).toContain("border");
+      expect(buttons[0].className).toContain("bg-background");
+      expect(buttons[1].className).toContain("bg-destructive");
+      expect(buttons[1].className).toContain("text-destructive");
+    } finally {
+      document.documentElement.className = "";
+    }
+  });
+
   it("a refused cancel closes the ask and leaves the existing editable schedule", async () => {
     const view = mount("run_card", true);
     const dialog = await open();

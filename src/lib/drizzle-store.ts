@@ -18,7 +18,7 @@ import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 —
 import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; import { lentActionGrantSchemaQueries } from "@/lib/lent-action-grant-schema"; import { agentRunCreatedAtSchemaQueries } from "@/lib/agent-run-created-at-schema"; import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-moment-schema"; import { memoryPromotionRequestSchemaQueries } from "@/lib/objects/memory-promotion-request-schema"; import { agentRunAssignmentScopeSchemaQueries } from "@/lib/assignment-scope"; import { agentAssignedContextSchemaQueries } from "@/lib/agent-assigned-context-schema"; import { agentTemplateRunGateSchemaQueries } from "@/lib/extension-grant-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; import { lentActionGrantSchemaQueries } from "@/lib/lent-action-grant-schema"; import { agentRunCreatedAtSchemaQueries, agentRunStartedBySchemaQueries } from "@/lib/agent-run-created-at-schema"; import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-moment-schema"; import { memoryPromotionRequestSchemaQueries } from "@/lib/objects/memory-promotion-request-schema"; import { agentRunAssignmentScopeSchemaQueries } from "@/lib/assignment-scope"; import { agentAssignedContextSchemaQueries } from "@/lib/agent-assigned-context-schema"; import { agentTemplateRunGateSchemaQueries } from "@/lib/extension-grant-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries, skillMatchRunContextDdl } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
@@ -1040,9 +1040,7 @@ END $$` },
       ('seed-openai-gpt4o', 'openai', 'gpt-4o', 2.50000000, 10.00000000, 1.25000000, 'litellm', now()),
       ('seed-openai-gpt4o-mini', 'openai', 'gpt-4o-mini', 0.15000000, 0.60000000, 0.07500000, 'litellm', now()),
       ('seed-anthropic-sonnet', 'anthropic', 'claude-sonnet-4-5-20250929', 3.00000000, 15.00000000, 0.30000000, 'litellm', now()),
-      ('seed-anthropic-opus', 'anthropic', 'claude-opus-4', 15.00000000, 75.00000000, 1.50000000, 'litellm', now()),
-      ('seed-gemini-flash', 'gemini', 'gemini-2.5-flash', 0.07500000, 0.30000000, NULL, 'litellm', now()),
-      ('seed-gemini-pro', 'gemini', 'gemini-2.5-pro', 1.25000000, 10.00000000, NULL, 'litellm', now())
+      ('seed-anthropic-opus', 'anthropic', 'claude-opus-4', 15.00000000, 75.00000000, 1.50000000, 'litellm', now())
     ON CONFLICT DO NOTHING` },
     // legacy_costs table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."legacy_costs" (
@@ -2259,7 +2257,7 @@ $body$` },
     // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
     // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
-    { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` }, ...agentRunStartedBySchemaQueries(schemaName),
     // agent_runs.project_id inheritance
     // carrier). Nullable refinement, never an ownership tier. agent_runs has
     // created_at (added earlier in this array) + status. Partial indexes:

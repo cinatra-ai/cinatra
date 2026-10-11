@@ -28,7 +28,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
-import { electRunRailActiveStep } from "../run-step-rail-extra-entry";
+import { buildRunStepRail } from "../run-step-rail";
+import { RunStepSelectionProvider, electRunRailActiveStep } from "../run-step-rail-extra-entry";
 
 const stream = vi.hoisted(() => ({ interruptContext: null as unknown }));
 
@@ -387,4 +388,28 @@ describe("a fully resolved rail elects no entry (item 4)", () => {
     await waitFor(() => expect(items().length).toBe(4));
     expect(activeItems().length).toBe(0);
   });
+});
+
+// Approved specs/app-artifact-review.html §I.3: exactly one current marking and next review beneath decided history.
+it("§I.3 three pending gates mark only A; deciding A marks B below A", async () => {
+  const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+  const gates = ["C", "B", "A"].map(reviewTaskId => ({ gateId: `g-${reviewTaskId}`, reviewTaskId, status: "pending" as "pending" | "resolved", disposition: null, createdAt: reviewTaskId === "C" ? 2 : 1 }));
+  const extras = () => buildRunStepRail({ gates, templateSteps: SPINE.map(s => ({ index: s.index, stepNumber: s.stepNumber, label: s.label })) }).entries;
+  const reading = () => <RunStepSelectionProvider value={{ selected: "detail", select: vi.fn() }}><OrchestratorStepperPanel {...baseProps({ railExtras: extras() })} /></RunStepSelectionProvider>;
+  const page = render(reading());
+  const marked = () => Array.from(document.querySelectorAll('[data-run-step-rail] [aria-current="step"]'));
+  await waitFor(() => expect(marked()).toHaveLength(1));
+  expect(marked()[0].getAttribute("data-rail-gate-open")).toBe("A");
+  expect(activeItems()).toHaveLength(1);
+  expect(activeItems()[0].querySelector('[data-rail-gate-open="A"]')).not.toBeNull();
+  gates[2].status = "resolved";
+  page.rerender(reading());
+  await waitFor(() => expect(marked()[0]?.getAttribute("data-rail-gate-open")).toBe("B"));
+  expect(marked()).toHaveLength(1);
+  expect(activeItems()).toHaveLength(1);
+  const history = document.querySelector('[data-run-step-rail] [data-rail-gate-history="true"]');
+  expect(history).not.toBeNull();
+  expect(history!.querySelector('[data-rail-gate-open="A"]')).not.toBeNull();
+  expect(activeItems()[0].querySelector('[data-rail-gate-open="B"]')).not.toBeNull();
+  expect(history!.compareDocumentPosition(marked()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

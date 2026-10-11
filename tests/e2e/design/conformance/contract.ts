@@ -20,6 +20,7 @@
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
 import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 
@@ -1056,6 +1057,37 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
             });
             await expect(dialog).toHaveAttribute("data-slot", "alert-dialog-content");
             await expect(dialog).toHaveAttribute("aria-modal", "true");
+            // Approved lifecycle-cards §VI.1; this driver runs in both palettes.
+            // The imported shared AlertDialog owns these dimensions and tokens.
+            const modalDrawing = await dialog.evaluate((element) => {
+              const style = getComputedStyle(element);
+              const title = element.querySelector('[data-slot="alert-dialog-title"]')!;
+              const description = element.querySelector('[data-slot="alert-dialog-description"]')!;
+              const titleStyle = getComputedStyle(title);
+              const descriptionStyle = getComputedStyle(description);
+              return {
+                radius: style.borderRadius, padding: style.padding, gap: style.gap,
+                width: element.getBoundingClientRect().width, border: style.borderTopWidth,
+                titleSize: titleStyle.fontSize, titleWeight: titleStyle.fontWeight,
+                descriptionSize: descriptionStyle.fontSize,
+                title: title.textContent,
+                description: description.textContent?.trim(),
+                buttons: [...element.querySelectorAll('button')].map((button) => button.textContent),
+              };
+            });
+            expect(modalDrawing).toMatchObject({
+              radius: "8px", padding: "24px", gap: "16px", border: "1px",
+              titleSize: "18px", titleWeight: "600", descriptionSize: "14px",
+              title: "Stop this recurring schedule?",
+              description: "No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards.",
+              buttons: ["Keep schedule", "Cancel schedule"],
+            });
+            expect(modalDrawing.width).toBeLessThanOrEqual(512);
+            const overlayDrawing = await page.locator('[data-slot="alert-dialog-overlay"]').evaluate((element) => {
+              const style = getComputedStyle(element);
+              return { top: style.top, background: style.backgroundColor };
+            });
+            expect(overlayDrawing).toEqual({ top: "64px", background: "rgba(0, 0, 0, 0.5)" });
             await expect(card.locator('[data-conformance-id="schedule-cancel-confirm"]')).toHaveCount(0);
             await expect(page.locator('[data-slot="alert-dialog-overlay"]')).toBeVisible();
             await dialog.getByRole("button", { name: "Keep schedule" }).click();
@@ -2053,8 +2085,22 @@ async function assertStartRefused(root: Locator): Promise<void> {
 // The static harness consumes actual product-Link navigation at its declared
 // fixture port. This proves dispatch and its exact address, not an authenticated
 // destination page; the latter belongs to the actual host's browser proof.
+// A link pressed before hydration can follow its native href and leave the
+// fixture. Wait on the actual control; never recover that navigation by retrying.
+async function waitForControlHydration(control: Locator): Promise<void> {
+  await expect
+    .poll(
+      () => control.evaluate((element) =>
+        Object.keys(element).some((key) => key.startsWith("__reactFiber$")),
+      ),
+      { timeout: HYDRATION_TIMEOUT_MS, message: "the control did not hydrate before interaction" },
+    )
+    .toBe(true);
+}
+
 async function followEligibilityLink(root: Locator, link: Locator, href: string, outcome: string): Promise<void> {
   await expect(link).toHaveAttribute("href", href);
+  await waitForControlHydration(link);
   await link.click();
   await expect(root).toHaveAttribute("data-outcome", outcome);
   await expect(root).toHaveAttribute("data-destination", href);
@@ -3732,6 +3778,7 @@ const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -3856,6 +3903,7 @@ const NOTIFICATION_ROW_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -5044,10 +5092,9 @@ const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
       outcome: "people-listed",
       run: async (page, root) => {
         const search = root.getByPlaceholder("Search by name or email…");
-        // Hydration-sensitive: under a loaded box the click and the keystrokes
-        // can land before this island hydrates, and React then re-renders the
-        // controlled field back to empty with the popover shut, so the typing
-        // is retried until the listbox answers (the same road as `clickUntil`).
+        // Wait on this controlled field before the first keystroke so React
+        // cannot replace a pre-hydration edit with its initial empty value.
+        await waitForControlHydration(search);
         await fillUntil(search, CONNECTOR_SHARING_SEARCH_QUERY, async () => {
           // The listbox is portalled, so it is asserted at the page level.
           await expect(
@@ -7361,13 +7408,14 @@ const UPLOAD_PANEL_NODE = '[data-conformance-id="upload-resolved-install-panel"]
 const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
 
 /**
- * Type the drawn link and press Continue until the panel mounts, retrying
- * through hydration (a click landing before React hydrates is silently
- * swallowed on the standalone build). Typing clears any previous resolution, so
- * a retry converges rather than compounding.
+ * Wait for the URL field and Continue button to hydrate before typing the
+ * drawn link. Typing clears any previous resolution, so the existing panel
+ * readiness retry converges rather than compounding.
  */
 async function resolveUploadReference(root: Locator): Promise<Locator> {
   const panel = root.locator(UPLOAD_PANEL_NODE);
+  await waitForControlHydration(root.locator("#github-repo-url"));
+  await waitForControlHydration(root.locator(UPLOAD_RESOLVE_CONTROL));
   await expect(async () => {
     // An unbounded action consumes the outer budget before toPass can refill.
     await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });

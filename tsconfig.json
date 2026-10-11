@@ -423,7 +423,7 @@
       "@cinatra-ai/openai-connector": ["./extensions/cinatra-ai/openai-connector/src/index.ts"],
       "@cinatra-ai/openai-connector/register": ["./extensions/cinatra-ai/openai-connector/src/register.ts"],
       "@cinatra-ai/openai-connector/deps": ["./extensions/cinatra-ai/openai-connector/src/deps.ts"],
-      "@cinatra-ai/openai-connector/log-directory": ["./extensions/cinatra-ai/openai-connector/src/log-directory.ts"],
+      "@cinatra-ai/openai-connector/log-capture-channel": ["./extensions/cinatra-ai/openai-connector/src/log-capture-channel.ts"],
       "@cinatra-ai/openai-connector/actions": ["./extensions/cinatra-ai/openai-connector/src/actions.ts"],
       "@cinatra-ai/permissions": ["./packages/permissions/src/index.ts"],
       "@cinatra-ai/permissions/pages": ["./packages/permissions/src/pages.tsx"],
