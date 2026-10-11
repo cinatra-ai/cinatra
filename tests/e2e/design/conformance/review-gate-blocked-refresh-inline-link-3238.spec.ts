@@ -62,7 +62,7 @@ for (const palette of PALETTES) {
       expect(reading.endsTheParagraph).toBe(true);
       expect(reading.sharesLastTextLine).toBe(true);
       expect(reading.color).toBe("rgb(54, 78, 129)");
-      expect(reading.display).toBe("inline");
+      expect(reading.display).toBe("inline-block");
       expect(reading.verticalAlign).toBe("baseline");
       expect(reading.decoration).toBe("underline");
       expect(reading.offset).toBe("3px");
