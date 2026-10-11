@@ -473,6 +473,8 @@ describe("cinatra#3285 — exactly one current entry across the Skills release",
     const { view } = await continueOnTheSkillsStep();
     const released = inputTreatment(view.container);
     expect(released).toEqual({ reached: "true", disabled: null, current: "step", highlighted: true, filled: true });
+    const releasedAction = view.container.querySelector<HTMLElement>('[data-run-surface-rail-step-key="input:0"]')!.getAttribute("data-action");
+    expect(releasedAction).toBe("open-input-step");
     expect(inputTreatment(view.container, "input:1")).toEqual({ reached: "false", disabled: "true", current: null, highlighted: false, filled: false });
     const skills = view.container.querySelector<HTMLElement>("[data-recommendation-rail-step]");
     await act(async () => { fireEvent.click(skills!); });
@@ -483,6 +485,7 @@ describe("cinatra#3285 — exactly one current entry across the Skills release",
     atMoment("handoff");
     const fresh = render(await serverTree());
     expect(inputTreatment(fresh.container)).toEqual(released);
+    expect(fresh.container.querySelector<HTMLElement>('[data-run-surface-rail-step-key="input:0"]')!.getAttribute("data-action")).toBe(releasedAction);
     expect(inputTreatment(fresh.container, "input:1")).toEqual({ reached: "false", disabled: "true", current: null, highlighted: false, filled: false });
   });
 

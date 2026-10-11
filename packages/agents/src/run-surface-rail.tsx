@@ -347,7 +347,7 @@ export function RunSurfaceRailRow({
       // the settled circle the same way on every rail it appears in.
       data-run-surface-rail-settled={settled ? "true" : "false"}
       data-conformance-id={conformanceId}
-      data-action={action}
+      data-action={releasedInput ? "open-input-step" : action}
       aria-current={selected ? "step" : undefined}
       aria-label={displayStep !== null && !runSurfaceStepDrawsGlyph(selectionKey) ? `${displayStep} ${title}` : undefined}
       // `aria-disabled`, NOT the native `disabled`. Native `disabled` takes the
