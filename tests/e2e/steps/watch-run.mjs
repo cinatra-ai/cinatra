@@ -19,7 +19,7 @@
 //     no status, as when the run's first step is an input step on the rail) and
 //     `unreadable` (the page could not be read at that moment). None of them
 //     settles: the watch holds to its bound and takes the frame there.
-import { pollUntilSettled, refuse, requireMs, requireRecord, takeFrame } from "./step-kit.mjs";
+import { pollUntilSettled, refuse, refuseFrameScope, requireMs, requireRecord, takeFrame } from "./step-kit.mjs";
 
 const STEP = "watchRun";
 
@@ -73,6 +73,7 @@ function runSettled(state) {
  * @returns {Promise<{ state: string, settled: boolean, elapsedMs: number, path: string }>}
  */
 export async function watchRun(page, { record, shutter, bound = RUN_WATCH_BOUND_MS, pollMs = RUN_WATCH_POLL_MS } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was read");
   requireRecord(STEP, record);
   const nothing = "nothing was read";
   if (typeof shutter !== "function") throw refuse(STEP, record, "input", `hand the step a shutter that takes the frame — ${nothing}`);

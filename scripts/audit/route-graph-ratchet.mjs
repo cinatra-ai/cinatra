@@ -77,6 +77,17 @@
  *    The gate's tests check the COMMITTED baseline the same way
  *    (`validateCommittedAbsorbs` against the base), so a pull request with
  *    real core growth carries its records and passes both (cinatra#3669).
+ *  - An annotated raise passes in the pull request that carries it
+ *    (cinatra#3848): the record is committed with the raise, whether or not the
+ *    base branch holds it. A ceiling differs from the floors that list faults:
+ *    it measures the graph a route reaches, and real growth raises it, so the
+ *    record with its notice makes the raise visible; a floor that lists faults
+ *    only shrinks.
+ *  - The base is read through the shared floor base guard
+ *    (scripts/audit/lib/floor-base-guard.mjs): ROUTE_GRAPH_RATCHET_BASE when
+ *    the workflow sets it, else the pull request's base branch; a base that
+ *    cannot be read fails closed, and a run that is no pull request says so in
+ *    one line.
  *
  * Node-builtins-only + offline (imports route-graph.mjs, which is also
  * node-builtins-only; the base-ref ratchet shells out to `git`). No third-party
@@ -90,14 +101,20 @@
  *   node scripts/audit/route-graph-ratchet.mjs --write-baseline # (re)write baseline to current counts (should only ever shrink)
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { FIXED_ROUTES, analyzeRoute } from "../route-graph.mjs";
+import { compareFloorWithBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const REPO_ROOT = process.cwd();
 const BASELINE_FILE = join(REPO_ROOT, "scripts/audit/route-graph-ratchet.baseline.json");
+
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "scripts/audit/route-graph-ratchet.baseline.json";
+
+/** The gate's own base variable (a git revision), set by the workflow. */
+export const FLOOR_BASE_VAR = "ROUTE_GRAPH_RATCHET_BASE";
 
 // Single source for the baseline's self-describing prose (kept in the gate so
 // `--write-baseline` regenerations cannot drift the documented contract).
@@ -294,8 +311,10 @@ export function validateAbsorbRecords(baseline) {
  * Returns { violations: [{ route, reason }], absorbed: [{ route, from, to, reason, pr }] }:
  *  - A raise (committed ceiling > base ceiling) with a committed record that
  *    EXACTLY matches the delta (from === base, to === committed) → absorbed
- *    (allowed; caller emits the LOUD notice). Any other raise → violation
- *    (silent raise / mismatched record).
+ *    (allowed; caller emits the LOUD notice), whether or not the base holds
+ *    the record: the pull request that raises the ceiling carries its record
+ *    (cinatra#3848). Any other raise → violation (silent raise / mismatched
+ *    record).
  *  - A committed record NOT consumed by a raise is valid ONLY as a
  *    carried-forward historical record: the base must contain a DEEP-EQUAL
  *    record for that route AND the committed ceiling must equal record.to.
@@ -409,6 +428,28 @@ export function validateCommittedAbsorbs(baseBaseline, committedBaseline) {
   const flagged = new Set(structural.map((e) => e.route));
   const { violations } = classifyRaises(baseBaseline, committedBaseline);
   return uniqueErrors([...structural, ...violations.filter((v) => !flagged.has(v.route))]);
+}
+
+/**
+ * The floor base guard (cinatra#3832) for the committed baseline: growth is
+ * every violation `classifyRaises` finds against the base branch's baseline
+ * (an unannotated raise, a raise whose record does not match it, a stale,
+ * orphan or altered record). A raise with its matching record is not growth
+ * here: it is absorbed, and the gate prints its notice (cinatra#3848). `headFloor` (the parsed baseline) defaults to the
+ * baseline in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
+  return compareFloorWithBase({
+    gate: "route-graph-ratchet",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: head,
+    parse: (text) => JSON.parse(text),
+    grown: (base, committed) => classifyRaises(base, committed).violations.map((v) => `${v.route} [${v.field}]: ${v.reason}`),
+    repoRoot,
+    env,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -625,53 +666,26 @@ function main() {
   }
 
   // Base-ref ratchet: block the SILENT regenerate-to-pass bypass (raise a
-  // ceiling + `--write-baseline` in the same PR with no annotation). When
-  // ROUTE_GRAPH_RATCHET_BASE is set (wired from the CI base ref: PR arm →
-  // origin/<base>, push arm → the previous tip), every ceiling raise vs the
-  // base-branch baseline must be exactly matched by a committed absorb record
-  // (then it passes with a LOUD notice); orphan/stale records and a deleted
-  // still-raised annotation also fail. Mirrors the sibling no-new-rot gates;
-  // fail-closed if the ref can't be resolved.
-  const baseRef = process.env.ROUTE_GRAPH_RATCHET_BASE;
-  if (baseRef) {
-    if (baseRef.startsWith("-")) {
-      console.error(`[route-graph-ratchet] FAIL — ROUTE_GRAPH_RATCHET_BASE="${baseRef}" is flag-like.`);
-      process.exit(1);
+  // ceiling + `--write-baseline` in the same PR with no annotation). The base
+  // is ROUTE_GRAPH_RATCHET_BASE when the workflow sets it (PR arm → the remote
+  // base branch, push arm → the previous tip), else the pull request's base
+  // branch; with none (no pull request) the guard says so and the tree check
+  // below still runs. Every ceiling raise vs the base-branch baseline must be
+  // exactly matched by a committed absorb record (then it passes with a LOUD
+  // notice); orphan/stale records and a deleted still-raised annotation also
+  // fail. Fail-closed when the base cannot be read.
+  const guard = checkFloorAgainstBase({ headFloor: baseline });
+  if (guard.ok && guard.baseFloor) {
+    const { absorbed } = classifyRaises(guard.baseFloor, baseline);
+    for (const a of absorbed) {
+      console.log(`[route-graph-ratchet] NOTICE — ABSORBED ceiling raise ${a.route}: ${a.from} -> ${a.to} (${a.reason}; PR #${a.pr})`);
     }
-    let refResolves = false;
-    try {
-      execFileSync("git", ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], { cwd: REPO_ROOT, stdio: ["ignore", "ignore", "ignore"] });
-      refResolves = true;
-    } catch { refResolves = false; }
-    if (!refResolves) {
-      console.error(`[route-graph-ratchet] FAIL — ROUTE_GRAPH_RATCHET_BASE="${baseRef}" did not resolve (shallow checkout / misconfig?). Failing closed — ensure the base ref is fetched (fetch-depth: 0).`);
-      process.exit(1);
+  }
+  if (!reportFloorGuard(guard)) {
+    if (guard.status === "grew") {
+      console.error(`A ceiling is never raised silently: a sanctioned raise needs a committed absorbs record { from, to, reason, pr } exactly matching the raise (see the baseline note).`);
     }
-    let baseText = null;
-    try {
-      baseText = execFileSync("git", ["show", `${baseRef}:scripts/audit/route-graph-ratchet.baseline.json`], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    } catch {
-      baseText = null; // ref resolves but file absent → introducing PR, no constraint
-    }
-    if (baseText) {
-      let baseBaseline = null;
-      try {
-        baseBaseline = JSON.parse(baseText);
-      } catch {
-        console.error(`[route-graph-ratchet] FAIL — base baseline at ${baseRef} is not valid JSON. Failing closed.`);
-        process.exit(1);
-      }
-      const { violations, absorbed } = classifyRaises(baseBaseline, baseline);
-      for (const a of absorbed) {
-        console.log(`[route-graph-ratchet] NOTICE — ABSORBED ceiling raise ${a.route}: ${a.from} -> ${a.to} (${a.reason}; PR #${a.pr})`);
-      }
-      if (violations.length) {
-        console.error(`[route-graph-ratchet] FAIL — committed baseline vs ${baseRef}: ${violations.length} unannotated raise(s) / invalid absorb record(s):`);
-        violations.forEach((v) => console.error(`  + ${v.route} [${v.field}]: ${v.reason}`));
-        console.error(`A ceiling is never raised silently: a sanctioned raise needs a committed absorbs record { from, to, reason, pr } exactly matching the raise (see the baseline note).`);
-        process.exit(1);
-      }
-    }
+    process.exit(1);
   }
 
   const { over, broken } = diffAgainstBaseline(counts, baseline);

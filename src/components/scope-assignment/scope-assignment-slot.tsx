@@ -234,7 +234,7 @@ export function ScopeAssignmentSlot({
 
       {rows.length === 0 ? (
         <p data-slot="scope-context-slot-empty" className="text-xs text-muted-foreground">
-          No artifact chosen. The run uses what it finds in its own context.
+          No artifact chosen — the run uses what it finds in its own context.
         </p>
       ) : (
         <ul className="mt-1 flex flex-col">

@@ -129,6 +129,16 @@ export const DELEGATED_WIDGET_BOUND_CARD_ACTION = "lifecycle_bound_card_decide";
  */
 export const DELEGATED_WIDGET_NAMED_AGENT_START = "agent_named_start";
 
+/**
+ * The FILL a widget delegation may reach (cinatra#2934, lifecycle-b W5c), for
+ * exactly the parity reason above: a person filling a form by describing it in
+ * the app and being refused inside a third-party application would be the widget
+ * quietly withholding something they can do. It resolves nothing — it places
+ * values in the fields of the one screen their own message was bound to and
+ * submits nothing — so it widens no decision surface at all.
+ */
+export const DELEGATED_WIDGET_BOUND_SCREEN_FILL = "lifecycle_bound_screen_fill";
+
 export const DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS: readonly string[] = [
   "artifact_review_gates_list",
   "artifact_review_gate_render",
@@ -156,12 +166,14 @@ const DELEGATED_WIDGET_ALLOWLIST: Readonly<
     ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
     DELEGATED_WIDGET_BOUND_CARD_ACTION,
     DELEGATED_WIDGET_NAMED_AGENT_START,
+    DELEGATED_WIDGET_BOUND_SCREEN_FILL,
   ]),
   drupal: new Set<string>([
     WIDGET_CONTENT_EDITOR_TOOLS.drupal,
     ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
     DELEGATED_WIDGET_BOUND_CARD_ACTION,
     DELEGATED_WIDGET_NAMED_AGENT_START,
+    DELEGATED_WIDGET_BOUND_SCREEN_FILL,
   ]),
 };
 

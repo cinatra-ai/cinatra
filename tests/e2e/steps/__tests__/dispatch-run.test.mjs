@@ -141,7 +141,7 @@ for (const backend of BACKENDS) {
       });
     });
 
-    it("refuses by name a page without the composer, naming its text boxes and never a placeholder", async () => {
+    it("refuses by name a page without the composer, naming its text boxes including platform placeholder names", async () => {
       await scene(backend, { secrets: [PROMPT] }, async ({ app, page, record, lines }) => {
         const { dispatchRun } = theSteps("dispatchRun");
         await page.goto(`${app.origin}/conversation/boxes`);
@@ -149,7 +149,7 @@ for (const backend of BACKENDS) {
         expect(error.kind).toBe("no-composer");
         expect(error.message).toBe(
           'dispatchRun refused (no-composer): no shown text box on /conversation/boxes is named "Send message" within 300 ms — ' +
-            'the text boxes it shows: "Search", "Notes", one without a name; no prompt was sent',
+            'the text boxes it shows: "Search", "Notes", "Type a message..."; no prompt was sent',
         );
         expect(lines).toEqual([error.message]);
       });

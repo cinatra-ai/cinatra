@@ -118,6 +118,14 @@ export default defineConfig({
       // cinatra#2683 — the conversation column mounts the REAL message list in
       // a DOM test, so the leaves that list reaches must resolve here as they do
       // in tsconfig.json. Subpath keys, so they stay above the bare entry.
+      // cinatra#2934 — the markdown renderer moved DOWN into the agents
+      // package so the per-run prompt window can draw the same assistant prose
+      // /chat draws (chat depends on agents, never the other way round).
+      // Subpath alias, so it stays above the bare-package entry.
+      "@cinatra-ai/agents/markdown-render-core": path.join(
+        root,
+        "packages/agents/src/markdown-render-core.ts",
+      ),
       "@cinatra-ai/agents/client-entry": path.join(
         root,
         "packages/agents/src/client-entry.ts",
@@ -134,6 +142,13 @@ export default defineConfig({
         root,
         "packages/agents/src/run-status.ts",
       ),
+      // The durable transcript projector uses these existing pure subpaths.
+      // Keep the agents subpath before the prefix-matching package barrel.
+      "@cinatra-ai/agents/assignment-scope-snapshot": path.join(
+        root,
+        "packages/agents/src/assignment-scope-snapshot.ts",
+      ),
+      "@cinatra-ai/chat/thread-slug": path.join(root, "packages/chat/src/thread-slug.ts"),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",

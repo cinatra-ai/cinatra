@@ -39,19 +39,16 @@ import {
 import {
   resolveMessageRouting,
   setAssistantPauseState,
-  extractHitlGateValuesAction,
 } from "./actions";
 // Chat prompt-window HITL drive.
 import {
-  classifyPromptForGate,
   createChatGateRegistry,
-  resolveComposerRouting,
-  resolveExtractedGateValues,
 } from "./inline-hitl-classify";
 // cinatra#2566's composer focus: the store the review cards register with, and
 // the pure resolver that says which gate (if any) the composer is bound to.
 import {
   createComposerFocusStore,
+  createLifecycleCardSettleBus,
   resolveComposerTarget,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
@@ -96,7 +93,7 @@ import {
 } from "./conversation-services";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
-import { fingerprintMessages, isRealActivity } from "./thread-activity";
+import { fingerprintMessages, isRealActivity, recallThreadTranscript, recalledThreadFingerprint, rememberThreadTranscript } from "./thread-activity";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
 
@@ -151,7 +148,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
   const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => recallThreadTranscript(userId ?? null, initialThreadId) as Message[]);
   // Streaming registry: one AbortController per in-flight streamResponse call.
   // Replaces the single boolean flag so N concurrent streams can coexist.
   const [streamingCount, setStreamingCount] = useState(0);
@@ -226,7 +223,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // opened/loaded the thread". Only the former advances `updatedAt` and the
   // sidebar position (issue #283). Empty string == nothing loaded yet (a
   // brand-new thread starts empty, so its first user message reads as activity).
-  const loadedFingerprintRef = useRef<string>("");
+  const loadedFingerprintRef = useRef<string>(recalledThreadFingerprint(userId ?? null, initialThreadId));
   // The active thread's immutable createdAt as read from the loaded thread
   // data. Used as the createdAt fallback when persisting so the payload's
   // createdAt does not drift to `now`/updatedAt if the local `threads` summary
@@ -243,7 +240,18 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // useState initializer → ONE registry instance for the component lifetime,
   // so both function identities are stable across renders (the handler is
   // threaded to InlineAgentRunCard).
-  const [{ handleActiveGateChange, getLatestOpenGate }] = useState(createChatGateRegistry);
+  // THE SAME-SESSION SETTLE BUS (cinatra#2853, the picture leg). One instance
+  // for the page's lifetime, on the same useState-initializer shape and for the
+  // same reason as the two stores around it. Created BEFORE the gate registry
+  // because the registry is one of the two things that announce on it.
+  const [cardSettleBus] = useState(createLifecycleCardSettleBus);
+  const [{ handleActiveGateChange, getLatestOpenGate }] = useState(() =>
+    // "FROM THE GATE ROW" — the registry is told a gate closed before this page
+    // learns anything else about it, and the descriptor it was holding names the
+    // card. Announcing here settles the card the moment the row does, whichever
+    // of the two roads gets there first.
+    createChatGateRegistry((cardRef) => cardSettleBus.announceSettled(cardRef)),
+  );
   // COMPOSER FOCUS (cinatra#2566): which review card this page's composer is
   // bound to. One store for the page's lifetime, handed DOWN to the column (so
   // the cards register and draw the affordance) and read HERE at send time (so
@@ -255,8 +263,12 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // rather than baked into the exported constant because the store is per-mount
   // — the constant stays the explicit statement of WHICH host this is.
   const chatHostAdapter = useMemo(
-    () => ({ ...CHAT_THREAD_HOST, composerFocus: composerFocusStore }),
-    [composerFocusStore],
+    () => ({
+      ...CHAT_THREAD_HOST,
+      composerFocus: composerFocusStore,
+      cardSettle: cardSettleBus,
+    }),
+    [composerFocusStore, cardSettleBus],
   );
   // Latest-value ref for the active thread id so in-flight streamResponse coroutines
   // can detect thread switches after an await and no-op their patches.
@@ -572,6 +584,11 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     );
   }, [messages, hasActiveStream, activeThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep this thread's turns where a REBUILT page can redraw them (./thread-activity).
+  useEffect(() => {
+    rememberThreadTranscript(userId ?? null, activeThreadId, loadedThreadIdRef.current, messages);
+  }, [activeThreadId, messages]);
+
   // Emit active thread title so AppShell can show it in the breadcrumb.
   useEffect(() => {
     const title = threads.find((t) => t.id === activeThreadId)?.title ?? null;
@@ -632,6 +649,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
           noteRunId: (runId) => { streams.noteRunId(token, runId); }, // the server's own name for THIS instance
           isWidgetRefreshTool: (name) => widgetRuntime.isWidgetRefreshTool(name),
           onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
+          // A TYPED CHANGE RE-DRAWS THE BOUND CARD IN PLACE (cinatra#2853,
+          // plan (A) §2.2). A schedule card cannot be edited — changing it
+          // RE-PROPOSES and mints a replacement ref — so the server names the
+          // ref the mounted card is now drawn from and the settle bus carries
+          // that word to it. The card re-resolves under the reader's own access,
+          // as it does on mount; the announcement itself decides nothing.
+          onLifecycleCardReplaced: ({ supersededRef, replacementRef }) =>
+            cardSettleBus.announceReplacement(supersededRef, replacementRef),
         },
       });
     } finally {
@@ -859,112 +884,63 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // a CLAIM the server re-checks under the reader's own access.
     // -----------------------------------------------------------------------
     const composerSnapshot = composerFocusStore.getSnapshot();
+    // THE WAITING SCREEN TRAVELS TOO (cinatra#2934). A review card carries a
+    // server-minted ref this page can claim; a waiting HITL screen carries none
+    // on any client, so the page names the RUN it is looking at and the server
+    // mints the screen's ref from that run's own durable row, under this
+    // reader's access. Read at SEND time for the same reason the review binding
+    // is: a gate can open or close while the reader is typing.
+    const waitingGate = getLatestOpenGate();
+    const screenRunIds =
+      waitingGate && waitingGate.kind !== "review_comment" ? [waitingGate.runId] : [];
     const boundCardClaim =
-      composerSnapshot.eligible.length > 0
+      composerSnapshot.eligible.length > 0 || screenRunIds.length > 0
         ? {
             refs: [...composerSnapshot.eligible],
             focused:
               resolveComposerTarget(composerSnapshot).kind === "target"
                 ? composerSnapshot.focused
                 : null,
+            ...(screenRunIds.length > 0 ? { screenRunIds } : {}),
           }
         : null;
-    {
-      // Append an assistant ack AND persist it, mirroring the immediate
-      // user-message save above. Without the explicit save the gate path's
-      // early returns leave the ack reliant on the generic no-stream
-      // persistence effect; persisting here removes the timing inconsistency
-      // so the ack survives an immediate reload.
-      const persistAck = (content: string): void => {
-        const ackMsg: Message = {
-          id: generateId(),
-          role: "assistant",
-          content,
-        };
-        const messagesWithAck = [...currentMessages, ackMsg];
-        setMessages((prev) => [...prev, ackMsg]);
-        const now = new Date().toISOString();
-        const title =
-          threads.find((t) => t.id === threadId)?.title ??
-          deriveThreadTitle(trimmed);
-        // createdAt is immutable: prefer the summary, then the loaded
-        // thread's createdAt, then now for a genuinely new thread (#283).
-        const createdAt =
-          threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-        saveChatThreadInOrder({
-          id: threadId,
-          title,
-          messages: messagesWithAck,
-          createdAt,
-          updatedAt: now,
-          activeAssistantHandle,
-          taggedAssistantUserIds,
-          slackMode: isSlackMode,
-          ownerUserId: userId,
-        } as Record<string, unknown> & { id: string }).catch((err) =>
-          console.error("[chat] saveChatThread (gate ack) failed:", err),
-        );
-      };
-      // Read the FIELD GATE at SEND time, not at render time: a gate can open or
-      // close while the reader is typing. A bound review is no longer read here
-      // at all — it travels with the message as `boundCardClaim` above.
-      const composerRouting = resolveComposerRouting({
-        latestOpenGate: getLatestOpenGate(),
-      });
+    // THE FIELD-GATE READER IS GONE (cinatra#2934, lifecycle-b W5c), and with it
+    // the last arm on this page that acted on a sentence before the assistant
+    // saw it. The plan's replacement table, row three: "The guesswork that read
+    // a form value out of your sentence, and the second, hidden model that
+    // guessed when the guessing failed" → "The HITL screen lends its own fill
+    // and submit controls. The assistant fills what the form asks for and asks
+    // you about what it cannot work out, in the conversation, where you can
+    // answer."
+    //
+    // What went, exactly: the deterministic ladder (`classifyPromptForGate`),
+    // the LLM fallback it deferred to (`extractHitlGateValuesAction` with
+    // `resolveExtractedGateValues`), the page-composed acknowledgements they
+    // wrote, and the routing arm that reached them. What replaced them, in this
+    // same change: the run whose screen is waiting travels with the message as
+    // `screenRunIds` below, the server mints that screen's own reference under
+    // this reader's access, and the conversation's assistant fills the screen's
+    // fields — and presses its button when asked in so many words — through the
+    // card's own paths. One road, one model, the person's own permissions.
 
-      const gate = composerRouting.kind === "field-gate" ? composerRouting.gate : undefined;
-      if (gate) {
-        const verdict = classifyPromptForGate(trimmed, {
-          fields: gate.fields,
-          fieldName: gate.fieldName,
-        });
-        const finishGateSubmit = async (
-          value: Record<string, unknown> | string | number | boolean,
-        ): Promise<void> => {
-          try {
-            await gate.submit(value);
-            persistAck(
-              `Submitted to the agent's \`${gate.xRenderer}\` step.`,
-            );
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "unknown";
-            persistAck(`Could not submit to the agent gate: ${msg}`);
-          }
-        };
-        if (verdict.kind === "submit") {
-          await finishGateSubmit(verdict.value);
-          return;
-        }
-        if (verdict.kind === "llm") {
-          let extracted: Record<string, unknown> = {};
-          try {
-            const raw = await extractHitlGateValuesAction(trimmed, gate.fields);
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-              extracted = parsed as Record<string, unknown>;
-            }
-          } catch {
-            extracted = {};
-          }
-          // The required-field policy is pure and unit-tested — see
-          // resolveExtractedGateValues in inline-hitl-classify.ts.
-          const resolution = resolveExtractedGateValues(extracted, gate.fields);
-          if (resolution.kind === "submit") {
-            await finishGateSubmit(resolution.value);
-            return;
-          }
-          if (resolution.kind === "partial") {
-            // Partial — keep the gate open, tell the user what's missing,
-            // do NOT route to the LLM (the message was a gate attempt).
-            persistAck(
-              `Got ${resolution.presentKeys.join(", ")}. Still need: ${resolution.missing.join(", ")}. Fill the form or reply with the remaining value(s).`,
-            );
-            return;
-          }
-          // Nothing extracted → fall through to normal chat routing.
-        }
-      }
-    }
+    // "FROM THE DECIDE TOOL\'S RESULT" (cinatra#2853, the picture leg) — the
+    // second of the two roads a decided card settles on.
+    //
+    // WHAT IT ANNOUNCES, AND WHY THAT IS ENOUGH. The single thing that can have
+    // pressed a control on these cards during this turn is the ONE single-use
+    // grant this message minted for them; when the turn ends, whether it was
+    // spent is a question only the server can answer, and the card asks it the
+    // way it asks every other one — by re-resolving under the reader\'s own
+    // access. So the announcement carries no claim about what happened. Its
+    // whole cost is a re-read of a card the reader is already looking at, and a
+    // card that was NOT decided re-draws exactly as it was.
+    //
+    // BEFORE THIS, a typed approve resolved the gate and answered the person in
+    // the conversation while the card underneath kept drawing `pending` with its
+    // terminal Approve and Reject pressable, until the thread was re-opened.
+    const settleTheClaimedCards = (): void => {
+      for (const ref of boundCardClaim?.refs ?? []) cardSettleBus.announceSettled(ref);
+    };
 
     // Routing: broadcast to all non-paused participants when there is no @mention.
     const routing = await resolveMessageRouting(
@@ -1011,7 +987,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         // Cinatra takeover — launch the stream FIRST so beginStream() registers the
         // abort controller in the same render batch that clears pendingExternalHandle
         // (removes the visible gap before the cinatra thinking indicator).
-        void streamResponse(currentMessages, "cinatra", undefined, undefined, undefined, undefined, boundCardClaim ?? undefined);
+        void streamResponse(currentMessages, "cinatra", undefined, undefined, undefined, undefined, boundCardClaim ?? undefined).finally(settleTheClaimedCards);
         setPendingExternalHandle(null);
       }, EXTERNAL_TAKEOVER_MS);
       return;
@@ -1026,10 +1002,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // is non-throwing (internal try/catch writes errors into the assistant message),
       // so void dispatch cannot leak an unhandled rejection.
       const displayHandle = nextActiveHandle ?? activeAssistantHandle ?? "Assistant";
-      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
+      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined).finally(settleTheClaimedCards);
     } else {
       // ChatGPT mode: preserve the existing synchronous, blocking behavior.
-      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
+      try {
+        await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
+      } finally {
+        settleTheClaimedCards();
+      }
     }
   }
 

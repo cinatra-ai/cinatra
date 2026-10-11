@@ -26,6 +26,7 @@ const resolveLifecycleCardState = vi.fn();
 const attachLifecycleSuggestions = vi.fn();
 const attachLifecycleSettledOutcome = vi.fn();
 const decodeLifecycleGateRef = vi.fn();
+const readReviewGateRecordedPrompt = vi.fn();
 
 vi.mock(
   "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor",
@@ -57,6 +58,12 @@ vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => ({
 }));
 vi.mock("@/lib/lifecycle/trigger-schedule-proposal-card", () => ({
   resolveTriggerScheduleProposalCard: vi.fn(),
+}));
+
+// Producer prompt attachment is a separate actor-authorized port. This fixture
+// measures island credential minting; prompt membership/denials have their own suite.
+vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
+  readReviewGateRecordedPrompt: (...args: unknown[]) => readReviewGateRecordedPrompt(...args),
 }));
 
 import { POST } from "../route";
@@ -105,6 +112,7 @@ function post(opts: { widget: boolean; viewType?: string }): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  readReviewGateRecordedPrompt.mockResolvedValue(null);
   resolveReviewActorContext.mockResolvedValue(COOKIE_ACTOR);
   resolveAssistantWidgetBinding.mockReturnValue({
     handle: "wordpress",
@@ -238,15 +246,19 @@ describe("the cookie arm is untouched — the credential is ADDITIVE", () => {
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
   });
 
-  it("decodes the ref ONCE, for the reading it composes — never a second time for a credential it will not mint", async () => {
-    await POST(post({ widget: false }));
-    // The credential branch is not entered at all on this arm, so it decodes
-    // nothing. The ONE decode this answer makes is §IV's target header
-    // (cinatra#3141 item 7), which is addressed by the gate the ref names and is
-    // composed on both arms alike; a second decode here would be the mint's,
-    // and there is none.
+  it("decodes the same signed ref for the header and authorized producer words, never for a cookie island credential", async () => {
+    readReviewGateRecordedPrompt.mockResolvedValue("exact producer words");
+    const answer = await (await POST(post({ widget: false }))).json();
+    // The original header and additive finalized-prompt reads each use this
+    // signed gate identity. The cookie branch still mints no island credential.
     expect(mintWidgetReviewIslandUrl).not.toHaveBeenCalled();
-    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(1);
+    expect(decodeLifecycleGateRef).toHaveBeenCalledTimes(2);
+    expect(decodeLifecycleGateRef.mock.calls).toEqual([[REF], [REF]]);
+    expect(readReviewGateRecordedPrompt).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1", reviewTaskId: "task-1", actorCtx: COOKIE_ACTOR,
+    });
+    expect(answer.recordedPrompt).toBe("exact producer words");
+    expect(answer.islandSrc).toBeUndefined();
   });
 });
 

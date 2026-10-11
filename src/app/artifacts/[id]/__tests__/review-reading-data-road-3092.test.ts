@@ -287,7 +287,7 @@ describe("(e) the surface loader sets the reading from the gate", () => {
   const MIME: Record<string, string> = { rev_text: "text/markdown", rev_image: "image/png" };
 
   function wireGate(status: "pending" | "resolved", disposition: string | null) {
-    vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true } as never);
+    vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true, orgId: ORG } as never);
     vi.mocked(readReviewGateState).mockResolvedValue(
       (status === "pending"
         ? { status: "pending", targets: TARGETS }
@@ -323,9 +323,12 @@ describe("(e) the surface loader sets the reading from the gate", () => {
       roads: { buildContent: stubContent, data: SESSION_ROAD } as never,
     });
     expect(surface.kind === "ready" || surface.kind === "settled").toBe(true);
-    const targets = (surface as { targets: { props: ArtifactRendererProps | null }[] }).targets;
+    const targets = (
+      surface as { targets: { prepared: Promise<{ props: ArtifactRendererProps | null }> }[] }
+    ).targets;
     expect(targets).toHaveLength(2);
-    return targets.map((t) => {
+    const prepared = await Promise.all(targets.map((t) => t.prepared));
+    return prepared.map((t) => {
       expect(t.props).not.toBeNull();
       return t.props as ArtifactRendererProps;
     });
@@ -375,7 +378,7 @@ describe("(f) the artifact page dispatches every row and hands every display the
     expect(CODE).not.toMatch(/dashboard-pointer-detail/);
     expect(CODE).not.toMatch(/DashboardPointer/);
     expect(CODE).not.toMatch(/"dashboard-pointer"/);
-    expect(CODE).toMatch(/pickArtifactRenderer\(/);
+    expect(CODE).toMatch(/resolveArtifactDisplayMount\(/);
   });
 
   it("its props snapshot passes the data road and no review reading", () => {

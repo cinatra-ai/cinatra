@@ -33,7 +33,7 @@ import {
   producedEventId,
   type ArtifactProducedEvent,
 } from "@/lib/lifecycle/lifecycle-produced-event";
-import { autoReviewTaskId, batchPartitionReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
+import { autoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import {
   isMultiTargetSnapshotPayload,
@@ -199,69 +199,64 @@ describe.skipIf(!HAS_DB)("cinatra#3028 W4 — the projector by kind, on the prod
     expect(snapshotSuggestions(payload!).length).toBeGreaterThan(0);
   });
 
-  it("BATCH PATH: a production of several artifacts gets a snapshot too — the path that skipped the lane entirely", async () => {
+  it("BATCH PATH: each frozen artifact gets its own kind-aware immutable snapshot", async () => {
     const runId = `run-${randomUUID()}`;
-    const a = await produce(FIXTURE_KIND, { producerRunId: runId });
-    const b = await produce(FIXTURE_KIND, { producerRunId: runId });
+    const events = [await produce(FIXTURE_KIND, { producerRunId: runId }), await produce(FIXTURE_KIND, { producerRunId: runId })];
     await orch.sweepReviewOrchestration();
-
-    const targets = [
-      { artifactId: a.artifactId, representationRevisionId: a.representationRevisionId },
-      { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId },
-    ];
-    const gate = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId(targets));
-    expect(gate).not.toBeNull();
-    expect(gate!.pinnedTargets).toHaveLength(2);
-
-    const rows = await snapshotRowsFor(gate!.id);
-    expect(rows).toHaveLength(1);
-    const payload = verifyGateSuggestionSnapshotPayload(rows[0]!.payload);
-    expect(payload).not.toBeNull();
-
-    // ONE SNAPSHOT PER GATE HOLDING A PAYLOAD PER PINNED TARGET — and, before
-    // this slice, the second target would have returned `already-bound` even if
-    // the lane had run at all.
-    const halves = snapshotTargetPayloads(payload!);
-    expect(halves).toHaveLength(2);
-    expect(new Set(halves.map((h) => h.target.artifactId))).toEqual(
-      new Set([a.artifactId, b.artifactId]),
-    );
-    for (const half of halves) {
-      expect(half.kind).toBe(FIXTURE_KIND);
-      expect(half.projectorId).toBe(FIXTURE_PROJECTOR_ID);
-      expect(half.suggestions.length).toBeGreaterThan(0);
+    const gateRows = await gateStore.listReviewGatesForRun(runId);
+    expect(gateRows).toHaveLength(2);
+    expect(new Set(gateRows.map(g => g.reviewTaskId))).toEqual(new Set(events.map(e => autoReviewTaskId(e.eventId))));
+    const allIds: string[] = [];
+    const before: unknown[] = [];
+    for (const ev of events) {
+      const target = { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId };
+      const gate = await gateStore.readReviewGate(runId, autoReviewTaskId(ev.eventId));
+      expect(gate?.pinnedTargets).toEqual([target]);
+      const rows = await snapshotRowsFor(gate!.id);
+      expect(rows).toHaveLength(1);
+      const payload = verifyGateSuggestionSnapshotPayload(rows[0]!.payload);
+      expect(payload).not.toBeNull();
+      const halves = snapshotTargetPayloads(payload!);
+      expect(halves).toHaveLength(1);
+      expect(halves[0]).toMatchObject({ target, kind: FIXTURE_KIND, projectorId: FIXTURE_PROJECTOR_ID });
+      expect(snapshotSuggestions(payload!).length).toBeGreaterThan(0);
+      allIds.push(...snapshotSuggestions(payload!).map(s => s.id));
+      before.push(rows);
     }
-    // The batch decision stays ONE all-or-nothing boundary: one gate, one
-    // snapshot, one surfaced set.
-    const ids = snapshotSuggestions(payload!).map((s) => s.id);
-    expect(new Set(ids).size).toBe(ids.length);
+    expect(new Set(allIds).size).toBe(allIds.length);
+    for (const ev of events) await outboxStore.emitArtifactProduced(ev, dbMod.db);
+    const replay = await orch.sweepReviewOrchestration();
+    expect(replay.gatesCreated).toBe(0);
+    for (const [index, ev] of events.entries()) {
+      const gate = await gateStore.readReviewGate(runId, autoReviewTaskId(ev.eventId));
+      expect(await snapshotRowsFor(gate!.id)).toEqual(before[index]);
+    }
   });
 
-  it("BATCH PATH, SEVERAL KINDS: a kind with no projector is served alike and RECORDED as such", async () => {
+  it("BATCH PATH, SEVERAL KINDS: singleton gates keep projector and no-projector results separate", async () => {
+    // Approved §I.3: no combined card/snapshot. The existing single-target
+    // rule below draws no suggestion row when that target has no projector.
     const runId = `run-${randomUUID()}`;
     const a = await produce(FIXTURE_KIND, { producerRunId: runId });
     const b = await produce(KIND_WITHOUT_PROJECTOR, { producerRunId: runId });
     await orch.sweepReviewOrchestration();
-
-    const targets = [
-      { artifactId: a.artifactId, representationRevisionId: a.representationRevisionId },
-      { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId },
-    ];
-    const gate = await gateStore.readReviewGate(runId, batchPartitionReviewTaskId(targets));
-    expect(gate).not.toBeNull();
-
-    const payload = verifyGateSuggestionSnapshotPayload(
-      (await snapshotRowsFor(gate!.id))[0]!.payload,
-    );
+    const gates = await gateStore.listReviewGatesForRun(runId);
+    expect(gates).toHaveLength(2);
+    expect(new Set(gates.map(g => g.reviewTaskId))).toEqual(new Set([autoReviewTaskId(a.eventId), autoReviewTaskId(b.eventId)]));
+    const withProjector = await gateStore.readReviewGate(runId, autoReviewTaskId(a.eventId));
+    const withoutProjector = await gateStore.readReviewGate(runId, autoReviewTaskId(b.eventId));
+    expect(withProjector?.pinnedTargets).toEqual([{ artifactId: a.artifactId, representationRevisionId: a.representationRevisionId }]);
+    expect(withoutProjector?.pinnedTargets).toEqual([{ artifactId: b.artifactId, representationRevisionId: b.representationRevisionId }]);
+    const rows = await snapshotRowsFor(withProjector!.id);
+    expect(rows).toHaveLength(1);
+    const payload = verifyGateSuggestionSnapshotPayload(rows[0]!.payload);
     expect(payload).not.toBeNull();
-    const halves = snapshotTargetPayloads(payload!);
-    const withProjector = halves.find((h) => h.kind === FIXTURE_KIND)!;
-    const without = halves.find((h) => h.kind === KIND_WITHOUT_PROJECTOR)!;
-    expect(withProjector.suggestions.length).toBeGreaterThan(0);
-    // "a kind without one yields no suggestions, RECORDED AS SUCH" — the entry
-    // exists, names its kind, and names no projector.
-    expect(without.projectorId).toBeNull();
-    expect(without.suggestions).toEqual([]);
+    expect(snapshotTargetPayloads(payload!)).toHaveLength(1);
+    expect(snapshotTargetPayloads(payload!)[0]).toMatchObject({
+      target: withProjector!.pinnedTargets[0], kind: FIXTURE_KIND, projectorId: FIXTURE_PROJECTOR_ID,
+    });
+    expect(snapshotSuggestions(payload!).length).toBeGreaterThan(0);
+    expect(await snapshotRowsFor(withoutProjector!.id)).toHaveLength(0);
   });
 
   it("A KIND WITH NO PROJECTOR ALONE writes no row — 'nothing to propose', not a silent failure", async () => {

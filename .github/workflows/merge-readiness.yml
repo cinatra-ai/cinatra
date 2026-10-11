@@ -40,6 +40,7 @@ permissions:
 
 jobs:
   merge-readiness:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     uses: ./.github/workflows/merge-readiness-reusable.yml
     with:
       candidate_sha: ${{ github.sha }}

@@ -60,6 +60,15 @@
  * `--write-allowlist`; the diff IS the review — every new/changed row must
  * carry a reason before it can be committed.
  *
+ * FLOOR COMPARED WITH THE BASE (cinatra#3832): the committed allowlist may not
+ * hold a row, or a count, the base branch's allowlist does not, so a pull
+ * request cannot list its own new write site; a lower count or a removed stale
+ * row passes. The base comes from ORG_ARCHIVE_BYPASS_BASE when a workflow sets
+ * it, else from the pull request's base branch; a base that cannot be read
+ * fails closed (the shared guard, scripts/audit/lib/floor-base-guard.mjs). No
+ * workflow runs this file directly: the root suite's live run of it (its test
+ * "exits 0 against the repo as checked out") inherits the run's environment.
+ *
  * Exit 0 -> clean; exit 1 -> at least one drift (printed to stderr);
  * exit 2 -> scanner error.
  *
@@ -72,6 +81,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { resolve, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanSource } from "./system-writer-manifest-gate.mjs";
+import { compareFloorWithBase, raisedCounts, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -259,6 +269,37 @@ export function loadAllowlist(repoRoot = DEFAULT_REPO_ROOT) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "scripts/audit/org-archive-bypass-allowlist.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "ORG_ARCHIVE_BYPASS_BASE";
+
+/** An allowlist's rows as a count map, keyed by the row's file and ref joined by a space. */
+function allowlistCounts(doc) {
+  const out = {};
+  for (const r of doc?.writers ?? []) out[`${r.file} ${r.ref}`] = r.count;
+  return out;
+}
+
+/**
+ * The floor base guard (cinatra#3832): growth is a row the base branch's
+ * allowlist does not hold, or a count above the base's. `headFloor` (the
+ * allowlist document) defaults to the one in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
+  return compareFloorWithBase({
+    gate: LABEL,
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: allowlistCounts(headFloor ?? loadAllowlist(repoRoot)),
+    parse: (text) => allowlistCounts(JSON.parse(text)),
+    grown: raisedCounts,
+    repoRoot,
+    env,
+  });
+}
+
 /**
  * Two-directional diff of a computed surface against the allowlist's rows
  * (same shape as `system-writer-manifest-gate.mjs`'s `diffManifest`).
@@ -314,8 +355,10 @@ function main(argv = process.argv.slice(2)) {
     return 0;
   }
 
-  const surface = computeSurface();
   const allowlist = loadAllowlist();
+  if (!reportFloorGuard(checkFloorAgainstBase({ headFloor: allowlist }))) return 1;
+
+  const surface = computeSurface();
   const { unlisted, stale, drifted } = diffAllowlist(surface, allowlist.writers ?? []);
   const missingReason = (allowlist.writers ?? []).filter(
     (r) => !r.reason || /^TODO/i.test(r.reason),

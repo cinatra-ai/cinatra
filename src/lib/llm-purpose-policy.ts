@@ -215,21 +215,12 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
     rationale:
       "The agent author declared the provider as part of the agent's contract. Honoured verbatim; the resolver's exact-binding rules apply to the implicit path only.",
   },
-  {
-    purpose: "chat-hitl-prompt-drive",
-    file: "packages/chat/src/actions.ts",
-    what: "Builder HITL assistance — extracting gate answers from a chat prompt.",
-    policy: "explicit-pin",
-    pinnedProvider: "openai",
-    rationale:
-      "INVENTORY FINDING: pinned in code today via an explicit provider argument. Recorded as-is rather than silently widened — the extraction depends on strict structured-output schema adherence that has only been validated on OpenAI. Re-evaluating it is follow-up work, not a drive-by change inside the un-fencing.",
-  },
 
   // ---- separate-default --------------------------------------------------
   {
     purpose: "image-generation",
-    file: "src/lib/blog/gemini.ts",
-    what: "Blog/campaign image materialization.",
+    file: "src/lib/artifact-image-tool.ts",
+    what: "Artifact image generation through the image tool.",
     policy: "separate-default",
     rationale:
       "Image generation is orthogonal to text generation and already has its OWN stored admin preference (llm_default_image_provider, read by resolveDefaultImageAdapter). It deliberately does NOT follow llm_default_provider — an operator on a text provider with no image support must still be able to generate images.",

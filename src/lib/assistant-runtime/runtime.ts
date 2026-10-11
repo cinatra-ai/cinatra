@@ -213,7 +213,16 @@ export type RunChatTurnArgs = {
    * Absent ⇒ no binding, no grant, and a system string byte-identical to a turn
    * that never had a composer binding.
    */
-  boundCard?: { candidateRefs: string[]; focusedRef: string | null };
+  boundCard?: {
+    candidateRefs: string[];
+    focusedRef: string | null;
+    /**
+     * Runs whose WAITING SCREEN the box sits under (cinatra#2934). A screen has
+     * no ref on any client, so the caller names the run and the binding module
+     * mints the ref from the run's own durable row under the reader's access.
+     */
+    screenRunIds?: readonly string[];
+  };
   /**
    * THE RUN A PROMPT WINDOW OUTSIDE THE CHAT SITS UNDER (cinatra#3016,
    * lifecycle-b W5b), already composed as text by the window's own road.

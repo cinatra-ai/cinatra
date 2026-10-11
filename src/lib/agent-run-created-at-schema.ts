@@ -64,3 +64,16 @@ export function agentRunCreatedAtSchemaQueries(schemaName: string): { text: stri
     { text: `ALTER TABLE "${s}"."agent_runs" ALTER COLUMN created_at SET DEFAULT now(), ALTER COLUMN created_at SET NOT NULL` },
   ];
 }
+
+// Independent starter provenance is another immutable run-creation fact.
+// Keeping its bootstrap twin on the existing pure run-schema edge preserves
+// the locked sign-in graph; neither this column nor created_at is rewritten.
+// Pure bootstrap leaf and operator-upgrade twin: distinct from parent_run_id.
+// Additive, nullable, no backfill, no cascade or rewrite of existing records.
+export function agentRunStartedBySchemaQueries(schemaName: string): { text: string }[] {
+  const s = schemaName.replaceAll('"', '""');
+  return [
+    { text: `ALTER TABLE "${s}"."agent_runs" ADD COLUMN IF NOT EXISTS started_by_run_id text` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_runs_started_by_run_id_idx ON "${s}"."agent_runs" (started_by_run_id, org_id, created_at) WHERE started_by_run_id IS NOT NULL` },
+  ];
+}

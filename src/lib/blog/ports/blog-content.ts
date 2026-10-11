@@ -5,7 +5,6 @@ import type {
   AvailableTranscriptOption,
   BlogPostIdeaGenerationState,
   BlogPostDraftGenerationState,
-  BlogPostImageGenerationState,
   BlogPostWordPressDraftState,
   BlogPostLinkedInDraftState,
 } from "../store";
@@ -50,17 +49,6 @@ export type BlogDraftGenerationPort = {
     imageArtifactId?: string;
     imageRepresentationRevisionId?: string;
   }): Promise<void>;
-};
-
-/** Manages image generation jobs. */
-export type BlogImageGenerationPort = {
-  startImageRegeneration(input: {
-    projectId: string;
-    postId: string;
-    prompt?: string;
-    personalSkillId?: string;
-  }): Promise<BlogPostImageGenerationState>;
-  stopImageRegeneration(projectId: string): Promise<BlogPostImageGenerationState>;
 };
 
 /** Manages WordPress and LinkedIn publishing. */

@@ -28,9 +28,6 @@ vi.mock("@/components/dashboards/portlets/object-version-history-portlet", () =>
 vi.mock("@/components/dashboards/portlets/artifact-edit-text-portlet", () => ({
   ArtifactEditTextPortlet: () => null,
 }));
-vi.mock("@/components/dashboards/portlets/artifact-edit-binary-prompt-portlet", () => ({
-  ArtifactEditBinaryPromptPortlet: () => null,
-}));
 vi.mock("@/components/dashboards/portlets/agent-launcher-portlet", () => ({
   AgentLauncherPortlet: () => null,
 }));

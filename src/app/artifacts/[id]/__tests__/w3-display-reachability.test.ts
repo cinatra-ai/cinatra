@@ -71,7 +71,7 @@ const KINDS = [
   ["zip-artifact", "@cinatra-ai/zip-artifact:artifact", "application/zip"],
   // the three moved onto the content channel
   ["json-artifact", "@cinatra-ai/json-artifact:artifact", "application/json"],
-  ["cms-snapshot-artifact", "@cinatra-ai/cms-snapshot-artifact:artifact", "application/vnd.cinatra.cms-fields+json"],
+  ["cms-snapshot-artifact", "@cinatra-ai/cms-snapshot-artifact:cms-page", "application/vnd.cinatra.cms-fields+json"],
   ["text-artifact", "@cinatra-ai/text-artifact:artifact", "text/csv"],
 ] as const;
 

@@ -177,6 +177,7 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // `enforceRunAccess(execute)` plus the project binding before the coordinator
   // launches anything. status enforced.
   agent_named_start:                { resourceType: "agent_run", action: "create", status: "enforced" },
+  lifecycle_bound_screen_fill:      { resourceType: "agent_run", action: "update", status: "enforced" },
   // artifact_source_* — admin-only ARTIFACT EXTENSION PACKAGE authoring (SDK-P5).
   // DISTINCT from artifact_authoring_emit (an artifact INSTANCE emit,
   // artifact::create). There is no dedicated artifact_extension resourceType (cf.
@@ -206,8 +207,6 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
 
   // ───── blog (artifact + connector_instance + agent_run) ─────
   blog_connector_list:                       { resourceType: "connector_instance", action: "list",    status: "enforced" },
-  blog_image_generate_cancel:                { resourceType: "agent_run",          action: "cancel",  status: "enforced" },
-  blog_image_generate_start:                 { resourceType: "agent_run",          action: "create",  status: "enforced" },
   blog_media_image_save:                     { resourceType: "artifact",           action: "create",  status: "enforced" },
   blog_media_list:                           { resourceType: "artifact",           action: "list",    status: "enforced" },
   blog_personal_skill_create:                { resourceType: "skill",              action: "create",  status: "enforced" },

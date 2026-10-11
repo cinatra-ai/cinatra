@@ -157,6 +157,24 @@ const HOST_STANDARD_IDS = new Set([
   // (packages/agents/src/__tests__/agentic-run-panel.review-slot.test.tsx) and
   // photographed (https://github.com/cinatra-ai/cinatra/blob/6c2147748ca40c09eaa7bbdf3ead65ce7f84daab/evidence/2790-s9f-host-parity, the S5a / R7a cells).
   "review-gate-placeholder",
+  // cinatra#3046 -- the placeholder's EMPTY FRAME, closing the stated skeleton
+  // deviation: the box the review screen will fill, drawn as an empty frame
+  // per section II ("names no status, reports no result, draws nothing to
+  // press") rather than the borrowed bar-skeleton motif. A child anchor of
+  // review-gate-placeholder above, listed here for the same reason: this
+  // suite's closed set is the older spec's. Its own conformance (frame
+  // present, no bar-skeleton motif inside it) is pinned in
+  // packages/agents/src/__tests__/review-gate-placeholder-drawing.test.tsx.
+  "review-gate-placeholder-frame",
+  // cinatra#3046 -- the run the wordless box is waiting on, named beside the
+  // spinner so a page that has been open a while says WHICH run it holds for
+  // rather than drawing one anonymous empty box. A child anchor of
+  // review-gate-placeholder above, listed here for the same reason: this
+  // suite's closed set is the older spec's. Its own conformance (the
+  // reference is drawn on BOTH hosts, and the box stops claiming something is
+  // coming once the run settles) is pinned in
+  // packages/agents/src/__tests__/agentic-run-panel.park-drawing-both-surfaces.test.tsx.
+  "review-gate-placeholder-run-ref",
   "suggestion-before-after",
   // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
   // the old three-state marking recorded a row only for the items the reviewer
@@ -219,6 +237,18 @@ const HOST_STANDARD_IDS = new Set([
   // SPEC_CONFORMANCE under its spec commit.
   "review-target-island-skeleton",
   "review-target-island-timeout",
+  // cinatra#3046 fix leg 17 (cinatra#3294) — the two parts of the SETTLED
+  // MARKER's drawn row, so a graded reading can address each of them.
+  //
+  // NAMED HONESTLY, like the anchors above: the COMPOSITION is the drawing's
+  // own and is quoted in the component — a wrapping flex row with the panel
+  // line, `var(--surface)` and 9px/12px padding, holding a pill with a 7px dot
+  // and then a 12px muted sentence — but the drawing's markup carries no
+  // conformance id on those two nodes, so the ids themselves are this surface's
+  // and are listed here rather than under SPEC_CONFORMANCE. The outer marker
+  // keeps its spec anchor, `review-gate-settled`, unchanged.
+  "review-gate-settled-pill",
+  "review-gate-settled-sentence",
 ]);
 
 function conformanceIdsIn(src: string): string[] {
@@ -333,9 +363,10 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
   // takes none of them and is given no fourth one. The strip is therefore
   // OPTIONAL in the panel — rendered only when there is a provenance to state.
   it("every rendered rung renders NO region — the panel gates the whole strip", () => {
-    // build-map, form and runtime share one arm now: the drawing lets none of
-    // the three name what drew the work.
-    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "form":\s*\n\s*case "runtime":\s*\n\s*return null/);
+    // build-map and runtime share one arm: the drawing lets neither name what
+    // drew the work. The host's own form rung retired with the core content
+    // arms, so there is no third rung to gate.
+    expect(MODEL).toMatch(/case "build-map":\s*\n\s*case "runtime":\s*\n\s*return null/);
     const panel = stripComments(TARGET_PANEL);
     expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
@@ -346,8 +377,7 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     expect(panel).toMatch(/structured data/);
   });
 
-  // cinatra#2931 W4 already gave the host's own text rendering no region. It
-  // still has none; it is now one of three rungs with none rather than the only.
+  // Every non-floor rung resolves to no region at all.
   it("every non-floor rung resolves to no region at all", () => {
     expect(MODEL).toMatch(/ReviewProvenanceConformanceId = "review-target-floor"/);
   });
@@ -376,7 +406,11 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
 
   it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {
     expect(TARGET_PANEL).toMatch(/ReviewTargetMount/);
-    expect(TARGET_PANEL).toMatch(/orgId=\{orgId\}/);
+    // NO ORGANIZATION SCOPE CROSSES INTO THE MOUNT any more. The scope existed
+    // for one arm only — the host's own text rendering, which read artifact
+    // bytes inside the card. That arm retired with the core content arms, and
+    // every remaining mount draws from the pinned props alone.
+    expect(TARGET_PANEL).not.toMatch(/orgId=\{orgId\}/);
   });
 
   // cinatra#2931 W4 — plan (B) §5: "The fallback face dies with its wrong
@@ -391,7 +425,21 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
     expect(panel).not.toMatch(/genericFloor/);
     expect(panel).not.toMatch(/urls\.preview|urls\.download/);
     expect(panel).not.toMatch(/>\s*Download\s*</);
-    expect(TARGET_PANEL).toMatch(/fallback=\{null\}/);
+    // WHAT STANDS IN ITS PLACE IS THE DRAWING'S OWN NODE, not nothing.
+    // `specs/app-artifact-review.html` §V: "A type-level floor — the type's
+    // renderer is installed but absent from this build (needs a rebuild), or the
+    // type resolves to no renderer — still has an authorized representation, so
+    // its diagnostic sits above the generic read-only structured-data view of
+    // that representation." So the panel hands the mount the host's ONE generic
+    // view when the prepared target carries pinned props, and null when it
+    // carries none — §V's artifact-level floor, which "renders the diagnostic
+    // alone (no representation content, because there is no authorized
+    // representation to render)". The three negative readings above are
+    // untouched: the OLD fallback FACE is still gone.
+    expect(TARGET_PANEL).toMatch(/ArtifactStructuredDataView/);
+    expect(TARGET_PANEL).toMatch(
+      /fallback=\{props \? <ArtifactStructuredDataView props=\{props\} \/> : null\}/,
+    );
   });
 });
 

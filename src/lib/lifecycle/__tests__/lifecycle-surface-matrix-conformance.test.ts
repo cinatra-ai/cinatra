@@ -74,6 +74,7 @@ import {
 import {
   DELEGATED_WIDGET_BOUND_CARD_ACTION,
   DELEGATED_WIDGET_NAMED_AGENT_START,
+  DELEGATED_WIDGET_BOUND_SCREEN_FILL,
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
   delegatedWidgetAllowedToolNames,
@@ -230,7 +231,7 @@ describe("BROKER exclusion, leg 2: a carrier run has no trigger interaction", ()
 });
 
 describe("BROKER exclusion, leg 3: the broker allowlist is TOTAL", () => {
-  it("a widget delegation reaches its OWN content-editor primitive, the read-only pulls and the ONE lent action, and nothing else", () => {
+  it("a widget delegation reaches its OWN content-editor primitive, the read-only pulls, the ONE lent action and the fill, and nothing else", () => {
     // AMENDED for cinatra#2932 (lifecycle-b W5a). The set gains exactly one
     // entry — the lent action — and the assertion stays TOTAL, which is the
     // property this case exists for: it is still an exhaustive equality, so a
@@ -257,6 +258,12 @@ describe("BROKER exclusion, leg 3: the broker allowlist is TOTAL", () => {
         ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
         DELEGATED_WIDGET_BOUND_CARD_ACTION,
         DELEGATED_WIDGET_NAMED_AGENT_START,
+        // AMENDED for cinatra#2934 (lifecycle-b W5c): one more entry, the FILL,
+        // for the same parity reason and with less authority than any of them —
+        // it resolves nothing at all, it places values in the fields of the one
+        // screen the person's own message was bound to. The assertion stays
+        // TOTAL, which is the property this case exists for.
+        DELEGATED_WIDGET_BOUND_SCREEN_FILL,
       ].sort();
       expect(allowed, kind).toEqual(expected);
     }

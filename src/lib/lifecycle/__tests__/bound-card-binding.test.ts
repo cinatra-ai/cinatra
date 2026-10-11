@@ -158,6 +158,29 @@ describe("the refusal is the platform's own words", () => {
     expect(line).toContain("nothing was done");
     expect(line).not.toMatch(/run|gate|ref|id/i);
   });
+
+  // THE WHOLE SENTENCE SET, VERBATIM (cinatra#2853, the picture leg).
+  //
+  // The refusal dropped plan (A) 2.1's closing escape sentence. A person whose
+  // message went nowhere has two things they may want — to reach one of the
+  // cards, or to stop being routed at a card at all — and the refusal that
+  // named only the first left the second undiscoverable from the one place it is
+  // ever needed. Pinned as the FULL string so a later edit cannot lose a
+  // sentence again, and still identifier-free.
+  it("is exactly the plan's three sentences, and ends with the way back to ordinary chat", () => {
+    expect(severalCardsWaitingRefusal(2)).toBe(
+      "2 cards are waiting for you, so nothing was done to any of them. " +
+        "Choose the one you mean — press its “Reply from the chat box” control — " +
+        "and say it again. To keep chatting normally, press that control twice " +
+        "on any one of them.",
+    );
+    expect(
+      severalCardsWaitingRefusal(7).endsWith(
+        "To keep chatting normally, press that control twice on any one of them.",
+      ),
+    ).toBe(true);
+    expect(severalCardsWaitingRefusal(7)).not.toMatch(/run|gate|ref|id/i);
+  });
 });
 
 describe("a resolver that throws contributes nothing", () => {
@@ -268,7 +291,12 @@ describe("what a SEND may lend today — convergence round 1, finding 1", () => 
     expect(primaryControlFor(review("a"))).toBe("comment");
   });
 
-  it("a waiting screen lends NOTHING yet — pressing Continue resumes a run", () => {
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). W5a withheld `submit` because
+  // the fill road did not exist, so a typed message could only ever have meant
+  // "press it". The plan requires the press to be askable — "when asked in so
+  // many words, submitted by the assistant" — and with filling as the ordinary
+  // road, the press is the separate thing a person has to ask for.
+  it("a waiting screen lends its Submit for a typed message", () => {
     expect(
       primaryControlFor({
         kind: "hitl_screen",
@@ -277,7 +305,7 @@ describe("what a SEND may lend today — convergence round 1, finding 1", () => 
         xRenderer: "x",
         form: { schema: {}, values: {} },
       }),
-    ).toBeNull();
+    ).toBe("submit");
   });
 
   it("an absent binding lends nothing", () => {

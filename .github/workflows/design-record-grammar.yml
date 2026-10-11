@@ -48,6 +48,7 @@ jobs:
   # payload carries the body as it is now, and this workflow holds this one
   # job alone, so an edit runs nothing else.
   design-record-grammar:
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:

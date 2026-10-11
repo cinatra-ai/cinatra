@@ -20,6 +20,13 @@ import * as gate from "../route-graph-ratchet.mjs";
 import { FIXED_ROUTES, analyzeRoute } from "../../route-graph.mjs";
 // Imported as a namespace for the same reason.
 import * as routeGraph from "../../route-graph.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 
 const REPO_ROOT = process.cwd();
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -662,4 +669,203 @@ test("pack reach: the gate prints each distinct per-pack reading once, beside th
     "pack-reached core modules on /a, /c: reached through @acme/pack-a: 2 core modules",
   ]);
   assert.deepEqual(gate.packReachLines(new Map([["/b", measure(G0)]]), ["/b"]), []);
+});
+
+// --- cinatra#3848: an annotated raise passes in the pull request that carries
+// it. A ceiling measures the graph a route reaches, and real growth raises it:
+// the record that matches the raise exactly, and the notice the gate prints for
+// it, make the raise visible. Every other refusal stays. Each case runs the
+// gate's base comparison against a git fixture (a base commit published as
+// origin/main and a head commit on top), as a pull request's run reads it. ---
+
+const RATCHET_FLOOR = "scripts/audit/route-graph-ratchet.baseline.json";
+
+// The comparison of `head` with `base` through the shared guard, on a fresh fixture.
+function guardOn(base, head, env = PULL_REQUEST_RUN) {
+  const f = makeFloorRepo({ base: { [RATCHET_FLOOR]: base }, head: { [RATCHET_FLOOR]: head } });
+  try {
+    return gate.checkFloorAgainstBase({ repoRoot: f.root, env });
+  } finally {
+    f.cleanup();
+  }
+}
+
+const growthOf = (r) => (r.growth ?? r.lines).join("\n");
+
+// The real shape: four routes raised by ten each, with their four records in
+// the same change; /sign-in is unchanged.
+const REAL_BASE = { routes: { "/sign-in": 164, "/api/mcp": 1295, "/chat": 1394, "/api/a2a": 1303, "/api/llm-bridge": 1313 } };
+const REAL_HEAD = {
+  routes: { "/sign-in": 164, "/api/mcp": 1305, "/chat": 1404, "/api/a2a": 1313, "/api/llm-bridge": 1323 },
+  absorbs: {
+    "/api/a2a": rec(1303, 1313),
+    "/api/llm-bridge": rec(1313, 1323),
+    "/api/mcp": rec(1295, 1305),
+    "/chat": rec(1394, 1404),
+  },
+};
+
+test("annotated raise (a): four ceilings raised by ten with their four records in the same change are absorbed, and the gate prints four notices", () => {
+  const f = makeFloorRepo({ base: { [RATCHET_FLOOR]: REAL_BASE }, head: { [RATCHET_FLOOR]: REAL_HEAD } });
+  try {
+    const r = gate.checkFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+    assert.equal(r.ok, true, growthOf(r));
+    assert.equal(r.status, "held");
+    const { violations, absorbed } = classifyRaises(r.baseFloor, REAL_HEAD);
+    assert.deepEqual(violations, []);
+    assert.deepEqual(absorbed.map((a) => [a.route, a.from, a.to]), [
+      ["/api/a2a", 1303, 1313],
+      ["/api/llm-bridge", 1313, 1323],
+      ["/api/mcp", 1295, 1305],
+      ["/chat", 1394, 1404],
+    ]);
+    assert.deepEqual(gate.validateCommittedAbsorbs(r.baseFloor, REAL_HEAD), []);
+
+    // The gate itself, run on the fixture as a pull request's run: the base
+    // comparison passes and prints one notice per absorbed raise. (The route
+    // measurement that follows reads this checkout's routes against the
+    // fixture's ceilings; its answer is not what this case pins.)
+    const run = spawnSync(process.execPath, [join(HERE, "..", "route-graph-ratchet.mjs")], {
+      cwd: f.root,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...PULL_REQUEST_RUN },
+    });
+    const notices = run.stdout.split("\n").filter((l) => l.includes("NOTICE — ABSORBED ceiling raise"));
+    assert.deepEqual(
+      notices,
+      [
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /api/a2a: 1303 -> 1313 (sanctioned growth (#999): test; PR #999)",
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /api/llm-bridge: 1313 -> 1323 (sanctioned growth (#999): test; PR #999)",
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /api/mcp: 1295 -> 1305 (sanctioned growth (#999): test; PR #999)",
+        "[route-graph-ratchet] NOTICE — ABSORBED ceiling raise /chat: 1394 -> 1404 (sanctioned growth (#999): test; PR #999)",
+      ],
+      `stdout: ${run.stdout}\nstderr: ${run.stderr}`,
+    );
+    assert.match(run.stdout, /floor base guard: scripts\/audit\/route-graph-ratchet\.baseline\.json does not grow against the base "origin\/main"/);
+    assert.doesNotMatch(run.stderr, /GREW against the base|cannot be compared with the base|invalid absorb record/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("annotated raise (b): a raise without a record fails", () => {
+  const r = guardOn(REAL_BASE, { routes: { ...REAL_HEAD.routes } });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, "grew");
+  assert.equal(r.growth.length, 4, growthOf(r));
+  assert.match(growthOf(r), /\/api\/mcp \[absorbs\]: ceiling RAISED 1295 -> 1305 with NO absorb record/);
+  // One record missing among four: that route alone fails.
+  const { "/chat": _dropped, ...three } = REAL_HEAD.absorbs;
+  const one = guardOn(REAL_BASE, { routes: REAL_HEAD.routes, absorbs: three });
+  assert.equal(one.ok, false);
+  assert.deepEqual(one.growth.map((g) => g.split(":")[0]), ["/chat [absorbs]"]);
+});
+
+test("annotated raise (c): a raise whose record names another from or another to fails", () => {
+  let r = guardOn({ routes: { "/a": 100 } }, { routes: { "/a": 120 }, absorbs: { "/a": rec(90, 120) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[from\]: ceiling raised 100 -> 120 but the absorb record does not exactly match the raise delta/);
+  r = guardOn({ routes: { "/a": 100 } }, { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 130) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[to\]: ceiling raised 100 -> 120 but the absorb record does not exactly match the raise delta/);
+  // The committed check names the stale "to" as well.
+  assert.deepEqual(fields(validateAbsorbRecords({ routes: { "/a": 120 }, absorbs: { "/a": rec(100, 130) } })), [["/a", "to"]]);
+});
+
+test("annotated raise (d): a record carried forward unchanged at its ceiling passes; altered or deleted it fails", () => {
+  const base = { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120) } };
+  let r = guardOn(base, { routes: { "/a": 120, "/b": 40 }, absorbs: { "/a": rec(100, 120) } });
+  assert.equal(r.ok, true, growthOf(r));
+  assert.equal(r.status, "held");
+  assert.deepEqual(classifyRaises(r.baseFloor, { routes: { "/a": 120, "/b": 40 }, absorbs: { "/a": rec(100, 120) } }).absorbed, []);
+  r = guardOn(base, { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120, { reason: "rewritten history" }) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[reason\]: absorb record deleted\/altered while its raised ceiling \(120\) is kept/);
+  r = guardOn(base, { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120, { pr: 1000 }) } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[pr\]: /);
+  r = guardOn(base, { routes: { "/a": 120, "/b": 50 } });
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[absorbs\]: absorb record deleted\/altered while its raised ceiling \(120\) is kept/);
+});
+
+test("annotated raise (e): a record for a ceiling the change does not raise, which the base does not hold, fails as an orphan", () => {
+  const base = { routes: { "/a": 100 } };
+  const head = { routes: { "/a": 100 }, absorbs: { "/a": rec(100, 120) } };
+  const r = guardOn(base, head);
+  assert.equal(r.ok, false);
+  assert.match(growthOf(r), /\/a \[from\]: orphan\/stale absorb record/);
+  // The committed baseline itself is refused: its "to" is not the ceiling.
+  assert.deepEqual(fields(validateAbsorbRecords(head)), [["/a", "to"]]);
+  assert.deepEqual(fields(gate.validateCommittedAbsorbs(base, head)), [["/a", "to"]]);
+  // A record below the unchanged ceiling is an orphan as well.
+  const below = guardOn(base, { routes: { "/a": 100 }, absorbs: { "/a": rec(90, 100) } });
+  assert.equal(below.ok, false);
+  assert.match(growthOf(below), /\/a \[from\]: orphan\/stale absorb record/);
+});
+
+test("annotated raise (f): a lowered ceiling retires its record", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const r = guardOn(base, { routes: { "/a": 105 } });
+  assert.equal(r.ok, true, growthOf(r));
+  assert.equal(r.status, "held");
+  // A record kept beside the lowered ceiling is stale.
+  assert.deepEqual(fields(validateAbsorbRecords({ routes: { "/a": 105 }, absorbs: { "/a": rec(100, 120) } })), [["/a", "to"]]);
+});
+
+test("annotated raise (g): a base that cannot be read on a pull request's run fails with its reason; a run that is no pull request passes with its line", () => {
+  let r = guardOn(REAL_BASE, REAL_HEAD, UNREADABLE_BASE_RUN);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, "unreadable");
+  assert.match(r.lines[0], /cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  r = guardOn(REAL_BASE, REAL_HEAD, NO_PULL_REQUEST_RUN);
+  assert.equal(r.ok, true);
+  assert.equal(r.status, "no-base");
+  assert.equal(r.lines.length, 1);
+  assert.match(r.lines[0], /no pull request and no base named \(ROUTE_GRAPH_RATCHET_BASE unset\)/);
+});
+
+// The committed floor is compared with the base through the shared guard: the
+// gate's own variable when the workflow sets it, else the pull request's base
+// branch; a base that cannot be read fails closed.
+test("floor base guard: against a git fixture — raised fails, lowered passes, unreadable fails, no pull request passes", () => {
+  const FLOOR = "scripts/audit/route-graph-ratchet.baseline.json";
+  const fixtures = [];
+  try {
+    const repo = (base, head) => {
+      const f = makeFloorRepo({ base: { [FLOOR]: base }, head: { [FLOOR]: head } });
+      fixtures.push(f);
+      return f.root;
+    };
+    let root = repo({ routes: { "/a": 100 } }, { routes: { "/a": 120 } });
+    let r = gate.checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    assert.equal(r.ok, false);
+    assert.match(r.growth.join("\n"), /\/a \[absorbs\]: ceiling RAISED 100 -> 120 with NO absorb record/);
+
+    root = repo({ routes: { "/a": 100 } }, { routes: { "/a": 90 } });
+    r = gate.checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    assert.equal(r.ok, true);
+    assert.equal(r.status, "held");
+
+    r = gate.checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    assert.equal(r.ok, false);
+    assert.match(r.lines[0], /did not resolve/);
+
+    r = gate.checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    assert.equal(r.ok, true);
+    assert.equal(r.status, "no-base");
+    assert.match(r.lines[0], /ROUTE_GRAPH_RATCHET_BASE unset/);
+  } finally {
+    for (const f of fixtures) f.cleanup();
+  }
+});
+
+test("floor base guard: without its own variable the gate reads the pull request's base branch and fails closed when it cannot", () => {
+  const run = spawnSync(process.execPath, [join(HERE, "..", "route-graph-ratchet.mjs")], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+  });
+  assert.equal(run.status, 1, `stdout: ${run.stdout}\nstderr: ${run.stderr}`);
+  assert.match(run.stderr, /cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
 });

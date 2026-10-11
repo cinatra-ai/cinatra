@@ -117,6 +117,7 @@ jobs:
     permissions:
       contents: read
     name: Validate agent.json shape (legacy schema check)
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
 
     steps:
@@ -169,6 +170,7 @@ jobs:
     permissions:
       contents: read
     name: Validate OAS runtime invariants
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_HEAVY || '"ubuntu-latest"') }}
 
     steps:
@@ -204,6 +206,7 @@ jobs:
     permissions:
       contents: read
     name: WayFlow mount guard (standalone + orchestrated, pinned tree)
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_E2E || '"ubuntu-latest"') }}
     # cinatra#2140. Until now NOTHING in CI mounted the pinned extension tree:
     # the only place `docker/wayflow/tests/test_repo_agents_load.py` ran was the

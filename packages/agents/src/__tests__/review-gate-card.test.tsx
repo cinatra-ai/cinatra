@@ -258,7 +258,9 @@ describe("one renderer, four first-party hosts", () => {
   // has to be driven here by name. A host nothing drives has no counted proof.
   const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
 
-  it("draws the SAME card on every first-party host, differing only in the frame", async () => {
+  it("draws the SAME card on every first-party host, differing only in the frame; asserts §I / §V.1 / §VI Note hierarchy before normalization", async () => {
+    const subordinateNoteClass = "flex field-sizing-content w-full py-2 transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent";
+    const primaryNoteClass = "flex field-sizing-content w-full text-base transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input-fill/50 disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:disabled:bg-input-fill/80 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 min-h-[44px] rounded-[7px] border border-line bg-surface px-[11px] py-[9px] text-reading shadow-none md:text-reading dark:bg-surface";
     const drawn: Record<string, string> = {};
     for (const host of HOSTS) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
@@ -268,11 +270,42 @@ describe("one renderer, four first-party hosts", () => {
       );
       const root = container.querySelector('[data-conformance-id="review-gate-card"]');
       expect(root?.getAttribute("data-lifecycle-card-host")).toBe(host);
-      // Normalize away the frame (the ONE thing a host may change) and the host
-      // marker; what remains must be byte-identical across the three.
+      const floor = root!.querySelector('[data-conformance-id="review-decision-bar"]')!;
+      const note = floor.querySelector<HTMLTextAreaElement>('[data-testid="review-rationale"]')!;
+      const wrapper = note.parentElement!;
+      const subordinate = host === "chat_thread" || host === "site_widget";
+      // Approved lifecycle-cards §I / §V.1: each conversation already has its
+      // primary chatbox; app-artifact-review §VI boxes the run/page Note.
+      // Assert every permitted difference BEFORE touching the cloned DOM.
+      expect(wrapper.getAttribute("data-conformance-id")).toBe(
+        subordinate ? "review-note-field-subordinate" : null,
+      );
+      expect(wrapper.className).toBe("px-4 pt-3");
+      expect(note.className).toBe(subordinate ? subordinateNoteClass : primaryNoteClass);
+      expect(note.id).toBe("review-rationale");
+      expect(note.getAttribute("data-slot")).toBe("textarea");
+      expect(note.getAttribute("placeholder")).toBe("Add a note for the run and the audit trail…");
+      expect(note.value).toBe("");
+      expect(note.disabled).toBe(false);
+      const label = wrapper.querySelector<HTMLLabelElement>("label")!;
+      expect(label.htmlFor).toBe(note.id);
+      expect(label.textContent).toBe("Decision rationale (optional on approve, expected on reject)");
+      expect(Array.from(floor.querySelectorAll<HTMLButtonElement>("button")).map((button) => ({
+        label: button.textContent?.trim(), action: button.getAttribute("data-action"), disabled: button.disabled,
+      }))).toEqual([
+        { label: "Comment", action: "comment-review -> annotated", disabled: false },
+        { label: "Reject", action: "reject-review -> resolved", disabled: false },
+        { label: "Approve", action: "approve-review -> resolved", disabled: false },
+      ]);
+      // Keep the original frame normalization, then normalize ONLY the two
+      // exact Note attributes asserted above. Every other card byte, including
+      // Note labels/values and action/permission chrome, remains compared.
       const clone = root!.cloneNode(true) as HTMLElement;
       clone.removeAttribute("class");
       clone.removeAttribute("data-lifecycle-card-host");
+      const clonedNote = clone.querySelector('[data-testid="review-rationale"]')!;
+      clonedNote.parentElement!.removeAttribute("data-conformance-id");
+      clonedNote.setAttribute("class", subordinateNoteClass);
       drawn[host] = clone.innerHTML;
       unmount();
       cleanup();
@@ -718,9 +751,15 @@ describe("a marked review gate never feeds the field-assist LLM path", () => {
     );
   });
 
-  it("strips the card ref out of the assist payload as defence in depth", () => {
-    expect(PANEL).toMatch(/currentValue: withoutLifecycleCardRef\(/);
-    expect(PANEL).toMatch(/function withoutLifecycleCardRef\(/);
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). The payload this case guarded is
+  // GONE: the panel no longer serializes the gate's values into a prompt for a
+  // second model, because the route that did it is retired. The rule it existed
+  // for is now satisfied by construction rather than by a strip — the panel
+  // builds no model-visible payload at all, so there is nothing for a ref to
+  // leak into.
+  it("builds no model-visible payload for the gate's values at all", () => {
+    expect(PANEL).not.toMatch(/currentValue:/);
+    expect(PANEL).not.toContain("hitl-assist");
   });
 
   it("reads the ref ONLY to address the card — never into a submitted payload", () => {
@@ -771,11 +810,16 @@ function decideBodies(fetchMock: ReturnType<typeof vi.fn>): Record<string, unkno
 }
 
 function mockResolveAndDecide(state: LifecycleCardState) {
-  const fetchMock = vi.fn(async (input: unknown) => {
+  const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
     const url = String(input);
     if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+      // Match the production mapper: Comment annotates, never resolves.
+      const { disposition } = JSON.parse(String(init?.body));
+      const outcome = disposition === "comment"
+        ? { kind: "annotated" }
+        : { kind: "decided", disposition, idempotent: false };
       return new Response(
-        JSON.stringify({ outcome: { kind: "decided", disposition: "approve", idempotent: false } }),
+        JSON.stringify({ outcome }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -1687,12 +1731,15 @@ describe("a settled card that knows its outcome", () => {
     return container;
   }
 
-  it("names the outcome AND the decider", async () => {
+  // RE-PINNED (cinatra#2934, fix leg 12). Lifecycle cards §XIII.1: "Continued is
+  // the only settled reading; there is no second status after it" — drawn as the
+  // marker "Continued" over "Decided on the revision above." The disposition
+  // stays a RECORD on the element, never a reading, and no settled card on this
+  // surface carries a person's name (Artifact review §VI).
+  it("draws the drawing's marker, and records the disposition beside it", async () => {
     const container = await settledWith("approved", "Dana Okonkwo");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
-    expect(container.textContent).toContain(
-      "The gate is resolved and the run has been released to continue.",
-    );
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).toContain("Decided on the revision above.");
     expect(
       container
         .querySelector('[data-conformance-id="review-gate-settled"]')
@@ -1700,15 +1747,23 @@ describe("a settled card that knows its outcome", () => {
     ).toBe("approved");
   });
 
-  it("names each of the three recorded outcomes", async () => {
-    const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
-      ["approved", "Approved by Dana Okonkwo"],
-      ["rejected", "Rejected by Dana Okonkwo"],
-      ["changes_requested", "Changes requested by Dana Okonkwo"],
-    ];
-    for (const [outcome, title] of cases) {
+  it("reads the SAME marker for each of the three recorded outcomes", async () => {
+    for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
       const container = await settledWith(outcome, "Dana Okonkwo");
-      expect(container.textContent).toContain(title);
+      const marker = container.querySelector('[data-conformance-id="review-gate-settled"]')!;
+      expect(marker.textContent).toContain("Continued");
+      expect(marker.textContent).toContain("Decided on the revision above.");
+      expect(container.textContent).not.toContain("The gate is resolved");
+      expect(marker.getAttribute("data-review-outcome")).toBe(outcome);
+      cleanup();
+    }
+  });
+
+  it("draws no card naming who decided — on any disposition", async () => {
+    for (const outcome of ["approved", "rejected", "changes_requested"] as const) {
+      const container = await settledWith(outcome, "Dana Okonkwo");
+      expect(container.textContent).not.toContain("Dana Okonkwo");
+      expect(container.textContent).not.toContain("Changes requested by");
       cleanup();
     }
   });
@@ -1737,13 +1792,12 @@ describe("a settled card that knows its outcome", () => {
     ).not.toBeNull();
   });
 
-  it("states the outcome ALONE when no decider can be named", async () => {
-    // The resolver drops a decider it cannot name safely rather than reaching
-    // for an identifier, so the card must read as a finished sentence without
-    // one — never "Approved by" and a dangling nothing.
+  it("reads the same whether or not the record carried a decider", async () => {
+    // The resolver drops a decider it cannot name safely; the marker never had
+    // anywhere to put one either way, so both records read alike.
     const container = await settledWith("approved");
-    expect(container.textContent).toContain("Approved");
-    expect(container.textContent).not.toContain("Approved by");
+    expect(container.textContent).toContain("Continued");
+    expect(container.textContent).not.toContain("Approved");
     expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
   });
 
@@ -1759,7 +1813,7 @@ describe("a settled card that knows its outcome", () => {
     }
     for (const html of drawn) {
       expect(html).toBe(drawn[0]);
-      expect(html).toContain("Approved by Dana Okonkwo");
+      expect(html).toContain("Continued");
     }
   });
 
@@ -1785,7 +1839,7 @@ describe("a settled card that knows its outcome", () => {
       ).not.toBeNull(),
     );
     expect(container.textContent).toContain("content.body");
-    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain("Continued");
   });
 });
 
@@ -1819,10 +1873,12 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
 
   // The two TERMINAL dispositions the issue was measured on, plus the third the
   // spec holds distinct from both.
+  // fix leg 12 — one marker for all three; the disposition is the RECORD the
+  // element carries, and the line beneath the card is the drawing's own.
   const DISPOSITIONS = [
-    ["approved", "Approved by Dana Okonkwo"],
-    ["rejected", "Rejected by Dana Okonkwo"],
-    ["changes_requested", "Changes requested by Dana Okonkwo"],
+    ["approved", "Continued"],
+    ["rejected", "Continued"],
+    ["changes_requested", "Continued"],
   ] as const;
 
   for (const [outcome, line] of DISPOSITIONS) {
@@ -1875,7 +1931,7 @@ describe("the decided reading — \"what was decided, AND the reviewed target(s)
         container.querySelector('[data-conformance-id="review-decision-bar"]'),
         `no floor on ${host}`,
       ).toBeNull();
-      expect(container.textContent).toContain("Approved by Dana Okonkwo");
+      expect(container.textContent).toContain("Continued");
       cleanup();
     }
   });
@@ -1934,4 +1990,248 @@ describe("a settled card that does NOT know its outcome", () => {
     );
     expect(screen.getByRole("button", { name: /refresh/i })).not.toBeNull();
   });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3334 — THE CARD'S TWO-BOUND LOAD PROTOCOL.
+//
+// One bound over the whole island load could not tell a hung frame from a gate
+// whose targets simply take a while to prepare, so a review over several
+// targets painted "The preview did not load" over work that was fine. The card
+// now watches TWO bounds and the island reports its own progress into them: the
+// INITIAL-RESPONSE bound runs from the moment the frame is pointed at the
+// island and is cancelled by the island's early, data-free `island-ready`; the
+// IDLE-PROGRESS bound runs from `island-ready` and restarts on every
+// `panel-mounted`. The plate is painted only when a bound expires, and the
+// frame's own `load` still cancels both and heals it.
+//
+// The messages are accepted only from the island's origin, only from the frame
+// the card is currently showing, and only for the attempt the card stamped on
+// that frame — and they carry nothing else: no ref, no target id, no
+// credential.
+// ---------------------------------------------------------------------------
+
+/** Mirrors `src/app/lifecycle/review-island/island-height-report.ts` — the same
+ *  mirroring the `ic` / `scheme` query keys already use across this boundary. */
+const ISLAND_PROGRESS_CHANNEL = "cinatra-review-island-progress";
+
+describe("the island's two-bound load protocol", () => {
+  function islandState(container: HTMLElement): string | null {
+    return container
+      .querySelector('[data-conformance-id="review-target-island"]')!
+      .getAttribute("data-island-load-state");
+  }
+
+  function frameOf(container: HTMLElement): HTMLIFrameElement {
+    return container.querySelector("iframe") as HTMLIFrameElement;
+  }
+
+  /** The attempt the card stamped on the frame it is currently showing. */
+  function currentAttempt(container: HTMLElement): number {
+    const name = frameOf(container).getAttribute("name") ?? "";
+    return Number(name.slice(name.indexOf(":") + 1));
+  }
+
+  function postProgress(
+    container: HTMLElement,
+    type: "island-ready" | "panel-mounted",
+    over: { origin?: string; source?: Window | null; attempt?: number } = {},
+  ): void {
+    const frame = frameOf(container);
+    const event = new MessageEvent("message", {
+      data: {
+        channel: ISLAND_PROGRESS_CHANNEL,
+        type,
+        attempt: over.attempt ?? currentAttempt(container),
+      },
+      origin: over.origin ?? window.location.origin,
+      source: (over.source === undefined ? frame.contentWindow : over.source) as Window,
+    });
+    act(() => {
+      window.dispatchEvent(event);
+    });
+  }
+
+  async function renderIslandCard(): Promise<HTMLElement> {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    return container;
+  }
+
+  async function advance(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /** Post a message 8 s in, then run past the 12 s INITIAL bound and report the
+   *  island's state: `loading` when the message cancelled that bound,
+   *  `timed-out` when the card refused it. */
+  async function stateAcrossTheInitialBound(
+    container: HTMLElement,
+    post: () => void,
+  ): Promise<string | null> {
+    await advance(8_000);
+    post();
+    await advance(5_000);
+    return islandState(container);
+  }
+
+  it("island-ready cancels the initial-response bound and starts the idle bound from itself", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+
+    await advance(8_000);
+    expect(islandState(container)).toBe("loading");
+    postProgress(container, "island-ready");
+
+    // Past the INITIAL bound's twelve seconds — the island answered, so nothing
+    // is painted. This is the whole defect: a gate whose targets take longer
+    // than the bound to prepare used to be declared dead here.
+    await advance(8_000);
+    expect(islandState(container)).toBe("loading");
+
+    // The IDLE bound runs from `island-ready`, and nothing has moved since.
+    await advance(5_000);
+    expect(islandState(container)).toBe("timed-out");
+  });
+
+  it("each panel-mounted restarts the idle bound — a steadily streaming island is never plated", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await advance(0);
+    expect(container.querySelector("iframe")).not.toBeNull();
+
+    postProgress(container, "island-ready");
+    for (let panel = 0; panel < 3; panel += 1) {
+      await advance(8_000);
+      expect(islandState(container)).toBe("loading");
+      postProgress(container, "panel-mounted");
+    }
+    // Advance only the fake clock: twenty-four seconds of progress, no plate.
+    expect(islandState(container)).toBe("loading");
+
+    // The moment progress stops, the idle bound expires like any other.
+    await advance(12_500);
+    expect(islandState(container)).toBe("timed-out");
+  });
+
+  it("a late load heals a plate the IDLE bound painted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+
+    postProgress(container, "island-ready");
+    await advance(13_000);
+    // Painted by the idle bound, not the initial one — the initial bound was
+    // cancelled at zero and would have fired a second earlier.
+    expect(islandState(container)).toBe("timed-out");
+
+    fireEvent.load(frameOf(container));
+    await waitFor(() => expect(islandState(container)).toBe("loaded"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("ignores a message from a FOREIGN ORIGIN — only the island's own origin answers for it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const foreign = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(foreign, () =>
+        postProgress(foreign, "island-ready", { origin: "https://not-the-island.example" }),
+      ),
+    ).toBe("timed-out");
+    cleanup();
+
+    const own = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(own, () => postProgress(own, "island-ready")),
+    ).toBe("loading");
+  });
+
+  it("ignores a message from a FOREIGN SOURCE — only the frame the card is showing answers for it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const foreign = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(foreign, () =>
+        // Same origin, a window that is not this card's frame.
+        postProgress(foreign, "island-ready", { source: window }),
+      ),
+    ).toBe("timed-out");
+    cleanup();
+
+    const own = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(own, () => postProgress(own, "island-ready")),
+    ).toBe("loading");
+  });
+
+  it("ignores a message that names a STALE ATTEMPT — a dead frame cannot hold the live one open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const stale = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(stale, () =>
+        postProgress(stale, "island-ready", { attempt: currentAttempt(stale) + 1 }),
+      ),
+    ).toBe("timed-out");
+    cleanup();
+
+    const live = await renderIslandCard();
+    expect(
+      await stateAcrossTheInitialBound(live, () => postProgress(live, "island-ready")),
+    ).toBe("loading");
+  });
+
+  it("stamps the frame with the attempt the island names back, and re-stamps it on a retry", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+    expect(currentAttempt(container)).toBe(0);
+
+    await advance(12_500);
+    expect(islandState(container)).toBe("timed-out");
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(islandState(container)).toBe("loading");
+    expect(currentAttempt(container)).toBe(1);
+  });
+
+  it("panel-mounted before island-ready cannot cancel the initial-response bound", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+    expect(await stateAcrossTheInitialBound(container, () => postProgress(container, "panel-mounted"))).toBe("timed-out");
+  });
+
+  it.each(["ref", "targetId", "credential"])("refuses a progress payload carrying %s instead of the data-free shape", async (extra) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const container = await renderIslandCard();
+    await advance(8_000);
+    act(() => window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      source: frameOf(container).contentWindow,
+      data: { channel: ISLAND_PROGRESS_CHANNEL, type: "island-ready", attempt: currentAttempt(container), [extra]: "private" },
+    })));
+    await advance(5_000);
+    expect(islandState(container)).toBe("timed-out");
+  });
+
+  it("a repeated island-ready does not restart the idle-progress bound", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await advance(0);
+    expect(container.querySelector("iframe")).not.toBeNull();
+    postProgress(container, "island-ready");
+    await advance(8_000);
+    expect(islandState(container)).toBe("loading");
+    postProgress(container, "island-ready");
+    // The first ready still owns the twelve-second deadline. Cross it only by
+    // advancing the fake clock, never by allowing wall time to move the bound.
+    await advance(3_999);
+    expect(islandState(container)).toBe("loading");
+    await advance(1);
+    expect(islandState(container)).toBe("timed-out");
+  });
+
 });

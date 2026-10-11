@@ -240,8 +240,8 @@ describe("readDevFleetLock — the committed lock", () => {
     expect(overlap).toEqual([]);
     // The counts an image build is measured against: required-only, and the
     // union a dev-fleet build carries.
-    expect(requiredNames.size).toBe(26);
-    expect(dev.packages.length).toBe(90);
+    expect(requiredNames.size).toBe(28);
+    expect(dev.packages.length).toBe(88);
   });
 
   it("rejects a lock entry without a 40-hex commit SHA", () => {

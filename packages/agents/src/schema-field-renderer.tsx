@@ -54,6 +54,8 @@ type Props = {
    * wrapper + the migrated host KIND-table floors).
    */
   bypassRegistry?: boolean;
+  /** The window's placed values (the shared props contract); this field reads its own key. */
+  aiSuggestions?: Record<string, unknown>;
 };
 
 /**
@@ -397,6 +399,27 @@ export function SchemaFieldRenderer(props: Props) {
     else if (Array.isArray(value)) setLocalValue(value.map((v) => String(v)).join("\n"));
   }, [value]);
 
+  // THE WINDOW'S FILL REACHES THIS FIELD (cinatra#2934). The shared props
+  // contract's `aiSuggestions` changes only when a turn placed values, and the
+  // per-field setup panels hand a string field the whole values envelope as
+  // `value` — so this field's own key is read from the payload, in the same
+  // shape the `value` sync above writes. A payload without this field's key
+  // changes nothing. Adjusted during render when a NEW payload object arrives
+  // (not in an effect), so the same payload on a later render never overwrites
+  // a typed edit.
+  const aiSuggestions = props.aiSuggestions;
+  const [seenAiSuggestions, setSeenAiSuggestions] = useState<Record<string, unknown> | undefined>(undefined);
+  if (aiSuggestions !== seenAiSuggestions) {
+    setSeenAiSuggestions(aiSuggestions);
+    const suggested =
+      aiSuggestions && Object.prototype.hasOwnProperty.call(aiSuggestions, fieldName)
+        ? aiSuggestions[fieldName]
+        : undefined;
+    if (typeof suggested === "string") setLocalValue(suggested);
+    else if (typeof suggested === "number") setLocalValue(String(suggested));
+    else if (Array.isArray(suggested)) setLocalValue(suggested.map((v) => String(v)).join("\n"));
+  }
+
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -493,13 +516,56 @@ export function SchemaFieldRenderer(props: Props) {
   const enumValues = (schema as { enum?: unknown[] }).enum;
   const placeholder = (schema as { ["x-placeholder"]?: string })["x-placeholder"];
 
+  // cinatra#3582 — THE DECLARATION, resolved ONCE for every kind below.
+  //
+  // `required` is the CALLER's declaration and `isDeclaredOptional` above is
+  // the three-state rule that reads it. The run's per-field Setup gate passes
+  // no such prop: it is minted only for a field the input schema declares
+  // required and says so on the field's own schema (`x-required`, written by
+  // execution.ts's `buildArtifact`). So the hint is read only where the caller
+  // declared nothing — it can never turn a declared-optional field into a
+  // required one, and an undeclared field still FAILS CLOSED.
+  const declaredRequired: boolean | undefined =
+    required !== undefined
+      ? required
+      : (schema as { ["x-required"]?: boolean })["x-required"] === true
+        ? true
+        : undefined;
+  // A field that is not declared optional and declares no `default` cannot be
+  // answered with nothing. The `default` clause is not decoration: cinatra#3452
+  // ruled that a required field which declares a default is ANSWERED by that
+  // default, so an empty box submits and the wizard moves on.
+  const blankIsNotAnAnswer =
+    !isDeclaredOptional(declaredRequired) &&
+    !Object.prototype.hasOwnProperty.call(schema, "default");
+  const blankBarsSubmit =
+    blankIsNotAnAnswer &&
+    isBlankSubValue(
+      type === "array"
+        ? localValue.split("\n").map((s) => s.trim()).filter(Boolean)
+        : localValue,
+    );
+  // A declared MINIMUM LENGTH speaks about an ANSWER, never about silence: a
+  // blank box is the blank bar's business, and a field declared optional and
+  // left blank is never barred by the minimum.
+  const declaredMinLength = (() => {
+    const raw = (schema as { minLength?: unknown }).minLength;
+    return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : null;
+  })();
+  const minLengthError =
+    declaredMinLength !== null &&
+    localValue.trim().length > 0 &&
+    localValue.trim().length < declaredMinLength
+      ? `Enter at least ${declaredMinLength} characters.`
+      : null;
+
   // Enum -> Select
   if (Array.isArray(enumValues) && enumValues.length > 0) {
     const enumTitles = (schema as { "x-enum-titles"?: string[] })["x-enum-titles"];
     const stringValue = value == null ? "" : String(value);
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Select value={stringValue} onValueChange={(next) => onChange(next)} disabled={disabled}>
           <SelectTrigger id={`field-${fieldName}`} className="border-line">
             <SelectValue placeholder={placeholder ?? label} />
@@ -530,7 +596,7 @@ export function SchemaFieldRenderer(props: Props) {
           disabled={disabled}
         />
         <div className="flex flex-col">
-          <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+          <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
           {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         </div>
       </div>
@@ -549,7 +615,7 @@ export function SchemaFieldRenderer(props: Props) {
       value,
       onChange,
       disabled,
-      required,
+      required: declaredRequired,
       error: callerError ?? null,
       label,
       description,
@@ -583,13 +649,13 @@ export function SchemaFieldRenderer(props: Props) {
     };
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Input
           id={`field-${fieldName}`}
           type="number"
           value={localValue}
           onChange={(e) => setLocalValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting) void submitNum(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting && !blankBarsSubmit) void submitNum(); }}
           disabled={disabled || submitting}
           className="border-line"
           aria-invalid={displayError ? true : undefined}
@@ -599,7 +665,7 @@ export function SchemaFieldRenderer(props: Props) {
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void submitNum()}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError || blankBarsSubmit} onClick={() => void submitNum()}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -615,7 +681,7 @@ export function SchemaFieldRenderer(props: Props) {
   if (type === "array") {
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Textarea
           id={`field-${fieldName}`}
           value={localValue}
@@ -629,7 +695,7 @@ export function SchemaFieldRenderer(props: Props) {
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue.split("\n").map((s) => s.trim()).filter(Boolean))}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || blankBarsSubmit} onClick={() => void handleSubmit(localValue.split("\n").map((s) => s.trim()).filter(Boolean))}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -642,10 +708,10 @@ export function SchemaFieldRenderer(props: Props) {
   // String with format=uri
   if (type === "string" && format === "uri") {
     const localError = localValue.length > 0 && !isValidUrl(localValue) ? "Enter a valid URL." : null;
-    const displayError = callerError ?? localError;
+    const displayError = callerError ?? localError ?? minLengthError;
     return (
       <Field>
-        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
+        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
         <InputGroup>
           <InputGroupAddon>
             <LinkIcon aria-hidden="true" />
@@ -656,7 +722,7 @@ export function SchemaFieldRenderer(props: Props) {
             inputMode="url"
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting) void handleSubmit(localValue); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting && !blankBarsSubmit) void handleSubmit(localValue); }}
             disabled={disabled || submitting}
             placeholder={placeholder ?? "https://example.com"}
             aria-invalid={displayError ? true : undefined}
@@ -667,7 +733,7 @@ export function SchemaFieldRenderer(props: Props) {
         {description ? <FieldDescription>{description}</FieldDescription> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError || blankBarsSubmit} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -680,10 +746,10 @@ export function SchemaFieldRenderer(props: Props) {
   // String with format=email
   if (type === "string" && format === "email") {
     const localError = localValue.length > 0 && !isValidEmail(localValue) ? "Enter a valid email address." : null;
-    const displayError = callerError ?? localError;
+    const displayError = callerError ?? localError ?? minLengthError;
     return (
       <Field>
-        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
+        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
         <InputGroup>
           <InputGroupAddon>
             <MailIcon aria-hidden="true" />
@@ -694,7 +760,7 @@ export function SchemaFieldRenderer(props: Props) {
             inputMode="email"
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting) void handleSubmit(localValue); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting && !blankBarsSubmit) void handleSubmit(localValue); }}
             disabled={disabled || submitting}
             placeholder={placeholder ?? "name@example.com"}
             aria-invalid={displayError ? true : undefined}
@@ -705,7 +771,7 @@ export function SchemaFieldRenderer(props: Props) {
         {description ? <FieldDescription>{description}</FieldDescription> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError || blankBarsSubmit} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -716,10 +782,13 @@ export function SchemaFieldRenderer(props: Props) {
   }
 
   // String fallback — textarea or single-line
+  // cinatra#3582 — a declared MINIMUM LENGTH reads in the line these two legs
+  // already draw for a caller's error; nothing new is drawn for it.
+  const stringDisplayError = callerError ?? minLengthError;
   if (isLikelyMultiline(schema)) {
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Textarea
           id={`field-${fieldName}`}
           value={localValue}
@@ -730,11 +799,11 @@ export function SchemaFieldRenderer(props: Props) {
           placeholder={placeholder}
         />
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-        {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
+        {stringDisplayError ? <p className="text-xs text-destructive">{stringDisplayError}</p> : null}
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || blankBarsSubmit || !!minLengthError} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -745,23 +814,23 @@ export function SchemaFieldRenderer(props: Props) {
   }
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+      <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
       <Input
         id={`field-${fieldName}`}
         type="text"
         value={localValue}
         onChange={(e) => setLocalValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && !submitting) void handleSubmit(localValue); }}
+        onKeyDown={(e) => { if (e.key === "Enter" && !submitting && !blankBarsSubmit && !minLengthError) void handleSubmit(localValue); }}
         disabled={disabled || submitting}
         className="border-line"
         placeholder={placeholder}
       />
       {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-      {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
+      {stringDisplayError ? <p className="text-xs text-destructive">{stringDisplayError}</p> : null}
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
         <GateControlFloor>
-          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting || blankBarsSubmit || !!minLengthError} onClick={() => void handleSubmit(localValue)}>
             {submitting ? "Submitting…" : "Continue"}
             <ArrowRight className="h-3.5 w-3.5" />
           </Button>

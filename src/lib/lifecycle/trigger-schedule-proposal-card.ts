@@ -53,6 +53,88 @@ import { decodeScheduleRunRef } from "./lifecycle-card-ref";
 
 const ABSENT: LifecycleCardState = { state: "absent" };
 
+/**
+ * The schedule card's "Estimated run duration" row, memoised per template.
+ *
+ * WHICH TIER, AND WHY ONLY THAT ONE. The estimator has two: this template's own
+ * completed-run HISTORY, and — where there is not enough of it — a reading of
+ * the agent's task text by a model. The card takes the first and stops there,
+ * for two reasons that are the same reason twice:
+ *
+ *   · the task text is read through a module that sits INSIDE the org-write
+ *     perimeter, so reaching it from here would either widen that perimeter or
+ *     put a writer module statically on the four route graphs this file is
+ *     locked onto. Neither is a price a duration row gets to charge;
+ *   · a card re-resolves on mount and on every window focus, and a model read
+ *     per redraw is a cost the plan does not ask for.
+ *
+ * The history tier is also the tier the plan's "range" is actually about: it IS
+ * how long this agent has taken. Where there is not enough history the row keeps
+ * the run page's own shipped "Unavailable." — named as a deviation.
+ *
+ * MEMOISED, AND BEST-EFFORT ALWAYS. One aggregate per template per window rather
+ * than one per redraw; and every failure — a store that is down, an estimator
+ * that throws — costs this ONE row and is drawn as the row's own "Unavailable.".
+ * A schedule the person can still confirm is never withheld because a duration
+ * could not be worked out.
+ *
+ * DEFERRED IMPORTS, like every other edge this slice adds: nothing is pulled in
+ * for a resolve of a card that is not a live proposal.
+ */
+const DURATION_COPY_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * AND IT IS BOUNDED, not only aged (convergence, finding 3).
+ *
+ * A time-to-live alone expires a VALUE and never removes its KEY, so a
+ * long-lived server process that resolved a proposal for many templates kept one
+ * entry per template it had ever seen, for the life of the process. The window
+ * is what makes an entry stale; this cap is what makes the table finite. On a
+ * full table the expired entries go first — they are already worthless — and
+ * only if none of them is does the oldest live one go, which insertion order
+ * gives for nothing.
+ */
+export const DURATION_COPY_MEMO_MAX = 256;
+const durationCopyMemo = new Map<string, { copy: string; at: number }>();
+
+function rememberDurationCopy(templateId: string, copy: string): void {
+  if (durationCopyMemo.size >= DURATION_COPY_MEMO_MAX) {
+    const cutoff = Date.now() - DURATION_COPY_TTL_MS;
+    for (const [key, entry] of durationCopyMemo) {
+      if (entry.at <= cutoff) durationCopyMemo.delete(key);
+    }
+    // Still full: every entry is live, so the oldest one goes. `Map` iterates in
+    // insertion order, so the first key is that one.
+    if (durationCopyMemo.size >= DURATION_COPY_MEMO_MAX) {
+      const oldest = durationCopyMemo.keys().next();
+      if (!oldest.done) durationCopyMemo.delete(oldest.value);
+    }
+  }
+  durationCopyMemo.set(templateId, { copy, at: Date.now() });
+}
+
+async function proposalDurationCopy(templateId: string): Promise<string | null> {
+  if (typeof templateId !== "string" || templateId.length === 0) return null;
+  const cached = durationCopyMemo.get(templateId);
+  if (cached && Date.now() - cached.at < DURATION_COPY_TTL_MS) return cached.copy;
+  try {
+    const [{ estimateFromHistory }, { durationCopyFor }] = await Promise.all([
+      import("@cinatra-ai/agents/trigger-duration-estimate"),
+      import("@cinatra-ai/agents/duration-copy"),
+    ]);
+    const estimate = await estimateFromHistory(templateId);
+    // NO ESTIMATE DRAWS NO LINE (cinatra#3174 fix leg 1): the drawing gives no
+    // wording for a missing estimate, so none is invented here either.
+    if (!estimate) return null;
+    const copy = durationCopyFor(estimate);
+    rememberDurationCopy(templateId, copy);
+    return copy;
+  } catch {
+    // The row alone. See the doc above.
+    return null;
+  }
+}
+
 export type TriggerScheduleProposalCard = {
   state: LifecycleCardState;
   view: TriggerScheduleProposalViewBody | null;
@@ -276,9 +358,25 @@ export async function resolveTriggerScheduleProposalCard(params: {
         version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
         agentName: resolved.agentName,
         schedule: proposalRows,
-        // THE DRAWING'S OWN LINE (cinatra#3174 fix leg 1, converge round) —
-        // see the waiting card's copy of this note. `null` draws no line.
-        durationCopy: resolved.durationCopy,
+        // ESTIMATED RUN DURATION, WITH A RANGE (cinatra#2853, the picture leg;
+        // plan (A) §7.2: "Under them, Estimated run duration with a range").
+        //
+        // It read no line on every frame, because this line was `null` and had
+        // always been. The estimator and its wording both already existed and
+        // were both already used — by the SAME row on the run page's scheduling
+        // step — so the card was drawing a row the app knows how to fill and
+        // declining to fill it.
+        //
+        // ON THE BRANCH THAT DRAWS IT, AND CACHED. The reason this was withheld
+        // is real: a card re-resolves on mount and on focus, and the estimator's
+        // second tier reads a model. So it is computed only in the PROPOSAL
+        // phase — the one phase that draws the row and can still be confirmed —
+        // and behind a short per-template memo, which turns a per-redraw cost
+        // into a per-template one. A failure costs the row and never the card,
+        // and `null` still draws no line (cinatra#3174 fix leg 1), so a template
+        // with no history reads exactly as it does on main.
+        durationCopy:
+          (await proposalDurationCopy(resolved.proposal.templateId)) ?? resolved.durationCopy,
         canConfirm: resolved.canConfirm,
         restrictedReason: resolved.restrictedReason,
       };
@@ -344,6 +442,10 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // the resolver's — the same predicate the endpoint refuses on — so the
       // card never offers a control the server is already going to refuse.
       canSave: resolved.canSave,
+      // OMITTED UNLESS THERE IS ONE, for the reason `stopped` is. A state
+      // refusal never travels here at all: that card carries no floor for the
+      // sentence to sit on, and its window answers instead (plan (A) §7.2).
+      ...(resolved.saveRefusal ? { saveRefusal: resolved.saveRefusal } : {}),
       // CANCEL SCHEDULE IS THE RECURRING SCHEDULE'S CONTROL, AFTER ITS FIRST
       // FIRE, AND NOTHING ELSE'S (cinatra#2972). Plan (A) §7.2 as amended
       // 2026-08-25: "its one control is **Cancel schedule**, shown only for a
@@ -369,11 +471,21 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // there is no control, no confirm strip and no `release` op left to read
       // it. Removable once no bundle predating this change can still be live.
       canRelease: false,
+      // AND IT IS THE OWNER'S CONTROL OR AN ADMINISTRATOR'S, like Save changes
+      // beside it (plan (A) §7.1). Read from the resolver's ONE answer, found
+      // by the convergence round of this leg: gating Save alone still drew a
+      // second person a LIVE Cancel schedule on a fired recurring run, and the
+      // write behind it refuses — a control the card offers and the server will
+      // not honour is the very thing this leg is closing.
       canCancel:
         resolved.triggerType === "recurring" &&
         resolved.firedOnce &&
         !resolved.stopped &&
-        !resolved.arming,
+        !resolved.arming &&
+        // FAIL-CLOSED AND ALWAYS A BOOLEAN: a resolution that does not say
+        // whether this reader may act draws no control, and the wire's own
+        // schema demands a boolean rather than an absent key.
+        resolved.mayAct === true,
     };
     return {
       state: { state: "settled" },
@@ -609,7 +721,38 @@ export async function decideTriggerScheduleProposal(params: {
         { userId, role, source: "ui" },
         { runId: settled, schedule: parsed.data },
       );
-      if (result.ok) return { kind: "saved", runId: result.runId };
+      if (result.ok) {
+        // AND THE PRESS RECORDS WHAT IT COMMITTED, exactly as the window's own
+        // save does (cinatra#2934, the convergence round of the fourth fix
+        // leg). The rows this button just saved ARE the placements the window
+        // put into them, so those placements are spent; without the receipt a
+        // later bare ask carries them again and re-applies them over rows that
+        // have moved on. Never allowed to fail the press: a receipt that will
+        // not append leaves the timestamp boundary standing, which is where the
+        // road was before receipts existed.
+        try {
+          const { readRunWindowPendingPlacementSequences, recordRunWindowPlacementsSaved } =
+            await import("@cinatra-ai/agents/run-window-conversation-store");
+          const sameForm = (rowRef: string) =>
+            rowRef === ref || decodeScheduleRunRef(rowRef)?.runId === settled;
+          const sequences = await readRunWindowPendingPlacementSequences(settled, {
+            placedBy: userId,
+            refMatches: sameForm,
+          });
+          if (sequences.length > 0) {
+            await recordRunWindowPlacementsSaved({
+              runId: settled,
+              surface: "armed-trigger",
+              ref,
+              savedBy: userId,
+              sequences,
+            });
+          }
+        } catch {
+          // See above: the boundary degrades, the press does not.
+        }
+        return { kind: "saved", runId: result.runId };
+      }
       return result.error === "forbidden" || result.error === "unauthorized"
         ? NOT_PERMITTED
         : { kind: "error", message: result.error };

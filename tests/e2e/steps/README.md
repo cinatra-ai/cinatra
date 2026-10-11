@@ -16,6 +16,7 @@ defect of a step, with a test, fixed once for every run.
 | `readRows` | Rows of one table by named columns, every name checked against the database's catalog first. |
 | `press` | One control pressed by its role and accessible name, never a guess, and the page's next settled state. |
 | `selectFrom` | One entry selected in a picker found by its name, and the selection reflected on the page. |
+| `readOptions` | A picker's entries in their order and the entry it shows, read without choosing; a combobox's list opened and closed again with the Escape key. |
 | `dispatchRun` | A run started from its card or sent through the composer, and the run or its notification shown. |
 | `readControlNames` | Every shown control of a page, by its role and its accessible name, a control without a name included. |
 | `armPageTape` | The document's time origin noted, and the main frame's navigations counted from then on. |
@@ -27,9 +28,17 @@ defect of a step, with a test, fixed once for every run.
 | `typeInWindow` | Text typed into a window's text box through the keyboard, read back from the box, and sent through the window's own send control when asked. |
 | `waitForTurn` | A turn of a window's conversation waited for without a reload: a new entry of the assistant, and the send control idle again. |
 | `reloadPage` | The browser's own reload of the page, and the new document's time origin. |
-| `sendInComposer` | One message sent through the conversation's composer, and the kind of the card that answers it; a message that starts a run is refused. |
+| `sendInComposer` | One message sent through the conversation's composer, awaiting its card by default or, with explicit `expect: "run"`, its new run ID. |
 | `openAddress` | A page no visible link leads to, such as the not-found page, loaded once by its address, with the status of the response. |
-<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress. -->
+| `readAddress` | The page's path and the values of the query parameters the caller names, read once the address has held still; any other parameter counted, never written. |
+| `pressByTestId` | One element without a role pressed by its test id and its whole text, never a guess, and the page's next settled state, read as `press` reads it; the record says the element has no role. |
+| `readTitle` | The page's title, read by the browser's own reading of it once it has held still. |
+| `openPageInOwnContext` | A further page opened from a visible link in a browser context of its own, with connections of its own, signed in by the session the first page carries and never through the sign-in page. |
+| `frameOf` | The one frame of a page, found by its element through open shadow roots, and a frame scope in which the control steps read and act in that frame's document alone. |
+| `pressWithoutName` | One control without an accessible name, such as a site widget's launcher, pressed by its selector through open shadow roots, never a guess, with the fault said, and the page's next settled state. |
+| `openPageOfOrigin` | A page of another origin than the page's, such as a site that embeds the product, loaded once by its address in an empty browser context of its own or in the page's own. |
+| `signInThroughWindow` | One sign-in through the window a control opens, as an embedded product signs in: the window that returns by itself, or its form typed into key by key and the window closed again. |
+<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress; then frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -43,7 +52,9 @@ imports only Node's builtins and its own files, so both of these work:
 
 - **A record.** Every step takes a `record` callback and writes one line per event
   through it. A line names a page by its path, never by its address or its query
-  string, and never carries a credential. A step without a `record` does nothing.
+  string, and never carries a credential. A line may carry the value of a query
+  parameter that the caller named to `openAddress` or `readAddress`, and no
+  other. A step without a `record` does nothing.
 - **Refusals by name.** A step that cannot keep its guarantee throws a
   `StepRefusal` whose message names the step, the kind of refusal and the reason,
   for example `navigateTo refused (no-link): no visible link on /agents leads to
@@ -56,6 +67,23 @@ imports only Node's builtins and its own files, so both of these work:
 - **Frames through a shutter.** The two watching steps take their frame through a
   `shutter` the caller passes: `({ step, state, settled, elapsedMs }) => path`.
   The shutter takes the picture (usually `page.screenshot`) and answers its path.
+- **A frame scope.** `frameOf` answers a scope of one frame of a page, such as
+  the frame a site's widget mounts. `readCount`, `press`, `pressByTestId`,
+  `dispatchRun`, `sendInComposer`, `typeInWindow`, `waitForTurn`, `fillForm`
+  and `readControlNames` take it in place of a page: they find, read, mark,
+  fill, type and press in that frame's document alone, with every guarantee
+  their sections state for a page, and write the frame's path where they write
+  a page's. `reloadPage`, `openAddress`, `readAddress`, `navigateTo`,
+  `openPageInOwnContext`, `signInThroughPage`, `armPageTape`, `readPageTape`,
+  `selectFrom`, `readOptions`, `uploadFile`, `switchTheme`, `decideGate`,
+  `watchRun`, `readStandingRequests`, `readTitle` and `waitForIsland` refuse a
+  scope (`input`) before they read, load, press or record anything else: a
+  frame is never reloaded, typed into or photographed; the page is. A scope
+  whose frame was replaced (the page reloaded, the frame mounted anew) is
+  stale: a step given it refuses (`unreadable`), naming that the frame is
+  detached, and the caller calls `frameOf` again. A frame's palette is the
+  class the app writes on the frame document's root, read with
+  `readCount(scope, { selector: "html.dark" })` (or `html.cinatra`).
 
 ## `signInThroughPage(page, { credentials, budget, record, url?, bounds? })`
 
@@ -170,6 +198,8 @@ the link's own handler opens a dialog in place, is refused at once
 (`no-navigation`), naming the link it pressed and the dialog or panel the page
 shows instead.
 
+The same start signals and short bound apply with `furtherPage: true`: no start is refused as `no-further-page`, naming what the current page shows instead, while a started open keeps its full landing wait.
+
 With `furtherPage: true` it opens the page in a further page instead, and first
 reads the requests that stand open on the origin (`readStandingRequests`): a
 browser keeps at most six connections per origin over plain HTTP, so at or above
@@ -253,10 +283,15 @@ When a name matches several controls, the step acts on none of them: it refuses
 (`ambiguous`) and names where each one sits. The one control a step acts on
 carries the mark `data-step-control` for that act only. A refusal lists at most
 `CONTROL_NAMES_LISTED` (ten) names and counts the others.
+A step that marks a control first waits until the page has hydrated, by the
+reading React leaves on the page's rendered elements; a page with nothing to
+hydrate is read at once, and a page that does not hydrate within
+`CONTROL_HYDRATION_BOUND_MS` is refused as `unreadable`.
 
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `CONTROL_ACTION_BOUND_MS` | 10_000 | one press or one selection |
+| `CONTROL_HYDRATION_BOUND_MS` | 60_000 | from a step's first reading to the page's hydration |
 | `CONTROL_POLL_MS` | 100 | how often the page is read while a step waits |
 
 ## `press(page, { name, record, role?, within?, bounds? })`
@@ -347,14 +382,53 @@ alert, a toast) names the entry that did not name it before. The step answers
 `{ picker, entry, kind, via, path, elapsedMs }`, where `via` is `state` or
 `confirmation`.
 
+A combobox the step opened is also waited for until its list has closed, when
+the list still hides the combobox from assistive technology once the choice
+shows: the shared select shows the choice while its list is still closing, and
+while the list is open it hides the rest of the page, so a second pick on the
+page would find no picker. The wait reads the combobox as the open wait does,
+within the same bound, measured from the choice, and the log line then ends
+`; its list closed after <n> ms`. A list that is closed at once, or a list the
+step found already open, takes no wait and adds nothing to the line.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
-| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, and from typing into a search field to its entry in the list |
+| `SELECT_REFLECT_BOUND_MS` | 5_000 | from the selection to the page reflecting it, from opening a combobox to its list, from the selection to the close of a list that hides the page, and from typing into a search field to its entry in the list |
 
 Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
 shows), `ambiguous`, `no-entry` (naming the picker's entries) and `disabled`
 (nothing was selected), `driver-failure`, `other-entry` (a search field's page
-took another entry than the one pressed) and `not-reflected`.
+took another entry than the one pressed), `not-reflected` and `not-closed` (a list
+that still hides the page once the bound has run out).
+
+## `readOptions(page, { picker, record, bounds? })`
+
+Reads the entries of the one shown picker named `picker`, found as `selectFrom`
+finds it (a combobox with no accessible name included), in the page's order,
+and the entry it shows as chosen, and chooses nothing. A select, a radio group,
+a listbox, and a combobox whose list is shown already, are read as they are. A
+combobox whose list is not shown is opened as `selectFrom` opens it and read
+again by its mark; then the Escape key is pressed once, the list's own close,
+and the step waits until the list has closed: the combobox reads closed and is
+no longer hidden from assistive technology, within the reflect bound measured
+from the key, whether or not the list hid the page. The step presses nothing
+else. It answers `{ picker, kind, entries, more, shows, path }`: `entries` the
+names of at most `CONTROL_NAMES_LISTED` entries, `more` the count of the rest,
+and `shows` the entry the picker showed when the step found it (a select's
+selected option, a radio group's checked radio, a listbox's option marked
+selected or checked, a combobox's own text, empty while it shows its
+placeholder), or the empty string. Its one line reads, for example,
+`readOptions: the picker "Size" on /pick/start lists "Small", "Medium",
+"Large", "Huge" in this order and shows "Small"`, and, for a combobox it opened,
+ends `; its list closed after <n> ms`; a picker that shows no entry is said to
+show no entry. It takes the bounds of `selectFrom` (`SELECT_BOUNDS`).
+
+Refusal kinds: `input`, `unreadable`, `no-picker` (naming the pickers the page
+shows), `ambiguous`, `disabled` and `no-list` (a search field, which lists
+entries only for typed text), each before anything is read; `no-entry` (an
+opened combobox shows no list), `driver-failure` (the press or the Escape key
+was not taken) and `not-closed` (the list did not close within the bound of the
+Escape key).
 
 ## `dispatchRun(page, { record, card?, control?, prompt?, composer?, bounds? })`
 
@@ -493,7 +567,7 @@ only the error's class is kept).
 
 <!-- uploadFile, fillForm, switchTheme and decideGate: the steps that drive a page's own controls. -->
 
-## `uploadFile(page, { control, path, record, bounds? })`
+## `uploadFile(page, { control, path, record, bounds?, done? })`
 
 Uploads the file at `path` through the page's own upload control. It presses the
 first shown button named `control` (the library's Upload button, which opens a
@@ -505,6 +579,19 @@ place it was read from. A press the page's handler has not taken over yet (befor
 the page has hydrated) opens no chooser, and is refused as such at once. It
 answers `{ control, file, path, elapsedMs }`.
 
+For an extension import that acknowledges the file on its own screen, pass
+`done: { selector: '[data-testid="upload-resolved-name"]', text: '@cinatra-ai/list-curation-skill' }`. This optional
+road waits for the named trigger's own file input to belong to React's current
+committed tree and carry its change handler, then uses `setInputFiles` on that
+input. Server markup, an uncommitted fiber or a missing handler cannot admit
+an upload. It does not press the sr-only input or a covering icon, and does not
+change any checkbox. It refuses ambiguous controls and an already shown
+completion signal before handing over a file, then waits for the caller's
+selector to read the expected text within `doneMs` (60 seconds by default). Without this option, the chooser and library-row
+road above is unchanged. The existing driver forwards this option with the
+other `uploadFile` options. The record line names `done.selector` and the text
+it read; a shown selector with a different package name is not completion.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `UPLOAD_CONTROL_BOUND_MS` | 15_000 | the control shown with its name |
@@ -512,10 +599,12 @@ answers `{ control, file, path, elapsedMs }`.
 | `UPLOAD_CHOOSER_BOUND_MS` | 5_000 | from the press to the file chooser |
 | `UPLOAD_ROW_BOUND_MS` | 120_000 | from the file handed over to its row |
 | `UPLOAD_POLL_MS` | 250 | how often the control and the list are read |
+| `doneMs` | 60_000 | from hand-over to the caller's exact completion text (`doneMs`) |
 
 Refusal kinds: `input` (nothing was pressed), `no-control` (naming the page's file
 inputs), `driver-failure`, `no-chooser` (the press opened no file chooser) and
-`no-row` (naming the rows the list shows).
+`no-row` (naming the rows the list shows). With `done`,
+`unhydrated`, `ambiguous`, `stale-completion` and `no-completion` also apply.
 
 ## `fillForm(page, { fields, record, form?, submit?, bounds? })`
 
@@ -684,7 +773,7 @@ the sign-in page, is refused, naming where it landed.
 Refusal kinds: `input` and `closed` (nothing was reloaded), `no-load`,
 `landed-elsewhere` and `driver-failure` (the new document could not be read).
 
-## `sendInComposer(page, { prompt, composer, record, bounds? })`
+## `sendInComposer(page, { prompt, composer, expect?, record, bounds? })`
 
 Sends one message through the conversation's composer, the one shown text box
 named `composer` ("Send message" in the product), and waits for the card that
@@ -700,6 +789,21 @@ run page's surface, the run panel the conversation draws, or a notification of
 a run) and refuses a send after which one shows: starting a run is
 `dispatchRun`'s act. No line carries the prompt.
 
+When a chat message is expected to start a run, opt in with
+`sendInComposer(page, { prompt, composer: "Send message", expect: "run", record })`.
+This arm waits for a new **visible** inline card's `data-inline-run-card` ID and
+returns `{ composer, runId, threadPath, elapsedMs }`, reading `threadPath` from
+the caller's document (the frame's path when called on a frame scope). It does
+not wait for a progress panel: a landed review card can occupy that place.
+IDs already visible before the send, hidden cards, empty IDs, a card without a
+run ID, and a run-start notification alone cannot satisfy it. If no new ID
+appears within `cardMs`, it refuses `no-run`, naming any new page error.
+
+Omitting `expect`, or passing `expect: "card"`, keeps the existing card arm:
+a run or run-start notification still refuses `starts-run`. An unsupported
+`expect` refuses `input` before typing. Both arms type once and never infer a
+run ID from prompt text, a toast, or an API request.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `DISPATCH_RUN_COMPOSER_BOUND_MS` | 30_000 | from the call to the composer shown with its name (`composerMs`) |
@@ -709,10 +813,10 @@ a run) and refuses a send after which one shows: starting a run is
 | `CONTROL_POLL_MS` | 100 | how often the page is read (`pollMs`) |
 
 Refusal kinds: `input` (nothing was sent), those of `typeInWindow` with
-`no-composer` in place of `no-field`, `starts-run`, and `no-card` (naming an
+`no-composer` in place of `no-field`, `starts-run`, `no-run` (the opt-in arm), and `no-card` (naming an
 error the page shows, the conversation's error card among them).
 
-## `openAddress(page, { path, record, bounds? })`
+## `openAddress(page, { path, record, params?, bounds? })`
 
 Loads `path`, once, on the current page's own origin and in the caller's page,
 so the session the page is signed in with goes with it, and answers
@@ -725,6 +829,23 @@ page leads to, read as `navigateTo` reads its links (`has-link`: pressing that
 link is `navigateTo`'s act), an address of another origin (`other-origin`), and
 anything that is no page path. Its line says that an address was typed.
 
+A page that keeps its views at their own addresses, such as `?tab=locked`, is
+opened with its query when the caller names the parameters the path may carry
+in `params`, such as `["tab"]`. The path may then carry a query of those names,
+and the step answers `{ path, status, from, elapsedMs, query, others }`: `query`
+holds each named parameter's value where the load landed (null when the address
+does not carry it), and `others` counts the parameters of any other name, whose
+values are never written. It refuses as `input`, before it loads anything,
+`params` that is no list of distinct names (letters, digits, `_`, `.` and `-`),
+a path with a fragment, and a query that names a parameter `params` does not
+name, without writing that parameter. The `has-link` reading then reads the
+path with its query. Its line writes each named parameter as `name="value"`, cut
+as a name is, or `name absent`, and counts the others, such as
+`openAddress: typed the address of /configuration/extensions with the query
+tab="locked" into the page on /chat, where no visible link leads to it; it
+landed on /configuration/extensions with the query tab="locked" with status 200
+after 412 ms`.
+
 | Bound | Default | Covers |
 | --- | --- | --- |
 | `OPEN_ADDRESS_BOUND_MS` | 120_000 | from the typed address to the landing (`loadMs`) |
@@ -732,6 +853,299 @@ anything that is no page path. Its line says that an address was typed.
 
 Refusal kinds: `input`, `other-origin`, `unreadable` and `has-link` (no address
 was typed), and `no-load`.
+
+## `readAddress(page, { params, record, settleMs?, pollMs?, bound? })`
+
+Reads the address of the page, on the driver's side as the page's address is,
+so a view the page chooses in place (a state pushed into its history) is read
+as a load is. It answers `{ path, query, others }` once two readings of the
+path and of the values of the parameters `params` names lie `settleMs` apart
+and are equal, and every reading between them agreed: `query` holds each named
+parameter's value (null when the address does not carry it), and `others`
+counts the parameters of any other name, whose values are never written. Its
+one line is written as `openAddress` writes a query, such as
+`readAddress: the page is on /configuration/extensions with the query
+tab="archived"`, or `... with the query tab="all", and 1 other parameter not
+written`. An address that never holds still within `bound` is refused
+(`unsteady`), naming the last two readings, the path and the named values only.
+An unknown option, `params` that is no list of distinct names, or a bound that
+is not a positive number of milliseconds is refused before anything is read
+(`input`).
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `ADDRESS_SETTLE_MS` | 1_000 | how long the address must hold still (`settleMs`) |
+| `ADDRESS_POLL_MS` | 100 | how often it is read (`pollMs`) |
+| `ADDRESS_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+Refusal kinds: `input` and `unsteady`.
+
+<!-- pressByTestId and readTitle: an element without a role pressed by its test id and its text, and the page's title. -->
+
+## `pressByTestId(page, { testId, text, record, within?, bounds? })`
+
+Presses the one shown element that carries the test id `testId` (in
+`data-testid`, `TEST_ID_ATTRIBUTE`, the attribute the product's browser tests
+read) and whose own text is `text`, for an element the product draws to be
+pressed without a role, such as a row of the type picker in the upload dialog: a
+list item with a click handler and a test id. `press` finds a control by its
+role and its name, so it has nothing to name there.
+
+- **Its own text.** The text the element draws: its text nodes, without a hidden
+  part, a script or a style, each run of white space made one space and trimmed,
+  and compared whole with `text`, folded the same way. A text that holds `text`
+  as a part is no match. Only a shown element counts: drawn, and inside nothing
+  hidden.
+- **Never a guess.** It presses only when exactly one element matches. No match
+  is refused (`no-control`), naming how many shown elements carry the test id
+  and their texts, at most `CONTROL_NAMES_LISTED` of them, each cut as a name
+  is; several are refused (`ambiguous`), naming the part of the page each sits
+  in. With `within`, it looks only inside the one shown part of the page of that
+  name, found as `press` finds it.
+- **The accessible road first.** An element that carries a role `press` presses
+  (its own, or one its tag gives it) and an accessible name is `press`'s: the
+  step refuses it (`has-role`), naming the role and the name, and presses
+  nothing.
+- **The fault said.** Before the press it writes one line: the page's path, the
+  test id, the text, and that the element carries no role and was found by its
+  test id, such as `pressByTestId: on /artifacts, the element of the test id
+  "artifacts-picker-type" with the text "Note pack:note Pack" carries no role;
+  it was found by its test id`. A person who uses the keyboard or a screen
+  reader finds such an element by no name, and every record of a run that needs
+  the step says so.
+
+It reads the page's next settled state with the reading `press` uses
+(press-settle.mjs), within the same bounds (`PRESS_BY_TEST_ID_BOUNDS`, the
+bounds of `press`), and answers the fields `press` answers, with the test id:
+`{ name, role, testId, from, path, navigated, elapsedMs }`, where `name` is the
+text and `role` is empty for an element without one.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press (`actionMs`) |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation (`startMs`) |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation (`settleMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-scope`,
+`no-control`, `ambiguous` and `has-role` (nothing was pressed),
+`driver-failure` and `unsettled`.
+
+## `readTitle(page, { record, settleMs?, pollMs?, bound? })`
+
+Reads the document's title through the browser's own reading of it
+(`document.title`), never by a selector: a count with a selector on the head's
+title element reads 0, since the engine that reads text reads only what the page
+draws. As `readCount` does for a count, it answers only once two readings that
+lie `settleMs` apart are equal and every reading between them agreed, so a title
+the page sets a moment after it loads is never read as the one before; a
+reading that could not be taken agrees with nothing. It answers
+`{ title, path }` and writes one line that names the page by its path and
+carries the title, cut as a name is, such as
+`readTitle: the title of the page on /agents reads "Agents"`. An empty title is
+a title: it is answered as the empty string, and the line says the page has an
+empty title. A title that never holds still within `bound` is refused
+(`unsteady`), naming the last two titles it read. An unknown option, or a bound
+that is not a positive number of milliseconds, is refused before anything is
+read (`input`).
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `TITLE_SETTLE_MS` | 1_000 | how long the title must hold still (`settleMs`) |
+| `TITLE_POLL_MS` | 100 | how often it is read (`pollMs`) |
+| `TITLE_BOUND_MS` | 15_000 | how long it has to hold still at all (`bound`) |
+
+## `openPageInOwnContext(page, { path, record, bounds? })`
+
+Opens `path` in a page of a browser context of its own, for a state that needs
+two people at once, such as one person on a run's pending gate while another
+settles it. A run page holds several requests open on its origin, and over
+plain HTTP a browser opens at most six connections to one origin in one
+context, so a further page in the same context (`navigateTo` with
+`furtherPage`) can starve the first page's own send. A second context has
+connections of its own.
+
+1. Refuses, before the page is touched, a path that is no page path or carries
+   a query string or a fragment, the sign-in page (`SIGN_IN_PAGE_PATH`, which
+   is `signInThroughPage`'s), and an unknown or non-positive bound.
+2. Reads the visible links on the current page that lead to `path`, as
+   `navigateTo` reads them. With none, it opens nothing and refuses, naming how
+   many visible links the page shows: it opens only what a person could open
+   from there, and never invents an address.
+3. Opens a new context on the page's browser from the storage state of the
+   page's context (its cookies and its storage) and the page's viewport. The
+   state goes from one call straight into the other: it is never written to a
+   file, recorded or logged. No sign-in is made, so the sign-in budget is not
+   touched, and no credential is typed.
+4. Starts the reading of standing requests (`readStandingRequests`) on the new
+   context before its page opens, so that page is never unknown to it.
+5. Loads the address the first such link leads to (its query string included)
+   in a new page of that context, and waits for the landing as `navigateTo`
+   does. A landing on the sign-in page (`session-lost`), or on another path
+   within the bound (`landed-elsewhere`), is refused, and the new context is
+   closed first.
+
+It answers `{ path, from, elapsedMs, furtherPage, standing }`: the landed path,
+the path it came from, the elapsed time, the page it opened, and the new
+context's own reading of standing requests. Its line names the two paths and
+says that the page stands in a browser context of its own; it never carries a
+cookie, a storage value, an address or a query string. The caller closes
+`furtherPage.context()` when it is done with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OWN_CONTEXT_LANDING_BOUND_MS` | 120_000 | from opening the new context to the landing of its page (`landingMs`) |
+| `READING_BOUND_MS` | 5_000 | the reading of the link, and of the standing requests (`readingMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-link` and
+`no-browser` (no context was opened), `driver-failure`, and `session-lost` and
+`landed-elsewhere` (the new context was closed).
+
+<!-- frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow: a frame of a site's page, a control without a name, a page of another origin, and the sign-in through a window. -->
+
+## `frameOf(page, { frame, record, bounds? })`
+
+Finds the one frame of a page by its element: `frame` is a CSS selector of the
+frame element, looked for as Playwright's locators look, through open shadow
+roots, since a site's widget mounts its frame inside its own shadow root. It
+waits until exactly one attached element matches and its frame's document has
+loaded, and answers `{ scope, path, elapsedMs }`: `path` is the frame's path,
+and `scope` the frame scope the control steps take in place of a page (see
+'What every step shares'). A scope's address, readings, locators and waits are
+the frame's; its keyboard, mouse, context and events are its page's, as a
+browser types into the frame that has the focus and announces the frame's
+requests on its page; it has no reload, address to go to, picture or close.
+A scope is known by a mark the kit alone sets, never by its shape. The line
+names the page's path, the selector and the frame's path, never an origin or
+an address, such as `frameOf: on /wp-admin/post.php, the frame of the selector
+"iframe.cw-frame" stands on /embed/assistant; the steps given its scope read
+and act in that frame's document alone`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `FRAME_SCOPE_BOUND_MS` | 120_000 | from the call to the one frame element attached with its document loaded (`frameMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (no selector, an unknown or non-positive bound, or a
+scope in place of a page), `no-frame` (naming how many elements matched when
+the bound ran out), `ambiguous` (several match, naming how many) and
+`driver-failure`.
+
+## `pressWithoutName(page, { selector, record, bounds? })`
+
+Presses the one shown element of a CSS `selector`, looked for through open
+shadow roots, whose role (its own, or the one its tag gives it) is one `press`
+presses and whose accessible name, read from Chromium's accessibility tree as
+the control steps read names, is empty: a site widget's launcher drawn as a
+button that holds an icon alone. `press` finds a control by its name, so it has
+nothing to name there. It takes a page or a frame scope.
+
+- **Never a guess.** No shown element of the selector is refused
+  (`no-control`), naming how many attached elements match it, and so is one of
+  no role `press` presses; several are refused (`ambiguous`), naming the part
+  of the page each sits in.
+- **The accessible road first.** An element of the selector that has a name is
+  `press`'s: the step refuses it (`has-name`), naming its role and its name,
+  and presses nothing.
+- **The fault said.** Before the press it writes one line: the page's path, the
+  selector, the role, and that the control has no accessible name and was found
+  by its selector, such as `pressWithoutName: on /wp-admin/post.php, the button
+  of the selector "button.cw-circle" has no accessible name; it was found by its
+  selector`. A person who uses a screen reader finds such a control by no name,
+  and every record of a run that needs the step says so.
+
+It reads the page's next settled state with the reading `press` uses
+(press-settle.mjs), within the same bounds (`PRESS_WITHOUT_NAME_BOUNDS`, the
+bounds of `press`), and answers `{ name: "", role, selector, from, path,
+navigated, elapsedMs }`.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `CONTROL_ACTION_BOUND_MS` | 10_000 | the press (`actionMs`) |
+| `PRESS_START_BOUND_MS` | 2_000 | from the press to the start of a navigation (`startMs`) |
+| `PRESS_SETTLE_BOUND_MS` | 60_000 | from the press to the landing of that navigation (`settleMs`) |
+| `CONTROL_POLL_MS` | 100 | how often the page is read while the step waits (`pollMs`) |
+
+Refusal kinds: `input` (the page was not touched), `unreadable`, `no-control`,
+`ambiguous` and `has-name` (nothing was pressed), `driver-failure` and
+`unsettled`.
+
+## `openPageOfOrigin(page, { address, record, params?, sameContext?, bounds? })`
+
+Loads `address`, an absolute http or https address of another origin than the
+page's, such as the page of a site that embeds the product, once, in a new
+page: by default of a new browser context of the page's browser that starts
+empty (no cookie and no storage of the page's context crosses into it), with
+the page's viewport; with `sameContext: true`, of the page's own context, the
+person's same browser, so what the product's tab holds, the new page holds.
+It takes a page only.
+
+Before anything opens it refuses an address of the page's own origin
+(`same-origin`: that is `openAddress`'s act), anything that is no absolute http
+or https address, an address with a user or a password in it, a fragment, and
+a query that names a parameter `params` does not name (`input`, the parameter
+never written); and `no-browser` when the page's context has no browser to
+open a context on. It answers `{ furtherPage, path, status, from, elapsedMs }`
+and, with `params`, `query` and `others` as `openAddress` answers them. Its line
+says that an address of another origin was typed, and names the paths and the
+named parameters' values only, never the origin or the address, such as
+`openPageOfOrigin: typed the address of /wp-login.php on another origin than
+the page's on /chat into a page of a browser context of its own; it landed on
+/wp-login.php with status 200 after 412 ms`. The caller closes `furtherPage`,
+and the context it opened with it.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `OTHER_ORIGIN_BOUND_MS` | 120_000 | from the typed address to the landing (`loadMs`) |
+
+Refusal kinds: `input`, `same-origin` and `no-browser` (nothing was opened),
+`driver-failure`, and `no-load` (what was opened was closed).
+
+## `signInThroughWindow(page, { name, role?, credentials, budget, record, bounds? })`
+
+Signs a run in once through the window a control opens, as an embedded product
+signs a person in: it takes no cookie of the product, and its sign-in control
+opens a window of the product that closes itself when it is done. It takes a
+page or a frame scope. It presses the one control of `role` (a button by
+default) named `name`, found as `press` finds it, and waits for the window the
+press opens (the page's `popup`). Then exactly one of two roads, read by
+polling and never assumed:
+
+- **The window returns by itself.** A person with a live session in that
+  browser context is returned at once, and the window closes itself. The step
+  answers `{ window: "returned", spent: false, path, elapsedMs }` without
+  touching the budget.
+- **The window shows the product's sign-in form**, on whatever path the window
+  stands. The step keeps every rule of `signInThroughPage` that applies to a
+  form it did not load itself: the budget refused when spent and spent by the
+  same rules, the two guards armed before the press, the hydration mark
+  `novalidate` waited for, and the app's own sign-in request on
+  `SIGN_IN_REQUEST_PATHS` read with its answer. It types the email and the
+  password key by key into the window's two fields, never a fill (the window's
+  fields are controlled inputs), reads the email back by its value and the
+  password by its length only, presses the form's submit once, and waits for
+  the window to close itself. It answers `{ window: "signed-in", spent: true,
+  path, windowPath, elapsedMs }`.
+
+No line carries the email, the password, a token, a cookie or an address; the
+window is named by its path.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `SIGN_IN_ACTION_BOUND_MS` | 30_000 | the press, and each field pressed into (`actionMs`) |
+| `WINDOW_OPEN_BOUND_MS` | 30_000 | from the press to the window it opens (`openMs`) |
+| `WINDOW_RETURN_BOUND_MS` | 120_000 | from the window's opening to its return or its form, and from the app's answer to the window closing itself (`returnMs`) |
+| `SIGN_IN_HYDRATION_POLL_MS` | 100 | how often the window is read (`pollMs`) |
+| `SIGN_IN_REQUEST_BOUND_MS` | 10_000 | from the press to the app's own sign-in request (`requestMs`) |
+| `SIGN_IN_ANSWER_BOUND_MS` | 120_000 | from that request to the app's answer (`answerMs`) |
+
+The bounds are `SIGN_IN_WINDOW_BOUNDS`. Refusal kinds: `input` and `spent`
+(nothing was pressed), `unreadable`, `no-control`, `ambiguous` and `disabled`
+(nothing was pressed), `no-window` (pressed, and no window within the bound),
+`blocker`, `driver-failure`, `rejected` and `no-answer` (as
+`signInThroughPage`'s), and `not-returned` (the window neither closed nor showed
+the form within the bound, or stayed open after the answer, naming the
+window's path).
 
 ## Shared bounds
 
@@ -746,7 +1160,15 @@ was typed), and `no-load`.
   `pnpm exec vitest run --config vitest.config.ts tests/e2e/steps`). Each step's
   branches run against a page double over a local fixture app: no browser, no
   server. With `E2E_STEPS_UNIT_BROWSER=1` the same cases also drive a real browser
-  over the same fixture pages, which keeps the double honest.
+  over the same fixture pages, which keeps the double honest. In the checks, the
+  job **Step tests in a real browser** runs them with the switch set for every
+  pull request that changes a file here other than Markdown: first on the page
+  double, then with the switch. Both runs receive `E2E_STEPS_UNIT_DATABASE_URL`
+  from a job-scoped PostgreSQL service at its mapped host port, so the real
+  `readRows` database cases run too. It fails unless every case passed, so in that
+  job a browser that cannot be launched is a failure, not a skip, and the
+  required `build` check fails with it. Any other pull request skips the job;
+  the selection line of **Detect CI impact (build-image)** names the reason.
 - **The live smoke**, one per step, against a running development server:
   `pnpm exec playwright test -c tests/e2e/config/steps.config.ts`. Without a
   browser or a server every test is skipped, and its reason names what is missing.

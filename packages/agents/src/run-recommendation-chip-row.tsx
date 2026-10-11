@@ -1718,6 +1718,103 @@ export const RECOMMENDATION_UNREADABLE: RunRecommendationHoldResolution = Object
   state: null,
 });
 
+// ---------------------------------------------------------------------------
+// THE LAST AUTHORIZED ANSWER, KEPT ACROSS A REMOUNT (cinatra#3007, fix leg 10).
+// ---------------------------------------------------------------------------
+// THE FAILURE THIS CLOSES, MEASURED RATHER THAN IMAGINED. The held-turn gate
+// photographed a chat transcript in which the settled row had been asserted on
+// its own root moments earlier and was then absent from the DOM entirely — and
+// the recorder's own reading says the transcript around it was absent too: the
+// conversation list was attached and NOTHING inside it was painted. The trace
+// says what happened between those two instants: the whole conversation subtree
+// was TORN DOWN AND REBUILT — its in-flight reads were aborted and a fresh mount
+// re-issued them — while the answer this card needs was still on the wire, and a
+// read that had been taking twelve seconds under load was not going to land
+// inside the shutter.
+//
+// WHY THE CARD ALONE COULD NOT SURVIVE THAT. Everything this hook knows about a
+// run lives in `useState`/`useRef` — state that dies with the instance. A rebuilt
+// card therefore starts from "nothing is known about this run" and draws NOTHING
+// (the render gate is fail-closed, deliberately) until a fresh read completes.
+// That is correct for a run this browser has never asked about. It is wrong for a
+// run this browser has ALREADY had an authoritative answer for: the answer did not
+// stop being true because a component was rebuilt, and blanking a settled row a
+// person is reading is exactly the disappearance this card's own rules exist to
+// prevent one seam over ("an answer outranks a later failure").
+//
+// SO THE SETTLED ANSWER OUTLIVES THE INSTANCE, and nothing else does. What is
+// kept is one authority-issued DECIDED `RunRecommendationHoldState` per run id —
+// never a live park, never a credential, never a reader, and never a decision
+// this card could take. It is written ONLY where such an answer is filed, so an
+// unresolved card, a failed read and a suppressed empty look all write nothing;
+// it is read ONLY to seed a fresh mount for the SAME run, and the read that mount
+// issues anyway replaces it the moment it lands. The card therefore draws what it
+// last drew and then corrects itself, rather than drawing nothing and then
+// correcting itself.
+//
+// IT IS BOUNDED, and it is per document: a browser tab that opens many runs keeps
+// the most recent `AUTHORIZED_ANSWER_LIMIT` and forgets the rest in insertion
+// order, so nothing grows without limit and no run's answer is retained after the
+// tab is gone.
+const AUTHORIZED_ANSWERS = new Map<string, RunRecommendationHoldState>();
+const AUTHORIZED_ANSWER_LIMIT = 32;
+
+/**
+ * File this run's authoritative answer where a later mount of the same card can
+ * find it — and ONLY a DECIDED one.
+ *
+ * A DECIDED answer is terminal for the run and read-only on screen: the row it
+ * draws is a summary, so redrawing it costs nothing and hiding it is the exact
+ * disappearance this fix exists to stop. A LIVE PARK is neither. Its row is
+ * interactive, it is seeded from the offer the reader is being shown, and it can
+ * legitimately change under the reader between two looks — so a rebuilt card asks
+ * for it again rather than redrawing an offer that may no longer be the one on
+ * offer. `none` is not filed either: there is nothing to redraw.
+ */
+function rememberAuthorizedAnswer(runId: string, state: RunRecommendationHoldState): void {
+  if (!runId) return;
+  if (state.state !== "confirmed" && state.state !== "skipped") return;
+  // Re-insert so the eviction below is genuinely least-recently-answered.
+  AUTHORIZED_ANSWERS.delete(runId);
+  AUTHORIZED_ANSWERS.set(runId, state);
+  while (AUTHORIZED_ANSWERS.size > AUTHORIZED_ANSWER_LIMIT) {
+    const oldest = AUTHORIZED_ANSWERS.keys().next();
+    if (oldest.done) break;
+    AUTHORIZED_ANSWERS.delete(oldest.value);
+  }
+}
+
+/** The last authoritative answer for this run, or `null` if it has never given one. */
+function recallAuthorizedAnswer(runId: string): RunRecommendationHoldState | null {
+  if (!runId) return null;
+  return AUTHORIZED_ANSWERS.get(runId) ?? null;
+}
+
+/**
+ * Drop this run's remembered answer.
+ *
+ * Called where a card that INHERITED an answer could never confirm it with a
+ * read of its own — see the failure budget below. The answer was kept so a
+ * rebuilt card would not blank while a slow read was on the wire; a card whose
+ * every read REFUSES is not that case, and an answer no reader of this document
+ * can obtain any more must not go on being redrawn from memory.
+ */
+function forgetAuthorizedAnswer(runId: string): void {
+  AUTHORIZED_ANSWERS.delete(runId);
+}
+
+/**
+ * FORGET EVERY RUN'S LAST ANSWER.
+ *
+ * A browser drops this by closing the tab. A test file that mounts many cards for
+ * the SAME run id has no such boundary, so it is given one: a suite that means
+ * "this card has never been told anything about this run" says so here, and the
+ * seeding above cannot carry one arm's answer into the next.
+ */
+export function forgetAuthorizedRecommendationAnswers(): void {
+  AUTHORIZED_ANSWERS.clear();
+}
+
 /**
  * The BROKER READ of one run's hold state (cinatra#2790, epic #2784 S9f).
  *
@@ -1810,10 +1907,17 @@ function useRecommendationHoldState(params: {
   auth: LifecycleCardAuth | null;
 }): RunRecommendationHoldResolution {
   const { runId, wireRef, reloadToken, auth } = params;
+  // THE ANSWER THIS RUN ALREADY GAVE, if a card for it has been mounted before
+  // in this document. ONE lookup feeds BOTH the rendered state and the filed
+  // answer below, so a rebuilt card cannot draw one thing and believe another.
+  const seedAnswer = (): { runId: string; state: RunRecommendationHoldState } | null => {
+    const remembered = recallAuthorizedAnswer(runId);
+    return remembered === null ? null : { runId, state: remembered };
+  };
   const [resolved, setResolved] = useState<{
     runId: string;
     state: RunRecommendationHoldState;
-  } | null>(null);
+  } | null>(seedAnswer);
   // THE RUN WHOSE READ GAVE UP — every attempt in the failure budget below was
   // spent without an answer. Filed under the run id, so a later run on the same
   // card starts asking again rather than inheriting a verdict about another run.
@@ -1823,6 +1927,30 @@ function useRecommendationHoldState(params: {
   // `useLifecycleCardResolve`; the reason is identical (a superseded answer is
   // exactly the staleness the refetch exists to prevent).
   const latestRequestRef = useRef(0);
+  // THE NEWEST ANSWER THAT HAS ACTUALLY LANDED, as the request id that carried
+  // it. Staleness is a question about ANSWERS, not about requests: what must
+  // never happen is an older answer overwriting a newer one, and that is exactly
+  // what this compares. See the ordering rule inside `resolve`.
+  const latestFiledRequestRef = useRef(0);
+  // THE LAST ANSWER THIS CARD FILED, readable from inside a resolve that is
+  // already in flight. `resolved` is state, so the closure a look was issued
+  // with holds whatever was on screen when it started; the rule below is about
+  // what is on screen when it LANDS. Written in the one place `resolved` is.
+  const filedAnswerRef = useRef<{
+    runId: string;
+    state: RunRecommendationHoldState;
+  } | null>(seedAnswer());
+  // THE RUN WHOSE ANSWER THIS INSTANCE ONLY INHERITED, and has not yet confirmed
+  // with a read of its own. Cleared the moment this card files an answer itself.
+  // The failure budget below reads it: an inherited answer must fail CLOSED when
+  // this card's own reads never land, or a run whose reader has changed (a
+  // shared browser signs a new person in without reloading the document) would
+  // keep redrawing a summary from memory that nobody present may read.
+  const seededAnswerRunIdRef = useRef<string | null>(seedAnswer() === null ? null : runId);
+  // CONSECUTIVE EMPTY LOOKS AT THE RUN ON SCREEN, so the rule below can be
+  // BOUNDED. Reset by any answer that is filed, and keyed to the run, so it
+  // counts one run's unanswered stretch and nothing else.
+  const emptyLooksRef = useRef<{ runId: string; count: number } | null>(null);
 
   /**
    * One resolve attempt. `true` means "this trigger is done" — either an answer
@@ -1843,10 +1971,98 @@ function useRecommendationHoldState(params: {
       // A broker read that could not be completed is a FAILURE, not a state: it
       // arms the bounded retry below rather than settling the card on silence.
       if (state === null) return false;
-      // Superseded: a newer trigger owns the answer now. Not a failure — and it
-      // must NOT arm a retry, or a burst of wire changes would fan out into a
-      // pile of competing retry chains.
-      if (requestId !== latestRequestRef.current) return true;
+      // AN ANSWER THAT LANDS IS FILED, EVEN IF A NEWER LOOK WAS ISSUED WHILE IT
+      // WAS ON THE WIRE (cinatra#3007, fix leg 10).
+      //
+      // The rule this replaces compared the answer against the newest REQUEST:
+      // anything but the very latest look was dropped on the floor. That is only
+      // the same thing as "do not overwrite a newer answer" while looks are
+      // fast. Under load they are not — the gate's own dev-runtime log measures
+      // this read at twelve to thirty SECONDS, five times in one flow — and a
+      // trigger arriving inside that window (the decision's own re-read, the
+      // wire's RESUME, a focus) supersedes an answer that was seconds from
+      // landing. The next look is superseded the same way, and the one after
+      // that: every answer is discarded, nothing is ever filed, and the card
+      // draws NOTHING for as long as the triggers keep arriving. The held-turn
+      // gate photographed exactly that — a run whose card never became decided
+      // across five reads and a hundred and eight seconds of wall clock.
+      //
+      // So the comparison is against the newest answer that has actually LANDED,
+      // which is what the staleness rule was always about. An answer older than
+      // one already on screen is still refused, unchanged. An answer that is
+      // merely older than a look still in flight is FILED — it is the best
+      // authorized reading this card has, and the look still in flight will
+      // replace it when it lands.
+      //
+      // It must still NOT arm a retry when it is refused, or a burst of wire
+      // changes would fan out into a pile of competing retry chains.
+      if (requestId <= latestFiledRequestRef.current) return true;
+      // AN EMPTY ANSWER DOES NOT WITHDRAW A POSITIVE ONE THIS RUN ALREADY GAVE
+      // (cinatra#3007, fix leg 10). `none` is the authority's word for several
+      // different questions, and two of them are the collapse of a read that
+      // STUMBLED rather than a statement about the run: the run row and the park
+      // row are each read `.catch(() => null)` and each ends at this same word.
+      // Beside an answer this run has ALREADY given that was not itself `none`,
+      // it is a look that did not land — so it is treated as one: nothing is filed,
+      // the bounded retry is armed, and the card keeps the last authorized
+      // answer instead of taking a settled row off a transcript somebody is
+      // reading.
+      //
+      // It is the rule the review-slot reader already carries one seam over, for
+      // the same reason and in the same words, and the held-turn gate is what
+      // asked for it here: a card that settled, was read decided on its own
+      // root, and was gone from the next look onward — permanently, because a
+      // filed answer schedules nothing and the steady state of this card is zero
+      // timers.
+      //
+      // KEYED TO THE RUN, and only to it: a FIRST `none` is still an answer (a
+      // run that was never held draws nothing, which is this card's whole
+      // fail-closed posture), and a later run on the same card inherits no
+      // verdict about an earlier one.
+      //
+      // AND IT IS BOUNDED BY THE RUN'S OWN FAILURE BUDGET, never permanent. A
+      // run really can move from a positive answer to `none` — the reader can
+      // lose access to it, and a park can be released carrying neither a
+      // selection nor a skip — and a rule that suppressed every `none` would
+      // leave that card on the transcript for the life of the mount, still
+      // offering a decision on a run that no longer has one. So the empty answer
+      // is disbelieved only while the retry chain is still asking: the initial
+      // look and every retry in `RESOLVE_RETRY_DELAYS_MS` may be withheld, and
+      // the next one is BELIEVED and filed. A stumble under load is absorbed
+      // across the whole budget; a genuine withdrawal costs the sum of those
+      // delays and then lands. The rule also disarms itself once it fires,
+      // because the answer it files is the `none` it was suppressing.
+      //
+      // AND IT COVERS ONLY AN ANSWER THIS INSTANCE FILED ITSELF. A seeded answer
+      // is a redraw of what this document was last told, not a reading this card
+      // has taken: it exists so a rebuilt card does not blank while its own read
+      // is still on the wire. The moment that read LANDS, whatever it says is the
+      // card's own first reading and it wins — the reader may have changed under
+      // a document that was never reloaded, and a run really can be released
+      // carrying neither a selection nor a skip. An inherited answer is a seed,
+      // never a verdict to weigh a landed one against.
+      const filed = filedAnswerRef.current;
+      if (
+        state.state === "none" &&
+        filed !== null &&
+        filed.runId === requestRunId &&
+        filed.state.state !== "none" &&
+        seededAnswerRunIdRef.current !== requestRunId
+      ) {
+        const consecutive =
+          emptyLooksRef.current !== null && emptyLooksRef.current.runId === requestRunId
+            ? emptyLooksRef.current.count + 1
+            : 1;
+        emptyLooksRef.current = { runId: requestRunId, count: consecutive };
+        if (consecutive <= RESOLVE_RETRY_DELAYS_MS.length) return false;
+      }
+      emptyLooksRef.current = null;
+      latestFiledRequestRef.current = requestId;
+      // This card has now been told the answer itself; nothing here is inherited.
+      seededAnswerRunIdRef.current = null;
+      filedAnswerRef.current = { runId: requestRunId, state };
+      // The one write. An answer, and only an answer, outlives this instance.
+      rememberAuthorizedAnswer(requestRunId, state);
       setResolved({ runId: requestRunId, state });
       return true;
     } catch {
@@ -1904,6 +2120,23 @@ function useRecommendationHoldState(params: {
         return;
       }
       if (attempt >= RESOLVE_RETRY_DELAYS_MS.length) {
+        // AN INHERITED ANSWER FAILS CLOSED WHEN THIS CARD'S OWN READS DO.
+        //
+        // The budget is spent only after real REFUSALS — a slow read that is
+        // still on the wire is still awaited, which is the whole point of
+        // keeping the answer — so reaching here means this document could not
+        // obtain the answer it is drawing even once. It is then dropped, from
+        // the card and from the memory both, and the card returns to drawing
+        // nothing. An answer this instance obtained ITSELF is untouched: it
+        // still outranks a later failure, as it always has.
+        if (seededAnswerRunIdRef.current === requestRunIdForBudget) {
+          seededAnswerRunIdRef.current = null;
+          filedAnswerRef.current = null;
+          forgetAuthorizedAnswer(requestRunIdForBudget);
+          setResolved((prev) =>
+            prev !== null && prev.runId === requestRunIdForBudget ? null : prev,
+          );
+        }
         // The budget is spent and nothing more is scheduled. Say so, rather than
         // leaving the caller waiting for an answer that will not arrive: a host
         // that withholds a card until this read lands must be able to stop

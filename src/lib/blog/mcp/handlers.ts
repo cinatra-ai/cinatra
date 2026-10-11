@@ -111,16 +111,6 @@ export function createBlogContentPrimitiveHandlers() {
       return { ok: true };
     },
 
-    "blog_image_generate_start": async (request: PrimitiveInvocationRequest<unknown>) => {
-      const input = schemas.startImageRegenerationSchema.parse(request.input);
-      return useCases.startImageRegeneration(input);
-    },
-
-    "blog_image_generate_cancel": async (request: PrimitiveInvocationRequest<unknown>) => {
-      const { projectId } = schemas.projectIdSchema.parse(request.input);
-      return useCases.stopImageRegeneration(projectId);
-    },
-
     "blog_post_publish_wordpress_start": async (request: PrimitiveInvocationRequest<unknown>) => {
       const input = schemas.startWordPressDraftSchema.parse(request.input);
       return useCases.startWordPressDraftCreation(input);

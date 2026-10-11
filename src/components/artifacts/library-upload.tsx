@@ -605,10 +605,17 @@ function TypePickerPanel() {
           // an instance with many of them it is the picker's tallest region. It
           // scrolls inside its own box so the action row below it stays inside
           // the window and the admin can always confirm the meaning.
-          <ul className="max-h-[45vh] overflow-y-auto rounded-lg border border-line">
+          <ul
+            className="max-h-[45vh] overflow-y-auto rounded-lg border border-line"
+            role="radiogroup"
+            aria-label="What is this?"
+          >
             {types.map((t, i) => (
               <li
                 key={t.objectTypeId ?? t.extension}
+                role="radio"
+                aria-checked={selected === t.extension}
+                aria-label={`${t.displayName} ${t.objectTypeId ?? t.extension} ${t.extensionLabel}`}
                 className={
                   "flex cursor-pointer items-center gap-2.5 px-3 py-2.5 " +
                   (i === types.length - 1 ? "" : "border-b border-line ") +

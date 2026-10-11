@@ -166,8 +166,13 @@ export const STREAM_SCENARIOS = Object.freeze({
 // `aria-hidden="true"` and its marker (`data-aria-hidden`); an element hidden
 // already keeps its own value. An entry pressed in such a list
 // (`data-fixture-chooses`) is taken: the list closes, the combobox that controls
-// it shows the entry, and every element the list hid is shown again.
-// page-double.mjs plays the same.
+// it shows the entry, and every element the list hid is shown again. A list
+// that carries `data-fixture-closes-after` closes that many milliseconds after
+// the choice, or never (`never`), as a list that is still closing does; the
+// combobox shows the entry and the entry reads as selected at once. The Escape
+// key closes every shown list a combobox opened the same way and takes no entry,
+// the combobox reading collapsed again, unless the list carries
+// `data-fixture-escape="ignored"`. page-double.mjs plays the same.
 const TIMELINE_RUNNER = `<script>
 (function () {
   var ops = JSON.parse(document.getElementById("fixture-timeline").textContent);
@@ -201,15 +206,38 @@ const TIMELINE_RUNNER = `<script>
       event.preventDefault();
       var list = entry.closest("[role='listbox']");
       if (!list) return;
+      function close() {
+        list.setAttribute("hidden", "");
+        document.querySelectorAll("[data-aria-hidden]").forEach(function (node) {
+          node.removeAttribute("aria-hidden");
+          node.removeAttribute("data-aria-hidden");
+        });
+      }
+      var picker = document.querySelector("[aria-controls='" + list.id + "']");
+      if (picker) {
+        picker.textContent = entry.textContent;
+        picker.removeAttribute("data-placeholder");
+        picker.setAttribute("aria-expanded", "false");
+      }
+      var closesAfter = list.getAttribute("data-fixture-closes-after");
+      if (closesAfter === null) close();
+      else {
+        entry.setAttribute("aria-selected", "true");
+        if (closesAfter !== "never") setTimeout(close, Number(closesAfter));
+      }
+    });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll("[role='listbox']").forEach(function (list) {
+      if (!list.id || list.hasAttribute("hidden") || list.getAttribute("data-fixture-escape") === "ignored") return;
+      var picker = document.querySelector("[data-fixture-opens='" + list.id + "'][aria-controls='" + list.id + "']");
+      if (!picker) return;
       list.setAttribute("hidden", "");
       document.querySelectorAll("[data-aria-hidden]").forEach(function (node) {
         node.removeAttribute("aria-hidden");
         node.removeAttribute("data-aria-hidden");
       });
-      var picker = document.querySelector("[aria-controls='" + list.id + "']");
-      if (!picker) return;
-      picker.textContent = entry.textContent;
-      picker.removeAttribute("data-placeholder");
       picker.setAttribute("aria-expanded", "false");
     });
   });
@@ -231,6 +259,21 @@ const TIMELINE_RUNNER = `<script>
       var href = link.getAttribute("href");
       fetch(href).then(function () { history.pushState(null, "", href); });
     });
+  });
+  // pressByTestId: rows drawn without a role, as the upload dialog's type picker
+  // draws them (see PRESS_ROWS_PAGE); page-double.mjs plays the same.
+  document.querySelectorAll("[data-fixture-counts]").forEach(function (element) {
+    element.addEventListener("click", function () {
+      element.setAttribute("data-fixture-clicks", String(Number(element.getAttribute("data-fixture-clicks") || 0) + 1));
+    });
+  });
+  document.querySelectorAll("[data-fixture-selects]").forEach(function (row) {
+    row.addEventListener("click", function () {
+      document.querySelectorAll("[data-fixture-selects]").forEach(function (other) { other.setAttribute("data-selected", String(other === row)); });
+    });
+  });
+  document.querySelectorAll("[data-fixture-goes]").forEach(function (row) {
+    row.addEventListener("click", function () { location.href = row.getAttribute("data-fixture-goes"); });
   });
   document.querySelectorAll("[data-fixture-toggles]").forEach(function (box) {
     box.addEventListener("click", function () {
@@ -258,7 +301,91 @@ const TIMELINE_RUNNER = `<script>
 })();
 </script>`;
 
-function page(title, body, timeline = []) {
+// A page that hydrates late, as a page of the product's development server
+// does: started with `hydrate: { afterMs }`, the app gives every HTML page it
+// serves one declaration (`fixture-hydration`) and a script that plays it. The
+// page carries the App Router's flight data (`self.__next_f`) from the start,
+// and hydrates ONCE: `afterMs` after it was built (null: never), or at the
+// first press, fill, typed key or focus on it, whichever comes first, as React
+// hydrates a pending page at once on such an event. Then every element of its
+// body carries the key React sets on an element it has hydrated, and the page
+// reports that moment by one request to HYDRATION_REPORT_PATH: `by` (`time` or
+// `event`), `marked` (how many elements carried the steps' mark then), `path`
+// and `at` (the moment, by the clock, since the request itself may reach the
+// app a little later). A request, so the report outlives a navigation that follows it; no
+// navigation, so no press reads it as its start signal. page-double.mjs plays
+// the same declaration.
+
+/** Where a page reports its hydration. */
+export const HYDRATION_REPORT_PATH = "/fixture/hydrated";
+/** The key a hydrated element carries, as React's own `__reactFiber$…` key. */
+export const HYDRATION_KEY = "__reactFiber$fixture";
+/** The mark the steps write on the one control they act on (CONTROL_MARK). */
+export const STEP_MARK = "data-step-control";
+/** The events on which a page that has not hydrated yet hydrates at once. */
+export const HYDRATING_EVENTS = Object.freeze(["pointerdown", "mousedown", "click", "keydown", "focusin", "input"]);
+
+const HYDRATION_RUNNER = `<script>
+(function () {
+  var declared = JSON.parse(document.getElementById("fixture-hydration").textContent);
+  var events = ${JSON.stringify(HYDRATING_EVENTS)};
+  self.__next_f = self.__next_f || [];
+  var pending = true;
+  function hydrate(by) {
+    if (!pending) return;
+    pending = false;
+    events.forEach(function (name) { document.removeEventListener(name, onEvent, true); });
+    var marked = document.querySelectorAll("[${STEP_MARK}]").length;
+    Array.prototype.forEach.call(document.body ? document.body.querySelectorAll("*") : [], function (element) {
+      element[${JSON.stringify(HYDRATION_KEY)}] = true;
+    });
+    var report = new URLSearchParams({ by: by, marked: String(marked), path: location.pathname, at: String(Date.now()) });
+    fetch(${JSON.stringify(HYDRATION_REPORT_PATH)} + "?" + report.toString());
+  }
+  function onEvent() { hydrate("event"); }
+  events.forEach(function (name) { document.addEventListener(name, onEvent, true); });
+  if (declared.afterMs !== null) setTimeout(function () { hydrate("time"); }, declared.afterMs);
+})();
+</script>`;
+
+/**
+ * `html` with the declaration of a late hydration and the script that plays it,
+ * in its head: after its `<head>`, else after its doctype, else first.
+ * @param {string} html
+ * @param {{ afterMs: number | null }} hydrate
+ */
+export function withHydration(html, { afterMs }) {
+  const declaration = `<script type="application/json" id="fixture-hydration">${JSON.stringify({ afterMs })}</script>${HYDRATION_RUNNER}`;
+  for (const at of [/<head>/i, /^<!doctype html>/i]) {
+    const found = at.exec(html);
+    if (found) return `${html.slice(0, found.index + found[0].length)}${declaration}${html.slice(found.index + found[0].length)}`;
+  }
+  return `${declaration}${html}`;
+}
+
+/** Every HTML page `response` serves carries the declaration: the first text it writes after an HTML head. */
+function declareHydration(response, hydrate) {
+  let html = false;
+  let declared = false;
+  const writeHead = response.writeHead.bind(response);
+  response.writeHead = (status, headers, ...rest) => {
+    html = /text\/html/.test(String(headers?.["content-type"] ?? ""));
+    return writeHead(status, headers, ...rest);
+  };
+  for (const name of ["write", "end"]) {
+    const own = response[name].bind(response);
+    response[name] = (chunk, ...rest) => {
+      if (html && !declared && typeof chunk === "string") {
+        declared = true;
+        return own(withHydration(chunk, hydrate), ...rest);
+      }
+      return own(chunk, ...rest);
+    };
+  }
+}
+
+/** A fixture page: its body, and the timeline its inline script plays (fixture-app-contexts.mjs draws its pages with it too). */
+export function page(title, body, timeline = []) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${title}</title></head>
 <body>
@@ -524,6 +651,38 @@ export const PICK_HIDING_PAGE = [
   '<div role="listbox" id="hiding-plans" aria-label="Plans" hidden data-fixture-hides-others><a href="#free" role="option" data-fixture-chooses>Free</a> <a href="#team" role="option" data-fixture-chooses>Team</a></div>',
   '<div><a href="#skills" role="combobox" aria-controls="hiding-skills" aria-expanded="false" data-placeholder="" data-fixture-opens="hiding-skills"><span>Pick a skill</span></a></div>',
   '<div role="listbox" id="hiding-skills" aria-label="Skills" hidden data-fixture-hides-others><a href="#web-search" role="option" data-fixture-chooses>Web search</a> <a href="#summary" role="option" data-fixture-chooses>Summary</a></div>',
+].join("");
+
+/**
+ * Three comboboxes whose list hides the rest of the page while it is open and
+ * still hides it for a while after an entry is chosen (see TIMELINE_RUNNER): the
+ * list of "Hour" and of "Minute" closes 30 ms after the choice, the list of
+ * "Zone" never closes. Each list has no accessible name, as the shared select's
+ * list has none, so a second pick on the page finds its combobox only once the
+ * first list has closed.
+ */
+export const PICK_CLOSING_PAGE = [
+  '<a href="#hour" role="combobox" aria-label="Hour" aria-controls="closing-hour" aria-expanded="false" data-fixture-opens="closing-hour"><span>Choose</span></a>',
+  '<div role="listbox" id="closing-hour" hidden data-fixture-hides-others data-fixture-closes-after="30"><a href="#h08" role="option" data-fixture-chooses>08</a> <a href="#h09" role="option" data-fixture-chooses>09</a></div>',
+  '<a href="#minute" role="combobox" aria-label="Minute" aria-controls="closing-minute" aria-expanded="false" data-fixture-opens="closing-minute"><span>Choose</span></a>',
+  '<div role="listbox" id="closing-minute" hidden data-fixture-hides-others data-fixture-closes-after="30"><a href="#m00" role="option" data-fixture-chooses>00</a> <a href="#m30" role="option" data-fixture-chooses>30</a></div>',
+  '<a href="#zone" role="combobox" aria-label="Zone" aria-controls="closing-zone" aria-expanded="false" data-fixture-opens="closing-zone"><span>Choose</span></a>',
+  '<div role="listbox" id="closing-zone" hidden data-fixture-hides-others data-fixture-closes-after="never"><a href="#utc" role="option" data-fixture-chooses>UTC</a> <a href="#cet" role="option" data-fixture-chooses>CET</a></div>',
+].join("");
+
+/**
+ * Two comboboxes whose list hides the rest of the page while it is open, for
+ * the reading of a picker's entries (see TIMELINE_RUNNER): "State" shows the
+ * entry it holds, "Active", and lists All, Active, Locked and Archived, as the
+ * installed-extensions page offers its views; the list of "Stuck" does not close
+ * on the Escape key (`data-fixture-escape="ignored"`). Neither list has an
+ * accessible name, as the shared select's list has none.
+ */
+export const PICK_OPTIONS_PAGE = [
+  '<a href="#state" role="combobox" aria-label="State" aria-controls="options-state" aria-expanded="false" data-fixture-opens="options-state"><span>Active</span></a>',
+  '<div role="listbox" id="options-state" hidden data-fixture-hides-others><a href="#all" role="option" data-fixture-chooses>All</a> <a href="#active" role="option" data-fixture-chooses>Active</a> <a href="#locked" role="option" data-fixture-chooses>Locked</a> <a href="#archived" role="option" data-fixture-chooses>Archived</a></div>',
+  '<a href="#stuck" role="combobox" aria-label="Stuck" aria-controls="options-stuck" aria-expanded="false" data-fixture-opens="options-stuck"><span>Choose</span></a>',
+  '<div role="listbox" id="options-stuck" hidden data-fixture-hides-others data-fixture-escape="ignored"><a href="#one" role="option" data-fixture-chooses>One</a> <a href="#two" role="option" data-fixture-chooses>Two</a></div>',
 ].join("");
 
 /**
@@ -838,17 +997,62 @@ export const JOINED_PAGE = [
   '<p role="status" id="joined-idea" hidden>Idea: 3 Select blog idea</p>',
 ].join("");
 
+// pressByTestId and readTitle: their pages.
+
+/**
+ * Rows drawn without a role, as the upload dialog's type picker draws them: list
+ * items with a click handler, a test id and a text. Each counts its presses
+ * (`data-fixture-clicks`). In the dialog: a row whose handler selects it, one
+ * whose text is spread over lines, a hidden row, a row with a hidden part, a row
+ * whose handler leaves the page, and a button of the same test id, which has a
+ * role and a name. Below it: two lists that each hold a row of one text, and two
+ * parts of one name.
+ */
+export const PRESS_ROWS_PAGE = [
+  '<div role="dialog" aria-label="Choose a type"><ul>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>Note <span>pack:note</span></span> <span>Pack</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-selects data-selected="false"><span>\n    Plain\n    text  </span>\n  <span>core:text</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts hidden><span>Hidden</span> <span>pack:hidden</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts><span>Half</span><span style="display:none"> kept apart</span></li>',
+  '<li data-testid="artifacts-picker-type" data-fixture-counts data-fixture-goes="/nav/target"><span>Open</span> <span>the target</span></li>',
+  "</ul>",
+  '<button type="button" data-testid="artifacts-picker-type" data-fixture-counts>Save type</button>',
+  "</div>",
+  '<section aria-label="First list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Second list"><ul><li data-testid="artifacts-picker-type" data-fixture-counts>Twin</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+  '<section aria-label="Same list"><ul><li data-testid="other-type" data-fixture-counts>Alone</li></ul></section>',
+].join("");
+
+/**
+ * The title pages: a title that holds still, one the page sets once a moment
+ * after it loads, one that changes every 50 ms for three seconds, so it never
+ * holds still, and an empty one.
+ */
+export const TITLE_SCENARIOS = Object.freeze({
+  steady: { title: "Steady title", timeline: [] },
+  late: { title: "Loading", timeline: [{ at: 150, target: "title", html: "Loaded title" }] },
+  restless: { title: "Title 0", timeline: Array.from({ length: 60 }, (_, i) => ({ at: 50 * (i + 1), target: "title", html: `Title ${i + 1}` })) },
+  empty: { title: "", timeline: [] },
+});
+
 /**
  * Start the app. `answer` is the status the sign-in routes answer. Every request
  * is recorded with the field NAMES its query string or form body carried. With
- * `secure`, every page is also served over HTTP/2 at `secureOrigin`.
+ * `secure`, every page is also served over HTTP/2 at `secureOrigin`. With
+ * `hydrate` (`{ afterMs }`), every HTML page hydrates late (see withHydration),
+ * and each report of a page's hydration is recorded with its `report`. With
+ * `site`, a site's page that embeds the app is served on two further origins,
+ * `siteOrigin` and `crossSiteOrigin`, and the app serves its embed page and
+ * windows (see fixture-app-site.mjs).
  */
-export async function startFixtureApp({ answer = 200, secure = false } = {}) {
+export async function startFixtureApp({ answer = 200, secure = false, hydrate, site = false } = {}) {
   const requests = [];
   const loads = new Map();
   const streams = new Set();
   let origin = null;
   const handle = (request, response) => {
+    if (hydrate) declareHydration(response, hydrate);
     let body = "";
     request.on("data", (chunk) => {
       body += chunk;
@@ -863,11 +1067,26 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         bodyFields: formBody ? [...new URLSearchParams(body).keys()] : [],
         body,
         at: Date.now(),
+        ...(url.pathname === HYDRATION_REPORT_PATH
+          ? {
+              report: {
+                by: url.searchParams.get("by"),
+                marked: Number(url.searchParams.get("marked")),
+                path: url.searchParams.get("path"),
+                at: Number(url.searchParams.get("at")),
+              },
+            }
+          : {}),
       });
       const html = (status, text) => {
         response.writeHead(status, { "content-type": "text/html; charset=utf-8" });
         response.end(text);
       };
+      if (url.pathname === HYDRATION_REPORT_PATH) {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
       if (request.method === "POST" && (url.pathname === EMAIL_ROUTE || url.pathname === USERNAME_ROUTE)) {
         const headers = { "content-type": "application/json" };
         if (answer === 200) headers["set-cookie"] = "fixture_session=1; Path=/; HttpOnly";
@@ -952,6 +1171,8 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
         "/pick/start": PICK_PAGE,
         "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/pick/hiding": PICK_HIDING_PAGE,
+        "/pick/closing": PICK_CLOSING_PAGE,
+        "/pick/options": PICK_OPTIONS_PAGE,
         "/pick/search": PICK_SEARCH_PAGE,
         "/conversation/empty": CONVERSATION_PAGES.empty,
         "/conversation/thread": CONVERSATION_PAGES.thread,
@@ -975,12 +1196,39 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
       if (tapePage && Object.hasOwn(TAPE_PAGES, tapePage[1])) return html(200, page(url.pathname, TAPE_PAGES[tapePage[1]]));
       // Names the steps match without their white space: their page.
       if (url.pathname === "/joined/start") return html(200, page(url.pathname, JOINED_PAGE));
+      // pressByTestId and readTitle: their pages.
+      if (url.pathname === "/press/rows") return html(200, page(url.pathname, PRESS_ROWS_PAGE));
+      const titlePage = /^\/title\/([a-z]+)$/.exec(url.pathname);
+      if (titlePage && Object.hasOwn(TITLE_SCENARIOS, titlePage[1])) {
+        const { title, timeline } = TITLE_SCENARIOS[titlePage[1]];
+        return html(200, page(title, "<p>A page with a title.</p>", timeline));
+      }
       // typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress:
       // their pages live in fixture-app-windows.mjs, so this file changes in this
       // one place.
       if (/^\/(window|composer|address|reload)\//.test(url.pathname)) {
         import("./fixture-app-windows.mjs").then(
           ({ serveWindowPage }) => serveWindowPage({ method: request.method, url, response, loads }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
+      // openPageInOwnContext: its pages, served only to a session, and the
+      // sign-in page they send a request without one to, live in
+      // fixture-app-contexts.mjs, so this file changes in this one place.
+      if (url.pathname.startsWith("/own/") || url.pathname === "/sign-in") {
+        import("./fixture-app-contexts.mjs").then(
+          ({ serveOwnContextPage }) => serveOwnContextPage({ request, url, response }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
+      // frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow:
+      // the embed page and its windows, served only with `site`, live in
+      // fixture-app-site.mjs, so this file changes in this one place.
+      if (site && /^\/(embed|widget)\//.test(url.pathname)) {
+        import("./fixture-app-site.mjs").then(
+          ({ serveSiteAppPage }) => serveSiteAppPage({ request, url, response }),
           () => html(500, "<!doctype html><title>Unavailable</title>"),
         );
         return;
@@ -1003,7 +1251,10 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
     await new Promise((done) => secureServer.listen(0, LOOPBACK, done));
     secureOrigin = `https://${LOOPBACK}:${secureServer.address().port}`;
   }
+  const sites = site ? await (await import("./fixture-app-site.mjs")).startSiteServers(origin) : null;
   return {
+    // The site's page on two further origins, when the app was started with `site`.
+    ...(sites ? { siteOrigin: sites.siteOrigin, crossSiteOrigin: sites.crossSiteOrigin } : {}),
     origin,
     /** The same app over HTTP/2, when it was started with `secure`. */
     secureOrigin,
@@ -1027,6 +1278,7 @@ export async function startFixtureApp({ answer = 200, secure = false } = {}) {
             for (const session of sessions) session.destroy();
             secureServer.close(done);
           }),
+        sites && sites.stop(),
       ]),
   };
 }

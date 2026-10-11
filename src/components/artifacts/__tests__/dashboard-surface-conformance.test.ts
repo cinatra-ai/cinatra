@@ -128,11 +128,11 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     // cinatra#3092 acceptance 2: "the page's pre-dispatch interception of the
     // dashboard row is gone". The page carries no branch on the type, no
     // pointer resolver and no pointer element, so a dashboard row reaches
-    // `pickArtifactRenderer(...)` (the CALL, not the import) like every other.
+    // `resolveArtifactDisplayMount(...)` (the CALL, not the import) like every other.
     expect(DETAIL).not.toMatch(/isDashboardArtifactType/);
     expect(DETAIL).not.toMatch(/resolveDashboardArtifactPointer/);
     expect(DETAIL).not.toMatch(/<DashboardPointerDetail/);
-    expect(DETAIL.indexOf("pickArtifactRenderer(")).toBeGreaterThan(-1);
+    expect(DETAIL.indexOf("resolveArtifactDisplayMount(")).toBeGreaterThan(-1);
   });
 });
 

@@ -34,12 +34,33 @@ test("notification test changes retain their browser suite", () => {
   assert.equal(plan.skip_notifications, false);
   assert.equal(plan.skip_runtime, true);
 });
+test("a step change runs the step tests in a real browser; any other pull request skips them and names why", () => {
+  for (const p of ["tests/e2e/steps/navigate-to.mjs", "tests/e2e/steps/__tests__/fixture-app.mjs", ".github/workflows/build-image.yml"]) {
+    const plan = pick(["docs/guide.md", p]);
+    assert.equal(plan.skip_steps_browser, false, p);
+    assert.equal(plan.steps_browser_reason, `${p} changed`, p);
+  }
+  // Markdown is prose, a sibling folder is not the folder, and a change that
+  // selects every other gate still leaves this job to its own inputs.
+  for (const p of ["tests/e2e/steps/README.md", "tests/e2e/steps-old/navigate-to.mjs", "tests/e2e/notifications/inbox.spec.ts", "src/app/page.tsx", "pnpm-lock.yaml"]) {
+    const plan = pick([p]);
+    assert.equal(plan.skip_steps_browser, true, p);
+    assert.match(plan.steps_browser_reason, /^no change under tests\/e2e\/steps\//, p);
+  }
+  const draft = pick(["tests/e2e/steps/navigate-to.mjs"], true);
+  assert.equal(draft.skip_steps_browser, true);
+  assert.match(draft.steps_browser_reason, /^a draft pull request/);
+});
 test("missing inventories and non-PR events retain full verification", () => {
-  for (const files of [null, undefined, {}, [23], [""]]) assert.equal(pick(files).skip_runtime, false);
+  for (const files of [null, undefined, {}, [23], [""]]) {
+    assert.equal(pick(files).skip_runtime, false);
+    assert.equal(pick(files).skip_steps_browser, false);
+  }
   for (const event of ["push", "merge_group", "workflow_dispatch"]) {
     const plan = selectCiImpact({ event, draft: true, files: [] });
     assert.equal(plan.skip_runtime, false);
     assert.equal(plan.skip_unit, false);
+    assert.equal(plan.skip_steps_browser, false);
   }
 });
 test("workflow gates consume impact and design receives every widening input", () => {
@@ -54,8 +75,8 @@ test("workflow gates consume impact and design receives every widening input", (
 
 test("the required aggregate refuses failures, cancellations, accidental skips and missing decisions", async () => {
   const { prerequisiteFailures } = await import("../ci-result-gate.mjs");
-  const jobs = ["image", "test", "skills-unit", "a2a-unit", "execution-plane-unit", "package-unit-suites", "hosted-mcp-wire-gate", "chat-hitl-held-turn-e2e"];
-  const needs = (decision, result) => ({ detect: { result: "success", outputs: { skip: decision, skip_feedback: decision, skip_runtime: decision } }, ...Object.fromEntries(jobs.map((j) => [j, { result }])) });
+  const jobs = ["image", "test", "skills-unit", "a2a-unit", "execution-plane-unit", "package-unit-suites", "hosted-mcp-wire-gate", "chat-hitl-held-turn-e2e", "steps-browser"];
+  const needs = (decision, result) => ({ detect: { result: "success", outputs: { skip: decision, skip_feedback: decision, skip_runtime: decision, skip_steps_browser: decision } }, ...Object.fromEntries(jobs.map((j) => [j, { result }])) });
   assert.deepEqual(prerequisiteFailures(needs("false", "success")), []);
   assert.deepEqual(prerequisiteFailures(needs("true", "skipped")), []);
   for (const decision of ["true", "false"]) for (const result of ["failure", "cancelled", undefined]) assert.ok(prerequisiteFailures(needs(decision, result)).length);
@@ -169,7 +190,7 @@ test("cancellation blocks the actual late archive fan-out after its dependencies
 test("both short fan-ins still report selected failed or cancelled dependencies as red", async () => {
   const { prerequisiteFailures } = await import("../ci-result-gate.mjs");
   const required = ["image", "test", "skills-unit", "a2a-unit", "execution-plane-unit",
-    "package-unit-suites", "hosted-mcp-wire-gate", "chat-hitl-held-turn-e2e"];
+    "package-unit-suites", "hosted-mcp-wire-gate", "chat-hitl-held-turn-e2e", "steps-browser"];
   const build = buildJob("build");
   assert.match(build, /run: node scripts\/ci\/ci-result-gate\.mjs/);
   const loops = buildJob("perpetual-loops-invariants");
@@ -178,6 +199,7 @@ test("both short fan-ins still report selected failed or cancelled dependencies 
   for (const result of ["success", "failure", "cancelled", "skipped"]) {
     const needs = { ...detected("success"), ...Object.fromEntries(required.map((id) => [id, { result }])) };
     needs.detect.outputs.skip_feedback = "false";
+    needs.detect.outputs.skip_steps_browser = "false";
     for (const cancelled of [false, true]) assert.equal(evaluate(condition(build), needs, cancelled), true);
     assert.equal(prerequisiteFailures(needs).length === 0, result === "success");
     const shards = { ...detected("success"), "perpetual-core": { result },
@@ -186,6 +208,31 @@ test("both short fan-ins still report selected failed or cancelled dependencies 
     const rendered = run.replace(/\$\{\{ (.+?) \}\}/g, (_, expression) => String(evaluate(expression, shards)));
     const executed = spawnSync("bash", ["-c", rendered], { encoding: "utf8", timeout: 5000 });
     assert.equal(executed.status, result === "success" ? 0 : 1, executed.stderr);
+  }
+});
+
+test("the build fan-in requires the step tests in a real browser whenever detect selects them", async () => {
+  const { prerequisiteFailures } = await import("../ci-result-gate.mjs");
+  const job = buildJob("steps-browser");
+  assert.equal(condition(job), "needs.detect.outputs.skip_steps_browser != 'true'");
+  assert.match(job, /^    runs-on: \$\{\{ fromJSON\(vars\.CI_RUNNER_E2E \|\| '"ubuntu-latest"'\) \}\}$/m);
+  assert.match(job, /^          E2E_STEPS_UNIT_BROWSER: "1"$/m);
+  // The page double runs first, and a browser leg that was skipped reds the job.
+  assert.ok(job.indexOf("name: Step tests on the page double") > 0, "no page-double step");
+  assert.ok(job.indexOf("name: Step tests on the page double") < job.indexOf("name: Install Playwright Chromium"));
+  assert.match(job, /numPassedTests[\s\S]*c\.fullName\.includes\("\[browser\]"\)/);
+  assert.match(buildJob("detect"), /^      skip_steps_browser: \$\{\{ steps\.impact\.outputs\.skip_steps_browser \}\}$/m);
+  const fanIn = buildJob("build").match(/^    needs: \[([^\]]+)\]$/m)[1].split(",").map((id) => id.trim()).filter((id) => id !== "detect");
+  assert.ok(fanIn.includes("steps-browser"), "the build fan-in does not need the job");
+  const needs = (decision, result) => ({
+    detect: { result: "success", outputs: { skip: "false", skip_feedback: "false", skip_runtime: "false", skip_steps_browser: decision } },
+    ...Object.fromEntries(fanIn.map((id) => [id, { result: "success" }])),
+    "steps-browser": { result },
+  });
+  assert.deepEqual(prerequisiteFailures(needs("true", "skipped")), []);
+  assert.deepEqual(prerequisiteFailures(needs("false", "success")), []);
+  for (const result of ["skipped", "failure", "cancelled", undefined]) {
+    assert.ok(prerequisiteFailures(needs("false", result)).some((f) => f.startsWith("steps-browser:")), String(result));
   }
 });
 

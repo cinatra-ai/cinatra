@@ -171,16 +171,28 @@ export async function consumeLentActionGrant(
     readonly orgId: string;
     /** The card the CALL names — the row must agree. */
     readonly cardRefFingerprint: string;
-    /** The control the CALL asks for — the row must agree. */
+    /**
+     * The grant's ANCHOR control — `claims.control`, which is what the row was
+     * written with (cinatra#2853).
+     *
+     * IT IS NOT NECESSARILY THE CONTROL BEING PRESSED. A grant may name a MENU
+     * of the card's own buttons, narrowed by the person's own words; which of
+     * them runs is authorized by the signed menu and by what the live card
+     * lends, not here. The row's job is unchanged and is the one single-use
+     * rests on: one atomic statement, one winner, bound to the person and to
+     * the card.
+     */
     readonly control: string;
   },
   deps: LentActionGrantStoreDeps = {},
 ): Promise<LentActionGrantSpend> {
   const query = deps.query ?? defaultQuery;
   try {
-    // The statement also names the CARD and the CONTROL, so the row itself
-    // refuses a grant spent for anything other than what it was minted for —
-    // defence in depth beneath the signature check, not a substitute for it.
+    // The statement also names the CARD and the anchor CONTROL, so the row
+    // itself refuses a grant spent against another card or under another
+    // anchor — defence in depth beneath the signature check, not a substitute
+    // for it. It no longer speaks about WHICH BUTTON of a menu ran
+    // (cinatra#2853): the database sees the anchor whichever one it was.
     const table = grantTable();
     const rows = await query<{ jti: string; message_text: string | null }>(
       `WITH spent AS (
@@ -203,6 +215,52 @@ export async function consumeLentActionGrant(
       : { outcome: "refused" };
   } catch {
     return { outcome: "refused" };
+  }
+}
+
+/**
+ * Is this grant still UNSPENT — atomically, without spending it?
+ *
+ * Its one caller is the FILL road (cinatra#2934), which must not press anything
+ * and therefore must not consume anything, but must also not keep working after
+ * the grant it rides has been used: a model that submits first and fills
+ * afterwards would otherwise record values that were never sent, on a screen the
+ * run has already moved past (convergence round 1, finding 6).
+ *
+ * IT IS AN UPDATE, NOT A SELECT, AND THAT IS THE POINT (convergence round 2). A
+ * `SELECT` answers about a moment already past: a spend committing between the
+ * read and the caller's next statement would go unseen. This statement is a
+ * NO-OP write under the same predicate the spend uses, so it takes the row's own
+ * lock: a concurrent spend either commits first — and then this re-evaluates its
+ * predicate and matches nothing — or waits for this to finish. Nothing about the
+ * row changes; `message_text = message_text` is the whole assignment.
+ *
+ * Fail-CLOSED: a statement that throws answers `false`.
+ */
+export async function lentActionGrantIsSpendable(
+  input: {
+    readonly jti: string;
+    readonly userId: string;
+    readonly orgId: string;
+    readonly cardRefFingerprint: string;
+  },
+  deps: LentActionGrantStoreDeps = {},
+): Promise<boolean> {
+  const query = deps.query ?? defaultQuery;
+  try {
+    const rows = await query<{ jti: string }>(
+      `UPDATE ${grantTable()}
+          SET message_text = message_text
+        WHERE jti = $1 AND user_id = $2 AND org_id = $3
+          AND card_ref_fp = $4
+          AND spent_at IS NULL
+          AND expires_at > now()
+        RETURNING jti`,
+      [input.jti, input.userId, input.orgId, input.cardRefFingerprint],
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
   }
 }
 

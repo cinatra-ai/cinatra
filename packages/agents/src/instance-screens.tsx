@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildRunStepPath } from "@/lib/agent-url";
+import { RUN_STEP_QUERY_KEY, buildAgentInstancePath, buildAgentWorkspacePath, buildRunStepPath } from "@/lib/agent-url";
 import {
   canonicalRunPath,
   homeRedirectFor,
@@ -13,6 +13,7 @@ import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surf
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
+import { RunStartRefusedPanel } from "./run-start-refused-panel";
 import {
   getAuthSession,
   isPlatformAdmin,
@@ -26,17 +27,21 @@ import {
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
-import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
+import { RunStartedRuns } from "./run-started-runs";
+import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor, buildActorContextFromPrimitive } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
 import {
   listReviewGatesForRun,
   readReviewGate,
+  isParkedOnProducedReview,
   readRunReviewSlot,
   readVerificationRecordsForGates,
+  type ReviewGateRow,
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
-import { buildRunStepRail, type RailMessage } from "./run-step-rail";
+import { buildRunStepRail, electCurrentReviewGate, type RailGate, type RailMessage } from "./run-step-rail";
+import { reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 // WAS THE RUN'S SKILLS QUESTION ANSWERED (cinatra#3047)? Asked of the module
@@ -76,6 +81,10 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { AuthzError } from "@/lib/authz";
+// The standard not-authorized panel every run surface refuses with
+// (cinatra#2934, the fifth graded proof set) — see `runScreenAccessAnswer`
+// below for which refusal reaches it and which one does not.
+import { RunNotAuthorizedPanel } from "./run-not-authorized-panel";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
 // Type re-exports (AvailableScopes, CoOwnerView) originate from their
@@ -86,7 +95,7 @@ import type { OwnerView as CoOwnerView } from "@/components/permissions-form";
 import type { AvailableScopes } from "@/components/access-combobox";
 import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
-import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
+import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, readAnsweredContextHistory, type AnsweredContextRailReading, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
 // cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
 // run's own access, resolved on the server so no window is drawn for a person
@@ -149,7 +158,7 @@ import {
   type RunMadeArtifactRow,
 } from "./run-made-reading";
 import { RunMadeStepSurface } from "./run-made-step-surface";
-import { buildRunInputRailSteps } from "./run-input-rail-steps";
+import { buildRunInputRailSteps, buildAnsweredContextRailSteps } from "./run-input-rail-steps";
 // The gate's own screen names its rail row, by the same rule the gate's card
 // titles itself (cinatra#3221) -- one derivation, so the row and the card
 // cannot say two different things about one gate.
@@ -1420,6 +1429,45 @@ async function launchOrganizationFor(
   return activeOrganizationId;
 }
 
+/** The rail names the same actor-readable artifact the review header names.
+ * The gate's own frozen target identifies it; no run output, type or object ID
+ * is invented as a title. Multi-target legacy gates keep their existing label:
+ * the approved rail draws one reviewed target and defines no aggregate name. */
+export async function readRunReviewRailGates(
+  gates: readonly Pick<ReviewGateRow, "id" | "orgId" | "reviewTaskId" | "status" | "disposition" | "createdAt" | "pinnedTargets">[],
+  ctx: { orgId: string | null; actor: PrimitiveActorContext; roleHints?: ActorRoleHints },
+): Promise<RailGate[]> {
+  const rows: RailGate[] = gates.map((gate) => ({
+    gateId: gate.id, reviewTaskId: gate.reviewTaskId, status: gate.status,
+    disposition: gate.disposition, createdAt: gate.createdAt,
+  }));
+  const named = gates.map((gate, index) => ({ gate, index })).filter(({ gate }) =>
+    gate.orgId === ctx.orgId && gate.pinnedTargets?.length === 1 &&
+    (gate.status === "pending" || reviewSettledOutcomeFromDisposition(gate.disposition) !== null),
+  );
+  if (named.length === 0) return rows;
+  // These are the review header's existing readers: both enforce ownership and
+  // object.read, and only the settled reading allows a tombstoned pinned target.
+  // Keep registration and its stores off the page's no-gate path.
+  const readers = await import("@/lib/artifacts/artifact-service").catch(() => null);
+  if (!readers) return rows;
+  const actor = buildActorContextFromPrimitive(ctx.actor, ctx.orgId, ctx.roleHints);
+  for (const { gate, index } of named) {
+    try {
+      const read = gate.status === "resolved"
+        ? readers.readArtifactForSettledReview
+        : readers.readArtifactForDetail;
+      const access = read({ artifactId: gate.pinnedTargets[0].artifactId, orgId: ctx.orgId, actor });
+      if (access.kind === "ok" && access.artifact.title?.trim()) {
+        rows[index].artifactName = access.artifact.title;
+      }
+    } catch {
+      // A lost/denied title never loses the gate's historical generic row.
+    }
+  }
+  return rows;
+}
+
 export async function SetupScreen({
   agentId,
   instanceId,
@@ -1476,6 +1524,17 @@ export async function SetupScreen({
         }),
       );
     }
+    if (result.installRefusal?.kind === "missing-required-dependency") {
+      return <RunStartRefusedPanel
+        agentName={template.name} missing={result.installRefusal.missing}
+        requirementsHref={buildExtensionHeaderLink(template.packageName, isPlatformAdmin(session))?.extensionHref ?? null}
+        agentsHref={`${scopeBase ?? ""}/agents`}
+        crumbEntries={[
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
+        ]}
+      />;
+    }
     notFound();
   }
 
@@ -1509,7 +1568,12 @@ export async function SetupScreen({
       run = await readAgentRunById(instanceId, setupActor, setupRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Setup" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
     // ONE CANONICAL HOME (cinatra#2809, epic #2806). A run launched from a
@@ -1549,6 +1613,9 @@ export async function SetupScreen({
       redirect(named ? buildRunStepPath(home, named) : home);
     }
   }
+
+  const { readVisibleStartedRuns } = await import("./visible-started-runs");
+  const startedRuns = run ? await readVisibleStartedRuns(run, setupActor, setupRoles) : [];
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
   // run: there is nothing to ask, and the screen keeps the box it has today.
@@ -1753,6 +1820,14 @@ export async function SetupScreen({
     ? await deriveRunHitlContext(run, { template }).catch(() => null)
     : null;
 
+  // Confirmed past context answers are independent of the live interrupt and
+  // renderer-policy cursor. Unavailable persistence never fabricates history.
+  let answeredContextHistory: AnsweredContextRailReading[] = [];
+  if (run) {
+    try { answeredContextHistory = await readAnsweredContextHistory(run.id); }
+    catch { /* Optional unavailable history never invents a settled answer. */ }
+  }
+
   // ── THE RUN'S OWN INPUT STEPS (cinatra#3068) ─────────────────────────────
   //
   // The first step a person meets on this page is the agent's own input form,
@@ -1840,6 +1915,9 @@ export async function SetupScreen({
   // history. Access is already enforced above (readAgentRunById with the actor);
   // `listReviewGatesForRun` is a plain run-scoped read behind that door.
   const railGates = run ? await listReviewGatesForRun(run.id) : [];
+  const reviewRailGates = run
+    ? await readRunReviewRailGates(railGates, { orgId: run.orgId, actor: setupActor, roleHints: setupRoles })
+    : [];
   // cinatra#2047 D-5: the run's LIFECYCLE POLICY DECISIONS, read from the run's own
   // produced-event outbox rows. A fired decision already renders as its gate above;
   // a SKIPPED one had no rendering at all before this — so an org-forbidden /
@@ -1883,13 +1961,7 @@ export async function SetupScreen({
         })),
         messages: railMessages,
         stepResults: railStepResults,
-        gates: railGates.map((g) => ({
-          gateId: g.id,
-          reviewTaskId: g.reviewTaskId,
-          status: g.status,
-          disposition: g.disposition,
-          createdAt: g.createdAt,
-        })),
+        gates: reviewRailGates,
         verifications: railVerifications
           .filter((v) => gateTaskById.has(v.gateId))
           .map((v) => ({
@@ -1971,6 +2043,19 @@ export async function SetupScreen({
             })
           : null,
         awaiting: Boolean(runReviewSlot?.awaiting),
+        // AND WHETHER THE RUN IS PARKED ON THIS REVIEW (cinatra#3046). The page
+        // already knows — it read the run and it read the slot — so the panel is
+        // handed the answer rather than made to discover it, exactly as the two
+        // facts beside it are. A run parked on its produced output's review
+        // therefore draws that review on its FIRST paint here, with no frame of
+        // the question it already answered in front of it.
+        producedReviewPark: isParkedOnProducedReview(run),
+        // Stable metadata only; the opaque ref remains the action ticket.
+        reviewTaskId: runReviewSlot?.reviewTaskId ?? null,
+        // The rail's earlier query is authoritative for what it actually drew.
+        // A gate may open before this later slot read in the SAME render.
+        railReviewTaskIds: railGates.map((gate) => gate.reviewTaskId),
+        railCurrentReviewTaskId: electCurrentReviewGate(reviewRailGates)?.reviewTaskId ?? null,
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────
@@ -2018,19 +2103,24 @@ export async function SetupScreen({
           reached: true,
           settled: true,
           surface: (
-            <LifecycleCardSurfaceProvider host="run_card">
-              <ReviewGateCard
-                view={{
-                  viewType: "artifact_review_gate",
-                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-                  ref: entry.ref,
-                }}
-                // §VI — the gate's conversational prompt window keeps its
-                // exchange with the RUN (cinatra#3141 item 1), so the mount that
-                // names the gate names the run it opened on too.
-                runId={run.id}
-              />
-            </LifecycleCardSurfaceProvider>
+            <section
+              className="rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+              data-run-review-slot="review"
+            >
+              <LifecycleCardSurfaceProvider host="run_card">
+                <ReviewGateCard
+                  view={{
+                    viewType: "artifact_review_gate",
+                    schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                    ref: entry.ref,
+                  }}
+                  // §VI — the gate's conversational prompt window keeps its
+                  // exchange with the RUN (cinatra#3141 item 1), so the mount that
+                  // names the gate names the run it opened on too.
+                  runId={run.id}
+                />
+              </LifecycleCardSurfaceProvider>
+            </section>
           ),
         }))
     : [];
@@ -2287,8 +2377,13 @@ export async function SetupScreen({
   // run in front of it, and that row is unreached, so it opens nothing: this
   // read stays where it is rather than paying for a list the reader cannot
   // reach.
+  //
+  // AND A RUN HELD BY ITS PRODUCED-REVIEW PARK (cinatra#3046) has finished
+  // making what it made: the rail draws its record reached once the review is
+  // decided, before the release writes the withheld terminal status, so the
+  // rows are read for it too rather than opening that step on an empty record.
   const runMadeRows: RunMadeArtifactRow[] =
-    run && isTerminalRunStatus(run.status)
+    run && (isTerminalRunStatus(run.status) || isParkedOnProducedReview(run))
       ? await (async () => {
           const { listRunMadeArtifacts } = await import(
             "@/lib/artifacts/run-made-artifacts"
@@ -2775,6 +2870,23 @@ export async function SetupScreen({
               // exception for it — it names no input step anywhere — so there
               // is no second drawn sentence to weigh, and the Skills entry
               // stands above these.
+              // A forecast Schedule has the same fixed place as a real one
+              // (§I; #3679), ahead of input work. Add it before mapping the
+              // input rows so their numerals count it exactly once.
+              if (
+                !railSteps.some((step) => step.key === "schedule") &&
+                !parkedScheduleStep &&
+                railDrawsUpcomingRunSteps({
+                  inputStepIsOpen,
+                  inputStepsInRail,
+                  gateStepInRail: hasRecommendationStep,
+                  hasExecution: runHasExecution,
+                })
+              ) {
+                railSteps.push(...buildSetupRailSteps([
+                  { key: "schedule", reached: false, settled: false, surface: null },
+                ], runSurfaceRailNumberedCount(railSteps.map((step) => step.key))));
+              }
               if (inputStepsInRail) {
                 // BENEATH THE SCHEDULE, AND NUMBERED AFTER IT (cinatra#3478).
                 // These rows number themselves from their own index, so an
@@ -2783,6 +2895,8 @@ export async function SetupScreen({
                 const railRowsAboveTheInputSteps = runSurfaceRailNumberedCount(railSteps.map((step) => step.key));
                 railSteps.push(...buildRunInputRailSteps(runInputSteps, runDetailFallback, railRowsAboveTheInputSteps));
               }
+              railSteps.push(...buildAnsweredContextRailSteps(answeredContextHistory,
+                runSurfaceRailNumberedCount(railSteps.map(step=>step.key))));
               // AND THE SCHEDULE STEP THE RUN IS STOPPED AT, WHERE IT HOLDS NO
               // TRIGGER ROW YET (cinatra#3221, fix leg 8).
               //
@@ -2915,7 +3029,12 @@ export async function SetupScreen({
                   hasExecution: runHasExecution,
                 }),
                 drawnKeys: railSteps.map((step) => step.key),
-              });
+              }).filter((key) =>
+                // The persisted rail already carries the real reviews, pending
+                // or settled. A second generic forecast inserts an extra row
+                // before that history and changes its place (#3679).
+                key !== "review" || !rail.entries.some((entry) => entry.kind === "gate"),
+              );
               // AND THE SKILLS PLACEHOLDER KEEPS THE HEAD OF THE RAIL, LIKE
               // THE STEP IT STANDS FOR (cinatra#3047 fix leg 8, convergence).
               //
@@ -2952,10 +3071,11 @@ export async function SetupScreen({
                   ...buildSetupRailSteps(upcomingHeadKeys.map(asUpcomingStep), 0),
                 );
               }
-              if (upcomingNumberedKeys.length > 0) {
+              const upcomingRowsAboveWork = upcomingNumberedKeys.filter((key) => key !== "review");
+              if (upcomingRowsAboveWork.length > 0) {
                 railSteps.push(
                   ...buildSetupRailSteps(
-                    upcomingNumberedKeys.map(asUpcomingStep),
+                    upcomingRowsAboveWork.map(asUpcomingStep),
                     // THE OFFSET IS THE RAIL'S OWN NUMERAL RULE (cinatra#3047),
                     // not this list's length. The Skills entry above draws the
                     // drawing's glyph and consumes no numeral, so the steps
@@ -3022,10 +3142,20 @@ export async function SetupScreen({
               const runHasAnUndecidedReviewGate = railGates.some((g) => g.status === "pending");
               const runParkedAtReviewGate =
                 runHasAnUndecidedReviewGate || initialReviewGate?.awaiting === true;
+              // AND THE RUN HELD BY ITS PRODUCED-REVIEW PARK (cinatra#3046). Such a run is
+              // past its work: it stays `pending_approval` only until the release writes
+              // the withheld terminal status, and once no gate holds it any more it has
+              // reached its record.
+              const runHeldByProducedReviewPark = initialReviewGate?.producedReviewPark === true;
               const runReachedItsRecord =
-                run != null && isTerminalRunStatus(run.status) && !runParkedAtReviewGate;
+                run != null &&
+                (isTerminalRunStatus(run.status) || runHeldByProducedReviewPark) &&
+                !runParkedAtReviewGate;
               const railCarriesMadeStep =
-                run != null && (isTerminalRunStatus(run.status) || runParkedAtReviewGate);
+                run != null &&
+                (isTerminalRunStatus(run.status) ||
+                  runParkedAtReviewGate ||
+                  runHeldByProducedReviewPark);
               const railDraws = screenDrawsPageRail({
                 runStatus: run.status,
                 railEntryCount: rail.entries.length,
@@ -3037,6 +3167,7 @@ export async function SetupScreen({
                 // steps in neither column.
                 gateStepCount:
                   railSteps.length +
+                  (upcomingNumberedKeys.includes("review") ? 1 : 0) +
                   (railCarriesMadeStep ? 1 : 0) +
                   reviewSelectionSteps.length,
                 panel: runDetailPanel,
@@ -3055,6 +3186,16 @@ export async function SetupScreen({
                   stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
                 />
               ) : null;
+              // Review is a forecast after the work, never a head row above
+              // it (§I; #3679). The existing frame tail preserves selection
+              // and separator semantics. Count only work rows actually drawn.
+              if (upcomingNumberedKeys.includes("review")) {
+                railSteps.push(...buildSetupRailSteps(
+                  [asUpcomingStep("review")],
+                  runSurfaceRailNumberedCount(railSteps.map((step) => step.key)) +
+                    (railDraws ? rail.entries.length : 0),
+                ).map((step) => ({ ...step, tail: true })));
+              }
               // THE RUN'S LAST STEP CLOSES THE RAIL (cinatra#3029, fix leg 2).
               //
               // The ratified drawing's artifact review, section I.2: "The
@@ -3149,6 +3290,7 @@ export async function SetupScreen({
               );
             })()}
           </div>
+          <RunStartedRuns rows={startedRuns} />
           </AgentPanelBody>
         ) : (
           // An empty-state notice is neither a form nor a control stack, so it
@@ -3253,7 +3395,12 @@ export async function PermissionsScreen({
     run = await readAgentRunById(instanceId, permActor, permRoles);
     if (!run) notFound();
   } catch (err) {
-    if (err instanceof AuthzError) notFound();
+    const answer = runScreenAccessAnswer(err);
+    if (answer === "not-found") notFound();
+    if (answer === "not-authorized")
+      return (
+        <RunNotAuthorizedPanel surface="Permissions" conformanceId="run-not-authorized" />
+      );
     throw err;
   }
   // ONE CANONICAL HOME (cinatra#3693), after the access door above.
@@ -3502,6 +3649,26 @@ export async function DataScreen({ agentId, instanceId, scopeBase }: ScreenProps
   );
 }
 
+/**
+ * HOW A RUN SURFACE ANSWERS A REFUSED READER (cinatra#2934; the refusal answer
+ * of cinatra#3697 stands).
+ *
+ * Every authorization refusal is answered with the flat not-found, exactly as
+ * the scoped run pages answer it: a run stays under its scope, and a reader the
+ * access door refuses learns nothing of it — not even that it exists. The
+ * earlier reading of this mapping, which drew the not-authorized panel for a
+ * 403 refusal, is superseded by cinatra#3697.
+ *
+ * Anything that is not an authorization refusal is handed back to be rethrown: a
+ * store that fell over is not a permission answer and must not be drawn as one.
+ */
+export function runScreenAccessAnswer(
+  err: unknown,
+): "not-found" | "not-authorized" | "rethrow" {
+  if (!(err instanceof AuthzError)) return "rethrow";
+  return "not-found";
+}
+
 export async function TriggerScreen({
   agentId,
   instanceId,
@@ -3544,7 +3711,12 @@ export async function TriggerScreen({
       run = await readAgentRunById(instanceId, triggerActor, triggerRoles);
       if (!run) notFound();
     } catch (err) {
-      if (err instanceof AuthzError) notFound();
+      const answer = runScreenAccessAnswer(err);
+      if (answer === "not-found") notFound();
+      if (answer === "not-authorized")
+        return (
+          <RunNotAuthorizedPanel surface="Schedule" conformanceId="run-not-authorized" />
+        );
       throw err;
     }
     // ONE CANONICAL HOME (cinatra#3693), after the access door above.
@@ -3794,7 +3966,7 @@ export async function TriggerScreen({
       ) : null}
       {/*
         THE SAME FORM, AS A READING (cinatra#2980).
-        design@fe2182547d4a `specs/app-components.html` § "Standard
+        design@c73c68f5e39e `specs/app-components.html` § "Standard
         scheduling step", the "Configured schedule step" reading: "Once a
         *Run right after setup* or *Schedule for later* schedule has fired it
         cannot be changed any more: the form stays as a **read-only** reading
@@ -3890,7 +4062,7 @@ export async function TriggerScreen({
       : null;
     return (
       <section
-        className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+        className="rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
         data-run-review-slot={gateRef ? "review" : "working"}
       >
         {gateRef ? (

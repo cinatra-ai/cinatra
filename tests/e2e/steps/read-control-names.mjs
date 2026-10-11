@@ -7,8 +7,8 @@
 // accessible names (a section named by its heading, a picker and a button named
 // for the row they belong to) had no step to stand on.
 //
-// ONE READER. The reading is the in-page reader of the control steps
-// (`readControls` in page-controls.mjs): the same order of name sources, the
+// ONE READER. The reading uses the platform AX reader of the control steps
+// (`readPageControls` in page-controls.mjs): the same browser names and sources, the
 // same rule for what counts as shown and the same roles, so a name this step
 // reads is the name `press` looks for. Beside the roles of controls it reads
 // the parts of a page a person moves between: a region (a section with a name),
@@ -18,8 +18,8 @@
 //
 // NOTHING LEFT OUT. A control without a name is listed, with an empty name: a
 // reading that left it out could not show that its name is missing.
-import { CONTROL_NAMES_LISTED, describeNames, describePart, plainName, quotedName, readControls, unspacedNote, withoutAddress } from "./page-controls.mjs";
-import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, requireRecord } from "./step-kit.mjs";
+import { CONTROL_NAMES_LISTED, describeNames, describePart, plainName, quotedName, readPageControls, unspacedNote, withoutAddress } from "./page-controls.mjs";
+import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, refuseStaleScope, requireRecord } from "./step-kit.mjs";
 
 const STEP = "readControlNames";
 
@@ -48,8 +48,9 @@ function lineName(name) {
  * as `press` finds it), and resolve `{ controls, more }`: `controls` lists
  * `{ role, name, from, description }` in the page's order, at most
  * READ_CONTROL_NAMES_LIMIT of them, and `more` counts those beyond. `from` is
- * where the name comes from (`aria-labelledby`, `aria-label`, `label`, `text` or
- * `title`), and `description` the text `aria-describedby` names; both are empty
+ * where the name comes from (`aria-labelledby`, `aria-label`, `label`, `text`,
+ * `title`, or the browser's `placeholder` fallback), and `description` the text
+ * `aria-describedby` names; both are empty
  * when there is none, as the name of a control without one is. Writes one line
  * per control, `readControlNames: ` and the JSON of its role, its name (see
  * lineName) and `from`, and one more, `readControlNames: {"more":N}`, when the
@@ -75,6 +76,7 @@ export async function readControlNames(page, { record, within: scope, bounds } =
     throw refuse(STEP, record, "input", `name the part of the page by the name of a landmark, a heading or a labelled section, such as Settings — ${nothing}`);
   }
   const bound = readBounds(STEP, record, READ_CONTROL_NAMES_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
 
   const on = pathOf(page.url());
   const query = { mode: "names", within: scopeName, limit: READ_CONTROL_NAMES_LIMIT, listed: CONTROL_NAMES_LISTED };
@@ -88,7 +90,7 @@ export async function readControlNames(page, { record, within: scope, bounds } =
   /** @type {any} */
   let reading;
   try {
-    reading = await Promise.race([page.evaluate(readControls, query), expired]);
+    reading = await Promise.race([readPageControls(page, query), expired]);
   } catch (error) {
     throw refuse(STEP, record, "driver-failure", `the controls on ${on} could not be read (${errorClass(error)})`);
   } finally {

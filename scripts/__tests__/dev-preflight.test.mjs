@@ -20,7 +20,7 @@
 // include glob (same as scripts/__tests__/nango-health.test.mjs, which covers
 // the sibling scripts/lib/nango-health.mjs).
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import net from "node:net";
 import {
@@ -2670,17 +2670,57 @@ describe("diagnoseDockerPortDrift guard", () => {
 
 // A port nothing is listening on, so the Nango /health probe fails fast and the
 // preflight proceeds to its (faked) compose heal. Bound then released, which is
-// how we know it is free without hardcoding one.
+// how we know it is free without hardcoding one. Remember every issued number
+// so an allocator that immediately reuses a released port cannot give two
+// services of this file the same port.
+const reservedClosedPorts = new Set();
 async function reserveClosedPort() {
-  return await new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
+  for (;;) {
+    const port = await new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.once("error", reject);
+      srv.listen(0, "127.0.0.1", () => {
+        const { port } = srv.address();
+        srv.close(() => resolve(port));
+      });
     });
-  });
+    if (reservedClosedPorts.has(port)) continue;
+    reservedClosedPorts.add(port);
+    return port;
+  }
 }
+
+describe("closed-port fixture allocation", () => {
+  it("does not reuse a port when the allocator immediately offers it again", async () => {
+    // Model the OS returning a just-closed port again, without relying on a
+    // particular kernel's ephemeral-port selection happening to reproduce it.
+    let allocated = 0;
+    const createServer = vi.spyOn(net, "createServer").mockImplementation(() => {
+      const port = 43000 + Math.floor(allocated++ / 2);
+      return {
+        once() { return this; },
+        listen(_port, _host, ready) { queueMicrotask(ready); },
+        address() { return { port }; },
+        close(done) { queueMicrotask(done); },
+      };
+    });
+    try {
+      const ports = [];
+      for (let service = 0; service < 8; service += 1) ports.push(await reserveClosedPort());
+      expect(new Set(ports).size).toBe(8);
+    } finally {
+      createServer.mockRestore();
+    }
+  });
+
+  it("provides eight distinct closed ports for each fixture across repeated allocations", async () => {
+    for (let fixture = 0; fixture < 25; fixture += 1) {
+      const ports = [];
+      for (let service = 0; service < 8; service += 1) ports.push(await reserveClosedPort());
+      expect(new Set(ports).size).toBe(8);
+    }
+  });
+});
 
 describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
   let dir;

@@ -23,150 +23,30 @@ import {
 } from "@/lib/assistant-thread-store";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
-import { runDeterministicLlmTask } from "@cinatra-ai/llm";
-import {
-  ensureSkillForCapability,
-  readSkillsCatalog,
-  stripSkillFrontmatter,
-} from "@cinatra-ai/skills";
 import { classifyMentions } from "./classify-mentions";
 import { buildAudienceRoutingContext } from "./server-audience-resolver";
 import { decideMessageRouting } from "./route-decision";
 import type { MessageRoutingResult } from "./chat-routing";
 import type { ChatThread } from "./types";
 
-// Chat prompt-window HITL extraction skill, resolved through the canonical
-// catalog by its package-OWNED capability key (`chat.hitl-prompt-drive`,
-// declared by the internal `@cinatra-ai/hitl-prompt-drive-skill` extension) \u2014
-// the same true-IoC contract as `skill-prefill-generation`. No hardcoded
-// extension dir or on-disk path (the pre-fold module-init read of
-// `extensions/cinatra-ai/assistant-skills/...` died with that pack,
-// cinatra#2090 S3). Static LLM instructions live in SKILL.md per repo rule,
-// never inlined in TS.
+// THE SIDE EXTRACTION IS GONE (cinatra#2934, lifecycle-b W5c).
 //
-// Semantics (fail-closed where it matters, fail-soft where it doesn't):
-//   - EXACTLY ONE active provider (`unique: true`) \u2014 an internal system
-//     prompt must never depend on filesystem scan order between two rival
-//     capability providers; ambiguity resolves to "skill unavailable".
-//   - Lazily registered, then the body is read from the CATALOG ROW the
-//     registration wrote (never the raw extension path): a swallowed
-//     registration failure inside the fail-soft resolver surfaces here as a
-//     catalog miss and correctly fails closed. Frontmatter stripped; memoized
-//     per process on SUCCESS only, so a transient miss retries next call.
-//   - On ANY failure the caller returns "{}" WITHOUT invoking the LLM \u2014
-//     "extract nothing" rather than "free-form hallucinate values",
-//     preserving the pre-fold fail-soft contract.
-const HITL_PROMPT_DRIVE_CAPABILITY = "chat.hitl-prompt-drive";
-let hitlPromptDriveSkillMemo: string | null = null;
-
-async function loadHitlPromptDriveSkill(): Promise<string | null> {
-  if (hitlPromptDriveSkillMemo !== null) return hitlPromptDriveSkillMemo;
-  try {
-    const skillId = await ensureSkillForCapability(HITL_PROMPT_DRIVE_CAPABILITY, {
-      unique: true,
-    });
-    // The registration path above is deliberately fail-soft; the catalog row
-    // is the proof it actually happened. No row (or empty content) \u21d2 null \u21d2
-    // the caller answers "{}" without an LLM call.
-    const catalog = await readSkillsCatalog();
-    const row = catalog.skills.find((skill) => skill.id === skillId);
-    const content = typeof row?.content === "string" ? row.content : "";
-    const body = stripSkillFrontmatter(content).trim();
-    if (!body) return null;
-    hitlPromptDriveSkillMemo = body;
-    return body;
-  } catch {
-    return null;
-  }
-}
-
-export type HitlGateField = {
-  name: string;
-  type: string;
-  title?: string;
-  required: boolean;
-};
-
-/**
- * LLM fallback for the chat prompt-window HITL classifier. Called ONLY after
- * the deterministic ladder in chat-page.tsx fails to
- * classify a short/medium non-question message. Extracts the subset of the
- * open gate's fields the message supplies, against a response schema built
- * from the flattened field list. Returns a JSON object string (subset of
- * field names) or "{}" on any failure \u2014 the caller treats "{}" as
- * "not a gate response \u2192 route to normal chat".
- */
-export async function extractHitlGateValuesAction(
-  message: string,
-  fields: HitlGateField[],
-): Promise<string> {
-  // Auth-first: same gate as every other chat server action. The actor is
-  // required by runDeterministicLlmTask's fail-closed ALS frame.
-  await requireAuthSession();
-  const actor = await requireActorContext();
-
-  if (!Array.isArray(fields) || fields.length === 0) return "{}";
-
-  const properties: Record<string, Record<string, unknown>> = {};
-  for (const f of fields) {
-    if (!f || typeof f.name !== "string" || f.name.length === 0) continue;
-    const t =
-      f.type === "boolean" ||
-      f.type === "number" ||
-      f.type === "integer" ||
-      f.type === "array" ||
-      f.type === "object"
-        ? f.type
-        : "string";
-    properties[f.name] = { type: t, title: f.title ?? f.name };
-  }
-  if (Object.keys(properties).length === 0) return "{}";
-
-  const responseSchema = {
-    type: "object",
-    properties,
-    additionalProperties: false,
-  };
-
-  // Resolve the extraction skill BEFORE any LLM work: no skill, no call —
-  // "{}" means "not a gate response → route to normal chat".
-  const hitlPromptDriveSkill = await loadHitlPromptDriveSkill();
-  if (!hitlPromptDriveSkill) return "{}";
-
-  try {
-    const result = await runDeterministicLlmTask({
-      provider: "openai",
-      system: hitlPromptDriveSkill,
-      user: message,
-      outputSchema: responseSchema,
-      logLabel: "chat-hitl-prompt-drive",
-      reasoningEffort: "low",
-      actorContext: actor,
-    });
-    const text = result.text?.trim() ?? "{}";
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      // Symmetric trust boundary with the deterministic fast-path's
-      // own-property Set filter (explicit-dispatch-server.ts).
-      // The provider *should* honor additionalProperties:false, but never
-      // trust it: allowlist to the known gate field names so a stray key
-      // (incl. inherited prototype names) can't flow into the gate submit
-      // payload.
-      const allowed = new Set(fields.map((f) => f.name));
-      const filtered: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(
-        parsed as Record<string, unknown>,
-      )) {
-        if (allowed.has(k)) filtered[k] = v;
-      }
-      return JSON.stringify(filtered);
-    }
-    return "{}";
-  } catch {
-    return "{}";
-  }
-}
-
+// `extractHitlGateValuesAction` was the second, hidden model the chat page
+// reached when its deterministic ladder could not read form values out of a
+// typed sentence - the plan's "guesswork that read a form value out of your
+// sentence, and the second, hidden model that guessed when the guessing
+// failed". It is retired with the ladder itself and with the loader that
+// resolved its internal `chat.hitl-prompt-drive` skill.
+//
+// WHAT STAYS, AND WHY: the skill PACKAGE that declares that capability lives
+// in the companion extensions repository and cannot be deleted from this one.
+// Nothing in this repository resolves the capability any more, so the package
+// is unreferenced here; removing the package itself is a change to that
+// repository.
+//
+// The replacement is the plan's: the screen lends its own fill and submit
+// controls, and the conversation's assistant fills the form through them
+// under the person's own permissions.
 
 type ThreadSummary = {
   id: string;

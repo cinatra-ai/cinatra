@@ -9,7 +9,7 @@
 // gate, a garbage ref — with one indistinguishable empty document.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
+import { createElement, type ReactElement } from "react";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
 
@@ -48,11 +48,19 @@ vi.mock(
 // The target panel and the shipped skeleton are rendered, not exercised, here —
 // they carry their own suites. Stubbed so this test does not drag the whole
 // renderer-resolution graph into a node environment.
+// cinatra#3334 — both stubs now draw a MARKER instead of nothing: the streaming
+// assertion below has to be able to tell a target that is already in the
+// document from one that is still behind its own boundary's fallback.
 vi.mock(
   "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel",
-  () => ({ ReviewTargetPanel: () => null }),
+  () => ({
+    ReviewTargetPanel: ({ prepared }: { prepared: { target: { artifactId: string } } }) =>
+      createElement("div", null, `panel:${prepared.target.artifactId}`),
+  }),
 );
-vi.mock("@cinatra-ai/agents/review-gate-states", () => ({ ReviewGateLoading: () => null }));
+vi.mock("@cinatra-ai/agents/review-gate-states", () => ({
+  ReviewGateLoading: () => createElement("div", null, "island-panel-loading"),
+}));
 
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 
@@ -72,11 +80,31 @@ const ACTOR = {
   roleHints: { actorOrganizationId: "org-1" },
 };
 
+/**
+ * One target of the STREAMING surface (cinatra#3334): the loader hands the page
+ * the target's identity and the promises of its preparation and its pinned
+ * capture, so the page can open a boundary per target the moment the preflight
+ * is through instead of waiting for the whole set.
+ */
 function target(artifactId: string) {
-  return {
+  const prepared = {
     target: { artifactId, representationRevisionId: `${artifactId}-rev` },
     props: null,
     mount: { kind: "floor" as const },
+  };
+  return {
+    target: prepared.target,
+    prepared: Promise.resolve(prepared),
+    capturePair: Promise.resolve(null),
+  };
+}
+
+/** A target whose preparation is still running — it never settles. */
+function pendingTarget(artifactId: string) {
+  return {
+    target: { artifactId, representationRevisionId: `${artifactId}-rev` },
+    prepared: new Promise<never>(() => {}),
+    capturePair: Promise.resolve(null),
   };
 }
 
@@ -131,8 +159,7 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
       kind: "ready",
       agentSummary: null,
       targets: [target("a1")],
-      pinnedCapturePairs: {},
-      permissions: { canDecide: true, canComment: true },
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
     await renderIsland(REF);
     expect(loadReviewGateSurface).toHaveBeenCalledWith({
@@ -147,8 +174,7 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
       kind: "ready",
       agentSummary: null,
       targets: [target("a1"), target("a2"), target("a3")],
-      pinnedCapturePairs: {},
-      permissions: { canDecide: true, canComment: true },
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
     const el = await renderIsland(REF);
     const props = el.props as { "data-target-count"?: number };
@@ -160,8 +186,7 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
       kind: "ready",
       agentSummary: null,
       targets: [target("a1"), target("a2")],
-      pinnedCapturePairs: {},
-      permissions: { canDecide: true, canComment: true },
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
     const el = await renderIsland(REF);
     const panels = panelProps(el);
@@ -174,8 +199,7 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
       kind: "ready",
       agentSummary: "drafted against the Q3 list",
       targets: [target("a1")],
-      pinnedCapturePairs: {},
-      permissions: { canDecide: true, canComment: true },
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
     const el = await renderIsland(REF);
     expect(JSON.stringify(el)).not.toMatch(/review-decision-bar|approve-review|reject-review/);
@@ -188,7 +212,7 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
 // draws a pending one's — with no decision chrome on either reading.
 describe("a DECIDED gate keeps its reviewed target(s), read-only", () => {
   function settledSurface(targets: ReturnType<typeof target>[]) {
-    return { kind: "settled", agentSummary: null, targets, pinnedCapturePairs: {} };
+    return { kind: "settled", agentSummary: null, targets };
   }
 
   it("draws every pinned target the decision was taken on — never an empty document", async () => {
@@ -218,8 +242,7 @@ describe("a DECIDED gate keeps its reviewed target(s), read-only", () => {
       kind: "ready",
       agentSummary: null,
       targets: [target("a1")],
-      pinnedCapturePairs: {},
-      permissions: { canDecide: true, canComment: true },
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
     const el = await renderIsland(REF);
     expect((el.props as Record<string, unknown>)["data-review-reading"]).toBe("pending");
@@ -360,7 +383,6 @@ describe("a frame that presents an island credential", () => {
     loadReviewGateSurface.mockResolvedValue({
       kind: "ready",
       targets: [target("a1")],
-      pinnedCapturePairs: {},
       agentSummary: null,
     });
     const el = await renderIsland(REF, { ic: CREDENTIAL });
@@ -385,7 +407,6 @@ describe("a frame that presents an island credential", () => {
     loadReviewGateSurface.mockResolvedValue({
       kind: "ready",
       targets: [],
-      pinnedCapturePairs: {},
       agentSummary: null,
     });
     await renderIsland(REF, { ic: CREDENTIAL });
@@ -436,8 +457,7 @@ describe("the island paints in the palette the host named", () => {
       kind: "ready",
       agentSummary: null,
       targets: [target("a1")],
-      pinnedCapturePairs: {},
-      permissions: { canDecide: true, canComment: true },
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
     });
 
   const classOf = (el: ReactElement): string | undefined =>
@@ -529,5 +549,76 @@ describe("the island paints in the palette the host named", () => {
     }
     const shapes = new Set(denials.map((el) => JSON.stringify(el.props)));
     expect(shapes.size).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3334 — EVERY TARGET STREAMS ON ITS OWN.
+//
+// The island used to await the whole prepared set before it built a single
+// boundary, so the `Suspense` wrappers were decoration: nothing could ever be
+// pending inside one. The loader now returns as soon as the authorization, gate
+// and substitution preflight is through and hands the page one promise per
+// target, so a target that is ready paints while its siblings are still being
+// prepared — which is what keeps a multi-target gate inside the card's bounds.
+// ---------------------------------------------------------------------------
+
+/** The document's SHELL: everything React can emit before it has to wait for a
+ *  boundary — the prepared panels, and the fallbacks of the unprepared ones. */
+async function shellHtml(el: ReactElement): Promise<string> {
+  const { renderToPipeableStream } = await import("react-dom/server");
+  const { Writable } = await import("node:stream");
+  return await new Promise<string>((resolve, reject) => {
+    let html = "";
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        html += String(chunk);
+        callback();
+      },
+    });
+    sink.on("finish", () => resolve(html));
+    const stream = renderToPipeableStream(el, {
+      onShellReady() {
+        stream.pipe(sink);
+        // A target that never finishes preparing would keep the render open for
+        // ever; the shell is what this asserts on, so the rest is abandoned.
+        setTimeout(() => stream.abort(), 0);
+      },
+      onShellError: reject,
+      onError() {},
+    });
+  });
+}
+
+describe("each target streams under its OWN boundary (cinatra#3334)", () => {
+  it("draws a prepared target's panel while an unprepared one is still showing its fallback", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1"), pendingTarget("a2")],
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+
+    const html = await shellHtml(await renderIsland(REF));
+
+    // The prepared one is in the document …
+    expect(html).toContain("panel:a1");
+    // … the unprepared one is its own boundary's fallback, not the document's …
+    expect(html).toContain("island-panel-loading");
+    // … and it has not painted anything of its own yet.
+    expect(html).not.toContain("panel:a2");
+  });
+
+  it("draws the decided reading the same way — one boundary per reviewed target", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "settled",
+      agentSummary: null,
+      targets: [target("a1"), pendingTarget("a2")],
+    });
+
+    const html = await shellHtml(await renderIsland(REF));
+    expect(html).toContain("panel:a1");
+    expect(html).toContain("island-panel-loading");
+    expect(html).not.toContain("panel:a2");
   });
 });

@@ -5,6 +5,7 @@ const policy = {
   image: "skip_runtime", test: "skip_feedback", "skills-unit": "skip",
   "a2a-unit": "skip", "execution-plane-unit": "skip", "package-unit-suites": "skip",
   "hosted-mcp-wire-gate": "skip", "chat-hitl-held-turn-e2e": "skip_runtime",
+  "steps-browser": "skip_steps_browser",
 };
 export function prerequisiteFailures(needs) {
   if (needs?.detect?.result !== "success") return ["impact detection did not succeed"];

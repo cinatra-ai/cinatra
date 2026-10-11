@@ -21,10 +21,19 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { BUILD_ONLY_HEAD_CONDITION } from "../build-only-heads.mjs";
 import { parseTriggers } from "../merge-group-coverage-guard.mjs";
 
 const REPO_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const read = (file) => fs.readFileSync(path.join(REPO_ROOT, ".github", "workflows", file), "utf8");
+
+/**
+ * A job-level condition on a line of its own: the job's own condition, joined
+ * with the condition that skips a build-only head (cinatra#3890).
+ */
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const jobIf = (own) =>
+  new RegExp(`^ {4}if: ${escapeRegExp(`\${{ (${own}) && ${BUILD_ONLY_HEAD_CONDITION} }}`)}$`, "m");
 
 /** Whole-line YAML comments are invisible: a commented-out trigger is not one. */
 const uncommented = (text) =>
@@ -89,16 +98,14 @@ describe("the path-filtered suites detect the changed paths themselves", () => {
   it("design-visual-verify concludes on an always-running verdict job", () => {
     const TEXT = uncommented(read("design-visual-verify.yml"));
     expect(TEXT).toMatch(/^ {2}verdict:$/m);
-    expect(TEXT).toMatch(/^ {4}if: \$\{\{ always\(\) \}\}$/m);
+    expect(TEXT).toMatch(jobIf("always()"));
   });
 
   it("execution-plane-e2e gates its discovery on an in-workflow path selection", () => {
     const TEXT = uncommented(read("execution-plane-e2e.yml"));
     expect(TEXT).toMatch(/^ {2}select:$/m);
     expect(TEXT).toContain("node scripts/ci/merge-group-path-select.mjs");
-    expect(TEXT).toMatch(
-      /^ {4}if: \$\{\{ needs\.select\.outputs\.applies == 'true' \}\}$/m,
-    );
+    expect(TEXT).toMatch(jobIf("needs.select.outputs.applies == 'true'"));
     // The verdict never reports a healthy tier on a group the selection let
     // through: every battery guard is conditioned on the selection saying yes.
     expect(TEXT).toMatch(/needs\.select\.outputs\.applies == 'true' &&/);

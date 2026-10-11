@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { splitBuildOnlyHeadGuard } from "../build-only-heads.mjs";
 import { selectCiImpact } from "../ci-impact.mjs";
 import { parseTriggers } from "../merge-group-coverage-guard.mjs";
 // The workflow file the skills-drift check is called from is named through the
@@ -193,7 +194,11 @@ const readsDetector = (body, detectors) =>
 
 /** A job that only ever runs outside a pull request needs no path guard. */
 function eventScoped(body) {
-  const guard = jobIf(body);
+  // The build-only heads condition (cinatra#3890) names the pull request's
+  // head repository on every job; only the job's own condition beside it says
+  // which events the job runs on.
+  const split = splitBuildOnlyHeadGuard(jobIf(body));
+  const guard = split.carries ? split.existing : jobIf(body);
   return Boolean(guard) && guard.includes("github.event_name") && !guard.includes("pull_request");
 }
 

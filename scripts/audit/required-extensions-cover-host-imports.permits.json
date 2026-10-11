@@ -1,0 +1,17 @@
+{
+  "note": "Records of the packages added to cinatra.systemExtensions of the root package.json (cinatra#3832). A new package passes in the pull request that carries it, with its record here in the same change: { list: \"system-extensions\", row (the package's name), reason (a sentence of at least six words of three letters or more, at least four of them different), pr (the pull request's number) }. A record is carried forward unchanged while its package stands and goes when its package goes; a record without its package fails the gate.",
+  "permits": [
+    {
+      "list": "system-extensions",
+      "row": "@cinatra-ai/email-connector",
+      "reason": "The mail delivery connector requires this outbound mail road, so it is always installed.",
+      "pr": 3908
+    },
+    {
+      "list": "system-extensions",
+      "row": "@cinatra-ai/resend-connector",
+      "reason": "The application's own account mails go through this connector, so it is always installed.",
+      "pr": 3908
+    }
+  ]
+}
