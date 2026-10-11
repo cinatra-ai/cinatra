@@ -1057,7 +1057,7 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
             });
             await expect(dialog).toHaveAttribute("data-slot", "alert-dialog-content");
             await expect(dialog).toHaveAttribute("aria-modal", "true");
-            // Approved lifecycle-cards §VI.1; this driver runs in both palettes.
+            // Approved lifecycle-cards §VI.1: measure the shared modal geometry here.
             // The imported shared AlertDialog owns these dimensions and tokens.
             const modalDrawing = await dialog.evaluate((element) => {
               const style = getComputedStyle(element);
