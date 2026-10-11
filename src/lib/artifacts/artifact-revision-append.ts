@@ -746,6 +746,7 @@ export class SemanticArtifactRevisionAppendRefusal extends Error {
       | "artifact-tombstoned"
       | "artifact-not-file-backed"
       | "source-absent"
+      | "accepts-mismatch"
       | "nothing-written",
     message: string,
   ) {
@@ -761,14 +762,22 @@ type Row = Record<string, unknown>;
  * Liveness is the row's OWN `deleted_at` column — `objects` soft-deletes, and
  * every reader is `WHERE deleted_at IS NULL`, so a tombstone check that read
  * only the JSON envelope would append a revision to a row nothing will serve.
+ *
+ * THE TARGET'S TYPE DECIDES WHAT IT ACCEPTS (cinatra#3862 leg 1, a review
+ * finding on this door). A revision appended or re-filed here becomes the next
+ * representation of an artifact that already declares its type, so its MIME
+ * must be one that type accepts — the rule `appendArtifactRevision` above
+ * already applies, read from the same registry. Without it a producing run that
+ * ended on a picture beside a post would file the picture as the post's next
+ * revision. A type that declares no accepted file MIME list is not narrowed.
  */
-function readLiveArtifact(orgId: string, artifactId: string): void {
+function readLiveArtifact(orgId: string, artifactId: string, mime: string): void {
   const schema = schemaId();
   const existing = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, data, deleted_at FROM "${schema}"."objects" WHERE id=$1::text AND org_id=$2::text LIMIT 1`,
+        text: `SELECT id, type, data, deleted_at FROM "${schema}"."objects" WHERE id=$1::text AND org_id=$2::text LIMIT 1`,
         values: [artifactId, orgId],
       },
     ],
@@ -792,6 +801,16 @@ function readLiveArtifact(orgId: string, artifactId: string): void {
     throw new SemanticArtifactRevisionAppendRefusal(
       "artifact-not-file-backed",
       `artifact ${artifactId} is "${String(envelope.artifactType)}"-backed — only a file-backed artifact takes an appended blob revision`,
+    );
+  }
+  registerAllObjectTypes();
+  const objectType = String(existing.type ?? "");
+  const accepts = objectTypeRegistry.resolve(objectType)?.isArtifact?.accepts?.file?.mimeTypes;
+  if (Array.isArray(accepts) && accepts.length > 0 && !mimeAcceptedByAccepts(accepts, mime)) {
+    throw new SemanticArtifactRevisionAppendRefusal(
+      "accepts-mismatch",
+      `artifact ${artifactId} is of type "${objectType}", which accepts [${accepts.join(", ")}]; ` +
+        `a revision of MIME "${mime}" is refused and nothing is written`,
     );
   }
 }
@@ -855,7 +874,7 @@ export async function appendSemanticArtifactRevision(
   const schema = schemaId();
   const conn = getPostgresConnectionString();
 
-  readLiveArtifact(input.orgId, input.artifactId);
+  readLiveArtifact(input.orgId, input.artifactId, input.declaredMime);
 
   const representationRevisionId = randomUUID();
   const resourceId = randomUUID();
@@ -1026,6 +1045,13 @@ export type RefileRevisionInput = {
   sourceRepresentationRevisionId: string;
   createdBy?: string | null;
   createdByRunId?: string | null;
+  /**
+   * Whether this call also moves the target's own pointer onto the re-filed
+   * revision. Default true. A caller that must not show a revision before
+   * something else accepts it passes false and moves the pointer afterwards
+   * with `advanceArtifactPointerOntoRevision`.
+   */
+  advancePointer?: boolean;
 };
 
 /**
@@ -1047,8 +1073,6 @@ export function refileRevisionOntoArtifact(
   ensurePostgresSchema();
   const schema = schemaId();
   const conn = getPostgresConnectionString();
-
-  readLiveArtifact(input.orgId, input.targetArtifactId);
 
   // The source revision, and the substance it binds. Read under the org so a
   // revision of another tenant can never be re-filed onto this one's artifact.
@@ -1078,6 +1102,10 @@ export function refileRevisionOntoArtifact(
   const resourceId = String(source.resource_id);
   const mime = String(source.mime);
   const sizeBytes = Number(source.size_bytes ?? 0);
+  // The target is read AFTER the source, because the source's MIME is what the
+  // target's type must accept; both reads come before any write.
+  readLiveArtifact(input.orgId, input.targetArtifactId, mime);
+  const advancePointer = input.advancePointer !== false;
   // The re-filed revision's OWN digest: the fingerprint of the substance it
   // binds, taken off the `resource` row already read above.
   const digest = blobDigestOfSubstanceKey(String(source.substance_key ?? ""));
@@ -1154,31 +1182,38 @@ RETURNING id, revision`,
           input.createdByRunId ?? null,
         ],
       },
-      {
-        text: `UPDATE "${schema}"."objects"
+      // The pointer and its projection only when the caller asked for them
+      // (`advancePointer`). Both sit AFTER the three reads above, so the result
+      // indexes the code below reads do not move.
+      ...(advancePointer
+        ? [
+            {
+              text: `UPDATE "${schema}"."objects"
    SET data = data || $1::jsonb,
        version = COALESCE(version, 0) + 1,
        graphiti_sync_status = 'pending',
        updated_at = now()
  WHERE id = $2::text AND org_id = $3::text AND deleted_at IS NULL
    AND EXISTS (SELECT 1 FROM "${schema}"."representation" r WHERE r.id = $4::text)`,
-        values: [
-          envelopePatch({
-            representationRevisionId,
-            digest,
-            mime,
-            sizeBytes,
-          }),
-          input.targetArtifactId,
-          input.orgId,
-          representationRevisionId,
-        ],
-      },
-      projectionGuardedOnItsRepresentation(schema, {
-        orgId: input.orgId,
-        artifactId: input.targetArtifactId,
-        representationRevisionId,
-      }),
+              values: [
+                envelopePatch({
+                  representationRevisionId,
+                  digest,
+                  mime,
+                  sizeBytes,
+                }),
+                input.targetArtifactId,
+                input.orgId,
+                representationRevisionId,
+              ],
+            },
+            projectionGuardedOnItsRepresentation(schema, {
+              orgId: input.orgId,
+              artifactId: input.targetArtifactId,
+              representationRevisionId,
+            }),
+          ]
+        : []),
       witnessGuardedOnItsRepresentation(schema, {
         orgId: input.orgId,
         artifactId: input.targetArtifactId,
@@ -1226,6 +1261,86 @@ RETURNING id, revision`,
     "nothing-written",
     `artifact ${input.targetArtifactId} stopped being live while the producing run's revision was being re-filed onto it — nothing was written`,
   );
+}
+
+export type ArtifactPointerAdvance = "advanced" | "already" | "moved";
+
+/**
+ * Move an artifact's own pointer from the revision the caller read onto a
+ * revision of that artifact that already exists — the second half of a re-file
+ * made with `advancePointer: false`.
+ *
+ * A COMPARE-AND-SET ON THE POINTER. The envelope moves only while it still
+ * names `fromRepresentationRevisionId` (an envelope that names no revision yet
+ * counts as naming it), so a write that moved the artifact in between is never
+ * overwritten: the answer is then `moved` and nothing is written. A pointer that
+ * already names the target answers `already`, so a re-drive costs nothing.
+ *
+ * ONE transaction: the same advisory lock and row lock as the two writers
+ * above, the envelope patch (the same keys `envelopePatch` writes, read off the
+ * revision's own `resource` row), the version bump and the projection enqueue,
+ * the last two only when the patch landed.
+ */
+export function advanceArtifactPointerOntoRevision(input: {
+  orgId: string;
+  artifactId: string;
+  fromRepresentationRevisionId: string;
+  toRepresentationRevisionId: string;
+}): ArtifactPointerAdvance {
+  ensurePostgresSchema();
+  const schema = schemaId();
+  const results = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [
+      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
+      {
+        text: `SELECT id, data->>'latestRepresentationRevisionId' AS pointer FROM "${schema}"."objects"
+ WHERE id=$1::text AND org_id=$2::text AND deleted_at IS NULL
+   FOR UPDATE`,
+        values: [input.artifactId, input.orgId],
+      },
+      {
+        text: `WITH moved AS (
+  UPDATE "${schema}"."objects" o
+     SET data = o.data || jsonb_build_object(
+           'latestRepresentationRevisionId', r.id,
+           'latestDigest', CASE WHEN res.substance_key LIKE 'blob:_%' THEN substr(res.substance_key, 6) ELSE NULL END,
+           'mime', res.mime,
+           'size', res.size_bytes),
+         version = COALESCE(o.version, 0) + 1,
+         graphiti_sync_status = 'pending',
+         updated_at = now()
+    FROM "${schema}"."representation" r
+    JOIN "${schema}"."resource" res ON res.id = r.resource_id AND res.org_id = r.org_id
+   WHERE o.id = $1::text AND o.org_id = $2::text AND o.deleted_at IS NULL
+     AND r.id = $4::text AND r.org_id = o.org_id AND r.artifact_id = o.id
+     AND COALESCE(o.data->>'latestRepresentationRevisionId', $3::text) = $3::text
+  RETURNING o.id, o.version, o.org_id
+)
+INSERT INTO "${schema}"."graphiti_projection_outbox"
+  (id, object_id, object_version, org_id, operation, payload_hash, status, attempts)
+SELECT gen_random_uuid()::text, moved.id, moved.version, moved.org_id, 'upsert', NULL, 'pending', 0
+  FROM moved
+RETURNING object_id`,
+        values: [
+          input.artifactId,
+          input.orgId,
+          input.fromRepresentationRevisionId,
+          input.toRepresentationRevisionId,
+        ],
+      },
+    ],
+  });
+  const locked = results?.[1]?.rows?.[0] as Row | undefined;
+  if (!locked?.id) {
+    throw new SemanticArtifactRevisionAppendRefusal(
+      "artifact-tombstoned",
+      `artifact ${input.artifactId} is absent or tombstoned — its pointer is not moved`,
+    );
+  }
+  if ((results?.[2]?.rows?.length ?? 0) > 0) return "advanced";
+  return locked.pointer === input.toRepresentationRevisionId ? "already" : "moved";
 }
 
 /**

@@ -86,6 +86,8 @@ beforeEach(() => {
   }));
   vi.doMock("@/lib/artifacts/artifact-revision-append", () => ({
     refileRevisionOntoArtifact: ports.refileRevisionOntoArtifact,
+    advanceArtifactPointerOntoRevision: () => "advanced",
+    SemanticArtifactRevisionAppendRefusal: class extends Error {},
   }));
 });
 

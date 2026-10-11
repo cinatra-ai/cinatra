@@ -49,8 +49,8 @@ import "server-only";
 // status — rather than closing a review on work that does not exist.
 // ---------------------------------------------------------------------------
 
-import { and, asc, desc, eq, ne } from "drizzle-orm";
-import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
+import { and, asc, desc, eq, ne, notInArray, sql } from "drizzle-orm";
+import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
 import { agentRuns, artifactProducedOutbox, lifecycleRepair } from "./schema";
@@ -59,7 +59,11 @@ import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
 import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
 
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
-import { refileRevisionOntoArtifact } from "@/lib/artifacts/artifact-revision-append";
+import {
+  advanceArtifactPointerOntoRevision,
+  refileRevisionOntoArtifact,
+  SemanticArtifactRevisionAppendRefusal,
+} from "@/lib/artifacts/artifact-revision-append";
 
 /** The CMS-snapshot capture emitter — the one emitter this drain does not claim,
  * because the CMS completer matches it on a resource identity this one cannot
@@ -84,14 +88,32 @@ const WEDGED_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
   "pending_input",
 ]);
 
-/** A minimal read-only projection of `objects` — liveness only, the identical
- * pattern the CMS bridge and the orchestration store already use. */
+/** A minimal read-only projection of `objects` — liveness and the envelope the
+ * artifact's own revision pointer lives in. Nothing here writes `objects`. */
 const appSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 const objectsLivenessRef = appSchema.table("objects", {
   id: text("id").primaryKey(),
   orgId: text("org_id"),
+  data: jsonb("data"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
+
+/**
+ * WHERE THE LAST PASS STOPPED (cinatra#3862 leg 1, a review finding on the
+ * candidate window). The window below is bounded, and a row this drain cannot
+ * finish stays `dispatched`. Read oldest-first from the head every pass, a
+ * window's worth of such rows would hide every completable repair behind them
+ * for as long as they last. So each pass starts AFTER the last row the previous
+ * pass looked at, oldest-first from there, and wraps to the head when it reaches
+ * the end: every dispatched row is looked at within a bounded number of passes,
+ * whatever sits in front of it.
+ *
+ * Kept in the process, not in a table. The sweep runs on a ~60 s loop in one
+ * long-lived worker; a restart starts again at the head, which costs one round
+ * of the rotation and never skips a row. `created_at` is carried as Postgres'
+ * own text so the comparison keeps its microseconds.
+ */
+let candidateCursor: { createdAt: string; id: string } | null = null;
 
 export interface ProducerRepairCompletionSummary {
   scanned: number;
@@ -168,23 +190,41 @@ async function claimProduction(
  * against, so a base that moved or died under the repair is refused there rather
  * than repaired over.
  *
- * A repaired production mints a FRESH revision beside the base rather than
- * replacing it ("Regenerate appends a revision — it never overwrites or deletes
- * the one under review"), so the base's current revision is still the one the
- * gate pinned for as long as the row lives.
+ * THE POINTER, NOT THE PIN (cinatra#3862 leg 1, a review finding on this read).
+ * It used to read liveness alone and hand back the repair's own base revision,
+ * which made the compare-and-set always agree: a person who saved a newer
+ * revision of the artifact after the review would have that revision buried
+ * under the regenerated one. An ordinary artifact is not immutable the way a
+ * captured CMS snapshot is, so the answer is the artifact's own pointer,
+ * `latestRepresentationRevisionId` in its envelope.
+ *
+ * TWO READINGS ARE NOT A MOVE. An envelope that names no revision carries no
+ * evidence of one, so it answers the repair's base as before. A pointer that
+ * names THIS repair run's own answer on the same artifact (a run that filed
+ * through the revision-append road onto the reviewed artifact itself) moved by
+ * the repair, not under it, so it answers the base too.
  */
 async function resolveCurrentBaseRevisionId(
   orgId: string,
   baseArtifactId: string,
-  baseRepresentationRevisionId: string,
+  expectedBaseRevisionId: string,
+  production: ClaimedProduction,
 ): Promise<string | null> {
   const [obj] = await db
-    .select({ deletedAt: objectsLivenessRef.deletedAt })
+    .select({
+      deletedAt: objectsLivenessRef.deletedAt,
+      pointer: sql<string | null>`${objectsLivenessRef.data}->>'latestRepresentationRevisionId'`,
+    })
     .from(objectsLivenessRef)
     .where(and(eq(objectsLivenessRef.id, baseArtifactId), eq(objectsLivenessRef.orgId, orgId)))
     .limit(1);
   if (!obj || obj.deletedAt) return null;
-  return baseRepresentationRevisionId;
+  const pointer = typeof obj.pointer === "string" && obj.pointer.length > 0 ? obj.pointer : null;
+  if (pointer === null) return expectedBaseRevisionId;
+  if (production.artifactId === baseArtifactId && pointer === production.representationRevisionId) {
+    return expectedBaseRevisionId;
+  }
+  return pointer;
 }
 
 /**
@@ -269,17 +309,51 @@ export async function completeDispatchedProducerRepairs(opts?: {
   // bounded (never a full-table scan), and the ordering is unchanged — oldest
   // first, so nothing this drain owns is reordered around anything else it
   // owns.
+  //
+  // AND IT ROTATES (cinatra#3862 leg 1). The window starts after the row the
+  // previous pass looked at last (`candidateCursor`) and wraps to the head, so
+  // rows this drain cannot finish delay the ones behind them by passes, never
+  // for good.
+  const window = Math.min(limit * CANDIDATE_WINDOW_FACTOR, MAX_CANDIDATE_WINDOW);
+  const dispatchedRepairs = and(
+    eq(lifecycleRepair.status, "dispatched"),
+    eq(lifecycleRepair.route, "producer_repair"),
+  );
+  const candidateColumns = {
+    id: lifecycleRepair.id,
+    createdAt: sql<string>`${lifecycleRepair.createdAt}::text`,
+  };
+  const cursor = candidateCursor;
   const candidates = await db
-    .select({ id: lifecycleRepair.id })
+    .select(candidateColumns)
     .from(lifecycleRepair)
-    .where(and(eq(lifecycleRepair.status, "dispatched"), eq(lifecycleRepair.route, "producer_repair")))
-    .orderBy(asc(lifecycleRepair.createdAt))
-    .limit(Math.min(limit * CANDIDATE_WINDOW_FACTOR, MAX_CANDIDATE_WINDOW));
+    .where(
+      cursor
+        ? and(
+            dispatchedRepairs,
+            sql`(${lifecycleRepair.createdAt}, ${lifecycleRepair.id}) > (${cursor.createdAt}::timestamptz, ${cursor.id})`,
+          )
+        : dispatchedRepairs,
+    )
+    .orderBy(asc(lifecycleRepair.createdAt), asc(lifecycleRepair.id))
+    .limit(window);
+  if (cursor && candidates.length < window) {
+    // The end of the queue: wrap to the head for the rest of the window.
+    const seen = candidates.map((c) => c.id);
+    const head = await db
+      .select(candidateColumns)
+      .from(lifecycleRepair)
+      .where(seen.length > 0 ? and(dispatchedRepairs, notInArray(lifecycleRepair.id, seen)) : dispatchedRepairs)
+      .orderBy(asc(lifecycleRepair.createdAt), asc(lifecycleRepair.id))
+      .limit(window - candidates.length);
+    candidates.push(...head);
+  }
 
   let budget = limit;
-  for (const { id } of candidates) {
+  for (const { id, createdAt } of candidates) {
     if (budget <= 0) break;
     summary.scanned += 1;
+    candidateCursor = { createdAt, id };
     try {
       const repair = await readRepair(id);
       // Vanished, or moved off `dispatched` under a concurrent pass — a later
@@ -394,7 +468,8 @@ export async function completeDispatchedProducerRepairs(opts?: {
       const currentBaseRevisionId = await resolveCurrentBaseRevisionId(
         repair.orgId,
         repair.baseArtifactId,
-        repair.baseRepresentationRevisionId,
+        repair.expectedBaseRevisionId,
+        production,
       );
 
       // ── THE SUCCESSOR IS A REVISION OF THE REVIEWED ARTIFACT ────────────
@@ -423,46 +498,51 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // A re-drive re-files nothing: the writer is idempotent on substance and
       // hands back the revision already there.
       //
-      // STATED RESIDUAL, not hidden — and stated CORRECTLY (a convergence
-      // finding on this leg corrected the first wording). The re-file lands
-      // before `submitRepairResponse` and in its own transaction, so a submit
-      // that is then refused (a base that moved, a successor pin already
-      // occupied) leaves the reviewed artifact carrying a revision no gate pins.
+      // THE POINTER MOVES ONLY BEHIND AN ACCEPTED SUCCESSOR (cinatra#3862 leg
+      // 1, a review finding on this seam). The re-file writes the revision row
+      // and its witness and leaves the artifact's own pointer where it is
+      // (`advancePointer: false`); the pointer moves onto the re-filed revision
+      // only after `submitRepairResponse` has accepted it (below). The two are
+      // two transactions — the repair store's finalize is its own — so the
+      // order is what holds the invariant: a refused or failed submit leaves a
+      // revision row no gate pins and no pointer on it, the reviewed revision
+      // stays the artifact's current one, and the next pass re-files nothing
+      // (the writer is idempotent on THIS run) and submits again. What a crash
+      // between the accepted submit and the pointer move can leave is the
+      // other way round, and it is the one stated residual: a successor gate
+      // pinning the regenerated revision while the artifact still points at
+      // the reviewed one — nothing advanced without its accepted successor.
       //
-      // THAT REVISION IS NOT INERT, and the first wording here said it was. The
-      // append moves the artifact's OWN pointer — `objects.data`'s
-      // `latestRepresentationRevisionId` — onto the new revision, which is what
-      // an append to an append-only series means: the artifact's current
-      // representation IS the regenerated one from that moment, on its own page
-      // and everywhere else that reads the envelope, whether or not a gate ever
-      // pins it. What a refused submit leaves behind is therefore an artifact
-      // one revision on with its review still open — not a hidden row.
-      //
-      // WHAT THAT COSTS, AND WHY IT IS TAKEN. Nothing is lost or overwritten:
-      // `representation` is append-only, the reviewed revision keeps its row and
-      // its number, and the gate still pins the revision the reviewer decided on
-      // (§VI — "a decided gate retains and displays the target it froze", and a
-      // pending gate's pin is immutable). The repair stays OPEN exactly as it
-      // did before, and the next drain re-files nothing — the writer is
-      // idempotent on THIS re-drive — and re-submits.
-      //
-      // Making the append and the successor pin ONE transaction is the honest
-      // fix and it is a change to the repair store's own seam, not this leg's;
-      // it is named here rather than papered over.
+      // A run answer whose type the reviewed artifact does not accept is
+      // refused by the door before anything is written; the repair stays OPEN.
       let successorTarget = production;
+      let refiledOntoBase = false;
       if (production.artifactId !== repair.baseArtifactId) {
-        const refiled = refileRevisionOntoArtifact({
-          orgId: repair.orgId,
-          targetArtifactId: repair.baseArtifactId,
-          sourceArtifactId: production.artifactId,
-          sourceRepresentationRevisionId: production.representationRevisionId,
-          createdBy: delivered.originatingRunBy ?? null,
-          createdByRunId: runId,
-        });
+        let refiled: ReturnType<typeof refileRevisionOntoArtifact>;
+        try {
+          refiled = refileRevisionOntoArtifact({
+            orgId: repair.orgId,
+            targetArtifactId: repair.baseArtifactId,
+            sourceArtifactId: production.artifactId,
+            sourceRepresentationRevisionId: production.representationRevisionId,
+            createdBy: delivered.originatingRunBy ?? null,
+            createdByRunId: runId,
+            advancePointer: false,
+          });
+        } catch (err) {
+          if (!(err instanceof SemanticArtifactRevisionAppendRefusal)) throw err;
+          summary.unresolved += 1;
+          console.error(
+            `[lifecycle-repair-producer-completion-store] the answer of repair ${repair.id} was not ` +
+              `re-filed onto artifact ${repair.baseArtifactId} (${err.code}): ${err.message}`,
+          );
+          continue;
+        }
         successorTarget = {
           artifactId: refiled.artifactId,
           representationRevisionId: refiled.representationRevisionId,
         };
+        refiledOntoBase = true;
       }
 
       const result = await submitRepairResponse({
@@ -490,8 +570,37 @@ export async function completeDispatchedProducerRepairs(opts?: {
         },
       });
 
-      if (result.ok) summary.completed += 1;
-      else summary.unresolved += 1;
+      if (!result.ok) {
+        summary.unresolved += 1;
+        continue;
+      }
+      summary.completed += 1;
+      if (refiledOntoBase && currentBaseRevisionId !== null) {
+        // Accepted: now the artifact's own pointer moves onto the successor,
+        // and only from the revision this pass read (a compare-and-set; a write
+        // that moved it in between is left standing and said out loud).
+        try {
+          const advance = advanceArtifactPointerOntoRevision({
+            orgId: repair.orgId,
+            artifactId: repair.baseArtifactId,
+            fromRepresentationRevisionId: currentBaseRevisionId,
+            toRepresentationRevisionId: successorTarget.representationRevisionId,
+          });
+          if (advance === "moved") {
+            console.error(
+              `[lifecycle-repair-producer-completion-store] artifact ${repair.baseArtifactId} moved after ` +
+                `repair ${repair.id} was accepted; its pointer is left on the newer write.`,
+            );
+          }
+        } catch (err) {
+          console.error(
+            `[lifecycle-repair-producer-completion-store] repair ${repair.id} is accepted but the pointer ` +
+              `of artifact ${repair.baseArtifactId} did not move: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+          );
+        }
+      }
     } catch (err) {
       summary.failed += 1;
       console.error(
