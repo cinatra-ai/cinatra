@@ -282,6 +282,8 @@ export type RunStepSelectionHandle = {
   select: (next: RunStepSelection) => void;
   /** The Skills question was answered on this page, before the refresh lands (cinatra#3285). */
   skillsReleased?: boolean;
+  /** Only the owed input elected by a successful Skills release is reached before refresh. */
+  releasedInputStep?: RunStepSelection | null;
   /** The chip row's one call on a successful decision. */
   releaseSkills?: () => void;
 };

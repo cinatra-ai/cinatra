@@ -324,11 +324,14 @@ export function RunSurfaceRailRow({
 }): ReactElement {
   const selection = useRunStepSelection();
   const selected = selection?.selected === selectionKey;
+  const releasedInput = selection?.releasedInputStep === selectionKey;
+  const effectiveReached = releasedInput ? true : reached;
+  const effectiveSelectable = selectable || releasedInput;
   // The emphasised treatment is for the row the surface is actually on. A row
   // that cannot be opened never gets it — and neither does a row its page has
   // said the run has not reached.
   const emphasised =
-    Boolean(selected) && (selectable || selection?.skillsReleased === true) && reached !== false;
+    Boolean(selected) && effectiveSelectable && effectiveReached !== false;
   // Only confirmed, successfully continued context gates get a settlement
   // word. Ordinary answered inputs keep their plain Setup/field label.
   const title = settled && selectionKey.startsWith("context:") ? `${label} · continued` : label;
@@ -339,7 +342,7 @@ export function RunSurfaceRailRow({
       data-run-surface-rail-step=""
       data-run-surface-rail-step-key={selectionKey}
       data-run-surface-rail-selected={selected ? "true" : "false"}
-      data-run-surface-rail-reached={reached === undefined ? undefined : reached ? "true" : "false"}
+      data-run-surface-rail-reached={effectiveReached === undefined ? undefined : effectiveReached ? "true" : "false"}
       // Mirrors the gate rows' own `data-…-step-settled`, so one capture reads
       // the settled circle the same way on every rail it appears in.
       data-run-surface-rail-settled={settled ? "true" : "false"}
@@ -352,9 +355,9 @@ export function RunSurfaceRailRow({
       // and "its row stays on the rail, so the series is visible" is precisely
       // what cinatra#2970 keeps. `aria-disabled` leaves the row in the tab order
       // and announces it as unavailable when focus arrives on it.
-      aria-disabled={selectable ? undefined : "true"}
-      onClick={selectable ? () => selection?.select(selectionKey) : undefined}
-      className={selectable ? RUN_SURFACE_RAIL_ROW_CLASS : RUN_SURFACE_RAIL_ROW_CLOSED_CLASS}
+      aria-disabled={effectiveSelectable ? undefined : "true"}
+      onClick={effectiveSelectable ? () => selection?.select(selectionKey) : undefined}
+      className={effectiveSelectable ? RUN_SURFACE_RAIL_ROW_CLASS : RUN_SURFACE_RAIL_ROW_CLOSED_CLASS}
       {...rowAttributes}
     >
       <span
@@ -517,6 +520,24 @@ export function RunSurfaceRail({
   const [selected, setSelected] = useState<RunStepSelection>(() =>
     resolveRunSurfaceSelection(steps, detail, initialSelection),
   );
+  const [skillsReleased, setSkillsReleased] = useState(false);
+  // The existing working placeholder is the released frame's fallback when
+  // the held server tree has no run detail yet. Selection reads that same
+  // fallback; it must not refuse a row the frame can already draw.
+  const releasedDetail = runSurfaceNodeExists(detail) ? detail : <ReviewGatePlaceholder />;
+  const selectionDetail = skillsReleased ? releasedDetail : detail;
+  const releasedInput = releasedSelection?.startsWith("input:")
+    ? steps.find((step) => step.key === releasedSelection)
+    : undefined;
+  // Release reaches exactly the elected owed input, and only if its real
+  // surface exists. Retain that identity when the reader revisits Skills;
+  // selecting another row must not close the input just reached.
+  const releasedInputStep = releasedInput && isRunSurfaceStepSelectable({ ...releasedInput, reached: true, selectable: true }, releasedDetail)
+    ? releasedInput.key
+    : null;
+  const effectiveSteps = skillsReleased && releasedInputStep
+    ? steps.map((step) => step.key === releasedInputStep ? { ...step, reached: true, selectable: true } : step)
+    : steps;
   // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken
   // inside a gate step calls `router.refresh()`, which re-renders the server tree
   // WITHOUT remounting this client component — so a selection kept only from the
@@ -538,9 +559,9 @@ export function RunSurfaceRail({
   const [lastInitial, setLastInitial] = useState<RunStepSelection>(initialSelection);
   if (initialSelection !== lastInitial) {
     setLastInitial(initialSelection);
-    setSelected(resolveRunSurfaceSelection(steps, detail, initialSelection));
+    setSelected(resolveRunSurfaceSelection(effectiveSteps, selectionDetail, initialSelection));
   }
-  const open = steps.find((step) => step.key === selected) ?? null;
+  const open = effectiveSteps.find((step) => step.key === selected) ?? null;
   // The rows that HEAD the rail, and the one that CLOSES it — see
   // `RunSurfaceRailStep.tail`. The selection reads `steps` whole, so splitting
   // the ROWS moves nothing about what can be opened.
@@ -561,18 +582,22 @@ export function RunSurfaceRail({
   // step that cannot be opened is dropped and the reader stays where they were,
   // which is "clicking it does nothing" written where it cannot be bypassed.
   const select = (next: RunStepSelection) => {
-    if (resolveRunSurfaceSelection(steps, detail, next) !== next) return;
+    if (resolveRunSurfaceSelection(effectiveSteps, selectionDetail, next) !== next) return;
     setSelected(next);
   };
   // The instant the Skills decision lands, the entry reads settled and the selection moves to the step the page elects for the released run, before the refresh does (cinatra#3285).
-  const [skillsReleased, setSkillsReleased] = useState(false);
   const releaseSkills = () => {
     setSkillsReleased(true);
-    if (releasedSelection !== undefined) setSelected(releasedSelection);
+    if (releasedSelection !== undefined) {
+      const releasedSteps = releasedInputStep
+        ? steps.map((step) => step.key === releasedInputStep ? { ...step, reached: true, selectable: true } : step)
+        : steps;
+      setSelected(resolveRunSurfaceSelection(releasedSteps, releasedDetail, releasedSelection));
+    }
   };
 
   return (
-    <RunStepSelectionProvider value={{ selected, select, skillsReleased, releaseSkills }}>
+    <RunStepSelectionProvider value={{ selected, select, skillsReleased, releaseSkills, releasedInputStep: skillsReleased ? releasedInputStep : null }}>
       {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
 
           A run panel drawn inside this detail raises a live rail column of

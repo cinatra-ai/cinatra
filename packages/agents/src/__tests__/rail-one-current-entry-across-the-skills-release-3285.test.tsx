@@ -109,7 +109,7 @@ const decision = vi.hoisted(() => ({
   skip: null as null | ((...a: unknown[]) => Promise<unknown>),
 }));
 
-const PROPERTIES = { brief: { type: "string", title: "brief" } } as Record<string, unknown>;
+const PROPERTIES = { brief: { type: "string", title: "brief" }, audience: { type: "string", title: "Audience" } } as Record<string, unknown>;
 
 function inputSchema() {
   return { properties: PROPERTIES, required: row.required };
@@ -378,6 +378,20 @@ function skillsSettled(container: HTMLElement): string | null {
   );
 }
 
+function inputTreatment(container: HTMLElement, key = "input:0") {
+  const entry = container.querySelector<HTMLElement>(`[data-run-surface-rail-step-key="${key}"]`);
+  expect(entry).not.toBeNull();
+  const title = entry!.lastElementChild as HTMLElement;
+  const indicator = entry!.firstElementChild as HTMLElement;
+  return {
+    reached: entry!.getAttribute("data-run-surface-rail-reached"),
+    disabled: entry!.getAttribute("aria-disabled"),
+    current: entry!.getAttribute("aria-current"),
+    highlighted: title.classList.contains("text-foreground"),
+    filled: indicator.classList.contains("bg-primary"),
+  };
+}
+
 async function serverTree(): Promise<React.ReactElement> {
   return (await SetupScreen({
     agentId: "blog-draft-writer",
@@ -454,6 +468,42 @@ afterAll(() => {
 });
 
 describe("cinatra#3285 — exactly one current entry across the Skills release", () => {
+  it("emphasises only the successfully released owed input before refresh, matching a fresh handoff render", async () => {
+    row.required = ["brief", "audience"];
+    const { view } = await continueOnTheSkillsStep();
+    const released = inputTreatment(view.container);
+    expect(released).toEqual({ reached: "true", disabled: null, current: "step", highlighted: true, filled: true });
+    expect(inputTreatment(view.container, "input:1")).toEqual({ reached: "false", disabled: "true", current: null, highlighted: false, filled: false });
+    const skills = view.container.querySelector<HTMLElement>("[data-recommendation-rail-step]");
+    await act(async () => { fireEvent.click(skills!); });
+    const input = view.container.querySelector<HTMLElement>('[data-run-surface-rail-step-key="input:0"]');
+    await act(async () => { fireEvent.click(input!); });
+    expect(inputTreatment(view.container)).toEqual(released);
+    cleanup();
+    atMoment("handoff");
+    const fresh = render(await serverTree());
+    expect(inputTreatment(fresh.container)).toEqual(released);
+    expect(inputTreatment(fresh.container, "input:1")).toEqual({ reached: "false", disabled: "true", current: null, highlighted: false, filled: false });
+  });
+
+  it("keeps unreleased inputs closed and keeps them closed after a refused Skills decision", async () => {
+    decision.confirm = vi.fn(async () => ({ ok: false, error: "Refused" }));
+    decision.skip = vi.fn(async () => ({ ok: false, error: "Refused" }));
+    const refresh = vi.fn();
+    wired.refreshed.current = refresh;
+    const view = render(await serverTree());
+    await waitFor(() => expect(boxes(view.container).length).toBeGreaterThan(0));
+    // This server input moment has reached the first field but keeps it
+    // unavailable while Skills is held; refusal must not change that reading.
+    const held = { reached: "true", disabled: "true", current: null, highlighted: false, filled: false };
+    expect(inputTreatment(view.container)).toEqual(held);
+    await act(async () => { fireEvent.click(view.container.querySelector<HTMLElement>("[data-skills-step-continue]")!); });
+    await waitFor(() => expect((decision.confirm as ReturnType<typeof vi.fn>).mock.calls.length + (decision.skip as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1));
+    expect(inputTreatment(view.container)).toEqual(held);
+    expect(railCurrent(view.container)).toEqual(["Skills"]);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("names Skills at the question, then Setup before the refresh and after it at every moment", async () => {
     const { view, before, land } = await continueOnTheSkillsStep();
     expect(before.current).toEqual(["Skills"]);

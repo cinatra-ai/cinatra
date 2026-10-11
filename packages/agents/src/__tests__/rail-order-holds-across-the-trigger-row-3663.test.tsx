@@ -90,6 +90,7 @@ const row = vi.hoisted(() => ({
   lifecycleCardRef: null as string | null,
   hitlContext: null as unknown,
   inputParams: {} as Record<string, unknown>,
+  isChild: false,
 }));
 
 /** The run's recommendation park: `parked` is the question held, `released` decided. */
@@ -153,7 +154,7 @@ function makeRun() {
     packageVersion: "1.0.0",
     a2aTaskId: null,
     a2aContextId: null,
-    parentRunId: null,
+    parentRunId: row.isChild ? "parent-run" : null,
     agUiEnabled: true,
     lgThreadId: null,
     traceId: null,
@@ -449,6 +450,8 @@ function expectDrawnOrder(head: readonly HeadRow[]): void {
 
 beforeEach(() => {
   vi.stubGlobal("EventSource", StubEventSource);
+  row.isChild = false;
+  TEMPLATE.approvalPolicy.steps = [{ stepNumber: 1, xRenderer: "cinatra/review", name: "Draft the post" }];
   atMoment("a");
 });
 
@@ -507,6 +510,25 @@ describe("cinatra#3663 — one run's rail keeps the drawing's order at every rea
 });
 
 describe("cinatra#3246 — the loading state never removes the entries this leg governs", () => {
+  it("keeps the complete logical rail at handoff, loading, input and schedule, before storage rows exist", async () => {
+    const expected = ["Skills", "Schedule", "Setup", "Draft the post", "Review"];
+    for (const moment of ["b", "c", "d", "e"] as const) {
+      const head = await readRunPage(moment, true);
+      expect({ moment, titles: head.map((entry) => entry.title) }).toEqual({ moment, titles: expected });
+      expect(head.map((entry) => entry.numeral)).toEqual(moment === "e" ? [null, 1, null, 3, 4] : [null, 1, 2, 3, 4]);
+    }
+  });
+
+  it("does not forecast a child run's parent-owned schedule or an undeclared review", async () => {
+    row.isChild = true;
+    TEMPLATE.approvalPolicy.steps = [];
+    for (const moment of ["a", "b", "c", "d"] as const) {
+      const head = await readRunPage(moment, true);
+      expect({ moment, titles: head.map((entry) => entry.title) }).toEqual({ moment, titles: ["Skills", "Setup"] });
+      expect(head.map((entry) => entry.numeral)).toEqual([null, 1]);
+    }
+  });
+
   it("keeps the Skills and Setup entries from the question to the form, (a) to (d)", async () => {
     for (const moment of ["a", "b", "c", "d"] as const) {
       const titles = (await readRunPage(moment)).map((entry) => entry.title);

@@ -2425,40 +2425,35 @@ export async function SetupScreen({
     recommendationHeld,
     openInputStepKey,
   });
-  // WHICH STILL-TO-COME STEPS THIS RUN ACTUALLY CARRIES (cinatra#3246), read
-  // ONCE, from the run's own rows and from nothing else -- and only for the one
-  // moment that needs the answer: the run inside its execution with none of its
-  // own rows written yet. The schedule is the run's trigger row, or the gate it
-  // is stopped at; the review is a gate still pending, or the outbox window
-  // still awaiting; the skills question is the run's own recommendation park,
-  // and in the issue's own moment that row is already ON the rail, so the
-  // de-duplication above leaves the reader the real row rather than a forecast
-  // of it. None of these three changes when the status does, which is what
-  // makes the rail's count monotone across the transition by construction.
-  //
-  // AND THE RIDE LIFTS ONLY THE EXECUTION SUPPRESSION (convergence). The rail's
-  // own answer above turns the still-to-come rows off for TWO different
-  // reasons: because the run is inside its execution, and because this rail
-  // carries neither the run's input steps nor its gate row at all. This fix is
-  // about the first reason only -- a rail that was never eligible for a
-  // forecast row must not grow one at the loading moment -- so the ride is
-  // asked for only when the rail's own two eligibility facts, the same two the
-  // call below hands `railDrawsUpcomingRunSteps`, say the rows could ride.
+  // Forecast identities precede their storage rows. A top-level setup run
+  // still owes its scheduling choice; a child uses its parent's schedule.
+  // Likewise a declared review is still ahead before its gate is stored.
+  // Read the same run-specific set before and after dispatch so entering
+  // `running` cannot make an advertised Schedule or Review disappear.
+  const runForecastsSchedule =
+    runCarriesScheduleStep || parkedScheduleStep || (run !== null && !run.parentRunId);
+  const runForecastsReview =
+    policySteps.some((step) => step.xRenderer === "cinatra/review" && step.firesRendererGate !== false) ||
+    railGates.some((gate) => gate.status === "pending") || initialReviewGate?.awaiting === true;
+  const drawUpcomingRunRailSteps = railDrawsUpcomingRunSteps({
+    inputStepIsOpen,
+    inputStepsInRail,
+    gateStepInRail: hasRecommendationStep,
+    hasExecution: runHasExecution,
+  });
   const runCarriesStillToComeKeys =
-    runInsideExecutionWithNothingYet &&
     (inputStepsInRail || hasRecommendationStep)
       ? {
           keys: [
             ...(hasRecommendationStep ? (["recommendation"] as const) : []),
-            ...(runCarriesScheduleStep || parkedScheduleStep
+            ...(runForecastsSchedule
               ? (["schedule"] as const)
               : []),
-            ...(railGates.some((gate) => gate.status === "pending") ||
-            initialReviewGate?.awaiting === true
+            ...(runForecastsReview
               ? (["review"] as const)
               : []),
           ],
-          throughTheLoadingMoment: true,
+          throughTheLoadingMoment: runInsideExecutionWithNothingYet,
         }
       : undefined;
   const railFramesTheRunDetail =
@@ -3089,12 +3084,11 @@ export async function SetupScreen({
               if (
                 !railSteps.some((step) => step.key === "schedule") &&
                 !parkedScheduleStep &&
-                railDrawsUpcomingRunSteps({
-                  inputStepIsOpen,
-                  inputStepsInRail,
-                  gateStepInRail: hasRecommendationStep,
-                  hasExecution: runHasExecution,
-                })
+                upcomingRunRailStepKeys({
+                  drawUpcoming: drawUpcomingRunRailSteps,
+                  drawnKeys: railSteps.map((step) => step.key),
+                  runCarries: runCarriesStillToComeKeys,
+                }).includes("schedule")
               ) {
                 railSteps.push(...buildSetupRailSteps([
                   { key: "schedule", reached: false, settled: false, surface: null },
@@ -3236,12 +3230,7 @@ export async function SetupScreen({
               // both answers are `railDrawsUpcomingRunSteps` and
               // `upcomingRunRailStepKeys` above.
               const upcomingRailStepKeys = upcomingRunRailStepKeys({
-                drawUpcoming: railDrawsUpcomingRunSteps({
-                  inputStepIsOpen,
-                  inputStepsInRail,
-                  gateStepInRail: hasRecommendationStep,
-                  hasExecution: runHasExecution,
-                }),
+                drawUpcoming: drawUpcomingRunRailSteps,
                 drawnKeys: railSteps.map((step) => step.key),
                 // AND THE ROWS RIDE THROUGH THE LOADING MOMENT, FILTERED TO
                 // WHAT THIS RUN CARRIES (cinatra#3246). The rail's own answer
