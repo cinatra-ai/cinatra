@@ -9,6 +9,7 @@ import {
   type ConnectSiteRow,
 } from "@/lib/connect-sites-store";
 import { isValidCodeChallenge, verifyPkceS256 } from "@/lib/connect-provisioning";
+import { resolveHandshakeSiteBinding } from "@/lib/embed/frame-ancestors.server";
 import {
   validateConnectServerCredential,
   originMatchesSiteUrl,
@@ -160,11 +161,48 @@ function userTokenScope(agentSlug: string): string | null {
 // `instancesConfigKey` is the connector_config key holding `instances[]`
 // (the agent's client: "wordpress" | "drupal"). A claimed `instanceId` may
 // only DISAMBIGUATE among origin-matched rows, never select a different row.
+//
+// cinatra#3715 — THE HANDSHAKE'S IDENTITY, OPT-IN. A site connected through the
+// handshake holds THIS APPLICATION'S OWN instance identity, not a connector
+// instance id, and the frame gate already accepts it (cinatra#3328). A sign-in
+// caller that names `connectSiteFallbackClient` (the client from the CLOSED host
+// table) asks the gate's ONE handshake rule when the connector road has no
+// answer: the claimed id must be that identity, the connector must hold no row
+// for it, the client must have exactly one active site origin, and that origin
+// must be the verified origin here. The pinned value is the identity as the
+// SERVER read it. A caller that omits the field keeps the connector-only answer.
 // ---------------------------------------------------------------------------
 
 type StoredInstanceRow = { id?: unknown; siteUrl?: unknown };
 
 export function resolveCanonicalInstanceForOrigin(input: {
+  instancesConfigKey: string;
+  origin: string;
+  claimedInstanceId?: string | null;
+  connectSiteFallbackClient?: string | null;
+}): string | null {
+  const fromConnector = resolveConnectorInstanceForOrigin(input);
+  if (fromConnector) return fromConnector;
+
+  const connectClient = String(input.connectSiteFallbackClient ?? "").trim();
+  if (!connectClient) return null;
+  const instancesConfigKey = String(input.instancesConfigKey ?? "").trim();
+  const origin = normalizeOriginStrict(input.origin);
+  const claimed =
+    typeof input.claimedInstanceId === "string" ? input.claimedInstanceId.trim() : "";
+  // The handshake road never picks an identity on its own: it only confirms one
+  // that was presented, and only for the origin verified here.
+  if (!instancesConfigKey || !origin || !claimed) return null;
+  const handshake = resolveHandshakeSiteBinding({
+    instancesConfigKey,
+    connectClient,
+    instanceId: claimed,
+  });
+  if (!handshake || normalizeOriginStrict(handshake.origin) !== origin) return null;
+  return handshake.instanceId;
+}
+
+function resolveConnectorInstanceForOrigin(input: {
   instancesConfigKey: string;
   origin: string;
   claimedInstanceId?: string | null;
@@ -357,6 +395,9 @@ export function createAuthTransaction(input: CreateTransactionInput): CreateTran
     instancesConfigKey: input.instancesConfigKey,
     origin: input.site.siteOrigin,
     claimedInstanceId: input.claimedInstanceId,
+    // cinatra#3715 — the transaction accepts the handshake's identity under the
+    // frame gate's own rule; the client is the one the CLOSED host table named.
+    connectSiteFallbackClient: input.instancesConfigKey,
   });
   if (!instanceId) {
     return { ok: false, reason: "instance_unresolved" };

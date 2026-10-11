@@ -213,6 +213,30 @@ export function launchScopeAnchorBase(anchor: LaunchScopeAnchorV1 | null): strin
   }
 }
 
+/**
+ * THE PERSONAL SCOPE'S OWN ROUTE, spelled here for the same reason the four
+ * bases above are: this leaf stays free of the surface vocabulary, and the
+ * agreement with `scopeSurfaceBase` is pinned by a test.
+ */
+const PERSONAL_SCOPE_BASE = "/personal";
+
+/**
+ * The base a SUCCESSOR is launched from, which is not always the base the run
+ * is addressed at (cinatra#3786). The two part on the `user` kind alone.
+ *
+ * An ADDRESS of a user-anchored run is flat because `/personal` names whoever
+ * is reading, and such a run has other authorized readers. A LAUNCH has no
+ * second reader: the successor is started by the person standing on the run's
+ * page, from that person's own vantage, so it opens the personal launcher,
+ * which is the one mint that stamps a fresh run with a `user` anchor. The bare
+ * launcher mints nothing, so a personal run's successor used to be written
+ * with no anchor at all.
+ */
+export function successorLaunchBase(anchor: LaunchScopeAnchorV1 | null): string | null {
+  if (anchor?.kind === "user") return PERSONAL_SCOPE_BASE;
+  return launchScopeAnchorBase(anchor);
+}
+
 function scopeOf(anchor: LaunchScopeAnchorV1 | null): AgentPathScope {
   const base = launchScopeAnchorBase(anchor);
   return base === null ? {} : { scopeBase: base };

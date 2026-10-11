@@ -72,8 +72,21 @@
 // Fail-closed: refuses to run against an absent/under-populated extensions/
 // tree (the banned-name set would be empty and the gate would pass vacuously).
 //
+// COMPARED WITH THE BASE (cinatra#3832): the set of system extensions
+// (`cinatra.systemExtensions` in the root package.json) is compared with the
+// base branch's copy. The set is a register of packages allowed after a review,
+// not a floor of faults: a package the base's set does not hold passes only in
+// the pull request that carries it WITH ITS RECORD in
+// scripts/audit/required-extensions-cover-host-imports.permits.json (the record
+// road of the shared guard), with a NOTICE line; without its record it fails,
+// and with the equality above the declared set of required extensions cannot
+// grow unrecorded either. A removed package passes. The base comes from REQUIRED_EXTENSIONS_COVER_BASE when a workflow sets it, else from
+// the pull request's base branch; a base that cannot be read fails closed (the
+// shared guard, scripts/audit/lib/floor-base-guard.mjs).
+//
 // Usage:
 //   node scripts/audit/required-extensions-cover-host-imports.mjs
+//   REQUIRED_EXTENSIONS_COVER_BASE=origin/main node ...   # compare the system set with that revision (default: the pull request's base branch)
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
@@ -81,12 +94,68 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { assertExtensionsPresent } from "./lib/assert-extensions-cloned.mjs";
 import { stripComments } from "./lib/strip-comments.mjs";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 import { discoverExtensionNames } from "./core-extension-import-ban.mjs";
 import { GENERATED_MANIFEST_FILES } from "../extensions/generated-manifest-files.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
 const LOCK_PATH = join(REPO_ROOT, "cinatra-required-extensions.lock.json");
+
+/** The file holding the floor (the set of system extensions), repo-relative. */
+export const FLOOR_FILE = "package.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "REQUIRED_EXTENSIONS_COVER_BASE";
+
+/** The permit file of the set of system extensions, repo-relative. */
+export const PERMIT_FILE = "scripts/audit/required-extensions-cover-host-imports.permits.json";
+
+/** The list name every permit in PERMIT_FILE carries. */
+export const PERMIT_LIST = "system-extensions";
+
+/** The record road, in one sentence (printed with every refusal of growth). */
+export const PERMIT_ROAD =
+  `A new system extension needs its record in ${PERMIT_FILE} in the same pull request: ` +
+  `{ "list": "${PERMIT_LIST}", "row": "the package's name", ` +
+  '"reason": "a sentence of at least six words", "pr": the pull request\'s number }.';
+
+/** `cinatra.systemExtensions` of a parsed package.json (absent or not a list: empty). */
+function systemExtensionsOf(pkgJson) {
+  const list = pkgJson?.cinatra?.systemExtensions;
+  return Array.isArray(list) ? list : [];
+}
+
+/**
+ * The floor base guard (cinatra#3832): growth is a package in the system set
+ * that the base branch's set does not hold. `headFloor` (the list) defaults to
+ * the root package.json in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? systemExtensionsOf(JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")));
+  return compareFloorWithBase({
+    gate: "required-extensions-cover-host-imports",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: head,
+    parse: (text) => systemExtensionsOf(JSON.parse(text)),
+    grown: (base, current) => newKeys(base, current),
+    repoRoot,
+    env,
+    permits: {
+      path: PERMIT_FILE,
+      list: PERMIT_LIST,
+      // The exact row: the package's name.
+      rowKey: (row) => {
+        if (typeof row !== "string" || !/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(row)) throw new Error("a row is a package name");
+        return row;
+      },
+      keyOfGrowth: (line) => line,
+      rowsOf: (set) => set,
+      road: PERMIT_ROAD,
+    },
+  });
+}
 
 const GENERATED_TREE_PREFIX = "src/lib/generated/";
 const GENERATED_TEST_FILE = "src/lib/generated/__tests__/guarded-optional-loaders.test.ts";
@@ -472,6 +541,9 @@ export function computeLiveCoverage(repoRoot = REPO_ROOT) {
 }
 
 function main() {
+  // The floor base guard runs first: it reads only the committed package.json.
+  if (!reportFloorGuard(checkFloorAgainstBase())) process.exit(1);
+
   // Fail-closed: an absent/under-populated extensions/ tree would make the
   // extension-name set empty and this gate would pass vacuously.
   assertExtensionsPresent(REPO_ROOT, "required-extensions-cover-host-imports");

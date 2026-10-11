@@ -6,7 +6,8 @@
     "scripts/ci/design-record-grammar.mjs",
     "scripts/ci/lib/design-pin.mjs",
     "scripts/ci/design-pin-gates.paths.json",
-    ".github/workflows/gates.yml"
+    ".github/workflows/gates.yml",
+    ".github/workflows/design-record-grammar.yml"
   ],
   "pins": {
     "chat-hitl-lifecycle": [

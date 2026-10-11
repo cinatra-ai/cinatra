@@ -10,6 +10,7 @@
 import { describe, it, expect } from "vitest";
 
 import { WORKSPACE_SCOPE_SENTINEL } from "@/lib/assignment-scope";
+import { scopeSurfaceBase } from "@/lib/scope-surfaces";
 import {
   LAUNCH_SCOPE_ANCHOR_KINDS,
   LAUNCH_SCOPE_ANCHOR_VERSION,
@@ -22,6 +23,7 @@ import {
   launchScopeAnchorForScope,
   launchScopeInstanceLabel,
   parseLaunchScopeAnchor,
+  successorLaunchBase,
   readLaunchScopeAnchor,
   serializeLaunchScopeAnchor,
 } from "@/lib/launch-scope-anchor";
@@ -131,6 +133,64 @@ describe("the canonical home", () => {
   });
   it("keeps an unanchored instance flat", () => {
     expect(launchScopeAnchorBase(null)).toBeNull();
+  });
+});
+
+/**
+ * THE LAUNCH BASE A SUCCESSOR OPENS (cinatra#3786).
+ *
+ * A run's canonical ADDRESS and the launcher its successor opens are the same
+ * route for four of the five kinds, and they part on the user kind. The address
+ * is flat because `/personal` names the reader; the launch is not read by a
+ * reader at all, so it opens the personal launcher, which is the one mint that
+ * stamps a fresh run with a user anchor.
+ */
+describe("the successor's launch base (cinatra#3786)", () => {
+  it("opens the PERSONAL launcher for a user-anchored run, where the address stays flat", () => {
+    expect(successorLaunchBase({ v: 1, kind: "user", id: "u1" })).toBe("/personal");
+    expect(launchScopeAnchorBase({ v: 1, kind: "user", id: "u1" })).toBeNull();
+  });
+
+  it("is the canonical base for the other four kinds, exactly", () => {
+    const others = [
+      { v: 1, kind: "workspace" },
+      { v: 1, kind: "organization", id: "o 1" },
+      { v: 1, kind: "team", id: "t1" },
+      { v: 1, kind: "project", id: "p1" },
+    ] as const;
+    for (const anchor of others) {
+      expect(successorLaunchBase(anchor)).toBe(launchScopeAnchorBase(anchor));
+    }
+    expect(successorLaunchBase({ v: 1, kind: "workspace" })).toBe("/workspace");
+    expect(successorLaunchBase({ v: 1, kind: "organization", id: "o 1" })).toBe(
+      "/organizations/o%201",
+    );
+    expect(successorLaunchBase({ v: 1, kind: "team", id: "t1" })).toBe("/teams/t1");
+    expect(successorLaunchBase({ v: 1, kind: "project", id: "p1" })).toBe("/projects/p1");
+  });
+
+  it("answers null for an unanchored run, so its successor keeps the bare road", () => {
+    expect(successorLaunchBase(null)).toBeNull();
+  });
+
+  it("spells the personal base the way the surface vocabulary spells it", () => {
+    // This leaf keeps its own copy of the scope bases rather than importing
+    // them, exactly as `launchScopeAnchorBase` does. The copy is pinned here.
+    expect(successorLaunchBase({ v: 1, kind: "user", id: "u1" })).toBe(
+      scopeSurfaceBase({ kind: "personal" }),
+    );
+  });
+
+  it("agrees with the personal launcher's own mint about which scope that base is", () => {
+    // The base below is the route of the scope whose launcher mints the user
+    // anchor, pinned beside the mint the "minting the anchor FROM the
+    // launching route's scope" block already holds, rather than restated.
+    expect(launchScopeAnchorForScope({ kind: "personal" }, "u1")).toEqual({
+      v: 1,
+      kind: "user",
+      id: "u1",
+    });
+    expect(successorLaunchBase({ v: 1, kind: "user", id: "u1" })).toBe("/personal");
   });
 });
 

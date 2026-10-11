@@ -23,6 +23,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { toast } from "@/lib/cinatra-toast";
+import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { createAndTriggerRun, readRunOutputEvidence } from "./run-actions";
 import {
   resolveRunTerminalOutcome,
@@ -31,13 +32,30 @@ import {
 
 export type StartNewRunButtonProps = {
   agentId: string;
+  /**
+   * THE LAUNCHER THE SUCCESSOR OPENS (cinatra#3693, cinatra#3786): the run's
+   * canonical base where it has one, and `/personal` for a user-anchored run,
+   * whose own address stays bare. A run launched from a vantage keeps its next
+   * run at that vantage: the press opens that launcher, which mints the anchor
+   * itself. Absent for an unanchored run, where the press creates the run
+   * exactly as it always has.
+   *
+   * NOT the run's scope base. The two agree for four of the five anchor kinds
+   * and part on the personal one, which is why this prop carries its own name;
+   * `src/lib/launch-scope-anchor.ts` answers it with `successorLaunchBase`.
+   */
+  launchBase?: string | null;
 };
 
-export function StartNewRunButton({ agentId }: StartNewRunButtonProps) {
+export function StartNewRunButton({ agentId, launchBase }: StartNewRunButtonProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
   const handleClick = () => {
+    if (launchBase) {
+      router.push(buildAgentWorkspacePath(agentId, { scopeBase: launchBase }));
+      return;
+    }
     startTransition(async () => {
       const result = await createAndTriggerRun({ templateSlug: agentId });
       if (result.ok) {
@@ -107,6 +125,9 @@ export type RunCompletionCardProps = {
    * never adds one", and this control is one the card's own section draws.
    */
   agentId?: string;
+  /** The launcher "Start new run" opens (cinatra#3693, cinatra#3786); see
+   *  `StartNewRunButtonProps`, which this forwards to unchanged. */
+  launchBase?: string | null;
   outputHint: RunOutputHint;
   /**
    * THE HOST'S OWN SYNCHRONOUS FACT (cinatra#3002, fix leg 4): the host is
@@ -125,6 +146,7 @@ export type RunCompletionCardProps = {
 export function RunCompletionCard({
   runId,
   agentId,
+  launchBase,
   outputHint,
   initialEvidence,
   transcriptCarriesOutput,
@@ -323,7 +345,7 @@ export function RunCompletionCard({
             stretches to the full card width. */}
         {agentId ? (
           <div className="flex flex-wrap items-center gap-2">
-            <StartNewRunButton agentId={agentId} />
+            <StartNewRunButton agentId={agentId} launchBase={launchBase} />
           </div>
         ) : null}
       </CardContent>

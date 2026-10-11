@@ -85,6 +85,7 @@ import {
   normalizeCitations,
 } from "./stream-normalizers";
 import { declaresLifecycleInteraction } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
+import { isLifecycleCardReplacementDataPart } from "@cinatra-ai/agent-ui-protocol";
 import type { UiCitation, UiThoughtGroup } from "../types";
 import type {
   AgUiEvent,
@@ -504,6 +505,13 @@ function reduceDataPart(
     }
     return pinRunIdOnToolCall(state, data.toolCallId, data.runId);
   }
+
+  // THE CARD-REPLACEMENT ANNOUNCEMENT (cinatra#2853) IS NOT CONTENT. It says
+  // "the card mounted on this ref is now that one" and draws nothing at all —
+  // the client's turn driver reads it off the EVENT and hands it to the mounted
+  // cards. Consumed here so it never reaches `dataParts`, where the renderable
+  // dispatch would draw its safe fallback for a payload that is not a view.
+  if (!isRenderableView && isLifecycleCardReplacementDataPart(data)) return state;
 
   if (!isRenderableView && isCitationsDataPart(data)) {
     const normalized = normalizeCitations(data.citations);

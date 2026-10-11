@@ -27,6 +27,14 @@ import { readInstanceIdentityRequiringInstanceId } from "@/lib/instance-identity
 // origin -> instance `resolveCanonicalInstanceForOrigin`, widget-user-auth.ts).
 // It CANNOT select a write target and MUST NEVER be used for authorization
 // The server still re-derives the write instance from the tokens.
+//
+// ONE EXCEPTION, NAMED (cinatra#3715): `resolveHandshakeSiteBinding` below is
+// the handshake rule of cinatra#3328, exported so the widget's sign-in asks the
+// SAME question the gate asks, the same way, instead of keeping a second copy.
+// The sign-in consults it only as the second road of its authoritative
+// origin -> instance re-derivation, and what it can accept is this
+// application's own instance identity for the one site that identity belongs
+// to — never a connector instance, so it selects no connector write target.
 // ---------------------------------------------------------------------------
 
 /** The CSP `frame-ancestors` value for a page that must NOT be framed anywhere. */
@@ -81,10 +89,15 @@ type StoredInstanceRow = { id?: unknown; siteUrl?: unknown };
 // the closed binding table; it learns nothing about, and special-cases nothing
 // in, any particular connector package.
 // ---------------------------------------------------------------------------
-function resolveConnectSiteFrameAncestor(input: {
+
+/** What the handshake rule answers: the site's sealed origin and this
+ *  application's own instance identity, read server-side (cinatra#3715). */
+export type HandshakeSiteBinding = { origin: string; instanceId: string };
+
+function resolveConnectSiteBinding(input: {
   connectClient: string;
   instanceId: string;
-}): string | null {
+}): HandshakeSiteBinding | null {
   const connectClient = input.connectClient.trim();
   if (!connectClient || !input.instanceId) return null;
 
@@ -108,7 +121,48 @@ function resolveConnectSiteFrameAncestor(input: {
 
   // The seal re-asserts the verdict at the boundary that produces a policy
   // value, exactly as the instances road does.
-  return sealPolicyOrigin(distinct[0]);
+  const origin = sealPolicyOrigin(distinct[0]);
+  return origin ? { origin, instanceId: ownInstanceId } : null;
+}
+
+/** The connector's own rows for the presented id — the first road's reading,
+ *  shared by the gate and the handshake rule so both count the same rows. */
+function connectorRowsForId(instancesConfigKey: string, instanceId: string): StoredInstanceRow[] {
+  const config = readConnectorConfigFromDatabase<{ instances?: unknown }>(
+    instancesConfigKey,
+    { instances: [] },
+  );
+  const instances: StoredInstanceRow[] = Array.isArray(config?.instances)
+    ? (config.instances.filter((r) => r && typeof r === "object") as StoredInstanceRow[])
+    : [];
+  return instances.filter((r) => typeof r.id === "string" && r.id.trim() === instanceId);
+}
+
+/**
+ * cinatra#3715 — THE ONE HANDSHAKE RULE, for the gate and the sign-in alike.
+ *
+ * Answers the gate's second road as a whole, for the same inputs the gate
+ * reads: the connector holds NO row for the presented id (one row answers by
+ * the connector road instead, several are an ambiguity nothing rescues), the id
+ * is this application's own instance identity, and the connect client has
+ * exactly one active site origin. The answer carries that origin and the
+ * identity as the SERVER read it. `null` on every other state and on any throw.
+ */
+export function resolveHandshakeSiteBinding(input: {
+  instancesConfigKey: string;
+  connectClient: string;
+  instanceId: string;
+}): HandshakeSiteBinding | null {
+  try {
+    const instancesConfigKey = String(input.instancesConfigKey ?? "").trim();
+    const connectClient = String(input.connectClient ?? "").trim();
+    const instanceId = String(input.instanceId ?? "").trim();
+    if (!instancesConfigKey || !connectClient || !instanceId) return null;
+    if (connectorRowsForId(instancesConfigKey, instanceId).length !== 0) return null;
+    return resolveConnectSiteBinding({ connectClient, instanceId });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -134,28 +188,22 @@ export function resolveInstanceFrameAncestor(input: {
     const instanceId = String(input.instanceId ?? "").trim();
     if (!instancesConfigKey || !instanceId) return null;
 
-    const config = readConnectorConfigFromDatabase<{ instances?: unknown }>(
-      instancesConfigKey,
-      { instances: [] },
-    );
-    const instances: StoredInstanceRow[] = Array.isArray(config?.instances)
-      ? (config.instances.filter((r) => r && typeof r === "object") as StoredInstanceRow[])
-      : [];
-
-    const matches = instances.filter(
-      (r) => typeof r.id === "string" && r.id.trim() === instanceId,
-    );
+    const matches = connectorRowsForId(instancesConfigKey, instanceId);
     // DUPLICATE matches → ambiguous: fail closed, NEVER select the first of
     // several rows, and NEVER let the second road rescue the ambiguity.
     if (matches.length > 1) return null;
     // Zero matches → the connector holds no row for this id. That is the filed
     // state of cinatra#3328 for a site that was connected through the handshake
     // and then added under the connector: ask the site's own row (opt-in, and
-    // fail-closed inside the helper).
+    // fail-closed inside the helper). cinatra#3715: through the ONE helper the
+    // sign-in asks too, so the gate and the sign-in cannot disagree.
     if (matches.length === 0) {
       const connectClient = String(input.connectSiteFallbackClient ?? "").trim();
       if (!connectClient) return null;
-      return resolveConnectSiteFrameAncestor({ connectClient, instanceId });
+      return (
+        resolveHandshakeSiteBinding({ instancesConfigKey, connectClient, instanceId })?.origin ??
+        null
+      );
     }
 
     const siteUrl = typeof matches[0].siteUrl === "string" ? matches[0].siteUrl : "";

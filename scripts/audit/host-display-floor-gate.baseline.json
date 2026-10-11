@@ -1,0 +1,148 @@
+{
+  "note": "Host display floor (cinatra#3821): the places where the application draws an artifact's content itself, or a step of one agent, instead of the extension that owns it. Each entry names its owner (the extension or the item that takes it over). SHRINK-ONLY: a new key or a grown count fails; a fallen count is stale until `node scripts/audit/host-display-floor-gate.mjs --write-baseline` ratchets it down (it refuses growth). See scripts/audit/host-display-floor.md.",
+  "handlerKinds": {},
+  "displays": {
+    "src/app/artifacts/[id]/dashboard-pointer-detail.tsx": {
+      "owner": "@cinatra-ai/dashboard-artifact",
+      "removedBy": "none filed; the dashboard pointer is held by the ruling recorded for the dashboard type in the data-contract allowlist"
+    }
+  },
+  "stepRenderers": {
+    "blog-idea-selection :: packages/agents/src/blog-idea-selection-renderer.tsx": {
+      "owner": "@cinatra-ai/blog-pipeline-agent"
+    },
+    "campaign-recipients-review :: packages/agents/src/campaign-recipients-review-renderer.tsx": {
+      "owner": "@cinatra-ai/email-artifacts"
+    },
+    "context-selector :: packages/agents/src/context-selector-renderer.tsx": {
+      "owner": "@cinatra-ai/context-selection-agent"
+    },
+    "cta :: packages/agents/src/cta-renderer.tsx": {
+      "owner": "@cinatra-ai/email-outreach-agent"
+    },
+    "email-drafts-review :: packages/agents/src/email-drafts-review-renderer.tsx": {
+      "owner": "@cinatra-ai/email-artifacts"
+    },
+    "list-picker :: packages/agents/src/list-picker-renderer.tsx": {
+      "owner": "@cinatra-ai/email-outreach-agent"
+    },
+    "wayflow-setup-form :: packages/agents/src/grouped-setup-form-renderer.tsx": {
+      "owner": "application generic setup form"
+    }
+  },
+  "ceilings": {
+    "packages/agents/src/blog-idea-selection-renderer.tsx": {
+      "topLevel": 2,
+      "imports": [
+        "packages/agents/src/schema-field-renderer",
+        "react",
+        "src/components/ui/radio-group"
+      ],
+      "owner": "@cinatra-ai/blog-pipeline-agent"
+    },
+    "packages/agents/src/campaign-recipients-review-renderer.tsx": {
+      "topLevel": 2,
+      "imports": [
+        "@cinatra-ai/sdk-ui",
+        "lucide-react",
+        "packages/agents/src/email-outreach-stage-actions",
+        "packages/agents/src/output-extract",
+        "packages/agents/src/use-edit-history",
+        "react",
+        "src/components/ui/button",
+        "src/components/ui/paginated-table",
+        "src/components/ui/table",
+        "src/lib/cinatra-toast"
+      ],
+      "owner": "@cinatra-ai/email-artifacts"
+    },
+    "packages/agents/src/context-selector-renderer.tsx": {
+      "topLevel": 6,
+      "imports": [
+        "packages/agents/src/humanize-field-name",
+        "react",
+        "src/components/ui/badge",
+        "src/components/ui/button",
+        "src/components/ui/card",
+        "src/components/ui/checkbox",
+        "src/components/ui/label",
+        "src/components/ui/separator"
+      ],
+      "owner": "@cinatra-ai/context-selection-agent"
+    },
+    "packages/agents/src/cta-renderer.tsx": {
+      "topLevel": 1,
+      "imports": [
+        "packages/agents/src/cta-actions",
+        "packages/agents/src/humanize-field-name",
+        "react",
+        "src/components/ui/label",
+        "src/components/ui/select",
+        "src/components/ui/textarea"
+      ],
+      "owner": "@cinatra-ai/email-outreach-agent"
+    },
+    "packages/agents/src/email-drafts-review-renderer.tsx": {
+      "topLevel": 2,
+      "imports": [
+        "packages/agents/src/email-outreach-stage-actions",
+        "packages/agents/src/output-extract",
+        "react",
+        "src/components/ui/button",
+        "src/components/ui/input",
+        "src/components/ui/label",
+        "src/components/ui/textarea",
+        "src/lib/cinatra-toast"
+      ],
+      "owner": "@cinatra-ai/email-artifacts"
+    },
+    "packages/agents/src/grouped-setup-form-renderer.tsx": {
+      "topLevel": 2,
+      "imports": [
+        "@hookform/resolvers/zod",
+        "lucide-react",
+        "packages/agents/src/agent-builder-ids",
+        "packages/agents/src/field-renderer-registry",
+        "packages/agents/src/humanize-field-name",
+        "packages/agents/src/json-schema-to-zod",
+        "packages/agents/src/schema-field-renderer",
+        "react",
+        "react-hook-form",
+        "src/components/ui/button",
+        "src/components/ui/form",
+        "src/components/ui/separator"
+      ],
+      "owner": "application generic setup form"
+    },
+    "packages/agents/src/list-picker-renderer.tsx": {
+      "topLevel": 3,
+      "imports": [
+        "date-fns",
+        "next/link",
+        "packages/agents/src/list-picker-actions",
+        "react",
+        "src/components/ui/badge",
+        "src/components/ui/button",
+        "src/components/ui/card",
+        "src/components/ui/input",
+        "src/lib/cinatra-toast"
+      ],
+      "owner": "@cinatra-ai/email-outreach-agent"
+    },
+    "src/app/artifacts/[id]/dashboard-pointer-detail.tsx": {
+      "topLevel": 5,
+      "imports": [
+        "date-fns",
+        "lucide-react",
+        "next/link",
+        "server-only",
+        "src/components/artifacts/dashboard-library-row",
+        "src/components/ui/button",
+        "src/lib/dashboards/dashboard-artifact-surface"
+      ],
+      "owner": "@cinatra-ai/dashboard-artifact"
+    }
+  },
+  "mimeConstructions": {},
+  "hostMounts": {}
+}

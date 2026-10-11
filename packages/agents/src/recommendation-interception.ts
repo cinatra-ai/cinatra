@@ -28,6 +28,7 @@ import "server-only";
 import {
   buildRecommendationCandidatesForAgent,
   recommendSkillsForAgentTask,
+  recommendSkillsForAgentTaskOrderedV1,
   type RecommendSkillsForAgentInput,
 } from "@cinatra-ai/skills/recommendation-server";
 import {
@@ -40,6 +41,7 @@ import {
   type RecommendationEfficacy,
   type RunIntent,
   type RunSkillSelectionEntry,
+  type RecommendationTruncationV1,
 } from "@cinatra-ai/skills/recommendation";
 import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
 import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
@@ -77,6 +79,40 @@ export async function getRunRecommendations(
   input: RecommendSkillsForAgentInput,
 ): Promise<RankedRecommendation[]> {
   return recommendSkillsForAgentTask(input);
+}
+
+/**
+ * THE READ PATH'S ONE ENTRY (cinatra#2815 S3 part 4).
+ *
+ * The chip-row read used to pass a restriction the CLIENT supplied, which made
+ * the scored pool a function of what the caller asked for. It is not a caller's
+ * decision: the pool is the agent's assigned, deliverable set resolved for THIS
+ * reader's own scope, so this entry takes that server-derived set and nothing
+ * else. There is no parameter here for a client restriction to arrive through —
+ * dropping it is the point, and a signature that cannot express it is what
+ * keeps it dropped.
+ *
+ * The ranking is therefore RANK-AUTHORITATIVE under RecommendationOrderingV1:
+ * every rank is a rank within the set the reader may actually be delivered, and
+ * the truncation record rides along so a persisted decision can say how much of
+ * the pool it was shown.
+ */
+export async function getRunRecommendationsForReader(input: {
+  agentId: string;
+  intent: RunIntent;
+  /** The SERVER-derived pool: the agent's assigned skills for this reader. */
+  assignedSkillIds: string[];
+  maxCandidates?: number;
+}): Promise<{
+  recommendations: RankedRecommendation[];
+  truncation: RecommendationTruncationV1;
+}> {
+  return recommendSkillsForAgentTaskOrderedV1({
+    agentId: input.agentId,
+    intent: input.intent,
+    restrictToSkillIds: input.assignedSkillIds,
+    ...(input.maxCandidates !== undefined ? { maxCandidates: input.maxCandidates } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------

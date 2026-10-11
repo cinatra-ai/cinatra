@@ -9,11 +9,15 @@
 // that ignores content edits, or that wrongly treats a re-render as activity)
 // fails here rather than silently reordering the sidebar on every open.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   fingerprintMessages,
+  forgetRememberedTranscripts,
   isRealActivity,
+  recallThreadTranscript,
+  recalledThreadFingerprint,
+  rememberThreadTranscript,
   type ActivityMessage,
 } from "../thread-activity";
 
@@ -164,5 +168,56 @@ describe("isRealActivity — the #283 gate", () => {
     const persisted = [user("u1", "hi"), assistant("a1", "answer")];
     const newBaseline = fingerprintMessages(persisted);
     expect(isRealActivity(newBaseline, persisted)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE REMEMBERED TRANSCRIPT IS THE VIEWER'S, NOT THE THREAD'S (cinatra#3007,
+// fix leg 10, convergence).
+// ---------------------------------------------------------------------------
+// The record that lets a REBUILT page redraw the conversation it already had
+// lives at module scope, so it outlives the signed-in person: signing out here
+// is a client-side route change, not a document reload. These arms pin the only
+// rule that makes that safe — a transcript is recalled for the reader it was
+// recorded for and for nobody else.
+describe("the remembered transcript is keyed to the reader", () => {
+  const transcript = [user("u1", "the quarterly numbers"), assistant("a1", "here they are")];
+
+  beforeEach(() => {
+    forgetRememberedTranscripts();
+  });
+
+  it("gives the SAME reader back the list the page last had", () => {
+    rememberThreadTranscript("user-a", "thr-1", "thr-1", transcript);
+    expect(recallThreadTranscript("user-a", "thr-1")).toHaveLength(2);
+    expect(recalledThreadFingerprint("user-a", "thr-1")).toBe(fingerprintMessages(transcript));
+  });
+
+  it("gives a DIFFERENT reader nothing at all", () => {
+    rememberThreadTranscript("user-a", "thr-1", "thr-1", transcript);
+    // The next person on this shared browser, one back-button press after
+    // signing in, lands on the same thread URL in the same document.
+    expect(
+      recallThreadTranscript("user-b", "thr-1"),
+      "another person's conversation is never redrawn from memory",
+    ).toEqual([]);
+    expect(
+      recalledThreadFingerprint("user-b", "thr-1"),
+      "and the load fingerprint is the cold-open one, so nothing is persisted for them",
+    ).toBe("");
+  });
+
+  it("gives a signed-OUT surface nothing a signed-in reader recorded", () => {
+    rememberThreadTranscript("user-a", "thr-1", "thr-1", transcript);
+    expect(recallThreadTranscript(null, "thr-1")).toEqual([]);
+    expect(recallThreadTranscript(undefined, "thr-1")).toEqual([]);
+  });
+
+  it("keeps the two readers' records apart rather than overwriting one with the other", () => {
+    const theirs = [user("u9", "my own thread")];
+    rememberThreadTranscript("user-a", "thr-1", "thr-1", transcript);
+    rememberThreadTranscript("user-b", "thr-1", "thr-1", theirs);
+    expect(recallThreadTranscript("user-a", "thr-1")).toHaveLength(2);
+    expect(recallThreadTranscript("user-b", "thr-1")).toHaveLength(1);
   });
 });

@@ -53,6 +53,11 @@ export type WidgetAuthAuditEvent =
   // not authorize a run — the turn's own dual-token decision above is the
   // dispatch record). Reason-coded/scrubbed like its siblings; never a secret.
   | "assistant_chat_capabilities_broker_advertised"
+  // cinatra#3715 — the same READ refused: emitted once at every fail-closed rung
+  // of that broker branch, reason-coded with the refusal point (and, for the two
+  // token consumes, the consume's own reason code) — never a token, a hash or a
+  // header value. The caller still receives the one generic 401.
+  | "assistant_chat_capabilities_broker_rejected"
   // cinatra#2574 (epic #2564 S8a) — the authorization DECISION for a widget
   // LIFECYCLE READ. Emitted by the one actor-construction seam every widget
   // lifecycle read goes through: authorized once the `cwu_` proved the

@@ -255,6 +255,35 @@ describe("importAgentTemplate upload path goes live (cinatra#2653)", () => {
     expect(logAuditEvent).not.toHaveBeenCalled();
   });
 
+  it("marks the import as a SUPPLIED INSTALL so an unmountable upload fails before it can be registered or flipped live (cinatra#3493)", async () => {
+    await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, { redirect: false });
+    const coreOptions = importAgentTemplateCore.mock.calls[0][2] as Record<string, unknown>;
+    expect(coreOptions.requireRuntimeMount).toBe(true);
+  });
+
+  it("lets the core's unmounted-install failure reach the person instead of registering and publishing (cinatra#3493)", async () => {
+    importAgentTemplateCore.mockRejectedValue(
+      new Error("the runtime did not mount it (the runtime reports 0 mounted agents)"),
+    );
+    await expect(
+      importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+        redirect: false,
+        publishAndBind: true,
+      }),
+    ).rejects.toThrow(/did not mount it/);
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(publishAgentTemplateAndBindVersion).not.toHaveBeenCalled();
+  });
+
+  it("lets a caller that only restores a DRAFT opt out of the runtime-mount requirement (cinatra#3493)", async () => {
+    await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      requireRuntimeMount: false,
+    });
+    const coreOptions = importAgentTemplateCore.mock.calls[0][2] as Record<string, unknown>;
+    expect(coreOptions.requireRuntimeMount).toBe(false);
+  });
+
   it("never forwards the flag into importAgentTemplateCore (the core's status contract is untouched)", async () => {
     await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
       redirect: false,

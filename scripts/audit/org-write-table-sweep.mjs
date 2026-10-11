@@ -12,17 +12,34 @@
 // NO-NEW-ROT RATCHET: the committed baseline records the CURRENT raw-SQL
 // surface per file; it can only shrink. Regenerate with --write-baseline.
 //
+// FLOOR COMPARED WITH THE BASE (cinatra#3832): the committed baseline may not
+// name a file or a count the base branch's baseline does not allow, so a pull
+// request cannot add its own write to the tolerated surface. The base comes
+// from ORG_WRITE_TABLE_SWEEP_BASE when a workflow sets it, else from the pull
+// request's base branch, fetched one commit deep when the checkout does not
+// hold it; a base that cannot be read fails closed (the shared guard,
+// scripts/audit/lib/floor-base-guard.mjs).
+//
 // Usage:
 //   node scripts/audit/org-write-table-sweep.mjs                  # check
 //   node scripts/audit/org-write-table-sweep.mjs --write-baseline # regenerate
+//   ORG_WRITE_TABLE_SWEEP_BASE=origin/main node ...   # compare the baseline with that revision (default: the pull request's base branch)
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compareFloorWithBase, raisedCounts, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const BASELINE_PATH = join(__dirname, "org-write-table-sweep.baseline.json");
+
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "scripts/audit/org-write-table-sweep.baseline.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "ORG_WRITE_TABLE_SWEEP_BASE";
 
 /** Org-axis tables (registry storageReferences universe + kernel tables). */
 const ORG_AXIS_TABLES = [
@@ -166,7 +183,41 @@ function scan() {
   return surface;
 }
 
+/** A baseline's text -> `{ file: count }`; throws when it is not one. */
+function parseBaseline(text) {
+  const doc = JSON.parse(text);
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not an object of counts");
+  for (const [file, count] of Object.entries(doc)) {
+    if (!Number.isInteger(count) || count < 0) throw new Error(`${file}: ${JSON.stringify(count)} is not a count`);
+  }
+  return doc;
+}
+
+/**
+ * The floor base guard (cinatra#3832): growth is a file the base branch's
+ * baseline does not name, or a count above the base's. `headFloor` (a
+ * `{ file: count }` map) defaults to the floor file in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? parseBaseline(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
+  return compareFloorWithBase({
+    gate: "org-write-table-sweep",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: head,
+    parse: parseBaseline,
+    grown: raisedCounts,
+    repoRoot,
+    env,
+  });
+}
+
 function main() {
+  // The floor base guard runs first: it reads only the committed baseline.
+  if (!process.argv.includes("--write-baseline")) {
+    const headFloor = existsSync(BASELINE_PATH) ? JSON.parse(readFileSync(BASELINE_PATH, "utf-8")) : {};
+    if (!reportFloorGuard(checkFloorAgainstBase({ headFloor }))) process.exit(1);
+  }
   const surface = scan();
   if (process.argv.includes("--write-baseline")) {
     writeFileSync(BASELINE_PATH, JSON.stringify(surface, null, 2) + "\n");
@@ -190,4 +241,5 @@ function main() {
   console.log(`org-write-table-sweep: OK (${Object.keys(surface).length} baselined file(s), no new surface)`);
 }
 
-main();
+// Run only when called as a program: the tests import the floor check without running the sweep.
+if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename)) main();

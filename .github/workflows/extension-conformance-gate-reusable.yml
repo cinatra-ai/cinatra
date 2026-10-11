@@ -87,6 +87,7 @@ jobs:
             packages/sdk-extensions/src/chat-views-contract.ts
             packages/sdk-extensions/src/llm-provider-contract.ts
             packages/sdk-extensions/src/access-config.ts
+            packages/sdk-extensions/src/artifact-client-bundle.ts
             packages/sdk-extensions/package.json
             packages/sdk-ui/package.json
           sparse-checkout-cone-mode: false

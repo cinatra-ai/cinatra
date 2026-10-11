@@ -1,0 +1,17 @@
+{
+  "note": "extension-rendering-gate — the floor of the rendering gate (cinatra#3871): the claiming artifact extensions that draw no display of their own. It only shrinks: a new entry fails against the base branch. Remove an entry with `node scripts/audit/extension-rendering-gate.mjs --write-baseline` once its extension ships its own detail display; the writer never adds one.",
+  "deficit": [
+    {
+      "package": "@cinatra-ai/dashboard-artifact",
+      "types": [
+        "@cinatra-ai/dashboard-artifact:dashboard"
+      ]
+    },
+    {
+      "package": "@cinatra-ai/drupal-artifacts",
+      "types": [
+        "@cinatra-ai/drupal:node"
+      ]
+    }
+  ]
+}

@@ -32,6 +32,7 @@ import {
 } from "@/lib/breadcrumb-contributions";
 import { buildBreadcrumbTrail } from "@/lib/breadcrumb-trail";
 import type { ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import type { ScopeAssignmentPageModel } from "@/lib/scope-assignment/scope-assignment-page.server";
 
 const ORG_ID = "88c63f08-4d2e-4c7a-9f1b-2a0d6e5c4b31";
 const TEAM_ID = "9c0dfce6-1b7a-4a51-8f30-5c2e91b7d4aa";
@@ -45,6 +46,24 @@ vi.mock("next/navigation", () => ({
 
 import { ScopeSurfaceSettingsShell } from "@/components/scope-surface-settings-shell";
 
+// The body is the per-scope assignment page (cinatra#2814); the trail this
+// suite pins is the shell's own, whatever the body holds.
+function page(scope: ScopeSurfaceRef): ScopeAssignmentPageModel {
+  return {
+    surface: "agent",
+    tab: "skills",
+    routeScope: scope,
+    packageName: "@cinatra-ai/author-agent",
+    displayName: "Author Agent",
+    scopeLabel: "Scope",
+    crossScope: scope.kind === "workspace",
+    target: { surface: "agent", scope, vendor: "cinatra-ai", name: "author-agent" },
+    admission: { ok: true },
+    manifest: null,
+    sections: [],
+  };
+}
+
 function renderShell(scope: ScopeSurfaceRef, pathname: string, scopeTitle: string | null) {
   nav.pathname = pathname;
   return render(
@@ -52,6 +71,7 @@ function renderShell(scope: ScopeSurfaceRef, pathname: string, scopeTitle: strin
       scope={scope}
       scopeTitle={scopeTitle}
       subject={{ kind: "agent", packageName: "@cinatra-ai/author-agent" }}
+      page={page(scope)}
     />,
   );
 }

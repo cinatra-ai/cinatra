@@ -79,6 +79,19 @@ export interface DashboardTwinContext {
    * `false` (no mint), so every non-materialize `pairTwin` call site is unchanged.
    */
   readonly mintMeaningAssertion?: boolean;
+  /**
+   * THE PINNED CONFIGURATION (cinatra#3092): the dashboard's configuration AS
+   * WRITTEN — `dashboards.config_json` of the just-written row, copied verbatim
+   * by `twinCtx` on an `upsert`. When set, the host twin records it on the
+   * representation revision it appends, in the same transaction, under the
+   * reserved `pinnedConfiguration` key of `representation.classifier_signals`
+   * (the key the non-file revision reader reads), so every revision keeps an
+   * immutable copy of what the dashboard looked like. Absent on a `delete`, and
+   * absent (undefined) on a context built before this field existed ⇒ no record
+   * (the column stays NULL), so the addition is backward-compatible for every
+   * existing `pairTwin` call site.
+   */
+  readonly configuration?: unknown;
 }
 
 /** The minimal transaction surface the twin needs: run a spliced host builder

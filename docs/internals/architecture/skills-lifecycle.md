@@ -118,6 +118,10 @@ active`), seeded one `migration`-source revision (deterministic id
 backfill statements are ordered and idempotent; `down()` fully reverses the
 schema.
 
+## Scoped assignments as recommendation candidates
+
+The per-scope assignment page (agent settings, **Skills**) writes picks through `assignScopeSkill` to `agent_assigned_skills` for the selected scope. On the next dispatch, `resolveRecommendationCandidateSkillIds` calls `getAssignedSkillIdsForAgent` with the run actor and frozen assignment-scope snapshot, so an assigned skill that remains assignable and deliverable becomes a recommendation candidate for that run. `maybeHoldRunForRecommendation` then applies the hold policy and request-aware scoring; assigning a skill does not guarantee that every run will be held.
+
 # Content authority + rollback (custom/personal skills)
 
 Content authority + rollback semantics (cinatra#1362, epic #1358 A2). Builds on

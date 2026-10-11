@@ -12,7 +12,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
 import type {
@@ -75,6 +74,8 @@ export function ListPickerRenderer({
   label,
   description,
   context,
+  mode,
+  bindingParams,
 }: FieldRendererProps) {
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,12 +143,51 @@ export function ListPickerRenderer({
     });
   }
 
+  // The gate header (cinatra#3720), drawn as the artifact review drawing's
+  // list step draws it: ONE row with the question the agent declared for the
+  // step and, while the gate waits, the pill "Awaiting your pick". The question
+  // is the binding's declared `question`, else the label; a blank or absent one
+  // draws no element at all, so no empty band is left. A read-only replay of a
+  // settled gate (`mode="view"`) never claims to wait.
+  const declaredQuestion =
+    typeof bindingParams?.question === "string" &&
+    bindingParams.question.trim() !== ""
+      ? bindingParams.question
+      : typeof label === "string" && label.trim() !== ""
+        ? label
+        : null;
+  const waiting = mode !== "view";
+
   return (
     <div className="flex flex-col gap-3">
-      <Label className="text-foreground">
-        {label}
-        {required ? " *" : ""}
-      </Label>
+      {declaredQuestion !== null || waiting ? (
+        <div
+          className="flex flex-wrap items-center gap-2.5"
+          data-testid="list-picker-gate-header"
+        >
+          {declaredQuestion !== null ? (
+            <span
+              className="font-sans text-sm font-bold text-foreground"
+              data-testid="list-picker-gate-question"
+            >
+              {declaredQuestion}
+              {required ? " *" : ""}
+            </span>
+          ) : null}
+          {waiting ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-brand-mustard/40 bg-brand-mustard/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink"
+              data-testid="list-picker-gate-waiting"
+            >
+              <span
+                className="size-[7px] rounded-full bg-brand-mustard"
+                aria-hidden="true"
+              />
+              Awaiting your pick
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {description ? (
         <p className="text-xs text-muted-foreground">{description}</p>
       ) : (

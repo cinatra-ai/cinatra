@@ -109,6 +109,8 @@ export interface RunStepRailEntry {
     disposition: string | null;
     /** resolved ⇒ read-only history; a completed gate submission replays inert. */
     resolved: boolean;
+    /** §I.3: exactly one pending gate is the run rail's current review. */
+    current?: boolean;
   };
   /** Present iff kind==="verification" (S4, cinatra#2042): the linkage the rail
    * entry deep-links into the review surface's VERIFICATION view with, plus the
@@ -172,6 +174,9 @@ export interface RailGate {
   reviewTaskId: string;
   status: "pending" | "resolved";
   disposition: string | null;
+  /** The actual title of the gate's one pinned artifact, authorized for this
+   * reader. Absent on historical inputs and when the target cannot be named. */
+  artifactName?: string | null;
   /** Creation time — the gate-ordering key. ISO string or epoch ms. */
   createdAt: string | number | Date;
 }
@@ -242,6 +247,21 @@ function gateTime(v: string | number | Date): number {
   if (typeof v === "number") return v;
   const parsed = Date.parse(v);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function compareReviewGates(a: { createdAt: string | number | Date; reviewTaskId: string }, b: { createdAt: string | number | Date; reviewTaskId: string }): number {
+  const time = gateTime(a.createdAt) - gateTime(b.createdAt);
+  return time !== 0 ? time : a.reviewTaskId.localeCompare(b.reviewTaskId);
+}
+
+/** Approved app-artifact-review §I.3: the first pending gate in rail order. */
+export function electCurrentReviewGate<T extends { status: string; createdAt: string | number | Date; reviewTaskId: string }>(gates: readonly T[]): T | undefined {
+  let current: T | undefined;
+  for (const gate of gates) {
+    if (gate.status !== "pending") continue;
+    if (!current || compareReviewGates(gate, current) < 0) current = gate;
+  }
+  return current;
 }
 
 /**
@@ -391,10 +411,8 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   //     gate is read-only history; a pending gate is the active decision. A gate
   //     is unique per (run, reviewTaskId) (artifact_review_gates_run_task_uniq),
   //     so `gate:<reviewTaskId>` is a stable, non-colliding key within a run.
-  const sortedGates = [...gates].sort((a, b) => {
-    const t = gateTime(a.createdAt) - gateTime(b.createdAt);
-    return t !== 0 ? t : a.reviewTaskId.localeCompare(b.reviewTaskId);
-  });
+  const sortedGates = [...gates].sort(compareReviewGates);
+  const currentReviewTaskId = electCurrentReviewGate(gates)?.reviewTaskId;
   // Gates strictly trail the spine: base off the TRUE max ordinal already
   // assigned (template indices, surplus stepResults, or transcript turns), never
   // a count — a deduped or non-contiguous spine can't push a gate up into it.
@@ -408,13 +426,14 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         key,
         ordinal: maxOrdinal + 1 + i,
         kind: "gate",
-        label: "Review",
+        label: g.artifactName?.trim() ? `Review · ${g.artifactName.trim()}` : "Review",
         status: g.status === "resolved" ? "resolved" : "pending",
         gate: {
           gateId: g.gateId,
           reviewTaskId: g.reviewTaskId,
           disposition: g.disposition,
           resolved: g.status === "resolved",
+          current: g.reviewTaskId === currentReviewTaskId,
         },
       }),
       "gate",
@@ -426,6 +445,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
           reviewTaskId: g.reviewTaskId,
           disposition: g.disposition,
           resolved: g.status === "resolved",
+          current: g.reviewTaskId === currentReviewTaskId,
         };
       },
     );

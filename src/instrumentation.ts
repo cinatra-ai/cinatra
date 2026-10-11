@@ -45,6 +45,11 @@ export async function register() {
       "@cinatra-ai/mcp-server/dev-admin-bypass-request"
     );
     installDevAdminBypassRequestPort();
+    // The development server's memory by kind, one line a minute (cinatra#3758).
+    // Starts nothing outside `next dev` (a build included), and one timer per
+    // process however often this hook runs. See src/lib/dev-memory-reading.ts.
+    const { startDevMemoryReading } = await import("@/lib/dev-memory-reading");
+    startDevMemoryReading();
     const { register: registerNode } = await import("./instrumentation.node");
     await registerNode();
   }

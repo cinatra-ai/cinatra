@@ -149,6 +149,7 @@ function makeRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     traceId: null,
     timeoutSeconds: null,
     streamedText: null,
+    producedReviewPark: null,
     authPolicy: null,
     orgId: "org-test",
     projectId: null,

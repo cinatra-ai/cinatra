@@ -1,6 +1,6 @@
 // /agents tab-bar model (cinatra#1007).
 //
-// /agents was restructured into two tabs:
+// /agents carries two tabs:
 //   - "All Agents" (default) — the run-agent picker, now served AT /agents
 //     (moved from the old /agents/run, which is removed/replaced — not
 //     redirected; old deep links to /agents/run intentionally 404).
@@ -11,7 +11,12 @@
 // packages/agents/src/pages.tsx and the dashboard in
 // packages/dashboards/src/screens/agents-dashboard.tsx) so the tab labels/
 // hrefs/order cannot drift between the two routes.
-export type AgentsTabValue = "all" | "executions" | "reviews";
+//
+// There is no Reviews tab (cinatra#3693): the owner retired the Reviews list —
+// "reviews are reached through the Notifications page for every scope, so the
+// workspace-wide Reviews tab under `/agents` and the standalone review page go
+// away; a pending review still opens in place on the run page".
+export type AgentsTabValue = "all" | "executions";
 
 export type AgentsNavItem = {
   /** Stable key for the active-tab state. */
@@ -23,18 +28,12 @@ export type AgentsNavItem = {
 export const AGENTS_NAV: readonly AgentsNavItem[] = [
   { value: "all", label: "All Agents", href: "/agents" },
   { value: "executions", label: "Executions", href: "/agents/executions" },
-  // "Reviews" — the org's open artifact-review queue (cinatra#2047 row 9). It
-  // belongs on this bar rather than in Configuration because it is a REVIEWER's
-  // working surface, not an administrator's: a plain org member both sees it and
-  // decides on it. The counts are org-wide; the listed rows are filtered by run
-  // access on the page itself.
-  { value: "reviews", label: "Reviews", href: "/agents/reviews" },
 ] as const satisfies readonly AgentsNavItem[];
 
 // THE BAR NEVER ESCAPES THE SCOPE IT IS DRAWN IN (cinatra#2809, S3).
 //
 // `AGENTS_NAV` addresses the ROOT Agents surface, and on a scoped Agents tab
-// every one of its three hrefs would walk the reader out of the organization,
+// every one of its hrefs would walk the reader out of the organization,
 // team or project they are looking at — silently, because the tab labels read
 // the same in both places. So a scoped render asks for the scoped bar instead,
 // and the root-escape test pins that not one href leaves the base.

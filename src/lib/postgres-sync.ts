@@ -118,9 +118,17 @@ export type PostgresWorkerErrorPayload = PostgresWorkerErrorDetail & {
  * runs this exact function: its source is stringified into `workerSource`
  * below, so both sides of the file describe an error the same way. It must
  * therefore stay self-contained — no imports, no module-scope references.
+ * Avoid nested functions too: tsx injects module-scoped naming helpers into
+ * their declarations, which would be missing in the worker (cinatra#3629).
  */
 export function serializeWorkerError(error: unknown): PostgresWorkerErrorPayload {
-  const detail = (value: unknown): PostgresWorkerErrorDetail => {
+  if (!(error instanceof Error)) {
+    return { message: String(error) };
+  }
+
+  const nested = (error as unknown as { errors?: unknown }).errors;
+  const details: PostgresWorkerErrorDetail[] = [];
+  for (const value of [error, ...(Array.isArray(nested) ? nested : [])]) {
     const e = (value ?? {}) as Record<string, unknown>;
     const out: PostgresWorkerErrorDetail = {};
     if (typeof e.name === "string") out.name = e.name;
@@ -128,19 +136,12 @@ export function serializeWorkerError(error: unknown): PostgresWorkerErrorPayload
     if (typeof e.code === "string") out.code = e.code;
     if (typeof e.errno === "number" || typeof e.errno === "string") out.errno = e.errno;
     if (typeof e.syscall === "string") out.syscall = e.syscall;
-    return out;
-  };
-
-  if (!(error instanceof Error)) {
-    return { message: String(error) };
+    details.push(out);
   }
 
-  const payload: PostgresWorkerErrorPayload = detail(error);
+  const [payload, ...errors]: PostgresWorkerErrorPayload[] = details;
   if (typeof error.stack === "string") payload.stack = error.stack;
-  const nested = (error as unknown as { errors?: unknown }).errors;
-  if (Array.isArray(nested) && nested.length > 0) {
-    payload.errors = nested.map(detail);
-  }
+  if (errors.length > 0) payload.errors = errors;
   return payload;
 }
 

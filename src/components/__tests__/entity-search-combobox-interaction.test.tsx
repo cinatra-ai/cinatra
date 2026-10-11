@@ -37,6 +37,22 @@ const USERS: EntitySearchItem[] = [
 afterEach(() => cleanup());
 
 describe("EntitySearchCombobox keyboard + a11y (§3.4)", () => {
+  it("names the input from the supplied section and prompt ids", () => {
+    render(<>
+      <span id="scope-name">Workspace</span>
+      <label id="skill-prompt" htmlFor="skill-search">Choose skills</label>
+      <EntitySearchCombobox
+        id="skill-search"
+        aria-labelledby="scope-name skill-prompt"
+        onSearch={async () => ({ results: [] })}
+        onPick={() => {}}
+      />
+    </>);
+    const input = screen.getByRole("combobox");
+    expect(input.getAttribute("aria-labelledby")).toBe("scope-name skill-prompt");
+    expect(screen.getByRole("combobox", { name: "Workspace Choose skills" })).toBe(input);
+  });
+
   it("ArrowDown moves the active row, Enter picks it, a11y attributes track", async () => {
     const onSearch = vi.fn(async () => ({ results: USERS }));
     const onPick = vi.fn();

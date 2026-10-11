@@ -39,7 +39,11 @@ export const dashboards = cinatraSchema.table(
      *  the #1898 cutover — the column that retired was `visibility` (see below). */
     ownerLevel: text("owner_level").notNull(),
     ownerId: text("owner_id").notNull(),
-    organizationId: text("organization_id").notNull(),
+    /** The tenant. NULL exactly for a WORKSPACE dashboard (cinatra#2811): the
+     *  workspace sits above every organization, so its user-owned rows carry no
+     *  tenant; `dashboards_workspace_entity_org_check` binds NULL to
+     *  entity_type='workspace' in both directions (migration core__0108). */
+    organizationId: text("organization_id"),
     // ACL cutover Phase-3 (cinatra#1898, epic #1883 §D7): the dashboard-local
     // `visibility` column ('private'|'owners'|'members') is DROPPED here
     // (migration core__0087). Phase-2 stopped reading it — a dashboard is always
@@ -127,6 +131,19 @@ export const dashboards = cinatraSchema.table(
     entityNameUniq: uniqueIndex("dashboards_entity_name_uniq")
       .on(t.organizationId, t.entityType, t.entityId, t.ownerLevel, t.ownerId, t.name)
       .where(sql`entity_type IS NOT NULL`),
+    // The ORG-NULL TWINS of the three per-entity indexes (cinatra#2811). NULLs
+    // are distinct in a unique index, so the org-keyed pair above cannot hold
+    // "one Overview" / "one name" for a workspace row; each twin is partial on
+    // `organization_id IS NULL`, so it never sees an organization row.
+    workspaceEntityIdx: index("dashboards_workspace_entity_idx")
+      .on(t.entityType, t.entityId, t.ownerLevel, t.ownerId)
+      .where(sql`entity_type IS NOT NULL AND organization_id IS NULL`),
+    workspaceEntityDefaultUniq: uniqueIndex("dashboards_workspace_entity_default_uniq")
+      .on(t.entityType, t.entityId, t.ownerLevel, t.ownerId)
+      .where(sql`is_default = true AND entity_type IS NOT NULL AND organization_id IS NULL`),
+    workspaceEntityNameUniq: uniqueIndex("dashboards_workspace_entity_name_uniq")
+      .on(t.entityType, t.entityId, t.ownerLevel, t.ownerId, t.name)
+      .where(sql`entity_type IS NOT NULL AND organization_id IS NULL`),
     // Contribution-identity (cinatra#1628, S11a).
     contributionIdIdx: index("dashboards_contribution_id_idx")
       .on(t.contributionId)
@@ -152,10 +169,11 @@ export const dashboards = cinatraSchema.table(
  * Overview protection and the per-entity name-uniqueness index on `dashboards`
  * are untouched by a listing.
  *
- * The scope kinds are the THREE shared add-to-scope scopes only — team, project,
- * organization (a personal user scope and the whole-workspace scope are not
- * add-to-scope targets, §IX). One listing per (dashboard, scope) — the UNIQUE
- * index makes add idempotent and remove exact.
+ * The scope kinds are the three shared add-to-scope scopes (team, project,
+ * organization) and, since cinatra#2811, the whole-workspace scope as a
+ * REFERENCE target (§IX.1 / §IX.3). A personal user scope is never a target. One
+ * listing per (dashboard, scope); the UNIQUE index makes add idempotent and
+ * remove exact.
  */
 export const dashboardEntityLinks = cinatraSchema.table(
   "dashboard_entity_links",
@@ -166,16 +184,29 @@ export const dashboardEntityLinks = cinatraSchema.table(
       .notNull()
       .references(() => dashboards.id, { onDelete: "cascade" }),
     /** The scope kind the dashboard is LISTED in: 'team'|'organization'|'project'
-     *  — the three shared add-to-scope scopes (§IX); enforced by CHECK in DDL. */
+     *  (§IX) or 'workspace' (a §IX.3 workspace REFERENCE, cinatra#2811);
+     *  enforced by CHECK in DDL. */
     entityType: text("entity_type").notNull(),
-    /** The scope instance id (team id / org id / project id). */
+    /** The scope instance id (team id / org id / project id; '__workspace__'
+     *  for a workspace reference, pinned by CHECK). */
     entityId: text("entity_id").notNull(),
     /** The scope's tenant — denormalized from the dashboard's org at add time so a
-     *  listing query stays tenant-scoped without a join. */
+     *  listing query stays tenant-scoped without a join. For a WORKSPACE
+     *  reference it is the TARGET dashboard's home organization: the listing
+     *  authority (an organization admin curates the links whose target's home
+     *  organization is theirs) and the read's tenant fence both key on it. */
     organizationId: text("organization_id").notNull(),
     /** The manager who added the listing (attribution / audit). */
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** §IX.4 "visible to everyone": a platform administrator's READ-ONLY grant
+     *  on a WORKSPACE reference (cinatra#2811). The CHECK
+     *  `dashboard_entity_links_workspace_grant_check` requires the two metadata
+     *  columns exactly when it is set and forbids it on a non-workspace link.
+     *  Its history is the append-only `audit_events` trail, never this row. */
+    workspaceReadGranted: boolean("workspace_read_granted").notNull().default(false),
+    workspaceReadGrantedBy: text("workspace_read_granted_by"),
+    workspaceReadGrantedAt: timestamp("workspace_read_granted_at", { withTimezone: true }),
   },
   (t) => ({
     // One listing per (dashboard, scope) — makes add idempotent, remove exact.
@@ -220,10 +251,16 @@ export type NewDashboardRevisionRow = typeof dashboardRevisions.$inferInsert;
 export type DashboardEntityLinkRow = typeof dashboardEntityLinks.$inferSelect;
 export type NewDashboardEntityLinkRow = typeof dashboardEntityLinks.$inferInsert;
 
-/** The three shared scope kinds a dashboard may be LISTED in (§IX add-to-scope).
- *  A user scope and the whole-workspace scope are not add-to-scope targets. */
-export const LISTING_SCOPE_KINDS = ["team", "organization", "project"] as const;
+/** The scope kinds a dashboard may be LISTED in: the three shared add-to-scope
+ *  scopes (§IX) and, since cinatra#2811, the whole-workspace scope as a
+ *  REFERENCE target (§IX.1 / §IX.3). A personal user scope is never a target. */
+export const LISTING_SCOPE_KINDS = ["team", "organization", "project", "workspace"] as const;
 export type ListingScopeKind = (typeof LISTING_SCOPE_KINDS)[number];
+
+/** The TENANT scope kinds: every listing kind but the workspace. A tenant
+ *  scope's listing is fenced to ONE organization; the workspace collection spans
+ *  organizations and is read, authorized and curated by its own arm. */
+export type TenantListingScopeKind = Exclude<ListingScopeKind, "workspace">;
 
 /** Supported ownership levels. */
 export const OWNER_LEVELS = ["user", "team", "organization", "workspace"] as const;

@@ -87,7 +87,6 @@ const props = (): ExtensionSettingsViewProps => ({
   activateDisabled: null,
   reinstallDisabled: null,
   forceDeleteDisabled: null,
-  isPublic: false,
   isRegisteredVendor: true,
   canPublish: true,
   permissions: <p data-slot="seeded-permissions">Seeded permissions control</p>,

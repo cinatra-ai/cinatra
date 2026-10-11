@@ -740,7 +740,7 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
   const field = (
     <div
       {...(conformanceId ? { "data-conformance-id": conformanceId } : {})}
-      className={`relative flex items-end gap-1 rounded-control border ${primary ? "border-line-strong" : "border-line"} bg-surface-strong shadow-sm transition-shadow focus-within:border-border focus-within:shadow-md ${fieldClassName ?? ""}`}
+      className={`relative flex items-end gap-1 ${primary ? "rounded-chip" : "rounded-control"} border ${primary ? "border-line-strong" : "border-line"} bg-surface-strong shadow-sm transition-shadow focus-within:border-border focus-within:shadow-md ${fieldClassName ?? ""}`}
     >
       {/* @-mention flyout — anchored inside the field container */}
       <Popover open={mentionOpen && filteredMentionables.length > 0} onOpenChange={setMentionOpen}>

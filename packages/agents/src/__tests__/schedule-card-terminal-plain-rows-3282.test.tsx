@@ -197,7 +197,11 @@ describe("the stopped recurring schedule is a plain value row too", () => {
   it("keeps its 24-hour time — the same clock the one-off now reads", async () => {
     const rows = await rowsOf(mount(STOPPED_RECURRING));
     const text = rows.textContent ?? "";
-    expect(text).toContain("Every day at 17:30");
+    // §VI: "The schedule is never drawn as a summary, on any host … it is drawn as
+    // this form in one of the five readings above." So the time is read from the
+    // form's own hour and minute boxes, never from a one-line summary.
+    expect(rows.querySelector('[data-readonly-field="recurring-hour"]')?.textContent).toContain("17");
+    expect(rows.querySelector('[data-readonly-field="recurring-minute"]')?.textContent).toContain("30");
     expect(text).not.toContain("5:30");
     expect(text).not.toContain("PM");
   });
@@ -205,7 +209,8 @@ describe("the stopped recurring schedule is a plain value row too", () => {
   it("names the zone beside it, as its own plain row", async () => {
     const rows = await rowsOf(mount(STOPPED_RECURRING));
     const text = rows.textContent ?? "";
-    expect(text).toContain("Repeats");
+    // §VI: "The schedule is never drawn as a summary, on any host" — so there is
+    // no "Repeats" summary row to name; the zone is the form's own Timezone row.
     expect(text).toContain("Timezone");
     expect(text).toContain("Europe/Berlin");
   });
@@ -226,9 +231,11 @@ describe("the stopped recurring schedule is a plain value row too", () => {
   });
 });
 
-/** The two value nodes a terminal reading draws — the pair §VI draws under
- *  "Run at" and "Timezone" on its spent example, and the pair the stopped
- *  recurring reading draws under "Repeats" and "Timezone". */
+/** The value nodes a terminal reading draws — the pair §VI draws under
+ *  "Run at" and "Timezone" on its spent example, and the five recurring rows
+ *  the stopped recurring reading draws read-only (repeat interval, frequency,
+ *  hour, minute and timezone), because §VI: "The schedule is never drawn as a
+ *  summary, on any host". */
 function valueNodes(rows: Element): HTMLElement[] {
   return Array.from(rows.querySelectorAll<HTMLElement>("[data-schedule-value]"));
 }
@@ -255,13 +262,16 @@ describe("the terminal value is a reading, not a control that has been switched 
   // its control taken out rather than a value where a field stood. That border
   // is the one thing the reading trades away; the fill, the measure and the
   // drawn inks stay.
-  for (const [name, body, aside] of [
-    ["the spent one-off", SPENT_ONE_OFF, { firedOnce: true }],
-    ["the stopped recurring schedule", STOPPED_RECURRING, {}],
+  // §VI: "The schedule is never drawn as a summary, on any host" — the stopped
+  // recurring reading draws the form's five recurring value boxes, not two.
+  for (const [name, body, aside, count] of [
+    ["the spent one-off", SPENT_ONE_OFF, { firedOnce: true }, 2],
+    ["the stopped recurring schedule", STOPPED_RECURRING, {}, 5],
   ] as const) {
     it(`${name} draws its values in the drawing's muted ink, never the label ink`, async () => {
       const nodes = valueNodes(await rowsOf(mount(body, aside)));
-      expect(nodes).toHaveLength(2);
+      // §VI: "The schedule is never drawn as a summary, on any host" (2 or 5).
+      expect(nodes).toHaveLength(count);
       for (const node of nodes) {
         expect(node.classList.contains("text-muted-foreground"), node.textContent ?? "").toBe(
           true,
@@ -272,7 +282,8 @@ describe("the terminal value is a reading, not a control that has been switched 
 
     it(`${name} draws its values with the reading's hairline, never the control's border`, async () => {
       const nodes = valueNodes(await rowsOf(mount(body, aside)));
-      expect(nodes).toHaveLength(2);
+      // §VI: "The schedule is never drawn as a summary, on any host" (2 or 5).
+      expect(nodes).toHaveLength(count);
       for (const node of nodes) {
         expect(node.classList.contains("border-border"), node.textContent ?? "").toBe(true);
         expect(node.classList.contains("border-input"), node.textContent ?? "").toBe(false);

@@ -31,6 +31,22 @@ import {
 import type { DashboardActor } from "./permissions";
 import { getDashboardsDb } from "./store/db";
 
+/**
+ * Thrown when a WORKSPACE write (cinatra#2811) has no acting user. The
+ * workspace tier has no organization lifecycle to rule on, so its one
+ * precondition is an identified principal; the writer's own resolver check then
+ * decides whether that principal owns the row.
+ */
+export class DashboardWorkspaceWriteActorError extends Error {
+  constructor() {
+    super(
+      "dashboards workspace write: no acting user; a workspace dashboard is " +
+        "written only by the user who owns it (cinatra#2811).",
+    );
+    this.name = "DashboardWorkspaceWriteActorError";
+  }
+}
+
 export class DashboardOrgWriteAuthorityError extends Error {
   constructor(reason: "missing" | "org-mismatch") {
     super(
@@ -64,7 +80,7 @@ export function isOrgWriteRefusal(e: unknown): boolean {
 export function requireOrgWriteAuthority(actor: DashboardActor): OrgWriteAuthority {
   const authority = actor.authority;
   if (!authority) throw new DashboardOrgWriteAuthorityError("missing");
-  if (authority.orgId !== actor.organizationId) {
+  if (actor.organizationId === null || authority.orgId !== actor.organizationId) {
     throw new DashboardOrgWriteAuthorityError("org-mismatch");
   }
   return authority;
@@ -74,10 +90,27 @@ export function requireOrgWriteAuthority(actor: DashboardActor): OrgWriteAuthori
  *  writer body already uses, seen through the kernel's minimal contract. */
 export type GuardedDashboardsTx = OrgWriteTx;
 
+/**
+ * Which tenancy a write runs under (cinatra#2811).
+ *
+ *   - "organization" (the default): every row the write touches belongs to the
+ *     actor's active organization, so the org-write kernel takes that
+ *     organization's locks and rules `content.write` against its lifecycle.
+ *   - "workspace": the write touches ONLY org-NULL workspace rows. The workspace
+ *     sits above every organization and has no lifecycle of its own, so no
+ *     organization is locked or ruled on, and the active organization (or its
+ *     absence) plays no part. The writer re-checks the row's org-NULL shape
+ *     inside the transaction, so a workspace tenancy can never reach an
+ *     organization row.
+ */
+export type DashboardWriteTenancy = "organization" | "workspace";
+
 export interface GuardedDashboardsWriteOptions {
   /** App schema holding the kernel's lease table (lease-gated rulings during
    *  an archive transition). Writers pass their resolved schema name. */
   readonly schema: string;
+  /** The write's tenancy; defaults to "organization" (see the type). */
+  readonly tenancy?: DashboardWriteTenancy;
   /** TEST-ONLY database override (production always uses the package db). */
   readonly db?: OrgWriteDb<OrgWriteTx>;
 }
@@ -93,13 +126,21 @@ export async function guardedDashboardsWrite<R>(
   options: GuardedDashboardsWriteOptions,
   fn: (tx: GuardedDashboardsTx) => Promise<R>,
 ): Promise<R> {
-  const authority = requireOrgWriteAuthority(actor);
   const db =
     options.db ?? (getDashboardsDb() as unknown as OrgWriteDb<OrgWriteTx>);
+  if (options.tenancy === "workspace") {
+    // The org-NULL arm: no organization to lock or rule on. One precondition:
+    // an identified acting user. Ownership is the writer's resolver check.
+    if (typeof actor.userId !== "string" || actor.userId.length === 0) {
+      throw new DashboardWorkspaceWriteActorError();
+    }
+    return db.transaction(async (tx) => fn(tx));
+  }
+  const authority = requireOrgWriteAuthority(actor);
   return guardOrgMutation(
     db,
     {
-      orgId: actor.organizationId,
+      orgId: authority.orgId,
       capability: "content.write",
       authority,
       schema: options.schema,

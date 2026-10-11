@@ -24,7 +24,21 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { BUILD_ONLY_HEAD_CONDITION } from "../build-only-heads.mjs";
 import { REPO_ROOT } from "../design-select.mjs";
+import { OWN_BRANCH_CONDITION } from "../runner-class-own-branches.mjs";
+
+/**
+ * The job-level condition of `pixel-diff`: the selection gate, joined with the
+ * condition that runs it for pull requests from branches of this repository
+ * only (cinatra#3919) and with the condition that skips a build-only head
+ * (cinatra#3890), on a line of its own.
+ */
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const PIXEL_DIFF_IF = new RegExp(
+  `^ {4}if: ${escapeRegExp(`\${{ ((needs.select.outputs.mode != 'none') && ${OWN_BRANCH_CONDITION}) && ${BUILD_ONLY_HEAD_CONDITION} }}`)}$`,
+  "m",
+);
 
 const WORKFLOW = ".github/workflows/design-visual-verify.yml";
 const TEXT = readFileSync(join(REPO_ROOT, WORKFLOW), "utf8");
@@ -217,9 +231,7 @@ describe("the expensive job is gated on the decision and consumes the same plan"
     // somewhere in the block: a substring scan passes on a commented-out
     // condition, and on a condition buried in a step, while the job is in
     // truth ungated or permanently disabled.
-    expect(PIXEL_DIFF).toMatch(
-      /^ {4}if: \$\{\{ needs\.select\.outputs\.mode != 'none' \}\}$/m,
-    );
+    expect(PIXEL_DIFF).toMatch(PIXEL_DIFF_IF);
   });
 
   it("downloads the published plan and runs Playwright from it", () => {
@@ -257,8 +269,6 @@ describe("the scanner reads steps, not prose about steps", () => {
 
   it("keeps the real workflow's own condition visible through that filter", () => {
     expect(PIXEL_DIFF).toMatch(/^ {4}needs: select$/m);
-    expect(PIXEL_DIFF).toMatch(
-      /^ {4}if: \$\{\{ needs\.select\.outputs\.mode != 'none' \}\}$/m,
-    );
+    expect(PIXEL_DIFF).toMatch(PIXEL_DIFF_IF);
   });
 });

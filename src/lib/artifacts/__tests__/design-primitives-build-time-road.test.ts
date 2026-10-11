@@ -26,6 +26,8 @@ import { describe, expect, it } from "vitest";
 // to collect — that is this suite's red.
 import * as servedByTheBuildTimeRoad from "@cinatra-ai/design-primitives";
 
+import * as productAlertDialog from "@/components/ui/alert-dialog";
+
 import {
   HOST_DESIGN_PRIMITIVES,
   HOST_DESIGN_PRIMITIVES_SERVED_VERSION,
@@ -58,6 +60,12 @@ describe("the id resolves at BUILD time for a source-compiled package", () => {
     expect(served.HOST_DESIGN_PRIMITIVES_SERVED_VERSION).toBe(
       HOST_DESIGN_PRIMITIVES_SERVED_VERSION,
     );
+  });
+
+  it("serves the complete AlertDialog family from the product's own module", () => {
+    for (const [name, component] of Object.entries(productAlertDialog)) {
+      expect(served[name], `${name} must resolve to the product's component`).toBe(component);
+    }
   });
 
   it("a fixture package's own `import { Alert } from \"@cinatra-ai/design-primitives\"` gets that instance", () => {

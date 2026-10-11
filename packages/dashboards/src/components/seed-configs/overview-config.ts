@@ -177,3 +177,45 @@ export function buildOrganizationOverviewConfig(
     },
   });
 }
+
+/**
+ * The WORKSPACE Overview's summary (cinatra#2811, per-scope surfaces S5): the
+ * instance's own non-secret identity plus the viewer's counts. The host reader
+ * builds it from `instance_identity` (display name and namespace ONLY, never the
+ * instance UUID or any secret) and from the epic's `WorkspaceVantage`, so the
+ * counts are the viewer's own and ignore the active organization.
+ */
+export type WorkspaceOverviewSummary = {
+  /** `instance_identity.instanceDisplayName`, when set. */
+  readonly instanceName?: string;
+  /** `instance_identity.instanceNamespace`, when set. */
+  readonly namespace?: string;
+  /** Organizations in the viewer's vantage (current membership, not archived). */
+  readonly organizationCount: number;
+  /** Teams the actor-visible team reader admitted, across those organizations. */
+  readonly teamCount: number;
+  /** Projects the actor-visible project reader admitted, across them. */
+  readonly projectCount: number;
+};
+
+/** Workspace Overview: the instance's identity + the viewer's scope counts. The
+ *  scope names itself when the instance has no display name yet. */
+export function buildWorkspaceOverviewConfig(
+  summary: WorkspaceOverviewSummary,
+): DashboardConfigV12 {
+  const items: SummaryItem[] = [
+    { label: "Name", value: summary.instanceName || "Workspace" },
+  ];
+  if (summary.namespace) items.push({ label: "Namespace", value: summary.namespace });
+  return buildEntityOverviewConfig({
+    scopeLevel: "workspace",
+    metadata: { title: "Workspace", items },
+    counts: {
+      items: [
+        { label: "Organizations", value: summary.organizationCount },
+        { label: "Teams", value: summary.teamCount },
+        { label: "Projects", value: summary.projectCount },
+      ],
+    },
+  });
+}

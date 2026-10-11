@@ -19,6 +19,8 @@ const {
   ensureSchemaMock,
   validateConnectServerCredentialMock,
   getActiveConnectSiteByIdMock,
+  listActiveConnectSiteOriginsMock,
+  readInstanceIdentityMock,
 } = vi.hoisted(() => ({
   runPostgresQueriesSyncMock: vi.fn(),
   readConnectorConfigMock: vi.fn(),
@@ -26,6 +28,8 @@ const {
   ensureSchemaMock: vi.fn(),
   validateConnectServerCredentialMock: vi.fn(),
   getActiveConnectSiteByIdMock: vi.fn(),
+  listActiveConnectSiteOriginsMock: vi.fn(),
+  readInstanceIdentityMock: vi.fn(),
 }));
 
 vi.mock("@/lib/postgres-config", () => ({
@@ -66,6 +70,13 @@ vi.mock("@/lib/widget-stream-auth", () => ({
 }));
 vi.mock("@/lib/connect-sites-store", () => ({
   getActiveConnectSiteById: getActiveConnectSiteByIdMock,
+  // cinatra#3715 — the handshake road's site read (the frame gate's rule).
+  listActiveConnectSiteOrigins: listActiveConnectSiteOriginsMock,
+}));
+// cinatra#3715 — the application's own instance identity, the value the
+// handshake hands every site. Stubbed as data, like the connector config.
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentityRequiringInstanceId: readInstanceIdentityMock,
 }));
 
 import {
@@ -99,6 +110,7 @@ import {
   widgetNoSignInScreenToken,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
+import { resolveInstanceFrameAncestor } from "@/lib/embed/frame-ancestors.server";
 
 // ---------------------------------------------------------------------------
 // In-memory store + a focused SQL interpreter for the three tables.
@@ -307,6 +319,10 @@ beforeEach(() => {
     }
     return fallback;
   });
+  // cinatra#3715 — by default no handshake identity and no connect-site origin,
+  // so every pre-existing case runs on the connector road alone.
+  readInstanceIdentityMock.mockReturnValue(null);
+  listActiveConnectSiteOriginsMock.mockReturnValue([]);
 });
 
 // PKCE: derive an S256 challenge from a verifier (mirrors verifyPkceS256).
@@ -441,6 +457,215 @@ describe("createAuthTransaction", () => {
       codeChallenge: CHALLENGE,
       state: STATE,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3715 — THE SIGN-IN ACCEPTS THE IDENTITY THE HANDSHAKE GAVE THE SITE.
+//
+// The handshake hands every site THIS APPLICATION'S OWN instance identity; the
+// connector's "Connect site" mints a different id and nothing copies it back.
+// The frame gate accepts the handshake's identity (cinatra#3328), so the sign-in
+// must answer the same question the same way: the REAL resolver and the REAL
+// frame-gate helper run here against stubbed stores, and every case compares
+// the transaction's answer with the gate's own answer for the same inputs.
+// ---------------------------------------------------------------------------
+describe("cinatra#3715 — the transaction for a site connected through the handshake", () => {
+  const OWN_ID = "11111111-2222-4333-8444-555555555555";
+  const gateAnswer = (instanceId: string) =>
+    resolveInstanceFrameAncestor({
+      instancesConfigKey: "wordpress",
+      instanceId,
+      connectSiteFallbackClient: "wordpress",
+    });
+
+  beforeEach(() => {
+    // The measured state: ONE active connect_sites row for the client, NO
+    // connector_config:wordpress instance at all.
+    readConnectorConfigMock.mockImplementation((key: string, fallback: unknown) =>
+      key === "wordpress" ? { instances: [] } : fallback,
+    );
+    readInstanceIdentityMock.mockReturnValue({ instanceId: OWN_ID });
+    listActiveConnectSiteOriginsMock.mockReturnValue(["https://wp.test"]);
+  });
+
+  it("pins a site that holds only its connect_sites row to the application's own identity (was instance_unresolved)", () => {
+    const r = newTxn(SITE_A, { claimedInstanceId: OWN_ID });
+    expect(r).toEqual({ ok: true, txnId: expect.any(String), instanceId: OWN_ID });
+    if (!r.ok) return;
+    expect(loadActiveTransaction(r.txnId)).toMatchObject({
+      siteId: SITE_A.siteId,
+      orgId: SITE_A.orgId,
+      siteOrigin: SITE_A.siteOrigin,
+      client: "wordpress",
+      instanceId: OWN_ID,
+    });
+    // The gate frames the same identity on the same origin.
+    expect(gateAnswer(OWN_ID)).toBe(SITE_A.siteOrigin);
+  });
+
+  it("the pinned instance is the server's own identity read, and only a sign-in caller opts in", () => {
+    expect(
+      resolveCanonicalInstanceForOrigin({
+        instancesConfigKey: "wordpress",
+        origin: "https://wp.test",
+        claimedInstanceId: OWN_ID,
+        connectSiteFallbackClient: "wordpress",
+      }),
+    ).toBe(OWN_ID);
+    // A caller that names no connect client keeps the connector-only answer.
+    expect(
+      resolveCanonicalInstanceForOrigin({
+        instancesConfigKey: "wordpress",
+        origin: "https://wp.test",
+        claimedInstanceId: OWN_ID,
+      }),
+    ).toBeNull();
+  });
+
+  it("REFUSES a caller-chosen id that is not the application's own identity (forged or foreign)", () => {
+    expect(newTxn(SITE_A, { claimedInstanceId: "caller-chosen" })).toEqual({
+      ok: false,
+      reason: "instance_unresolved",
+    });
+    expect(gateAnswer("caller-chosen")).toBeNull();
+  });
+
+  it("REFUSES without a claim — the handshake road never picks an identity on its own", () => {
+    expect(newTxn(SITE_A)).toEqual({ ok: false, reason: "instance_unresolved" });
+  });
+
+  it("the same site after it was added under the connector, presenting the connector's id, pins it exactly as before", () => {
+    readConnectorConfigMock.mockImplementation((key: string, fallback: unknown) =>
+      key === "wordpress"
+        ? { instances: [{ id: "connector-minted-id", siteUrl: "https://wp.test" }] }
+        : fallback,
+    );
+    const r = newTxn(SITE_A, { claimedInstanceId: "connector-minted-id" });
+    expect(r).toEqual({ ok: true, txnId: expect.any(String), instanceId: "connector-minted-id" });
+    // The connector road answered on its own; the handshake road was not asked.
+    expect(readInstanceIdentityMock).not.toHaveBeenCalled();
+    expect(listActiveConnectSiteOriginsMock).not.toHaveBeenCalled();
+  });
+
+  it("the same site after it was added under the connector, presenting the handshake's id, pins the handshake's id — the gate's answer", () => {
+    readConnectorConfigMock.mockImplementation((key: string, fallback: unknown) =>
+      key === "wordpress"
+        ? { instances: [{ id: "connector-minted-id", siteUrl: "https://wp.test" }] }
+        : fallback,
+    );
+    const r = newTxn(SITE_A, { claimedInstanceId: OWN_ID });
+    expect(r).toEqual({ ok: true, txnId: expect.any(String), instanceId: OWN_ID });
+    expect(gateAnswer(OWN_ID)).toBe(SITE_A.siteOrigin);
+  });
+
+  it("REFUSES zero or several distinct active site origins for the client, as the gate does", () => {
+    for (const origins of [[], ["https://wp.test", "https://other.test"]]) {
+      listActiveConnectSiteOriginsMock.mockReturnValue(origins);
+      expect(newTxn(SITE_A, { claimedInstanceId: OWN_ID })).toEqual({
+        ok: false,
+        reason: "instance_unresolved",
+      });
+      expect(gateAnswer(OWN_ID)).toBeNull();
+    }
+  });
+
+  it("REFUSES a site whose origin is not the one the handshake road derived", () => {
+    // The client's single active origin is wp.test; a transaction for a site on
+    // another origin can never be pinned to the handshake's identity.
+    expect(newTxn(SITE_B, { claimedInstanceId: OWN_ID })).toEqual({
+      ok: false,
+      reason: "instance_unresolved",
+    });
+    expect(gateAnswer(OWN_ID)).not.toBe(SITE_B.siteOrigin);
+  });
+
+  it("REFUSES when the connector holds rows carrying the presented id — duplicate or elsewhere, never rescued", () => {
+    for (const instances of [
+      [
+        { id: OWN_ID, siteUrl: "https://a.example" },
+        { id: OWN_ID, siteUrl: "https://b.example" },
+      ],
+      [{ id: OWN_ID, siteUrl: "https://elsewhere.example" }],
+    ]) {
+      readConnectorConfigMock.mockImplementation((key: string, fallback: unknown) =>
+        key === "wordpress" ? { instances } : fallback,
+      );
+      expect(newTxn(SITE_A, { claimedInstanceId: OWN_ID })).toEqual({
+        ok: false,
+        reason: "instance_unresolved",
+      });
+      expect(gateAnswer(OWN_ID)).not.toBe(SITE_A.siteOrigin);
+    }
+  });
+
+  it("REFUSES when the application's identity is missing or its read throws (fail closed)", () => {
+    readInstanceIdentityMock.mockReturnValue(null);
+    expect(newTxn(SITE_A, { claimedInstanceId: OWN_ID })).toEqual({
+      ok: false,
+      reason: "instance_unresolved",
+    });
+    expect(gateAnswer(OWN_ID)).toBeNull();
+    readInstanceIdentityMock.mockImplementation(() => {
+      throw new Error("identity row corrupt");
+    });
+    expect(newTxn(SITE_A, { claimedInstanceId: OWN_ID })).toEqual({
+      ok: false,
+      reason: "instance_unresolved",
+    });
+    expect(gateAnswer(OWN_ID)).toBeNull();
+  });
+
+  it("the visitor completes it: the code redeems, the token carries the pinned identity and the first turn's re-pin confirms it", () => {
+    getActiveConnectSiteByIdMock.mockImplementation((siteId: string) =>
+      siteId === SITE_A.siteId
+        ? {
+            siteId: SITE_A.siteId,
+            client: "wordpress",
+            widgetOrigin: SITE_A.siteOrigin,
+            orgId: SITE_A.orgId,
+            credentialVersion: SITE_A.credentialVersion,
+          }
+        : null,
+    );
+    const t = newTxn(SITE_A, { claimedInstanceId: OWN_ID });
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
+    if (!issued.ok) throw new Error("issue");
+    const redeemed = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site: SITE_A,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    expect(redeemed.ok).toBe(true);
+    if (!redeemed.ok) return;
+    const consumed = consumeUserWidgetToken({
+      token: redeemed.token,
+      agentSlug: "wordpress-content-editor",
+      routePath: "/api/assistants/chat",
+      requestOrigin: SITE_A.siteOrigin,
+    });
+    expect(consumed.ok).toBe(true);
+    if (!consumed.ok) return;
+    expect(consumed.claims.instanceId).toBe(OWN_ID);
+    // The chat route's per-turn re-pin (same inputs, same opt-in) confirms it;
+    // without the opt-in it would refuse.
+    expect(
+      resolveCanonicalInstanceForOrigin({
+        instancesConfigKey: "wordpress",
+        origin: SITE_A.siteOrigin,
+        claimedInstanceId: consumed.claims.instanceId,
+        connectSiteFallbackClient: "wordpress",
+      }),
+    ).toBe(OWN_ID);
+    expect(
+      resolveCanonicalInstanceForOrigin({
+        instancesConfigKey: "wordpress",
+        origin: SITE_A.siteOrigin,
+        claimedInstanceId: consumed.claims.instanceId,
+      }),
+    ).toBeNull();
   });
 });
 

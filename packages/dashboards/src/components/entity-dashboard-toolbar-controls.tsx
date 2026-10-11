@@ -61,6 +61,11 @@ import { useScopeAddSources } from "@/components/dashboards/scope-add-sources";
 import { useEntityDashboards } from "./entity-dashboards-context";
 import { EntityDashboardNameDialog } from "./entity-dashboard-name-dialog";
 
+// The name prompt, re-exported on this module's existing host alias so the
+// workspace Dashboards tab's Create (cinatra#2811) reuses the one prompt Create
+// and Rename share, rather than a second name form.
+export { EntityDashboardNameDialog };
+
 export function EntityDashboardsToolbarControls() {
   const ctx = useEntityDashboards();
   // Read unconditionally, ABOVE the `!ctx` bail — a hook may not be called

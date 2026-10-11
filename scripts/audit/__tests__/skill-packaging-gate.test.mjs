@@ -13,7 +13,7 @@
 //
 // Do not change one side without the other.
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -40,6 +40,15 @@ import {
 import { lintBundleRouterReferences } from "../../../src/lib/skill-bundle-store.ts";
 import { ANTHROPIC_SKILL_MAX_UPLOAD_BYTES } from "../../../packages/llm/src/tools/anthropic-skill-content-hash.ts";
 import { SKILL_EXTENSION_ROLES, resolveSkillExtensionRole } from "../../../packages/extension-types/src/index.ts";
+import { FLOOR_BASE_VAR, FLOOR_FILE, checkFloorAgainstBase } from "../skill-packaging-gate.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+  makeOneCommitCheckout,
+} from "./floor-base-fixture.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -435,5 +444,86 @@ describe("gate binary", () => {
     const text = formatViolations([{ code: "package-suffix", message: "bad name" }], "@x/y-skills");
     expect(text).toContain("skill-packaging verdict v");
     expect(text).toContain("[package-suffix] bad name");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3832: the list of embedded skills in the ledger is compared with the
+// copy on the base branch, so a pull request cannot add its own embedded skill.
+// ---------------------------------------------------------------------------
+
+describe("skill-packaging-gate — floor compared with the base", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const ledger = (embeddedSkills) => ({ note: "fixture", schemaVersion: 1, exceptions: [], embeddedSkills });
+  function repo(baseSkills, headSkills, make = makeFloorRepo) {
+    const f = make({ base: { [FLOOR_FILE]: ledger(baseSkills) }, head: { [FLOOR_FILE]: ledger(headSkills) } });
+    fixtures.push(f);
+    return f.root;
+  }
+  const A = "@x/a-agent :: skills/a/SKILL.md";
+  const B = "@x/b-connector :: SKILL.md";
+
+  it("names its floor file and its own base variable", () => {
+    expect(FLOOR_FILE).toBe("config/skill-packaging-legacy-exceptions.json");
+    expect(FLOOR_BASE_VAR).toBe("SKILL_PACKAGING_BASE");
+  });
+
+  it("a raised floor (a new name in the list of embedded skills) FAILS", () => {
+    const root = repo([A], [A, B]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([B]);
+  });
+
+  it("a lowered floor (a migrated skill removed) PASSES", () => {
+    const root = repo([A, B], [A]);
+    expect(checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read on a pull request's run FAILS with its reason", () => {
+    const root = repo([], []);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: UNREADABLE_BASE_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.lines[0]).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  });
+
+  it("a base copy whose list is not a list of names FAILS with its reason", () => {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: { embeddedSkills: "x" } }, head: { [FLOOR_FILE]: ledger([]) } });
+    fixtures.push(f);
+    const r = checkFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toMatch(/is not a readable floor/);
+  });
+
+  it("no pull request PASSES with its line", () => {
+    const root = repo([], [A]);
+    const r = checkFloorAgainstBase({ repoRoot: root, env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("in a checkout of one commit the base is fetched: a raised floor FAILS, a lowered one PASSES", () => {
+    let root = repo([A], [A, B], makeOneCommitCheckout);
+    let r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r.status).toBe("grew");
+    expect(r.fetched).toEqual({ remote: "origin", branch: "main" });
+    root = repo([A, B], [B], makeOneCommitCheckout);
+    r = checkFloorAgainstBase({ repoRoot: root, env: PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("the gate itself runs the guard first: an unreadable base fails it with the reason", () => {
+    const res = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "audit", "skill-packaging-gate.mjs")], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(
+      /\[skill-packaging-gate\] FAIL — the floor config\/skill-packaging-legacy-exceptions\.json cannot be compared with the base/,
+    );
   });
 });

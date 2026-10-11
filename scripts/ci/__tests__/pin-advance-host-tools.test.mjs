@@ -4,7 +4,8 @@
 // flows, the static allowlist reader over this tree's own route, and the
 // one-flow command-line form.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +17,8 @@ import {
   hostToolFindings,
   readPassthroughAllowlist,
 } from "../pin-advance-host-tools.mjs";
+// Imported as a namespace so a missing export fails only the case that reads it.
+import * as check from "../pin-advance-host-tools.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SCRIPT = path.join(REPO_ROOT, "scripts/ci/pin-advance-host-tools.mjs");
@@ -244,5 +247,81 @@ describe("the one-flow command line", () => {
   it("exits 2 with its reason when the arguments are incomplete", () => {
     const result = spawnSync(process.execPath, [SCRIPT, "--flow"], { cwd: REPO_ROOT, encoding: "utf8" });
     expect(result.status).toBe(2);
+  });
+});
+
+describe("the per-pack route reading (cinatra#3664)", () => {
+  // The route analyses a run takes once, in an order other than the tracked one.
+  const analyses = (packModules) =>
+    ["/chat", "/api/llm-bridge", "/sign-in", "/api/a2a", "/api/mcp"].map((route) => ({
+      route,
+      ok: true,
+      missingCount: 0,
+      extensionModulesByPack: {
+        "@cinatra-ai/another-pack": 5,
+        ...(packModules[route] ? { [PACKAGE]: packModules[route] } : {}),
+      },
+    }));
+  const seventeen = { "/api/mcp": 17, "/chat": 17, "/api/a2a": 17, "/api/llm-bridge": 17 };
+
+  it("the reading records a changed pack's reachable module count on each tracked route and adds no finding", () => {
+    const reading = check.packRouteReading({ packageName: PACKAGE, tip: TIP, routes: analyses(seventeen) });
+    expect(reading.packageName).toBe(PACKAGE);
+    expect(reading.tip).toBe(TIP);
+    expect(reading.perRoute).toEqual([
+      { route: "/sign-in", modules: 0 },
+      { route: "/api/mcp", modules: 17 },
+      { route: "/chat", modules: 17 },
+      { route: "/api/a2a", modules: 17 },
+      { route: "/api/llm-bridge", modules: 17 },
+    ]);
+    expect(reading.line).toBe(
+      `pin-advance host-tool check: ${PACKAGE} at ${TIP} — reachable modules on the tracked routes: ` +
+        "/sign-in 0, /api/mcp 17, /chat 17, /api/a2a 17, /api/llm-bridge 17",
+    );
+    // A route that did not resolve, and one with missing imports, say so.
+    const routes = analyses(seventeen).map((r) =>
+      r.route === "/chat" ? { route: "/chat", ok: false } : r.route === "/api/a2a" ? { ...r, missingCount: 3 } : r,
+    );
+    const partial = check.packRouteReading({ packageName: PACKAGE, tip: TIP, routes });
+    expect(partial.line).toContain("/chat unresolved");
+    expect(partial.line).toContain("/api/a2a 17 (+3 missing)");
+    // The reading is beside the host-tool comparison and adds no finding to it.
+    const allowlist = readPassthroughAllowlist(REPO_ROOT);
+    const calls = collectPassthroughHostTools(readFixture("allowed-host-tool.oas.json"));
+    expect(hostToolFindings({ packageName: PACKAGE, tip: TIP, calls, allowlist }).findings).toEqual([]);
+    expect(Object.keys(reading).sort()).toEqual(["line", "packageName", "perRoute", "tip"]);
+  });
+
+  it("a pack whose modules grow shows in the per-pack reading", () => {
+    const before = check.packRouteReading({ packageName: PACKAGE, tip: TIP, routes: analyses(seventeen) });
+    const after = check.packRouteReading({
+      packageName: PACKAGE,
+      tip: TIP,
+      routes: analyses({ ...seventeen, "/chat": 19 }),
+    });
+    expect(before.perRoute.find((r) => r.route === "/chat").modules).toBe(17);
+    expect(after.perRoute.find((r) => r.route === "/chat").modules).toBe(19);
+    expect(after.line).not.toBe(before.line);
+    expect(after.line).toBe(before.line.replace("/chat 17,", "/chat 19,"));
+  });
+
+  it("a counter that cannot load leaves the check's own exit code and reason unchanged", () => {
+    // A copy of the check and the counter over a tree whose tsconfig.json is not JSON.
+    const tree = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pin-advance-3664-")));
+    try {
+      mkdirSync(path.join(tree, "scripts", "ci"), { recursive: true });
+      copyFileSync(path.join(REPO_ROOT, "scripts/route-graph.mjs"), path.join(tree, "scripts/route-graph.mjs"));
+      copyFileSync(SCRIPT, path.join(tree, "scripts/ci/pin-advance-host-tools.mjs"));
+      writeFileSync(path.join(tree, "tsconfig.json"), "{ not json");
+      const result = spawnSync(process.execPath, [path.join(tree, "scripts/ci/pin-advance-host-tools.mjs"), "--flow"], {
+        cwd: tree,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("pin-advance host-tool check: error — --flow needs a value");
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
   });
 });

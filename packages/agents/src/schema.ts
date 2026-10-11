@@ -294,6 +294,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Self-referential link to orchestrator parent run. Nullable, no CASCADE:
   // children survive parent deletion.
   parentRunId: text("parent_run_id"),
+  startedByRunId: text("started_by_run_id"), // independent tool starter (#3749), never an orchestrator parent
   // Explicit AG-UI capability marker. Set to true for runs created with AG-UI
   // support. Null for legacy runs (no backfill). Used by AgenticRunPanel
   // to decide: SSE path (agUiEnabled=true) vs. legacy polling path (agUiEnabled=null|false).
@@ -344,6 +345,19 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // reads this via initialStreamedText to hydrate after page refresh.
   // Migration: see src/lib/drizzle-store.ts streamed_text entry (ADD COLUMN IF NOT EXISTS).
   streamedText: text("streamed_text"),
+  // THE PARK ITSELF, AS A COLUMN (cinatra#3046, fix leg 12). The produced-review
+  // park used to live ONLY as an additive key inside this row's own MUTABLE
+  // `step_results` JSON, and every other writer of that column sets it WHOLE —
+  // so one unrelated write while a run sat parked erased the park with no error
+  // and no status change, and every surface then read "not parked" off a
+  // genuinely parked row. This column carries the withheld terminal write the
+  // park is holding, is written in the SAME guarded transaction as the parked
+  // status, and is cleared in the SAME transaction as the terminal write that
+  // ends it — so no concurrent `step_results` write can reach it. JSON-as-text,
+  // matching `step_results`' own storage. Additive and nullable (the
+  // streamed_text precedent); NULL means "not parked on a produced review".
+  // Migration: see src/lib/drizzle-store.ts produced_review_park entry.
+  producedReviewPark: text("produced_review_park"),
   // authPolicy: per-run override of the template's agentAuthPolicy (JSON-as-text).
   // Nullable; null = inherit from agent_templates.agentAuthPolicy (or DEFAULT_AGENT_AUTH_POLICY).
   authPolicy: text("auth_policy"),
@@ -471,6 +485,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Aligning the Drizzle schema declaration prevents `drizzle-kit generate`
   // from diffing against the live DB and attempting to drop/recreate as a
   // full index.
+  startedByRunIdIdx: index("agent_runs_started_by_run_id_idx").on(t.startedByRunId, t.orgId, t.createdAt).where(sql`started_by_run_id IS NOT NULL`),
   parentRunIdIdx:   index("agent_runs_parent_run_id_idx")
     .on(t.parentRunId)
     .where(sql`parent_run_id IS NOT NULL`),
@@ -1145,6 +1160,7 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
   excluded:   boolean("excluded").notNull().default(false),
   submittedValues: jsonb("submitted_values").$type<Record<string, unknown> | null>(),
   schemaSnapshot: jsonb("schema_snapshot").$type<Record<string, unknown> | null>(),
+  dispatchReceipt: jsonb("dispatch_receipt").$type<Record<string, unknown> | null>(),
 }, (t) => ({
   runIdAgentIdx: index("agent_run_hitl_prompts_run_id_agent_idx").on(t.runId, t.agentId),
 }));

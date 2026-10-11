@@ -10,3 +10,14 @@
 
 export * from "./request-aware-scorer";
 export * from "./selection";
+
+// RecommendationOrderingV1 — the BOUND ordering a persisted recommendation
+// carries (cinatra#2815 S3 part 4).
+export {
+  RECOMMENDATION_ORDERING_VERSION,
+  RECOMMENDATION_POOL_CAP,
+  buildRecommendationTruncation,
+  orderRankAuthoritative,
+  type RankAuthoritativeRow,
+  type RecommendationTruncationV1,
+} from "./request-aware-scorer";

@@ -52,6 +52,7 @@ const fixture = vi.hoisted(() => ({
   activeByKind: {} as Record<string, unknown[]>,
   archivedByKind: {} as Record<string, unknown[]>,
   registryPackages: [] as unknown[],
+  staticManifest: {} as Record<string, { displayName: string }>,
 }));
 
 vi.mock("@/lib/extensions", () => ({}));
@@ -61,7 +62,7 @@ vi.mock("@/lib/register-all-object-types", () => ({
 vi.mock("@/lib/verdaccio-config", () => ({
   loadVerdaccioConfigForReads: vi.fn(async () => ({ registryUrl: "http://registry.test" })),
 }));
-vi.mock("@/lib/generated/extensions.server", () => ({ STATIC_EXTENSION_MANIFEST: {} }));
+vi.mock("@/lib/generated/extensions.server", () => ({ STATIC_EXTENSION_MANIFEST: fixture.staticManifest }));
 vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: vi.fn(() => ({
     instanceNamespace: "acme",
@@ -79,16 +80,20 @@ vi.mock("@/lib/extension-discovery-scope", () => ({
 }));
 // The root suite maps `@cinatra-ai/registries` to a narrow stub (the real
 // barrel drags the pacote chain into the sandbox), so this factory supplies the
-// three symbols the loader reads: the catalog read (mocked — this suite is
+// four symbols the loader reads: the catalog read (mocked — this suite is
 // about the rows, not the registry), its two page budgets (plain numbers on the
 // heavy verdaccio client), and the REAL pure vendor-name resolver the byline
 // resolves through.
 vi.mock("@cinatra-ai/registries", async () => {
-  const scope = await vi.importActual<{ resolveInstalledVendorName: unknown }>(
+  const scope = await vi.importActual<{
+    resolveInstalledVendorName: unknown;
+    declaredVendorNameForScope: unknown;
+  }>(
     "../../../../../packages/registries/src/scope",
   );
   return {
     resolveInstalledVendorName: scope.resolveInstalledVendorName,
+    declaredVendorNameForScope: scope.declaredVendorNameForScope,
     listExtensionPackages: vi.fn(async () => fixture.registryPackages),
     CATALOG_PACKUMENT_TIMEOUT_MS: 8_000,
     CATALOG_HYDRATION_BUDGET_MS: 12_000,
@@ -224,11 +229,14 @@ function setFixture(input: {
   activeByKind?: Record<string, unknown[]>;
   archivedByKind?: Record<string, unknown[]>;
   registry?: unknown[];
+  staticManifest?: Record<string, { displayName: string }>;
 }) {
   fixture.canonicalRows = input.rows;
   fixture.activeByKind = input.activeByKind ?? {};
   fixture.archivedByKind = input.archivedByKind ?? {};
   fixture.registryPackages = input.registry ?? [];
+  for (const key of Object.keys(fixture.staticManifest)) delete fixture.staticManifest[key];
+  Object.assign(fixture.staticManifest, input.staticManifest ?? {});
 }
 
 async function load() {
@@ -459,5 +467,47 @@ describe("installed list — a marketplace-installed artifact pack (cinatra#3533
     // The connector row keeps the scope-stripped package title it always drew.
     expect(connectorRows[0].displayName).toBe("knowledge-base-connector");
     expect(connectorRows[0].versionLabel).toBe("v1.4.0");
+  });
+});
+
+describe("installed card metadata for every registry kind (cinatra#3571)", () => {
+  it.each(["agent", "skill", "connector", "artifact"] as const)("draws %s with its declared vendor and installed version", async (kind) => {
+    const packageName = `@acme/example-${kind}`;
+    setFixture({
+      rows: [installRow({ packageName, kind })],
+      activeByKind: {
+        [kind]: [kind === "connector" ? { packageId: packageName, displayName: packageName } : { packageName }],
+      },
+      registry: [{ ...registryEntry(packageName, "Example Extension", kind), packageVersion: "9.0.0", author: null, vendorName: "Acme Studio" }],
+    });
+    const { active } = await load();
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({ displayName: "Example Extension", vendor: "Acme Studio", versionLabel: "v1.4.0", rawVersion: "1.4.0" });
+    const html = renderInstalledCard(active[0]!);
+    expect(html).toContain("Example Extension");
+    expect(html).toContain("Acme Studio");
+    expect(html).toContain("v1.4.0");
+    expect(html).not.toContain("v9.0.0");
+    expect(html).not.toContain("Unknown vendor");
+  });
+});
+
+
+describe("multi-descriptor package titles (cinatra#3571)", () => {
+  it.each([
+    { declaredName: null, expected: "@acme/combined-skill" },
+    { declaredName: "Combined Skill", expected: "Combined Skill" },
+  ])("uses package metadata instead of an arbitrary member: $expected", async ({ declaredName, expected }) => {
+    const packageName = "@acme/combined-skill";
+    setFixture({
+      rows: [installRow({ packageName, kind: "skill" })],
+      activeByKind: { skill: [
+        { packageName, name: "First member" },
+        { packageName, name: "Second member" },
+      ] },
+      registry: [registryEntry(packageName, packageName, "skill")],
+      staticManifest: declaredName ? { [packageName]: { displayName: declaredName } } : {},
+    });
+    expect((await load()).active[0]?.displayName).toBe(expected);
   });
 });

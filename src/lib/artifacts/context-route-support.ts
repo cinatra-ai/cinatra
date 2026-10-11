@@ -29,6 +29,51 @@ export type ContextCandidate = ResolvedContextRef & {
   description?: string;
 };
 
+/**
+ * THE ONE narrow-to-broad ORDER, and the tiebreak that makes it TOTAL
+ * (cinatra#2815 S3 part 3).
+ *
+ * The resolver sorts what it read; the manifest-wide planner orders what it was
+ * given. Two statements of one ordering rule drift, and a drifted order here is
+ * not a cosmetic difference: the allocation is content-addressed into the token
+ * that finalize compares, so two readers that order differently report drift
+ * against data nobody touched.
+ *
+ * THE TIEBREAK IS A UNIQUE COLUMN. Scope and artifact id alone leave rows tied:
+ * one artifact can carry two eligible assertions from two accepted extensions,
+ * at the same tier, under the same artifact id. The semantic assertion is the
+ * row's own identity, and the representation revision finishes it, so no two
+ * distinct refs can compare equal.
+ */
+export function contextScopeWeight(
+  scope: "user" | "team" | "organization" | "workspace" | "project",
+): number {
+  switch (scope) {
+    case "project":
+      return 0;
+    case "user":
+      return 1;
+    case "team":
+      return 2;
+    case "organization":
+      return 3;
+    case "workspace":
+      return 4;
+  }
+}
+
+/** A TOTAL order over resolved refs: narrowest scope first, then the ref's own
+ *  unique triple. Never returns 0 for two distinct refs. */
+export function compareContextRefs(a: ResolvedContextRef, b: ResolvedContextRef): number {
+  const w = contextScopeWeight(a.sourceScope) - contextScopeWeight(b.sourceScope);
+  if (w !== 0) return w;
+  const byArtifact = a.artifactId.localeCompare(b.artifactId);
+  if (byArtifact !== 0) return byArtifact;
+  const byAssertion = a.semanticAssertionId.localeCompare(b.semanticAssertionId);
+  if (byAssertion !== 0) return byAssertion;
+  return a.representationRevisionId.localeCompare(b.representationRevisionId);
+}
+
 export type ContextSlotMeta = {
   slotId: string;
   resolutionMode: "override" | "accumulate";

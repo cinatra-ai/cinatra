@@ -59,6 +59,13 @@
 //     reason (their dimension IS meaningful in tests) — fs access in tests is
 //     a different, non-hazardous class.
 //
+// FLOOR COMPARED WITH THE BASE (cinatra#3832): the committed baseline may not
+// record a hit the base branch's baseline does not, so a pull request cannot
+// add its own hit to the tolerated debt. The base comes from
+// EXTENSION_FS_IMPORT_BAN_BASE when a workflow sets it, else from the pull
+// request's base branch; a base that cannot be read fails closed (the shared
+// guard, scripts/audit/lib/floor-base-guard.mjs).
+//
 // ALLOWLIST (owner-ruled, self-policing, mirrors extension-import-ban.mjs's
 // STRICT_SDK_ONLY_ALLOWLIST shape): a PERMANENT edge-level carve-out for a
 // SPECIFIC (extension, file) pair with an inline rationale — unlike the
@@ -70,17 +77,25 @@
 // Usage:
 //   node scripts/audit/extension-fs-import-ban.mjs                  # check (exit 1 on any hit outside baseline+allowlist)
 //   node scripts/audit/extension-fs-import-ban.mjs --write-baseline # regenerate the baseline from CURRENT hits (minus allowlisted keys)
+//   EXTENSION_FS_IMPORT_BAN_BASE=origin/main node ...   # compare the baseline with that revision (default: the pull request's base branch)
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripComments } from "../extensions/inventory.mjs";
 import { assertExtensionsPresent } from "./lib/assert-extensions-cloned.mjs";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
 const EXT_ROOT = join(REPO_ROOT, "extensions");
 const BASELINE_PATH = join(__dirname, "extension-fs-import-ban.baseline.json");
+
+/** The committed floor, repo-relative (the file the base branch is read at). */
+export const FLOOR_FILE = "scripts/audit/extension-fs-import-ban.baseline.json";
+
+/** The gate's own base variable (a git revision), when a workflow sets one. */
+export const FLOOR_BASE_VAR = "EXTENSION_FS_IMPORT_BAN_BASE";
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".mjs", ".cjs", ".js", ".jsx"]);
 
@@ -213,6 +228,25 @@ function readBaseline() {
   }
 }
 
+/**
+ * The floor base guard (cinatra#3832): growth is an (extension, file) hit the
+ * base branch's baseline does not record. `headFloor` (a Set of
+ * `extension::file` keys) defaults to the floor file in `repoRoot`.
+ */
+export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? flatten(JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")).hits ?? {});
+  return compareFloorWithBase({
+    gate: "extension-fs-import-ban",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: head,
+    parse: (text) => flatten(JSON.parse(text).hits ?? {}),
+    grown: (base, current) => newKeys(base, current),
+    repoRoot,
+    env,
+  });
+}
+
 /** Non-tolerated (extension, file) violations — outside BOTH the permanent
  *  allowlist and the temporary migration-debt baseline. Exported for unit
  *  tests. */
@@ -237,6 +271,10 @@ export function staleBaselineEntries(hits, baseline) {
 
 async function main() {
   const args = process.argv.slice(2);
+  // The floor base guard runs first: it reads only the committed baseline.
+  if (!args.includes("--write-baseline") && !reportFloorGuard(checkFloorAgainstBase({ headFloor: readBaseline() }))) {
+    process.exit(1);
+  }
   assertExtensionsPresent(REPO_ROOT, "extension-fs-import-ban");
   const hits = scanExtensionsForFsImports(listExtensionDirs());
 

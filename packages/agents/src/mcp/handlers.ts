@@ -1097,10 +1097,11 @@ async function handleAgentBuilderRun(
     // consults the run-start recommendation hold, then dispatches; every other
     // frame creates and enqueues in one act, as before. The launch origin is
     // SERVER-DERIVED from this frame, never from the primitive's input.
+    const { runStartedByFromFrame } = await import("../agent-run-serde");
     const launched = await createAgentRunForLaunchFrame({
       frame: request.actor,
       create: {
-        id: runId,
+        id: runId, startedByRunId: runStartedByFromFrame(mcpRequestContextStorage.getStore()),
         templateId: resolvedTemplateId,
         versionId: latestVersionId,
         inputParams: inputParamsParsed,
@@ -2665,11 +2666,11 @@ async function handleAgentBuilderImport(
   if (!zipBase64 || typeof zipBase64 !== "string") return { error: "zipBase64 is required." };
 
   try {
-    // Delegate to importAgentTemplate with redirect: false — MCP handlers must not
-    // trigger Next.js redirects. The upsert-by-packageName path is handled inside
-    // importAgentTemplate when the ZIP's agent.json carries a packageName.
+    // Delegate to importAgentTemplate with redirect: false (MCP handlers must not trigger Next.js redirects) and requireRuntimeMount: false
+    // (cinatra#3493: this primitive RESTORES a draft and neither registers nor publishes anything, so it keeps its previous contract on an
+    // instance with no agent runtime configured, while the screen’s supplied-install road requires the mount). The upsert-by-packageName path is handled inside importAgentTemplate.
     const { importAgentTemplate } = await import("../import-export-actions");
-    const result = await importAgentTemplate(zipBase64, name ?? undefined, { redirect: false });
+    const result = await importAgentTemplate(zipBase64, name ?? undefined, { redirect: false, requireRuntimeMount: false });
 
     return {
       templateId: result.templateId,

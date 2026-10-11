@@ -160,7 +160,7 @@ export function scopeSelectionMatchesAny(
 // Filter-mode multi-select picker behaviour (cinatra#1074, the W5 UI half).
 //
 // The GRANT picker's toggle/row-state semantics (owner-strip-when-mixed, the
-// owner floor, org→team implied display — src/components/access-scope.ts) are
+// owner floor, org→team implied display; packages/sdk-ui/src/access/scope.ts) are
 // grant rules and deliberately do NOT apply to the FILTER:
 //   - "personal" is an ordinary OR-token (personal + team:<id> is a
 //     meaningful union: "my stuff or that team's stuff");

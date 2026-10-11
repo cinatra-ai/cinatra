@@ -119,7 +119,16 @@ export async function registerSavedConnectionIdentity(input: {
    * broadening — mirrors the core__0015 legacy seed.
    */
   seed?: "owner" | "workspace";
-}): Promise<NangoConnectionIdentity> {
+  /**
+   * Called the instant the identity row is known and BEFORE the grant seed,
+   * with whether THIS call inserted it (cinatra#3485 fix leg 5). A caller that
+   * must compensate for an identity it installed needs that answer even when
+   * the seed below throws, because the row is standing by then; and it cannot
+   * derive it from a lookup of its own, since another request can insert
+   * between that lookup and this insert.
+   */
+  onIdentityRow?: (row: NangoConnectionIdentity & { created: boolean }) => void;
+}): Promise<NangoConnectionIdentity & { created: boolean }> {
   const { connectorKey, connectionId, ownerUserId, organizationId } = input;
   const connectorPackageId = HOST_CONNECTOR_KEY_TO_PACKAGE[connectorKey];
   if (!connectorPackageId) {
@@ -137,10 +146,11 @@ export async function registerSavedConnectionIdentity(input: {
     connectionId,
     ownerUserId,
   });
+  input.onIdentityRow?.(row);
 
   // Conflict hard-fail (codex round-1 finding 2 of the pre-stage): the store
-  // returns the EXISTING live row on conflict with no created flag — a
-  // mismatch means this save addressed a foreign identity.
+  // returns the EXISTING live row on conflict, so a mismatch means this save
+  // addressed a foreign identity.
   if (row.ownerUserId !== ownerUserId) {
     throw new ConnectionIdentityConflictError(
       `The ${connectorKey} connection "${connectionId}" is already registered to a ` +

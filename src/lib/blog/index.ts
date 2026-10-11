@@ -7,7 +7,6 @@ export * from "./generation";
 // removed with the lazy/guarded host-access cutover — a
 // new converter registration belongs in a BlogConnector registered via the
 // `blog-connector` capability, never a host-side re-export.
-export * from "./gemini";
 export { contentBlogPlugin } from "./plugin/definition";
 export { createBlogContentModule } from "./integration/module";
 export { registerBlogContentPrimitives } from "./mcp/registry";

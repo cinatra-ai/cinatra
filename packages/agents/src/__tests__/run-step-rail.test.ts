@@ -38,6 +38,25 @@ const msg = (
 ): RailMessage => ({ id, sequence, role, messageType, text });
 
 describe("buildRunStepRail merge contract", () => {
+  it.each(["pending", "resolved"] as const)("names the actual reviewed artifact on a %s gate", (status) => {
+    const rail = buildRunStepRail({
+      gates: [{
+        ...gate("named", status, "2026-10-05T00:00:00Z", status === "resolved" ? "approve" : null),
+        artifactName: "Why migrations are the hardest part",
+      }],
+    });
+    expect(rail.entries[0].label).toBe("Review · Why migrations are the hardest part");
+    expect(rail.entries[0].key).toBe("gate:named");
+    expect(rail.entries[0].gate?.disposition).toBe(status === "resolved" ? "approve" : null);
+  });
+
+  it.each([undefined, null, "", "   "])("retains the historical generic label without a real artifact name: %s", (artifactName) => {
+    const rail = buildRunStepRail({
+      gates: [{ ...gate("unnamed", "resolved", "2026-10-05T00:00:00Z", "approve"), artifactName }],
+    });
+    expect(rail.entries[0].label).toBe("Review");
+  });
+
   it("orchestrator run: template steps form the spine, gates trail in createdAt order", () => {
     const rail = buildRunStepRail({
       templateSteps: [tstep(1, 10, "Draft"), tstep(2, 20, "Refine")],
@@ -354,5 +373,18 @@ describe("buildRunStepRail — lifecycle policy decisions (cinatra#2047 D-5)", (
     });
     expect(forward.entries.map((e) => e.key)).toEqual(["gate:t1", "lifecycle:ev-a", "lifecycle:ev-b"]);
     expect(reversed.entries.map((e) => e.key)).toEqual(forward.entries.map((e) => e.key));
+  });
+});
+
+// Approved specs/app-artifact-review.html §I.3: one current entry, settled history above its successor.
+describe("§I.3 one current review across multiple artifacts", () => {
+  it("elects A at a same-ms tie, then B beneath settled A, then no current gate", () => {
+    const gates = [gate("C", "pending", "2026-10-10T00:00:01Z"), gate("B", "pending", "2026-10-10T00:00:00Z"), gate("A", "pending", "2026-10-10T00:00:00Z")];
+    const rail = () => buildRunStepRail({ gates }).entries;
+    expect(rail().filter(entry => entry.gate?.current).map(entry => entry.gate?.reviewTaskId)).toEqual(["A"]);
+    gates[2].status = "resolved";
+    expect(rail().map(entry => [entry.gate?.reviewTaskId, entry.gate?.current])).toEqual([["A", false], ["B", true], ["C", false]]);
+    gates.forEach(g => { g.status = "resolved"; });
+    expect(rail().filter(entry => entry.gate?.current)).toHaveLength(0);
   });
 });

@@ -1171,6 +1171,54 @@ export async function readProjectsForUser(
   return rows;
 }
 
+/**
+ * The tenant facts of the given projects: the stored organization and the
+ * owner tuple the organization is derived from when that column is empty
+ * (organization_id is nullable on older rows).
+ *
+ * `readProjectsForUser` answers WHICH projects a reader sees, across every
+ * organization at once; this answers which organization each of them belongs
+ * to, so a per-organization caller can keep every project under its own
+ * organization (cinatra#3529). No visibility decision is taken here: callers
+ * pass ids an actor-visible reader already returned.
+ */
+export async function readProjectOrganizationFacts(
+  projectIds: readonly string[],
+): Promise<Array<{ id: string; organizationId: string | null; ownerLevel: string; ownerId: string }>> {
+  if (projectIds.length === 0) return [];
+  return projectsDb
+    .select({
+      id: projects.id,
+      organizationId: projects.organizationId,
+      ownerLevel: projects.ownerLevel,
+      ownerId: projects.ownerId,
+    })
+    .from(projects)
+    .where(inArray(projects.id, [...projectIds]));
+}
+
+/**
+ * The agent-template bindings of ONE project, with each binding's visibility
+ * (`visible` | `hidden` | `project-private`, the table's CHECK). Read by the
+ * per-scope eligibility loader, whose project scope admits a package through a
+ * non-hidden binding and never through a hidden one (cinatra#2808, #3529).
+ * Callers pass a project id the actor-visible project reader already returned.
+ */
+export async function readProjectAgentTemplateBindings(
+  projectId: string,
+): Promise<Array<{ agentTemplateId: string; visibility: string }>> {
+  const schema = (process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra").replaceAll(
+    '"',
+    '""',
+  );
+  const result = await projectsDb.execute<{ agent_template_id: string; visibility: string }>(sql`
+    SELECT b.agent_template_id, b.visibility
+      FROM "${sql.raw(schema)}"."project_agent_template_bindings" b
+     WHERE b.project_id = ${projectId}
+  `);
+  return result.rows.map((r) => ({ agentTemplateId: r.agent_template_id, visibility: r.visibility }));
+}
+
 // ---------------------------------------------------------------------------
 // Probe whether a userId corresponds to a real human user row in the Better
 // Auth users table. Used by the WayFlow callback actor resolution path in

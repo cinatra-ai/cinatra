@@ -6,6 +6,7 @@ import {
   isSafePathSegment,
   assertSafePathSegment,
   vendorScopeOfPackage,
+  resolveInstalledVendorName,
 } from "@cinatra-ai/registries";
 
 describe("vendorScopeOfPackage", () => {
@@ -228,5 +229,52 @@ describe("dependencyScopePrefixesFor", () => {
     // appear here. The function signature only accepts the root name, so this
     // simply pins the first-party constant's value.
     expect(FIRST_PARTY_PACKAGE_SCOPE).toBe("@cinatra-ai");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3447 — the vendor byline chain's third DECLARED-data step.
+// ---------------------------------------------------------------------------
+
+describe("resolveInstalledVendorName — the scope's declared vendor identity (cinatra#3447)", () => {
+  it("falls through to the vendor identity declared for the package's scope", () => {
+    // The shipped manifest declares no `cinatra.vendor` on any agent entry and
+    // a never-published package has no registry author, so without this step
+    // the §V header of every installed agent drops its "by {Vendor}" clause.
+    expect(
+      resolveInstalledVendorName({
+        manifestVendorName: null,
+        author: null,
+        scopeVendorName: "Cinatra",
+      }),
+    ).toBe("Cinatra");
+  });
+
+  it("leaves the two existing steps first — the package's own declaration, then the author", () => {
+    expect(
+      resolveInstalledVendorName({
+        manifestVendorName: "Meridian Labs",
+        author: "someone else",
+        scopeVendorName: "Cinatra",
+      }),
+    ).toBe("Meridian Labs");
+    expect(
+      resolveInstalledVendorName({
+        manifestVendorName: null,
+        author: "Meridian Labs",
+        scopeVendorName: "Cinatra",
+      }),
+    ).toBe("Meridian Labs");
+  });
+
+  it("still renders no vendor at all when no source carries a human name", () => {
+    expect(
+      resolveInstalledVendorName({ manifestVendorName: null, author: null, scopeVendorName: null }),
+    ).toBeNull();
+    expect(
+      resolveInstalledVendorName({ manifestVendorName: null, author: null, scopeVendorName: "  " }),
+    ).toBeNull();
+    // The two-step call site (no scope data to offer) reads exactly as before.
+    expect(resolveInstalledVendorName({ manifestVendorName: null, author: null })).toBeNull();
   });
 });

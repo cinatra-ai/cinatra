@@ -55,14 +55,6 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
       "Update a blog post: EITHER raw { title, excerpt, content } (re-materialized) OR artifact refs { postArtifactId, postRepresentationRevisionId, imageArtifactId?, imageRepresentationRevisionId? } to swap (refs-only, no re-materialization). The two shapes are mutually exclusive.",
     inputSchema: schemas.blogPostUpdateToolSchema,
   },
-  "blog_image_generate_start": {
-    description: "Start generating a hero image for a blog post using AI.",
-    inputSchema: schemas.startImageRegenerationSchema,
-  },
-  "blog_image_generate_cancel": {
-    description: "Cancel an in-progress hero image generation.",
-    inputSchema: schemas.projectIdSchema,
-  },
   "blog_post_publish_wordpress_start": {
     description: "Start creating a WordPress draft for a blog post.",
     inputSchema: schemas.startWordPressDraftSchema,

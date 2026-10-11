@@ -21,6 +21,8 @@ import {
 } from "@cinatra-ai/sdk-extensions/design-primitives-contract";
 import { afterEach, describe, expect, it } from "vitest";
 
+import * as productAlertDialog from "@/components/ui/alert-dialog";
+
 import {
   HOST_DESIGN_PRIMITIVES,
   HOST_DESIGN_PRIMITIVES_SERVED_VERSION,
@@ -34,9 +36,10 @@ import {
   isAllowedSharedSpecifier,
 } from "../host-module-registry";
 
-/** The sixteen product components the module is built from. */
+/** The seventeen product components the module is built from. */
 const PRIMITIVE_FILES = [
   "alert",
+  "alert-dialog",
   "badge",
   "button",
   "card",
@@ -112,6 +115,14 @@ describe("a bundle leaving the id external resolves to the host's instance", () 
     expect(resolved).toBe(HOST_DESIGN_PRIMITIVES);
     // Component identity, not only module identity.
     expect((resolved as Record<string, unknown>).Button).toBe(HOST_DESIGN_PRIMITIVES.Button);
+  });
+
+  it("serves every AlertDialog export as the product's own component through the registry", () => {
+    initWithHost();
+    const resolved = getHostModule(HOST_DESIGN_PRIMITIVES_MODULE) as Record<string, unknown>;
+    for (const [name, component] of Object.entries(productAlertDialog)) {
+      expect(resolved[name], `${name} must retain the product's component identity`).toBe(component);
+    }
   });
 
   it("a SECOND copy is never mounted — the identity assertion throws on one", () => {

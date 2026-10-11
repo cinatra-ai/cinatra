@@ -7,6 +7,7 @@ import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
 
 import { cn } from "@/lib/utils";
+import { reviewGateRailSettlement } from "@/lib/artifacts/review-surface-model";
 
 import type { RunStepRailEntry } from "./run-step-rail";
 // THE SELECTION VOCABULARY, AS A TYPE ONLY (cinatra#3478, the click leg).
@@ -14,7 +15,11 @@ import type { RunStepRailEntry } from "./run-step-rail";
 // compile time, so reading the run detail's selection here adds no module to
 // any route graph -- the rule this file's head states for every declaration it
 // holds.
-import type { RunStepSelection } from "./run-surface-rail-step";
+import type {
+  RunReviewAuditStepKey,
+  RunReviewGateStepKey,
+  RunStepSelection,
+} from "./run-surface-rail-step";
 
 // ---------------------------------------------------------------------------
 // THE RUN PAGE'S RAIL VOCABULARY, IN ONE PLACE (cinatra#3188, forward + fix
@@ -153,6 +158,11 @@ export const RUN_PAGE_RAIL_ROW_CLASS =
 export const RUN_PAGE_RAIL_TITLE_CLASS =
   "min-w-0 leading-[1.15] break-words whitespace-normal text-start";
 
+/** State both halves of the rail's declared color rule. The native utility
+ * contract and the browser's actual computed colors are verified separately. */
+export const RUN_PAGE_RAIL_TITLE_COLOUR_CLASS =
+  "data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground";
+
 /**
  * THE MARK BETWEEN TWO ENTRIES, which is the whole gap between them:
  *
@@ -224,34 +234,16 @@ export const RUN_PAGE_RAIL_SEP_CLASS = RUN_RAIL_MARK_CLASS;
  * A run on the agent runtime leaves one step result, and the rail carries it as
  * a row: it IS a thing that happened and it keeps its place. It opens nothing —
  * only gate, verification and lifecycle rows carry a target — so fix leg 6 took
- * the button off it. The row went on drawing the same circle, the same numeral,
- * the same title and the same box as the rows that DO open, so on pixels
- * nothing told a reader it does not open: a difference only the DOM carried.
+ * the button off it: the row is not a control and takes no pointer cursor.
  *
- * THE DRAWING GIVES NO SUCH ROW TO COPY. The ratified drawing names ONE action
- * for this rail — "open-run-step -> step-detail" — and every rail row it draws
- * opens on selection; its rows are parted by the state ink alone (the entry
- * passed and the entry ahead share one muted ground, the entry being read takes
- * the ink). There is no drawn treatment for a row that looks like a step and
- * cannot be opened, and inventing a mark the drawing does not have would be a
- * second departure rather than a fix for the first.
- *
- * SO THE ROW TAKES THE RAIL'S OWN READING FOR A ROW A READER CANNOT PRESS. This
- * rail already draws them: a step still ahead is rendered `disabled`, and the
- * vendored stepper row's own class list is
- * "... cursor-pointer ... disabled:pointer-events-none disabled:opacity-60" —
- * so on this very surface "cannot be pressed" is already 60% ink and no pointer
- * cursor. The literal classes are carried here rather than the `disabled:`
- * variants because this row is not a disabled CONTROL — it is not a control at
- * all, and a variant keyed off a button's disabled attribute never fires on a
- * div.
- *
- * WHAT DOES NOT CHANGE: the drawing's row anatomy. The 24px glyph, the numeral,
- * the title, the 28px box and the marks between the rows are untouched, so the
- * rail's geometry reads exactly as it was graded. Only the affordance moves,
- * which is the one thing the row was saying wrongly.
+ * IT CARRIES NO OPACITY (cinatra#3240). The drawing gives every entry the
+ * reader is not on the muted ink itself and dims no title and no whole step
+ * (section I's rail rules), so neither does this row: an opacity on it painted
+ * its muted title paler than the muted token. The row's anatomy — the 24px
+ * glyph, the numeral, the title, the 28px box and the marks between the rows —
+ * is unchanged.
  */
-export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default opacity-60";
+export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default";
 
 
 // ---------------------------------------------------------------------------
@@ -348,7 +340,22 @@ export function RailExtraEntry({
   const isLifecycle = entry.kind === "lifecycleDecision";
   const lifecycleOutcome = entry.lifecycleDecision?.outcome;
   const isResolved = entry.status === "resolved";
+  // THE SETTLED WORD IS THE DRAWING'S, NOT THE WIRE'S (cinatra#3046, fix leg
+  // 16). This row used to print `entry.gate.disposition` straight through, so
+  // the rail read "APPROVE" beside a Review step whose card, on the same
+  // screen, read "Continued" — one settlement in two vocabularies, one of them
+  // the decider's verb rather than a reading. Derived from the one closed set
+  // the header and the settled line already read.
+  const gateSettlement = reviewGateRailSettlement(entry.gate?.disposition);
   const isPending = entry.status === "pending";
+  // THE ENTRY IS MARKED THE WAY THE FRAME'S OWN ROWS MARK THEIRS, which is what
+  // this file already says it intends below: "one reading of the rail answers
+  // for every row of it". An entry the run has not got to yet is not reached;
+  // an entry whose state is terminal -- resolved, completed or skipped -- is
+  // settled. The vocabulary is `RailStatus`'s own, not a second one.
+  const railReached = entry.status !== "upcoming";
+  const railSettled =
+    entry.status === "resolved" || entry.status === "completed" || entry.status === "skipped";
 
   // THE GATE THE RUN IS PARKED ON OPENS IN PLACE (cinatra#3478, the click leg).
   // The run detail is where a gate's own surface is drawn, so the row that
@@ -362,21 +369,51 @@ export function RailExtraEntry({
   // detail is where the parked gate's own surface stands, so a detail-selected
   // frame IS this row's screen being shown -- the reader is standing on this
   // step, and the rail says so in the vocabulary its spine rows already use.
-  const gateIsTheOpenScreen = gateOpensInTheRunDetail && selection?.selected === "detail";
+  const gateIsTheOpenScreen = gateOpensInTheRunDetail && selection?.selected === "detail" && entry.gate?.current === true;
+
+  // AND EVERY OTHER REVIEW ROW OPENS IN PLACE TOO (cinatra#3693).
+  //
+  // The click leg above gave the PARKED gate its in-place control and left the
+  // other two rows as links: a settled gate still opened the review's own page,
+  // and an Audit row still deep-linked into that page's `?view=verification`
+  // reading. The ratified drawing gives neither a page -- "a pending review
+  // renders the review gate in the run detail, under the same rail, never as a
+  // standalone document", and "there is no review page view outside the run's
+  // route" -- so both rows select a step of the run detail instead, keyed by the
+  // review task they belong to (`run-surface-rail-step.ts`).
+  //
+  // WHERE THERE IS NO FRAME THERE IS NO RUN DETAIL, and the row has nothing to
+  // select into: a rail mounted without one (a host that composes no run detail)
+  // keeps the deep link it has always carried. That is the same condition the
+  // parked row states above, asked once more for these two.
+  //
+  // THE KEYS ARE COMPOSED HERE, AND THE TYPE IS WHAT KEEPS THEM RIGHT. The two
+  // constructors live beside their types in `run-surface-rail-step`, and calling
+  // them would be a VALUE edge to that module -- which the route-graph ratchet
+  // refuses from this file: four locked routes reach it, and each grew by one
+  // module when the edge was tried. The types are template literals
+  // (`review:${string}`, `audit:${string}`), so an annotation here is checked
+  // against the same one declaration a call would have read, and the import stays
+  // erased at compile time -- the rule this file's head states for every
+  // declaration it holds.
+  const settledGateKey: RunReviewGateStepKey | null = entry.gate
+    ? `review:${entry.gate.reviewTaskId}`
+    : null;
+  const settledGateOpensInTheRunDetail = isGate && !isPending && selection !== null;
+  const verificationKey: RunReviewAuditStepKey | null = entry.verification
+    ? `audit:${entry.verification.reviewTaskId}`
+    : null;
+  const verificationOpensInTheRunDetail = isVerification && selection !== null;
+
+  // The settled row draws this one text run; its accessible name reads it too.
+  const settledGateTitle = `${entry.label} · ${gateSettlement.toLowerCase()}`;
 
   const titleNode = (
     <StepperTitle
-      className={cn(
-        RUN_PAGE_RAIL_TITLE_CLASS,
-        "data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground",
-      )}
+      className={cn(RUN_PAGE_RAIL_TITLE_CLASS, RUN_PAGE_RAIL_TITLE_COLOUR_CLASS)}
     >
-      {entry.label}
-      {isGate && isResolved ? (
-        <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
-          {entry.gate?.disposition ?? "resolved"}
-        </span>
-      ) : null}
+      {/* Review I.3 draws one text run, including its lowercase settlement. */}
+      {isGate && isResolved ? settledGateTitle : entry.label}
       {isVerification ? (
         <span className="ms-1.5 text-badge-2xs uppercase tracking-widest text-muted-foreground">
           {entry.verification?.outcome ?? "verified"}
@@ -401,6 +438,16 @@ export function RailExtraEntry({
       ) : null}
     </StepperTitle>
   );
+
+  // Numbered steps and audits separate adjacent spoken words.
+  // Settled reviews name their one complete existing visible title.
+  const accessibleName = isGate && isResolved
+    ? settledGateTitle
+    : isVerification
+      ? `${entry.label} ${entry.verification?.outcome ?? "verified"}`
+      : entry.kind === "step" && displayStep != null
+        ? `${displayStep} ${entry.label}`
+        : undefined;
 
   const indicatorNode = (
     <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
@@ -436,6 +483,7 @@ export function RailExtraEntry({
       data-rail-openable={entry.openable === false ? "false" : undefined}
       data-rail-gated-step={isGate ? "true" : undefined}
       data-rail-gate-history={isGate && isResolved ? "true" : undefined}
+      data-rail-gate-settlement={isGate && isResolved ? gateSettlement : undefined}
       data-rail-gate-pending={isGate && isPending ? "true" : undefined}
       data-rail-verification={isVerification ? "true" : undefined}
       data-rail-verification-outcome={isVerification ? entry.verification?.outcome : undefined}
@@ -459,9 +507,18 @@ export function RailExtraEntry({
         // row reachable from the keyboard, and the key handler below keeps it
         // openable from there, as the link it replaces was.
         <StepperTrigger
+          aria-label={accessibleName}
           className={RUN_PAGE_RAIL_ROW_CLASS}
           tabIndex={0}
           data-rail-gate-open={entry.gate.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
           // THE STEP THE SCREEN BELONGS TO IS MARKED, and marked the way the
           // frame's own rows mark theirs, so one reading of the rail answers
           // for every row of it.
@@ -483,12 +540,49 @@ export function RailExtraEntry({
           {indicatorNode}
           {titleNode}
         </StepperTrigger>
+      ) : isGate && entry.gate && settledGateOpensInTheRunDetail && settledGateKey ? (
+        // A SETTLED GATE'S OWN CONTROL (cinatra#3693). The gate the run has
+        // passed keeps its place on the rail as read-only history, and pressing
+        // it draws the settled reading in the run detail beside the rail --
+        // never on a document of its own. Same control, same box and same
+        // reading as the parked row above; only the key differs, because a run
+        // may have passed several gates and this row stands for one of them.
+        <StepperTrigger
+          aria-label={accessibleName}
+          className={RUN_PAGE_RAIL_ROW_CLASS}
+          tabIndex={0}
+          // THE ANCHOR THE ROW HAS ALWAYS CARRIED, unchanged: a capture and a
+          // suite address this row by the task it settles, and that is the same
+          // fact whether the row navigates or selects.
+          data-rail-gate-open={entry.gate.reviewTaskId}
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          aria-current={selection?.selected === settledGateKey ? "step" : undefined}
+          data-run-surface-rail-selected={
+            selection?.selected === settledGateKey ? "true" : "false"
+          }
+          onClick={() => selection?.select(settledGateKey)}
+          // AND THE KEY OPENS WHAT THE POINTER OPENS, for the reason the parked
+          // row states: the control's own keyboard road answers Enter and Space
+          // by moving the stepper's active step and stopping the activation
+          // there, so the row must answer those two keys itself or it opens
+          // nothing from the keyboard -- where the link it replaces opened.
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            selection?.select(settledGateKey);
+          }}
+        >
+          {indicatorNode}
+          {titleNode}
+        </StepperTrigger>
       ) : isGate && entry.gate ? (
-        // A gate row links into the run-embedded review surface. A resolved
-        // gate still links — the review page replays the completed submission
-        // read-only. Rendered as a plain Link (not a StepperTrigger button) to
-        // avoid a button-in-anchor.
+        // NO FRAME, NO RUN DETAIL: the deep link the row has always carried.
+        // Rendered as a plain Link (not a StepperTrigger button) to avoid a
+        // button-in-anchor.
         <Link
+          aria-label={accessibleName}
           href={`${reviewHrefBase}/${encodeURIComponent(entry.gate.reviewTaskId)}`}
           // ONE ROW BOX FOR EVERY ROW (cinatra#3225). The row's geometry is the
           // shared declaration above, not a second copy written out here: a
@@ -499,20 +593,79 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-gate-link={entry.gate.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
         </Link>
+      ) : isVerification && entry.verification && verificationOpensInTheRunDetail && verificationKey ? (
+        // THE AUDIT ROW'S OWN CONTROL (cinatra#3693). The run detail already
+        // draws this record's card (§VII's audit card, one per record the run
+        // carries), so the row that stands for it selects that card rather than
+        // deep-linking into a reading on another page.
+        <StepperTrigger
+          aria-label={accessibleName}
+          className={RUN_PAGE_RAIL_ROW_CLASS}
+          tabIndex={0}
+          data-rail-verification-open={entry.verification.reviewTaskId}
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          aria-current={selection?.selected === verificationKey ? "step" : undefined}
+          data-run-surface-rail-selected={
+            selection?.selected === verificationKey ? "true" : "false"
+          }
+          onClick={() => selection?.select(verificationKey)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            selection?.select(verificationKey);
+          }}
+        >
+          {indicatorNode}
+          {titleNode}
+        </StepperTrigger>
       ) : isVerification && entry.verification ? (
-        // A verification row (S4) deep-links into the same review surface's
-        // VERIFICATION view — the before/after "Audit".
+        // NO FRAME, NO RUN DETAIL: the deep link this row has always carried,
+        // into the same review surface's VERIFICATION view — the before/after
+        // "Audit".
         <Link
+          aria-label={accessibleName}
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className={cn(
             "flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           data-rail-verification-link={entry.verification.reviewTaskId}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -533,6 +686,21 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_INERT_ROW_CLASS
           )}
           data-rail-inert=""
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}
@@ -549,6 +717,7 @@ export function RailExtraEntry({
         // height back to the content so a taller row PUSHES the rail down;
         // `min-h-8` keeps every single-line row at exactly the height it had.
         <StepperTrigger
+          aria-label={accessibleName}
           className={cn(
             // The row's own box AND its alignment are the shared row class's
             // (`h-auto`, content sized, `items-center`, cinatra#3225) — no
@@ -560,6 +729,21 @@ export function RailExtraEntry({
             RUN_PAGE_RAIL_ROW_CLASS,
           )}
           tabIndex={-1}
+          // THE ROW IS WHERE THE RAIL'S STATE IS MARKED, the way the frame's
+          // own rows mark theirs (run-surface-rail): the marks sit on the node
+          // that carries the shared row box, not on the box around it, so one
+          // reading of the rail finds one row per entry and reads one rhythm
+          // down the whole composed rail.
+          data-run-surface-rail-step=""
+          data-run-surface-rail-reached={railReached ? "true" : "false"}
+          data-run-surface-rail-settled={railSettled ? "true" : "false"}
+          // AND -selected IS NEVER ABSENT (cinatra#3449). The parked gate below
+          // says whether its screen is the one drawn; every other entry of this
+          // rail said NOTHING, so a reading of a drawn entry came back with
+          // null for a state mark -- which is neither "current" nor "not". It
+          // reads "false", which is what the row draws and what the frame's own
+          // rows write for a row the reader is not standing on.
+          data-run-surface-rail-selected="false"
         >
           {indicatorNode}
           {titleNode}

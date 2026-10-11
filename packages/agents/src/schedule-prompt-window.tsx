@@ -14,11 +14,10 @@
 // schedule tab, whose own drawing was a summary of the configuration rather than
 // the form; the run page's schedule STEP drew the scheduler and nothing under
 // it. The plan puts the window on the step. Rather than give the product a
-// second prompt window, this is the same panel (`HitlConversationPanel`), the
-// same endpoint and the same `xRenderer` that tab already sent, mounted where
-// the plan asks for it — and, since cinatra#3004, mounted by BOTH surfaces from
-// here, so the run detail's step and the run's schedule tab ask their questions
-// through one window.
+// second prompt window, this is the same panel (`HitlConversationPanel`),
+// mounted where the plan asks for it — and, since cinatra#3004, mounted by BOTH
+// surfaces from here, so the run detail's step and the run's schedule tab ask
+// their questions through one window.
 //
 // IT PORTALS INTO ITS OWN MOUNT, NOT INTO `<main>`. `HitlConversationPanel`
 // takes its portal target from the parent, and the retired tab handed it
@@ -28,31 +27,56 @@
 // immediately below the scheduler form. That is a composition decision, not a
 // change to the shared panel — no other surface moves.
 //
-// IT CHANGES NOTHING BY ITSELF. The assist endpoint answers in the panel; it
-// does not write the schedule. cinatra#2853 owns making a typed instruction act
-// on the card, and `schedule-proposal-card.tsx` already exports the act it will
-// call (`submitScheduleDecision` / `adjustAndConfirmSchedule`). This slice adds
-// the window the plan asks for and nothing behind it.
+// AND IT CHANGES THE SCHEDULE ABOVE IT (cinatra#2934, the armed-trigger tab).
+// This box used to do nothing but talk: what was typed reached the run's
+// conversation and the form above it never moved, which is the deviation this
+// pull request recorded and the maintainer refused. The plan's own sentence for
+// the surface is "Fills the scheduler form's own rows … whether the schedule is
+// being set for the first time or changed once it stands. The person presses the
+// form's own button", and the second half is what lands here:
+//
+//   · a described change comes back as this turn's own FILL and is written into
+//     the card's rows — its `draft`, the same state its controls write — so the
+//     person sees it and nothing is saved;
+//   · a message that ALSO plainly asks for it to be saved is pressed by the
+//     assistant through the card's own save, and the card is re-drawn from the
+//     server so the rows show what was actually armed;
+//   · a schedule that can no longer be changed refuses in the server's own
+//     words, and the window touches nothing.
+//
+// THE WINDOW DECIDES NONE OF THAT. It relays this turn's effect to its host,
+// which owns the card; which road a sentence took is the server's answer, read
+// off the turn (`effect.fill` / `effect.acted`), never guessed at here.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 
-import {
-  HitlConversationPanel,
-  type HitlConversationEntry,
-} from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
-/** The renderer id the assist endpoint is already tuned for on this subject.
- *  The same string the Trigger tab sends, so one prompt understands one
- *  schedule however the reader reached it. */
-const SCHEDULE_ASSIST_RENDERER = "trigger-tab";
+/**
+ * WHAT THE WINDOW SAYS when the schedule above it can no longer be changed
+ * (cinatra#2934; plan (A) §7.2).
+ *
+ * THE PLATFORM'S OWN SENTENCE, in the family the other windows already use for
+ * a window that cannot do what it invites (`RUN_WINDOW_TOOL_LESS_NOTICE`): what
+ * is no longer possible, what the surface still is, and what to do instead. It
+ * is deliberately NOT the card's reason — the card draws that, from the
+ * server's own table, right above this line — so the two say one thing between
+ * them rather than the same thing twice.
+ */
+export const SCHEDULE_WINDOW_OVER_NOTICE =
+  "This schedule can no longer be changed — the form above shows it as it " +
+  "stands, and nothing typed here would change it. Start a new run to " +
+  "schedule it again.";
 
 export function SchedulePromptWindow({
   templateId,
   runId,
   canRespondInWindow,
   readOnly = false,
+  onFill,
+  onActed,
 }: {
   /** The template the assist call is scoped to. The schedule itself is never
    *  named here: this window answers, it does not act. */
@@ -75,24 +99,43 @@ export function SchedulePromptWindow({
    */
   canRespondInWindow?: boolean;
   /**
-   * IS THE SCHEDULE ABOVE THIS WINDOW OVER? (cinatra#3004)
+   * IS THE SCHEDULE ABOVE THIS WINDOW OVER? (cinatra#3004, as amended by
+   * cinatra#2934)
    *
    * The window's own invitation on this surface is "Ask Cinatra to change this
    * schedule, or ask about it…" (§X), and a schedule that is over can be
-   * changed by nobody — so the invitation would be one the surface cannot keep. The composer follows the
-   * form: present and live while the schedule can still be changed, gone once
-   * the run is over.
+   * changed by nobody — so the invitation is one the surface cannot keep. The
+   * COMPOSER therefore follows the form: present and live while the schedule
+   * can still be changed, gone once the run is over. `HitlConversationPanel`
+   * takes one `visible` boolean and has no read-only reading of its own, and a
+   * dead composer would be the same "control that exists only to refuse" the
+   * card itself withheld.
    *
-   * ABSENT RATHER THAN DISABLED, because that is what the shipped panel offers:
-   * `HitlConversationPanel` takes one `visible` boolean and has no read-only
-   * reading of its own, and `visible={!readOnly && …}` is the pattern this
-   * product already uses for exactly this state. A dead composer would be the
-   * same "control that exists only to refuse" the card itself removed.
+   * THE WINDOW ITSELF STAYS, AND THAT IS THE PART THIS PULL REQUEST GOT WRONG.
+   * It used to go with the composer, so a fired one-off drew a locked form and
+   * then nothing at all — no box, no sentence, no reason. Plan (A) §7.2 asks
+   * this state to ANSWER: the schedule "cannot be changed any more", said in
+   * the same platform's-own-words family as the other windows' notices. So the
+   * window is mounted, it says so, and the card beside it carries the server's
+   * own reason for the state.
    *
    * The surfaces that mount this window MEASURE the state off the card's own
    * DOM rather than predicting it (`useScheduleSurfaceReading`).
    */
   readOnly?: boolean;
+  /**
+   * THIS TURN PLACED VALUES IN THE FORM ABOVE (cinatra#2934). Handed up
+   * unchanged, for the host to write into the card's own rows — the window draws
+   * no schedule and holds no draft, exactly as the scheduling step's window
+   * hands its fill to that form's `applyScheduleValues`.
+   */
+  onFill?: (values: Record<string, unknown>) => void;
+  /**
+   * THIS TURN PRESSED SOMETHING. The card is re-resolved rather than re-drawn
+   * from what was asked for: "whatever it did, the server is the only thing that
+   * knows what the card now shows".
+   */
+  onActed?: () => void;
 }): ReactElement {
   const [mount, setMount] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
@@ -100,111 +143,84 @@ export function SchedulePromptWindow({
   // keeps no parallel copy it could show instead; the store is the state.
   const runWindow = useRunWindowConversation({ runId, surface: "armed-trigger" });
   const sendRunWindowTurn = runWindow.send;
-  /**
-   * THE PLATFORM'S OWN LINE ABOUT THE FORM FILL — not the conversation.
-   *
-   * The assist call below is a SECOND job beside the run's conversation: it
-   * fills THIS FORM's fields. When it fails, the fields are not filled, and a
-   * reader who is told nothing reads the run's own answer as if the form had
-   * been filled too. So the failure is still said out loud.
-   *
-   * It is NOT a parallel transcript, which is the thing this slice removed from
-   * every window: nothing is written here on the success path, the run's stored
-   * exchange is still the only record of what was asked and answered, and this
-   * line is shown after it. The review page's window already carries its
-   * platform outcome exactly this way.
-   */
-  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
-  // NEGATIVE, so a platform line can never take a stored entry's React key.
-  // The store's positions and the controller's optimistic ids are both positive
-  // and unbounded, so an offset — however large — is only PROBABLY disjoint;
-  // the sign is disjoint by construction.
-  const outcomeIdRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  // A FORM FILL IN FLIGHT WHEN THE SCHEDULE ENDS IS DROPPED (cinatra#3004).
-  // Withdrawing the window hides the panel; it does not stop the request the
-  // reader had already sent. Without this, a Cancel schedule landing mid-answer
-  // would leave a live call still trying to fill fields nobody can change any
-  // more. The abort's own path appends nothing and clears the pending flag in
-  // its `finally`, so nothing else has to be undone here.
-  //
-  // WHAT IS NOT DROPPED, stated rather than left to be discovered: the RUN's
-  // conversation turn (cinatra#2933). It is a stored turn — the whole point of
-  // the per-run window is that what was asked is still there after a reload and
-  // from the schedule's other host — so once it is accepted it stands, and a
-  // schedule ending afterwards does not reach back and unsay it. Only the form
-  // fill, which has become pointless, is cancelled.
-  useEffect(() => {
-    if (!readOnly) return;
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, [readOnly]);
-
   const handlePromptSubmit = useCallback(
     async (prompt: string) => {
-      if (!templateId) return;
-      abortRef.current?.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-      // The run's own conversation carries what was typed and what came back.
-      // The assist call below still fills THIS FORM's fields, which is a
-      // different job and is retired by #2934 together with the fill.
-      void sendRunWindowTurn(prompt);
+      // ONE ROAD, AND ONLY ONE MODEL (cinatra#2934, lifecycle-b W5c). This box
+      // used to do a SECOND job beside the run's conversation: it asked the
+      // field-assist route to fill this form's fields, and that route ran a
+      // second, hidden model over the same sentence the assistant was already
+      // reading. The route is gone, and with it this window's private path —
+      // what is typed here reaches the run's own conversation and nothing else.
+      //
+      // WHAT WENT WITH IT, named rather than left to be noticed: the platform's
+      // own line about a failed fill, and the abort that dropped a fill still in
+      // flight when the schedule ended (cinatra#3004). Both existed for that
+      // second call. The RUN's turn is not one of them and never was: it is
+      // stored, so once it is accepted it stands, and a schedule ending
+      // afterwards does not reach back and unsay it.
+      //
+      // AND IT IS THE ONE ROAD THAT CHANGES THE ARMED SCHEDULE TOO
+      // (cinatra#2934, the armed-trigger tab). The turn is bound to the ARMED
+      // scheduler form — the server mints its ref from the run this box sits
+      // under — so the same send that answers the question is the send that
+      // fills the rows and, when the person plainly asks, presses the card's own
+      // Save changes.
       setPromptPending(true);
       try {
-        const res = await fetch(
-          `/api/agents/builder/${encodeURIComponent(templateId)}/hitl-assist`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: ctrl.signal,
-            body: JSON.stringify({
-              prompt,
-              xRenderer: SCHEDULE_ASSIST_RENDERER,
-              // cinatra#2933 -- the run the schedule belongs to, so the route
-              // asks the RUN's access rather than the platform tier.
-              ...(runId ? { runId } : {}),
-              schemaProperties: [
-                "triggerType",
-                "scheduledAt",
-                "timezone",
-                "cronExpression",
-              ],
-            }),
-          },
-        );
-        if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-        // The answer the reader sees is the STORED one -- `runWindow.send`
-        // above re-reads the run's exchange when the turn lands. Appending the
-        // assist reply here as well would put a second, unstored copy of the
-        // answer on the screen, which is the parallel transcript this slice
-        // removed from every window.
-        void (await res.json());
-      } catch (err) {
-        // An ABORT is this component replacing its own in-flight question, not a
-        // failure the reader has to read about.
-        if (ctrl.signal.aborted) return;
-        console.warn(
-          "[schedule-prompt-window] assist failed",
-          err instanceof Error ? err.message : String(err),
-        );
-        setOutcomeLines((prev) => [
-          ...prev,
-          {
-            id: --outcomeIdRef.current,
-            role: "assistant",
-            content: "Could not fetch suggestions — please try again.",
-          },
-        ]);
+        const effect = await sendRunWindowTurn(prompt);
+        // A turn that PRESSED writes no fields: the card re-resolves and shows
+        // what the server actually armed, never the values optimistically.
+        if (effect.acted) onActed?.();
+        else if (effect.fill) onFill?.(effect.fill.values);
       } finally {
         setPromptPending(false);
       }
     },
-    [templateId, runId, sendRunWindowTurn],
+    [sendRunWindowTurn, onActed, onFill],
   );
+
+  // THE WINDOW ANSWERS, AND IT IS STILL A WINDOW (cinatra#2934, the FOURTH
+  // graded capture; plan (A) §7.2).
+  //
+  // WHAT THE CAPTURE PHOTOGRAPHED. The sentence was there, and it was drawn as
+  // a bare paragraph on the page ground — no block, no chrome, no field — so
+  // what the pixels showed under a locked form was a line of text, not the
+  // window the drawing places below the scheduler. And the card above it had
+  // been given a dead floor to carry the same state twice.
+  //
+  // SO THE WINDOW IS PRESENT AND DISABLED, drawn as ITS OWN BLOCK: the same
+  // outer placement the live window takes, the same centred column, and the
+  // window's own bordered field — the box a person would type in — carrying the
+  // answer instead of a composer. Nothing can be typed into it: it is a region,
+  // not a control, and it is marked disabled for a reader who is not looking at
+  // the pixels. This is now the ONLY place this state says anything, which is
+  // what §7.2's "the same form and nothing else" leaves room for.
+  if (readOnly) {
+    return (
+      <div
+        data-conformance-id="schedule-prompt-window"
+        data-schedule-prompt-window=""
+      >
+        <div data-run-window-placement="floating" className="px-5 pb-4 pt-6">
+          <div className="mx-auto max-w-3xl">
+            <div
+              data-run-window-field=""
+              aria-disabled="true"
+              className="rounded-panel border border-line bg-surface px-3 py-2.5 shadow-lg"
+            >
+              <p
+                data-conformance-id="schedule-window-over"
+                role="status"
+                className="text-sm text-muted-foreground"
+              >
+                {SCHEDULE_WINDOW_OVER_NOTICE}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -221,13 +237,8 @@ export function SchedulePromptWindow({
         // Two independent reasons for there to be no box, and both still hold:
         // the schedule is over so there is nothing to edit (cinatra#3004), or
         // the run would refuse this person's message (cinatra#2933).
-        visible={
-          !readOnly &&
-          canRespondInWindow !== false &&
-          !!templateId &&
-          !!mount
-        }
-        conversation={[...runWindow.entries, ...outcomeLines]}
+        visible={canRespondInWindow !== false && !!templateId && !!mount}
+        conversation={runWindow.entries}
         promptPending={promptPending || runWindow.pending}
         storageKey={`cinatra_schedule_assist_${templateId}_step`}
         onSubmit={handlePromptSubmit}

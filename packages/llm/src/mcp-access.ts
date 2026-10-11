@@ -242,6 +242,12 @@ export type AgentRunMcpActor = {
    * can refuse stale attempts. Optional; mirrors the app-layer type.
    */
   executionAttemptId?: string;
+  /**
+   * The verified step of the calling model step (`stp` claim, cinatra#3745),
+   * set by the bridge only from the flow runtime's signed step pair.
+   * Optional; mirrors the app-layer type.
+   */
+  verifiedStepId?: string;
 };
 
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;

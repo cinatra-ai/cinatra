@@ -235,6 +235,90 @@ describe("the access write is fail-closed (criteria 13, 32)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// WHAT AUDIENCE THE CHOSEN TARGET ACTUALLY PERSISTS (cinatra#3785).
+//
+// The anchor suite above measures the row identity. This one measures the other
+// half of the same contract: the policy the sanctioned writer is called with.
+// The defect it pins is the organization target on a kind whose install default
+// is OWNER-ONLY (agent_template / skill_package): with no policy supplied the
+// writer applied that default, and an owner-only reach is admitted by no
+// organization vantage, so the organization's own Agents tab listed nothing.
+//
+// The team and project targets are asserted beside it because they are what the
+// organization target is supposed to look like, and because a fix that reached
+// them would be a regression. The artifact case is asserted because its
+// established deferral MUST survive: an artifact's organization-target default
+// is the contract's business, not this road's.
+// ---------------------------------------------------------------------------
+describe("the audience the chosen target persists (cinatra#3785)", () => {
+  const AGENT_SNAPSHOT = {
+    package: {
+      kind: "agent",
+      packageName: "@acme/thing-agent",
+      version: "1.0.0",
+      contentDigest: "a".repeat(64),
+      provenance: { type: "local", path: "x.tgz", contentDigest: "a".repeat(64) },
+    },
+    tarball: new Uint8Array([1]),
+    provenance: { type: "local", path: "x.tgz", contentDigest: "a".repeat(64) },
+    validatorRan: true,
+  };
+
+  const lastAccessCall = () =>
+    (access.setExtensionInstallAccess.mock.calls.at(-1) as unknown as unknown[])[0] as {
+      kind: string;
+      resourceId: string;
+      policy?: {
+        runListVisibility: string[];
+        runDataVisibility: string[];
+        runExecuteVisibility: string[];
+        allowRunSharing: boolean;
+      };
+    };
+
+  const scopedTo = (token: string) => ({
+    runListVisibility: [token],
+    runDataVisibility: [token],
+    runExecuteVisibility: [token],
+    allowRunSharing: false,
+  });
+
+  async function installAgentAt(accessTarget: { level: string; id: string }) {
+    road.prepareSuppliedArchiveSnapshot.mockResolvedValueOnce(AGENT_SNAPSHOT as never);
+    const result = await installSuppliedArchiveAction({ zipBase64: ZIP, accessTarget } as never);
+    expect(result.ok).toBe(true);
+    return lastAccessCall();
+  }
+
+  it("an ORGANIZATION target on an agent writes the org:<id> audience, not the owner-only default", async () => {
+    const call = await installAgentAt({ level: "organization", id: "org-1" });
+    expect(call.kind).toBe("agent_template");
+    expect(call.policy).toEqual(scopedTo("org:org-1"));
+  });
+
+  it("a TEAM target on an agent keeps its team:<id> audience", async () => {
+    const call = await installAgentAt({ level: "team", id: "team-9" });
+    expect(call.policy).toEqual(scopedTo("team:team-9"));
+  });
+
+  it("a PROJECT target on an agent keeps its project:<id> audience", async () => {
+    const call = await installAgentAt({ level: "project", id: "proj-7" });
+    expect(call.policy).toEqual(scopedTo("project:proj-7"));
+  });
+
+  it("an ORGANIZATION target on an ARTIFACT still defers to the kind's install default", async () => {
+    const result = await installSuppliedArchiveAction({
+      zipBase64: ZIP,
+      accessTarget: { level: "organization", id: "org-1" },
+    } as never);
+    expect(result.ok).toBe(true);
+    const call = lastAccessCall();
+    expect(call.kind).toBe("artifact");
+    expect(call.policy).toBeUndefined();
+  });
+});
+
 describe("what a successful install points the operator at (criterion 21)", () => {
   it("names the artifact kind's own observable", async () => {
     const result = await installSuppliedArchiveAction({

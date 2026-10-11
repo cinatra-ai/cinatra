@@ -467,6 +467,8 @@
   --accent: oklch(0.929 0.013 255.508);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
+  /* Section rule: the dark palette's own text colour (app.html, Section rule). */
+  --line-strong: var(--foreground);
   /* Control chrome (cinatra#3107). The light palette's full navy IS invisible
      against dark surfaces, so the dark control boundary stays in the same
      white-over-ground vocabulary as --line — but STRENGTHENED, because --line
@@ -583,11 +585,8 @@
   --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
-  /* The strengthened line. `--line-strong` is declared for the light
-     palette only -- the dark palette must not re-declare it, the
-     etched-rule gate binds to that -- so a boundary that has to stay
-     findable in BOTH palettes draws from `--line-control`, which is
-     `var(--line-strong)` in the light one. */
+  /* Controls keep their own boundary strength in each palette, separate from
+     the section rule's full-strength text ink. */
   --color-line-control: var(--line-control);
   --color-accent-soft: var(--accent-soft);
   /* Fabric stripe utility tokens. */
@@ -1266,6 +1265,11 @@ textarea::placeholder {
 input:focus::placeholder,
 textarea:focus::placeholder {
   color: transparent;
+}
+/* The open list auto-focuses its search row; keep its drawn prompt visible.
+   Ordinary fields retain their existing focus behavior. */
+[data-slot="command-input-wrapper"][data-chrome="flush"] input:focus::placeholder {
+  color: var(--muted-foreground);
 }
 
 /* Chat fenced code blocks — shiki injects its own <pre> without layout classes;

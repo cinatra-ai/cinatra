@@ -1,6 +1,5 @@
 import { Suspense } from "react";
 import Link from "next/link";
-import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { ChevronLeft } from "lucide-react";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
@@ -61,6 +60,13 @@ import { getCustomSkillById, readSkillsCatalog, resolveEffectiveSkillAccessPolic
 // The afterPolicyWrite hook keeps the (level, scope) tuple projection in sync
 // on save while readers still depend on it.
 import { loadSkillPermissionsContext } from "./permissions-page-data";
+// The catalog rows + their per-row gate (cinatra#2810, per-scope surfaces S4).
+// Re-exported here because `@cinatra-ai/skills/pages` is the entry point the
+// app already resolves for this package's surfaces.
+import { SkillsCatalogRows, mapSkillLevelToScopeLevel } from "./skills-catalog-rows";
+import { listAuthorizedInstalledSkills } from "./skills-list-gate";
+export { SkillsCatalogRows, mapSkillLevelToScopeLevel } from "./skills-catalog-rows";
+export { listAuthorizedInstalledSkills } from "./skills-list-gate";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -80,26 +86,6 @@ const SKILLS_ERROR_TOASTS: SearchParamToastConfig[] = [
   { param: "error", value: "skill-not-found", message: "Skill not found.", variant: "error" },
 ];
 
-// SkillLevel → ScopeLevel mapping for ScopeBadge rendering.
-// SkillLevel has 8 values; ScopeLevel has 5 (user|team|organization|workspace|project).
-// - team/organization/workspace/project → identity
-// - personal/agent → user (individual ownership)
-// - third-party/system → user (no canonical ownership; render as default)
-function mapSkillLevelToScopeLevel(level: SkillLevel): "user" | "team" | "organization" | "workspace" | "project" {
-  switch (level) {
-    case "team":
-    case "organization":
-    case "workspace":
-    case "project":
-      return level;
-    case "personal":
-    case "agent":
-    case "system":
-    default:
-      return "user";
-  }
-}
-
 type SkillsPageProps = {
   searchParams?: Promise<SearchParams>;
 };
@@ -113,34 +99,11 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
     getAuthSession(),
   ]);
 
-  // The list must apply per-row authorization. A "filter system only"
-  // gate leaks scoped skill metadata (name,
-  // description, package, slug, source URL, usedBy) for personal/team/
-  // org/project/workspace rows the actor cannot access. Apply per-row
-  // `requireResourceAccess` so the rendered list mirrors what
-  // `skills_installed_list` returns to MCP callers. platform_admin
-  // is short-circuited inside `requireResourceAccess` and continues to
-  // see everything.
-  const listSkillPackages = (await readSkillsCatalog()).skillPackages ?? [];
-  const skills = allSkills.filter((s) => {
-    try {
-      // Keep the UI authorization shape aligned with auth-policy.ts.
-      requireResourceAccess(actor, buildSkillResourceRef({
-        id: s.id,
-        level: s.level,
-        scope: s.scope ?? null,
-        // Durable owner identity (cinatra#1416): a shared personal skill stays
-        // visible to its owner even when the projected scope names a locus the
-        // owner is not a member of.
-        ownerUserId: s.ownerUserId ?? null,
-        // Canonical effective policy (W4): skill override else parent package's.
-        accessPolicy: resolveEffectiveSkillAccessPolicy(s, listSkillPackages),
-      }));
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  // The list's per-row authorization gate — and the rows it guards — now live
+  // in ./skills-catalog-rows, so the per-scope Skills tab (cinatra#2810) runs
+  // the IDENTICAL gate rather than its own approximation of it. The gate itself
+  // is unchanged; only its address is.
+  const skills = await listAuthorizedInstalledSkills(actor, allSkills);
 
   const preferredView = cookieStore.get(getListViewCookieName("/skills"))?.value;
   const requestedView = pickSearchParam(resolvedSearchParams.view);
@@ -269,34 +232,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
         />
 
         {view === "cards" ? (
-          <section className="grid gap-4">
-            {filtered.map((skill) => (
-              <Card key={skill.id} className="border-line bg-surface backdrop-blur-none p-6">
-                <Kicker size="sm" tracking="wide">Skill</Kicker>
-                <h2 className="mt-2 text-xl font-semibold">
-                  <Link href={`/skills/${encodeURIComponent(skill.id)}`} className="underline-offset-4 hover:underline">
-                    {skill.name}
-                  </Link>
-                </h2>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">{skill.description}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {skill.level ? (
-                    <ScopeBadge level={mapSkillLevelToScopeLevel(skill.level)}>{skill.level}</ScopeBadge>
-                  ) : null}
-                  <span className="rounded-full border border-line px-3 py-1 text-xs text-muted-foreground">
-                    Extension:{" "}
-                    <Link href={`/skills?q=${encodeURIComponent(skill.packageName)}`} className="font-medium underline-offset-4 hover:underline">
-                      {skill.packageName}
-                    </Link>
-                  </span>
-                  <span className="rounded-full border border-line px-3 py-1 text-xs text-muted-foreground">Skill id: {skill.slug}</span>
-                  <span className="rounded-full border border-line px-3 py-1 text-xs text-muted-foreground">
-                    Used in: {skill.usedBy.length > 0 ? skill.usedBy.join(", ") : "Not currently used"}
-                  </span>
-                </div>
-              </Card>
-            ))}
-          </section>
+          <SkillsCatalogRows skills={filtered} />
         ) : (
           <PaginatedTable className="min-w-full text-left text-sm">
             <TableHeader>

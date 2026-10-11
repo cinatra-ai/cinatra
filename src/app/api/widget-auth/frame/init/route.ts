@@ -183,8 +183,13 @@ export async function POST(request: Request): Promise<Response> {
       siteOrigin: site.siteOrigin,
       reason: created.reason,
     });
-    const status = created.reason === "instance_unresolved" ? 409 : 400;
-    return NextResponse.json({ error: created.reason }, { status });
+    // cinatra#3715 — a binding refusal on this second read (the state changed
+    // between the two reads) answers the ONE generic shape a derivation failure
+    // answers; the audit line above keeps its reason.
+    if (created.reason === "instance_unresolved") {
+      return NextResponse.json(GENERIC_400, { status: 400 });
+    }
+    return NextResponse.json({ error: created.reason }, { status: 400 });
   }
 
   // The CANONICAL origin the gate matched, not `new URL(request.url).origin`:

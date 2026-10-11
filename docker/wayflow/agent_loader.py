@@ -492,6 +492,107 @@ def _extract_endnode_outputs(status: Any, conversation: Any, assistant: Any) -> 
     return filtered
 
 
+# The step that paused a run (cinatra#3745).
+#
+# When a run pauses for a review (an input-required task), the loader finds
+# the conversation that yielded, reads the id of its current step, signs the
+# claim `g1\n<contextId>\n<taskId>\n<nodeId>` with the dedicated key and puts
+# `{"node": <id>, "attestation": "g1:<hex>"}` on the metadata of the last new
+# A2A message under CINATRA_GATE_NODE_METADATA_KEY. The application stores the
+# claim beside the gate's task id and verifies it with the same key.
+# ---------------------------------------------------------------------------
+
+
+CINATRA_GATE_NODE_METADATA_KEY = "cinatra_gate_node"
+
+#: Upper bound on the sub-conversation levels the finder walks.
+_GATE_NODE_MAX_DEPTH = 32
+
+
+def _find_yielding_step_id(status: Any, conversation: Any) -> Optional[str]:
+    """Return the id of the current step of the conversation that yielded.
+
+    The yielding conversation is `conversation` itself or one of its
+    sub-conversations (at any depth) whose id equals the status's
+    `_conversation_id`; its current step is `current_step_name` looked up in
+    `component.steps`. Returns None on anything it cannot read; never raises.
+    """
+    try:
+        target = getattr(status, "_conversation_id", None)
+        if not isinstance(target, str) or not target:
+            return None
+        pending = [(conversation, 0)]
+        seen = set()
+        while pending:
+            conv, depth = pending.pop()
+            if conv is None or id(conv) in seen or depth > _GATE_NODE_MAX_DEPTH:
+                continue
+            seen.add(id(conv))
+            try:
+                conv_id = getattr(conv, "id", None)
+            except Exception:
+                continue
+            if conv_id == target:
+                step_name = getattr(conv, "current_step_name", None)
+                component = getattr(conv, "component", None)
+                steps = getattr(component, "steps", None)
+                if not isinstance(step_name, str) or not isinstance(steps, dict):
+                    return None
+                step = steps.get(step_name)
+                step_id = getattr(step, "id", None) if step is not None else None
+                return step_id if isinstance(step_id, str) and step_id else None
+            try:
+                subs = conv._get_all_sub_conversations()
+            except Exception:
+                continue
+            if isinstance(subs, (list, tuple)):
+                for sub in subs:
+                    pending.append((sub, depth + 1))
+        return None
+    except Exception:
+        return None
+
+
+def _sign_gate_node_claim(
+    key: Optional[str],
+    context_id: Optional[str],
+    task_id: Optional[str],
+    node_id: Optional[str],
+) -> Optional[Dict[str, str]]:
+    """Return `{"node": node_id, "attestation": "g1:<hex>"}` over
+    `g1\n<context_id>\n<task_id>\n<node_id>` with `key`, or None without a key,
+    a context id, a task id or a node id."""
+    for value in (key, context_id, task_id, node_id):
+        if not isinstance(value, str) or not value:
+            return None
+    material = f"g1\n{context_id}\n{task_id}\n{node_id}".encode("utf-8")
+    sig = hmac.new(key.encode("utf-8"), material, hashlib.sha256).hexdigest()
+    return {"node": node_id, "attestation": f"g1:{sig}"}
+
+
+def _attach_gate_node_claim(
+    messages: List[Any], claim: Optional[Dict[str, str]]
+) -> List[Any]:
+    """Set a non-None `claim` as `metadata[CINATRA_GATE_NODE_METADATA_KEY]` on
+    the LAST message of `messages`, keeping that message's other metadata.
+    Adds no message; an empty list stays empty. Returns `messages`."""
+    if claim is None or not isinstance(messages, list) or not messages:
+        return messages
+    last = messages[-1]
+    if not isinstance(last, dict):
+        return messages
+    metadata = last.get("metadata")
+    if metadata is None:
+        metadata = {}
+    elif not isinstance(metadata, dict):
+        return messages
+    else:
+        metadata = dict(metadata)
+    metadata[CINATRA_GATE_NODE_METADATA_KEY] = claim
+    last["metadata"] = metadata
+    return messages
+
+
 # Placeholder substitution.
 # ---------------------------------------------------------------------------
 
@@ -746,6 +847,37 @@ def _patch_api_call_step_bridge_token() -> None:
                     request["headers"]["X-Cinatra-Context-Node"] = _node_id
                     request["headers"]["X-Cinatra-Context-Attestation"] = (
                         f"v2:{_expiry}:{_sig}"
+                    )
+            # cinatra#3745: sign the identity of the executing step on the
+            # model-bridge and passthrough calls, so the application learns
+            # which step of the run makes each call. `self.id` is the executing
+            # compiled step's own id; the material `s1\n<ctx>\n<node>\n<expiry>`
+            # carries a prefix of its own, distinct from the context pair's.
+            # Step headers of these names that the flow's source declared on
+            # an internal call are replaced by the runtime's values (or
+            # dropped when the runtime has no key, context id or step id).
+            if "llm-bridge" in _ctx_url or "/agents/passthrough" in _ctx_url:
+                for _hname in list(request["headers"].keys()):
+                    if str(_hname).lower() in (
+                        "x-cinatra-step-node",
+                        "x-cinatra-step-attestation",
+                    ):
+                        del request["headers"][_hname]
+                _step_id = getattr(self, "id", "") or ""
+                if attest_key and _ctx_id and _step_id:
+                    _step_expiry = (
+                        int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
+                    )
+                    _step_sig = hmac.new(
+                        attest_key.encode("utf-8"),
+                        f"s1\n{_ctx_id}\n{_step_id}\n{_step_expiry}".encode(
+                            "utf-8"
+                        ),
+                        hashlib.sha256,
+                    ).hexdigest()
+                    request["headers"]["X-Cinatra-Step-Node"] = _step_id
+                    request["headers"]["X-Cinatra-Step-Attestation"] = (
+                        f"s1:{_step_expiry}:{_step_sig}"
                     )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
@@ -1225,6 +1357,10 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     status, ToolRequestStatus
                 ):
                     task_state = "input-required"
+                    # cinatra#3745: record which step of the flow paused the run.
+                    _gate_node_id = _find_yielding_step_id(status, conversation)
+                    _gate_claim = _sign_gate_node_claim(os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"), task.get("context_id"), task.get("id"), _gate_node_id)
+                    _attach_gate_node_claim(new_a2a_messages, _gate_claim)
                 elif isinstance(status, FinishedStatus):
                     task_state = "completed"
                     # Prepend (NOT append) a synthetic A2A DataPart message

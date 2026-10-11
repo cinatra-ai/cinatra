@@ -104,6 +104,51 @@ export const AGENTS_DEFAULT_CONFIG: DashboardConfigV1_1 = {
   grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
 };
 
+/** The scope an Executions tab is drawn under (cinatra#3693). */
+export type AgentsExecutionsScope =
+  | { readonly kind: "workspace" }
+  | { readonly kind: "personal" }
+  | { readonly kind: "organization" | "team" | "project"; readonly id: string };
+
+/**
+ * The Executions view of a scope (cinatra#3693): the seed's portlets, each
+ * narrowed to the runs launched from that scope by a listing filter on the
+ * `agent_runs.launch_scope` dimension. The drawing: "Executions lists the runs
+ * started in that scope, and the workspace's Executions lists every run the
+ * viewer may see" — so the workspace gets the seed unchanged.
+ *
+ * Built fresh per request, like the entity detail configs, and never persisted:
+ * the view that mounts it is read-only, so the filter never reaches the
+ * reader's saved layout of the bare Executions tab. The personal scope is
+ * actor-relative — its runs are anchored to the human who launched them — so
+ * the viewer's own id names them. The cube's access predicate still runs under
+ * the filter; the filter only narrows what an authorized read lists.
+ */
+export function agentsExecutionsConfigForScope(
+  scope: AgentsExecutionsScope,
+  viewerUserId: string,
+): DashboardConfigV1_1 {
+  if (scope.kind === "workspace") return AGENTS_DEFAULT_CONFIG;
+  const value = scope.kind === "personal" ? `user:${viewerUserId}` : `${scope.kind}:${scope.id}`;
+  return {
+    ...AGENTS_DEFAULT_CONFIG,
+    portlets: AGENTS_DEFAULT_CONFIG.portlets.map((portlet) => {
+      // The seed's own portlets, whose analysis config it wrote above.
+      const analysis = portlet.analysisConfig as { query?: Record<string, unknown> };
+      return {
+        ...portlet,
+        analysisConfig: {
+          ...analysis,
+          query: {
+            ...analysis.query,
+            filters: [{ member: "agent_runs.launch_scope", operator: "equals", values: [value] }],
+          },
+        },
+      };
+    }),
+  };
+}
+
 /**
  * Build the per-org-per-user dashboard row id for /agents.
  *

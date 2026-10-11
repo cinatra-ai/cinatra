@@ -34,6 +34,8 @@ import type { RemovalActionResult } from "../removal-failure";
 import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 
 const REGISTRIES_HREF = "/configuration/environment?tab=registries";
+const MARKETPLACE_UNAVAILABLE_REASON =
+  "Marketplace publishing isn't available for this extension yet.";
 
 export type ExtensionSettingsActions = {
   // NOTE (cinatra#1041): there is deliberately NO update action here — the §V
@@ -115,7 +117,13 @@ export type ExtensionSettingsViewProps = {
    * operator sees the blockers BEFORE clicking, not just after the refusal.
    */
   archiveDependents?: string[];
-  isPublic: boolean;
+  /**
+   * The §V Marketplace group draws the publish action in exactly one of its
+   * three drawn states (cinatra#3447): live when `canPublish`, else muted
+   * beside the Register link when the instance is no registered vendor, else
+   * muted beside the visible not-available reason. §V draws no "already
+   * published" state, so the group takes no visibility of its own.
+   */
   isRegisteredVendor: boolean;
   canPublish: boolean;
   /** The Permissions control (access picker) or a deferred note. */
@@ -144,7 +152,6 @@ export function ExtensionSettingsView({
   forceDeleteDisabled,
   lifecycleCapabilityReasons,
   archiveDependents,
-  isPublic,
   isRegisteredVendor,
   canPublish,
   permissions,
@@ -213,9 +220,7 @@ export function ExtensionSettingsView({
         {/* Marketplace */}
         <section data-slot="settings-marketplace" className="border-b border-line py-5.5">
           <h2 className="mb-3.5 text-lg font-bold text-foreground">Marketplace</h2>
-          {isPublic ? (
-            <p className="text-sm text-muted-foreground">Published on the marketplace.</p>
-          ) : canPublish ? (
+          {canPublish ? (
             <ConfirmActionButton
               triggerLabel="Publish on marketplace"
               triggerIcon={<Store data-icon="inline-start" />}
@@ -249,12 +254,22 @@ export function ExtensionSettingsView({
               </Button>
             </div>
           ) : (
-            <DisabledActionButton
-              label="Publish on marketplace"
-              icon={<Store data-icon="inline-start" />}
-              variant="destructive"
-              reason="Marketplace publishing isn't available for this extension yet."
-            />
+            // §V draws the reason as muted text beside the muted action, not
+            // only as the button's hover title.
+            <div className="flex flex-wrap items-center gap-2">
+              <DisabledActionButton
+                label="Publish on marketplace"
+                icon={<Store data-icon="inline-start" />}
+                variant="destructive"
+                reason={MARKETPLACE_UNAVAILABLE_REASON}
+              />
+              <span
+                data-slot="marketplace-publish-reason"
+                className="text-xs text-muted-foreground"
+              >
+                {MARKETPLACE_UNAVAILABLE_REASON}
+              </span>
+            </div>
           )}
         </section>
 

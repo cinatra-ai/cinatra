@@ -55,6 +55,9 @@ export interface ArtifactEditAuditFacts {
   revision: number;
   /** The acting principal (audit display only — never authorization input). */
   actor?: string | null;
+  /** The field the edit changed (cinatra#3814). `"title"` for a title change;
+   *  absent for a text change, whose detail stays exactly as it always was. */
+  field?: "title";
 }
 
 /**
@@ -80,6 +83,7 @@ VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, '${ARTIFACT_EDIT_
         baseRevision: f.baseRevision,
         revision: f.revision,
         origin: "artifact-page-editor",
+        ...(f.field === "title" ? { field: "title" } : {}),
       }),
     ],
   };

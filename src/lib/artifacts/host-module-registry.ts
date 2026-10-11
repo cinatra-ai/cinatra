@@ -20,6 +20,7 @@
 import {
   CLIENT_BUNDLE_EXTERNAL_ALLOWLIST,
   DESIGN_PRIMITIVES_CONTRACT_MISMATCH,
+  HOST_DASHBOARD_COMPOSITION_MODULE,
   HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION,
   HOST_DESIGN_PRIMITIVES_EXPORTS,
   HOST_DESIGN_PRIMITIVES_MODULE,
@@ -45,6 +46,18 @@ export interface HostSharedModules {
    * components and never a second copy.
    */
   designPrimitives: unknown;
+  /**
+   * The read-only dashboard COMPOSITION module (`@cinatra-ai/sdk-dashboard/components`,
+   * cinatra#3092) — the host's ONE instance of the module exporting the two
+   * promoted read-only views. "The dashboard extension lives outside this
+   * repository and cannot import the host's composition": a bundle leaves the
+   * exact specifier external and is served this instance, so the dashboard's
+   * displays draw through the composition the application draws with.
+   *
+   * OPTIONAL, so no existing caller changes; until a caller registers it the
+   * specifier answers nothing.
+   */
+  dashboardComposition?: unknown;
 }
 
 interface HostModuleRegistryState {
@@ -78,6 +91,7 @@ export function initHostModuleRegistry(mods: HostSharedModules): void {
     "react-dom/client": mods["react-dom/client"],
     "@cinatra-ai/design": mods.designTokens,
     [HOST_DESIGN_PRIMITIVES_MODULE]: mods.designPrimitives,
+    [HOST_DASHBOARD_COMPOSITION_MODULE]: mods.dashboardComposition,
   };
   s.initialized = true;
 }

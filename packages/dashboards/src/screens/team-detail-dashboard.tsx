@@ -30,18 +30,32 @@
  * personal surface; a team-OWNED shared model would be a larger, separate change
  * the AC does not require.
  *
- * Access: TWO conditions.
- *   1. Tenant alignment — the team must belong to the viewer's ACTIVE
- *      organization. The entity-dashboard actions derive their org from the
- *      active org (org is the ambient tenant), so viewing a team outside it
- *      would file/read that team's Overview + custom dashboards under the WRONG
- *      tenant (a foreign team id under the active org). Requiring the match keeps
- *      the persisted rows tenant-consistent with the team and the access gate
- *      (codex #704 convergence). A team reached from `/teams` (the active-org
- *      list) always satisfies this; a cross-active-org deep link redirects.
- *   2. Authority — a team member OR a manager (team admin / org owner-admin /
- *      platform admin of the team's org), the same predicate the settings
- *      surface uses. Membership alone views; management adds the write controls.
+ * Access: ONE condition, authority over THIS team (cinatra#3787). A team member
+ * OR a manager (team admin / an owner or admin of the TEAM's organization /
+ * platform admin) opens this landing, the same predicate the settings surface
+ * and the team's name read apply, and the same one `/teams/[teamId]/agents`
+ * already applied. A caller who holds neither is refused with the reason that is
+ * true of them (`/not-authorized?reason=scope-membership`), never the
+ * platform-admin sentence.
+ *
+ * WHAT WAS DROPPED, and why it is safe. A tenant-alignment gate used to come
+ * FIRST: the team had to belong to the viewer's ACTIVE organization, else the
+ * page redirected. Its reason (codex #704 convergence) was the entity-dashboard
+ * actions, which derived their organization from the session, so a team outside
+ * the active organization would have filed its dashboards under the wrong
+ * tenant. The gate stood ahead of the authority gate below, so the platform
+ * admin, owner of every organization and admin of the team, was refused too,
+ * and was told the area is limited to platform admins.
+ *
+ * The tenant is now carried, not assumed: `authorizeTeamDashboards` names the
+ * team's organization on the ref and the delegate files under it, so the wrong
+ * tenant is unreachable and the gate has nothing left to guard. This is the
+ * owner's decision on cinatra#3693 applied to the landing: "a launch from a
+ * scope's tab belongs to that scope's organization, whatever the session's
+ * active organization is". It makes the team landing read like the project
+ * landing, which never compared the active organization at all. Everything this
+ * page builds for the scope already used `team.organizationId`, and still does.
+ *
  * The Overview summary is fetched directly (the actor is already gated); the
  * custom dashboards stay user-owned + row/ref-confined + capability-derived
  * server-side.
@@ -66,7 +80,10 @@ import {
 } from "@/lib/auth-session";
 import { betterAuthDb, teamMemberRoleColumnExists } from "@/lib/better-auth-db";
 import { CrumbContributions } from "@/components/crumb-contributions";
-import { canManageTeamMembers } from "@/app/teams/[teamId]/settings/team-member-authority";
+import {
+  resolveTeamSurfaceAccess,
+  TEAM_SURFACE_REFUSAL_REASON,
+} from "@/lib/team-surface-access";
 import type { TeamMemberView } from "@/app/teams/[teamId]/settings/team-members-section";
 
 
@@ -105,14 +122,6 @@ export async function TeamDetailDashboardPage({
   const team = teamRows.rows?.[0];
   if (!team) notFound();
 
-  // Tenant-alignment gate (codex #704): the entity-dashboard actions operate
-  // under the session's ACTIVE organization, so the team must be in it — else a
-  // member deep-linking a team outside their active org would file/read its
-  // dashboards under the wrong tenant. `resolveOrgRoleForUser` / `is_member`
-  // below then resolve against this same (active == team) org.
-  const activeOrgId = session.session?.activeOrganizationId ?? null;
-  if (activeOrgId !== team.organizationId) redirect("/not-authorized");
-
   // Members list (+ per-team roles when the app-owned `teamMember.role` column
   // is provisioned) — the same fetch the settings surface uses. Needed here for
   // the Overview member count and the viewer's per-team role (authority gate);
@@ -147,17 +156,25 @@ export async function TeamDetailDashboardPage({
     role: rolesEnabled ? (row.role === "admin" ? "admin" : "member") : null,
   }));
 
-  // View + manage gate (mirrors `/teams/[teamId]/settings`): a team member keeps
-  // access; a manager (team admin / org owner-admin / platform admin) additionally
-  // manages membership and may view without a membership row.
+  // View + manage gate (mirrors `/teams/[teamId]/settings` and the team's name
+  // read): a team member keeps access; a manager (team admin / an owner or admin
+  // of the TEAM's organization / platform admin) additionally manages membership
+  // and may view without a membership row. The organization role is resolved
+  // against `team.organizationId`, which is this surface's tenant; the session's
+  // active organization plays no part in the decision.
   const orgRole = await resolveOrgRoleForUser(team.organizationId, userId);
   const viewerRole = members.find((m) => m.userId === userId)?.role;
-  const canManage = canManageTeamMembers({
+  const access = resolveTeamSurfaceAccess({
+    team,
+    isMember: team.is_member,
     platformAdmin: isPlatformAdmin(session),
     orgRole,
     ...(viewerRole ? { teamRole: viewerRole } : {}),
   });
-  if (!team.is_member && !canManage) redirect("/not-authorized");
+  // The refusal names what the reader actually lacks: a role on this team.
+  if (access.outcome !== "allowed") {
+    redirect(`/not-authorized?reason=${TEAM_SURFACE_REFUSAL_REASON}`);
+  }
 
   // The #1897 scope collection folded onto this landing (cinatra#2474 PR2). The
   // actor drives the §IX.2 write gate inside the section (`actorMayWriteScope`:

@@ -107,9 +107,12 @@ _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # The two agents cinatra#2140 names, with the gate + declared input the pinned
 # runtime rejects unreconciled. Keyed by slug so an absent tree (the works-after
-# single-fixture mount) skips instead of false-failing.
+# single-fixture mount) skips instead of false-failing. The second field pins
+# ONE input the gate declares: the shim must reconcile it (the mount case) and
+# the flow must still declare it (the rejection case). The rejection case reads
+# every declared input from the flow itself.
 _STANDALONE_GATE_AGENTS: Dict[str, Tuple[str, str]] = {
-    "email-drafting-agent": ("approval_gate", "draftBundle"),
+    "email-drafting-agent": ("approval_gate", "draftBodyArtifacts"),
     "email-recipient-selection-agent": ("approval_gate", "confirmedRecipients"),
 }
 _ORCHESTRATOR = "email-outreach-agent"
@@ -184,6 +187,20 @@ def _iter_gates(doc: Any):
             yield from _iter_gates(item)
 
 
+def _declared_gate_inputs(doc: Any, gate_id: str) -> Tuple[str, ...]:
+    """The ``title`` of every declared input of each gate keyed ``gate_id``
+    (``id`` or ``name``, the key the loader's reconcile report uses), read from
+    the flow's own document, in document order."""
+    titles: List[str] = []
+    for gate in _iter_gates(doc):
+        if (gate.get("id") or gate.get("name")) != gate_id:
+            continue
+        for entry in gate.get("inputs") or []:
+            if isinstance(entry, dict) and "title" in entry:
+                titles.append(entry["title"])
+    return tuple(titles)
+
+
 # --------------------------------------------------------------------------
 # 1 + 2 — the STANDALONE path.
 # --------------------------------------------------------------------------
@@ -213,16 +230,24 @@ def test_standalone_authored_form_is_rejected_without_the_shim(slug: str) -> Non
     """Pins the pinned-runtime half of the contract: the authored declared-input
     gate is REJECTED by a bare load. This is the failure cinatra#2140 reported —
     it is what a mount path that skips the container's pre-load pipeline sees,
-    and it is expected, not a defect in the OAS."""
+    and it is expected, not a defect in the OAS. The message names one of the
+    gate's declared inputs; which one follows the process's string-hash order
+    when the gate declares several."""
     doc = json.loads(_require(slug).read_text(encoding="utf-8"))
-    _gate_id, declared_input = _STANDALONE_GATE_AGENTS[slug]
+    gate_id, pinned_input = _STANDALONE_GATE_AGENTS[slug]
+    declared = _declared_gate_inputs(doc, gate_id)
+    assert pinned_input in declared, (
+        f"{slug}: _STANDALONE_GATE_AGENTS pins {pinned_input!r} on gate "
+        f"{gate_id!r} but the flow declares {declared!r}; the table and the "
+        f"flow disagree."
+    )
 
     agent_loader._patch_pyagentspec_deserialization_error_mask()
     with pytest.raises(Exception) as excinfo:
         AgentSpecLoader().load_json(_bare(doc))
     message = str(excinfo.value)
     assert "did not expect any properties" in message, message
-    assert declared_input in message, message
+    assert any(title in message for title in declared), message
 
 
 # --------------------------------------------------------------------------

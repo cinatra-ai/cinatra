@@ -20,7 +20,28 @@ const MUTATION_SERVICE = path.resolve(__dirname, "../mutation-service.ts");
 
 const WRITE_TABLE_NAMES = new Set(["dashboards", "dashboardRevisions"]);
 const WRITE_METHODS = new Set(["insert", "update", "delete"]);
-const PAIR_CALLEES = new Set(["pairTwin", "pairTwinBulk"]);
+const PAIR_CALLEES = new Set(["pairTwin", "pairTwinBulk", "pairTwinUnlessWorkspaceRow"]);
+
+/**
+ * THE ONE RECORDED EXCEPTION (cinatra#2811, per-scope surfaces S5): a
+ * WORKSPACE dashboard row (org-NULL, the user-owned `(workspace,
+ * __workspace__)` entity) has NO artifact-substrate twin. The substrate is
+ * tenant-keyed (the twin context carries a non-null org) and a workspace row has
+ * no tenant; its access is the owner alone, which the dashboards resolver
+ * decides without the substrate. The exception is taken through ONE helper,
+ * `pairTwinUnlessWorkspaceRow`, which skips exactly the rows
+ * `isWorkspaceDashboardRow` recognizes and pairs every other row, and ONLY the
+ * writers named here may call it; every other writer keeps the plain,
+ * unconditional `pairTwin` (a workspace row reaching it throws, fail-closed).
+ */
+const WORKSPACE_TWIN_EXEMPT_WRITERS = new Set([
+  "ensureOverview",
+  "createEntityDashboard",
+  "updateDashboard",
+  "archiveDashboard",
+  "renameDashboard",
+  "deleteEntityDashboard",
+]);
 
 /** The exported mutation-service writer names — a call to one of these counts as
  *  delegation (the callee pairs its own twin). Kept in sync via the gate's own
@@ -129,6 +150,40 @@ describe("mutation-service pairs the artifact-substrate twin on every write path
       if (!subtreeHasPairOrDelegation(fn, w)) missing.push(`${w}: no twin pairing`);
     }
     expect(missing, `KNOWN_WRITERS drift:\n${missing.join("\n")}`).toEqual([]);
+  });
+
+  it("the workspace exception is taken by EXACTLY the named writers (cinatra#2811)", () => {
+    const callers = new Set<string>();
+    for (const fn of fns) {
+      const name = fn.name?.text;
+      if (!name || name === "pairTwinUnlessWorkspaceRow") continue;
+      let calls = false;
+      const visit = (node: ts.Node): void => {
+        if (calls) return;
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "pairTwinUnlessWorkspaceRow"
+        ) {
+          calls = true;
+          return;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(fn);
+      if (calls) callers.add(name);
+    }
+    expect([...callers].sort()).toEqual([...WORKSPACE_TWIN_EXEMPT_WRITERS].sort());
+  });
+
+  it("the exception helper skips only the workspace predicate and pairs every other row", () => {
+    const helper = fns.find((f) => f.name?.text === "pairTwinUnlessWorkspaceRow");
+    expect(helper, "pairTwinUnlessWorkspaceRow must be a top-level function").toBeTruthy();
+    const text = helper!.getText(sf);
+    expect(text).toContain("isWorkspaceDashboardRow(");
+    expect(text).toContain("pairTwin(");
+    // The helper has exactly one early return: the workspace skip.
+    expect(text.match(/\breturn\b/g)?.length ?? 0).toBe(1);
   });
 
   it("the twin is paired at least once (sanity: the gate is wired to a real symbol)", () => {

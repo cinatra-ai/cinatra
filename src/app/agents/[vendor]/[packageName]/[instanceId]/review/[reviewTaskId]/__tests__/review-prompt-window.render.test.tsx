@@ -55,7 +55,10 @@ vi.mock("@cinatra-ai/sdk-ui", () => ({
 // tiers. The shared panel and the one controller run for real.
 vi.mock("@cinatra-ai/agents/run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
-  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [] })),
+  // THE OUTCOME'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): the turn now
+  // reports the fills it placed and whether it PRESSED a control, and the one
+  // controller reads both. A mock that omits them lies about the contract.
+  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [], fills: [], acted: false })),
 }));
 
 beforeEach(() => {
@@ -76,7 +79,10 @@ async function mount(canComment: boolean) {
   const { ReviewGatePromptWindow } = await import("@cinatra-ai/agents/review-gate-card");
   return render(
     <ReviewGatePromptWindow
-      submitAction={vi.fn(async () => ({ ok: true }) as never)}
+      // NO `submitAction` (cinatra#2934, lifecycle-b W5c): the window does not
+      // take the review's decision action any more. What is typed here reaches
+      // the assistant, and a request for changes is filed through the card's
+      // OWN Comment control — so there is no action for this mount to hold.
       storageKey="cinatra_review_window_run-2933"
       canComment={canComment}
       runId="run-2933"
