@@ -950,7 +950,7 @@ for (const { name: palette, theme } of PALETTES) {
   test.describe("Select long-list viewport — specs/app-components.html#Select", () => {
     test("exposes the actual overflowing viewport's thin track", async ({ page }) => {
       await open(page, theme);
-      await seam(page, "select-long-list").getByRole("combobox").click();
+      await page.locator(seam("select-long-list")).getByRole("combobox").click();
       const listbox = page.getByRole("listbox");
       const viewport = listbox.locator("[data-radix-select-viewport]");
       await expect(listbox.getByRole("option")).toHaveCount(48);
@@ -983,7 +983,7 @@ for (const { name: palette, theme } of PALETTES) {
 
     test("retains keyboard selection and restores trigger focus", async ({ page }) => {
       await open(page, theme);
-      const trigger = seam(page, "select-long-list").getByRole("combobox");
+      const trigger = page.locator(seam("select-long-list")).getByRole("combobox");
       await trigger.focus();
       await trigger.press("ArrowDown");
       await expect(page.getByRole("listbox")).toBeVisible();
