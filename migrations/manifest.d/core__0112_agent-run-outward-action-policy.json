@@ -1,0 +1,10 @@
+{
+  "seq": "0112",
+  "file": "core/core__0112_agent-run-outward-action-policy.mjs",
+  "summary": "Add immutable per-run outward-action policy bindings and one-time artifact review action consumption for cinatra#3745. New agent_run_outward_action_policies stores run, organization, execution attempt and policy; artifact_review_action_consumptions burns each gate once before an external effect. Fresh-install bootstrap and Drizzle twins ship with the module. Existing rows and schemas are not rewritten, no authority is backfilled, and no time expiry or parallel approved-argument storage is introduced. Idempotent CREATE TABLE IF NOT EXISTS; automatic down refuses because discarding gate consumptions would permit replay.",
+  "destructive": false,
+  "tables": [
+    "agent_run_outward_action_policies",
+    "artifact_review_action_consumptions"
+  ]
+}
