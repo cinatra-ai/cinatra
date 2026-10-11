@@ -975,14 +975,23 @@ for (const { name: palette, theme } of PALETTES) {
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         const content = el.closest('[role="listbox"]');
-        const bar = content?.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
-        const thumb = bar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
         const visible = (node: Element | null | undefined) => {
           if (!node) return false;
           const rect = node.getBoundingClientRect();
           const visibility = getComputedStyle(node).visibility;
           return rect.width > 0 && rect.height > 0 && visibility !== "hidden" && visibility !== "collapse";
         };
+        let bar = content?.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
+        let thumb = bar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
+        // ResizeObserver schedules a frame and the shared thumb size update is
+        // debounced before React mounts its real Presence. Wait on that actual
+        // geometry, within this same evaluation and below the normal hide delay.
+        const readinessDeadline = performance.now() + 200;
+        while ((!visible(bar) || !visible(thumb)) && performance.now() < readinessDeadline) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          bar = content?.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
+          thumb = bar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
+        }
         const lastItem = Array.from(el.querySelectorAll('[role="option"]'))
           .find((option) => option.textContent?.trim() === "List item 48");
         const itemRect = lastItem?.getBoundingClientRect();
