@@ -88,6 +88,10 @@ export function RecommendationRailStepRow({
       data-recommendation-rail-step=""
       data-recommendation-step-selected={selected ? "true" : "false"}
       data-recommendation-step-settled={settledReading ? "true" : "false"}
+      data-run-surface-rail-step=""
+      data-run-surface-rail-reached={openable ? "true" : "false"}
+      data-run-surface-rail-settled={settledReading ? "true" : "false"}
+      data-run-surface-rail-selected={selected ? "true" : "false"}
       // The same two names the rail's generic row uses, so one walk reads one
       // vocabulary on every row of the rail.
       data-action={openable ? "open-recommendation-step" : "recommendation-step-unavailable"}

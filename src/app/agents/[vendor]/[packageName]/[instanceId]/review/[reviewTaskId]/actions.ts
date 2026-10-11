@@ -48,7 +48,7 @@ import { resolveReviewActorContext } from "./review-actor";
 export async function submitReviewDecisionAction(
   runId: string,
   reviewTaskId: string,
-  disposition: ReviewDisposition,
+  requestedDisposition: ReviewDisposition | "continue",
   comment: string | null,
   /**
    * The ALREADY-RESOLVED reviewing context (cinatra#2566, epic #2564 S2).
@@ -75,12 +75,20 @@ export async function submitReviewDecisionAction(
    */
   suggestionDecisions?: SuggestionDecisionPartition | null,
 ): Promise<ReviewSubmitOutcome> {
+  // Continue is transport compatibility, never a new persisted disposition.
+  const disposition: ReviewDisposition = requestedDisposition === "continue"
+    ? "approve"
+    : requestedDisposition;
   const actorCtx = resolvedActorCtx ?? (await resolveReviewActorContext());
   if (!actorCtx) {
     return {
       kind: "not-permitted",
       message: "Sign in to the run's organization to decide this review.",
     };
+  }
+
+  if (disposition === "reject") {
+    return { kind: "error", message: "There is no Reject decision. Leave the review open, Comment, or Continue." };
   }
 
   // Run access for the decision op FIRST (approve/reject → approveHitl; comment →
