@@ -81,7 +81,7 @@ describe("reviewTargetRowFacts — the meta line's updated time", () => {
       // line reads "… · Team · Private · text/html · updated 8 min ago". An
       // earlier reading prefixed each fact with "Ownership:" / "Visibility:";
       // the drawing puts neither there, so the pin is re-taken on the drawn line.
-      "organization · organization · text/markdown · updated 8 min ago",
+      "Organization · Organization · text/markdown · updated 8 min ago",
     );
     expect(line).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
@@ -232,5 +232,15 @@ describe("reviewGateRailSettlement — the rail entry says the drawing's word", 
     expect(reviewGateRailSettlement(undefined)).toBe("resolved");
     expect(reviewGateRailSettlement("comment")).toBe("resolved");
     expect(reviewGateRailSettlement(null)).not.toBe("Review requested");
+  });
+});
+
+
+describe("R3 casing leaves time and settlement unchanged", () => {
+  it("pins the approved Team · Private · text/html · updated 8 min ago line", () => {
+    expect(reviewTargetRowFacts({ ownerLevel: "team", visibility: "private", mime: "text/html", updatedAt: at(8 * 60_000) }, NOW).join(" · "))
+      .toBe("Team · Private · text/html · updated 8 min ago");
+    expect(reviewGateHeaderTitle("approved")).toBe("Continued");
+    expect(reviewGateHeaderTitle("changes_requested")).toBe("Changes requested");
   });
 });

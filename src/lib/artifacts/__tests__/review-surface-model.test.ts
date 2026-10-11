@@ -346,7 +346,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("organization · organization · text/markdown · updated 8 min ago");
+    expect(line).toBe("Organization · Organization · text/markdown · updated 8 min ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -361,7 +361,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 min ago"]);
   });
 
   // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
@@ -393,7 +393,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts).toEqual(["team", "private", "text/html", "updated 8 min ago"]);
+    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 min ago"]);
   });
 
   it("falls back to the value it was handed when that value is not a readable instant", () => {
@@ -410,5 +410,21 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
     const a = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: "now" });
     const b = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: "now" });
     expect(a.slice(0, 2)).toEqual(b.slice(0, 2));
+  });
+});
+
+
+describe("R3 scope labels — approved artifact-review §IV", () => {
+  it.each([
+    ["team", "private", "Team", "Private"],
+    ["organization", "organization", "Organization", "Organization"],
+    ["user", "public", "User", "Public"],
+    ["team-owned", "orgPrivate", "Team-owned", "OrgPrivate"],
+    ["Team", "Private", "Team", "Private"],
+    ["", "", "", ""],
+  ])("draws %s/%s with only the first character capitalized", (ownerLevel, visibility, owner, visible) => {
+    const row = { ownerLevel, visibility, mime: "application/x-Custom", updatedAt: "not-an-instant" };
+    expect(reviewTargetRowFacts(row)).toEqual([owner, visible, row.mime, "updated not-an-instant"]);
+    expect(row).toEqual({ ownerLevel, visibility, mime: "application/x-Custom", updatedAt: "not-an-instant" });
   });
 });

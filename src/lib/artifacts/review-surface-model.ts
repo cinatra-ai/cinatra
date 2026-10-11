@@ -356,8 +356,8 @@ export function reviewTargetRowFacts(
   now: Date = new Date(),
 ): string[] {
   return [
-    artifact.ownerLevel,
-    artifact.visibility,
+    artifact.ownerLevel.charAt(0).toUpperCase() + artifact.ownerLevel.slice(1),
+    artifact.visibility.charAt(0).toUpperCase() + artifact.visibility.slice(1),
     artifact.mime,
     // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
     // writes "updated 8 min ago"; the decided target printed the stored column

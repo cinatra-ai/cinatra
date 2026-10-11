@@ -97,7 +97,7 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
         // The meta line reads exactly what the shipped composer composes from
         // the row — owner level, visibility, MIME and the relative updated time,
         // in the drawing's order. A fixture that ever carried a finished fact
-        // instead (a platform, an address, a capitalized scope) is red here,
+        // instead (a platform, an address, a preworded scope) is red here,
         // because the product has no reading that produces one.
         const facts = reviewTargetRowFacts(seed.row, now);
         expect(facts.length, `${fixture.surfaceId} fact count`).toBe(4);
@@ -123,5 +123,25 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
     for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
       expect(fixture.headers.length, `${fixture.surfaceId} pins one target`).toBe(1);
     }
+  });
+});
+
+
+describe("R3 authorized scope labels on the shipped header", () => {
+  it("renders the stored Team and Private facts with approved first-character casing", () => {
+    const { container } = render(<LifecycleReviewTargetHeaderFixtures />);
+    let matched = 0;
+    for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
+      const headers = container.querySelector(`[data-surface-id="${fixture.surfaceId}"]`)!
+        .querySelectorAll('[data-conformance-id="review-target-header"]');
+      fixture.headers.forEach((seed, index) => {
+        if (seed.row.ownerLevel === "team" && seed.row.visibility === "private") {
+          matched++;
+          expect(headers[index]!.textContent).toContain("Team · Private · " + seed.row.mime);
+          expect(headers[index]!.textContent).not.toContain("team · private");
+        }
+      });
+    }
+    expect(matched).toBeGreaterThan(0);
   });
 });
