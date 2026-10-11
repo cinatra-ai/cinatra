@@ -947,7 +947,7 @@ for (const { name: palette, theme } of PALETTES) {
     });
   });
 
-  test.describe("Select long-list viewport — specs/app-components.html#Select", () => {
+  test.describe(`Select long-list viewport — ${palette} — specs/app-components.html#Select`, () => {
     test("exposes the actual overflowing viewport's thin track", async ({ page }) => {
       await open(page, theme);
       await page.locator(seam("select-long-list")).getByRole("combobox").click();
