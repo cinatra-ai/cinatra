@@ -13,7 +13,7 @@ import {
 describe("selectAdapterProvider — modelPrefs.provider selects the adapter", () => {
   it("returns the pinned provider when set", () => {
     expect(selectAdapterProvider({ provider: "anthropic" })).toBe("anthropic");
-    expect(selectAdapterProvider({ provider: "gemini", model: "gemini-2.5" })).toBe("gemini");
+    expect(selectAdapterProvider({ provider: "gemini", model: "gemini-3.5-flash" })).toBe("gemini");
   });
 
   it("returns null (platform default) for an empty / whitespace / absent provider", () => {

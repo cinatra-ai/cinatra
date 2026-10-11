@@ -976,8 +976,18 @@ for (const { name: palette, theme } of PALETTES) {
       expect(track.webkitHeight).toBe("6px");
       expect(track.thumb).toBe(await computedColor(page, await token(page, "--border")));
       expect(alphaOf(track.track)).toBe(0);
+      // Keep this scrollbar check independent of the selected option. Radix
+      // scroll controls reveal the active option when they mount; focus the
+      // existing listbox before direct scrolling so that is not an item.
+      await listbox.focus();
+      await expect(listbox).toBeFocused();
       await viewport.evaluate((el) => { el.scrollTop = el.scrollHeight; });
-      await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+      await expect.poll(() => viewport.evaluate(async (el) => {
+        // Read the bottom extent after layout and scroll-control updates settle.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        return Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
+      })).toBe(0);
       await expect(listbox.getByRole("option", { name: "List item 48" })).toBeInViewport();
     });
 
