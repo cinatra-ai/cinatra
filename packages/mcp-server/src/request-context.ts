@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import type { OboCeilingChain } from "./obo-ceiling";
 import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission";
 
@@ -74,6 +76,7 @@ export type DelegatedMcpActor =
        * no step. The transport stamps it on the frame as `verifiedStepId`.
        */
       verifiedStepId?: string;
+      verifiedExecutedSource?: VerifiedExecutedRunSource;
     }
   | {
       delegation: "public_site_widget";
@@ -367,6 +370,9 @@ export type McpRequestContext = {
    * for every call that carries no verified step.
    */
   verifiedStepId?: string;
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
+  /** Opaque transaction-committed admission; never decoded from network input. */
+  outwardActionAdmission?: object;
   /**
    * The LENT-ACTION GRANT this turn presented (cinatra#2932, lifecycle-b W5a).
    *
@@ -512,6 +518,7 @@ export type DurableRunContextResolution =
         agentSpecVersion?: string;
         /** The binding's verified step (cinatra#3745), when it carries one. */
         stepId?: string;
+        verifiedExecutedSource?: VerifiedExecutedRunSource;
       };
     }
   | { outcome: "invalid" }
@@ -538,6 +545,7 @@ export type ResolvedRequestRunContext = {
    * verified run id and never read from a header.
    */
   stepId?: string;
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
   /** Which channel supplied the run id (the cutover metric dimension). */
   servedBy: RunContextServedBy;
   /** True when a durable "invalid" outcome suppressed the legacy channels. */
@@ -566,6 +574,7 @@ export function resolveRequestRunContext(input: {
   /** delegatedActor.verifiedStepId when delegation === "agent_run"; else
    *  undefined (cinatra#3745). Used only when the delegated run id serves. */
   delegatedStepId?: string;
+  delegatedExecutedSource?: VerifiedExecutedRunSource;
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
@@ -653,6 +662,13 @@ export function resolveRequestRunContext(input: {
       ? nonEmpty(durableCtx?.stepId)
       : undefined;
 
+  const sourceCandidate = nonEmpty(input.delegatedRunId)
+    ? input.delegatedExecutedSource : nonEmpty(durableCtx?.runId) ? durableCtx?.verifiedExecutedSource : undefined;
+  const source = sourceCandidate === undefined ? undefined : parseVerifiedExecutedRunSource(sourceCandidate);
+  // Refuse any corrupt/mixed-channel proof before dispatch; never borrow another channel's proof.
+  if (sourceCandidate !== undefined && (!source || source.stepId !== stepId)) {
+    return { servedBy: "none", suppressed: true, denied: true };
+  }
   const servedBy: RunContextServedBy = input.delegatedRunId
     ? "obo"
     : durableCtx?.runId
@@ -667,6 +683,7 @@ export function resolveRequestRunContext(input: {
     packageVersion: durableCtx?.packageVersion ?? effHeaderPackageVersion,
     agentSpecVersion: durableCtx?.agentSpecVersion ?? effHeaderAgentSpecVersion,
     ...(stepId ? { stepId } : {}),
+    ...(source ? { verifiedExecutedSource: source } : {}),
     servedBy,
     suppressed,
     denied,

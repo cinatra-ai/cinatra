@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import IORedis from "ioredis";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,7 @@ export type DurableRunContextBinding = {
    *  the bridge only from the flow runtime's signed step pair it verified;
    *  unlike the provenance fields above it is a verified value. */
   stepId?: string;
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
 };
 
 export type DurableRunContextResolution =
@@ -83,6 +86,7 @@ export type DurableRunContextResolution =
         agentSpecVersion?: string;
         /** The binding's verified step (cinatra#3745), when it carries one. */
         stepId?: string;
+        verifiedExecutedSource?: VerifiedExecutedRunSource;
       };
     }
   | { outcome: "invalid" }
@@ -240,6 +244,10 @@ export async function writeDurableRunContextBinding(
   client: DurableBindingRedis = getClient(),
 ): Promise<string | null> {
   if (!rawBearerToken || !SHA256_HEX.test(binding.tokenHash)) return null;
+  if (binding.verifiedExecutedSource !== undefined) {
+    const source = parseVerifiedExecutedRunSource(binding.verifiedExecutedSource);
+    if (!source || source.stepId !== binding.stepId) return null;
+  }
   const key = durableRunContextKey(rawBearerToken);
   try {
     await client.set(
@@ -297,12 +305,15 @@ function parseBinding(raw: string): DurableRunContextBinding | null {
   const optional = (v: unknown): string | undefined =>
     typeof v === "string" && v.length > 0 ? v : undefined;
   const stepId = optional(candidate.stepId);
+  const source = candidate.verifiedExecutedSource === undefined ? undefined : parseVerifiedExecutedRunSource(candidate.verifiedExecutedSource);
+  if (candidate.verifiedExecutedSource !== undefined && (!source || source.stepId !== stepId)) return null;
   return {
     tokenHash: candidate.tokenHash,
     agentId: optional(candidate.agentId),
     packageVersion: optional(candidate.packageVersion),
     agentSpecVersion: optional(candidate.agentSpecVersion),
     ...(stepId ? { stepId } : {}),
+    ...(source ? { verifiedExecutedSource: source } : {}),
   };
 }
 
@@ -318,6 +329,7 @@ export async function resolveDurableRunContext(
     hash: string,
   ) => Promise<{ id: string; orgId: string; runBy: string | null } | null>,
   client: DurableBindingRedis = getClient(),
+  verifySource?: (runId: string, orgId: string, source: VerifiedExecutedRunSource) => Promise<boolean>,
 ): Promise<DurableRunContextResolution> {
   if (!rawBearerToken) return { outcome: "absent" };
 
@@ -362,6 +374,11 @@ export async function resolveDurableRunContext(
     return { outcome: "invalid" };
   }
 
+  if (binding.verifiedExecutedSource && (!verifySource ||
+      !await verifySource(run.id, run.orgId, binding.verifiedExecutedSource).catch(() => false))) {
+    bump(counters().durableOutcome, "invalid_source");
+    return { outcome: "invalid" };
+  }
   bump(counters().durableOutcome, "resolved");
   return {
     outcome: "resolved",
@@ -371,6 +388,7 @@ export async function resolveDurableRunContext(
       packageVersion: binding.packageVersion,
       agentSpecVersion: binding.agentSpecVersion,
       ...(binding.stepId ? { stepId: binding.stepId } : {}),
+      ...(binding.verifiedExecutedSource ? { verifiedExecutedSource: binding.verifiedExecutedSource } : {}),
     },
   };
 }

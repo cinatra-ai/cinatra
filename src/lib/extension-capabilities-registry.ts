@@ -70,6 +70,7 @@ const registry: Map<string, Map<string, CapabilityProvider>> =
 export function registerCapabilityProvider(
   capability: string,
   provider: CapabilityProvider,
+  loadedIdentity?: LoadedExtensionIdentity,
 ): void {
   if (!provider?.packageName) {
     throw new Error(
@@ -81,7 +82,17 @@ export function registerCapabilityProvider(
     byPackage = new Map<string, CapabilityProvider>();
     registry.set(capability, byPackage);
   }
-  byPackage.set(provider.packageName, provider);
+  const bound = bindLoadedCapabilityProvider(provider, loadedIdentity, capability);
+  if (capability === "artifact-action-check/v1") {
+    const previous = byPackage.get(provider.packageName);
+    const priorIdentity = previous && capabilityProviderLoadedIdentity(previous);
+    if (previous && (!priorIdentity || !loadedIdentity ||
+        JSON.stringify(priorIdentity) !== JSON.stringify(loadedIdentity) || previous.impl !== provider.impl)) {
+      byPackage.delete(provider.packageName);
+      throw new Error("action_checker_registration_ambiguous");
+    }
+  }
+  byPackage.set(provider.packageName, bound);
 }
 
 /**
@@ -115,6 +126,9 @@ export function resolveCapabilityProviders(capability: string): CapabilityProvid
  * commits — so a removed extension leaves no stale provider.
  */
 export function invalidateProvidersForPackage(packageName: string): void {
+  for (const [key, identity] of actionIdentities.loaded) {
+    if (identity.packageName === packageName) actionIdentities.loaded.delete(key);
+  }
   for (const byPackage of registry.values()) {
     byPackage.delete(packageName);
   }
@@ -155,6 +169,8 @@ export function snapshotCapabilityProviders(): { capability: string; packageName
  * targeted reset. */
 export function __resetCapabilityRegistry(): void {
   registry.clear();
+  actionIdentities.loaded.clear();
+  actionIdentities.providers = new WeakMap();
   signedTrustedRegistry.clear();
   servingRecords.clear();
 }
@@ -392,3 +408,87 @@ export function clearServingRecordForPackage(packageName: string): boolean {
 export function __resetServingRecords(): void {
   servingRecords.clear();
 }
+
+// Authority stamped ONLY by host loaders from verified install/byte selection.
+// Shared across Next compilations; provider records expose no caller-owned stamp.
+export type LoadedExtensionIdentity = Readonly<{
+  packageName: string; version: string; installId: string; digest: string; generation: number;
+}>;
+const ACTION_IDENTITIES_KEY = Symbol.for("@cinatra-ai/host:loaded-action-identities/v1");
+type IdentityRegistry = { next: number; loaded: Map<string, LoadedExtensionIdentity>;
+  providers: WeakMap<object, LoadedExtensionIdentity> };
+const identityHolder = globalThis as unknown as { [ACTION_IDENTITIES_KEY]?: IdentityRegistry };
+const actionIdentities = identityHolder[ACTION_IDENTITIES_KEY] ??= {
+  next: 0, loaded: new Map(), providers: new WeakMap(),
+};
+function loadedKey(v: Omit<LoadedExtensionIdentity, "generation">): string {
+  return JSON.stringify([v.packageName, v.version, v.installId, v.digest]);
+}
+function identityFieldsValid(v: Omit<LoadedExtensionIdentity, "generation">): boolean {
+  return [v.packageName, v.version, v.installId, v.digest].every(x => typeof x === "string" && x.length > 0 && !/[\r\n]/.test(x));
+}
+/** Host-internal; packageName/provider claims and serving diagnostics never call this. */
+export function recordLoadedExtensionIdentity(v: Omit<LoadedExtensionIdentity, "generation">): LoadedExtensionIdentity {
+  if (!identityFieldsValid(v)) throw new Error("action_loaded_identity_invalid");
+  const key = loadedKey(v); const prior = actionIdentities.loaded.get(key);
+  if (prior) return prior;
+  const identity = Object.freeze({ packageName: v.packageName, version: v.version,
+    installId: v.installId, digest: v.digest, generation: ++actionIdentities.next });
+  actionIdentities.loaded.set(key, identity);
+  return identity;
+}
+export function readLoadedExtensionIdentity(v: Omit<LoadedExtensionIdentity, "generation">): LoadedExtensionIdentity | undefined {
+  return identityFieldsValid(v) ? actionIdentities.loaded.get(loadedKey(v)) : undefined;
+}
+export function isLoadedExtensionIdentityCurrent(v: LoadedExtensionIdentity): boolean {
+  return readLoadedExtensionIdentity(v)?.generation === v.generation;
+}
+export function bindLoadedCapabilityProvider(provider: CapabilityProvider,
+  identity?: LoadedExtensionIdentity, capability?: string): CapabilityProvider {
+  if (capability === "artifact-action-check/v1") {
+    const impl = provider.impl;
+    if (!impl || typeof impl !== "object") throw new Error("action_checker_registration_incompatible");
+    const check = Object.getOwnPropertyDescriptor(impl, "check");
+    const classify = Object.getOwnPropertyDescriptor(impl, "classify");
+    if (!check || !("value" in check) || typeof check.value !== "function" ||
+        (classify && (!("value" in classify) || typeof classify.value !== "function"))) {
+      throw new Error("action_checker_registration_incompatible");
+    }
+    // Registration binds the exact methods of the selected namespace. A later
+    // assignment/getter cannot substitute a different CHECK under the same stamp.
+    Object.freeze(impl);
+  }
+  const bound = Object.freeze({ packageName: provider.packageName, impl: provider.impl });
+  if (identity) {
+    if (identity.packageName !== provider.packageName || !isLoadedExtensionIdentityCurrent(identity)) throw new Error("action_provider_identity_mismatch");
+    actionIdentities.providers.set(bound, identity);
+  }
+  return bound;
+}
+export function capabilityProviderLoadedIdentity(provider: object): LoadedExtensionIdentity | undefined {
+  const identity = actionIdentities.providers.get(provider);
+  return identity && isLoadedExtensionIdentityCurrent(identity) ? identity : undefined;
+}
+
+const GUARDED_DISPATCH_KEY = Symbol.for("@cinatra-ai/host:guarded-run-dispatch/v1");
+const dispatchHolder = globalThis as unknown as { [GUARDED_DISPATCH_KEY]?: WeakSet<object> };
+const guardedDispatches = dispatchHolder[GUARDED_DISPATCH_KEY] ??= new WeakSet<object>();
+const leafKey = Symbol.for("@cinatra-ai/host:guarded-run-leaves/v1");
+const leafHolder = globalThis as unknown as { [leafKey]?: WeakSet<object> };
+const guardedLeaves = leafHolder[leafKey] ??= new WeakSet<object>();
+export function isGuardedRunLeaf(handler: unknown): boolean { return typeof handler === "function" && guardedLeaves.has(handler); }
+export function bindGuardedRunDispatch<T extends (...args: never[]) => unknown>(handler: T, leaf: unknown): T {
+  return isGuardedRunLeaf(leaf) ? markGuardedRunDispatch(handler) : handler;
+}
+/** Host dispatch bridge only: this function must resolve a registered guarded leaf.
+ * It is NOT an admission. The selected leaf still checks actual input/identity,
+ * ordinary auth, and a canonical person gate before its captured effect. */
+export function markGuardedRunDispatch<T extends (...args: never[]) => unknown>(handler: T): T {
+  guardedDispatches.add(handler); return handler;
+}
+export function isGuardedRunDispatch(handler: unknown): boolean {
+  return typeof handler === "function" && guardedDispatches.has(handler);
+}
+
+/** Host only: marks an actual captured effect guard, not an admission. */
+export function markGuardedRunLeaf<T extends (...args: never[])=>unknown>(handler:T):T { guardedLeaves.add(handler); return handler; }

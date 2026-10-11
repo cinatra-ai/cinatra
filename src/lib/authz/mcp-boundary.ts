@@ -190,6 +190,7 @@ export type McpBoundaryDecision =
 
 export type McpBoundaryRequest = {
   primitiveName: string;
+  arguments?: unknown;
   /** mcpRequestContextStorage frame at call time. */
   ctx?: {
     orgId?: string | null;
@@ -212,6 +213,7 @@ export type McpBoundaryRequest = {
      * cross-service MCP call is traceable back to the dispatching run.
      */
     runId?: string;
+    outwardActionAdmission?: object;
     projectContext?: { projectId?: string | null };
     /**
      * Agent-run OBO scope-ceiling chain forwarded from the delegated actor
@@ -255,7 +257,15 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
   } as ActorContext;
 }
 
-export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
+export function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
+  return enforceBoundary(req, true);
+}
+/** Existing authority ceilings before consumption; this never admits an effect.
+ * Shared guard invokes the full boundary again with opaque argument-bound burn. */
+export function enforceMcpBoundaryPrerequisites(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
+  return enforceBoundary(req, false);
+}
+async function enforceBoundary(req: McpBoundaryRequest, requireRecordedDecision: boolean): Promise<McpBoundaryDecision> {
   let classification = lookupPrimitiveClassification(req.primitiveName);
 
   // Extension-registered MCP tools (register(ctx) → ctx.mcp.registerTool) are not
@@ -314,7 +324,7 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
   // carve-outs, the unenforced shadow step and every role short-circuit, so it
   // holds whatever the caller's role, the tool's classification status, a
   // carve-out or the enforcement mode.
-  if (needsRecordedDecision(req.primitiveName, req.ctx)) {
+  if (requireRecordedDecision && needsRecordedDecision(req.primitiveName, req.ctx) && !takeOutwardActionAdmission(req.primitiveName, req.arguments, req.ctx)) {
     await audit(req, classification.resourceType, "denied", {
       mode: "enforced",
       boundary: req.delegatedRestricted ? "delegated_chat_token" : "mcp_handler_dispatch",
@@ -545,4 +555,21 @@ async function audit(
     ...(req.ctx?.runId ? { runId: req.ctx.runId } : {}),
     metadata,
   });
+}
+
+const admissionKey = Symbol.for("@cinatra-ai/host:outward-action-admissions/v1");
+type Admission = { frame: object; toolName: string; matchesArguments: (value:unknown)=>boolean; used: boolean };
+const holder = globalThis as unknown as { [admissionKey]?: WeakMap<object, Admission> };
+const admissions = holder[admissionKey] ??= new WeakMap();
+/** Boundary consumes ONE opaque host admission, not a public field/boolean. */
+export function takeOutwardActionAdmission(toolName: string, argumentsValue: unknown,
+  frame: { outwardActionAdmission?: object } | undefined): boolean {
+  const key = frame?.outwardActionAdmission;
+  const admission = key && admissions.get(key);
+  if (!admission || admission.used || admission.frame !== frame || admission.toolName !== toolName) return false;
+  try {
+    if (!admission.matchesArguments(argumentsValue)) return false;
+  } catch { return false; }
+  admission.used = true;
+  return true;
 }

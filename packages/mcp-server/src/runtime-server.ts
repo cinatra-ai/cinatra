@@ -374,11 +374,15 @@ export async function createMcpRuntimeServer(input: {
       // handler.
       try {
         const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
-        const decision = await enforceMcpBoundary({
-          primitiveName: name,
-          ctx,
-          delegatedRestricted: !!ctx?.delegatedRestricted,
-        });
+        const { isGuardedRunDispatch } = await import("@/lib/extension-capabilities-registry");
+        const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+        cbArgs[0] = await prepareDeclaredRunToolArguments(name, cbArgs[0]);
+        // A branded host bridge can only dispatch a guarded captured leaf.
+        // That leaf performs the full ordinary boundary and argument-bound burn.
+        const decision = ctx?.runId && isGuardedRunDispatch(cb)
+          ? { allowed: true as const }
+          : await enforceMcpBoundary({ primitiveName: name, arguments: cbArgs[0], ctx,
+              delegatedRestricted: !!ctx?.delegatedRestricted });
         if (!decision.allowed && decision.shouldBlock) {
           return {
             content: [

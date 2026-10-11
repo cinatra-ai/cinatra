@@ -52,9 +52,10 @@ vi.mock("@/lib/extension-authorized-dispatch", () => ({
 // A delegated-chat request frame. The declaration is only ever consulted inside
 // one, and always AFTER host admission — which stays the REAL policy below.
 let delegatedRestricted = true;
+let guardedRun = false;
 vi.mock("@cinatra-ai/mcp-server", () => ({
   mcpRequestContextStorage: {
-    getStore: () => ({ delegatedRestricted }),
+    getStore: () => ({ delegatedRestricted, ...(guardedRun ? {runId:"run",orgId:"org"} : {}) }),
     run: (_ctx: unknown, fn: () => unknown) => fn(),
   },
 }));
@@ -82,6 +83,8 @@ vi.mock("@/lib/delegated-chat-admission-store", async () => {
 // resolution lands on the DEFAULT version — the registration's own.
 vi.mock("@/lib/extension-edge-bound-serving", () => ({
   resolveEdgeBoundExtensionVersion: async () => ({ kind: "none" }),
+  dispatchPlannedExtensionMcpTool: async () => ({ok:true}),
+  wrapExtensionToolResult: (raw:unknown) => ({structuredContent:raw}),
 }));
 
 // Not under test here — the deny-by-default boundary has its own suites, and
@@ -149,6 +152,7 @@ function roundTrip(name: string, declared?: DelegatedChatToolClass): CapturedHos
 
 beforeEach(() => {
   delegatedRestricted = true;
+  guardedRun = false;
   snapshotRecords = [];
   pinnedDispatches = [];
   _resetExtensionMcpForTests();
@@ -156,6 +160,7 @@ beforeEach(() => {
   __resetHostSelfPrimitiveHandlers();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   _resetExtensionMcpForTests();
   __resetHostSelfPrimitiveHandlers();
 });
@@ -344,4 +349,31 @@ describe("the self-invoker refuses a non-canonical name, exactly as the transpor
     );
     expect(pinnedDispatches).toEqual([]);
   });
+});
+
+
+describe("guarded run self-dispatch selection (declaration/consumer have separate native witnesses)",()=>{
+ it("refuses an unguarded selected default handler before dispatch",async()=>{
+  guardedRun=true;roundTrip("acme_thing_list","read");snapshotRecords=[admissionRecordFor({ownerPackage:PKG,resolvedVersion:PKG_VERSION,primitiveName:"acme_thing_list",declaredClass:"read"})];
+  await expect(callHostPrimitive("acme_thing_list",{})).rejects.toThrow("action_self_resolved_handler_unavailable");expect(pinnedDispatches).toEqual([]);
+ });
+ it("keeps the selected guarded handler despite a later default replacement",async()=>{
+  guardedRun=true;const captured=roundTrip("acme_thing_list","read");snapshotRecords=[admissionRecordFor({ownerPackage:PKG,resolvedVersion:PKG_VERSION,primitiveName:"acme_thing_list",declaredClass:"read"})];
+  const registry=await import("@/lib/extension-capabilities-registry");const loaded=registry.recordLoadedExtensionIdentity({packageName:PKG,version:PKG_VERSION,installId:"self-native",digest:"a".repeat(64)});
+  const leaf=(await import("@/lib/extension-host-context")).bindArtifactGuardedMcpHandler("acme_thing_list",async()=>({ok:true}),loaded);
+  registerExtensionMcpTool(PKG,{name:"acme_thing_list",handler:leaf,delegatedChat:"read"},{resolvedVersion:PKG_VERSION});
+  const consumer=await import("@/lib/extension-host-context");const spy=vi.spyOn(consumer,"prepareDeclaredRunToolArguments").mockImplementationOnce(async(_name,args)=>{
+   registerExtensionMcpTool(PKG,{name:"acme_thing_list",handler:async()=>{throw Error("replacement must not run");},delegatedChat:"read"},{resolvedVersion:PKG_VERSION});return Object.freeze({...args as object});
+  });
+  const edge=await import("@/lib/extension-edge-bound-serving");let selected:unknown;
+  const dispatch=vi.spyOn(edge,"dispatchPlannedExtensionMcpTool").mockImplementationOnce(async(plan)=>{selected=plan;return {ok:true};});
+  capturedHandlers.set("acme_thing_list",captured);__resetHostSelfPrimitiveHandlers();
+  await expect(callHostPrimitive("acme_thing_list",{value:"captured"})).resolves.toEqual({ok:true});
+  expect((selected as {expected:string;tool:{handler:unknown}}).expected).toBe("default");expect((selected as {tool:{handler:unknown}}).tool.handler).toBe(leaf);spy.mockRestore();dispatch.mockRestore();registry.__resetCapabilityRegistry();
+ });
+ it("stops before a guarded bridge when declaration proof lookup refuses",async()=>{
+  guardedRun=true;delegatedRestricted=false;roundTrip("acme_thing_list","none");
+  const consumer=await import("@/lib/extension-host-context");const spy=vi.spyOn(consumer,"prepareDeclaredRunToolArguments").mockRejectedValueOnce(Error("missing executed source"));
+  await expect(callHostPrimitive("acme_thing_list",{})).rejects.toThrow("missing executed source");expect(pinnedDispatches).toEqual([]);spy.mockRestore();
+ });
 });

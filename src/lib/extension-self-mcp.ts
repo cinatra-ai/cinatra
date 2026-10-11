@@ -1,3 +1,4 @@
+import { isGuardedRunDispatch, isGuardedRunLeaf, markGuardedRunDispatch } from "@/lib/extension-capabilities-registry";
 import "server-only";
 
 // Host self-primitive invoker for `ctx.mcp.callPrimitive`.
@@ -271,8 +272,18 @@ export async function callHostPrimitive(
         const { dispatchAuthorizedExtensionPrimitive } = await import(
           "@/lib/extension-authorized-dispatch"
         );
-        handler = (pinnedInput: unknown) =>
-          dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
+        if (ctx.runId && pinned.kind === "extension-default") {
+          const { listExtensionMcpTools, UNRESOLVED_EXTENSION_VERSION } = await import("@/lib/extension-mcp-registry");
+          const tool = listExtensionMcpTools().find(t => t.packageName === pinned.packageName && t.name.toLowerCase() === pinned.name);
+          if (!tool || (tool.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION) !== pinned.version || !isGuardedRunLeaf(tool.handler)) {
+            throw new Error("action_self_resolved_handler_unavailable");
+          }
+          const { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } = await import("@/lib/extension-edge-bound-serving");
+          handler = markGuardedRunDispatch(async (frozenInput: unknown) => wrapExtensionToolResult(
+            await dispatchPlannedExtensionMcpTool({ expected: "default", tool }, frozenInput)));
+        } else {
+          handler = markGuardedRunDispatch((pinnedInput: unknown) => dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput));
+        }
       }
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.
@@ -280,11 +291,12 @@ export async function callHostPrimitive(
     let decision: { allowed: boolean; shouldBlock?: boolean; reason?: string };
     try {
       const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
-      decision = await enforceMcpBoundary({
-        primitiveName,
-        ctx,
-        delegatedRestricted: !!ctx?.delegatedRestricted,
-      });
+      const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+      input = await prepareDeclaredRunToolArguments(primitiveName, input);
+      decision = ctx?.runId && isGuardedRunDispatch(handler)
+        ? { allowed: true }
+        : await enforceMcpBoundary({ primitiveName, arguments: input, ctx,
+            delegatedRestricted: !!ctx?.delegatedRestricted });
     } catch (err) {
       throw new Error(
         `[extension-self-mcp] authorization unavailable for "${primitiveName}" (boundary_error): ` +

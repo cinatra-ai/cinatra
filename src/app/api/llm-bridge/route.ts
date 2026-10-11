@@ -1,3 +1,5 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource, readRunStepToolPolicy, readTrustedStepToolDeclaration } from "@cinatra-ai/agents/store";
 import "server-only";
 
 import * as path from "node:path";
@@ -93,6 +95,8 @@ import {
   verifyRunToken,
   RUN_TOKEN_HEADER,
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -989,7 +993,7 @@ export async function POST(req: Request): Promise<Response> {
   // run, and only from the runtime's signed pair, verified with that context
   // id. The body and every other header are never read for a step. An absent
   // or unverified pair gives no step and changes nothing else.
-  const verifiedStepId =
+  let verifiedStepId =
     runFromToken && a2aContextId && runFromContextId?.id === runFromToken.id
       ? (verifyRunStepAttestation({
           key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
@@ -998,6 +1002,24 @@ export async function POST(req: Request): Promise<Response> {
           attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
         }) ?? undefined)
       : undefined;
+
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null) {
+    const sourceAttestation = verifySourceBoundRunStep({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      contextId: a2aContextId, node: req.headers.get(RUN_STEP_NODE_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
+      sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      if (!sourceAttestation || !runFromToken?.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(runFromToken.id, runFromToken.orgId, sourceAttestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+    } catch {
+      return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Provider-aware dispatch resolution.
@@ -1605,13 +1627,19 @@ export async function POST(req: Request): Promise<Response> {
     // preferredProvider. When kind === "passthrough", we pass NO
     // preferredProvider / preferredModel so the orchestration helper takes
     // the backward-compatible path.
+    const stepToolPolicy = runForPorts
+      ? verifiedExecutedSource
+        ? readTrustedStepToolDeclaration((await readRunStepToolPolicy(runForPorts.id, runForPorts.orgId!)).source, verifiedExecutedSource.stepId)
+        : { kind: "declared" as const, tools: [] }
+      : undefined;
     const dispatchOverrides =
       dispatch.kind === "dispatch"
         ? {
+            ...(stepToolPolicy ? { stepToolPolicy } : {}),
             preferredProvider: dispatch.effectiveProvider,
             preferredModel: dispatch.preferredModel,
           }
-        : {};
+        : { ...(stepToolPolicy ? { stepToolPolicy } : {}) };
 
     // Telemetry only. requested_provider captures what
     // metadata.cinatra.llm.preferredProvider asked for (NULL when no
@@ -1770,11 +1798,14 @@ export async function POST(req: Request): Promise<Response> {
                         // The verified step of the calling model step
                         // (cinatra#3745) — written only when verified above.
                         ...(verifiedStepId ? { stepId: verifiedStepId } : {}),
+                        ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
                       });
                       if (key) durableBindingKeys.push(key);
+                      else if (verifiedExecutedSource) return null;
                     }
                   }
                 } catch {
+                  if (verifiedExecutedSource) return null;
                   // best-effort — binding absent ⇒ the step carries no run
                   // attribution (never a weaker, forgeable substitute).
                 }
@@ -1859,6 +1890,7 @@ export async function POST(req: Request): Promise<Response> {
                   // `stp` claim (cinatra#3745): the verified step of the
                   // calling model step, carried to the tool server's frame.
                   ...(verifiedStepId ? { verifiedStepId } : {}),
+                  ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,

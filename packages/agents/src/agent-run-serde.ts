@@ -25,7 +25,7 @@ import {
 } from "@cinatra-ai/mcp-server/obo-ceiling";
 import { readOwnerContainmentResolver } from "./owner-containment-port";
 import { db } from "./db";
-import { agentTemplates, agentRuns } from "./schema";
+import { agentTemplates, agentRuns, agentRunOutwardActionPolicies } from "./schema";
 import { AgentAuthPolicySchema } from "./auth-policy";
 // cinatra#2485 C — the pure install-scope evaluator lives with the rest of
 // the agent auth policy; the async guard below resolves its inputs.
@@ -631,4 +631,215 @@ export async function assertAgentRunDispatchAuthorized(input: {
     actor: input.actor ?? null,
     actingUserId: input.actingUserId ?? null,
   });
+}
+
+// #3745 immutable run/step execution policy, colocated to preserve route ceilings.
+import { createHash } from "node:crypto";
+// Fixed host module, never a request-selected package/import. This ABI is the
+// independently reviewed #3880 prerequisite; its absence is a refusal.
+import * as invariantReaders from "./validate-oas-runtime-invariants";
+
+export class RunStepToolPolicyRefusal extends Error {
+  constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
+}
+export type StepToolReading =
+  | { readonly kind: "undeclared" }
+  | { readonly kind: "declared"; readonly tools: readonly string[] };
+export type RunStepToolPolicy = {
+  readonly version: 1;
+  readonly contextId: string;
+  readonly sourceSha256: string;
+  readonly executedSourceSha256: string;
+  readonly declarationSourceSha256: string;
+  /** Immutable, pre-substitution loader graph, not the mutable template row. */
+  readonly source: string;
+};
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+const text = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+const hash = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
+function parseDocument(source: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(source);
+    if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  } catch { /* a stated refusal below */ }
+  throw new RunStepToolPolicyRefusal("step_tool_source_invalid");
+}
+type ReaderAbi = { readStepToolDeclaration?: unknown; findStepToolDeclaration?: unknown };
+
+/** ABI validation does not clone the prerequisite's parser or graph traversal. */
+export function readTrustedStepToolDeclaration(
+  source: string, stepId: string, trustedReaders: ReaderAbi = invariantReaders as ReaderAbi,
+): StepToolReading {
+  if (!text(stepId) || typeof trustedReaders.readStepToolDeclaration !== "function" ||
+      typeof trustedReaders.findStepToolDeclaration !== "function") {
+    throw new RunStepToolPolicyRefusal("step_tool_reader_unavailable");
+  }
+  const document = parseDocument(source);
+  const value: unknown = trustedReaders.findStepToolDeclaration(document, stepId);
+  if (!value || typeof value !== "object") throw new RunStepToolPolicyRefusal("step_tool_reader_incompatible");
+  const r = value as { kind?: unknown; tools?: unknown };
+  if (r.kind === "undeclared") return Object.freeze({ kind: "undeclared" });
+  if (r.kind !== "declared" || !Array.isArray(r.tools) ||
+      r.tools.some((v) => !text(v) || v !== v.toLowerCase() || /\s/.test(v)) ||
+      new Set(r.tools).size !== r.tools.length) {
+    throw new RunStepToolPolicyRefusal("step_tool_declaration_invalid");
+  }
+  return Object.freeze({ kind: "declared", tools: Object.freeze([...r.tools]) });
+}
+
+/** Bind the selected graph before dispatch, not from callback body/header data. */
+export function createRunStepToolPolicy(input: {
+  contextId: string; rawSource: string; executedSource?: string;
+  selectedRawSourceSha256?: string; selectedExecutedSourceSha256?: string;
+}, trustedReaders: ReaderAbi = invariantReaders as ReaderAbi): RunStepToolPolicy {
+  if (typeof trustedReaders.readStepToolDeclaration !== "function" ||
+      typeof trustedReaders.findStepToolDeclaration !== "function") {
+    throw new RunStepToolPolicyRefusal("step_tool_reader_unavailable");
+  }
+  if (!text(input.contextId) || !text(input.rawSource)) throw new RunStepToolPolicyRefusal("step_tool_binding_invalid");
+  if ((input.selectedRawSourceSha256 !== undefined && !hash(input.selectedRawSourceSha256)) ||
+      (input.selectedExecutedSourceSha256 !== undefined && !hash(input.selectedExecutedSourceSha256))) {
+    throw new RunStepToolPolicyRefusal("step_tool_selected_source_invalid");
+  }
+  const source = input.executedSource ?? input.rawSource;
+  parseDocument(source); parseDocument(input.rawSource);
+  return Object.freeze({ version: 1, contextId: input.contextId,
+    sourceSha256: input.selectedRawSourceSha256 ?? sha256(input.rawSource),
+    executedSourceSha256: input.selectedExecutedSourceSha256 ?? sha256(source),
+    declarationSourceSha256: sha256(source), source });
+}
+
+export function parseRunStepToolPolicy(value: unknown): RunStepToolPolicy {
+  if (!value || typeof value !== "object") throw new RunStepToolPolicyRefusal("step_tool_binding_missing");
+  const v = value as Partial<RunStepToolPolicy>;
+  if (v.version !== 1 || !text(v.contextId) || !hash(v.sourceSha256) ||
+      !hash(v.executedSourceSha256) || !hash(v.declarationSourceSha256) || !text(v.source) || sha256(v.source) !== v.declarationSourceSha256) {
+    throw new RunStepToolPolicyRefusal("step_tool_binding_invalid");
+  }
+  parseDocument(v.source);
+  return Object.freeze({ version: 1, contextId: v.contextId, sourceSha256: v.sourceSha256,
+    executedSourceSha256: v.executedSourceSha256, declarationSourceSha256: v.declarationSourceSha256, source: v.source });
+}
+
+export function assertRunStepToolAllowed(input: {
+  policy: unknown; contextId: string; executedSourceSha256: string; stepId: string; toolName: string;
+}, trustedReaders: ReaderAbi = invariantReaders as ReaderAbi): StepToolReading {
+  const policy = parseRunStepToolPolicy(input.policy);
+  if (policy.contextId !== input.contextId || policy.executedSourceSha256 !== input.executedSourceSha256) {
+    throw new RunStepToolPolicyRefusal("step_tool_executed_source_mismatch");
+  }
+  const reading = readTrustedStepToolDeclaration(policy.source, input.stepId, trustedReaders);
+  if (reading.kind === "declared" && !reading.tools.includes(input.toolName)) {
+    throw new RunStepToolPolicyRefusal("step_tool_not_declared");
+  }
+  return reading;
+}
+
+/** Trusted loader selection BEFORE dispatch. Credentials never leave the configured origin. */
+export async function selectWayflowRunStepToolPolicy(input: {
+  agentUrl: string; contextId: string;
+}, fetchImpl: typeof fetch = fetch): Promise<RunStepToolPolicy> {
+  const base = process.env.WAYFLOW_BASE_URL;
+  const bridgeToken = process.env.CINATRA_BRIDGE_TOKEN;
+  if (!base || !bridgeToken) throw new RunStepToolPolicyRefusal("step_tool_loader_unavailable");
+  let target: URL; let configured: URL;
+  try { target = new URL(input.agentUrl); configured = new URL(base); }
+  catch { throw new RunStepToolPolicyRefusal("step_tool_loader_target_invalid"); }
+  const route = /^\/agents\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)\/?$/.exec(target.pathname);
+  if (target.origin !== configured.origin || !route || target.username || target.password || target.search || target.hash) {
+    throw new RunStepToolPolicyRefusal("step_tool_loader_target_invalid");
+  }
+  const endpoint = new URL(`/.internal/composed-oas/${route[1]}/${route[2]}`, configured);
+  const response = await fetchImpl(endpoint, { headers: { "X-Cinatra-Bridge-Token": bridgeToken },
+    redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw new RunStepToolPolicyRefusal("step_tool_loader_selection_refused");
+  const body: unknown = await response.json();
+  const selected = (body as { selectedSourceBinding?: unknown } | null)?.selectedSourceBinding;
+  if (!selected || typeof selected !== "object") throw new RunStepToolPolicyRefusal("step_tool_loader_binding_missing");
+  const b = selected as Record<string, unknown>;
+  if (!hash(b.sourceSha256) || !hash(b.executedSourceSha256) || !hash(b.declarationSourceSha256) ||
+      !text(b.declarationSource) || sha256(b.declarationSource) !== b.declarationSourceSha256) {
+    throw new RunStepToolPolicyRefusal("step_tool_loader_binding_invalid");
+  }
+  return createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
+    selectedRawSourceSha256: b.sourceSha256, selectedExecutedSourceSha256: b.executedSourceSha256 });
+}
+
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import { guardedRunWrite } from "./org-write-run-seam";
+
+export type RunActionPolicyTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+/** The org-write guard owns transaction/lock order; never accepts a caller DB handle. */
+export function withRunActionPolicyTransaction<T>(input: {
+  orgId: string; runId: string; authority: OrgWriteAuthority;
+}, body: (tx: RunActionPolicyTx) => Promise<T>): Promise<T> {
+  return guardedRunWrite(input.authority, { orgId: input.orgId, runId: input.runId,
+    capability: "run.execute" }, (tx) => body(tx as unknown as RunActionPolicyTx));
+}
+/** First bind only. A restart/retry cannot silently replace the selected graph. */
+export async function bindRunStepToolPolicy(input: {
+  orgId: string; runId: string; executionAttemptId: string;
+  policy: RunStepToolPolicy; authority: OrgWriteAuthority;
+}): Promise<void> {
+  const policy = parseRunStepToolPolicy(input.policy);
+  await withRunActionPolicyTransaction(input, async (tx) => {
+    const [run] = await tx.select().from(agentRuns).where(and(eq(agentRuns.id, input.runId),
+      eq(agentRuns.orgId, input.orgId))).for("update");
+    if (!run || run.status !== "running" || !input.executionAttemptId ||
+        run.executionAttemptId !== input.executionAttemptId || run.a2aContextId !== policy.contextId) {
+      throw new RunStepToolPolicyRefusal("step_tool_dispatch_binding_mismatch");
+    }
+    await tx.insert(agentRunOutwardActionPolicies).values({ runId: input.runId, orgId: input.orgId,
+      executionAttemptId: input.executionAttemptId, policy }).onConflictDoNothing();
+    const [bound] = await tx.select().from(agentRunOutwardActionPolicies)
+      .where(eq(agentRunOutwardActionPolicies.runId, input.runId)).for("update");
+    if (!bound || bound.orgId !== input.orgId || bound.executionAttemptId !== input.executionAttemptId ||
+        JSON.stringify(parseRunStepToolPolicy(bound.policy)) !== JSON.stringify(policy)) {
+      throw new RunStepToolPolicyRefusal("step_tool_dispatch_rebind_refused");
+    }
+  });
+}
+export async function readRunStepToolPolicy(runId: string, orgId: string): Promise<RunStepToolPolicy> {
+  const [bound] = await db.select({ policy: agentRunOutwardActionPolicies.policy })
+    .from(agentRunOutwardActionPolicies).where(and(eq(agentRunOutwardActionPolicies.runId, runId),
+      eq(agentRunOutwardActionPolicies.orgId, orgId)));
+  return parseRunStepToolPolicy(bound?.policy);
+}
+
+/** Derive attempt from the authoritative run/policy rows, never a runtime header. */
+export async function verifyRunExecutedSource(runId: string, orgId: string,
+  attestation: Omit<VerifiedExecutedRunSource, "executionAttemptId">,
+): Promise<VerifiedExecutedRunSource> {
+  const [row] = await db.select({ run: agentRuns, binding: agentRunOutwardActionPolicies })
+    .from(agentRuns).innerJoin(agentRunOutwardActionPolicies,
+      eq(agentRuns.id, agentRunOutwardActionPolicies.runId))
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)));
+  if (!row || row.run.status !== "running" || !row.run.executionAttemptId ||
+      row.binding.orgId !== orgId || row.binding.executionAttemptId !== row.run.executionAttemptId ||
+      row.run.a2aContextId !== attestation.contextId) {
+    throw new RunStepToolPolicyRefusal("step_tool_run_source_inactive");
+  }
+  const policy = parseRunStepToolPolicy(row.binding.policy);
+  if (policy.contextId !== attestation.contextId || policy.sourceSha256 !== attestation.sourceSha256 ||
+      policy.executedSourceSha256 !== attestation.executedSourceSha256 ||
+      policy.declarationSourceSha256 !== attestation.declarationSourceSha256) {
+    throw new RunStepToolPolicyRefusal("step_tool_executed_source_mismatch");
+  }
+  // Proves the selected compiled step exists and its declaration remains valid.
+  readTrustedStepToolDeclaration(policy.source, attestation.stepId);
+  const proof = parseVerifiedExecutedRunSource({ ...attestation, executionAttemptId: row.run.executionAttemptId });
+  if (!proof) throw new RunStepToolPolicyRefusal("step_tool_source_proof_invalid");
+  return proof;
+}
+export async function isRunExecutedSourceCurrent(runId: string, orgId: string,
+  proof: VerifiedExecutedRunSource): Promise<boolean> {
+  const parsed = parseVerifiedExecutedRunSource(proof);
+  if (!parsed) return false;
+  try {
+    const { executionAttemptId, ...attestation } = parsed;
+    const current = await verifyRunExecutedSource(runId, orgId, attestation);
+    return current.executionAttemptId === executionAttemptId;
+  } catch { return false; }
 }
