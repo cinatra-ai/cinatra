@@ -213,6 +213,10 @@ vi.mock("@cinatra-ai/extensions/scope-containment-filter", () => ({
   allowedScopeIdentitiesFromPolicy: vi.fn(() => []),
 }));
 
+vi.mock("../started-run-store", () => ({
+  readStartedRunsFor: vi.fn(async () => []),
+}));
+
 vi.mock("../store", () => ({
   readAgentTemplateBySlug: vi.fn(async () =>
     row.templateType === "agentic"

@@ -443,16 +443,23 @@ function ReviewGateStepCard({
 }) {
   if (cardRef) {
     return (
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard
-          view={{
-            viewType: "artifact_review_gate",
-            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-            ref: cardRef,
-          }}
-          runId={runId}
-        />
-      </LifecycleCardSurfaceProvider>
+      // The step rail is the layout; this is its one review .runcard (§I).
+      // ReviewGateCard draws content inside the slot, with no second frame.
+      <section
+        className="rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+        data-run-review-slot="review"
+      >
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard
+            view={{
+              viewType: "artifact_review_gate",
+              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+              ref: cardRef,
+            }}
+            runId={runId}
+          />
+        </LifecycleCardSurfaceProvider>
+      </section>
     );
   }
   return (
@@ -1743,6 +1750,17 @@ function StepperColumn({
                   >
                     <StepperTrigger
                       className={RUN_PAGE_RAIL_ROW_CLASS}
+                      // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
+                      // (cinatra#3449), in the rail's one vocabulary and
+                      // derived as the rail's other rows derive it
+                      // (`run-step-rail-extra-entry`): a step still ahead is
+                      // not reached, a completed one is settled. This mount's
+                      // spine rows carried no mark at all, so a reading of THIS
+                      // rail answered for its trailing entries only.
+                      data-run-surface-rail-step=""
+                      data-run-surface-rail-reached={isCompleted || isActive ? "true" : "false"}
+                      data-run-surface-rail-settled={isCompleted ? "true" : "false"}
+                      data-run-surface-rail-selected={isActive ? "true" : "false"}
                       aria-label={`${s.index} ${s.label}`}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
@@ -2774,6 +2792,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     runId,
     reviewTaskId,
     initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: embedMode ? undefined : router.refresh,
   });
 
@@ -2861,7 +2880,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard = reviewSlot.ref ? (
       <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
     ) : (
-      <Card data-run-review-slot="working">
+      <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
         <CardContent className="p-6">
           {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
               reading took this exact box on both themes and found "a large
@@ -3057,7 +3076,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         reviewSlot.ref ? (
           <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
         ) : reviewMayStillOpen ? (
-          <Card data-run-review-slot="working">
+          <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
             <CardContent className="p-6">
               <ReviewGatePlaceholder />
             </CardContent>
@@ -3083,7 +3102,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // for the same reason every other wordless box on this page does.
   if (stageCard === null && status === "pending_approval" && reviewStillReading) {
     stageCard = (
-      <Card data-run-review-slot="working">
+      <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
         <CardContent className="p-6">
           {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
               reading took this exact box on both themes and found "a large

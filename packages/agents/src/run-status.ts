@@ -701,6 +701,21 @@ export const RUN_START_SCHEDULE_WAIT_CLAUSE =
   "this conversation is where that schedule is decided.";
 
 /**
+ * The line the ratified drawing puts over a schedule that has not fired
+ * (cinatra#2853 fix leg 2).
+ *
+ * Section VI gives a turn that carries a schedule card exactly one prose line,
+ * and it is the section's own: "the first shown, configured and expired
+ * readings drawn below all carry" this sentence word for word, in place of the
+ * assistant's own lead-in. A schedule that has fired, or that was stopped,
+ * carries its own sentence instead — see the fired and stopped sentences of
+ * this file.
+ */
+export const RUN_START_SCHEDULE_PROPOSAL_SENTENCE =
+  "Schedule proposal is ready. Confirm it on the card below and I will arm it; " +
+  "change the rows first if it is not right.";
+
+/**
  * Is this reading of a run one of a run WAITING FOR ITS SCHEDULE?
  *
  * ONE definition, so the sentence the start mints and the correction the

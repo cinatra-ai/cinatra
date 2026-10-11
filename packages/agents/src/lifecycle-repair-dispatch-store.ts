@@ -235,7 +235,7 @@ export async function dispatchPendingProducerRepairs(opts?: {
         continue;
       }
 
-      const producer = await resolveProducingTemplate(row.producerRunId);
+      const producer = await resolveProducingTemplate(row.producerRunId, row.orgId);
       if (!producer) {
         // No producing run/template to deliver to. Escalate rather than leaving the
         // repair pending forever — the S2 AC's "nothing silently drops".
@@ -347,7 +347,11 @@ export async function dispatchPendingProducerRepairs(opts?: {
               id: runId,
               templateId: producer.templateId,
               orgId: row.orgId,
-              inputParams: { lifecycleRepairRequest: request, ...cmsInputParams },
+              inputParams: {
+                ...producer.originatingInputParams,
+                ...cmsInputParams,
+                lifecycleRepairRequest: request,
+              },
               sourceType: "lifecycle_repair",
               // Attribution: the repair run is the ORIGINATING human's, never
               // the system dispatcher's — mirrors the ActorContext threaded to
@@ -411,7 +415,7 @@ export async function dispatchPendingProducerRepairs(opts?: {
 }
 
 /** Resolve the producing run's template (the agent that must repair). */
-async function resolveProducingTemplate(producerRunId: string | null): Promise<{
+async function resolveProducingTemplate(producerRunId: string | null, orgId: string): Promise<{
   templateId: string;
   packageName: string | null;
   /** The producing run's PERSISTED OBO ceiling chain — the compose operand for
@@ -426,6 +430,8 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
    * a system-authority principal.
    */
   originatingRunBy: string | null;
+  /** Recorded producer inputs are data, never launch authority. */
+  originatingInputParams: Record<string, unknown>;
 } | null> {
   if (!producerRunId) return null;
   const [run] = await db
@@ -433,9 +439,10 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
       templateId: agentRuns.templateId,
       oboCeiling: agentRuns.oboCeiling,
       runBy: agentRuns.runBy,
+      inputParams: agentRuns.inputParams,
     })
     .from(agentRuns)
-    .where(eq(agentRuns.id, producerRunId))
+    .where(and(eq(agentRuns.id, producerRunId), eq(agentRuns.orgId, orgId)))
     .limit(1);
   if (!run?.templateId) return null;
   const [tmpl] = await db
@@ -452,11 +459,23 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
       parentOboCeiling = null;
     }
   }
+  let originatingInputParams: Record<string, unknown> = {};
+  if (run.inputParams) {
+    try {
+      const parsed: unknown = JSON.parse(run.inputParams);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        originatingInputParams = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Unreadable historical inputs cannot become launch authority or fields.
+    }
+  }
   return {
     templateId: tmpl.id,
     packageName: tmpl.packageName ?? null,
     parentOboCeiling,
     originatingRunBy: run.runBy ?? null,
+    originatingInputParams,
   };
 }
 

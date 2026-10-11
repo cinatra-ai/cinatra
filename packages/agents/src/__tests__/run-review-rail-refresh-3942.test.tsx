@@ -11,11 +11,13 @@ import { useRunReviewRailRefresh } from "../lifecycle-card-runtime";
 function Probe({
   seed,
   initialTasks,
+  railCurrent,
   runId = "run-3942",
   enabled = true,
 }: {
   seed: unknown;
   initialTasks?: readonly string[];
+  railCurrent?: string | null;
   runId?: string;
   enabled?: boolean;
 }) {
@@ -24,6 +26,7 @@ function Probe({
     runId,
     reviewTaskId: slot?.reviewTaskId,
     initialReviewTaskIds: initialTasks,
+    railCurrentReviewTaskId: railCurrent,
     refresh: enabled ? refresh : undefined,
   });
   return null;
@@ -93,10 +96,40 @@ describe("the page refresh follows real gate identities, not opaque ticket nonce
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("seeds every actually drawn gate, including historical gates", () => {
-    const { rerender } = render(<Probe initialTasks={["task-1", "task-2"]} seed={seed("task-1", "nonce-1")} />);
-    rerender(<Probe initialTasks={["task-1", "task-2"]} seed={seed("task-2", "nonce-2")} />);
+  it("§I.3 refreshes once when drawn B becomes live while the SSR rail still marks A", () => {
+    const { rerender } = render(<Probe initialTasks={["task-1", "task-2"]} railCurrent="task-1" seed={seed("task-1", "nonce-1")} />);
     expect(refresh).not.toHaveBeenCalled();
+    rerender(<Probe initialTasks={["task-1", "task-2"]} railCurrent="task-1" seed={seed("task-2", "nonce-2")} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    rerender(<Probe initialTasks={["task-1", "task-2"]} railCurrent="task-1" seed={seed("task-2", "nonce-3")} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    rerender(<Probe initialTasks={["task-1", "task-2"]} railCurrent="task-2" seed={seed("task-2", "nonce-4")} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("§I.3 a resolved A in history does not refresh when current B is already drawn", () => {
+    render(<Probe initialTasks={["task-1", "task-2"]} railCurrent="task-2" seed={seed("task-2", "nonce-B")} />);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("§I.3 preserves a resolved history slot when the rail has no current pending review", () => {
+    const page = render(<StrictMode><Probe initialTasks={["resolved-task"]} railCurrent={null} seed={seed("resolved-task", "nonce-1")} /></StrictMode>);
+    expect(refresh).not.toHaveBeenCalled();
+    page.rerender(<Probe initialTasks={["resolved-task"]} railCurrent={null} seed={seed("resolved-task", "nonce-2")} />);
+    expect(refresh).not.toHaveBeenCalled();
+    page.unmount();
+    render(<Probe initialTasks={["resolved-task"]} railCurrent={null} seed={seed("resolved-task", "nonce-3")} />);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("§I.3 still refreshes an unknown new slot once when the rail has no current review", () => {
+    const page = render(<Probe initialTasks={["resolved-task"]} railCurrent={null} seed={seed("new-task", "nonce-1")} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    page.rerender(<Probe initialTasks={["resolved-task"]} railCurrent={null} seed={seed("new-task", "nonce-2")} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    page.unmount();
+    render(<Probe initialTasks={["resolved-task", "new-task"]} railCurrent={null} seed={seed("new-task", "nonce-3")} />);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("keeps independent run identities and server seeds separate", () => {
