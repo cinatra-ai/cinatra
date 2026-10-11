@@ -965,22 +965,54 @@ for (const { name: palette, theme } of PALETTES) {
       // existing listbox before direct scrolling so that is not an item.
       await listbox.focus();
       await expect(listbox).toBeFocused();
-      await viewport.evaluate((el) => { el.scrollTop = el.scrollHeight; });
-      await expect.poll(() => viewport.evaluate(async (el) => {
-        // Read the bottom extent after layout and scroll-control updates settle.
+      // Resolve the stable token before scrolling. The shared scroll treatment
+      // hides after its normal debounce/delay, so observe all transient drawing
+      // pins together rather than spending that interval on separate RPCs.
+      const expectedThumbColor = await computedColor(page, await token(page, "--border"));
+      const drawing = await viewport.evaluate(async (el) => {
+        el.scrollTop = el.scrollHeight;
+        // Preserve the existing two-frame layout/scroll-control settling.
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        return Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
-      })).toBe(0);
-      await expect(scrollbar).toBeVisible();
-      expect((await box(scrollbar)).width).toBe(6);
-      expect(await style(scrollbar, "position")).toBe("absolute");
-      expect(alphaOf(await style(scrollbar, "background-color"))).toBe(0);
-      const thumb = scrollbar.locator('[data-slot="scroll-area-thumb"]');
-      await expect(thumb).toBeVisible();
-      expect(await style(thumb, "background-color")).toBe(await computedColor(page, await token(page, "--border")));
-      await expect(scrollbar).toHaveAttribute("data-state", "visible");
-      await expect(listbox.getByRole("option", { name: "List item 48" })).toBeInViewport();
+        const content = el.closest('[role="listbox"]');
+        const bar = content?.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
+        const thumb = bar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
+        const visible = (node: Element | null | undefined) => {
+          if (!node) return false;
+          const rect = node.getBoundingClientRect();
+          const visibility = getComputedStyle(node).visibility;
+          return rect.width > 0 && rect.height > 0 && visibility !== "hidden" && visibility !== "collapse";
+        };
+        const lastItem = Array.from(el.querySelectorAll('[role="option"]'))
+          .find((option) => option.textContent?.trim() === "List item 48");
+        const itemRect = lastItem?.getBoundingClientRect();
+        const viewportRect = el.getBoundingClientRect();
+        const barStyle = bar ? getComputedStyle(bar) : null;
+        return {
+          bottom: Math.round(el.scrollHeight - el.clientHeight - el.scrollTop),
+          barVisible: visible(bar),
+          barWidth: bar?.getBoundingClientRect().width ?? null,
+          barPosition: barStyle?.position ?? null,
+          barBackground: barStyle?.backgroundColor ?? null,
+          thumbVisible: visible(thumb),
+          thumbBackground: thumb ? getComputedStyle(thumb).backgroundColor : null,
+          barState: bar?.getAttribute("data-state") ?? null,
+          lastItemInViewport: !!itemRect && itemRect.bottom > Math.max(viewportRect.top, 0)
+            && itemRect.top < Math.min(viewportRect.bottom, window.innerHeight)
+            && itemRect.right > Math.max(viewportRect.left, 0)
+            && itemRect.left < Math.min(viewportRect.right, window.innerWidth),
+        };
+      });
+      expect(drawing.bottom).toBe(0);
+      expect(drawing.barVisible).toBe(true);
+      expect(drawing.barWidth).toBe(6);
+      expect(drawing.barPosition).toBe("absolute");
+      expect(drawing.barBackground).not.toBeNull();
+      expect(alphaOf(drawing.barBackground!)).toBe(0);
+      expect(drawing.thumbVisible).toBe(true);
+      expect(drawing.thumbBackground).toBe(expectedThumbColor);
+      expect(drawing.barState).toBe("visible");
+      expect(drawing.lastItemInViewport).toBe(true);
     });
 
     test("retains keyboard selection and restores trigger focus", async ({ page }) => {
