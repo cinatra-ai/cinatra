@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-const h=vi.hoisted(()=>({burned:new Set<string>(),events:[] as string[],resolvedBy:"person",fingerprint:"person:gate",live:true,status:"running",current:true,identity:true,matching:true,commits:0, queue:Promise.resolve(),raw:JSON.stringify({recipient:"approved"})}));
+import { PgDialect } from "drizzle-orm/pg-core";
+const h=vi.hoisted(()=>({burned:new Set<string>(),gateIds:["gate"] as string[],ledgerReads:[] as string[],events:[] as string[],resolvedBy:"person",fingerprint:"person:gate",live:true,status:"running",current:true,identity:true,matching:true,commits:0, queue:Promise.resolve(),raw:JSON.stringify({recipient:"approved"})}));
 vi.mock("@cinatra-ai/agents/schema",()=>({agentRuns:{id:"id",orgId:"org"},agentRunOutwardActionPolicies:{runId:"run"},artifactReviewGates:{id:"gate",runId:"run",orgId:"org",status:"status",disposition:"disposition"},artifactReviewActionConsumptions:{gateId:"gate"}}));
 vi.mock("@/lib/extension-capabilities-registry",async(importOriginal)=>{const actual=await importOriginal<typeof import("@/lib/extension-capabilities-registry")>();return {...actual,isLoadedExtensionIdentityCurrent:(v:import("@/lib/extension-capabilities-registry").LoadedExtensionIdentity)=>h.identity && ("wrapper" in v || actual.isLoadedExtensionIdentityCurrent(v)),
  resolveCapabilityProviders:()=>[{packageName:"pack",impl:checker}],capabilityProviderLoadedIdentity:()=>({packageName:"pack",version:"1",installId:"install",digest:"f".repeat(64),generation:1})};});
@@ -15,14 +16,20 @@ vi.mock("@cinatra-ai/agents/store",()=>({
  withRunActionPolicyTransaction:async(_scope:unknown,fn:(tx:object)=>Promise<unknown>)=>{
   const previous=h.queue;let release!:()=>void;h.queue=new Promise<void>(r=>release=r);await previous;
   let select=0;
-  const gate=()=>({id:"gate",status:"resolved",disposition:"approve",resolvedBy:h.resolvedBy,resolvedAt:new Date(),fingerprint:h.fingerprint,pinnedTargets:[{artifactId:"artifact",representationRevisionId:"revision"}]});
-  const chain=()=>{const n=select++;const result=()=>n===0?[{status:h.status,executionAttemptId:"attempt",a2aContextId:"ctx"}]:n===1?[{orgId:"org",executionAttemptId:"attempt",policy:{sourceSha256:"a".repeat(64),declarationSourceSha256:"c".repeat(64)}}]:[gate()];return {from(){return this;},where(){return this;},for(){return Promise.resolve(result());},orderBy(){return Promise.resolve(result());}};};
+  const gate=(id:string)=>({id,status:"resolved",disposition:"approve",resolvedBy:h.resolvedBy,resolvedAt:new Date(),fingerprint:h.fingerprint,pinnedTargets:[{artifactId:"artifact",representationRevisionId:"revision"}]});
+  const chain=()=>{let table:{gateId?:string}|undefined;let gateId="gate";let n=-1;return {
+   from(value:{gateId?:string}){table=value;if(!table.gateId)n=select++;return this;},
+   where(condition:Parameters<PgDialect["sqlToQuery"]>[0]){const params=new PgDialect().sqlToQuery(condition).params;gateId=String(table?.gateId?params.at(-1):params[1]);return this;},
+   for(){return Promise.resolve(n===0?[{status:h.status,executionAttemptId:"attempt",a2aContextId:"ctx"}]:n===1?[{orgId:"org",executionAttemptId:"attempt",policy:{sourceSha256:"a".repeat(64),declarationSourceSha256:"c".repeat(64)}}]:h.gateIds.includes(gateId)?[gate(gateId)]:[]);},
+   orderBy(){return Promise.resolve(h.gateIds.map(gate));},
+   then(resolve:(rows:{gateId:string}[])=>unknown){h.ledgerReads.push(gateId);return Promise.resolve(h.burned.has(gateId)?[{gateId}]:[]).then(resolve);}
+  };};
   let exec=0;const tx={select:chain,execute:async()=>{
    const n=exec++;if(n===0){h.events.push("artifact-fence");return {rows:[]};}
-   if(n===1)return {rows:h.resolvedBy?[{id:h.resolvedBy}]:[]};
-   if(n===2)return {rows:[{id:"artifact",type:"document",deleted_at:null}]};
+   if((n-1)%3===0)return {rows:h.resolvedBy?[{id:h.resolvedBy}]:[]};
+   if((n-1)%3===1)return {rows:[{id:"artifact",type:"document",deleted_at:null}]};
    return {rows:h.live?[{id:"revision",kind:"blob",form:"file",substance_key:"blob:"+createHash("sha256").update(h.raw).digest("hex"),metadata:{storageKey:"bound"},size_bytes:Buffer.byteLength(h.raw)}]:[]};
-  },insert:()=>({values:()=>({onConflictDoNothing:()=>({returning:async()=>{h.events.push("unique-consume");if(h.burned.has("gate"))return [];h.burned.add("gate");return [{gateId:"gate"}];}})})})};
+  },insert:()=>({values:(value:{gateId:string})=>({onConflictDoNothing:()=>({returning:async()=>{h.events.push("unique-consume");if(h.burned.has(value.gateId))return [];h.burned.add(value.gateId);return [{gateId:value.gateId}];}})})})};
   try{const result=await fn(tx);h.events.push("commit");h.commits++;return result;}finally{release();}
  }
 }));
@@ -32,7 +39,7 @@ const action={packageName:"pack",version:"1",installId:"install",digest:"f".repe
 const proof={contextId:"ctx",stepId:"step",executionAttemptId:"attempt",sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)};
 const frame=()=>({runId:"run",orgId:"org",userId:"person",orgWriteAuthority:{} as never,verifiedStepId:"step",verifiedExecutedSource:proof});
 const call=(effect=async()=>{h.events.push("effect");return "sent";},args:unknown={recipient:"approved"})=>mcpRequestContextStorage.run(frame(),()=>withArtifactReviewAction({action,arguments:args},effect));
-beforeEach(()=>{h.burned.clear();h.events=[];h.resolvedBy="person";h.fingerprint="person:gate";h.live=true;h.status="running";h.current=true;h.identity=true;h.matching=true;h.commits=0;h.queue=Promise.resolve();});
+beforeEach(()=>{h.burned.clear();h.gateIds=["gate"];h.ledgerReads=[];h.events=[];h.resolvedBy="person";h.fingerprint="person:gate";h.live=true;h.status="running";h.current=true;h.identity=true;h.matching=true;h.commits=0;h.queue=Promise.resolve();});
 describe("real consumer with deterministic transactional ports (not PostgreSQL race proof)",()=>{
  it("commits its unique person-gate consumption before the exact effect",async()=>{
   expect(await call()).toBe("sent");expect(h.events.indexOf("commit")).toBeLessThan(h.events.indexOf("effect"));expect(h.burned.has("gate")).toBe(true);
@@ -89,5 +96,29 @@ describe("captured guarded leaf to real shared consumer cross-channel",()=>{
   const stale=(await import("@/lib/extension-host-context")).bindArtifactGuardedMcpHandler("publish",async()=>++effects,identity);registry.invalidateProvidersForPackage("pack");
   for(const leaf of [stale,(await import("@/lib/extension-host-context")).bindArtifactGuardedMcpHandler("publish",async()=>++effects)])await expect(mcpRequestContextStorage.run(frame(),()=>leaf({recipient:"approved"}))).rejects.toThrow("action_loaded_identity_missing_or_stale");
   expect(effects).toBe(0);expect(h.burned.size).toBe(0);registry.__resetCapabilityRegistry();
+ });
+});
+
+
+describe("durably consumed gate census and fresh canonical approval",()=>{
+ it("uses fresh B once after consumed A for the same pinned action and denies B replay",async()=>{
+  h.gateIds=["A"];expect(await call()).toBe("sent");expect(h.burned.has("A")).toBe(true);
+  h.gateIds=["A","B"];expect(await call()).toBe("sent");expect(h.burned.has("B")).toBe(true);
+  expect(h.ledgerReads).toContain("A");expect(h.ledgerReads).toContain("B");
+  await expect(call()).rejects.toThrow("action_gate_already_consumed");
+  expect(h.events.filter(e=>e==="effect")).toHaveLength(2);
+ });
+ it("still refuses multiple genuinely fresh matching approvals when A is already consumed",async()=>{
+  h.burned.add("A");h.gateIds=["A","B","C"];
+  await expect(call()).rejects.toThrow("action_gate_ambiguous");
+  expect(h.burned).toEqual(new Set(["A"]));expect(h.events).not.toContain("effect");expect(h.commits).toBe(0);
+ });
+ it("allows only one concurrent use of fresh B after consumed A across channels",async()=>{
+  h.burned.add("A");h.gateIds=["A","B"];
+  const results=await Promise.allSettled([call(),call()]);
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);
+  expect(results.filter(r=>r.status==="rejected")).toHaveLength(1);
+  expect(h.burned).toEqual(new Set(["A","B"]));expect(h.events.filter(e=>e==="effect")).toHaveLength(1);
+  expect(h.events.indexOf("commit")).toBeLessThan(h.events.indexOf("effect"));
  });
 });

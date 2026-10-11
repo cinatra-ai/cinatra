@@ -1818,6 +1818,7 @@ export async function withArtifactReviewAction<T>(input: {
     }
     for (const id of [...artifactIds].sort()) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${id}))`);
     const matching: string[] = [];
+    let consumedMatches = 0;
     for (const snapshot of gates) {
       const [gate] = await tx.select().from(artifactReviewGates).where(and(
         eq(artifactReviewGates.id, snapshot.id), eq(artifactReviewGates.orgId, frame.orgId!),
@@ -1852,9 +1853,16 @@ export async function withArtifactReviewAction<T>(input: {
       if (!valid) continue;
       try { checkArtifactAction(checker, { action, arguments: argumentsValue, revisions }); }
       catch { continue; }
+      // A prior durable burn remains final, but cannot make a newly approved
+      // matching gate ambiguous. Read under the same run/gate/pin transaction
+      // before the candidate census; the unique insert below remains the fence.
+      const consumed = await tx.select({ gateId: artifactReviewActionConsumptions.gateId })
+        .from(artifactReviewActionConsumptions).where(eq(artifactReviewActionConsumptions.gateId, gate.id));
+      if (consumed.length !== 0) { consumedMatches++; continue; }
       matching.push(gate.id);
     }
-    if (matching.length !== 1) throw new OutwardActionRefusal(matching.length ? "action_gate_ambiguous" : "action_person_gate_missing");
+    if (matching.length !== 1) throw new OutwardActionRefusal(matching.length ? "action_gate_ambiguous" :
+      consumedMatches ? "action_gate_already_consumed" : "action_person_gate_missing");
     if (!isLoadedExtensionIdentityCurrent(action) || resolveArtifactActionChecker(action) !== checker) {
       throw new OutwardActionRefusal("action_checker_changed");
     }
