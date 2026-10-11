@@ -126,12 +126,11 @@ describe("resolveRequestRunContext precedence", () => {
     expect(r.suppressed).toBe(false);
   });
 
-  it("denied defaults to false on every non-failClosed path", () => {
+  it("ordinary and verified paths remain not denied without the header cutover", () => {
     for (const r of [
       resolveRequestRunContext({ delegatedRunId: "run-obo" }),
       resolveRequestRunContext({ durable: DURABLE_RESOLVED }),
       resolveRequestRunContext({ durable: { outcome: "absent" }, ...HEADERS }),
-      resolveRequestRunContext({ durable: { outcome: "invalid" }, ...HEADERS }),
       resolveRequestRunContext({}),
     ]) {
       expect(r.denied).toBe(false);
@@ -239,17 +238,17 @@ describe("resolveRequestRunContext fail-closed cutover denial", () => {
     expect(r.deniedChannel).toBe("header");
   });
 
-  it("durable INVALID with NO legacy claim is suppressed but NOT denied — the request is served without run attribution", () => {
-    // The availability boundary of the posture, stated explicitly: a request
-    // that never claimed a run id is not refused just because its durable
-    // binding went stale. An unattributed write is never a misattributed one.
+  it("durable INVALID with NO legacy claim is suppressed AND denied rather than served runless", () => {
+    // A present run binding is authoritative even when the caller sends no
+    // run header. Failed verification must not erase its policy protection.
     const r = resolveRequestRunContext({
       failClosed: true,
       durable: { outcome: "invalid" },
     });
     expect(r.runId).toBeUndefined();
     expect(r.suppressed).toBe(true);
-    expect(r.denied).toBe(false);
+    expect(r.denied).toBe(true);
+    expect(r.deniedChannel).toBeUndefined();
   });
 
   it("durable INVALID + a header claim does NOT deny a verified OBO caller", () => {
@@ -321,5 +320,20 @@ describe("resolveRequestRunContext empty-verified-id normalization (default path
     expect(r.runId).toBe("run-header");
     expect(r.servedBy).toBe("header");
     expect(r.denied).toBe(false);
+  });
+});
+
+
+describe("durable refusal is not a legacy-header opt-out", () => {
+  it.each([false, undefined])("invalid durable binding denies with failClosed=%s", (failClosed) => {
+    const r = resolveRequestRunContext({ durable: { outcome: "invalid" }, failClosed });
+    expect(r).toMatchObject({ servedBy: "none", suppressed: true, denied: true });
+    expect(r.runId).toBeUndefined();
+    expect(r.deniedChannel).toBeUndefined();
+  });
+  it("an empty OBO id cannot shield an invalid durable binding", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "", durable: { outcome: "invalid" }, failClosed: true });
+    expect(r.denied).toBe(true);
+    expect(r.runId).toBeUndefined();
   });
 });

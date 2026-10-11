@@ -493,9 +493,10 @@ export function resolveRequestLentActionGrant(input: {
 // packageVersion / agentSpecVersion) is UNTRUSTED tagging input on every
 // channel — never an authorization input.
 //
-// Suppression and DENIAL compose: under `failClosed` a header run id that
-// suppression already dropped is STILL refused, because serving the request
-// with the id merely dropped would persist an unattributed run-scoped write.
+// Suppression and DENIAL compose: a present-invalid durable binding is
+// refused even without a header claim. It is authoritative evidence that this
+// bearer was run-bound; dropping it must not bypass the run policy. An
+// independently verified OBO run still wins over stale durable state.
 //
 // FAIL-CLOSED CUTOVER DENIAL (`failClosed`, now ACTIVE in production wiring):
 // a run id that ONLY a legacy/forgeable channel could supply is REFUSED
@@ -551,13 +552,13 @@ export type ResolvedRequestRunContext = {
   /** True when a durable "invalid" outcome suppressed the legacy channels. */
   suppressed: boolean;
   /**
-   * True when `failClosed` REFUSED a run id that only a legacy/forgeable
-   * channel could supply (#1195 fail-closed posture, now ACTIVE). The run id
+   * True when a present-invalid durable binding has no independently verified
+   * run, or when `failClosed` REFUSED a legacy-only run id (#1195). The run id
    * and legacy provenance are dropped and `servedBy` collapses to "none"; a
-   * verified channel (obo / durable) is NEVER denied. False when `failClosed`
-   * is not set. Distinct from `suppressed`: suppression is the
-   * durable-"invalid" self-defense that fires regardless of the flag; denial is
-   * the deliberate refusal of the weak channel — the enforcement point treats
+   * verified channel (obo / durable) is NEVER denied. Durable-invalid refusal
+   * is unconditional; `failClosed` only controls the legacy-header cutover.
+   * Distinct from `suppressed`: suppression drops legacy claims; denial is
+   * the refusal of known-invalid or legacy-only run authority — the enforcement point treats
    * `denied` (not merely a missing run id) as the signal to reject the request
    * before any run-scoped write can persist (see the transport in index.tsx).
    * The two are NOT mutually exclusive: a suppressed legacy claim is still a
@@ -633,14 +634,14 @@ export function resolveRequestRunContext(input: {
     ? "header"
     : undefined;
 
-  // Fail-closed refusal applies ONLY to a legacy-only run id: a request that
-  // never claimed one (including a durable-"invalid" with no header) is still
-  // SERVED without run attribution — an availability decision, and an
-  // unattributed write is never a misattributed one.
+  // A present-invalid binding is known run-bound state, not genuine absence.
+  // Never downgrade its bearer to an ordinary runless call after authoritative
+  // verification fails. Signed OBO retains precedence; truly absent ordinary
+  // callers retain their existing behavior. The header cutover flag cannot
+  // disable this durable refusal.
   const denied =
-    input.failClosed === true &&
     verifiedRunId === undefined &&
-    legacyChannel !== undefined;
+    (suppressed || (input.failClosed === true && legacyChannel !== undefined));
   const deniedChannel = denied ? legacyChannel : undefined;
 
   // Under denial the legacy channel is dropped as a UNIT (run id + provenance),
