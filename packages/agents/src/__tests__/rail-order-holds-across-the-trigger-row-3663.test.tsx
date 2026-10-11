@@ -437,6 +437,19 @@ async function readScheduleScreen(): Promise<HeadRow[]> {
   return head;
 }
 
+/** The same page with no required form, before any review/output storage row. */
+async function readZeroInputRunPage(moment: "b" | "c", carriesSchedule: boolean): Promise<HeadRow[]> {
+  atMoment(moment);
+  if (carriesSchedule) {
+    triggerRow.row = { triggerType: "scheduled", releasedAt: null };
+  }
+  const tree = await SetupScreen({ agentId: "blog-draft-writer", instanceId: RUN_ID });
+  const { container } = render(tree as React.ReactElement);
+  const head = readHead(container, true);
+  cleanup();
+  return head;
+}
+
 /** The titles a reading draws, in the drawing's order and nothing else. */
 function expectDrawnOrder(head: readonly HeadRow[]): void {
   const titles = head.map((entry) => entry.title);
@@ -450,6 +463,7 @@ function expectDrawnOrder(head: readonly HeadRow[]): void {
 
 beforeEach(() => {
   vi.stubGlobal("EventSource", StubEventSource);
+  INPUT_SCHEMA.required = ["brief"];
   row.isChild = false;
   TEMPLATE.approvalPolicy.steps = [{ stepNumber: 1, xRenderer: "cinatra/review", name: "Draft the post" }];
   atMoment("a");
@@ -535,6 +549,60 @@ describe("cinatra#3246 — the loading state never removes the entries this leg 
       expect({ moment, titles: titles.filter((t) => t === "Skills" || t === "Setup") }).toEqual({
         moment,
         titles: ["Skills", "Setup"],
+      });
+    }
+  });
+});
+
+describe("cinatra#3246 — zero-input runs retain their declared Review during loading", () => {
+  it("keeps the complete zero-input census with the run's real Schedule at queued and running", async () => {
+    INPUT_SCHEMA.required = [];
+    for (const moment of ["b", "c"] as const) {
+      const head = await readZeroInputRunPage(moment, true);
+      expect({ moment, entries: head.map((entry) => [entry.title, entry.numeral]) }).toEqual({
+        moment,
+        entries: [["Skills", null], ["Schedule", 1], ["Draft the post", 2], ["Review", 3]],
+      });
+      expect(head[0].settled).toBe("true");
+      expect(head.some((entry) => entry.title === "Setup")).toBe(false);
+    }
+  });
+
+  it("keeps a zero-input child's declared Review without inventing its parent's Schedule", async () => {
+    INPUT_SCHEMA.required = [];
+    row.isChild = true;
+    for (const moment of ["b", "c"] as const) {
+      const head = await readZeroInputRunPage(moment, false);
+      expect({ moment, entries: head.map((entry) => [entry.title, entry.numeral]) }).toEqual({
+        moment,
+        entries: [["Skills", null], ["Draft the post", 1], ["Review", 2]],
+      });
+      expect(head[0].settled).toBe("true");
+    }
+  });
+
+  it("adds neither Schedule nor Review to a zero-input child with no declared review", async () => {
+    INPUT_SCHEMA.required = [];
+    row.isChild = true;
+    TEMPLATE.approvalPolicy.steps = [];
+    for (const moment of ["b", "c"] as const) {
+      const head = await readZeroInputRunPage(moment, false);
+      expect({ moment, entries: head.map((entry) => [entry.title, entry.numeral]) }).toEqual({
+        moment,
+        entries: [["Skills", null]],
+      });
+    }
+  });
+
+  it("forecasts no work, Schedule or Review for a disabled zero-input child Review", async () => {
+    INPUT_SCHEMA.required = [];
+    row.isChild = true;
+    Object.assign(TEMPLATE.approvalPolicy.steps[0], { firesRendererGate: false });
+    for (const moment of ["b", "c"] as const) {
+      const head = await readZeroInputRunPage(moment, false);
+      expect({ moment, entries: head.map((entry) => [entry.title, entry.numeral]) }).toEqual({
+        moment,
+        entries: [["Skills", null]],
       });
     }
   });

@@ -2429,6 +2429,11 @@ export async function SetupScreen({
   // still owes setup. Already-answered inputs do not imply an absent schedule
   // is ahead. A child never owes its parent's scheduling choice.
   const runStillOwesInput = runInputSteps.some((step) => !step.answered);
+  // A declared or pending Review stays ahead even when this run asks no input.
+  const runStillOwesReview =
+    policySteps.some((step) => step.xRenderer === "cinatra/review" && step.firesRendererGate !== false) ||
+    railGates.some((gate) => gate.status === "pending") ||
+    initialReviewGate?.awaiting === true;
   const runCarriesStillToComeKeys =
     runInsideExecutionWithNothingYet &&
     (inputStepsInRail || hasRecommendationStep)
@@ -2441,11 +2446,11 @@ export async function SetupScreen({
               : []),
             ...(railGates.some((gate) => gate.status === "pending") ||
             initialReviewGate?.awaiting === true ||
-            (runStillOwesInput && policySteps.some((step) => step.xRenderer === "cinatra/review" && step.firesRendererGate !== false))
+            policySteps.some((step) => step.xRenderer === "cinatra/review" && step.firesRendererGate !== false)
               ? (["review"] as const)
               : []),
           ],
-          throughTheLoadingMoment: runStillOwesInput,
+          throughTheLoadingMoment: runStillOwesInput || runStillOwesReview,
         }
       // Keep child forecasts restricted before dispatch too. The parent's
       // schedule is never a step this run will take, and a review with neither
