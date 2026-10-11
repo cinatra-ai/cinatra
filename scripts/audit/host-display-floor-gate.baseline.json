@@ -1,47 +1,10 @@
 {
   "note": "Host display floor (cinatra#3821): the places where the application draws an artifact's content itself, or a step of one agent, instead of the extension that owns it. Each entry names its owner (the extension or the item that takes it over). SHRINK-ONLY: a new key or a grown count fails; a fallen count is stale until `node scripts/audit/host-display-floor-gate.mjs --write-baseline` ratchets it down (it refuses growth). See scripts/audit/host-display-floor.md.",
-  "handlerKinds": {
-    "dispatch :: audio": {
-      "owner": "cinatra#3319"
-    },
-    "dispatch :: image": {
-      "owner": "cinatra#3319"
-    },
-    "dispatch :: markdown": {
-      "owner": "cinatra#3319"
-    },
-    "dispatch :: pdf": {
-      "owner": "cinatra#3319"
-    },
-    "dispatch :: text": {
-      "owner": "cinatra#3319"
-    },
-    "dispatch :: video": {
-      "owner": "cinatra#3319"
-    },
-    "review-form :: markdown": {
-      "owner": "cinatra#3319"
-    },
-    "review-form :: text": {
-      "owner": "cinatra#3319"
-    }
-  },
+  "handlerKinds": {},
   "displays": {
     "src/app/artifacts/[id]/dashboard-pointer-detail.tsx": {
       "owner": "@cinatra-ai/dashboard-artifact",
       "removedBy": "none filed; the dashboard pointer is held by the ruling recorded for the dashboard type in the data-contract allowlist"
-    },
-    "src/app/artifacts/[id]/handlers/fallback-handler.tsx": {
-      "owner": "application generic floor",
-      "removedBy": "cinatra#3319"
-    },
-    "src/app/artifacts/[id]/handlers/markdown-handler.tsx": {
-      "owner": "@cinatra-ai/markdown-artifact",
-      "removedBy": "cinatra#3319"
-    },
-    "src/app/artifacts/[id]/handlers/plain-text-handler.tsx": {
-      "owner": "@cinatra-ai/text-artifact",
-      "removedBy": "cinatra#3319"
     }
   },
   "stepRenderers": {
@@ -178,46 +141,8 @@
         "src/lib/dashboards/dashboard-artifact-surface"
       ],
       "owner": "@cinatra-ai/dashboard-artifact"
-    },
-    "src/app/artifacts/[id]/handlers/fallback-handler.tsx": {
-      "topLevel": 1,
-      "imports": [
-        "lucide-react",
-        "next/link",
-        "src/components/ui/button",
-        "src/components/ui/card"
-      ],
-      "owner": "application generic floor"
-    },
-    "src/app/artifacts/[id]/handlers/markdown-handler.tsx": {
-      "topLevel": 3,
-      "imports": [
-        "@cinatra-ai/agents/readme-render",
-        "server-only",
-        "src/lib/artifacts/artifact-read",
-        "src/lib/artifacts/local-disk-blob-store"
-      ],
-      "owner": "@cinatra-ai/markdown-artifact"
-    },
-    "src/app/artifacts/[id]/handlers/plain-text-handler.tsx": {
-      "topLevel": 3,
-      "imports": [
-        "server-only",
-        "src/lib/artifacts/artifact-read",
-        "src/lib/artifacts/local-disk-blob-store"
-      ],
-      "owner": "@cinatra-ai/text-artifact"
     }
   },
   "mimeConstructions": {},
-  "hostMounts": {
-    "src/app/artifacts/[id]/review-target-prepare.ts :: form-mount": {
-      "count": 1,
-      "owner": "cinatra#3319"
-    },
-    "src/lib/artifacts/artifact-review-preparation.ts :: form-mount": {
-      "count": 1,
-      "owner": "cinatra#3319"
-    }
-  }
+  "hostMounts": {}
 }

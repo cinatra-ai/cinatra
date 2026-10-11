@@ -77,7 +77,7 @@ const q = (s: string) => `"${s.replaceAll('"', '""')}"`;
 
 const DECLARED_TABLES = [
   {
-    name: "idea_drafts",
+    name: "seam_rows",
     organizationColumn: "org_id",
     columns: [
       { name: "id", type: "text", notNull: true, primaryKey: true },
@@ -85,7 +85,7 @@ const DECLARED_TABLES = [
       { name: "run_id", type: "text", notNull: true },
       { name: "state", type: "text", notNull: true },
     ],
-    indexes: [{ name: "idea_drafts_by_run", columns: ["org_id", "run_id"] }],
+    indexes: [{ name: "seam_rows_by_run", columns: ["org_id", "run_id"] }],
   },
 ];
 
@@ -188,7 +188,7 @@ beforeAll(async () => {
     "@cinatra-ai/sdk-extensions/manifest"
   );
   roleName = extensionDatabaseRoleName(PACKAGE);
-  physicalTable = declaredTablePhysicalName(PACKAGE, "idea_drafts");
+  physicalTable = declaredTablePhysicalName(PACKAGE, "seam_rows");
   await admin.query(`DROP ROLE IF EXISTS ${q(roleName)}`);
 
   readAgentTemplateByPackageNameMock.mockResolvedValue({

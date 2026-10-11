@@ -452,6 +452,15 @@ export async function saveArtifactEdit(
   return postArtifactEditRequest(capability, buildArtifactEditRequest(capability, text), deps);
 }
 
+/** The window event the one title-save road announces once a title is saved. */
+export const ARTIFACT_TITLE_SAVED_EVENT = "cinatra:artifact:title-saved";
+
+/**
+ * What that event carries: the artifact whose title was saved, the revision that
+ * holds it, and `title`, the title the save sent and the host answered saved.
+ */
+export type ArtifactTitleSavedDetail = { artifactId: string; revisionId: string; title: string };
+
 /**
  * SEND one TITLE change, and answer with exactly one outcome (cinatra#3814).
  *
@@ -476,7 +485,30 @@ export async function saveArtifactTitleEdit(
   if (artifactEditByteLength(title) > capability.capBytes) {
     return { outcome: "refused", reason: "over-cap" };
   }
-  return postArtifactEditRequest(capability, buildArtifactTitleEditRequest(capability, title), deps);
+  const outcome = await postArtifactEditRequest(
+    capability,
+    buildArtifactTitleEditRequest(capability, title),
+    deps,
+  );
+  // THE OPEN PAGE'S HEADING TAKES THE SAVED TITLE FROM THIS ANNOUNCEMENT
+  // (cinatra#3886): a saved title is announced once, with the title itself, for
+  // every display alike, and nothing re-reads the page, because a re-read would
+  // hand the open display a capability minted on a newer revision in the middle
+  // of its edit. A text save announces nothing. A runtime without events (a
+  // server render, a node test) does nothing and never throws.
+  if (
+    outcome.outcome === "saved" &&
+    typeof globalThis.dispatchEvent === "function" &&
+    typeof globalThis.CustomEvent === "function"
+  ) {
+    const detail: ArtifactTitleSavedDetail = {
+      artifactId: capability.artifactId,
+      revisionId: outcome.revisionId,
+      title,
+    };
+    globalThis.dispatchEvent(new CustomEvent(ARTIFACT_TITLE_SAVED_EVENT, { detail }));
+  }
+  return outcome;
 }
 
 /** The one transport both saves share: post, read the status, then the body. */

@@ -38,7 +38,7 @@ import {
 } from "./page-controls.mjs";
 import { PRESS_BOUNDS, PRESS_ROLES, ROLE_WORDS } from "./press.mjs";
 import { pressAndSettle } from "./press-settle.mjs";
-import { READING_BOUND_MS, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, pathOf, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "pressByTestId";
 
@@ -98,6 +98,7 @@ export async function pressByTestId(page, { testId, text, within: scope, record,
     throw refuse(STEP, record, "input", `name the scope by the name of a landmark, a heading or a labelled section, such as Settings — ${nothing}`);
   }
   const bound = readBounds(STEP, record, PRESS_BY_TEST_ID_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const id = quotedName(testId);
   const shows = quotedName(wanted);
 

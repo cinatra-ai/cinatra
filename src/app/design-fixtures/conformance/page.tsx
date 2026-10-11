@@ -1,3 +1,4 @@
+import { AgentRunEligibilityFixtures } from "./agent-run-eligibility-fixtures";
 import type { Metadata } from "next";
 
 import { Main } from "@/components/layout/main";
@@ -115,6 +116,7 @@ export default function ConformanceHarnessPage() {
       />
       <PageContent className="flex flex-col gap-8 pb-12">
         <ToastConformanceFixture />
+        <AgentRunEligibilityFixtures />
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>Status pills (surface: status-pills)</CardTitle>

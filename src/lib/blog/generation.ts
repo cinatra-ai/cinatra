@@ -11,10 +11,7 @@ import {
   saveGeneratedIdeas,
   saveWordPressDraftReference,
   updateLinkedInDraftReference,
-  updateBlogPostDraftImage,
   updateBlogPostDraftGenerationState,
-  updateBlogPostImageGenerationState,
-  markBlogPostImageGenerationStoppedIfRunning,
   updateBlogPostIdeaGenerationState,
   updateBlogPostLinkedInDraftGenerationState,
   updateBlogPostWordPressDraftGenerationState,
@@ -25,10 +22,8 @@ import {
   getDefaultBlogPostWordPressDraftState,
   readBlogPostsProjectById,
 } from "./store";
-import { generateBlogPostImage } from "./gemini";
 import { projectLinkedinMemberPostDraft } from "./member-post-draft-projection";
 import { publishBlogPostDraftToWordPress } from "./wordpress";
-import { resolveBlogDashboardUrl } from "./dashboard-url";
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { createBlogContentPrimitiveHandlers } from "./mcp/handlers";
 import { createInProcessPrimitiveTransport } from "@cinatra-ai/mcp-client";
@@ -36,17 +31,14 @@ import { createInProcessPrimitiveTransport } from "@cinatra-ai/mcp-client";
 // The asset-blog `blog_post_publish_linkedin_*` primitives remain compatibility
 // wrappers: only the actual provider/transport call routes through the facade;
 // project state and HITL lifecycle stay in asset-blog.
-// Both facades resolve through the capability registry at call time
+// The facade resolves through the capability registry at call time
 // (lazy/guarded host-access cutover): `social-media-system` for the LinkedIn
-// publish step, `blog-system` for image materialization. Absence fails the
-// respective pipeline step with a descriptive error (existing failure paths).
+// publish step. Absence fails that pipeline step with a descriptive error
+// (existing failure paths).
 import { requireSocialMediaSystem } from "@/lib/social-media-system-provider";
-import { requireBlogSystem } from "@/lib/blog-system-provider";
-// Post body and idea summary live in semantic artifacts; resolve via the
-// reader helpers when image regeneration, WordPress publishing, or LinkedIn
-// publishing flows need the body string.
+// The post body lives in a semantic artifact; resolve via the reader helper
+// when WordPress publishing or LinkedIn publishing flows need the body string.
 import { readBlogPostBodyArtifactBytes } from "@/lib/blog-post-artifact-materializer";
-import { readBlogIdeaArtifactBytes } from "@/lib/blog-idea-artifact-materializer";
 // The WordPress client is CONNECTOR-owned since cinatra#975 Wave 3 — the
 // draft status/delete flows resolve the relocated client lazily and FAIL LOUD
 // (descriptive error through the existing failure paths) when the owning
@@ -114,167 +106,6 @@ export async function readBlogPostsProjectGenerationState(projectId: string) {
     wordpressDraftGeneration: project?.wordpressDraftGeneration ?? getDefaultBlogPostWordPressDraftState(),
     linkedinDraftGeneration: project?.linkedinDraftGeneration ?? getDefaultBlogPostLinkedInDraftState(),
   };
-}
-
-export async function startBlogPostImageRegeneration(input: { projectId: string; postId: string; customPrompt?: string }) {
-  const project = await readBlogPostsProjectById(input.projectId);
-  if (!project) {
-    throw new Error("Blog posts project not found.");
-  }
-
-  if (project.imageGeneration.status === "running") {
-    if (project.imageGeneration.jobId && (await isBackgroundJobActive(project.imageGeneration.jobId))) {
-      return project.imageGeneration;
-    }
-    await updateBlogPostImageGenerationState(project.id, getDefaultBlogPostImageGenerationState());
-  }
-
-  const post = project.posts.find((entry) => entry.id === input.postId);
-  if (!post) {
-    throw new Error("Blog post draft not found.");
-  }
-
-  const idea = project.ideas.find((entry) => entry.id === post.ideaId);
-  const jobId = await enqueueBackgroundJob(BACKGROUND_JOB_NAMES.BLOG_POST_IMAGE_REGENERATION, {
-    projectId: project.id,
-    postId: post.id,
-    customPrompt: input.customPrompt,
-  });
-
-  const runningState = {
-    status: "running" as const,
-    message: "Gemini is generating a new blog post image.",
-    updatedAt: new Date().toISOString(),
-    jobId,
-    postId: post.id,
-    postTitle: post.title,
-  };
-  await updateBlogPostImageGenerationState(project.id, runningState);
-
-  return runningState;
-}
-
-export async function runBlogPostImageRegenerationJob(
-  input: { projectId: string; postId: string; customPrompt?: string },
-  _jobId: string,
-) {
-  const project = await readBlogPostsProjectById(input.projectId);
-  if (!project) {
-    throw new Error("Blog posts project not found.");
-  }
-
-  const post = project.posts.find((entry) => entry.id === input.postId);
-  if (!post) {
-    throw new Error("Blog post draft not found.");
-  }
-
-  const idea = project.ideas.find((entry) => entry.id === post.ideaId);
-  const runningState = {
-    status: "running" as const,
-    message: "Gemini is generating a new blog post image.",
-    updatedAt: new Date().toISOString(),
-    jobId: _jobId,
-    postId: post.id,
-    postTitle: post.title,
-  };
-  const controller = new AbortController();
-  registerBackgroundJobAbortController(_jobId, controller);
-
-  try {
-    throwIfAborted(controller.signal);
-    // Resolve body bytes server-side. Falls back to the post excerpt when refs
-    // are absent (e.g. a freshly seeded project without materialized body).
-    const ideaSummaryBytes =
-      idea?.summaryArtifactId && idea.summaryRepresentationRevisionId
-        ? await readBlogIdeaArtifactBytes({
-            artifactId: idea.summaryArtifactId,
-            representationRevisionId: idea.summaryRepresentationRevisionId,
-          })
-        : null;
-    const postBodyBytes =
-      post.postArtifactId && post.postRepresentationRevisionId
-        ? await readBlogPostBodyArtifactBytes({
-            artifactId: post.postArtifactId,
-            representationRevisionId: post.postRepresentationRevisionId,
-          })
-        : null;
-    const image = await generateBlogPostImage({
-      companyUrl: project.companyUrl,
-      projectName: project.name,
-      ideaTitle: post.title,
-      ideaSummary: ideaSummaryBytes?.summary ?? post.excerpt,
-      blogPostContent: postBodyBytes?.body ?? "",
-      customPrompt: input.customPrompt,
-    });
-    throwIfAborted(controller.signal);
-
-    // Regeneration mints a new artifact id because each materialization is a
-    // fresh `createSemanticArtifact` call. Post-record refs are swapped to the
-    // new pair; the previous artifact remains in `/artifacts` for replay.
-    const imageMaterialization = await requireBlogSystem().materializeBlogImage({
-      imageBase64: image.imageBase64,
-      imageMimeType: image.imageMimeType,
-      title: post.title,
-    });
-
-    await updateBlogPostImageGenerationState(project.id, {
-      ...runningState,
-      message: "Saving regenerated blog post image.",
-    });
-
-    await updateBlogPostDraftImage({
-      projectId: project.id,
-      postId: post.id,
-      imageArtifactId: imageMaterialization.artifactId,
-      imageRepresentationRevisionId: imageMaterialization.representationRevisionId,
-      imagePrompt: image.imagePrompt,
-    });
-
-    await updateBlogPostImageGenerationState(project.id, {
-      status: "succeeded",
-      message: "Generated a new blog post image.",
-      updatedAt: new Date().toISOString(),
-      jobId: _jobId,
-      postId: post.id,
-      postTitle: post.title,
-    });
-
-    const workerActor = getActorContext();
-    // Without an actor we can't resolve the specific dashboard-detail row; fall
-    // back to `/artifacts` (the retired `/dashboards` directory page has no
-    // redirect — cinatra#2058), where the dashboard is discoverable.
-    const dashboardHref = workerActor
-      ? await resolveBlogDashboardUrl(workerActor, project.id)
-      : "/artifacts";
-    await createNotification({
-      title: "Blog post image regenerated",
-      body: `Generated a new hero image for "${post.title}".`,
-      kind: "success",
-      href: dashboardHref,
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      await updateBlogPostImageGenerationState(project.id, {
-        status: "stopped",
-        message: "Blog post image generation stopped.",
-        updatedAt: new Date().toISOString(),
-        jobId: _jobId,
-        postId: post.id,
-        postTitle: post.title,
-      });
-      return;
-    }
-    await updateBlogPostImageGenerationState(project.id, {
-      status: "failed",
-      message: error instanceof Error ? error.message : "Unable to regenerate the image.",
-      updatedAt: new Date().toISOString(),
-      jobId: _jobId,
-      postId: post.id,
-      postTitle: post.title,
-    });
-  } finally {
-    unregisterBackgroundJobAbortController(_jobId);
-  }
 }
 
 export async function startWordPressDraftCreation(input: {
@@ -877,35 +708,6 @@ export async function stopBlogPostDraftGeneration(projectId: string) {
     message: "Blog post generation stopped.",
     updatedAt: new Date().toISOString(),
   });
-  return await readBlogPostsProjectById(projectId);
-}
-
-export async function stopBlogPostImageRegeneration(projectId: string) {
-  const project = await readBlogPostsProjectById(projectId);
-  if (!project) {
-    throw new Error("Blog posts project not found.");
-  }
-  // Terminal-state guard (mirrors stopLinkedInDraftGeneration). Without it a
-  // cancel racing job completion clobbers a succeeded/failed status with
-  // `stopped`, erasing the outcome of an already-finished job — and, in the
-  // dashboard portlet's manual refSwapMode, suppressing the keep/revert gate
-  // even though the new image was already applied by the pipeline.
-  const currentStatus = project.imageGeneration.status;
-  if (
-    currentStatus === "succeeded" ||
-    currentStatus === "failed" ||
-    currentStatus === "stopped"
-  ) {
-    return project;
-  }
-  if (project.imageGeneration.jobId) {
-    await cancelBackgroundJob(project.imageGeneration.jobId);
-  }
-  // The worker may have committed a terminal state (e.g. `succeeded`) while
-  // the cancel round-trip above was in flight. The store-level conditional
-  // transition re-checks and writes in ONE synchronous block (no await
-  // boundary), so an already-terminal outcome is never clobbered.
-  await markBlogPostImageGenerationStoppedIfRunning(project.id, "Blog post image generation stopped.");
   return await readBlogPostsProjectById(projectId);
 }
 

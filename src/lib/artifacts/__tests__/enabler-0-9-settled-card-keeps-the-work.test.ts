@@ -88,7 +88,11 @@ function basePorts(
       consulted.push("member-historical");
       return reads.historicalMember;
     },
-    resolveMount: () => ({ kind: "form", arm: "first-party", form: "markdown" }),
+    resolveMount: () => ({
+      kind: "build-map",
+      packageName: "@cinatra-ai/markdown-artifact",
+      generatedKey: "@cinatra-ai/markdown-artifact::detail",
+    }),
     buildProps: (input) =>
       ({
         propsApiVersion: input.propsApiVersion,
@@ -143,7 +147,10 @@ describe("enabler 0.9 — the gate-authorized historical reader", () => {
     if (!result.ok) return;
     // The work is on screen: a real mount over the pinned revision, not the
     // `unknown-or-tombstoned` floor the live artifact read produces.
-    expect(result.prepared[0].mount).toMatchObject({ kind: "form", form: "markdown" });
+    expect(result.prepared[0].mount).toMatchObject({
+      kind: "build-map",
+      packageName: "@cinatra-ai/markdown-artifact",
+    });
     expect(result.prepared[0].props).not.toBeNull();
     expect(result.prepared[0].props?.representation?.revisionId).toBe(TARGET.representationRevisionId);
     // BOTH reads went historical, and neither live reader ran.
@@ -158,7 +165,10 @@ describe("enabler 0.9 — the gate-authorized historical reader", () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.prepared[0].mount).toMatchObject({ kind: "form", form: "markdown" });
+    expect(result.prepared[0].mount).toMatchObject({
+      kind: "build-map",
+      packageName: "@cinatra-ai/markdown-artifact",
+    });
     expect(consulted).toEqual(["artifact-historical", "member-historical"]);
   });
 

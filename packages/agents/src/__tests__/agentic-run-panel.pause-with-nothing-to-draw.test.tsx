@@ -52,13 +52,15 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock("lucide-react", () => {
+vi.mock("lucide-react", async () => {
+  const actual = await vi.importActual<typeof import("lucide-react")>("lucide-react");
   const StubIcon = () => null;
   return new Proxy({} as Record<string, () => null>, {
     get: (_t, prop) => {
       if (prop === "__esModule") return true;
       if (prop === "then") return undefined;
       if (typeof prop === "symbol") return undefined;
+      if (prop === "Loader2Icon") return actual.Loader2Icon;
       return StubIcon;
     },
     has: () => true,

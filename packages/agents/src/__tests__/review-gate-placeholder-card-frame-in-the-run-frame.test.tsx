@@ -14,13 +14,10 @@
  * `border: 1px solid var(--line); border-radius: 12px;
  *  background: var(--surface-strong); padding: 18px 20px`.
  *
- * WHAT PICTURE ROUND 2 MEASURED. On the run page the rail draws the frame, so
- * the slot's box gives up its card chrome (fix leg 14: a detail never holds one
- * card inside another), and the placeholder drew none of its own - its heading
- * and its arc stood on the page ground. The frame goes on the placeholder's OWN
- * root, because the box's observer reads every other child of the box as "the
- * card has drawn".
- *
+ * App262 for #3242 clarifies the frame is the SLOT'S throughout the swap.
+ * The rail is a layout, and the placeholder and review draw only content in
+ * the same .runcard, so neither a lost ground nor a nested frame can appear.
+
  * Run:
  *   cd packages/agents && pnpm exec vitest run --no-coverage \
  *     src/__tests__/review-gate-placeholder-card-frame-in-the-run-frame.test.tsx
@@ -39,10 +36,12 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock("lucide-react", () => {
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("lucide-react")>();
   const StubIcon = () => null;
   return new Proxy({} as Record<string, () => null>, {
     get: (_t, prop) => {
+      if (prop === "Loader2Icon" || prop === "Loader2") return actual.Loader2Icon;
       if (prop === "__esModule") return true;
       if (prop === "then") return undefined;
       if (typeof prop === "symbol") return undefined;
@@ -238,6 +237,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.documentElement.classList.remove("dark", "cinatra");
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   vi.useRealTimers();
@@ -259,14 +259,17 @@ afterAll(() => {
 });
 
 describe("the working placeholder inside the rail's frame is the drawn run card (cinatra#3007, fix leg 20)", () => {
-  // F1 - the placeholder's own root carries the drawn card frame on the run page.
-  it("F1: inside the rail's frame the placeholder's own root draws the card frame - the line border, the 12px radius, the surface-strong ground and the drawn padding", async () => {
+  // F1 - the slot keeps the drawn frame around the placeholder on the run page.
+  it.each(["light", "dark"])("F1: inside the rail the slot draws the card frame around the unframed placeholder and arc (%s)", async (palette) => {
+    document.documentElement.classList.add(palette === "dark" ? "dark" : "cinatra");
     stubTransport(workingRow);
     await mountPanel(true);
     const root = await placeholderRoot();
-    const classes = classesOf(root);
+    const box = document.querySelector<HTMLElement>(SLOT)!;
+    const classes = classesOf(box);
+    expect(root.getAttribute("class") ?? "").not.toMatch(CARD_CHROME);
     for (const token of DRAWN_FRAME) {
-      expect(classes, `the placeholder's root is missing ${token} (it reads "${classes.join(" ")}")`).toContain(token);
+      expect(classes, `the slot is missing ${token} (it reads "${classes.join(" ")}")`).toContain(token);
     }
     // The heading and the arc stand INSIDE that root.
     expect(root.textContent).toContain("Agentic Run Progress");
@@ -274,13 +277,15 @@ describe("the working placeholder inside the rail's frame is the drawn run card 
   });
 
   // F1g - GUARDS, green before the change and after it.
-  it("F1g: the slot's box inside the rail's frame carries no card chrome of its own, so the frame is drawn once", async () => {
+  it("F1g: the slot owns the only frame and its placeholder adds no chrome", async () => {
     stubTransport(workingRow);
     await mountPanel(true);
     await placeholderRoot();
     const box = document.querySelector<HTMLElement>(SLOT);
     expect(box).not.toBeNull();
-    expect(box!.getAttribute("class") ?? "").not.toMatch(CARD_CHROME);
+    for (const token of DRAWN_FRAME) expect(classesOf(box!)).toContain(token);
+    const placeholder = box!.querySelector(PLACEHOLDER);
+    if (placeholder) expect(placeholder.getAttribute("class") ?? "").not.toMatch(CARD_CHROME);
   });
 
   it("F1g: off the rail's frame the box keeps its measured card frame and the placeholder draws none of its own", async () => {
@@ -301,7 +306,8 @@ describe("the working placeholder inside the rail's frame is the drawn run card 
     expect(root!.getAttribute("class")).toBe("flex w-full flex-col gap-3");
   });
 
-  it("F1g: once the review card has drawn, no placeholder and no frame of it remains in the box", async () => {
+  it.each(["light", "dark"])("F1g: once the real review card has drawn, no placeholder or spinning arc remains (%s)", async (palette) => {
+    document.documentElement.classList.add(palette === "dark" ? "dark" : "cinatra");
     stubTransport(parkedRow);
     streamState.status = "pending_approval";
     await mountPanel(true);
@@ -314,7 +320,10 @@ describe("the working placeholder inside the rail's frame is the drawn run card 
     );
     const box = document.querySelector<HTMLElement>(SLOT);
     expect(box!.getAttribute("data-run-review-slot")).toBe("review");
-    expect(box!.getAttribute("class") ?? "").not.toMatch(CARD_CHROME);
+    for (const token of DRAWN_FRAME) expect(classesOf(box!)).toContain(token);
+    const placeholder = box!.querySelector(PLACEHOLDER);
+    if (placeholder) expect(placeholder.getAttribute("class") ?? "").not.toMatch(CARD_CHROME);
+    expect(box!.querySelector("svg.animate-spin")).toBeNull();
     const framedChildren = Array.from(box!.children).filter((child) =>
       DRAWN_FRAME.every((token) => classesOf(child).includes(token)),
     );

@@ -16,7 +16,9 @@
 import { useEffect, useRef } from "react";
 import type { ReactElement } from "react";
 
-import { islandContentHeight, reviewIslandHeightMessage } from "./island-height-report";
+import { islandContentHeight, reviewIslandHeightMessage, parseReviewIslandFrameName, reviewIslandProgressMessage, type ReviewIslandProgressType } from "./island-height-report";
+import { islandPaletteClass } from "./island-color-scheme";
+import { parseReviewIslandPalette } from "./island-palette-message";
 
 export function IslandHeightReporter(): ReactElement {
   const marker = useRef<HTMLSpanElement>(null);
@@ -27,6 +29,20 @@ export function IslandHeightReporter(): ReactElement {
     const view = container?.ownerDocument?.defaultView ?? null;
     // Not framed — the island opened directly. There is nobody to tell.
     if (!container || !view || view.parent === view) return;
+
+    // Repaint the current work while a palette-address navigation is arriving.
+    // Neither another frame nor a foreign origin may repaint this island.
+    const onPalette = (event: MessageEvent) => {
+      if (event.origin !== view.location.origin || event.source !== view.parent) return;
+      const scheme = parseReviewIslandPalette(event.data);
+      if (scheme === null) return;
+      container.classList.remove("cinatra", "dark");
+      container.classList.add(islandPaletteClass(scheme), "min-h-dvh", "text-foreground");
+      container.dataset.islandColorScheme = scheme;
+      container.style.colorScheme = scheme;
+      container.ownerDocument.documentElement.style.colorScheme = scheme;
+    };
+    view.addEventListener("message", onPalette);
 
     let last = -1;
     const report = () => {
@@ -71,6 +87,7 @@ export function IslandHeightReporter(): ReactElement {
       sizes?.disconnect();
       children?.disconnect();
       view.removeEventListener("load", onLoad);
+      view.removeEventListener("message", onPalette);
     };
   }, []);
 
@@ -82,4 +99,39 @@ export function IslandHeightReporter(): ReactElement {
       data-conformance-id="review-target-island-height-reporter"
     />
   );
+}
+
+function postProgress(type: ReviewIslandProgressType): void {
+  if (typeof window === "undefined") return;
+  // The card's stamp on THIS frame. A document nobody framed — or one framed by
+  // something that is not the card — has no attempt to name and stays silent.
+  const attempt = parseReviewIslandFrameName(window.name);
+  if (attempt === null) return;
+  // `*`, deliberately: the message is data-free (the channel, the event and the
+  // attempt), and this document is never told the origin of the surface that
+  // frames it — first-party it is the app's own, inside the widget it is a
+  // third-party site's. The card is the side that checks provenance, and it
+  // checks all three of origin, source frame and attempt.
+  window.parent.postMessage(reviewIslandProgressMessage(type, attempt), "*");
+}
+
+/**
+ * "The island document is answering." Posted BEFORE any panel work — it is the
+ * first child of the body — so the card can cancel its initial-response bound
+ * and start watching for progress instead.
+ */
+export function IslandReadySignal(): null {
+  useEffect(() => {
+    postProgress("island-ready");
+  }, []);
+  return null;
+}
+
+/** "A panel arrived." Posted as each target's panel mounts, which restarts the
+ *  card's idle-progress bound: a gate that is still streaming is never plated. */
+export function IslandPanelMountedSignal(): null {
+  useEffect(() => {
+    postProgress("panel-mounted");
+  }, []);
+  return null;
 }

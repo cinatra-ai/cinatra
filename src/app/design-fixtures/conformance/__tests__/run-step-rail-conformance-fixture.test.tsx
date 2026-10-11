@@ -48,12 +48,13 @@ describe("the run step rail harness mount's settled gate", () => {
     const row = settledRow();
     // The browser driver's reading: a case-sensitive substring of the row.
     expect(row.textContent).toContain(RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION);
-    // And the badge itself says exactly that word, in its text and attribute.
-    const badge = row.querySelector("[data-rail-gate-settlement]");
-    expect(badge, "the settled row draws its settlement badge").not.toBeNull();
-    expect(badge!.textContent).toBe(RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION);
-    expect(badge!.getAttribute("data-rail-gate-settlement")).toBe(
-      RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION,
-    );
+    const title = row.querySelector('[data-slot="stepper-title"]');
+    expect(title, "the settled row draws one plain text title").not.toBeNull();
+    expect(title!.textContent).toBe(`Review · ${RUN_STEP_RAIL_CONFORMANCE_SETTLED_DISPOSITION}`);
+    expect(title!.childElementCount).toBe(0);
+    // The canonical metadata remains separate from the lowercase drawn word.
+    const settlement = row.querySelector("[data-rail-gate-settlement]");
+    expect(settlement).not.toBeNull();
+    expect(settlement!.getAttribute("data-rail-gate-settlement")).toBe("Continued");
   });
 });

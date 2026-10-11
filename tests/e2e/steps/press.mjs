@@ -41,7 +41,7 @@ import {
   waitForPageHydration,
 } from "./page-controls.mjs";
 import { pressAndSettle } from "./press-settle.mjs";
-import { READING_BOUND_MS, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, pathOf, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "press";
 
@@ -115,6 +115,7 @@ export async function press(page, { name, role = "button", within: scope, record
     throw refuse(STEP, record, "input", `name the scope by the name of a landmark, a heading or a labelled section, such as Settings — ${nothing}`);
   }
   const bound = readBounds(STEP, record, PRESS_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const [word, words] = ROLE_WORDS[role];
   const named = quotedName(wanted);
   const checks = CHECKED_ROLES.includes(role);

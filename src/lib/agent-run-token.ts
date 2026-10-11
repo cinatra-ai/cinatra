@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Run-token spine — the dispatch-minted per-run credential (#1193).
@@ -114,4 +114,123 @@ export async function verifyRunToken(
     return { ok: false, reason: "unresolvable" };
   }
   return { ok: true, run };
+}
+
+// ---------------------------------------------------------------------------
+// Step identity of a run's calls (cinatra#3745).
+//
+// The flow runtime (docker/wayflow/agent_loader.py) signs the id of the
+// EXECUTING compiled step on each call a run's step makes to the model bridge
+// or to the deterministic passthrough road, with its dedicated key
+// (CINATRA_CONTEXT_ATTEST_KEY) over the run's context id:
+//
+//   X-Cinatra-Step-Node:        <nodeId>
+//   X-Cinatra-Step-Attestation: s1:<expiryEpochSeconds>:<hex>
+//   hex = HMAC-SHA256(key, "s1\n<contextId>\n<nodeId>\n<expiryEpochSeconds>")
+//
+// When a run pauses for a review the runtime records the pausing step as a
+// claim `{ node, attestation: "g1:<hex>" }` over
+// "g1\n<contextId>\n<taskId>\n<nodeId>" on the pause's last message.
+//
+// The version prefixes (`s1`, `g1`) are distinct from the context-resolution
+// pair's (`v1`, `v2`), so material signed for one purpose never verifies for
+// another. The model never holds, sees or chooses the step: only these two
+// verifiers turn a signed value into a step id, and each answers the verified
+// node id or null. A null is "no step"; the caller serves the call as it does
+// without a step.
+// ---------------------------------------------------------------------------
+
+/** The runtime's step-node header (lower-case; `Headers.get` is case-insensitive). */
+export const RUN_STEP_NODE_HEADER = "x-cinatra-step-node";
+
+/** The runtime's step-attestation header (`s1:<expiry>:<hex>`). */
+export const RUN_STEP_ATTESTATION_HEADER = "x-cinatra-step-attestation";
+
+/** Grace for verifier/runtime clock skew: an expiry up to this far in the
+ *  past is still accepted (the context verifier's window). */
+const RUN_STEP_ATTESTATION_SKEW_MS = 60_000;
+
+/** An expiry further ahead than this is not accepted (the context verifier's
+ *  window; the runtime's time to live is 300 seconds). */
+const RUN_STEP_ATTESTATION_MAX_FUTURE_MS = 600_000;
+
+const RUN_STEP_ATTESTATION_PATTERN = /^s1:([0-9]+):([0-9a-fA-F]+)$/;
+const GATE_NODE_CLAIM_PATTERN = /^g1:([0-9a-fA-F]+)$/;
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function hmacHex(key: string, material: string): string {
+  return createHmac("sha256", key).update(material).digest("hex");
+}
+
+/** Constant-time compare of two hex strings (length mismatch answers false). */
+function hexEquals(providedHex: string, expectedHex: string): boolean {
+  const provided = Buffer.from(providedHex.toLowerCase(), "utf8");
+  const expected = Buffer.from(expectedHex, "utf8");
+  if (provided.length !== expected.length) return false;
+  return timingSafeEqual(provided, expected);
+}
+
+/**
+ * Verify the runtime's step pair for one call. Answers the verified node id,
+ * or null when the key, the context id, the node or the attestation is
+ * missing, the attestation is not an `s1` value, the signature does not
+ * verify over (contextId, node, expiry), or the expiry lies more than 60
+ * seconds in the past or more than 600 seconds ahead.
+ */
+export function verifyRunStepAttestation(input: {
+  key: string | null | undefined;
+  contextId: string | null | undefined;
+  node: string | null | undefined;
+  attestation: string | null | undefined;
+  /** Injectable clock (ms); defaults to Date.now(). */
+  nowMs?: number;
+}): string | null {
+  const { key, contextId, node, attestation } = input;
+  if (
+    !nonEmptyString(key) ||
+    !nonEmptyString(contextId) ||
+    !nonEmptyString(node) ||
+    !nonEmptyString(attestation)
+  ) {
+    return null;
+  }
+  const match = RUN_STEP_ATTESTATION_PATTERN.exec(attestation);
+  if (!match) return null;
+  const expiryEpochSeconds = Number(match[1]);
+  if (!Number.isSafeInteger(expiryEpochSeconds)) return null;
+  const expected = hmacHex(key, `s1\n${contextId}\n${node}\n${expiryEpochSeconds}`);
+  if (!hexEquals(match[2]!, expected)) return null;
+  const nowMs = input.nowMs ?? Date.now();
+  const expiryMs = expiryEpochSeconds * 1000;
+  if (nowMs > expiryMs + RUN_STEP_ATTESTATION_SKEW_MS) return null;
+  if (expiryMs > nowMs + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
+  return node;
+}
+
+/**
+ * Verify a recorded pause claim `{ node, attestation: "g1:<hex>" }` for the
+ * gate task it was recorded for. Answers the verified node id, or null for a
+ * missing key, context id or task id, a claim of any other shape, or a
+ * signature that does not verify over (contextId, taskId, node).
+ */
+export function verifyGateNodeClaim(input: {
+  key: string | null | undefined;
+  contextId: string | null | undefined;
+  taskId: string | null | undefined;
+  claim: unknown;
+}): string | null {
+  const { key, contextId, taskId, claim } = input;
+  if (!nonEmptyString(key) || !nonEmptyString(contextId) || !nonEmptyString(taskId)) {
+    return null;
+  }
+  if (!claim || typeof claim !== "object" || Array.isArray(claim)) return null;
+  const { node, attestation } = claim as { node?: unknown; attestation?: unknown };
+  if (!nonEmptyString(node) || !nonEmptyString(attestation)) return null;
+  const match = GATE_NODE_CLAIM_PATTERN.exec(attestation);
+  if (!match) return null;
+  const expected = hmacHex(key, `g1\n${contextId}\n${taskId}\n${node}`);
+  return hexEquals(match[1]!, expected) ? node : null;
 }

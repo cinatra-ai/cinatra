@@ -234,6 +234,8 @@
   --accent: oklch(0.929 0.013 255.508);
   --accent-soft: oklch(0.279 0.041 260.031);
   --line: oklch(1 0 0 / 10%);
+  /* Section rule: the dark palette's own text colour (app.html, Section rule). */
+  --line-strong: var(--foreground);
   /* Control chrome (cinatra#3107) — a control BOUNDARY is its own line token,
      held at or above the 3:1 non-text contrast floor against the grounds a
      control sits on. Kept identical to the host token layer in

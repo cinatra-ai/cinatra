@@ -19,6 +19,8 @@
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
+import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 
@@ -1972,6 +1974,127 @@ const INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER: SurfaceDriver = {
 // harness `data-outcome` instrumentation, mirrored by a real StatusPill).
 // ---------------------------------------------------------------------------
 
+// Approved Extensions §IV.1–2. The static mounts use the actual All Agents
+// card and the same pure refusal panel as the server start screen. Reader
+// variants are asserted independently: an administrator's link must never
+// cause a member fixture to appear to have reachable recourse.
+const eligibilityReader = (root: Locator, reader: "administrator" | "member") =>
+  root.locator(`[data-reader="${reader}"]`);
+
+async function assertCannotRunCard(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const card = eligibilityReader(root, reader);
+    await expect(card.locator('[data-slot="installed-extension-card"]')).toBeVisible();
+    await expect(card.locator('[data-slot="installed-extension-kind-label"]')).toHaveText("Agent");
+    await expect(card.locator('[data-slot="installed-extension-card"]')).toHaveClass(/bg-surface-strong/);
+    await expect(card.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(card.locator('[data-icon="inline-start"]')).toHaveCount(0);
+    await expect(card.locator(`a[href="${RUN_ELIGIBILITY_AGENT.runHref}"]`)).toHaveCount(0);
+    await expect(card.locator('[data-slot="installed-status-indicator"]')).toHaveCount(0);
+    await expect(card.locator('[data-slot="installed-extension-card"]')).not.toHaveAttribute("data-archived", "");
+    await expect(card.locator('[data-slot="installed-extension-card"]')).not.toHaveAttribute("data-needs-review", "");
+    await expect(card.locator('[data-slot="installed-extension-spec-line"]')).toHaveCount(0);
+    await expect(card.getByRole("link", { name: "Settings" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.settingsHref);
+    await expect(card.getByText("More details", { exact: true })).toBeVisible();
+  }
+  const admin = eligibilityReader(root, "administrator");
+  const member = eligibilityReader(root, "member");
+  const reason = `This agent cannot run: ${RUN_ELIGIBILITY_MISSING[0].displayName} is not installed.`;
+  const link = admin.getByRole("link", { name: `${RUN_ELIGIBILITY_AGENT.name} cannot run — ${RUN_ELIGIBILITY_MISSING[0].displayName} not installed. View requirements`, exact: true });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute("title", reason);
+  await expect(link).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.listingHref);
+  await expect(link).toHaveClass(/border/);
+  await expect(member.getByText("Unavailable", { exact: true })).toHaveAttribute("title", reason);
+  await expect(member.getByText("View requirements", { exact: true })).toHaveCount(0);
+  await expect(member.locator('a[href^="/configuration"]')).toHaveCount(0);
+}
+
+async function assertStartRefused(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const panel = eligibilityReader(root, reader);
+    const alert = panel.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveAttribute("data-state", "error kind:agent");
+    await expect(alert).toContainText(`${RUN_ELIGIBILITY_AGENT.name} can't start`);
+    await expect(alert).toContainText(RUN_ELIGIBILITY_MISSING[0].displayName!);
+    await expect(alert.locator(".font-mono")).toHaveText(RUN_ELIGIBILITY_MISSING[0].packageName);
+    await expect(panel.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(panel.getByText("not found", { exact: false })).toHaveCount(0);
+    await expect(panel.getByRole("link", { name: "Back to Agents" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.agentsHref);
+    if (reader === "administrator") {
+      await expect(panel.getByRole("link", { name: "View requirements" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.listingHref);
+      await expect(alert).toContainText("Install it from the marketplace, then start the agent again.");
+    } else {
+      await expect(panel.getByRole("link", { name: "View requirements" })).toHaveCount(0);
+      await expect(alert).toContainText("Ask a platform administrator to install it, then start the agent again.");
+    }
+  }
+}
+
+// The static harness consumes actual product-Link navigation at its declared
+// fixture port. This proves dispatch and its exact address, not an authenticated
+// destination page; the latter belongs to the actual host's browser proof.
+// A link pressed before hydration can follow its native href and leave the
+// fixture. Wait on the actual control; never recover that navigation by retrying.
+async function waitForControlHydration(control: Locator): Promise<void> {
+  await expect
+    .poll(
+      () => control.evaluate((element) =>
+        Object.keys(element).some((key) => key.startsWith("__reactFiber$")),
+      ),
+      { timeout: HYDRATION_TIMEOUT_MS, message: "the control did not hydrate before interaction" },
+    )
+    .toBe(true);
+}
+
+async function followEligibilityLink(root: Locator, link: Locator, href: string, outcome: string): Promise<void> {
+  await expect(link).toHaveAttribute("href", href);
+  await waitForControlHydration(link);
+  await link.click();
+  await expect(root).toHaveAttribute("data-outcome", outcome);
+  await expect(root).toHaveAttribute("data-destination", href);
+}
+
+const AGENT_CARD_CANNOT_RUN_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-card-cannot-run"]'),
+  present: async (_page, root) => assertCannotRunCard(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => {
+      for (const reader of ["administrator", "member"] as const) {
+        await expect(eligibilityReader(root, reader).locator('[data-slot="extension-card-name"]')).toHaveText(RUN_ELIGIBILITY_AGENT.name);
+      }
+    } },
+    "missing-dependency": { source: "dependency.manifest.displayName", assert: async (_page, root) => assertCannotRunCard(root) },
+  },
+  actions: {
+    "view-requirements": { outcome: "agent-listing-open", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").locator('[data-slot="agent-card-unavailable-action"]'), RUN_ELIGIBILITY_AGENT.listingHref, "agent-listing-open") },
+  },
+  states: { "kind:agent": async (page) => assertCannotRunCard(page.locator('[data-surface-id="agent-card-cannot-run"]')) },
+};
+
+const AGENT_START_REFUSED_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-start-refused"]'),
+  present: async (_page, root) => assertStartRefused(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => assertStartRefused(root) },
+    "missing-dependency": { source: "dependency.manifest.displayName", assert: async (_page, root) => assertStartRefused(root) },
+  },
+  actions: {
+    "view-requirements": { outcome: "agent-listing-open", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").getByRole("link", { name: "View requirements" }), RUN_ELIGIBILITY_AGENT.listingHref, "agent-listing-open") },
+    "back-to-agents": { outcome: "scope-agents-tab", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "member"), eligibilityReader(root, "member").getByRole("link", { name: "Back to Agents" }), RUN_ELIGIBILITY_AGENT.agentsHref, "scope-agents-tab") },
+  },
+  states: {
+    error: async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+    "kind:agent": async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+  },
+};
+
 /** The populated (interactive) root of an approvals/scheduling harness surface. */
 function harnessRoot(id: string): (page: Page) => Locator {
   return (page) => page.locator(`[data-surface-id="${id}"][data-variant="populated"]`);
@@ -3605,6 +3728,7 @@ const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -3729,6 +3853,7 @@ const NOTIFICATION_ROW_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -4917,10 +5042,9 @@ const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
       outcome: "people-listed",
       run: async (page, root) => {
         const search = root.getByPlaceholder("Search by name or email…");
-        // Hydration-sensitive: under a loaded box the click and the keystrokes
-        // can land before this island hydrates, and React then re-renders the
-        // controlled field back to empty with the popover shut, so the typing
-        // is retried until the listbox answers (the same road as `clickUntil`).
+        // Wait on this controlled field before the first keystroke so React
+        // cannot replace a pre-hydration edit with its initial empty value.
+        await waitForControlHydration(search);
         await fillUntil(search, CONNECTOR_SHARING_SEARCH_QUERY, async () => {
           // The listbox is portalled, so it is asserted at the page level.
           await expect(
@@ -7234,16 +7358,18 @@ const UPLOAD_PANEL_NODE = '[data-conformance-id="upload-resolved-install-panel"]
 const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
 
 /**
- * Type the drawn link and press Continue until the panel mounts, retrying
- * through hydration (a click landing before React hydrates is silently
- * swallowed on the standalone build). Typing clears any previous resolution, so
- * a retry converges rather than compounding.
+ * Wait for the URL field and Continue button to hydrate before typing the
+ * drawn link. Typing clears any previous resolution, so the existing panel
+ * readiness retry converges rather than compounding.
  */
 async function resolveUploadReference(root: Locator): Promise<Locator> {
   const panel = root.locator(UPLOAD_PANEL_NODE);
+  await waitForControlHydration(root.locator("#github-repo-url"));
+  await waitForControlHydration(root.locator(UPLOAD_RESOLVE_CONTROL));
   await expect(async () => {
-    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
-    await root.locator(UPLOAD_RESOLVE_CONTROL).click();
+    // An unbounded action consumes the outer budget before toPass can refill.
+    await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+    await root.locator(UPLOAD_RESOLVE_CONTROL).click({ timeout: 5_000 });
     await expect(panel).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 30_000 });
   return panel;
@@ -7350,15 +7476,130 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
     // loading — "reads Looking up... while the lookup is in flight", and the
     // form says so on its own root only while it is.
     loading: async (_page, root) => {
-      const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
-      await expect(async () => {
-        await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL);
-        await submit.click();
-        await expect(
-          root.locator(`${UPLOAD_FORM_NODE}[data-state="loading"]`),
-        ).toBeVisible({ timeout: 2_000 });
-        await expect(submit).toContainText("Looking up");
-      }).toPass({ timeout: 30_000 });
+      const cleanups = new Map<string, () => Promise<void>>();
+      let finished = false;
+      try {
+        await expect(async () => {
+          if (finished) throw new Error("The loading observation has finished");
+          const submit = root.locator(UPLOAD_RESOLVE_CONTROL);
+          const form = await root.locator(UPLOAD_FORM_NODE).elementHandle({ timeout: 5_000 });
+          if (!form) throw new Error("The upload form is not mounted");
+          if (finished) {
+            await form.dispose();
+            throw new Error("The loading observation has finished");
+          }
+          // Observe before the action: a fast lookup can finish before click's
+          // transport reply arrives. Retain one actual same-form DOM sample,
+          // rather than requiring two later reads inside the loading window.
+          const key = `__conformanceUploadLoading_${crypto.randomUUID()}`;
+          let cleanupPromise: Promise<void> | undefined;
+          const cleanup = () => cleanupPromise ??= (async () => {
+            try {
+              await form.evaluate((node, key) => {
+                const target = node as HTMLElement & Record<string, unknown>;
+                const record = target[key] as { observer: MutationObserver | null } | undefined;
+                record?.observer?.disconnect();
+                delete target[key];
+              }, key);
+            } finally {
+              try {
+                await form.dispose();
+              } finally {
+                cleanups.delete(key);
+              }
+            }
+          })();
+          cleanups.set(key, cleanup);
+          try {
+            await form.evaluate((node, { key, selector, mountSelector, formSelector }) => {
+              const target = node as HTMLElement & Record<string, unknown>;
+              const mount = node.closest(mountSelector);
+              const record = {
+                mount,
+                armed: false,
+                snapshot: null as { state: string; text: string } | null,
+                observer: null as MutationObserver | null,
+                sample: null as (() => void) | null,
+              };
+              target[key] = record;
+              // Match the maintained assertion's visibility semantics while
+              // sampling: opacity zero is still visible; hidden/empty boxes
+              // cannot supply the loading witness.
+              const isVisible = (element: Element): boolean => {
+                const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+                if (!style) return true;
+                if (style.display === "contents") {
+                  return Array.from(element.childNodes).some((child) => {
+                    if (child.nodeType === 1) return isVisible(child as Element);
+                    if (child.nodeType !== 3) return false;
+                    const range = element.ownerDocument.createRange();
+                    range.selectNode(child);
+                    const rect = range.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                  });
+                }
+                const details = element.closest("details, summary");
+                if (details !== element && details?.tagName === "DETAILS"
+                  && !details.hasAttribute("open")) return false;
+                if (style.visibility !== "visible") return false;
+                if (typeof element.checkVisibility === "function" && !element.checkVisibility()) return false;
+                const rect = element.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+              };
+              record.sample = () => {
+                const state = node.getAttribute("data-state");
+                const text = node.querySelector(selector)?.textContent ?? "";
+                if (record.armed && !record.snapshot && node.isConnected && mount?.isConnected
+                  && mount.querySelector(formSelector) === node
+                  && isVisible(node)
+                  && state === "loading" && text.includes("Looking up")) {
+                  record.snapshot = { state, text };
+                  record.observer?.disconnect();
+                }
+              };
+              record.observer = new MutationObserver(record.sample);
+              record.observer.observe(node, {
+                attributes: true,
+                attributeFilter: ["data-state", "class", "style", "hidden", "open"],
+                childList: true,
+                subtree: true,
+                characterData: true,
+              });
+              if (!mount?.isConnected || node.getAttribute("data-state") === "loading") {
+                throw new Error("The loading driver requires an idle upload form");
+              }
+            }, { key, selector: UPLOAD_RESOLVE_CONTROL, mountSelector: UPLOAD_GITHUB_FORM_MOUNT, formSelector: UPLOAD_FORM_NODE });
+            if (finished) throw new Error("The loading observation has finished");
+            await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+            if (finished) throw new Error("The loading observation has finished");
+            await form.evaluate((node, key) => {
+              const record = (node as HTMLElement & Record<string, unknown>)[key] as { armed: boolean };
+              if (record) record.armed = true;
+            }, key);
+            if (finished) throw new Error("The loading observation has finished");
+            await submit.click({ timeout: 5_000 });
+            if (finished) throw new Error("The loading observation has finished");
+            await expect.poll(() => form.evaluate((node, { key, formSelector }) => {
+              const record = (node as HTMLElement & Record<string, unknown>)[key] as {
+                snapshot: { state: string; text: string } | null;
+                mount: Element | null;
+                sample: (() => void) | null;
+              } | undefined;
+              record?.sample?.();
+              return node.isConnected && record?.mount?.isConnected
+                && record.mount.querySelector(formSelector) === node ? record.snapshot : null;
+            }, { key, formSelector: UPLOAD_FORM_NODE }), { timeout: 2_000 }).toEqual({
+              state: "loading",
+              text: expect.stringContaining("Looking up"),
+            });
+          } finally {
+            await cleanup();
+          }
+        }).toPass({ timeout: 30_000 });
+      } finally {
+        finished = true;
+        await Promise.all([...cleanups.values()].map((cleanup) => cleanup()));
+      }
     },
   },
 };
@@ -7495,6 +7736,8 @@ const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
 
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
+  "agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER,
+  "agent-start-refused": AGENT_START_REFUSED_DRIVER,
   toast: TOAST_DRIVER,
   "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,

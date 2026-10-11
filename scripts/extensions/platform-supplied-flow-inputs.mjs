@@ -139,3 +139,25 @@ export function isExemptFromUnsatisfiableInputCheck(packageName, title) {
   const entry = OAS_RUNTIME_014_EXEMPTIONS[packageName];
   return Array.isArray(entry) && entry.includes(title);
 }
+
+
+/**
+ * cinatra#3759 install-only ceiling for existing visible inputs without defaults
+ * or a required declaration. The historical thirteen-pair ceiling has shrunk
+ * by Project Manager's three corrected declarations (5ac6e33a). The ten
+ * remaining pairs may only shrink. This is not a runtime exemption.
+ */
+export const VISIBLE_UNDEFAULTED_INPUT_BASELINE = Object.freeze({
+  "@cinatra-ai/drupal-agent": Object.freeze([
+    "instanceId", "nodeId", "nodeBundle", "nodeStatus", "instructions",
+  ]),
+  "@cinatra-ai/wordpress-agent": Object.freeze([
+    "instanceId", "postId", "postType", "postStatus", "instructions",
+  ]),
+});
+
+export function isOnVisibleInputInstallBaseline(packageName, title) {
+  const inputs = Object.prototype.hasOwnProperty.call(VISIBLE_UNDEFAULTED_INPUT_BASELINE, packageName)
+    ? VISIBLE_UNDEFAULTED_INPUT_BASELINE[packageName] : undefined;
+  return Array.isArray(inputs) && inputs.includes(title);
+}

@@ -339,14 +339,16 @@ describe("runCarriesInputSteps — an unanswered form is not on its own an input
     expect(runCarriesInputSteps(stepsFor({}, atInputMoment), atInputMoment)).toBe(false);
   });
 
-  it("stops carrying them once every form is answered", () => {
+  it("keeps fully answered forms as settled history after the initial input moment", () => {
     const atInputMoment = runAtInputMoment({
-      runStatus: "pending_approval",
-      interrupt: { reviewTaskId: "setup-run-bdwa40" },
+      runStatus: "running",
+      interrupt: null,
     });
     const steps = stepsFor({ idea: { title: "human purpose" } }, atInputMoment);
+    expect(atInputMoment).toBe(false);
+    expect(steps[0].settled).toBe(true);
     expect(runOwesInputStep(steps)).toBe(false);
-    expect(runCarriesInputSteps(steps, atInputMoment)).toBe(false);
+    expect(runCarriesInputSteps(steps, atInputMoment)).toBe(true);
   });
 });
 

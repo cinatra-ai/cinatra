@@ -131,7 +131,6 @@ const USER_INITIATED_JOBS = new Set<string>([
   // The retired blog text-generation jobs (idea / draft / linkedin-draft
   // creation) were removed: they are replaced by the blog pipeline agents and
   // are no longer enqueued, so their names never reach this policy.
-  "blog-post-image-regeneration",
   "blog-post-wordpress-draft-creation",
   "blog-post-linkedin-draft-publish",
   "agent-builder-execution",

@@ -31,7 +31,7 @@
 // HTTP/3 is not counted against it, because one connection carries all of its
 // requests. The protocol is read from the resource timing; an origin whose
 // protocol the browser does not give counts as plain HTTP.
-import { READING_BOUND_MS, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, pathOf, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "readStandingRequests";
 
@@ -284,6 +284,7 @@ export const describeUnknown = (unknown) => unknown.map((page) => `page ${page.p
  * @returns {Promise<StandingReading>}
  */
 export async function readStandingRequests(context, { record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, context, "nothing was read");
   requireRecord(STEP, record);
   const nothing = "nothing was read";
   const given = /** @type {any} */ (context);

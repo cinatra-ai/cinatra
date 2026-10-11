@@ -1,4 +1,4 @@
-// Registration of the generic portlet KIND metadata: the 9 generic kinds plus
+// Registration of the generic portlet KIND metadata: the 8 generic kinds plus
 // the keystone `analytics` kind (and its `cube-dashboard` alias, cinatra#325).
 // METADATA ONLY (scopePolicy, input/output keys, install-time validateConfig) —
 // server-safe, imported by the dashboard install validator. The interactive
@@ -80,7 +80,6 @@ export const PORTLET_KINDS_WITH_BUNDLED_COMPONENT = [
   "artifact-list",
   "artifact-version-history",
   "artifact-edit-text",
-  "artifact-edit-binary-prompt",
   "agent-launcher",
   ENTITY_METADATA_PORTLET_KIND,
   ENTITY_COUNT_PORTLET_KIND,
@@ -358,30 +357,6 @@ export function registerCorePortletKinds(): void {
       ...reqConfigString(p, "refSwapPrimitive", "port_edit_text_missing_refswap"),
       ...reqConfigString(p, "parentObjectField", "port_edit_text_missing_refswap"),
     ],
-  });
-
-  // artifact-edit-binary-prompt — prompt-driven binary regen (auto/manual).
-  registerPortletKind({
-    kind: "artifact-edit-binary-prompt",
-    version: PORTLET_VERSION,
-    scopePolicy: { scopeFrom: "session", resource: "artifact", op: "object.update" },
-    inputKeys: ["parentObjectId"],
-    outputKeys: [],
-    validateConfig: (p) => {
-      const errs: PortletConfigError[] = [
-        ...reqConfigString(p, "generationPrimitive", "port_edit_binary_invalid_config"),
-        ...reqConfigString(p, "parentObjectField", "port_edit_binary_invalid_config"),
-      ];
-      const mode = p.config.refSwapMode;
-      if (mode !== "auto" && mode !== "manual") {
-        errs.push({ code: "port_edit_binary_invalid_config", message: 'config.refSwapMode must be "auto" | "manual"' });
-      } else if (mode === "manual" && typeof p.config.refSwapPrimitive !== "string") {
-        errs.push({ code: "port_edit_binary_invalid_config", message: "config.refSwapPrimitive is required when refSwapMode is manual" });
-      } else if (mode === "auto" && p.config.refSwapPrimitive !== undefined) {
-        errs.push({ code: "port_edit_binary_invalid_config", message: "config.refSwapPrimitive must be absent when refSwapMode is auto" });
-      }
-      return errs;
-    },
   });
 
   // artifact-version-history — parent object's ref-swap timeline.

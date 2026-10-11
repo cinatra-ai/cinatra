@@ -50,6 +50,36 @@ export type UseRunWindowConversation = {
 
 const NOTHING_HAPPENED: RunWindowTurnEffect = { fill: null, acted: false };
 
+// A turn can end after the page moved to the next step, and the window mounted
+// there has read the stored exchange before the reply was stored. The turn's
+// end is the moment the stored rows changed, so every mounted window of that
+// run is told, and re-reads. Kept in this module: both ends are here and the
+// run id travels with the announcement.
+const turnEndListeners = new Map<string, Set<() => void>>();
+
+function listenForTurnEnd(runId: string, listener: () => void): () => void {
+  let set = turnEndListeners.get(runId);
+  if (!set) {
+    set = new Set();
+    turnEndListeners.set(runId, set);
+  }
+  set.add(listener);
+  return () => {
+    const current = turnEndListeners.get(runId);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) turnEndListeners.delete(runId);
+  };
+}
+
+function announceTurnEnd(runId: string, except: (() => void) | null): void {
+  const set = turnEndListeners.get(runId);
+  if (!set) return;
+  for (const listener of [...set]) {
+    if (listener !== except) listener();
+  }
+}
+
 /**
  * `runId` absent ⇒ the window has no run to keep a conversation with (the
  * instance-level schedule screen before any run exists). The hook then holds
@@ -84,22 +114,38 @@ export function useRunWindowConversation(args: {
   // `outcome.fills` is already only this message's rows and there is nothing
   // here to keep in step.
 
+  // The newest read wins: a read that answers late never overwrites a newer one.
+  const readGenerationRef = useRef(0);
+  // This instance's own re-read, so a turn it sends does not re-read itself.
+  const turnEndListenerRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     if (!runId) {
       setLoaded(true);
       return;
     }
     let cancelled = false;
+    const read = () => {
+      const generation = ++readGenerationRef.current;
+      return loadRunWindowConversation(runId).then((rows) => {
+        if (cancelled || generation !== readGenerationRef.current) return;
+        // The stored exchange IS the state: what a reload shows is what the run
+        // holds, never a client-side merge of the two.
+        setEntries(rows);
+        setLoaded(true);
+      });
+    };
     setLoaded(false);
-    void loadRunWindowConversation(runId).then((rows) => {
-      if (cancelled) return;
-      // The stored exchange IS the state: what a reload shows is what the run
-      // holds, never a client-side merge of the two.
-      setEntries(rows);
-      setLoaded(true);
-    });
+    void read();
+    const listener = () => {
+      void read().catch(() => {});
+    };
+    turnEndListenerRef.current = listener;
+    const stopListening = listenForTurnEnd(runId, listener);
     return () => {
       cancelled = true;
+      stopListening();
+      turnEndListenerRef.current = null;
     };
   }, [runId]);
 
@@ -125,6 +171,7 @@ export function useRunWindowConversation(args: {
         ]);
         return NOTHING_HAPPENED;
       }
+      const ownListener = turnEndListenerRef.current;
       setPending(true);
       // The person's own words appear immediately; the server is what makes
       // them durable, and the re-read below replaces this optimistic row with
@@ -148,6 +195,9 @@ export function useRunWindowConversation(args: {
           ]);
           return NOTHING_HAPPENED;
         }
+        // The turn's own exchange is the newest state: a refresh still out from
+        // another window's turn must not overwrite it.
+        readGenerationRef.current += 1;
         setEntries(outcome.entries);
         // THIS TURN'S OWN FILLS, and only those — the server selected them by the
         // turn's identity. A turn that placed none applies none, so a screen
@@ -174,6 +224,7 @@ export function useRunWindowConversation(args: {
         };
       } finally {
         setPending(false);
+        announceTurnEnd(runId, ownListener);
       }
     },
     [runId, surface],

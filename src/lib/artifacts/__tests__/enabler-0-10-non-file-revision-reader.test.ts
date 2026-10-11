@@ -108,7 +108,11 @@ describe("enabler 0.10 — a non-file revision is a MEMBER, not a floor", () => 
       readGatePinnedTargets: () => ({ status: "pending", targets: [TARGET] }),
       readArtifact: () => ({ kind: "ok", artifact: DASHBOARD }),
       revisionMember: () => ({ mime: "text/markdown", form: "file" }),
-      resolveMount: () => ({ kind: "form", arm: "first-party", form: "markdown" }),
+      resolveMount: () => ({
+        kind: "build-map",
+        packageName: "@cinatra-ai/markdown-artifact",
+        generatedKey: "@cinatra-ai/markdown-artifact::detail",
+      }),
       buildProps: (input) =>
         buildArtifactRendererProps({
           artifact: input.artifact,

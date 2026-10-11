@@ -42,7 +42,7 @@ import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
  * {@link ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION}). A display that declared
  * version 3, 2 or 1 is handed the capability at edit-channel version 1.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 4;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 5;
 
 /**
  * The version at which the snapshot began carrying the byte reference.
@@ -86,6 +86,8 @@ export const ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION = 4;
 export type ArtifactRendererReviewReading = {
   reading: "pending" | "continued";
   openLive: string | null;
+  /** v5 only: the canonical continued decision time for this reviewed revision. */
+  decidedAt?: string;
 };
 
 /**
@@ -439,6 +441,12 @@ export function buildArtifactRendererProps(input: {
       ? {
           reading: input.review.reading,
           openLive: input.review.reading === "pending" ? null : input.review.openLive,
+          ...(propsApiVersion >= 5 && input.review.reading === "continued" &&
+            typeof input.review.decidedAt === "string" &&
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.review.decidedAt) &&
+            Number.isFinite(Date.parse(input.review.decidedAt)) &&
+            new Date(input.review.decidedAt).toISOString() === input.review.decidedAt
+            ? { decidedAt: input.review.decidedAt } : {}),
         }
       : null;
   const data: ArtifactRendererDataRoad | null =
@@ -512,6 +520,10 @@ export function artifactRendererPropsAtVersion(
   if (version < ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION) {
     delete next.review;
     delete next.data;
+  }
+  // The decision time is absent below v5; do not mutate the original snapshot.
+  if (version < 5 && next.review) {
+    next.review = { reading: next.review.reading, openLive: next.review.openLive };
   }
   // The title road is what the v3, v2 and v1 shapes have no place for.
   if (props.edit) next.edit = artifactEditCapabilityForPropsVersion(props.edit, version);

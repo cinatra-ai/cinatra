@@ -8,7 +8,7 @@
 // window, so a title the page sets a moment after it loads is never read as the
 // one it had before.
 import { quotedName } from "./page-controls.mjs";
-import { READING_BOUND_MS, pathOf, pause, refuse, requireMs, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, pathOf, pause, refuse, refuseFrameScope, requireMs, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "readTitle";
 
@@ -54,6 +54,7 @@ const describeTitle = (title) => (title === null ? "no reading (the page could n
 export async function readTitle(page, options = /** @type {any} */ ({})) {
   const given = options && typeof options === "object" ? options : {};
   const { record, settleMs = TITLE_SETTLE_MS, pollMs = TITLE_POLL_MS, bound = TITLE_BOUND_MS } = /** @type {any} */ (given);
+  refuseFrameScope(STEP, record, page, "nothing was read");
   requireRecord(STEP, record);
   const nothing = "nothing was read";
   for (const name of Object.keys(given)) {

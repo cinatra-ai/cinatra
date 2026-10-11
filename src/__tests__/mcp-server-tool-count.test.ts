@@ -229,6 +229,14 @@ describe("MCP tool registry — function-tool cap headroom", () => {
     expect(toolNames).toContain("blog_post_publish_wordpress_delete");
   });
 
+  it("the older picture road's two tools are not offered", () => {
+    const { toolNames } = countToolNamesInHandlers(
+      path.join(ROOT, "src/lib/blog/mcp/handlers.ts"),
+    );
+    expect(toolNames).not.toContain("blog_image_generate_start");
+    expect(toolNames).not.toContain("blog_image_generate_cancel");
+  });
+
   // The connector-facade MCP modules
   // (createSocialMediaModule / createBlogModule) use `server.registerTool`
   // DIRECTLY (not the key:async() handlers shape the static scanner

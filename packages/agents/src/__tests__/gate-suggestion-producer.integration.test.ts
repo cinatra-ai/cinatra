@@ -101,6 +101,19 @@ async function snapshotRowsFor(gateId: string) {
   return rows.rows as { id: string; gate_id: string; payload: unknown }[];
 }
 
+// #3944: preserve the already-minted historical gate and its original pins.
+// The public NEW mint must continue refusing a combined target set.
+async function seedHistoricalGate(runId: string, reviewTaskId: string, targets: CoreAnalysisTarget[]) {
+  const gateId = randomUUID();
+  await pool(`INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+    (id, run_id, org_id, review_task_id, status, pinned_targets)
+    VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`, [gateId, runId, ORG, reviewTaskId, JSON.stringify(targets)]);
+  const replay = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+  expect(replay).toMatchObject({ gateId, idempotent: true });
+  expect((await gateStore.readReviewGate(runId, reviewTaskId))?.pinnedTargets).toEqual(targets);
+  return replay;
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -279,12 +292,7 @@ describe.skipIf(!HAS_DB)("S4 — the refusals", () => {
       artifactId: `art-${randomUUID()}`,
       representationRevisionId: `rev-${randomUUID()}`,
     };
-    const emitted = await gateStore.emitArtifactReviewGate({
-      runId: `run-${randomUUID()}`,
-      orgId: ORG,
-      reviewTaskId: `task-${randomUUID()}`,
-      targets: [t1, t2],
-    });
+    const emitted = await seedHistoricalGate(`run-${randomUUID()}`, `task-${randomUUID()}`, [t1, t2]);
     const entryFor = (target: CoreAnalysisTarget, lead: string) => ({
       target,
       kind: "@cinatra-ai/text-artifact:text",
