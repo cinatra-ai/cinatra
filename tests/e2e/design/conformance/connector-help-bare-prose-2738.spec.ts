@@ -6,15 +6,14 @@
  * These are rendered CI pins, not screenshots or a local rendering claim.
  */
 import { test, expect } from "@playwright/test";
-import { ensureSeeded, SEEDED_HARNESS_PATH } from "./contract";
+import { HARNESS_PATH } from "./contract";
 
 for (const theme of ["light", "dark"] as const) {
   for (const width of [1280, 390]) {
     test(`§II design201 Help: bare labeled prose, ${theme}, viewport ${width}`, async ({ page }) => {
-      await ensureSeeded();
       await page.setViewportSize({ width, height: 900 });
       await page.addInitScript((value) => localStorage.setItem("theme", value), theme);
-      await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+      await page.goto(HARNESS_PATH, { waitUntil: "domcontentloaded" });
       const mount = page.locator('[data-surface-id="connector-setup-tabbed"][data-variant="populated"]');
       await expect(mount).toHaveCount(1);
       const tabs = mount.getByRole("tablist");
