@@ -53,7 +53,7 @@ export function ReviewGateBlocked({
         <Button
           variant="link"
           size="sm"
-          className="inline h-auto p-0 align-baseline text-xs underline underline-offset-[3px]"
+          className="inline h-auto p-0 align-baseline text-xs text-indigo-ink underline underline-offset-[3px]"
           data-action="refresh-gate -> live-gate"
           onClick={() => (onRefresh ? onRefresh() : router.refresh())}
         >

@@ -1664,3 +1664,49 @@ describe("artifactKindLabelEntries — carried, never derived", () => {
     );
   });
 });
+
+
+describe("artifact kind labels — bounded declared type migration (#3527)", () => {
+  const records = [
+    { packageName: "@cinatra-ai/linkedin-artifacts", kind: "artifact", displayName: "  LinkedIn post  ", artifactObjectTypes: [{ type: "@cinatra-ai/linkedin:post-draft", claim: "dedicated" }] },
+    { packageName: "@cinatra-ai/marketing-icp-artifact", kind: "artifact", displayName: "Marketing ICP", artifactObjectTypes: [{ type: "@cinatra-ai/marketing-icp:profile", claim: "dedicated" }] },
+    { packageName: "@owner/generic-artifact", kind: "artifact", displayName: "Generic", artifactObjectTypes: [{ type: "@cinatra-ai/linkedin:post-draft", claim: "default" }] },
+  ];
+  it("carries the two reviewed aliases from their pack declarations, never invented names", () => {
+    const emitted = emitArtifactKindLabels(records);
+    expect(emitted).toContain('"@cinatra-ai/linkedin:post-draft": "LinkedIn post",');
+    expect(emitted).toContain('"@cinatra-ai/marketing-icp:profile": "Marketing ICP",');
+    expect(emitted).not.toContain('"@cinatra-ai/linkedin":');
+    expect(emitted).toContain('"@owner/generic-artifact": "Generic",');
+    expect(emitArtifactKindLabels([...records].reverse())).toBe(emitted);
+    expect(emitArtifactKindLabels([{ ...records[0], displayName: "A declared spelling" }])).toContain('"@cinatra-ai/linkedin:post-draft": "A declared spelling",');
+  });
+  it("collects the actual pinned manifest claim even when its package name differs", async () => {
+    const manifest = await buildManifest();
+    const record = manifest.records.find((r) => r.packageName === "@cinatra-ai/linkedin-artifacts");
+    expect(record.artifactObjectTypes).toEqual(expect.arrayContaining([{ type: "@cinatra-ai/linkedin:post-draft", claim: "dedicated" }]));
+    expect(emitArtifactKindLabels(manifest.records)).toContain('"@cinatra-ai/linkedin:post-draft": "LinkedIn post",');
+  });
+  it("refuses competing reviewed labels rather than selecting by arrival order", () => {
+    expect(() => emitArtifactKindLabels([records[0], { ...records[0], displayName: "Another label" }])).toThrow("conflicting declared labels for @cinatra-ai/linkedin:post-draft");
+  });
+  it("does not let a generic default, non-artifact or another pack rename a reviewed type", () => {
+    const emitted = emitArtifactKindLabels([records[2], { ...records[0], kind: "connector" }, { ...records[0], packageName: "@owner/competing-artifact" }, { ...records[0], artifactObjectTypes: [{ type: "@cinatra-ai/linkedin:post-draft", claim: "default" }] }]);
+    expect(emitted).not.toContain('"@cinatra-ai/linkedin:post-draft":');
+    expect(emitted).toContain('"@owner/generic-artifact": "Generic",');
+    expect(emitted).toContain('"@owner/competing-artifact": "LinkedIn post",');
+  });
+  it("keeps aggregate Email/Drupal and arbitrary pack labels off unrelated type aliases", () => {
+    const emitted = emitArtifactKindLabels([
+      { packageName: "@cinatra-ai/email-artifacts", kind: "artifact", displayName: "Email Artifacts", artifactObjectTypes: [{ type: "@cinatra-ai/email:body", claim: "dedicated" }] },
+      { packageName: "@cinatra-ai/drupal-artifacts", kind: "artifact", displayName: "Drupal Artifacts", artifactObjectTypes: [{ type: "@cinatra-ai/drupal:node", claim: "dedicated" }] },
+      { packageName: "@owner/blog-artifact", kind: "artifact", displayName: "Editorial", artifactObjectTypes: [{ type: "@owner/blog:post", claim: "dedicated" }] },
+    ]);
+    expect(emitted).toContain('"@cinatra-ai/email-artifacts": "Email Artifacts",');
+    expect(emitted).toContain('"@cinatra-ai/drupal-artifacts": "Drupal Artifacts",');
+    expect(emitted).toContain('"@owner/blog-artifact": "Editorial",');
+    expect(emitted).not.toContain('"@cinatra-ai/email:body":');
+    expect(emitted).not.toContain('"@cinatra-ai/drupal:node":');
+    expect(emitted).not.toContain('"@owner/blog:post":');
+  });
+});

@@ -165,3 +165,56 @@ describe("SDK re-export parity (cinatra#1627 AC3)", () => {
     expect(asSdk.propsApiVersion).toBe(ARTIFACT_RENDERER_PROPS_API_VERSION);
   });
 });
+
+// #3978: the new reading is supplied by the authenticated gate, not an effect.
+describe("3978 v5 review decision time", () => {
+  const decidedAt = "2026-10-07T09:35:30.000Z";
+  const make = (version?: number, reading: "pending" | "continued" = "continued", time: string | null = decidedAt) => buildArtifactRendererProps({
+    artifact, representation: { revisionId: "reviewed-rev", mime: "application/pdf" },
+    previewHref: "/p", downloadHref: "/d", content: absentArtifactContent("reviewed-rev"),
+    edit: { kind: "read-only", channelVersion: 1, reason: "read-only-surface" },
+    ...(version === undefined ? {} : { propsApiVersion: version }),
+    review: { reading, openLive: "https://example.com/source", ...(time === null ? {} : { decidedAt: time }) },
+  });
+
+  it("advances host and SDK together to the decision-only v5 window", () => {
+    expect(ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(5);
+    expect(SDK_ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(5);
+  });
+  it("carries the supplied authentic continued time and exact reviewed revision", () => {
+    expect(make().review).toEqual({ reading: "continued", openLive: "https://example.com/source", decidedAt });
+    expect(make().representation?.revisionId).toBe("reviewed-rev");
+    expect(make().review).not.toHaveProperty("effect");
+  });
+  it.each([1, 2, 3, 4])("preserves every v%s snapshot key/value when a future fact is supplied", (version) => {
+    const withFact = make(version);
+    const withoutFact = make(version, "continued", null);
+    // The field's omission, not null/undefined serialization, is the legacy ABI.
+    expect(withFact).toEqual(withoutFact);
+    if (version < 3) expect(withFact).not.toHaveProperty("review");
+    else expect(withFact.review).toEqual({ reading: "continued", openLive: "https://example.com/source" });
+  });
+  it("never carries a decision time or live link for a pending reading", () => {
+    expect(make(undefined, "pending").review).toEqual({ reading: "pending", openLive: null });
+  });
+  it.each(["", "not-a-date", "2026", "2026-02-30T00:00:00.000Z"])("omits malformed decision time %s without substituting artifact dates", (time) => {
+    expect(make(undefined, "continued", time).review).toEqual({ reading: "continued", openLive: "https://example.com/source" });
+  });
+});
+
+describe("3978 negotiated snapshot narrowing", () => {
+  it.each([1, 2, 3, 4])("drops the v5 fact from an already-built snapshot at v%s", async (version) => {
+    const { artifactRendererPropsAtVersion } = await import("../artifact-renderer-props");
+    const source = buildArtifactRendererProps({ artifact, representation: { revisionId: "reviewed-rev", mime: "application/pdf" },
+      previewHref: "/p", downloadHref: "/d", content: absentArtifactContent("reviewed-rev"),
+      edit: { kind: "read-only", channelVersion: 1, reason: "read-only-surface" },
+      propsApiVersion: 5, review: { reading: "continued", openLive: "https://example.com/source" } });
+    source.review = { ...source.review!, decidedAt: "2026-10-07T09:35:30.000Z" };
+    const before = JSON.stringify(source);
+    const narrowed = artifactRendererPropsAtVersion(source, version);
+    if (narrowed.review) expect(narrowed.review).not.toHaveProperty("decidedAt");
+    if (version < 3) expect(narrowed).not.toHaveProperty("review");
+    else expect(narrowed.review).toEqual({ reading: "continued", openLive: "https://example.com/source" });
+    expect(JSON.stringify(source)).toBe(before);
+  });
+});

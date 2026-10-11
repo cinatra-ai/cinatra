@@ -38,14 +38,13 @@
 // cascade. The live reading of both palettes on the running application is the
 // proof this issue asks for at close.
 //
-// THE DARK PALETTE'S DRAWING LINK-ACCENT ACCEPTANCE REMAINS UNRESOLVED.
-// The existing shared Button uses text-primary. Its light declaration is the
-// indigo accent; its dark declaration aliases the application's near-white
-// accent. This bounded placement/underline repair preserves that shared role
-// and does not make a new dark-color choice. The declaration controls below
-// verify the current theme contract, not the drawing's dark link-color
-// acceptance. Real computed styles in both palettes and the App's independent
-// stale-gate proof remain owed; no whole #3238 completion is claimed.
+// THE LINK COLOUR IS THE DRAWING'S PALETTE-INVARIANT INDIGO.
+// The shared Button link uses text-primary, whose dark action colour is near
+// white. This blocked reading names the drawing's --blue (#364e81), so its
+// local class uses the already registered indigo-ink token. The shared Button
+// and theme remain untouched. These tests check the real DOM and declarations;
+// the companion Playwright pin reads actual computed styles and inline flow.
+// Native success does not claim that browser execution or a stale-gate grade.
 //
 // Run:
 //   cd packages/agents && pnpm exec vitest run \
@@ -75,11 +74,11 @@ const COPY = reviewBlockedCopy("no-longer-pending");
 const REFRESH = '[data-action="refresh-gate -> live-gate"]';
 const PANEL = '[data-conformance-id="review-gate-blocked"]';
 
-/** Two native case/declaration guards. The light case reads :root/default,
- *  not the application's actual .cinatra theme cascade. The dark case reads
- *  .dark declarations. App-owned .cinatra/.dark computed proof remains owed. */
+/** Two native case/declaration guards. The light case reads .cinatra declarations; the dark case reads .dark.
+ *  Root fallback models declaration inheritance only, never computed cascade.
+ *  App-owned actual .cinatra/.dark computed proof remains owed. */
 const PALETTES = [
-  { palette: "light", selector: ":root" },
+  { palette: "light", selector: ".cinatra" },
   { palette: "dark", selector: ".dark" },
 ] as const;
 
@@ -108,7 +107,8 @@ function paletteBlock(selector: string): string {
 /** Follow var(--x) hops within the selected source declaration block only.
  *  This does not resolve actual inherited theme values or a browser cascade. */
 function resolveToken(block: string, name: string, depth = 0): string {
-  const declared = new RegExp(`^\\s*--${name}:\\s*([^;]+);`, "m").exec(block);
+  const pattern = new RegExp(`^\\s*--${name}:\\s*([^;]+);`, "m");
+  const declared = pattern.exec(block) ?? pattern.exec(paletteBlock(":root"));
   expect(declared, `--${name} is declared in this palette`).not.toBeNull();
   const value = declared![1].trim();
   const hop = /^var\(\s*--([a-z0-9-]+)\s*\)$/.exec(value);
@@ -181,8 +181,8 @@ describe("the Refresh affordance sits inside the sentence it ends", () => {
 
 // ---------------------------------------------------------------------------
 // Acceptance 2 structural/declaration controls only: shared link Button and
-// resting underline. Actual drawing link-accent acceptance in both palettes
-// remains owed; these native controls do not resolve a browser cascade.
+// resting underline and registered drawing link colour. These native controls
+// do not resolve a browser cascade; the companion browser pin must run hosted.
 // ---------------------------------------------------------------------------
 describe("the Refresh affordance is drawn as the design system's link button", () => {
   for (const { palette, selector } of PALETTES) {
@@ -207,23 +207,25 @@ describe("the Refresh affordance is drawn as the design system's link button", (
       const { control } = renderBlocked(palette);
       const tokens = classTokens(control);
 
-      expect(tokens).toContain("text-primary");
-      expect(registersColourToken("primary")).toBe(true);
+      expect(tokens).toContain("text-indigo-ink");
+      expect(tokens).not.toContain("text-primary");
+      expect(registersColourToken("indigo-ink")).toBe(true);
     });
 
     it(`${palette} — the link accent is not the ink the paragraph is drawn in`, () => {
       const { control, body } = renderBlocked(palette);
-      expect(classTokens(control)).toContain("text-primary");
+      expect(classTokens(control)).toContain("text-indigo-ink");
       expect(classTokens(body)).toContain("text-muted-foreground");
 
       const block = paletteBlock(selector);
-      const accent = resolveToken(block, "primary");
+      const accent = resolveToken(block, "indigo-ink");
       const paragraphInk = resolveToken(block, "muted-foreground");
       const bodyInk = resolveToken(block, "foreground");
 
       for (const value of [accent, paragraphInk, bodyInk]) {
         expect(value, "a palette value resolves to a colour").toMatch(/^(#|oklch|rgb|hsl)/);
       }
+      expect(accent).toBe("#364e81");
       expect(accent).not.toBe(paragraphInk);
       expect(accent).not.toBe(bodyInk);
     });

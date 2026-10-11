@@ -232,6 +232,10 @@ vi.mock("@/lib/better-auth-db", () => ({
   readProjectsForUser: vi.fn(async () => []),
 }));
 
+vi.mock("../started-run-store", () => ({
+  readStartedRunsFor: vi.fn(async () => []),
+}));
+
 vi.mock("../store", () => ({
   readAgentTemplateBySlug: vi.fn(async () => makeTemplate()),
   readAgentRunById: vi.fn(async () => makeRun()),

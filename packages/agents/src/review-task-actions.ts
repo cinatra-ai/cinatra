@@ -26,8 +26,8 @@ import {
   // statement the WayFlow gate is claimed with, mirroring the org-scoped CAS the
   // setup- branch already runs through `resumeRunFromSetupApproval`.
   transitionRunStatus,
-  writeHitlPrompt,
 } from "./store";
+import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
@@ -180,6 +180,51 @@ async function assertRunScopeOrDeny(
     throw err;
   }
 }
+
+/**
+ * cinatra#3582 — "the person gave this field NOTHING", the same reading the
+ * setup screen takes (`isBlankSubValue` in schema-field-renderer.tsx): absent,
+ * null, a string that trims to empty, or an empty list. `0` and `false` are
+ * ANSWERS, never blank.
+ */
+function isBlankSetupValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/**
+ * cinatra#3582 — a declared MINIMUM LENGTH, refused here as well as on the
+ * screen, because the screen is only one door into a run's inputs. Measured on
+ * the trimmed value and only on a value that is not blank: emptiness is the
+ * blank reading's business, never the minimum's.
+ */
+function assertSetupValuesSatisfyDeclaredMinLength(
+  properties: Record<string, Record<string, unknown>>,
+  values: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value !== "string") continue;
+    const declared = Object.prototype.hasOwnProperty.call(properties, key)
+      ? properties[key]
+      : undefined;
+    const declaredMinLength = declared?.minLength;
+    if (
+      typeof declaredMinLength !== "number" ||
+      !Number.isInteger(declaredMinLength) ||
+      declaredMinLength <= 0
+    ) {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length === 0 || trimmed.length >= declaredMinLength) continue;
+    throw new Error(
+      `Setup approval rejected: fieldName "${key}" is shorter than the minimum length of ${declaredMinLength} the agent declares`,
+    );
+  }
+}
+
 
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
@@ -426,7 +471,14 @@ export async function approveReviewTaskInternal(
           submitted === null ||
           !submittedCarriesKey ||
           submitted[fieldName] === null ||
-          submitted[fieldName] === undefined;
+          submitted[fieldName] === undefined ||
+          // cinatra#3582 — a BLANK answer is not an answer. An empty string, a
+          // whitespace-only string and an empty list reach the SAME three
+          // declared readings below as an absent key: a declared default
+          // answers it, a declared-optional field is settled, and a
+          // declared-required field is refused by name. `0` and `false` are
+          // answers, never blank.
+          isBlankSetupValue(submitted[fieldName]);
         if (noValueGiven) {
           const schema = await resolvedInputSchema();
           // cinatra#3452 (convergence round) — an OWN declaration only. A bare
@@ -455,8 +507,17 @@ export async function approveReviewTaskInternal(
                 [fieldName]: submitted[fieldName],
               });
             }
+            // cinatra#3582 — a value that ARRIVED and was empty is told as a
+            // blank rather than as an absence; either way the field is named.
+            const submittedBlankValue =
+              submittedCarriesKey &&
+              submitted !== null &&
+              submitted[fieldName] !== null &&
+              submitted[fieldName] !== undefined;
             throw new Error(
-              `Setup approval rejected: fieldName "${fieldName}" is not present in the submitted values`,
+              submittedBlankValue
+                ? `Setup approval rejected: fieldName "${fieldName}" was submitted blank and the agent declares it required`
+                : `Setup approval rejected: fieldName "${fieldName}" is not present in the submitted values`,
             );
           }
           emptyFieldSettled = true;
@@ -499,6 +560,11 @@ export async function approveReviewTaskInternal(
         const singleFieldProperties = await declaredProperties();
         if (singleFieldProperties) {
           assertSetupValuesMatchDeclaredObjectTypes(singleFieldProperties, {
+            [fieldName]: fieldValue,
+          });
+          // cinatra#3582 — a declared minimum length is refused here too: the
+          // setup screen is only ONE door into a run's inputs.
+          assertSetupValuesSatisfyDeclaredMinLength(singleFieldProperties, {
             [fieldName]: fieldValue,
           });
         }
@@ -550,11 +616,46 @@ export async function approveReviewTaskInternal(
               );
             }
           }
+          // cinatra#3582 — A BLANK ANSWER IS NOT AN ANSWER, on this road too.
+          // The grouped form submits every field at once, so the single-field
+          // reading above never sees these values. A field the schema declares
+          // required and for which it declares no default cannot be merged
+          // blank; a declared default answers it (cinatra#3452) and a field
+          // declared optional is left exactly as it is.
+          const groupedSchema = await resolvedInputSchema();
+          if (groupedSchema) {
+            for (const [key, submittedValue] of Object.entries(fieldValues)) {
+              // An `undefined` value is not a field this road MERGES: the
+              // serialization below drops the key, so this submission writes
+              // nothing for it — whatever the run already carries stands, and a
+              // required field the run carries blank or not at all is still the
+              // setup loop's to ask for (cinatra#2484's reading of an untouched
+              // object field). A BLANK value is the opposite — it would be
+              // written.
+              if (submittedValue === undefined) continue;
+              if (!groupedSchema.required.includes(key)) continue;
+              const declaredGroupedField = Object.prototype.hasOwnProperty.call(
+                groupedSchema.properties,
+                key,
+              )
+                ? groupedSchema.properties[key]
+                : undefined;
+              if (declaredGroupedField?.default !== undefined) continue;
+              if (isBlankSetupValue(submittedValue)) {
+                throw new Error(
+                  `Setup approval rejected: fieldName "${key}" was submitted blank and the agent declares it required`,
+                );
+              }
+            }
+          }
           // cinatra#2484 — same type gate as the single-field path above. Runs
           // AFTER the allowlist so an unknown key still reports as unknown.
           const groupedProperties = await declaredProperties();
           if (groupedProperties) {
             assertSetupValuesMatchDeclaredObjectTypes(groupedProperties, fieldValues);
+            // cinatra#3582 — the grouped form reaches THIS road too, so the
+            // declared minimum is read here as well as on the screen.
+            assertSetupValuesSatisfyDeclaredMinLength(groupedProperties, fieldValues);
           }
           inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
         }
@@ -982,11 +1083,15 @@ export async function approveReviewTaskInternal(
     // A failure OF the dispatch is not released: WayFlow may already have taken
     // the message, and re-opening the gate there is the double resume this whole
     // section exists to prevent.
+    // Read only THIS pre-dispatch materialization, never the latest gate later.
+    let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
+    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
     let dispatchStarted = false;
+    let capturedPromptId: string | null = null;
     try {
       // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
       // ""). Bare-approval flagged excluded=true.
-      await writeHitlPrompt({
+      capturedPromptId = await captureHitlPromptForContinue({
         runId: run.id,
         agentId: template.packageName,
         stepKey: taskId,
@@ -998,6 +1103,7 @@ export async function approveReviewTaskInternal(
         // The first argument of a console call is a CONSTANT: a caller-derived
         // value in it is read as a format string, not as text (cinatra#3423).
         console.warn("[approveReviewTaskInternal] writeHitlPrompt failed", { runId: run.id }, e);
+        return null;
       });
 
       // #1987 (F1 deferred from #1960) — mint the ANSWERED-gate-submission
@@ -1066,7 +1172,8 @@ export async function approveReviewTaskInternal(
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
       // Past this line the answer is on the wire.
       dispatchStarted = true;
-      const task = await client.sendTask({
+      const deadline = Date.now() + WAYFLOW_A2A_TIMEOUT_MS;
+      const initialTask = await client.sendTask({
         message: {
           role: "user",
           kind: "message",
@@ -1075,8 +1182,9 @@ export async function approveReviewTaskInternal(
           parts: [{ kind: "text", text: resumeText }],
           metadata: resumeMetadata,
         },
-        configuration: { acceptedOutputModes: ["text"] },
-      });
+        configuration: { acceptedOutputModes: ["text"], blocking: true },
+      }, {timeoutMs: Math.max(1,deadline-Date.now())});
+      const task = await awaitContinueTaskOutcome(initialTask,client,run.a2aContextId,deadline);
 
       // Lazy import to avoid circular dep (review-task-actions ← actions.ts ←
       // index.ts ← @cinatra-ai/a2a).
@@ -1090,6 +1198,17 @@ export async function approveReviewTaskInternal(
       const { handleWayflowTaskState } = await import("./execution");
       await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority: resumeAuthority });
 
+      const state=task.status?.state;
+      if(capturedPromptId && gateSnapshot && submittedValues !== null
+        && task.contextId===run.a2aContextId && typeof task.id==="string"
+        && (state==="completed" || (state==="input-required" && task.id!==taskId))){
+        await recordSuccessfulContinue({promptId:capturedPromptId,gate:gateSnapshot,submittedValues,
+          receipt:{version:1,runId:run.id,orgId:run.orgId,agentId:template.packageName,
+            reviewTaskId,contextId:run.a2aContextId,returnedTaskId:task.id,returnedState:state,
+            materializedAt:gateSnapshot.materializedAt,schemaDigest:continueGateDigest(gateSnapshot),
+            answerDigest:continueBindingDigest(submittedValues),acknowledgedAt:new Date().toISOString()}
+        }).catch(error=>console.warn("[approveReviewTaskInternal] Continue receipt unavailable",error));
+      }
       console.log("[approveReviewTaskInternal] wayflow-path resumed", {
         runId: run.id,
         taskId,
@@ -1128,4 +1247,49 @@ export async function approveReviewTaskInternal(
     `real UUID paths are not supported after review task row removal. ` +
     `Use synthetic prefix (setup-, wayflow-) for post-migration runs.`,
   );
+}
+
+/** Internal: an accepted async reply is not yet a settled answer. */
+export async function awaitContinueTaskOutcome<T extends {
+  id: string; contextId?: string; status?: {state: string};
+}>(initial: T, client: {getTask(id:string,options?:{signal?:AbortSignal}):Promise<T>},
+  contextId: string, deadline: number): Promise<T> {
+  // Direct replies cross the same boundary as polled replies. The canonical
+  // handler treats an unknown state as completed, so identity and state must
+  // be accepted BEFORE it can mutate the run, not only before writing history.
+  const validate = (value: T): void => {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || typeof value.id !== "string" || value.id.trim().length === 0
+      || /[\u0000-\u001f\u007f]/.test(value.id) || value.contextId !== contextId) {
+      throw new Error("Continue task identity mismatch");
+    }
+    if (!value.status || typeof value.status !== "object" || Array.isArray(value.status)
+      || !["submitted", "working", "input-required", "completed", "failed"].includes(value.status.state)) {
+      throw new Error("Continue outcome is not confirmed");
+    }
+  };
+  validate(initial);
+  if(initial.status?.state!=="working" && initial.status?.state!=="submitted") return initial;
+  // The first reply may legitimately name a NEW next task: the outgoing
+  // message carries a context, not the paused task ID. Subsequent reads must
+  // remain bound to precisely this accepted first task ID and run context.
+  const taskId=initial.id;
+  let task=initial;
+  let pause=250;
+  while(task.status?.state==="working" || task.status?.state==="submitted"){
+    const remaining=deadline-Date.now();
+    if(remaining<=0) throw new Error("Continue outcome deadline exceeded");
+    await new Promise<void>(resolve=>setTimeout(resolve,Math.min(pause,remaining)));
+    const budget=deadline-Date.now();
+    if(budget<=0) throw new Error("Continue outcome deadline exceeded");
+    // getTask has no default timeout. Cancel its actual HTTP call at the
+    // ORIGINAL send deadline, rather than racing an uncancelled promise.
+    task=await client.getTask(taskId,{signal:AbortSignal.timeout(budget)});
+    validate(task);
+    if(task.id!==taskId) throw new Error("Continue task identity mismatch");
+    pause=Math.min(2000,pause*2);
+  }
+  if(task.status?.state!=="completed" && task.status?.state!=="input-required" && task.status?.state!=="failed")
+    throw new Error("Continue outcome is not confirmed");
+  return task;
 }

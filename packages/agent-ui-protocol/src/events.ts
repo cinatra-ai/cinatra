@@ -239,3 +239,75 @@ export type AgUiEvent =
   | InterruptEvent
   | ResumeEvent
   | DataPartEvent; // local DATA_PART extension
+
+// ---------------------------------------------------------------------------
+// THE CARD-REPLACEMENT ANNOUNCEMENT (cinatra#2853).
+//
+// A schedule card can be CHANGED from the prompt window. The change does not
+// edit the card in the store — a proposal ref IS the proposal, so an adjust
+// mints a REPLACEMENT ref and leaves the old one addressable. That is the whole
+// reason this payload exists: the page holds a card mounted on the old ref, and
+// without a word from the server it keeps drawing the schedule the person just
+// asked to change, with its own Confirm still pressable.
+//
+// A DATA_PART, NOT A VIEW. It carries no card and draws nothing: a renderable
+// view would put a SECOND card in the transcript, which is the defect rather
+// than the fix. What it says is only "the card mounted on this ref is now that
+// one" — and the mounted card answers it by re-resolving the new ref under the
+// reader's own access, exactly as it does on mount. So the announcement can only
+// ever cost a re-resolve, and nothing that publishes it needs to be trusted.
+//
+// SESSION-SCOPED BY CONSTRUCTION. It is emitted on the wire and never kept in
+// the turn's durable content: it describes what a MOUNTED card should do now,
+// not what the turn produced. A reload re-draws whatever the transcript's own
+// refs resolve to, which is exactly what the card's own Adjust button already
+// leaves behind.
+// ---------------------------------------------------------------------------
+
+/** The `kind` discriminator of the card-replacement DATA_PART payload. */
+export const LIFECYCLE_CARD_REPLACEMENT_PART_KIND = "lifecycle_card_replacement";
+
+/** "The card mounted on `supersededRef` is now `ref`." Refs only, never content. */
+export type LifecycleCardReplacementDataPart = {
+  kind: typeof LIFECYCLE_CARD_REPLACEMENT_PART_KIND;
+  /**
+   * The card kind the two refs address.
+   *
+   * NAMED `cardViewType`, NOT `viewType`, AND THAT IS LOAD-BEARING. The chat
+   * renderer classifies ANY data part carrying a non-empty string `viewType` as
+   * a renderable view and sends it to the interactive dispatch, which draws it —
+   * the safe fallback at worst. An announcement that draws a card is the SECOND
+   * card this payload exists to prevent, so it must not carry that field at all.
+   */
+  cardViewType: string;
+  /** The ref the mounted card is drawn from now. */
+  supersededRef: string;
+  /** The ref that replaced it. */
+  ref: string;
+};
+
+/**
+ * Narrow an arbitrary DATA_PART payload to the replacement announcement.
+ * Total and never throws — an announcement missing either ref is not one.
+ */
+export function isLifecycleCardReplacementDataPart(
+  data: unknown,
+): data is LifecycleCardReplacementDataPart {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return false;
+  const d = data as Record<string, unknown>;
+  // A PAYLOAD THAT WOULD BE DRAWN IS NOT AN ANNOUNCEMENT. The renderer's rule is
+  // "a non-empty string `viewType` is a renderable view"; refusing such a
+  // payload here keeps the invariant checkable at the boundary instead of
+  // resting on the emitter remembering it.
+  if (typeof d.viewType === "string" && d.viewType.length > 0) return false;
+  return (
+    d.kind === LIFECYCLE_CARD_REPLACEMENT_PART_KIND &&
+    typeof d.cardViewType === "string" &&
+    d.cardViewType.length > 0 &&
+    typeof d.supersededRef === "string" &&
+    d.supersededRef.length > 0 &&
+    typeof d.ref === "string" &&
+    d.ref.length > 0 &&
+    d.ref !== d.supersededRef
+  );
+}

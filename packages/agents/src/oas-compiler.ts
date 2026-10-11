@@ -1887,7 +1887,7 @@ export async function compileOasAgentJson(opts: {
           items?: unknown;
           properties?: Record<string, unknown>;
           required?: string[];
-          json_schema?: { items?: unknown; properties?: Record<string, unknown>; required?: string[] };
+          json_schema?: { items?: unknown; properties?: Record<string, unknown>; required?: string[]; minLength?: unknown };
         }>;
         metadata?: {
           cinatra?: {
@@ -1986,6 +1986,20 @@ export async function compileOasAgentJson(opts: {
     // truthiness: `"default": ""` is the canonical hidden-input declaration and
     // satisfies the runtime like any other value.
     if (flowInputDefaults.has(title)) propShape.default = flowInputDefaults.get(title);
+    // cinatra#3582 — a declared MINIMUM LENGTH is a constraint the setup screen
+    // and the approval road both read, so it has to survive compilation like
+    // `items` and the `x-` hints above. Without this copy a minimum an agent
+    // declares is inert end to end. Same nesting fallback as `items`: top level
+    // or under `json_schema`.
+    const declaredMinLength =
+      (prop as { minLength?: unknown }).minLength ?? prop.json_schema?.minLength;
+    if (
+      typeof declaredMinLength === "number" &&
+      Number.isInteger(declaredMinLength) &&
+      declaredMinLength > 0
+    ) {
+      propShape.minLength = declaredMinLength;
+    }
     inputSchemaProperties[title] = propShape;
   }
   const inputSchema: Record<string, unknown> = {
