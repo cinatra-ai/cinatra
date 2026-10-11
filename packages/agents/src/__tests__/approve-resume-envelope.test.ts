@@ -78,6 +78,13 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+vi.mock("../agent-run-hitl-prompts", () => ({
+  captureHitlPromptForContinue: async (input: never) => {
+    await storeMock.writeHitlPrompt(input); return "captured-prompt";
+  },
+  recordSuccessfulContinue: async () => {},
+  continueBindingDigest: () => "", continueGateDigest: () => "",
+}));
 
 vi.mock("../wayflow-url", () => ({
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),

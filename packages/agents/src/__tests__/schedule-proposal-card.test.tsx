@@ -1608,3 +1608,161 @@ describe("a settled card's Save changes answers only to its own edits", () => {
     expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A SETTLED ONE-OFF'S SAVE CHANGES (cinatra#3903)
+//
+// "a refusal is drawn as the card's refusal line and leaves the armed time in
+// place, visibly". A refused save draws the refusal line and no saved line,
+// keeps the reader's draft and the live control, and does not re-resolve. The
+// converse arm: a landed save draws the saved line, quiets the control and
+// re-resolves.
+// ---------------------------------------------------------------------------
+
+describe("a settled one-off's Save changes: a refusal keeps the armed rows, a landed save says so", () => {
+  /**
+   * The settled read-back of ONE armed one-off. Every resolve answers the same
+   * armed schedule and is counted; every decision POST is recorded as its parsed
+   * body and answered with the case's own answer.
+   */
+  function settledOneOffTransport(answer: () => Response) {
+    let resolves = 0;
+    const decisions: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const raw = typeof init?.body === "string" ? init.body : "";
+      if (raw.includes('"op"')) {
+        decisions.push(JSON.parse(raw) as Record<string, unknown>);
+        return answer();
+      }
+      resolves += 1;
+      return new Response(
+        JSON.stringify({
+          kind: "trigger_schedule_proposal",
+          state: { state: "settled" },
+          body: settledBody({
+            triggerType: "scheduled",
+            canCancel: false,
+            scheduleCopy: "Once, at 2099-03-04 09:00",
+            schedule: { kind: "scheduled", runAt: "2099-03-04T09:00", timezone: "Europe/Berlin" },
+          }),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    return { resolveCount: () => resolves, decisions };
+  }
+
+  it("a refused save of a changed one-off time draws the refusal line and keeps the armed rows", async () => {
+    const { resolveCount, decisions } = settledOneOffTransport(
+      () =>
+        new Response(
+          JSON.stringify({
+            outcome: { kind: "error", message: SAVE_SCHEDULE_REFUSALS.firedOneOff },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    fireEvent.change(container.querySelector('[data-field="schedule-run-at"]')!, {
+      target: { value: "2099-03-04T10:00" },
+    });
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+    const before = resolveCount();
+    fireEvent.click(container.querySelector('[data-action="save-schedule-changes"]')!);
+
+    await waitFor(() => {
+      const lines = container.querySelectorAll('[data-conformance-id="schedule-proposal-refusal"]');
+      expect(lines).toHaveLength(1);
+      expect(lines[0].textContent).toBe(SAVE_SCHEDULE_REFUSALS.firedOneOff);
+    });
+    expect(container.querySelector('[data-conformance-id="schedule-saved"]')).toBeNull();
+    const control = container.querySelector('[data-action="save-schedule-changes"]');
+    expect(isDisabled(control)).toBe(false);
+    expect(control?.textContent).toContain("Save changes");
+    expect(control?.textContent).not.toContain("Saving…");
+    expect(
+      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+    ).toBe("2099-03-04T10:00");
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].op).toBe("save");
+    expect(decisions[0].ref).toBe(VIEW.ref);
+    expect((decisions[0].schedule as { runAt: string }).runAt).toBe("2099-03-04T10:00");
+    // A refusal does not re-resolve: nothing landed, so the armed rows stand.
+    expect(resolveCount()).toBe(before);
+  });
+
+  it("a non-2xx answer to a save draws the uniform refusal and keeps the armed rows", async () => {
+    const { resolveCount, decisions } = settledOneOffTransport(
+      () => new Response("nope", { status: 500 }),
+    );
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    fireEvent.change(container.querySelector('[data-field="schedule-run-at"]')!, {
+      target: { value: "2099-03-04T10:00" },
+    });
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+    const before = resolveCount();
+    fireEvent.click(container.querySelector('[data-action="save-schedule-changes"]')!);
+
+    await waitFor(() => {
+      const lines = container.querySelectorAll('[data-conformance-id="schedule-proposal-refusal"]');
+      expect(lines).toHaveLength(1);
+      expect(lines[0].textContent).toBe("This action could not be taken on this surface.");
+    });
+    expect(container.querySelector('[data-conformance-id="schedule-saved"]')).toBeNull();
+    const control = container.querySelector('[data-action="save-schedule-changes"]');
+    expect(isDisabled(control)).toBe(false);
+    expect(control?.textContent).toContain("Save changes");
+    expect(control?.textContent).not.toContain("Saving…");
+    expect(
+      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+    ).toBe("2099-03-04T10:00");
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].op).toBe("save");
+    expect(decisions[0].ref).toBe(VIEW.ref);
+    expect((decisions[0].schedule as { runAt: string }).runAt).toBe("2099-03-04T10:00");
+    expect(resolveCount()).toBe(before);
+  });
+
+  it("a landed save draws the saved line and quiets the control", async () => {
+    const { resolveCount } = settledOneOffTransport(
+      () =>
+        new Response(JSON.stringify({ outcome: { kind: "saved", runId: "run-777" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    fireEvent.change(container.querySelector('[data-field="schedule-run-at"]')!, {
+      target: { value: "2099-03-04T10:00" },
+    });
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+    const before = resolveCount();
+    fireEvent.click(container.querySelector('[data-action="save-schedule-changes"]')!);
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="schedule-saved"]')?.textContent,
+      ).toBe("Saved — the trigger is re-armed on these rows."),
+    );
+    expect(container.querySelector('[data-conformance-id="schedule-proposal-refusal"]')).toBeNull();
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    expect(
+      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+    ).toBe("2099-03-04T10:00");
+    // A landed save RE-RESOLVES.
+    await waitFor(() => expect(resolveCount()).toBeGreaterThan(before));
+  });
+});

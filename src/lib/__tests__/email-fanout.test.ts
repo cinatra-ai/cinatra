@@ -496,3 +496,84 @@ describe("startInitialSend — fan-out at the send boundary", () => {
     expect(emitEmailFanout).not.toHaveBeenCalled();
   });
 });
+
+describe("startInitialSend — a draft is addressed to its own recipient only", () => {
+  const mixedRecipients = {
+    id: "recip-ref",
+    type: "@cinatra-ai/campaigns:recipients",
+    data: {
+      confirmedRecipients: [
+        { contactId: "c1", email: "one@example.com", name: "One" },
+        { contactId: "c2", name: "Two" },
+      ],
+    },
+  };
+  const sentCallsFor = (sendEmail: ReturnType<typeof vi.fn>, subject: string) =>
+    sendEmail.mock.calls.filter(
+      (call) => (call[0] as { subject: string }).subject === subject,
+    );
+
+  it("a draft without an address of its own is never addressed to another recipient", async () => {
+    const { deps, sendEmail } = makeSendDeps({ recipBundle: mixedRecipients });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.startInitialSend(sendInput, actor);
+    expect(result).toMatchObject({ status: "completed", sentCount: 1 });
+    for (const call of sentCallsFor(sendEmail, "S2")) {
+      expect((call[0] as { to: string[] }).to).not.toContain("one@example.com");
+    }
+    expect(sentCallsFor(sendEmail, "S2")).toHaveLength(0);
+  });
+
+  it("the first recipient's own draft still goes to the first recipient", async () => {
+    const { deps, sendEmail } = makeSendDeps({ recipBundle: mixedRecipients });
+    const uc = createTriggerEmailSendUseCases(deps);
+    await uc.startInitialSend(sendInput, actor);
+    const calls = sentCallsFor(sendEmail, "S1");
+    expect(calls).toHaveLength(1);
+    expect((calls[0][0] as { to: string[] }).to).toEqual(["one@example.com"]);
+  });
+
+  it("a draft matched by its contact id takes the matched recipient's address", async () => {
+    const { deps, sendEmail } = makeSendDeps({
+      draftBundle: {
+        id: "draft-ref",
+        type: "@cinatra-ai/campaigns:email-draft-bundle",
+        data: {
+          drafts: [{ id: "d1", contactId: "c2", subject: "S1", body: "B1" }],
+        },
+      },
+    });
+    const uc = createTriggerEmailSendUseCases(deps);
+    await uc.startInitialSend(sendInput, actor);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect((sendEmail.mock.calls[0][0] as { to: string[] }).to).toEqual(["two@example.com"]);
+  });
+
+  it("a draft without any address is not sent and the run completes with the drafts that were sent", async () => {
+    const { deps, sendEmail } = makeSendDeps({
+      draftBundle: {
+        id: "draft-ref",
+        type: "@cinatra-ai/campaigns:email-draft-bundle",
+        data: {
+          drafts: [
+            { id: "d1", contactId: "c1", subject: "S1", body: "B1" },
+            { id: "d2", recipientEmail: "own@example.com", subject: "S2", body: "B2" },
+          ],
+        },
+      },
+      recipBundle: {
+        id: "recip-ref",
+        type: "@cinatra-ai/campaigns:recipients",
+        data: { confirmedRecipients: [{ contactId: "c1", name: "One" }] },
+      },
+    });
+    const uc = createTriggerEmailSendUseCases(deps);
+    const result = await uc.startInitialSend(sendInput, actor);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect((sendEmail.mock.calls[0][0] as { to: string[] }).to).toEqual(["own@example.com"]);
+    expect(result).toMatchObject({ status: "completed", sentCount: 1 });
+    expect((result as { errorMessage?: string }).errorMessage).toBeUndefined();
+    const status = await uc.getInitialSendStatus({ campaignId: "camp-1" }, actor);
+    expect(status).toMatchObject({ status: "completed", sentCount: 1 });
+  });
+});

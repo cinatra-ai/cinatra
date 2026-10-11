@@ -250,6 +250,10 @@ vi.mock("@/lib/better-auth-db", () => ({
   readProjectsForUser: vi.fn(async () => []),
 }));
 
+vi.mock("../started-run-store", () => ({
+  readStartedRunsFor: vi.fn(async () => []),
+}));
+
 vi.mock("../store", () => ({
   readAgentTemplateBySlug: vi.fn(async () => makeTemplate()),
   readAgentRunById: vi.fn(async () => makeRun()),
@@ -265,12 +269,23 @@ vi.mock("../auth-policy", () => ({
   resolveTemplateVisibilityActor: vi.fn(async () => ({})),
 }));
 
-vi.mock("../artifact-review-gate-store", () => ({
-  listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
-  readReviewGate: vi.fn(async () => null),
-  readRunReviewSlot: vi.fn(async () => ({ reviewTaskId: null, awaiting: false })),
-  readVerificationRecordsForGates: vi.fn(async () => verifications.rows),
-}));
+vi.mock("../artifact-review-gate-store", async () => {
+  // cinatra#3046 — this screen also asks the store whether the run is parked on
+  // the review its own output opened. That predicate is PURE: it answers from the
+  // run row it is handed, so this factory hands the suite the REAL one (re-exported
+  // by the store from its writer) instead of a stub that could answer differently
+  // from the page under test.
+  const hold = await vi.importActual<typeof import("../run-produced-review-hold")>(
+    "../run-produced-review-hold",
+  );
+  return {
+    listReviewGatesForRun: vi.fn(async () => reviewGates.rows),
+    readReviewGate: vi.fn(async () => null),
+    readRunReviewSlot: vi.fn(async () => ({ reviewTaskId: null, awaiting: false })),
+    readVerificationRecordsForGates: vi.fn(async () => verifications.rows),
+    isParkedOnProducedReview: hold.isParkedOnProducedReview,
+  };
+});
 
 vi.mock("../lifecycle-policy-store", () => ({
   readLifecycleDecisionsForRun: vi.fn(async () => []),
@@ -407,7 +422,12 @@ function railEntryLabels(column: HTMLElement): string[] {
         "[data-schedule-rail-step],[data-recommendation-rail-step]",
     ),
   )
-    .filter((el) => el.parentElement?.closest("[data-run-surface-rail-step]") == null)
+    // ONE NODE PER ENTRY. A panel entry draws a wrapper that stands for the
+    // entry (`data-rail-kind`) with its own ROW inside it, and the row is where
+    // the rail's state marks sit (run-step-rail-extra-entry) -- so the union
+    // above matches the entry twice. The node that stands for the entry is the
+    // one kept; anything nested inside it is the same entry read again.
+    .filter((el) => el.parentElement?.closest("[data-rail-kind]") == null)
     .map((el) => (el.textContent ?? "").trim())
     .filter((text) => text.length > 0)
     .map((text) => text.replace(/^\d+/, ""));
@@ -506,13 +526,19 @@ describe("the parked review opens in the run detail, under the same rail (cinatr
     // the selected anchor) -- so one reading of the rail answers for every row
     // of it. Exactly one row reads current: with the review on the detail, no
     // spine row does.
+    // THE READING IS KEYED ON THE ENTRY, the way the collapsing predicate above
+    // is: an entry marks its state on the ROW it draws inside its wrapper, so a
+    // spine row is a marked row that stands inside no entry at all.
     expect(control.getAttribute("aria-current")).toBe("step");
+    // Approved artifact-review drawing §I.3: one entry is highlighted at a time.
     expect(control.getAttribute("data-run-surface-rail-selected")).toBe("true");
-    expect(
-      columnAfter.querySelector(
+    const current = Array.from(
+      columnAfter.querySelectorAll<HTMLElement>(
         '[data-run-surface-rail-step][data-run-surface-rail-selected="true"]',
       ),
-    ).toBeNull();
+    );
+    expect(current.filter((el) => el.closest("[data-rail-kind]") == null)).toEqual([]);
+    expect(current).toEqual([control]);
   });
 
   it("opens that same screen from the keyboard — Enter and Space on the control", async () => {

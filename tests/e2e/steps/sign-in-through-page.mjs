@@ -25,7 +25,7 @@
 //      the sign-in page.
 import { randomUUID } from "node:crypto";
 
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "signInThroughPage";
 
@@ -112,7 +112,8 @@ export function createSignInBudget() {
 }
 
 // These run IN THE PAGE. Playwright sends each one's source text, so none of
-// them may use anything of this module.
+// them may use anything of this module. signInThroughWindow reads its window's
+// form with the same ones.
 
 /** True once the form that holds the password field carries the hydration mark. */
 function signInFormHydrated({ password, mark }) {
@@ -121,7 +122,7 @@ function signInFormHydrated({ password, mark }) {
 }
 
 /** What the sign-in page shows, for a stall's reading. Never a field's value. */
-function readSignInForm({ password, submit, mark }) {
+export function readSignInForm({ password, submit, mark }) {
   const field = document.querySelector(password);
   const form = field && field.form ? field.form : null;
   const button = document.querySelector(submit);
@@ -161,7 +162,7 @@ function readLanding({ selectors }) {
  * submission nobody cancelled, the native one a press before hydration makes, is
  * cancelled here and counted. The step removes it when the sign-in ends.
  */
-function armNativeSubmitGuard(key) {
+export function armNativeSubmitGuard(key) {
   if (window[key]) return true;
   const guard = { cancelled: 0 };
   guard.listener = function cancelNativeSubmit(event) {
@@ -175,13 +176,13 @@ function armNativeSubmitGuard(key) {
 }
 
 /** How many native submissions the page guard cancelled; null when this document carries no guard. */
-function readNativeSubmitGuard(key) {
+export function readNativeSubmitGuard(key) {
   const guard = window[key];
   return guard ? guard.cancelled : null;
 }
 
 /** Remove the page guard; its count, or null when this document carries none. */
-function disarmNativeSubmitGuard(key) {
+export function disarmNativeSubmitGuard(key) {
   const guard = window[key];
   if (!guard) return null;
   window.removeEventListener("submit", guard.listener);
@@ -189,7 +190,7 @@ function disarmNativeSubmitGuard(key) {
   return guard.cancelled;
 }
 
-function describeReading(reading) {
+export function describeReading(reading) {
   if (!reading || reading.unreadable) return `the page could not be read (${reading?.unreadable ?? "no reading"})`;
   return [
     `path ${reading.path}`,
@@ -271,6 +272,7 @@ export async function signInThroughPage(
   page,
   { credentials, budget, record, url = SIGN_IN_PAGE_PATH, ready = SIGN_IN_READY_SELECTORS, bounds } = /** @type {any} */ ({}),
 ) {
+  refuseFrameScope(STEP, record, page, "nothing was sent");
   requireRecord(STEP, record);
   const nothingSent = "nothing was sent";
   // Without the run's own count the rule could only be kept per call, which is no rule at all.

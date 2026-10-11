@@ -1825,7 +1825,12 @@ function checkFsAndEnvBans(pkg, relFiles) {
 //     (file, road) whose comment-stripped text names a road of
 //     ARTIFACT_CREATING_ROADS (derived from the SDK) as a whole token. Findings
 //     on CONNECTOR_ARTIFACT_BORDER_FLOOR go to `known`; a floor entry of the
-//     package with no matching finding is `border.connector-floor-stale`.
+//     package with no matching finding is `border.connector-floor-stale`: the
+//     SINGLE-PACKAGE run (`--package`) answers it with a NOTE that names the
+//     entry (the connector's cure must be able to pass while the application's
+//     pinned floor still holds it), and the FLEET reading over the materialized
+//     tree (connector-artifact-border-fleet.test.mjs) FAILS on it, so the
+//     application drops the entry in the change that moves its pin.
 // Both run for `cinatra.kind === "connector"` only.
 //
 // WHAT THESE RULES CANNOT SEE: a road id assembled at run time or passed in a
@@ -1895,8 +1900,11 @@ function inScopeSourceFiles(pkgDir, pkg) {
  * reads). Returns `{ findings, floored, stale }`: `findings` are the failing
  * `border.connector-creates-artifact` findings outside the floor, `floored` the
  * ones on the floor (each carries its `floorKey`), and `stale` one
- * `border.connector-floor-stale` finding per floor entry of this package that
- * no finding matches. All three are empty for a package of any other kind.
+ * `border.connector-floor-stale` entry (with its `floorKey`) per floor entry of
+ * this package that no finding matches. All three are empty for a package of
+ * any other kind. The single-package run (`runConformanceGate`) answers a
+ * `stale` entry with a note (`borderNotes`), never a failure; the fleet reading
+ * over the materialized tree, which calls this function directly, fails on it.
  */
 export function checkConnectorArtifactBorder(pkgDir, pkg, rules, relFiles) {
   const out = { findings: [], floored: [], stale: [] };
@@ -1940,6 +1948,7 @@ export function checkConnectorArtifactBorder(pkgDir, pkg, rules, relFiles) {
     out.stale.push({
       rule: "border.connector-floor-stale",
       file: key.slice(prefix.length).split(":")[0],
+      floorKey: key,
       detail: `the floor entry "${key}" matches no finding — remove it from CONNECTOR_ARTIFACT_BORDER_FLOOR (the floor only shrinks).`,
     });
   }
@@ -2122,8 +2131,16 @@ export function runConformanceGate({ packageDir, sdkRoot, strict = false }) {
     ...checkFsAndEnvBans(pkg, inScopeSource),
   ];
   // cinatra#3821 class 5: floored findings are reported as known (strict fails them).
+  // A floor entry of this package with no finding is a note here, never a
+  // failure (also under strict); the fleet reading fails it.
   const border = checkConnectorArtifactBorder(packageDir, pkg, rules, inScopeSource);
-  findings.push(...border.findings, ...border.stale);
+  findings.push(...border.findings);
+  const borderNotes = border.stale.map((s) => ({
+    rule: s.rule,
+    file: s.file,
+    floorKey: s.floorKey,
+    detail: `no use here; the application's floor drops the entry "${s.floorKey}" at its next pin of this connector (CONNECTOR_ARTIFACT_BORDER_FLOOR only shrinks).`,
+  }));
 
   // cinatra#3867: the known older findings of connectors on their floor go to
   // known (strict fails them); a line of this package with no finding is a
@@ -2144,6 +2161,7 @@ export function runConformanceGate({ packageDir, sdkRoot, strict = false }) {
     known,
     advisory,
     notes: olderFloor.cured,
+    borderNotes,
     conform: blocking.length === 0,
   };
 }
@@ -2160,6 +2178,9 @@ function printHumanReport(result) {
     console.log(`  WARN  [${f.rule}] ${f.file}: ${f.detail}`);
   }
   for (const f of result.notes ?? []) {
+    console.log(`  NOTE  [${f.rule}] ${f.file}: ${f.detail}`);
+  }
+  for (const f of result.borderNotes ?? []) {
     console.log(`  NOTE  [${f.rule}] ${f.file}: ${f.detail}`);
   }
   if (result.conform) console.log("  conform");

@@ -3,7 +3,7 @@
  * REAL-store proof of the persistence half of the #1795/#1807 review surface:
  * the emitting gate PINS immutable targets, and the DECISION core's atomic
  * commit resolves the gate (CAS) transactionally with the audit rows, the
- * reject→tombstone disposition record, and the exactly-once-persisted resume
+ * legacy reject→tombstone readback, and the exactly-once-persisted resume
  * intent (at-least-once delivery).
  *
  * Proves, against real DDL + constraints (fresh schema per file from the
@@ -19,7 +19,8 @@
  *             runtime+digest / floor) …
  *   RESUME    … and exactly ONE resume outbox intent (kind-discriminated;
  *   -INTENT   approve-envelope asserts approval, reject-envelope does NOT).
- *   REJECT  — records a tombstone disposition per target (applied_at NULL,
+ *   REJECT  — new submissions refuse without changing any store row (§VI);
+ *             seeded historical tombstones stay readable (applied_at NULL,
  *             never a hard delete).
  *   IDEMPOTENT — a response-lost retry of the SAME decision is idempotent
  *             (no duplicate audit/outbox rows; plan null).
@@ -40,6 +41,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { buildRunStepRail } from "../run-step-rail";
 import { Client } from "pg";
 import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 
@@ -49,6 +51,7 @@ import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 // module load) are dynamic-imported AFTER SUPABASE_SCHEMA is set in beforeAll.
 import {
   submitReviewDecisionCore,
+  reviewDecisionFingerprint,
   ARTIFACT_REVIEW_DECISION_API_VERSION,
   type SubmitDecisionPorts,
   type ReviewRendererProvenance,
@@ -56,7 +59,7 @@ import {
   type ReviewDisposition,
   type ReviewDecisionCommitPlan,
 } from "@/lib/artifacts/artifact-review-decision";
-import { payloadAssertsApproval } from "@/lib/artifacts/artifact-review-rejection";
+import { buildReviewRejectEnvelope, payloadAssertsApproval } from "@/lib/artifacts/artifact-review-rejection";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_review_gate_1796";
@@ -136,6 +139,76 @@ function mkDecision(input: {
   };
 }
 
+
+/** Read every persisted field, not only counts: refused decisions must leave the
+ * pin, actor, fingerprint, audit, tombstones and resume intent unchanged. */
+async function readDecisionRows(gateId: string) {
+  const gate = await client.query(
+    `SELECT * FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE id = $1`,
+    [gateId],
+  );
+  const audit = await client.query(
+    `SELECT * FROM "${q(TEST_SCHEMA)}"."artifact_review_audit" WHERE gate_id = $1 ORDER BY id`,
+    [gateId],
+  );
+  const dispositions = await client.query(
+    `SELECT * FROM "${q(TEST_SCHEMA)}"."artifact_review_dispositions" WHERE gate_id = $1 ORDER BY id`,
+    [gateId],
+  );
+  const outbox = await client.query(
+    `SELECT * FROM "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox" WHERE gate_id = $1`,
+    [gateId],
+  );
+  return { gate: gate.rows, audit: audit.rows, dispositions: dispositions.rows, outbox: outbox.rows };
+}
+
+/** Already-persisted historical rows, seeded directly into the canonical fixture
+ * schema. Never call the retired Reject decision operation to manufacture history. */
+async function seedHistoricalReject(input: {
+  runId: string;
+  reviewTaskId: string;
+  target: Target;
+  actor: string;
+}) {
+  const gateId = randomUUID();
+  const targets = [input.target];
+  const comment = "not good";
+  const fingerprint = reviewDecisionFingerprint({
+    runId: input.runId, reviewTaskId: input.reviewTaskId,
+    disposition: "reject", comment, reviewedTargets: targets,
+  });
+  const responseText = JSON.stringify(buildReviewRejectEnvelope({
+    reviewTaskId: input.reviewTaskId, comment, targets,
+  }));
+  await client.query(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       (id, run_id, org_id, review_task_id, status, pinned_targets, disposition, fingerprint, resolved_by, resolved_at)
+     VALUES ($1,$2,$3,$4,'resolved',$5::jsonb,'reject',$6,$7,now())`,
+    [gateId, input.runId, ORG, input.reviewTaskId, JSON.stringify(targets), fingerprint, input.actor],
+  );
+  await client.query(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_audit"
+       (id, gate_id, run_id, review_task_id, decision_fingerprint, artifact_id, representation_revision_id,
+        disposition, renderer_kind, renderer_package)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'reject','build-map','@cinatra-ai/default-artifact')`,
+    [randomUUID(), gateId, input.runId, input.reviewTaskId, fingerprint, input.target.artifactId, input.target.representationRevisionId],
+  );
+  await client.query(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_dispositions"
+       (id, gate_id, org_id, run_id, artifact_id, representation_revision_id, kind, applied_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'tombstone',NULL)`,
+    [randomUUID(), gateId, ORG, input.runId, input.target.artifactId, input.target.representationRevisionId],
+  );
+  await client.query(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+       (gate_id, run_id, review_task_id, kind, response_text, status)
+     VALUES ($1,$2,$3,'reject',$4,'pending')`,
+    [gateId, input.runId, input.reviewTaskId, responseText],
+  );
+  return { gateId, fingerprint, responseText };
+}
+
+describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real store)", () => {
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -208,32 +281,41 @@ afterAll(async () => {
   if (cleanupError) throw cleanupError;
 });
 
-describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real store)", () => {
   // -------------------------------------------------------------------------
   // PIN — the emitting gate.
   // -------------------------------------------------------------------------
-  it("PIN: emits a pending gate with the canonical frozen target set", async () => {
+  it("PIN: emits a pending singleton gate and deduplicates identical pins", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    const a1 = `art-${randomUUID()}`;
     const a2 = `art-${randomUUID()}`;
-    // Deliberately UNSORTED + duplicated on input — emit canonicalizes + dedupes.
+    // Repeated identical pins describe one artifact revision, not another target.
     const emit = await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,
       reviewTaskId,
       targets: [
         { artifactId: a2, representationRevisionId: "rev-2" },
-        { artifactId: a1, representationRevisionId: "rev-1" },
         { artifactId: a2, representationRevisionId: "rev-2" },
       ],
     });
     expect(emit.idempotent).toBe(false);
-    expect(emit.targets).toHaveLength(2); // deduped
+    expect(emit.targets).toEqual([{ artifactId: a2, representationRevisionId: "rev-2" }]);
 
     const pinned = await gateStore.readGatePinnedTargets(runId, reviewTaskId);
     expect(pinned.status).toBe("pending");
     const state = await gateStore.readReviewGateState(runId, reviewTaskId);
     expect(state.status).toBe("pending");
+  });
+
+  it("PIN: refuses a new combined gate without storing a partial singleton", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    await expect(gateStore.emitArtifactReviewGate({
+      runId, orgId: ORG, reviewTaskId,
+      targets: [
+        { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" },
+        { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" },
+      ],
+    })).rejects.toMatchObject({ code: "invalid-targets" });
+    expect(await gateStore.readReviewGate(runId, reviewTaskId)).toBeNull();
   });
 
   it("PIN: re-emit of the SAME set is idempotent; a DIFFERENT set fails closed", async () => {
@@ -273,7 +355,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // DECIDE → CAS → AUDIT → RESUME-INTENT (the full path, real commit).
   // -------------------------------------------------------------------------
-  it("APPROVE: resolves the gate (CAS), writes audit rows with provenance, and enqueues ONE approve resume intent", async () => {
+  it("LEGACY APPROVE: a grandfathered combined gate settles as minted with both audits and one resume intent", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const aBuild = `art-${randomUUID()}`;
     const aRuntime = `art-${randomUUID()}`;
@@ -281,7 +363,18 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       { artifactId: aBuild, representationRevisionId: "rev-b" },
       { artifactId: aRuntime, representationRevisionId: "rev-r" },
     ];
+    // Historical gates remain valid decisions over their original whole set.
+    // Seed that already-minted row, rather than creating a new combined review.
+    const historicalGateId = randomUUID();
+    await client.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+         (id, run_id, org_id, review_task_id, status, pinned_targets)
+       VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`,
+      [historicalGateId, runId, ORG, reviewTaskId, JSON.stringify(targets)],
+    );
     const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+    expect(emit.idempotent).toBe(true);
+    expect(emit.gateId).toBe(historicalGateId);
 
     const ports = makeDecidePorts({
       provenance: {
@@ -325,30 +418,60 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     expect(await gateStore.readGateDispositions(emit.gateId)).toHaveLength(0);
   });
 
-  it("REJECT: records a tombstone disposition per target (applied_at NULL) + a reject resume intent that never reads as approval", async () => {
+  it("§VI REJECT: a new decision refuses with no gate, actor, audit, tombstone or resume writes", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const art = `art-${randomUUID()}`;
     const targets: Target[] = [{ artifactId: art, representationRevisionId: "rev-x" }];
     const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+    const before = await readDecisionRows(emit.gateId);
 
-    const res = await  submitReviewDecisionCore(
+    const res = await submitReviewDecisionCore(
       mkDecision({ runId, reviewTaskId, disposition: "reject", targets, comment: "not good" }),
-      makeDecidePorts(),
+      makeDecidePorts({ actingActorId: "user-V-reviewer" }),
     );
-    expect(res.ok).toBe(true);
+    expect(res).toEqual({ ok: false, error: {
+      kind: "invalid-decision",
+      message: "There is no Reject decision. Leave the review open, Comment, or Continue.",
+    } });
+    expect(await readDecisionRows(emit.gateId)).toEqual(before);
+    const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("pending");
+    expect(gate?.pinnedTargets).toEqual(targets);
+    expect(gate?.disposition).toBeNull();
+    expect(gate?.fingerprint).toBeNull();
+    expect(gate?.resolvedBy).toBeNull();
+    expect(gate?.resolvedAt).toBeNull();
+    expect(await gateStore.readGateAuditRows(emit.gateId)).toHaveLength(0);
+    expect(await gateStore.readGateDispositions(emit.gateId)).toHaveLength(0);
+    expect(await gateStore.readResumeIntent(emit.gateId)).toBeNull();
+  });
 
+  it("LEGACY REJECT: historical tombstones and the non-approval resume intent remain readable", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const target = { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-x" };
+    const historical = await seedHistoricalReject({ runId, reviewTaskId, target, actor: "user-decider" });
+    const before = await readDecisionRows(historical.gateId);
     const gate = await gateStore.readReviewGate(runId, reviewTaskId);
     expect(gate?.status).toBe("resolved");
     expect(gate?.disposition).toBe("reject");
-
-    const dispositions = await gateStore.readGateDispositions(emit.gateId);
+    expect(gate?.fingerprint).toBe(historical.fingerprint);
+    expect(gate?.pinnedTargets).toEqual([target]);
+    expect(await gateStore.readReviewGateState(runId, reviewTaskId)).toEqual({
+      status: "resolved", fingerprint: historical.fingerprint,
+    });
+    const audit = await gateStore.readGateAuditRows(historical.gateId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].disposition).toBe("reject");
+    expect(audit[0].representationRevisionId).toBe(target.representationRevisionId);
+    const dispositions = await gateStore.readGateDispositions(historical.gateId);
     expect(dispositions).toHaveLength(1);
     expect(dispositions[0].kind).toBe("tombstone");
     expect(dispositions[0].appliedAt).toBeNull(); // never hard-deleted; pending downstream
-
-    const intent = await gateStore.readResumeIntent(emit.gateId);
+    const intent = await gateStore.readResumeIntent(historical.gateId);
     expect(intent?.kind).toBe("reject");
+    expect(intent?.responseText).toBe(historical.responseText);
     expect(payloadAssertsApproval(JSON.parse(intent!.responseText))).toBe(false);
+    expect(await readDecisionRows(historical.gateId)).toEqual(before);
   });
 
   it("IDEMPOTENT: a response-lost retry of the SAME decision is idempotent — no duplicate audit / outbox rows", async () => {
@@ -378,17 +501,21 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     const art = `art-${randomUUID()}`;
     const targets: Target[] = [{ artifactId: art, representationRevisionId: "rev-1" }];
     const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
-    await  submitReviewDecisionCore(
+    const first = await submitReviewDecisionCore(
       mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
       makeDecidePorts(),
     );
+    expect(first.ok).toBe(true);
+    const before = await readDecisionRows(emit.gateId);
     const conflicting = await  submitReviewDecisionCore(
-      mkDecision({ runId, reviewTaskId, disposition: "reject", targets }),
+      mkDecision({ runId, reviewTaskId, disposition: "approve", targets, comment: "a different note" }),
       makeDecidePorts(),
     );
     expect(conflicting.ok).toBe(false);
     if (conflicting.ok) return;
     expect(conflicting.error.kind).toBe("gate-conflict");
+
+    expect(await readDecisionRows(emit.gateId)).toEqual(before);
 
     // Unchanged: still approve, one audit row, no reject disposition.
     const gate = await gateStore.readReviewGate(runId, reviewTaskId);
@@ -588,20 +715,28 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     expect(gate?.resolvedBy).toBe("user-V-reviewer");
   });
 
-  it("RECORD: a terminal REJECT stamps the deciding actor too", async () => {
+  it("RECORD: a historical REJECT retains its actor; another Reject cannot alter the resolved rows", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    const art = `art-${randomUUID()}`;
-    const targets = [{ artifactId: art, representationRevisionId: "rev-1" }];
-    await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
-
+    const target = { artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" };
+    const historical = await seedHistoricalReject({ runId, reviewTaskId, target, actor: "user-V-reviewer" });
+    const before = await readDecisionRows(historical.gateId);
     const res = await submitReviewDecisionCore(
-      mkDecision({ runId, reviewTaskId, disposition: "reject", targets, comment: "not yet" }),
-      makeDecidePorts({ actingActorId: "user-V-reviewer" }),
+      mkDecision({ runId, reviewTaskId, disposition: "reject", targets: [target], comment: "not yet" }),
+      makeDecidePorts({ actingActorId: "user-DIFFERENT-reviewer" }),
     );
-    expect(res.ok).toBe(true);
+    expect(res).toEqual({ ok: false, error: {
+      kind: "invalid-decision",
+      message: "There is no Reject decision. Leave the review open, Comment, or Continue.",
+    } });
+    expect(await readDecisionRows(historical.gateId)).toEqual(before);
     const gate = await gateStore.readReviewGate(runId, reviewTaskId);
+    expect(gate?.status).toBe("resolved");
     expect(gate?.disposition).toBe("reject");
+    expect(gate?.fingerprint).toBe(historical.fingerprint);
     expect(gate?.resolvedBy).toBe("user-V-reviewer");
+    expect(await gateStore.readGateAuditRows(historical.gateId)).toHaveLength(1);
+    expect(await gateStore.readGateDispositions(historical.gateId)).toHaveLength(1);
+    expect((await gateStore.readResumeIntent(historical.gateId))?.responseText).toBe(historical.responseText);
   });
 
   it("RECORD: an unidentifiable decider (a non-human carrier) resolves the gate with a NULL decider, never a fabricated one", async () => {
@@ -731,6 +866,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
   // -------------------------------------------------------------------------
   // SLOT — what the run card draws where the review screen goes (cinatra#2997).
   //
+  // AND WHETHER THE RUN IS WAITING ON IT (cinatra#3046). None of the runs below
+  // has an `agent_runs` row at all, so none of them is parked and every reading
+  // here is the unparked one — which is the point: the third fact is a fact about
+  // the RUN, and it is false for a run that is not held by a review.
+  //
   // The run card is a placeholder for the review screen while the agent works
   // and becomes that screen when the work opens one, so it asks the run's own
   // rows: which gate is this run's, and might one still be opened for what it
@@ -742,6 +882,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -761,6 +902,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: true,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -776,6 +918,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
 
     // A RESOLVED gate is still the answer. The reader who decided in place must
@@ -795,6 +938,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
   });
 
@@ -836,37 +980,52 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
       reviewTaskId,
       awaiting: true,
+      parkedOnProducedReview: false,
     });
   });
 
-  it("SLOT: the NEWEST gate is the run's answer when it has more than one", async () => {
+  it("SLOT: detail and rail advance in raise order through three actual decisions", async () => {
     const { runId, reviewTaskId } = freshGateIds();
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }],
-    });
-    // Age the first one so "newest" is decidable without depending on clock
-    // resolution between two inserts.
+    const tasks = [reviewTaskId, `${reviewTaskId}-second`, `${reviewTaskId}-third`];
+    const targets = tasks.map(task => [{ artifactId: `art-${task}`, representationRevisionId: "rev-1" }]);
+    for (let i = 0; i < tasks.length; i++) {
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: tasks[i], targets: targets[i] });
+      await client!.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+            SET created_at = timestamptz '2026-10-01 00:00:00+00' + $3 * interval '1 second'
+          WHERE run_id = $1 AND review_task_id = $2`,
+        [runId, tasks[i], i],
+      );
+    }
+    for (let i = 0; i < tasks.length; i++) {
+      const gates = await gateStore.listReviewGatesForRun(runId);
+      const rail = buildRunStepRail({ gates: gates.map(g => ({ gateId: g.id, reviewTaskId: g.reviewTaskId,
+        status: g.status, disposition: g.disposition, createdAt: g.createdAt })) });
+      expect(rail.entries.find(entry => entry.ordinal === rail.activeOrdinal)?.gate?.reviewTaskId).toBe(tasks[i]);
+      await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
+        reviewTaskId: tasks[i], awaiting: false, parkedOnProducedReview: false,
+      });
+      const decision = await submitReviewDecisionCore(
+        mkDecision({ runId, reviewTaskId: tasks[i], disposition: "approve", targets: targets[i] }), makeDecidePorts(),
+      );
+      expect(decision.ok).toBe(true);
+    }
+    // All decided: retain the latest settled review rather than a completion flash.
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe(tasks[2]);
+  });
+
+  it("SLOT: simultaneous pending gates use the rail's task-key tie order", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const tasks = [`${reviewTaskId}-Z`, `${reviewTaskId}-a`, `${reviewTaskId}-A`, `${reviewTaskId}_2`, `${reviewTaskId}#2`];
+    for (const task of tasks) {
+      await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: task,
+        targets: [{ artifactId: `art-${task}`, representationRevisionId: "rev-1" }] });
+    }
     await client!.query(
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
-          SET created_at = now() - interval '1 hour'
-        WHERE run_id = $1 AND review_task_id = $2`,
-      [runId, reviewTaskId],
+          SET created_at = timestamptz '2026-10-01 00:00:00+00' WHERE run_id = $1`, [runId],
     );
-    const second = `${reviewTaskId}-second`;
-    await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId: second,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" }],
-    });
-
-    await expect(gateStore.readRunReviewSlot(runId)).resolves.toEqual({
-      reviewTaskId: second,
-      awaiting: false,
-    });
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort((a, b) => a.localeCompare(b))[0]);
   });
 
   it("SLOT: another run's gate is never this run's answer", async () => {
@@ -882,6 +1041,41 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     await expect(gateStore.readRunReviewSlot(mine.runId)).resolves.toEqual({
       reviewTaskId: null,
       awaiting: false,
+      parkedOnProducedReview: false,
     });
+  });
+});
+
+// #3978 native projection only. SQL fixtures and their hooks are separately scoped.
+describe("3978 fake-executor decision projection (no database)", () => {
+  const targets = [{ artifactId: "artifact-1", representationRevisionId: "reviewed-rev" }];
+  const time = new Date("2026-10-07T09:35:30.000Z");
+  const row = { id: "gate-1", orgId: "org-1", runId: "run-1", reviewTaskId: "task-1",
+    status: "resolved", pinnedTargets: targets, disposition: "approve", fingerprint: "a".repeat(64),
+    resolvedBy: "reviewer-1", resolvedAt: time, createdAt: new Date("2026-10-07T00:00:00.000Z") };
+  async function read(over: Record<string, unknown> = {}, orgId: string | null = "org-1") {
+    const store = await import("../artifact-review-gate-store");
+    const executor = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ ...row, ...over }] }) }) }) };
+    return store.readGatePinnedTargets("run-1", "task-1", {
+      executor: executor as unknown as NonNullable<Parameters<typeof store.readGatePinnedTargets>[2]>["executor"],
+      ...(orgId === null ? {} : { decisionFactsForOrgId: orgId }),
+    });
+  }
+  it("reads canonical continued time and the exact frozen targets without a database", async () => {
+    expect(await read()).toEqual({ status: "resolved", targets, decision: { gateId: "gate-1", orgId: "org-1",
+      runId: "run-1", reviewTaskId: "task-1", fingerprint: "a".repeat(64), disposition: "approve", decidedAt: time.toISOString() } });
+  });
+  it("keeps the legacy two-field outcome exact when facts were not requested", async () => {
+    expect(await read({}, null)).toEqual({ status: "resolved", targets });
+  });
+  it.each([
+    { orgId: "foreign-org" }, { runId: "foreign-run" }, { reviewTaskId: "foreign-task" },
+    { id: "" }, { disposition: "reject" }, { disposition: "comment" },
+    { fingerprint: null }, { fingerprint: "malformed" }, { resolvedAt: null }, { resolvedAt: new Date(NaN) },
+  ])("suppresses a refused or invalid canonical decision %j", async (over) => {
+    expect(await read(over)).toEqual({ status: "resolved", targets });
+  });
+  it("does not manufacture a decision from a still-pending gate", async () => {
+    expect(await read({ status: "pending" })).toEqual({ status: "pending", targets });
   });
 });

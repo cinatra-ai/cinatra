@@ -132,6 +132,12 @@ export type MissingAgentDependency = {
   reason: "not-installed" | "archived";
 };
 
+/** Structured install-gate refusal for the start page; unrelated refusals keep their own handling. */
+export type AgentInstallRefusal = {
+  kind: "missing-required-dependency";
+  missing: MissingAgentDependency[];
+};
+
 /**
  * Why an agent may (or may not) be RUN, for the surfaces that offer a run.
  * `runnable` is the only state a Run affordance may be built from.
@@ -487,7 +493,7 @@ export async function assertAgentPackageRunnable(
     /** The version the run would use — fences the catalog's dependency edges. */
     packageVersion?: string | null;
   } = {},
-): Promise<{ error: string } | null> {
+): Promise<{ error: string; installRefusal?: AgentInstallRefusal } | null> {
   if (!packageName) return null; // no package → untracked/legacy → never blocked
   const availability = await resolveAgentRunAvailabilityMap(
     [{ packageName, packageVersion: deps.packageVersion ?? null }],
@@ -505,6 +511,7 @@ export async function assertAgentPackageRunnable(
       };
     case "missing-required-dependency":
       return {
+        installRefusal: { kind: "missing-required-dependency", missing: verdict.missing },
         error:
           `Agent cannot run: ${identifierForError} requires ${verdict.missing
             .map((m) => `${m.displayName ?? m.packageName} (${m.packageName})`)

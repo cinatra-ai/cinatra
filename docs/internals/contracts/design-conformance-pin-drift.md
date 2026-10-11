@@ -228,7 +228,19 @@ body, `schemaVersion`, `spec` and all sixteen surfaces are unchanged and
 `contentHash` alone moved. The 2026-10-01 reconciliation below re-pinned it, and
 all five pins read `match` again, on both arms.
 
-Eight adoptions got them there and all eight are recorded below: the 2026-09-10
+**Then three more on 2026-10-02 — one reconciled hashes-only, two awaiting
+their drivers.** The design source changed one sentence of the application
+drawing and republished the manifest, so `app` drifted and the
+`design-pin-drift` job was red on the default branch. Compared as parsed JSON
+with the pinned body, `schemaVersion`, `spec` and all six surfaces are unchanged
+and `contentHash` alone moved. The 2026-10-02 reconciliation below re-pinned it
+for cinatra#3930. `app-components` and `app-extensions` republished the same day
+with one new surface each — `toast` and `agent-assignment-skills` — which is the
+class this page's rule names: those two pins move only together with the
+drivers, harness mounts and stable-id contract that answer those surfaces, and
+until then the `push`-to-`main` arm stays red on those two.
+
+Nine adoptions got them there and all nine are recorded below: the 2026-09-10
 adoption of `app-connectors`, whose published body redeclares the manifest
 (three sharing surfaces gained) and therefore moves with the drivers and harness
 mounts that answer those surfaces — it landed with cinatra#3374 — the 2026-09-12
@@ -238,8 +250,9 @@ after the design source republished its spec under a byte-identical drawing, and
 the 2026-09-18 adoption of `app-extensions` with its three new surfaces,
 the 2026-09-26 hashes-only re-pin of `app-extensions` after the wording change,
 the second 2026-09-26 hashes-only re-pin of `app-components` after the
-Breadcrumb sentence, and the 2026-10-01 hashes-only re-pin of `app-extensions`
-after the section VIII rewording.
+Breadcrumb sentence, the 2026-10-01 hashes-only re-pin of `app-extensions`
+after the section VIII rewording, and the 2026-10-02 hashes-only re-pin of
+`app` after the one-sentence change of the application drawing.
 `app-notifications` has not moved since 2026-08-30.
 
 A published manifest can republish more than once under one drawing, and
@@ -254,7 +267,8 @@ The bodies a pin named before an adoption are kept as the checker's own drift
 input (see `superseded-pins-2026-08-28/`, `superseded-pins-2026-09-12/`,
 `superseded-pins-2026-09-13/`, `superseded-pins-2026-09-17/`,
 `superseded-pins-2026-09-18/`, `superseded-pins-2026-09-26/`,
-`superseded-pins-2026-09-26-r2/` and `superseded-pins-2026-10-01/` beside the
+`superseded-pins-2026-09-26-r2/`, `superseded-pins-2026-10-01/` and
+`superseded-pins-2026-10-02/` beside the
 frozen published ones, and every row a later frozen fetch superseded), because
 a gate whose drift path has no input is a gate whose drift path is untested.
 
@@ -635,6 +649,52 @@ that names the commit its bytes were read from, and the checker's own suite
 asserts both halves of the finding: that the superseded body still classifies as
 `drift` in both hashes, and that the body adopted in its place declares the same
 sixteen surfaces.
+
+## Reconciliation record — 2026-10-02
+
+Measured 2026-10-02 against the manifests published under `publishedBaseUrl`,
+for cinatra#3930. All five bodies were fetched with one anonymous `curl -sS`
+each into a scratch directory outside every repository tree. Only the `app`
+body is frozen, under
+`scripts/ci/__tests__/__fixtures__/design-pin-drift/published-2026-10-02/`,
+beside the receipt that records its url, HTTP status, byte length, hash,
+schemaVersion and embedded content hash — one body, like
+`published-2026-09-10/`, because the suite reads a capture as the adopted body
+of every file it carries, and this round adopts `app` alone. `app-connectors`
+and `app-notifications` came back byte-identical to the artifacts their pins
+already named. `app` had republished after the design source changed one
+sentence of the application drawing, and was compared, as parsed JSON, with the
+committed copy under `tests/e2e/design/conformance/manifests/`.
+`schemaVersion`, `spec` and the whole `surfaces` array — six surfaces, the same
+ids in the same order, field-for-field identical — are unchanged; `contentHash`
+alone moved, the one line in which the two bodies differ. That is again the
+second of the two cases "why a hash-only re-pin is refused" names: the spec
+source changed under an unchanged drawing. The committed artifact of that row
+is now the verbatim published body, and both hashes in `conformance-pins.json`
+were re-derived from it on the branch — the manifest hash over the file's bytes
+with the checker's own `sha256Hex`, the spec-content hash read back out of the
+adopted body's own `contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `drift` | **hashes only** — byte-identical surface declarations (6 surfaces) | re-pin |
+| `app-components` | `drift` | a new surface `toast` | not adopted here, awaits its driver |
+| `app-extensions` | `drift` | a new surface `agent-assignment-skills` | not adopted here, awaits its driver |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
+Because no surface of `app` was added, retired or redrawn, no driver, harness
+mount or stable-id entry moves with this pin, and
+`tests/e2e/design/conformance/allowlist.json` is untouched. After this
+reconciliation the `push`-to-`main` arm — red on any non-`match` outcome —
+still reads `drift` for `app-components` and `app-extensions`, the two pins
+this round leaves for the adoption that brings their drivers. The body `app`
+named before this round, which is the body the 2026-09-12 reconciliation took,
+is frozen as the round's own drift input under `superseded-pins-2026-10-02/`,
+with the provenance receipt that names the commit its bytes were read from, and
+the checker's own suite asserts both halves of the finding: that the superseded
+body still classifies as `drift` in both hashes, and that the body adopted in
+its place declares the same six surfaces.
 
 ## Running it locally
 

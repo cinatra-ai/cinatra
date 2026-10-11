@@ -5,7 +5,7 @@
  * The pre-spine `hasTypedRenderer` boolean is REPLACED by claimant-keyed
  * resolution: the caller resolves the semantic + representation inputs and this
  * leaf composes the total precedence — semantic detail renderer → representation
- * viewer (extension provider or first-party host default) → generic fallback,
+ * viewer (an installed extension provider) → the terminal floor,
  * with never-built claimants degrading to requires-rebuild. Also pins the
  * (retired) activation barrier.
  */
@@ -39,8 +39,24 @@ const unbuiltSemantic: SemanticRendererResolution = {
   generatedKey: "@cinatra-ai/outreach::detail",
   built: false,
 };
-const pdfFirstParty: RepresentationRendererResolution = { tier: "first-party", handler: "pdf" };
-const imageFirstParty: RepresentationRendererResolution = { tier: "first-party", handler: "image" };
+// THE HOST HAS NO VIEWER UNDER THE PROVIDER TIER any more (cinatra#3319): a
+// representation resolves to an installed extension provider or to nothing, so
+// the fixtures below are extension providers and the fall-throughs land on the
+// terminal floor.
+const builtImageProvider: RepresentationRendererResolution = {
+  tier: "extension",
+  packageName: "@cinatra-ai/image-artifact",
+  generatedKey: "@cinatra-ai/image-artifact::detail",
+  pattern: "image/png",
+  slot: "detail",
+  built: true,
+};
+const imageDispatch = {
+  kind: "representation",
+  packageName: "@cinatra-ai/image-artifact",
+  generatedKey: "@cinatra-ai/image-artifact::detail",
+  pattern: "image/png",
+} as const;
 const builtRepProvider: RepresentationRendererResolution = {
   tier: "extension",
   packageName: "@cinatra-ai/pdf-viewer",
@@ -61,26 +77,26 @@ const unbuiltRepProvider: RepresentationRendererResolution = {
 describe("pickArtifactRenderer — semantic tier (case 1)", () => {
   it("dispatches to the built semantic renderer when the effective-identity winner ships one", () => {
     expect(
-      pickArtifactRenderer({ identity: extensionIdentity, semantic: builtSemantic, representation: pdfFirstParty }),
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: builtSemantic, representation: builtImageProvider }),
     ).toEqual({ kind: "semantic", packageName: "@cinatra-ai/outreach", generatedKey: "@cinatra-ai/outreach::detail" });
   });
 
   it("a NEVER-BUILT semantic claimant degrades to requires-rebuild (terminal — does NOT fall through to representation)", () => {
     expect(
-      pickArtifactRenderer({ identity: extensionIdentity, semantic: unbuiltSemantic, representation: pdfFirstParty }),
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: unbuiltSemantic, representation: builtImageProvider }),
     ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/outreach", slot: "detail" });
   });
 
   it("an extension identity whose winner ships NO semantic renderer falls through to the representation tier", () => {
     expect(
-      pickArtifactRenderer({ identity: extensionIdentity, semantic: null, representation: pdfFirstParty }),
-    ).toEqual({ kind: "mime", handler: "pdf" });
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: null, representation: builtImageProvider }),
+    ).toEqual(imageDispatch);
   });
 
   it("does not apply a stray semantic resolution to a non-extension identity (defensive gate)", () => {
     expect(
-      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: builtSemantic, representation: imageFirstParty }),
-    ).toEqual({ kind: "mime", handler: "image" });
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: builtSemantic, representation: builtImageProvider }),
+    ).toEqual(imageDispatch);
   });
 
   it("does not render a semantic resolution whose claimant is NOT the effective-identity winner (defensive winner-binding)", () => {
@@ -92,8 +108,8 @@ describe("pickArtifactRenderer — semantic tier (case 1)", () => {
     // identity winner is @cinatra-ai/outreach but the semantic names @cinatra-ai/loser
     // → the semantic tier is skipped; falls through to the representation tier.
     expect(
-      pickArtifactRenderer({ identity: extensionIdentity, semantic: mismatched, representation: imageFirstParty }),
-    ).toEqual({ kind: "mime", handler: "image" });
+      pickArtifactRenderer({ identity: extensionIdentity, semantic: mismatched, representation: builtImageProvider }),
+    ).toEqual(imageDispatch);
   });
 });
 
@@ -129,10 +145,10 @@ describe("pickArtifactRenderer — representation tier (case 2)", () => {
     ).toEqual({ kind: "requires-rebuild", packageName: "@cinatra-ai/pdf-viewer", slot: "detail" });
   });
 
-  it("a first-party default resolves to the host MIME handler", () => {
+  it("a representation NO installed package covers lands on the terminal floor, not a host viewer", () => {
     expect(
-      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: imageFirstParty }),
-    ).toEqual({ kind: "mime", handler: "image" });
+      pickArtifactRenderer({ identity: noPrimaryIdentity, semantic: null, representation: null }),
+    ).toEqual({ kind: "fallback" });
   });
 });
 

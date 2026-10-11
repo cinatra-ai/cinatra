@@ -47,6 +47,7 @@ const BOUND_NAMES = [
 STEP_NAMES.push("decideGate", "dispatchRun", "fillForm", "press", "readRows", "selectFrom", "switchTheme", "uploadFile");
 BOUND_NAMES.push(
   "CONTROL_ACTION_BOUND_MS",
+  "CONTROL_HYDRATION_BOUND_MS",
   "CONTROL_POLL_MS",
   "DISPATCH_RUN_BOUND_MS",
   "DISPATCH_RUN_COMPOSER_BOUND_MS",
@@ -111,6 +112,12 @@ BOUND_NAMES.sort();
 // takes the bounds of selectFrom, listed above already.
 STEP_NAMES.push("readAddress", "readOptions");
 BOUND_NAMES.push("ADDRESS_BOUND_MS", "ADDRESS_POLL_MS", "ADDRESS_SETTLE_MS");
+BOUND_NAMES.sort();
+// frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow: their
+// steps and their bounds join the lists in this one place, and the bounds stay
+// in order. pressWithoutName takes the bounds of press, listed above already.
+STEP_NAMES.push("frameOf", "openPageOfOrigin", "pressWithoutName", "signInThroughWindow");
+BOUND_NAMES.push("FRAME_SCOPE_BOUND_MS", "OTHER_ORIGIN_BOUND_MS", "WINDOW_OPEN_BOUND_MS", "WINDOW_RETURN_BOUND_MS");
 BOUND_NAMES.sort();
 
 describe("the steps module", () => {

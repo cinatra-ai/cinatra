@@ -285,6 +285,29 @@ export async function readFinalizedMaterialization(input: {
   };
 }
 
+/** Producer prompt on the exact FINALIZED revision the gate pinned (§VI).
+ * Authorization belongs to the caller's artifact/run read ladder. This query
+ * never substitutes the current revision, another org, or an unfinalized claim.
+ * Ambiguous provenance is absent rather than guessed. */
+export async function readRevisionImagePrompt(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<string | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT image_prompt FROM "${s}"."artifact_materializations"
+     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+       AND phase = 'finalized' AND image_prompt IS NOT NULL
+     LIMIT 2`,
+    [input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  if (res.rows.length !== 1) return null;
+  const prompt: unknown = res.rows[0]?.image_prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+}
+
 /**
  * Advisory WARN-phase lookup for the LLM-emit path: the finalized
  * DECLARATIVE (`end_node_binding`) materialization of this run + extension +

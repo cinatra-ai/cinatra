@@ -38,6 +38,7 @@ import type { AccessScopeVantage } from "@cinatra-ai/extensions/access-scope-van
 
 import {
   getAuthSession,
+  isPlatformAdmin,
   requireActorContext,
   resolveActorGrantsForUserInOrg,
 } from "@/lib/auth-session";
@@ -83,6 +84,8 @@ type PackageFacts = {
   readonly templateId: string;
   /** Every template row of the package: a project binding names one of them. */
   readonly templateIds: readonly string[];
+  /** Actual template builds, identical to the global Run-list availability inputs. */
+  readonly packageVersions: readonly (string | null)[];
   readonly name: string;
   readonly description: string | null;
 };
@@ -94,7 +97,10 @@ type PackageFacts = {
  * session's active organization entirely; every other scope reads under the
  * organization the scope itself belongs to.
  */
-async function resolveAnchor(scope: ScopeSurfaceRef): Promise<ScopeSurfaceAnchor | null> {
+async function resolveAnchor(
+  scope: ScopeSurfaceRef,
+  includeRunRecourse = false,
+): Promise<(ScopeSurfaceAnchor & { canViewRequirements: boolean }) | null> {
   const session = await getAuthSession();
   const userId = session?.user?.id;
   if (!session || !userId) return null;
@@ -131,6 +137,7 @@ async function resolveAnchor(scope: ScopeSurfaceRef): Promise<ScopeSurfaceAnchor
   if (scope.kind === "workspace") {
     return {
       userId,
+      canViewRequirements: includeRunRecourse && isPlatformAdmin(session),
       // The workspace scope reads under no single organization: every decision
       // is taken under one concrete member organization at a time.
       viewedOrgId: null,
@@ -141,7 +148,7 @@ async function resolveAnchor(scope: ScopeSurfaceRef): Promise<ScopeSurfaceAnchor
   const viewedOrgId = resolveVantageOrgForScope(workspace, scope, activeOrgId);
   // FAIL CLOSED: a scope this reader reaches no organization from lists nothing.
   if (!viewedOrgId) return null;
-  return { userId, viewedOrgId, workspace: null };
+  return { userId, viewedOrgId, workspace: null, canViewRequirements: includeRunRecourse && isPlatformAdmin(session) };
 }
 
 /**
@@ -245,18 +252,20 @@ async function readLiveAgentInstalls(
 async function readPackageFacts(): Promise<ReadonlyMap<string, PackageFacts>> {
   const { readInstalledAgentTemplates } = await import("@cinatra-ai/agents/store");
   const templates = await readInstalledAgentTemplates();
-  const facts = new Map<string, PackageFacts & { templateIds: string[] }>();
+  const facts = new Map<string, PackageFacts & { templateIds: string[]; packageVersions: (string | null)[] }>();
   for (const template of templates) {
     const packageName = template.packageName ?? null;
     if (!packageName) continue;
     const known = facts.get(packageName);
     if (known) {
       known.templateIds.push(template.id);
+      if (template.sourceType !== "external") known.packageVersions.push(template.packageVersion ?? null);
       continue;
     }
     facts.set(packageName, {
       templateId: template.id,
       templateIds: [template.id],
+      packageVersions: template.sourceType === "external" ? [] : [template.packageVersion ?? null],
       name: template.name,
       description: template.description ?? null,
     });
@@ -343,14 +352,17 @@ export async function readScopeSurfaceEligibility(
  *  Only a read that is BOTH ok and complete may say the scope holds nothing. */
 async function readScopeSurfaceEligibilityWithAnchor(
   scope: ScopeSurfaceRef,
+  includeRunRecourse = false,
 ): Promise<{
   rows: readonly ScopeSurfaceEligibilityRow[];
   viewedOrgId: string | null;
   ok: boolean;
   complete: boolean;
+  availabilityInputs?: readonly { packageName: string; packageVersion: string | null }[];
+  canViewRequirements?: boolean;
 }> {
   try {
-    const anchor = await resolveAnchor(scope);
+    const anchor = await resolveAnchor(scope, includeRunRecourse);
     if (!anchor) return { rows: [], viewedOrgId: null, ok: false, complete: false };
     const viewedOrgId = anchor.viewedOrgId;
     const facts = await readPackageFacts();
@@ -470,7 +482,18 @@ async function readScopeSurfaceEligibilityWithAnchor(
         },
       },
     });
-    return { rows, viewedOrgId, ok: true, complete };
+    return {
+      rows, viewedOrgId, ok: true, complete,
+      // Only authorized packages are passed to the extra presence read. Keep
+      // every template version so the global resolver's ambiguity rule is shared.
+      availabilityInputs: rows.flatMap((row) =>
+        facts.get(row.packageName)!.packageVersions.map((packageVersion) => ({
+          packageName: row.packageName,
+          packageVersion,
+        })),
+      ),
+      canViewRequirements: anchor.canViewRequirements,
+    };
   } catch (e) {
     warn("eligibility read failed; rendering no rows", e);
     return { rows: [], viewedOrgId: null, ok: false, complete: false };
@@ -505,7 +528,7 @@ export async function readScopeSurfaceAgentTab(
   scope: ScopeSurfaceRef,
 ): Promise<ScopeSurfaceTabRead<ScopeAgentCardRow>> {
   try {
-    const { rows: eligible, ok, complete } = await readScopeSurfaceEligibilityWithAnchor(scope);
+    const { rows: eligible, ok, complete, availabilityInputs, canViewRequirements } = await readScopeSurfaceEligibilityWithAnchor(scope, true);
     // FAIL-CLOSED on a read that could not be TAKEN, and said so: an
     // unresolvable anchor or a failed membership read knows nothing about this
     // scope, so the tab may not report the scope as empty. A read that ran but
@@ -517,7 +540,16 @@ export async function readScopeSurfaceAgentTab(
     // assistants", which would list every assistant as an agent.
     const assistantPackages = await readAssistantPackageNames();
     const rows = eligible.filter((row) => !assistantPackages.has(row.packageName));
-    return { rows: buildScopeSurfaceAgentRows(scope, rows), read: complete };
+    if (rows.length === 0) return { rows: [], read: complete };
+    const { resolveAgentRunAvailabilityMap } = await import("@cinatra-ai/agents/runtime-install-gate");
+    const agentPackages = new Set(rows.map((row) => row.packageName));
+    const availabilityByPackage = await resolveAgentRunAvailabilityMap(
+      (availabilityInputs ?? []).filter((item) => agentPackages.has(item.packageName)),
+    );
+    return {
+      rows: buildScopeSurfaceAgentRows(scope, rows, { availabilityByPackage, canViewRequirements }),
+      read: complete,
+    };
   } catch (e) {
     warn("agents tab read failed; rendering no rows", e);
     return { rows: [], read: false };

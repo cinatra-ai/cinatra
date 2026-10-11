@@ -58,12 +58,6 @@ export function createDeterministicBlogContentClient(input: {
             },
       ) => invoke<{ ok: true }>("blog_post_update", input),
     },
-    image: {
-      startRegeneration: (input: { projectId: string; postId: string; prompt?: string }) =>
-        invoke("blog_image_generate_start", input),
-      cancelRegeneration: (projectId: string) =>
-        invoke("blog_image_generate_cancel", { projectId }),
-    },
     wordpress: {
       startDraft: (input: { projectId: string; postId: string; wordpressInstanceId: string }) =>
         invoke("blog_post_publish_wordpress_start", input),

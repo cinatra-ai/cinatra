@@ -164,7 +164,11 @@ function installGateSeam(overrides: Record<string, unknown> = {}) {
   (globalThis as Record<string, unknown>).__cinatraArtifactReviewGateSeam = {
     decideDeclaredReview: async () => ({ review: true }),
     emit: async () => ({ ok: true }),
+    // A first singleton mint now uses the atomic family port.
+    emitFamily: async () => ({ ok: true }),
     readGate: async () => null,
+    // Like readGate's null, this fixture has no prior gate before the mint.
+    listGates: async () => [],
     ...overrides,
   };
 }

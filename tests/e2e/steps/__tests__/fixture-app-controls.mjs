@@ -41,6 +41,21 @@ const RUN_PILL = '[data-conformance-id="run-surface"] [data-slot="status-pill"][
 
 // The page's own handlers, as a browser runs them: they play the page's
 // declared behaviour, and its declared timeline.
+/** The fixture models React's committed host fibers and current event props.
+ * No production hydration mark is added: both backends exercise the same metadata contract. */
+export function hydrateFixtureUpload(document, op) {
+  const input = document.querySelector(op.chosen);
+  const trigger = input?.closest("label");
+  if (!input || !trigger) return;
+  const root = { tag: 3, memoizedState: { isDehydrated: false }, child: null };
+  root.stateNode = { current: op.uncommitted ? { child: null } : root };
+  const labelFiber = { stateNode: trigger, return: root, child: null, sibling: null };
+  const inputFiber = { stateNode: input, return: labelFiber, child: null, sibling: null };
+  root.child = labelFiber; labelFiber.child = inputFiber;
+  trigger.__reactFiber$fixture = labelFiber; input.__reactFiber$fixture = inputFiber;
+  input.__reactProps$fixture = op.missingHandler ? {} : { onChange() {} };
+}
+
 const CONTROL_RUNNER = `<script>
 (function () {
   function declared(id) {
@@ -48,6 +63,9 @@ const CONTROL_RUNNER = `<script>
     return node ? JSON.parse(node.textContent) : [];
   }
   var behaviour = declared("fixture-behaviour");
+  behaviour.forEach(function (op) {
+    if (op.direct && op.hydrateAfterMs !== null) setTimeout(function () { (${hydrateFixtureUpload.toString()})(document, op); }, op.hydrateAfterMs);
+  });
   declared("fixture-timeline").forEach(function (op) {
     setTimeout(function () {
       var el = document.querySelector(op.target);
@@ -93,6 +111,11 @@ const CONTROL_RUNNER = `<script>
       fetch(op.upload, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: file }).then(function (answer) {
         after(op.delayMs, function () {
           if (answer.ok) {
+            if (op.completion) {
+              var signal = document.querySelector(op.completion);
+              if (signal && !op.completionNever) { signal.textContent = op.wrongResult ? "@acme/different-skill" : "@acme/fixture-skill"; signal.removeAttribute("hidden"); }
+              return;
+            }
             var list = document.querySelector(op.rows);
             if (!list) return;
             var row = document.createElement("li");
@@ -153,7 +176,7 @@ const CONTROL_RUNNER = `<script>
   });
   document.addEventListener("change", function (event) {
     behaviour.forEach(function (op) {
-      if (op.chosen && event.target instanceof Element && event.target.matches(op.chosen)) upload(op, event.target);
+      if (op.chosen && event.target instanceof Element && event.target.matches(op.chosen) && (!op.direct || typeof event.target.__reactProps$fixture?.onChange === "function")) upload(op, event.target);
     });
   });
   document.addEventListener("submit", function (event) {
@@ -194,9 +217,22 @@ export const UPLOAD_SCENARIOS = Object.freeze({
   inert: { route: UPLOAD_ACCEPT_ROUTE, opens: false },
   // A shown file input with a label of its own is the control itself.
   attach: { route: UPLOAD_ACCEPT_ROUTE, attach: true },
+  extension: { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 200 },
+  "extension-never": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: null },
+  "extension-uncommitted": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 0, uncommitted: true },
+  "extension-no-handler": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 0, missingHandler: true },
+  "extension-stale": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 0, signalStale: true },
+  "extension-ambiguous": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 0, duplicate: true },
+  "extension-wrong-result": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 0, wrongResult: true },
+  "extension-no-result": { route: UPLOAD_ACCEPT_ROUTE, direct: true, hydrateAfterMs: 0, completionNever: true },
 });
 
 function uploadPage(scenario) {
+  if (scenario.direct) {
+    const trigger = (id) => `<label style="display:block;position:relative;width:300px;height:80px"><svg style="position:absolute;inset:0;width:100%;height:100%;z-index:2" aria-hidden="true"></svg><p>Select an extension package</p><p>Click here or drag and drop — an agent, skill, connector or artifact package</p><input type="file" id="${id}" data-fixture-pointer-intercepted="svg" style="position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0)"></label>`;
+    const body = `<main>${trigger("upload-input")}${scenario.duplicate ? trigger("other-input") : ""}<p data-testid="upload-resolved-name"${scenario.signalStale ? "" : " hidden"}>${scenario.signalStale ? "@acme/previous-skill" : ""}</p><label><input type="checkbox" data-testid="upload-consent">Send to outside service</label></main>`;
+    return controlPage("Extension upload", body, { behaviour: [{ chosen: "#upload-input", upload: scenario.route, direct: true, hydrateAfterMs: scenario.hydrateAfterMs, uncommitted: scenario.uncommitted, missingHandler: scenario.missingHandler, completion: '[data-testid="upload-resolved-name"]', completionNever: scenario.completionNever, wrongResult: scenario.wrongResult, delayMs: 200 }] });
+  }
   const control = scenario.attach
     ? '<label>Attach a file <input type="file" id="upload-input"></label>'
     : '<div data-conformance-id="artifacts-upload-affordance"><span>or drop a file</span> ' +

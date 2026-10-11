@@ -19,7 +19,9 @@
  * The manifest tier sits BELOW the registry title deliberately: a catalog-
  * listed package keeps the title it already rendered (no behaviour change),
  * and the self-declared name only fills the gap where there was none. Blank /
- * whitespace values at any tier are treated as absent.
+ * whitespace values at any tier are treated as absent. A descriptor/catalog
+ * value equal to the raw package ID is also only a fallback (cinatra#3571):
+ * it must not hide a human title declared by the next source.
  */
 export function resolveInstalledDisplayName(input: {
   /** Per-kind native descriptor name (null for the artifact kind). */
@@ -32,11 +34,16 @@ export function resolveInstalledDisplayName(input: {
   packageName: string;
 }): string {
   return (
-    normalize(input.nativeName) ??
-    normalize(input.registryTitle) ??
+    humanName(input.nativeName, input.packageName) ??
+    humanName(input.registryTitle, input.packageName) ??
     normalize(input.manifestDisplayName) ??
     input.packageName
   );
+}
+
+function humanName(value: string | null | undefined, packageName: string): string | null {
+  const name = normalize(value);
+  return name === packageName ? null : name;
 }
 
 function normalize(value: string | null | undefined): string | null {

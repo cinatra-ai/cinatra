@@ -143,7 +143,7 @@ describe("enqueueBackgroundJob auto-attribution cascade", () => {
     requestActorMock.mockResolvedValue(humanUserCtx); // tier-3
     const explicit: ActorContext = { ...humanUserCtx, principalId: "u-explicit" };
     await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.BLOG_POST_IMAGE_REGENERATION,
+      BACKGROUND_JOB_NAMES.BLOG_POST_WORDPRESS_DRAFT_CREATION,
       { foo: 1 },
       { actorContext: explicit, skipWorker: true, jobId: "test-explicit" },
     );
@@ -154,7 +154,7 @@ describe("enqueueBackgroundJob auto-attribution cascade", () => {
   it("inherits a HumanUser ALS frame when no explicit context", async () => {
     alsCurrent = humanUserCtx;
     await enqueueBackgroundJob(
-      BACKGROUND_JOB_NAMES.BLOG_POST_IMAGE_REGENERATION,
+      BACKGROUND_JOB_NAMES.BLOG_POST_WORDPRESS_DRAFT_CREATION,
       { foo: 2 },
       { skipWorker: true, jobId: "test-als-human" },
     );

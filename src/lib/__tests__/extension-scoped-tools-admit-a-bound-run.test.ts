@@ -155,7 +155,16 @@ describe("dispatchExtensionScopedTool — extension_tool", () => {
     );
     expect(seen).toHaveLength(1);
     // EVERY PORT, and only the ports.
-    expect(Object.keys(seen[0]!.ports).sort()).toEqual(["artifacts", "clock", "data", "review"]);
+    expect(Object.keys(seen[0]!.ports).sort()).toEqual([
+      "artifacts",
+      "clock",
+      "data",
+      "objects",
+      "review",
+    ]);
+    const objects = seen[0]!.ports.objects as Record<string, unknown>;
+    expect(typeof objects.read).toBe("function");
+    expect(typeof objects.save).toBe("function");
     // THE RUN IDENTITY IS NOT A MODULE INPUT.
     expect(seen[0]!.input).toEqual({ kind: "one" });
     const values = Object.values(seen[0]!.input);
@@ -206,6 +215,24 @@ describe("dispatchExtensionScopedTool — extension_tool", () => {
     if (outcome.ok) return;
     expect(outcome.status).toBe(403);
     expect(outcome.error).toMatch(REFUSED_UNRESOLVED);
+  });
+
+  it("refuses the objects port to a module of a package that is no agent", async () => {
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: { kind: "connector", tools: [DECLARED] } } });
+    loadDeclaredToolModule.mockResolvedValue({
+      extensionTool: async (invocation: { ports: { objects: { save(r: unknown): unknown } } }) =>
+        invocation.ports.objects.save({ type: "@fixture-scope/fixture-artifacts:record", data: {} }),
+    });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    const outcome = await dispatchExtensionScopedTool({
+      tool: "extension_tool",
+      input: { name: "fixture_tool", input: {} },
+      run: RUN,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(403);
+    expect(outcome.error).toMatch(/^extension_tool: objects\.save: .* is no agent package/);
   });
 });
 

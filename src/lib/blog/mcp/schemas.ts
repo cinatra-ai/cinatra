@@ -72,12 +72,6 @@ export const blogPostUpdateToolSchema = z.object({
   imageRepresentationRevisionId: z.string().min(1).optional(),
 });
 
-export const startImageRegenerationSchema = z.object({
-  projectId: z.string().min(1),
-  postId: z.string().min(1),
-  prompt: z.string().optional(),
-});
-
 export const startWordPressDraftSchema = z.object({
   projectId: z.string().min(1),
   postId: z.string().min(1),

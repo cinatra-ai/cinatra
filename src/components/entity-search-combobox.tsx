@@ -108,6 +108,8 @@ export type EntitySearchComboboxProps<T extends EntitySearchItem> = {
   disabled?: boolean;
   /** HTML id for the anchoring Input (label association). */
   id?: string;
+  /** Ordered ids naming the input, such as its scope heading and prompt. */
+  "aria-labelledby"?: string;
   /**
    * Clear the typed query when a row is picked (cinatra#2349).
    *
@@ -236,6 +238,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
   pageSize = DEFAULT_PAGE_SIZE,
   disabled = false,
   id,
+  "aria-labelledby": ariaLabelledBy,
   clearQueryOnPick = false,
 }: EntitySearchComboboxProps<T>) {
   const [open, setOpen] = useState(false);
@@ -397,6 +400,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
       <PopoverAnchor asChild>
         <Input
           id={id}
+          aria-labelledby={ariaLabelledBy}
           ref={inputRef}
           disabled={disabled}
           placeholder={placeholder}

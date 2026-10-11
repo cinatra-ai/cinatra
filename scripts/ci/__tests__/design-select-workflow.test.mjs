@@ -26,14 +26,17 @@ import { describe, expect, it } from "vitest";
 
 import { BUILD_ONLY_HEAD_CONDITION } from "../build-only-heads.mjs";
 import { REPO_ROOT } from "../design-select.mjs";
+import { OWN_BRANCH_CONDITION } from "../runner-class-own-branches.mjs";
 
 /**
  * The job-level condition of `pixel-diff`: the selection gate, joined with the
- * condition that skips a build-only head (cinatra#3890), on a line of its own.
+ * condition that runs it for pull requests from branches of this repository
+ * only (cinatra#3919) and with the condition that skips a build-only head
+ * (cinatra#3890), on a line of its own.
  */
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const PIXEL_DIFF_IF = new RegExp(
-  `^ {4}if: ${escapeRegExp(`\${{ (needs.select.outputs.mode != 'none') && ${BUILD_ONLY_HEAD_CONDITION} }}`)}$`,
+  `^ {4}if: ${escapeRegExp(`\${{ ((needs.select.outputs.mode != 'none') && ${OWN_BRANCH_CONDITION}) && ${BUILD_ONLY_HEAD_CONDITION} }}`)}$`,
   "m",
 );
 

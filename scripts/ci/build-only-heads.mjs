@@ -90,7 +90,7 @@ function tokenize(text) {
     const ch = text[i];
     if (/\s/.test(ch)) {
       i++;
-    } else if (text.startsWith("&&", i) || text.startsWith("||", i) || text.startsWith("==", i)) {
+    } else if (text.startsWith("&&", i) || text.startsWith("||", i) || text.startsWith("==", i) || text.startsWith("!=", i)) {
       tokens.push({ kind: "op", value: text.slice(i, i + 2) });
       i += 2;
     } else if ("!(),".includes(ch)) {
@@ -127,6 +127,10 @@ const OPERANDS = {
   "github.head_ref": (head) => head.headRef ?? "",
   "github.event.pull_request.head.repo.full_name": (head) => head.headRepo ?? null,
   "github.repository": (head) => head.repository,
+  "github.event_name": (head) => {
+    if (typeof head.eventName !== "string") throw new Error("github.event_name needs a head with an eventName");
+    return head.eventName;
+  },
 };
 
 /** A value as a number, the way the platform coerces one of another type. */
@@ -151,7 +155,9 @@ function looselyEqual(a, b) {
  * `{ headRef, headRepo, repository }` (a push has the empty head reference and
  * no head repository, `null`). `startsWith` and `==` ignore case, as the
  * platform's own do. Anything else in the text throws: an expression this
- * reader does not know is never taken as true.
+ * reader does not know is never taken as true. `github.event_name` (the head's
+ * `eventName`, which throws when the head carries none) and `!=` (the negation
+ * of `==`) are read too.
  */
 export function evaluateHeadCondition(text, head) {
   if (head === null || typeof head !== "object" || typeof head.repository !== "string") {
@@ -199,6 +205,10 @@ export function evaluateHeadCondition(text, head) {
       return String(subject ?? "").toLowerCase().startsWith(String(prefix ?? "").toLowerCase());
     }
     const left = value();
+    if (peek()?.kind === "op" && peek().value === "!=") {
+      pos++;
+      return !looselyEqual(left, value());
+    }
     take("op", "==");
     return looselyEqual(left, value());
   };

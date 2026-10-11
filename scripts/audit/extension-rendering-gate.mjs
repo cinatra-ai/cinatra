@@ -13,10 +13,19 @@
 // type id is well formed AND that is either self-namespaced (the bridge
 // registers it as an artifact type) or declares
 // `dispositions.projection === "artifact-safe"` (a claim-backed host type). A
-// claiming extension with no display of its own is a finding. Its OWN display
-// is the build map's entry `<package>::detail` in GENERATED_ARTIFACT_RENDERERS,
-// read with the floor gate's own fail-closed reader: the build map, never a
-// manifest's `ui` block, is the authority (see the floor gate's header).
+// claiming extension that is not drawn is a finding. It is drawn in one of two
+// ways, read in this order:
+//   - by its OWN display: the build map's entry `<package>::detail` in
+//     GENERATED_ARTIFACT_RENDERERS, read with the floor gate's own fail-closed
+//     reader: the build map, never a manifest's `ui` block, is the authority
+//     (see the floor gate's header);
+//   - by a CONTENT-TYPE display (cinatra#3092): its `cinatra.artifact.accepts`
+//     declares at least one form, names no key the SDK's contract does not name
+//     (`file`, `connectorRef`, `dashboard`), and EVERY declared form is served:
+//     the form is in the application's preview-inline MIME allowlist AND a
+//     build-map entry of `resolution: "required"` in the `detail` slot declares
+//     a representation that matches it exactly or by type wildcard — what the
+//     runtime's system representation providers bind for every org.
 //
 // OUTSIDE THE GATE BY CONSTRUCTION. An artifact extension that declares no
 // writable claim (no `objectTypes`, or only claims that are malformed or of
@@ -26,10 +35,12 @@
 // NOTHING IS COUNTED TWICE. host-display-floor-gate.mjs counts the
 // application's own displays and reads no extension tree; the floor gate
 // (artifact-review-floor-gate.mjs) counts artifact TYPES whose review lands on
-// the metadata floor. A type drawn by a host handler or by another extension's
-// representation provider is off that floor and still in this gate's deficit,
-// because it does not draw ITSELF. The units differ and are reported side by
-// side.
+// the metadata floor. An extension whose every declared form is drawn by a
+// required content-type display is drawn and off this gate's deficit; a form
+// drawn only by the host's handler, a catch-all (`*/*`), an optional
+// (`guardedOptional`) display, another slot or the generic fallback is not, and
+// its extension stays in the deficit. The units differ and are reported side
+// by side.
 //
 // THE MODE IS WARN (GATE_MODE). A finding above the floor is printed as a
 // warning and passes. A floor entry that no longer applies is printed as a
@@ -58,8 +69,9 @@
 // Exit codes: 0 = clean or warn-only; 1 = a grown floor or an unreadable base
 // on a pull request's run (and, in blocking mode only, a live finding or a
 // stale entry); 2 = scanner error (no artifact extension, a partial fleet, an
-// unreadable manifest, an unparseable build map, an absent or unreadable
-// floor file).
+// unreadable manifest, an unparseable build map, an absent or unparseable
+// preview-inline MIME allowlist or dashboard MIME source, an absent or
+// unreadable floor file).
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -69,11 +81,15 @@ import { fileURLToPath } from "node:url";
 import {
   CANONICAL_SOURCES,
   InfraError,
+  declaredFormMimes,
   discoverArtifactPackNames,
   expectedArtifactPackNames,
   isArtifactExtensionDirName,
   missingArtifactPacks,
+  readDashboardMime,
   readGeneratedRendererEntries,
+  readMimeAllowlist,
+  representationMatchSpecificity,
   typeNamespace,
 } from "./artifact-review-floor-gate.mjs";
 import { compareFloorWithBase, newKeys, readFileAtBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
@@ -102,6 +118,11 @@ const FLOOR_NOTE =
   "its extension ships its own detail display; the writer never adds one.";
 
 const byPackage = (a, b) => (a.package < b.package ? -1 : a.package > b.package ? 1 : 0);
+const byForm = (a, b) => (a.form < b.form ? -1 : a.form > b.form ? 1 : 0);
+
+/** The keys of `cinatra.artifact.accepts` the SDK's contract names
+ * (`ArtifactRepresentationForms` in packages/sdk-extensions/src/artifact-contract.ts). */
+const CONTRACT_FORM_KEYS = new Set(["file", "connectorRef", "dashboard"]);
 
 // ---------------------------------------------------------------------------
 // Discovery.
@@ -146,7 +167,8 @@ function isWritableClaim(claim, packageName) {
 
 /**
  * Every artifact extension of the tree, sorted by package:
- * `{ package, declaresObjectTypes, writableTypes }` (writable type ids sorted).
+ * `{ package, declaresObjectTypes, writableTypes, accepts }` (writable type ids
+ * sorted; `accepts` the raw `cinatra.artifact.accepts`, `{}` when absent).
  * An unreadable manifest is a scanner error.
  */
 export function readClaimingExtensions(extensionsRoot) {
@@ -166,7 +188,8 @@ export function readClaimingExtensions(extensionsRoot) {
     const writableTypes = declaresObjectTypes
       ? [...new Set(objectTypes.filter((c) => isWritableClaim(c, pkg.name)).map((c) => c.type))].sort()
       : [];
-    out.push({ package: pkg.name, declaresObjectTypes, writableTypes });
+    const accepts = pkg.cinatra.artifact?.accepts;
+    out.push({ package: pkg.name, declaresObjectTypes, writableTypes, accepts: accepts === undefined ? {} : accepts });
   }
   return out.sort(byPackage);
 }
@@ -175,15 +198,81 @@ export function readClaimingExtensions(extensionsRoot) {
 // The classifier.
 // ---------------------------------------------------------------------------
 
+const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const isStringList = (value) => Array.isArray(value) && value.every((m) => typeof m === "string");
+
+/** `accepts` shaped as `ArtifactRepresentationForms` types it: `file.mimeTypes`
+ * and `connectorRef.resolvedMimeTypes` lists of strings, `dashboard` true. */
+function isContractShaped(accepts) {
+  if ("file" in accepts && !(isPlainObject(accepts.file) && isStringList(accepts.file.mimeTypes))) return false;
+  if (
+    "connectorRef" in accepts &&
+    !(isPlainObject(accepts.connectorRef) && isStringList(accepts.connectorRef.resolvedMimeTypes))
+  ) {
+    return false;
+  }
+  if ("dashboard" in accepts && accepts.dashboard !== true) return false;
+  return true;
+}
+
 /**
- * `{ deficit: [{ package, types }], ownDisplay: [package], outside: [{ package, reason }] }`,
- * each sorted. A claiming extension with no `<package>::detail` entry in the
- * build map is a finding.
+ * The forms of `accepts`, each with the required content-type display that
+ * serves it — `[{ form, by }]` sorted by form — or null when the extension is
+ * not drawn this way: no declared form, an accepts key the contract does not
+ * name, a form block not shaped as the contract types it, or a form not served.
+ * A form is served when it is in the preview-inline
+ * MIME allowlist AND a `resolution: "required"` entry of the `detail` slot
+ * declares a representation that matches it exactly (3) or by type wildcard
+ * (2); never by a catch-all (1), an optional entry or another slot. `by` is the
+ * package of the most specific such entry, ties broken by package name.
  */
-export function classifyRendering({ extensions, generatedEntries }) {
+function contentTypeForms(accepts, { generatedEntries, mimeAllowlist, dashboardMime }) {
+  if (!isPlainObject(accepts)) return null;
+  if (Object.keys(accepts).some((key) => !CONTRACT_FORM_KEYS.has(key))) return null;
+  if (!isContractShaped(accepts)) return null;
+  const mimes = declaredFormMimes(accepts, dashboardMime);
+  if (mimes.length === 0) return null;
+  const providers = generatedEntries.filter((e) => e.resolution === "required" && e.slot === "detail");
+  const forms = [];
+  for (const form of mimes) {
+    if (!mimeAllowlist.has(form)) return null;
+    let best = null;
+    for (const entry of providers) {
+      for (const pattern of entry.representations) {
+        const specificity = representationMatchSpecificity(pattern, form);
+        if (specificity < 2) continue;
+        if (
+          best === null ||
+          specificity > best.specificity ||
+          (specificity === best.specificity && entry.packageName < best.by)
+        ) {
+          best = { specificity, by: entry.packageName };
+        }
+      }
+    }
+    if (best === null) return null;
+    forms.push({ form, by: best.by });
+  }
+  return forms.sort(byForm);
+}
+
+/**
+ * `{ deficit: [{ package, types }], ownDisplay: [package],
+ *    drawnByContentType: [{ package, forms: [{ form, by }] }], outside: [{ package, reason }] }`,
+ * each sorted. A claiming extension is drawn by its OWN display when the build
+ * map holds `<package>::detail`, else by a CONTENT-TYPE display when every form
+ * it declares is served by a required detail display (contentTypeForms);
+ * otherwise it is a finding in the deficit. `mimeAllowlist` (a Set) and
+ * `dashboardMime` are required: without them the call is an InfraError.
+ */
+export function classifyRendering({ extensions, generatedEntries, mimeAllowlist, dashboardMime }) {
+  if (!(mimeAllowlist instanceof Set) || typeof dashboardMime !== "string") {
+    throw new InfraError("the classifier needs the preview-inline MIME allowlist and the dashboard MIME");
+  }
   const keys = new Set(generatedEntries.map((e) => e.key));
   const deficit = [];
   const ownDisplay = [];
+  const drawnByContentType = [];
   const outside = [];
   for (const ext of extensions) {
     if (ext.writableTypes.length === 0) {
@@ -193,10 +282,20 @@ export function classifyRendering({ extensions, generatedEntries }) {
       });
       continue;
     }
-    if (keys.has(`${ext.package}::detail`)) ownDisplay.push(ext.package);
+    if (keys.has(`${ext.package}::detail`)) {
+      ownDisplay.push(ext.package);
+      continue;
+    }
+    const forms = contentTypeForms(ext.accepts, { generatedEntries, mimeAllowlist, dashboardMime });
+    if (forms !== null) drawnByContentType.push({ package: ext.package, forms });
     else deficit.push({ package: ext.package, types: [...ext.writableTypes] });
   }
-  return { deficit: deficit.sort(byPackage), ownDisplay: ownDisplay.sort(), outside: outside.sort(byPackage) };
+  return {
+    deficit: deficit.sort(byPackage),
+    ownDisplay: ownDisplay.sort(),
+    drawnByContentType: drawnByContentType.sort(byPackage),
+    outside: outside.sort(byPackage),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -331,16 +430,20 @@ function readFloorFile(floorPath, floorRel) {
   }
 }
 
-function scan({ repoRoot, extensionsRoot, allowPartialFleet }) {
-  const mapPath = join(repoRoot, CANONICAL_SOURCES.generatedRenderers);
-  if (!existsSync(mapPath)) throw new InfraError(`canonical source missing: ${CANONICAL_SOURCES.generatedRenderers}`);
-  let mapText;
+function readCanonicalSource(repoRoot, rel) {
+  const full = join(repoRoot, rel);
+  if (!existsSync(full)) throw new InfraError(`canonical source missing: ${rel}`);
   try {
-    mapText = readFileSync(mapPath, "utf8");
+    return readFileSync(full, "utf8");
   } catch (err) {
-    throw new InfraError(`unreadable canonical source: ${CANONICAL_SOURCES.generatedRenderers} (${err?.code ?? err})`);
+    throw new InfraError(`unreadable canonical source: ${rel} (${err?.code ?? err})`);
   }
-  const generatedEntries = readGeneratedRendererEntries(mapText);
+}
+
+function scan({ repoRoot, extensionsRoot, allowPartialFleet }) {
+  const generatedEntries = readGeneratedRendererEntries(readCanonicalSource(repoRoot, CANONICAL_SOURCES.generatedRenderers));
+  const mimeAllowlist = readMimeAllowlist(readCanonicalSource(repoRoot, CANONICAL_SOURCES.mimeAllowlist));
+  const dashboardMime = readDashboardMime(readCanonicalSource(repoRoot, CANONICAL_SOURCES.dashboardMime));
   const extensions = readClaimingExtensions(extensionsRoot);
   if (extensions.length === 0) {
     throw new InfraError(
@@ -357,16 +460,22 @@ function scan({ repoRoot, extensionsRoot, allowPartialFleet }) {
       );
     }
   }
-  return { extensions, result: classifyRendering({ extensions, generatedEntries }) };
+  return { extensions, result: classifyRendering({ extensions, generatedEntries, mimeAllowlist, dashboardMime }) };
 }
 
+const claimingCount = (result) => result.deficit.length + result.ownDisplay.length + result.drawnByContentType.length;
+
 function reportLines({ extensions, result }) {
-  const claiming = result.deficit.length + result.ownDisplay.length;
   const lines = [
-    `[${GATE}] ${result.deficit.length} of ${claiming} claiming extensions draw no display of their own ` +
+    `[${GATE}] ${result.deficit.length} of ${claimingCount(result)} claiming extensions draw no display of their own ` +
       `(${GATE_MODE} mode; ${extensions.length} artifact extensions scanned)`,
   ];
   for (const e of result.deficit) lines.push(`    no own display: ${e.package} (${e.types.join(", ")})`);
+  for (const e of result.drawnByContentType) {
+    lines.push(
+      `    drawn by a content-type display: ${e.package} (${e.forms.map((f) => `${f.form} by ${f.by}`).join(", ")})`,
+    );
+  }
   for (const e of result.outside) lines.push(`    outside the gate by construction: ${e.package} — ${e.reason}`);
   return lines;
 }
@@ -443,10 +552,11 @@ export function main(argv = process.argv.slice(2), env = process.env) {
         {
           mode: GATE_MODE,
           count: scanned.result.deficit.length,
-          claiming: scanned.result.deficit.length + scanned.result.ownDisplay.length,
+          claiming: claimingCount(scanned.result),
           scanned: scanned.extensions.length,
           deficit: scanned.result.deficit,
           ownDisplay: scanned.result.ownDisplay,
+          drawnByContentType: scanned.result.drawnByContentType,
           outside: scanned.result.outside,
           above: above.map((e) => e.package),
           stale: stale.map((e) => e.package),

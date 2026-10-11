@@ -68,11 +68,29 @@ const objectsStore = vi.hoisted(() => ({
 }));
 const artifactService = vi.hoisted(() => ({ readArtifactForDetail: vi.fn() }));
 
+/**
+ * THE RUN'S OWN RECORD — the second road `readRunOutputEvidence` reads
+ * (cinatra#3449): the WRITTEN half of the materialization ledger, read as ids.
+ * This suite is about the PROVENANCE window, so the ledger is held EMPTY here
+ * and pinned in its own file (`run-completion-card-record-outputs.test.tsx`).
+ * Stubbed rather than left alone on purpose: without it these cases would rest
+ * on a database read failing, which is not a fact this suite should depend on.
+ */
+const ledger = vi.hoisted(() => ({
+  query: vi.fn(async () => ({ rows: [] as Array<{ artifact_id: string }> })),
+}));
+
 vi.mock("@/lib/auth-session", () => authSession);
 vi.mock("@/lib/authz", () => ({ AuthzError: class AuthzError extends Error {} }));
 vi.mock("../store", () => store);
 vi.mock("@/lib/objects-store", () => objectsStore);
 vi.mock("@/lib/artifacts/artifact-service", () => artifactService);
+vi.mock("@/lib/db/pooled", () => ({ getPooledDb: () => ({ query: ledger.query }) }));
+vi.mock("@/lib/postgres-config", () => ({
+  postgresSchema: "cinatra",
+  getPostgresConnectionString: () => "postgres://test",
+}));
+vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
 
 import { readRunOutputEvidence } from "../run-actions";
 

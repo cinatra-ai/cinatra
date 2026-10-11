@@ -891,3 +891,25 @@ export function agentInstanceTabLabel(
   if (!leaf || leaf.ellipsis) return null;
   return leaf.label || null;
 }
+
+
+/** The four-segment connector dispatch route, including its selected page tab. */
+export function isConnectorDispatchPathname(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments[0] === "connectors" && segments.length === 4;
+}
+
+/** Read the route's authorized replacement label, never a position insertion. */
+export function connectorRouteTabLabel(
+  pathname: string,
+  contributions: readonly CrumbContribution[],
+): string | null {
+  if (!isConnectorDispatchPathname(pathname)) return null;
+  const routePath = "/" + pathname.split("/").filter(Boolean).join("/");
+  let label: string | null = null;
+  for (const entry of contributions) {
+    if (entry.insertBefore || entry.appendAfter || entry.prefix !== routePath) continue;
+    label = entry.label || null;
+  }
+  return label;
+}

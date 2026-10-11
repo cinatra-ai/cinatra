@@ -60,7 +60,7 @@ export {
 // readRows, the landing of signInThroughPage, dispatchRun, press and selectFrom.
 export { SIGN_IN_LANDING_BOUND_MS, SIGN_IN_READY_SELECTORS } from "./sign-in-through-page.mjs";
 export { READ_ROWS_BOUNDS, READ_ROWS_BOUND_MS, READ_ROWS_LIMIT, readRows } from "./read-rows.mjs";
-export { CONTROL_ACTION_BOUND_MS, CONTROL_MARK, CONTROL_NAMES_LISTED, CONTROL_POLL_MS } from "./page-controls.mjs";
+export { CONTROL_ACTION_BOUND_MS, CONTROL_HYDRATION_BOUND_MS, CONTROL_MARK, CONTROL_NAMES_LISTED, CONTROL_POLL_MS } from "./page-controls.mjs";
 export { PRESS_BOUNDS, PRESS_ROLES, PRESS_SETTLE_BOUND_MS, PRESS_START_BOUND_MS, press } from "./press.mjs";
 export { SELECT_BOUNDS, SELECT_REFLECT_BOUND_MS, readOptions, selectFrom } from "./select-from.mjs";
 export {
@@ -153,3 +153,10 @@ export { TITLE_BOUND_MS, TITLE_POLL_MS, TITLE_SETTLE_MS, readTitle } from "./rea
 // openPageInOwnContext: a further page in a browser context of its own, signed
 // in by the session the first page carries.
 export { OWN_CONTEXT_BOUNDS, OWN_CONTEXT_LANDING_BOUND_MS, openPageInOwnContext } from "./open-page-in-own-context.mjs";
+// frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow: the one
+// frame of a page and the scope the control steps take in its place, a control
+// without a name, a page of another origin, and the sign-in through a window.
+export { FRAME_SCOPE_BOUNDS, FRAME_SCOPE_BOUND_MS, frameOf } from "./frame-scope.mjs";
+export { PRESS_WITHOUT_NAME_BOUNDS, pressWithoutName } from "./press-without-name.mjs";
+export { OTHER_ORIGIN_BOUNDS, OTHER_ORIGIN_BOUND_MS, openPageOfOrigin } from "./open-page-of-origin.mjs";
+export { SIGN_IN_WINDOW_BOUNDS, WINDOW_OPEN_BOUND_MS, WINDOW_RETURN_BOUND_MS, signInThroughWindow } from "./sign-in-through-window.mjs";
