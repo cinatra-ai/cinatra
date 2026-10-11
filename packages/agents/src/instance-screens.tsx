@@ -2450,7 +2450,7 @@ export async function SetupScreen({
               ? (["review"] as const)
               : []),
           ],
-          throughTheLoadingMoment: runStillOwesInput || runStillOwesReview,
+          throughTheLoadingMoment: runStillOwesInput || (runInputSteps.length === 0 && runStillOwesReview),
         }
       // Keep child forecasts restricted before dispatch too. The parent's
       // schedule is never a step this run will take, and a review with neither
