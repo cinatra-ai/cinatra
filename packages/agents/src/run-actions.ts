@@ -18,7 +18,7 @@ import { resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
-import { asActionablePreflightError } from "./actionable-preflight-error";
+import { asActionablePreflightError, connectorSetupRoute, type ConnectorConfigurationRefusal } from "./actionable-preflight-error";
 import { assertAgentPackageRunnable, type AgentInstallRefusal } from "./runtime-install-gate";
 import {
   readAgentRunById,
@@ -135,7 +135,7 @@ export type CreatePendingRunArgs = {
 export type CreatePendingRunResult =
   | { ok: true; runId: string }
   // See TriggerAgentRunResult — actionable preflight failure fields.
-  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal };
+  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal; connectorConfigurationRefusal?: Omit<ConnectorConfigurationRefusal, "settingsHref"> };
 
 /**
  * Creates an empty `pending_input` run for any template. The dispatcher's
@@ -297,7 +297,36 @@ async function createAndTriggerRunCore(
     // run has already been compensated back to a decidable state by the
     // coordinator, so the retry the message asks for has somewhere to land.
     const actionable = asActionablePreflightError(enqueueErr);
-    if (actionable) return { ok: false, ...actionable };
+    if (actionable) {
+      const packageId = actionable.packageId;
+      const route = connectorSetupRoute(packageId);
+      const dependencies = template.connectorDependencies;
+      const dependency = packageId && dependencies && Object.hasOwn(dependencies, packageId)
+        ? dependencies[packageId] : undefined;
+      // Only a declared required connector can produce this reading. The legacy
+      // string dependency form means required, as it does in enqueue preflight.
+      if (packageId && route && (typeof dependency === "string" || dependency?.requirement === "required")) {
+        // Read lazily, the way the install gate reads the same catalog
+        // (runtime-install-gate.ts), so this module gains no eager edge.
+        const manifest = (await import("@/lib/generated/extensions.server").catch(() => null))?.STATIC_EXTENSION_MANIFEST;
+        const declared = manifest && Object.hasOwn(manifest, packageId)
+          ? manifest[packageId] : undefined;
+        const displayName = declared?.kind === "connector" && declared.displayName?.trim()
+          ? declared.displayName : packageId;
+        // Log the named refusal without exposing backend diagnostics or hidden
+        // connection records. The coordinator's compensation stays unchanged.
+        // Whether THIS reader may open the connector's setup page is read on the
+        // page, not here: this module is reachable from four ratchet-locked
+        // routes (see the note on readRecordedRunOutputArtifactIds), and the setup
+        // identity module would grow each of them.
+        console.warn("[agents] run start refused: required connector is not configured", {
+          code: actionable.code, agentPackage: template.packageName,
+          connectorPackage: packageId, connectorName: displayName,
+        });
+        return { ok: false, ...actionable, connectorConfigurationRefusal: { packageId, displayName } };
+      }
+      return { ok: false, ...actionable };
+    }
     throw enqueueErr;
   }
   if (launched.carrier.kind !== "run") {

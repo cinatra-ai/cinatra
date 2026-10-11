@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   readScopeSurfaceOrganizationId: vi.fn(),
   getAuthSession: vi.fn(),
   readAgentTemplateBySlug: vi.fn(),
+  getActorContext: vi.fn(),
+  resolveConnectorRouteIdentity: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -37,6 +39,11 @@ vi.mock("@/lib/auth-session", () => ({
   resolveOrgRoleForSession: vi.fn(async () => "member"),
   requireActorContext: vi.fn(),
   resolveActorGrantsForUserInOrg: vi.fn(async () => []),
+  getActorContext: mocks.getActorContext,
+}));
+
+vi.mock("@/lib/connector-route-identity.server", () => ({
+  resolveConnectorRouteIdentity: mocks.resolveConnectorRouteIdentity,
 }));
 
 vi.mock("@/lib/scope-surface-eligibility.server", () => ({
@@ -259,5 +266,93 @@ describe("a refused /new run explains the refusal (cinatra#3961)", () => {
     const failure = new Error("private backend failure");
     mocks.createAndTriggerRunWithContext.mockRejectedValue(failure);
     await expect(outcome()).rejects.toBe(failure);
+  });
+});
+
+
+describe("a start missing a required connection (cinatra#4041, section IV.4)", () => {
+  // The core names the connector; the page reads whether THIS reader may open
+  // its setup page, so the mocked result carries no setup address.
+  const connector = { packageId: "@cinatra-ai/apollo-connector", displayName: "Apollo" };
+  const setupHref = "/connectors/cinatra-ai/apollo-connector/setup";
+  const actor = (orgRole: "admin" | "member" = "member", organizationId: string = ORG_A) =>
+    ({ principalType: "HumanUser", principalId: "user-1", organizationId, orgRole, teamIds: [], projectGrants: [] });
+  const identity = (packageId = connector.packageId, displayName = "Apollo", isCatalog = true) =>
+    ({ kind: "identity", packageId, displayName, isCatalog });
+  function refuse(displayName = connector.displayName) {
+    mocks.createAndTriggerRunWithContext.mockResolvedValue({ ok: false, error: "PRIVATE_BACKEND_DIAGNOSTIC", code: "CONNECTOR_NOT_CONFIGURED", connectorConfigurationRefusal: { ...connector, displayName } });
+  }
+  async function drawn(props?: Parameters<typeof SetupScreen>[0]) {
+    const result = await outcome(props); expect(result.navigation).toBeNull(); render(<>{result.tree}</>);
+    return screen.getByRole("alert");
+  }
+  beforeEach(() => {
+    mocks.getActorContext.mockResolvedValue(actor());
+    mocks.resolveConnectorRouteIdentity.mockResolvedValue({ kind: "refused", considerMarketplaceRedirect: false });
+  });
+  it.each(["administrator", "permitted member"])("shows named connector and setup recourse for %s instead of not-found", async (reader) => {
+    mocks.viewerIsAdmin = reader === "administrator"; refuse();
+    mocks.getActorContext.mockResolvedValue(actor(reader === "administrator" ? "admin" : "member"));
+    mocks.resolveConnectorRouteIdentity.mockResolvedValue(identity());
+    const panel = await drawn();
+    expect(panel.getAttribute("data-conformance-id")).toBe("agent-start-needs-connection");
+    expect(panel.textContent).toContain("Blog Idea Generator can't start");
+    expect(panel.textContent).toContain("It needs Apollo @cinatra-ai/apollo-connector, a connection that is not set up for you yet. Set it up, then start the agent again.");
+    expect(panel.textContent).toContain("Set up connections first:");
+    expect(screen.getByRole("link", { name: "Apollo" }).getAttribute("href")).toBe(setupHref);
+    expect(screen.getByRole("link", { name: "Back to Agents" }).getAttribute("href")).toBe("/agents");
+    expect(panel.textContent).not.toContain("PRIVATE_BACKEND_DIAGNOSTIC");
+    expect(screen.queryByRole("link", { name: "View requirements" })).toBeNull();
+    expect(mocks.resolveConnectorRouteIdentity).toHaveBeenCalledExactlyOnceWith(
+      { vendor: "cinatra-ai", slug: "apollo-connector", subroute: "setup" },
+      expect.objectContaining({ principalId: "user-1", organizationId: ORG_A }),
+    );
+  });
+  it("gives a reader the setup page refuses the exact administrator recourse without a setup link or strip", async () => {
+    refuse();
+    const panel = await drawn();
+    expect(panel.textContent).toContain("Apollo @cinatra-ai/apollo-connector");
+    expect(panel.textContent).toContain("Ask a platform administrator to set it up for you, then start the agent again.");
+    expect(panel.textContent).not.toContain("Set up connections first:");
+    expect(screen.queryByRole("link", { name: "Apollo" })).toBeNull();
+  });
+  it("does not link the setup page of another package", async () => {
+    refuse(); mocks.resolveConnectorRouteIdentity.mockResolvedValue(identity("@other/apollo-connector", "Another connector"));
+    const panel = await drawn();
+    expect(panel.textContent).toContain("Apollo @cinatra-ai/apollo-connector");
+    expect(panel.textContent).not.toContain("Set up connections first:");
+    expect(panel.textContent).not.toContain("Another connector");
+    expect(screen.queryByRole("link", { name: "Apollo" })).toBeNull();
+  });
+  it("keeps the panel and grants no setup link when the setup reading fails", async () => {
+    refuse(); mocks.resolveConnectorRouteIdentity.mockRejectedValue(new Error("private policy read error"));
+    const panel = await drawn();
+    expect(panel.getAttribute("data-conformance-id")).toBe("agent-start-needs-connection");
+    expect(panel.textContent).toContain("Ask a platform administrator to set it up for you, then start the agent again.");
+    expect(panel.textContent).not.toContain("Set up connections first:");
+    expect(panel.textContent).not.toContain("private policy read error");
+  });
+  it("names a trusted runtime-only connector by the name its setup page carries", async () => {
+    refuse(); mocks.resolveConnectorRouteIdentity.mockResolvedValue(identity(connector.packageId, "Runtime Apollo", false));
+    const panel = await drawn();
+    expect(panel.textContent).toContain("It needs Runtime Apollo @cinatra-ai/apollo-connector, a connection that is not set up for you yet. Set it up, then start the agent again.");
+    expect(screen.getByRole("link", { name: "Runtime Apollo" }).getAttribute("href")).toBe(setupHref);
+  });
+  it.each([
+    ["an absent actor", undefined],
+    ["an actor of another organization", actor("member", "another-org")],
+  ])("never reads setup access for %s", async (_name, reader) => {
+    refuse(); mocks.getActorContext.mockResolvedValue(reader);
+    const panel = await drawn();
+    expect(mocks.resolveConnectorRouteIdentity).not.toHaveBeenCalled();
+    expect(panel.textContent).not.toContain("Set up connections first:");
+    expect(screen.queryByRole("link", { name: "Apollo" })).toBeNull();
+  });
+  it("keeps the scoped Back to Agents and escaped manifest name", async () => {
+    refuse("<script>connector()</script>");
+    render(<>{(await outcome({ agentId: AGENT_ID, instanceId: "new", scopeBase: "/teams/team-A" })).tree}</>);
+    expect(screen.getByRole("link", { name: "Back to Agents" }).getAttribute("href")).toBe("/teams/team-A/agents");
+    expect(screen.getByRole("alert").textContent).toContain("<script>connector()</script>");
+    expect(screen.getByRole("alert").querySelector("script")).toBeNull();
   });
 });

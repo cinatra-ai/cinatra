@@ -206,3 +206,59 @@ describe("real install refusal creates no run (cinatra#3961)", () => {
     expect(transitionRunStatus).toHaveBeenNthCalledWith(2, RUN_ID, "queued", "pending_input", undefined, { kind: "session" });
   });
 });
+
+
+describe("required connector start refusal (cinatra#4041)", () => {
+  // The reader's setup reading belongs to the page, never to this core: the
+  // refusal names the declared connector and nothing about the reader.
+  const packageId = "@cinatra-ai/apollo-connector";
+  const settingsHref = "/connectors/cinatra-ai/apollo-connector/setup";
+  function arrange(requirement: "required" | "optional" = "required") {
+    registry.catalog = { ...registry.catalog, [packageId]: { packageName: packageId, kind: "connector", version: "1.0.0", resolution: "guardedOptional", displayName: "Apollo", dependencies: [] } } as AgentCatalogView;
+    enqueueAgentRun.mockRejectedValueOnce(Object.assign(new Error("PRIVATE_BACKEND_DIAGNOSTIC"), { code: "CONNECTOR_NOT_CONFIGURED", packageId, settingsHref }));
+    return { ...template, connectorDependencies: { [packageId]: { range: "^1.0.0", requirement } } };
+  }
+  it("retains the declared identity and trusted name, and logs the refused connector", async () => {
+    const current = arrange();
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await createAndTriggerRunWithContext(USER, ORG, current);
+      expect(result).toMatchObject({ ok: false, code: "CONNECTOR_NOT_CONFIGURED", connectorConfigurationRefusal: { packageId, displayName: "Apollo" } });
+      expect(result).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: "Apollo" });
+      expect(log).toHaveBeenCalledWith("[agents] run start refused: required connector is not configured", expect.objectContaining({ connectorPackage: packageId, connectorName: "Apollo", agentPackage: PKG }));
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE_BACKEND_DIAGNOSTIC");
+      expect(createAgentRunPendingInput).toHaveBeenCalledTimes(1);
+      expect(enqueueAgentRun).toHaveBeenCalledTimes(1);
+      expect(transitionRunStatus).toHaveBeenNthCalledWith(2, RUN_ID, "queued", "pending_input", undefined, { kind: "session" });
+    } finally { log.mockRestore(); }
+  });
+  it("uses the declared package identity when no public display name exists", async () => {
+    const current = arrange();
+    registry.catalog = { ...registry.catalog, [packageId]: { ...registry.catalog![packageId], displayName: "  " } };
+    expect(await createAndTriggerRunWithContext(USER, ORG, current)).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: packageId });
+  });
+  it("does not borrow a non-connector record's name", async () => {
+    const current = arrange(); registry.catalog = { ...registry.catalog, [packageId]: { ...registry.catalog![packageId], kind: "skill", displayName: "Unrelated secret" } };
+    expect(await createAndTriggerRunWithContext(USER, ORG, current)).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: packageId });
+  });
+  it("preserves the preflight's legacy string declaration as a required edge", async () => {
+    const current = arrange();
+    expect(await createAndTriggerRunWithContext(USER, ORG, { ...current, connectorDependencies: { [packageId]: "^1.0.0" } })).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: "Apollo" });
+  });
+  it("never turns an LLM failure into a named connector or connector log", async () => {
+    enqueueAgentRun.mockRejectedValueOnce(Object.assign(new Error("Configure LLM"), { code: "LLM_PROVIDER_NOT_CONFIGURED", packageId, settingsHref: "/configuration/llm" }));
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await createAndTriggerRunWithContext(USER, ORG, template)).toEqual({ ok: false, error: "Configure LLM", code: "LLM_PROVIDER_NOT_CONFIGURED", settingsHref: "/configuration/llm" });
+      expect(log).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+  it("does not promote an optional edge into a required-connector refusal", async () => {
+    expect(await createAndTriggerRunWithContext(USER, ORG, arrange("optional"))).not.toHaveProperty("connectorConfigurationRefusal");
+  });
+  it("does not trust an undeclared thrown connector", async () => {
+    arrange();
+    expect(await createAndTriggerRunWithContext(USER, ORG, template)).not.toHaveProperty("connectorConfigurationRefusal");
+  });
+});
