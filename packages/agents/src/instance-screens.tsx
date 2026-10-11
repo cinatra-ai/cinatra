@@ -1787,10 +1787,12 @@ export async function SetupScreen({
   // keeps this walk in lockstep with the live resolver (execution.ts) and the
   // replay submission map (run-actions.ts); a mismatch shifts every prompt→step
   // mapping by one slot.
-  const policySteps = template.approvalPolicy?.steps ?? [];
+  // The renderer/gate fields are part of the shared rail policy projection.
+  // Widen the stored record structurally without replacing its runtime values.
+  const policySteps: ReadonlyArray<RunStepperPolicyStep> = template.approvalPolicy?.steps ?? [];
   // Shared with the agent-run review surface via buildRunStepperSteps (cinatra#2063)
   // so both surfaces render the identical step list in lockstep.
-  const hitlSteps = buildRunStepperSteps(policySteps as ReadonlyArray<RunStepperPolicyStep>, {
+  const hitlSteps = buildRunStepperSteps(policySteps, {
     // The run's own record of each step, for a declaration that names nothing
     // (cinatra#3226): a work step is named by its work, never by an ordinal.
     stepResults: (run?.stepResults ?? null) as readonly unknown[] | null,
