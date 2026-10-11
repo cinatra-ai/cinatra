@@ -948,34 +948,18 @@ for (const { name: palette, theme } of PALETTES) {
   });
 
   test.describe(`Select long-list viewport — ${palette} — specs/app-components.html#Select`, () => {
-    test("exposes the actual overflowing viewport's thin track", async ({ page }) => {
+    test("uses the shared ScrollArea overlay on the actual overflowing viewport", async ({ page }) => {
       await open(page, theme);
       await page.locator(seam("select-long-list")).getByRole("combobox").click();
       const listbox = page.getByRole("listbox");
       const viewport = listbox.locator("[data-radix-select-viewport]");
       await expect(listbox.getByRole("option")).toHaveCount(48);
       await expect.poll(() => viewport.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-      const track = await viewport.evaluate((el) => {
-        const css = getComputedStyle(el);
-        const bar = getComputedStyle(el, "::-webkit-scrollbar");
-        const thumb = getComputedStyle(el, "::-webkit-scrollbar-thumb");
-        const track = getComputedStyle(el, "::-webkit-scrollbar-track");
-        return {
-          width: css.scrollbarWidth,
-          display: bar.display,
-          webkitWidth: bar.width,
-          webkitHeight: bar.height,
-          thumb: thumb.backgroundColor,
-          track: track.backgroundColor,
-        };
-      });
-      expect(track.width).toBe("thin");
-      expect(track.display).toBe("block");
-      // WebKit recipe pin: standard thin width remains browser-controlled.
-      expect(track.webkitWidth).toBe("6px");
-      expect(track.webkitHeight).toBe("6px");
-      expect(track.thumb).toBe(await computedColor(page, await token(page, "--border")));
-      expect(alphaOf(track.track)).toBe(0);
+      await expect(viewport).toHaveAttribute("data-radix-scroll-area-viewport", "");
+      expect(await style(viewport, "scrollbar-width")).toBe("none");
+      expect(await viewport.evaluate((el) => getComputedStyle(el, "::-webkit-scrollbar").display)).toBe("none");
+      const scrollbar = listbox.locator('[data-slot="scroll-area-scrollbar"]');
+      await expect(scrollbar).toHaveCount(0);
       // Keep this scrollbar check independent of the selected option. Radix
       // scroll controls reveal the active option when they mount; focus the
       // existing listbox before direct scrolling so that is not an item.
@@ -988,6 +972,14 @@ for (const { name: palette, theme } of PALETTES) {
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         return Math.round(el.scrollHeight - el.clientHeight - el.scrollTop);
       })).toBe(0);
+      await expect(scrollbar).toBeVisible();
+      expect((await box(scrollbar)).width).toBe(6);
+      expect(await style(scrollbar, "position")).toBe("absolute");
+      expect(alphaOf(await style(scrollbar, "background-color"))).toBe(0);
+      const thumb = scrollbar.locator('[data-slot="scroll-area-thumb"]');
+      await expect(thumb).toBeVisible();
+      expect(await style(thumb, "background-color")).toBe(await computedColor(page, await token(page, "--border")));
+      await expect(scrollbar).toHaveAttribute("data-state", "visible");
       await expect(listbox.getByRole("option", { name: "List item 48" })).toBeInViewport();
     });
 
