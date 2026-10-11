@@ -1085,9 +1085,15 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
             expect(modalDrawing.width).toBeLessThanOrEqual(512);
             const overlayDrawing = await page.locator('[data-slot="alert-dialog-overlay"]').evaluate((element) => {
               const style = getComputedStyle(element);
-              return { top: style.top, background: style.backgroundColor };
+              // Resolve equivalent CSS color serializations through the browser.
+              const canvas = document.createElement("canvas");
+              canvas.width = canvas.height = 1;
+              const context = canvas.getContext("2d")!;
+              context.fillStyle = style.backgroundColor;
+              context.fillRect(0, 0, 1, 1);
+              return { top: style.top, background: Array.from(context.getImageData(0, 0, 1, 1).data) };
             });
-            expect(overlayDrawing).toEqual({ top: "64px", background: "rgba(0, 0, 0, 0.5)" });
+            expect(overlayDrawing).toEqual({ top: "64px", background: [0, 0, 0, 128] });
             await expect(card.locator('[data-conformance-id="schedule-cancel-confirm"]')).toHaveCount(0);
             await expect(page.locator('[data-slot="alert-dialog-overlay"]')).toBeVisible();
             await dialog.getByRole("button", { name: "Keep schedule" }).click();
