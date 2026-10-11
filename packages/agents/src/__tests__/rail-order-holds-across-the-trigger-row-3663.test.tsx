@@ -386,6 +386,10 @@ function readHead(container: HTMLElement, includeWork = false): HeadRow[] {
   return Array.from(column.querySelectorAll<HTMLElement>(
       includeWork ? `${HEAD_ROWS},[data-rail-kind="step"]` : HEAD_ROWS,
     ))
+    // Main marks the work row's own box too. The head-only readings exclude
+    // work, while the complete reading counts that box once, not its wrapper.
+    .filter((el) => !el.querySelector("[data-run-surface-rail-step]"))
+    .filter((el) => includeWork || !el.closest('[data-rail-kind="step"]'))
     .filter((el) => el.getAttribute("data-run-surface-rail-step-key") !== "made")
     .map((el) => {
       const text = (el.textContent ?? "").trim();

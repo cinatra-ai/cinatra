@@ -424,7 +424,8 @@ function readRail(container: HTMLElement): RailReading {
       numeral: numeral === undefined ? null : Number(numeral),
       key:
         el.getAttribute("data-run-surface-rail-step-key") ??
-        (el.hasAttribute("data-recommendation-rail-step") ? "recommendation" : null),
+        (el.hasAttribute("data-recommendation-rail-step") ? "recommendation" :
+          el.hasAttribute("data-schedule-rail-step") ? "schedule" : null),
       selected:
         el.getAttribute("data-run-surface-rail-selected") ??
         el.getAttribute("data-recommendation-step-selected"),
@@ -465,7 +466,7 @@ async function freshReading(moment: MomentName, name = `fresh render (${moment})
   return reading;
 }
 
-const DRAWN_AT_THE_GATE = ["Skills", "Schedule", "Setup", "Draft Context", "Review"];
+const DRAWN_AT_THE_GATE = ["Skills", "Schedule", "Setup", "Draft Context", "Draft the post", "Review"];
 
 beforeEach(() => {
   vi.stubGlobal("EventSource", StubEventSource);
@@ -526,19 +527,21 @@ describe("cinatra#3246 -- the gate the run stops at after its trigger row is a w
     const reading = readRail(container);
     READINGS["confirmed context before a later current gate"] = reading;
     expect(reading.rows.map((r) => r.key)).toEqual([
-      "recommendation", "schedule", "input:0", "context:wayflow-context-A", "gate", "review",
+      "recommendation", "schedule", "input:0", "context:wayflow-context-A", "gate", null, "review",
     ]);
     const allRows = Array.from(container.querySelectorAll<HTMLElement>(
       `[data-run-step-rail-column] ${RAIL_ROWS.split(",").join(",[data-run-step-rail-column] ")},[data-run-step-rail-column] [data-rail-kind="step"]`,
-    ));
+    )).filter((el) => !el.querySelector("[data-run-surface-rail-step]"));
+    // The complete census includes every physical marked row, and the
+    // work wrapper contributes no second logical entry. A duplicated row
+    // would still make both the titles and this marked-row census fail.
+    expect(container.querySelectorAll('[data-run-step-rail-column] [data-run-surface-rail-step]')).toHaveLength(allRows.length);
     expect(allRows.map((el) => (el.textContent ?? "").trim().replace(/^\d+/, ""))).toEqual([
       "Skills", "Schedule", "Setup", "Draft Context · continued", "Later Context", "Draft the post", "Review",
     ]);
     // Settled rows draw checks, but retain their numeral in the accessible name.
-    expect(reading.rows.map((r) => container.querySelector(
-      r.key === "recommendation" ? "[data-recommendation-rail-step]" : `[data-run-surface-rail-step-key="${r.key}"]`,
-    )?.getAttribute("aria-label"))).toEqual([
-      null, "1 Schedule", "2 Setup", "3 Draft Context · continued", "4 Later Context", "6 Review",
+    expect(allRows.map((el) => el.getAttribute("aria-label"))).toEqual([
+      null, "1 Schedule", "2 Setup", "3 Draft Context · continued", "4 Later Context", "5 Draft the post", "6 Review",
     ]);
     expect(container.querySelector('[data-rail-kind="step"]')?.textContent?.trim()).toBe("5Draft the post");
     expect(reading.currentCount).toBe(1);
@@ -666,7 +669,7 @@ describe("cinatra#3246 -- the gate the run stops at after its trigger row is a w
     const SPENT = {
       counted: 1,
       step: "",
-      key: "schedule",
+      key: null,
       selected: "false",
       reached: "true",
       settled: "true",
@@ -676,14 +679,14 @@ describe("cinatra#3246 -- the gate the run stops at after its trigger row is a w
       ownSettled: "true",
     };
     // AT (f) the scheduled run has not fired: the Schedule step is the step the
-    // surface is on, unsettled, and -- like every unsettled run_card row -- it
-    // states nothing about "reached".
+    // surface is on, unsettled. Main marks that Schedule row as reached
+    // because this run carries the dispatched schedule, independently of settlement.
     const STANDING_ON_IT = {
       counted: 1,
       step: "",
-      key: "schedule",
+      key: null,
       selected: "true",
-      reached: null,
+      reached: "true",
       settled: "false",
       current: "step",
       host: "run_card",
