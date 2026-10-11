@@ -165,11 +165,7 @@ export function ScheduleRailStepRow({
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
       className={RUN_SURFACE_RAIL_ROW_CLASS}
-      // Only the run card's Schedule entry is addressed by the surface's key.
-      // Main's common row readings above remain the single source of its state.
-      {...(host === "run_card"
-        ? { "data-run-surface-rail-step-key": "schedule" }
-        : {})}
+
     >
       <span
         data-conformance-id="schedule-rail-indicator"
