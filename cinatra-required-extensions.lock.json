@@ -117,9 +117,9 @@
     {
       "packageName": "@cinatra-ai/json-artifact",
       "repo": "cinatra-ai/json-artifact",
-      "resolvedSha": "742686607c4ccf1d35611e2aa3d523a5d7659922",
+      "resolvedSha": "eeec22a53ef2c23342e81e0b0ded16ccb0eac75a",
       "packageVersion": "0.1.1",
-      "treeSha256": "662364db55312a3b23297967a8fb8ba4de0c73004b772ff2a4bb2ce6c0fdc8a7"
+      "treeSha256": "f57d67c0e829dc1d865b8ed5fd36e2f82373cc81b6f8a603b8fc845e689d6cc5"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -180,9 +180,9 @@
     {
       "packageName": "@cinatra-ai/text-artifact",
       "repo": "cinatra-ai/text-artifact",
-      "resolvedSha": "905835b4eef2b3645b0bcfe740f3a8b5cd1a77e8",
+      "resolvedSha": "3f7d278d7f93b986fe472cefa398cb4d9ce85262",
       "packageVersion": "0.1.0",
-      "treeSha256": "2c572b64990d9aa8f28c38e49ef2c524d38ac20d9f7b3e176078c757f4b7c978"
+      "treeSha256": "0b27c9531015caa9965445295c6878ef6b0f12f243d242162c5305c95def71eb"
     },
     {
       "packageName": "@cinatra-ai/video-artifact",
@@ -194,9 +194,9 @@
     {
       "packageName": "@cinatra-ai/zip-artifact",
       "repo": "cinatra-ai/zip-artifact",
-      "resolvedSha": "3cd30b4a0b522468ad12dfedc7ed9b2636f6f3bd",
+      "resolvedSha": "c841ee4ed0d97a0e5445de78f614c5fc9cb88f92",
       "packageVersion": "0.1.0",
-      "treeSha256": "d8d032b7c0f3e6a53ef75600781e2777f33ce4e977c009e681660c858ea5a182"
+      "treeSha256": "4d80ede66e2384a91080b1db5acc423e155b8dd082bb77774e3dde0819658b54"
     }
   ]
 }

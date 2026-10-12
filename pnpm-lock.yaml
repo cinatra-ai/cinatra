@@ -1243,6 +1243,10 @@ importers:
         version: 3.2.7(@types/node@24.13.5)(jiti@2.7.0)(jsdom@30.0.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)
 
   extensions/cinatra-ai/json-artifact:
+    dependencies:
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -1744,6 +1748,9 @@ importers:
       '@cinatra-ai/sdk-ui':
         specifier: workspace:*
         version: link:../../../packages/sdk-ui
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       react:
         specifier: 19.2.7
@@ -1812,6 +1819,10 @@ importers:
         version: 5.9.3
 
   extensions/cinatra-ai/text-artifact:
+    dependencies:
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -2038,6 +2049,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@24.13.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   extensions/cinatra-ai/zip-artifact:
+    dependencies:
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
