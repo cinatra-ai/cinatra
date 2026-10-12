@@ -382,4 +382,11 @@ describe("configuration-only preflight resolves the activated owner", () => {
     await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
     expect(googlePresence).not.toHaveBeenCalled();
   });
+
+  it.each(["present", "absent"])("refuses inherited state %s with an unrelated own key", async state => {
+    registered();
+    googlePresence.mockResolvedValue(Object.assign(Object.create({ state }), { unrelated: true }));
+    await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+  });
 });

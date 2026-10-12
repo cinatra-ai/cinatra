@@ -320,11 +320,14 @@ export async function hasRequiredConnectorConnectionForUse(input: {packageId:str
         // Resolve the live owning reader on each call. Never import its vendor
         // implementation or treat an unwired/invalid provider as a known miss.
         const result: unknown = await (impl as { readPresence(): Promise<unknown> }).readPresence();
-        if (!result || typeof result !== "object" || Array.isArray(result) ||
-            Object.keys(result).length !== 1 || !("state" in result)) {
+        if (!result || typeof result !== "object" || Array.isArray(result)) {
           throw new ConnectionAvailabilityUnknownError();
         }
-        const observed = result.state;
+        const keys = Reflect.ownKeys(result);
+        if (keys.length !== 1 || keys[0] !== "state") {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        const observed = (result as { state: unknown }).state;
         if (observed !== "present" && observed !== "absent") {
           throw new ConnectionAvailabilityUnknownError();
         }
