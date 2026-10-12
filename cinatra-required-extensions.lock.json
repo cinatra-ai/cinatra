@@ -12,9 +12,9 @@
     {
       "packageName": "@cinatra-ai/audio-artifact",
       "repo": "cinatra-ai/audio-artifact",
-      "resolvedSha": "054e9fb8f13d2c8d18a3f1f9db35881b1c8f47e6",
+      "resolvedSha": "19c0b86b2a6c43b8d1d10b11c9495677ae2a22b0",
       "packageVersion": "0.1.1",
-      "treeSha256": "fafd7fc24083b3989dff94e03529004bb8adbd65cad896c0d41151955cc5bee7"
+      "treeSha256": "5f2e5d71f45f378b70746f63dbf915cd4b16a9481550e963daa38a09155eccc6"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
@@ -33,9 +33,9 @@
     {
       "packageName": "@cinatra-ai/binary-artifact",
       "repo": "cinatra-ai/binary-artifact",
-      "resolvedSha": "42e2d0f837f66bd377b89a3b930d1215124fef33",
+      "resolvedSha": "b9375ec828d8cce53b9330545c6663763c36b2f7",
       "packageVersion": "0.1.0",
-      "treeSha256": "02193ffd2675aa105909b905b0dc5ac5cab9d138d3d413698fdb91476ffa9039"
+      "treeSha256": "493c46e938bd3034732ce7e73103d29db5c7d60c81ccb3a0d7bcd8041f7f516a"
     },
     {
       "packageName": "@cinatra-ai/blog-content-skill",
@@ -110,9 +110,9 @@
     {
       "packageName": "@cinatra-ai/image-artifact",
       "repo": "cinatra-ai/image-artifact",
-      "resolvedSha": "1eaf60aa5058b0c6c3a5cc1db91edcd44d3242f6",
+      "resolvedSha": "52d9265c6789a6b5ee2eae7f339469c7de6bd5f2",
       "packageVersion": "0.1.1",
-      "treeSha256": "228f32607104c277763e309617fa377fdac9a5dff81edf5c69b5e7170ad279fc"
+      "treeSha256": "dac6ccf396418343a0f5b22a6dac92fed85b4026c62716ffbf7d7d8bf99de4d3"
     },
     {
       "packageName": "@cinatra-ai/json-artifact",
@@ -131,9 +131,9 @@
     {
       "packageName": "@cinatra-ai/markdown-artifact",
       "repo": "cinatra-ai/markdown-artifact",
-      "resolvedSha": "b3d54ae67e878c262473725acbc287ba4927f22c",
+      "resolvedSha": "b3c08cc0e4fa21cf315385f8b614608453e508d7",
       "packageVersion": "0.1.0",
-      "treeSha256": "6828a54048f7c18f09d4c930c11f0a13d56d0e40e4c4c4877ddb8c46d57422ce"
+      "treeSha256": "9cc297c8fd40245ca70f9387d7ebdb611f2b1dfa2a24187c8b6fd6c527999003"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",
@@ -145,16 +145,16 @@
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "f59c1f8e5b09bc001f935781fae522ab4eb2ee32",
-      "packageVersion": "0.1.9",
-      "treeSha256": "3bbe31cc09c4b39a8143ea15122150bfeda9ad8998dc0bc1c381526049194170"
+      "resolvedSha": "4b07c958d59d7e588d27d363f287e9137bbd8df0",
+      "packageVersion": "0.1.10",
+      "treeSha256": "966e177e3321b5133e895a8d1a0aa50b1d32880e80a2536b639cfa2160b666e0"
     },
     {
       "packageName": "@cinatra-ai/pdf-artifact",
       "repo": "cinatra-ai/pdf-artifact",
-      "resolvedSha": "bca854520e2e1797d165db8d163739a0d2e0a2f8",
+      "resolvedSha": "6a490721446018d87cd2ea218780dea0c8108f83",
       "packageVersion": "0.1.1",
-      "treeSha256": "5967315fdedc3078fdd739ec24057b756b0fe527dd92616b524995a4d0373ff2"
+      "treeSha256": "d1a870e92cb54ef96f82d3da4e6c20c7c943f2ed2b2a11603b714a24a1774996"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
