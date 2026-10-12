@@ -1665,6 +1665,83 @@ export async function devAttachTwentyBearerFromMintedKey(input: {
 }
 
 /**
+ * DEV-ONLY (cinatra#4112): hand the Twenty workspace connection the REFUSED
+ * development fixture account owns to the owner the dev-boot shell pushed (the
+ * instance's first administrator). An earlier, private boot attached Twenty for
+ * the fixture account; on a boot that refuses that account the connection must
+ * follow the new owner, or the hook keeps a connection nobody can own and, once
+ * its key dies, mints a key per boot that `saveTwentyConnection`'s
+ * foreign-owner guard refuses.
+ *
+ * NARROW BY CONSTRUCTION: it acts only when an owner is pushed AND the
+ * connection's live `externalMcp` identity is owned by `refusedFixtureUserId`,
+ * the fixture account the shell refused on THIS boot. Any other owner is left
+ * alone, so the foreign-owner guard keeps refusing a save under somebody else's
+ * connection exactly as before.
+ *
+ *   - Twenty cannot be reached to check the stored key: nothing changes
+ *     ("deferred"); a later boot retries.
+ *   - The stored key still authenticates: the fixture identity is revoked
+ *     first, then the SAME key is re-saved through the sanctioned
+ *     `saveTwentyConnection` for the new owner ("reowned") — no key is minted.
+ *   - The stored key is missing or rejected (401/403), or the re-save fails:
+ *     the connection is removed through `disconnectTwentyConnection`
+ *     ("cleared"), so the Twenty hook that runs next mints ONE fresh key and
+ *     attaches it for the new owner.
+ *
+ * Never throws. SECRET BOUNDARY: the key is never logged or returned.
+ */
+export async function devReownRefusedFixtureTwentyConnection(input: {
+  refusedFixtureUserId: string;
+}): Promise<
+  "no-owner" | "no-connection" | "not-fixture-owned" | "deferred" | "reowned" | "cleared" | "failed"
+> {
+  const owner = seededDevActorForExternalMcp;
+  const fixtureUserId = input.refusedFixtureUserId;
+  if (!owner?.userId || !owner?.organizationId || !fixtureUserId || owner.userId === fixtureUserId) {
+    return "no-owner";
+  }
+  try {
+    const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+    if (!row?.nangoConnectionId) return "no-connection";
+    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+      "@cinatra-ai/extensions/connection-identity-store"
+    );
+    const identity = await readNangoConnectionByNaturalKey("externalMcp", row.nangoConnectionId);
+    if (!identity || identity.ownerUserId !== fixtureUserId) return "not-fixture-owned";
+    if (!isNangoConfigured()) return "deferred";
+
+    // The stored key is read through the GATED resolver (the connection's own
+    // use-gate), never a raw credential read.
+    const apiKey = await resolveExternalMcpServerBearer(row);
+    const { restBase } = normalizeTwentyInstanceUrl(row.serverUrl);
+    const probe = apiKey ? await probeTwentyKey(restBase, apiKey) : "unauthorized";
+    if (probe === "unreachable") return "deferred";
+
+    if (probe === "ok" && apiKey) {
+      // Revocation first: the fixture's identity stops minting before the new
+      // owner's identity is seeded by the sanctioned save.
+      await softDeleteNangoConnection(identity.id);
+      try {
+        await saveTwentyConnection({
+          instanceUrl: row.serverUrl,
+          apiKey,
+          owner: { userId: owner.userId, organizationId: owner.organizationId },
+        });
+        return "reowned";
+      } catch {
+        // Fall through: a connection without a live identity would never mint
+        // again and the hook would never replace it, so it is removed instead.
+      }
+    }
+    await disconnectTwentyConnection();
+    return "cleared";
+  } catch {
+    return "failed";
+  }
+}
+
+/**
  * Disconnect the Twenty workspace: remove the row, then best-effort delete the
  * Nango connection. The row is read FRESH (bypassing the TTL cache) so a stale
  * null cache on another worker cannot leave the Nango key behind.

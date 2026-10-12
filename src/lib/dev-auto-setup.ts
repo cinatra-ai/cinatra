@@ -48,7 +48,10 @@ import type {
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
-import { setDevActorForExternalMcp } from "@/lib/external-mcp-registry";
+import {
+  devReownRefusedFixtureTwentyConnection,
+  setDevActorForExternalMcp,
+} from "@/lib/external-mcp-registry";
 import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
@@ -485,13 +488,17 @@ const EARLIEST_USER_SQL = `SELECT id FROM public."user" ORDER BY "createdAt" ASC
 // first-user bootstrap promoted. A machine account (the fixture account, the
 // built-in assistant) is never it, whatever its age, and neither is a
 // demo-dataset account (`usr-…` ids; the same reading as the demo seed's
-// "human admin exists").
+// "human admin exists"). The fixture account is ALSO excluded by its fixed
+// address ($1 = `DEV_UAT_USER.email`): an older boot seeded it as a human and
+// the first-user bootstrap could promote it (cinatra#1135), and a reachable
+// instance refuses it before the boot that would re-mark it runs.
 const FIRST_ADMINISTRATOR_SQL = `SELECT id FROM public."user"
   WHERE EXISTS (
     SELECT 1 FROM regexp_split_to_table(COALESCE(role, ''), '\\s*,\\s*') r WHERE r = 'admin'
   )
   AND id NOT LIKE 'usr-%'
   AND COALESCE("userType", 'human') = 'human'
+  AND lower(email) <> lower($1)
   ORDER BY "createdAt" ASC
   LIMIT 1`;
 
@@ -508,7 +515,11 @@ function readOwnerPair(
   const connectionString = getPostgresConnectionString();
   const userRows = runPostgresQueriesSync({
     connectionString,
-    queries: [{ text: who === "first-administrator" ? FIRST_ADMINISTRATOR_SQL : EARLIEST_USER_SQL }],
+    queries: [
+      who === "first-administrator"
+        ? { text: FIRST_ADMINISTRATOR_SQL, values: [DEV_UAT_USER.email] }
+        : { text: EARLIEST_USER_SQL },
+    ],
   })[0]?.rows as { id: string }[] | undefined;
   const userId = userRows?.[0]?.id ?? null;
   if (!userId) return { userId: null, organizationId: null };
@@ -730,6 +741,12 @@ type DevConnectActor = { userId: string; orgId: string; email: string };
 
 let cachedDevActor: DevConnectActor | null = null;
 
+// The fixture account THIS boot refused (cinatra#4112): set only on the refusal
+// branch (`retireStaleDevFixtureAccount`), when an earlier boot left the
+// account behind. It is the one owner whose connections this boot may hand to
+// the first administrator.
+let refusedFixtureUserId: string | null = null;
+
 /**
  * The three sign-in-store operations a fixture-password rotation needs, taken
  * from the app's own auth stack so the rotation hashes exactly the way a real
@@ -796,6 +813,7 @@ async function retireStaleDevFixtureAccount(): Promise<void> {
       })[0]?.rows as { id: string }[] | undefined
     )?.[0]?.id;
     if (!userId) return;
+    refusedFixtureUserId = userId;
     const retired = await retireDevFixturePassword(userId, await devFixtureCredentialStore());
     console.log(
       retired
@@ -1170,6 +1188,32 @@ export function adoptFirstAdministratorAsConnectionOwner(): InstallConnectionOwn
   return adopted;
 }
 
+/**
+ * Hand the connection the REFUSED fixture account owns to the first
+ * administrator just adopted (cinatra#4112). An earlier, private boot attached
+ * Twenty for the fixture account; once this instance refuses that account, its
+ * connection must follow the new owner — otherwise the hook keeps a connection
+ * nobody can own and, once its key dies, mints a key per boot that the
+ * foreign-owner guard refuses. Only the fixture account refused on THIS boot
+ * qualifies; every other owner keeps the guard. Never throws.
+ */
+async function reownRefusedFixtureConnection(fixtureUserId: string): Promise<void> {
+  const outcome = await devReownRefusedFixtureTwentyConnection({ refusedFixtureUserId: fixtureUserId });
+  const said: Partial<Record<typeof outcome, string>> = {
+    reowned:
+      "the refused fixture account's Twenty connection now belongs to the first administrator (same key)",
+    cleared:
+      "the refused fixture account's Twenty connection had no working key and was removed — " +
+      "the Twenty hook attaches one fresh key for the first administrator",
+    deferred:
+      "the refused fixture account's Twenty connection is kept for now: Twenty could not be reached " +
+      "to check its key; a later boot hands it over",
+    failed: "could not hand the refused fixture account's Twenty connection over on this boot",
+  };
+  const line = said[outcome];
+  if (line) console.log(`${tag}:connect ${line}`);
+}
+
 // ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
@@ -1195,6 +1239,7 @@ export async function runDevAutoSetup(): Promise<{
   // hooks below can mint per-site `cnx_` credentials bound to it via
   // `ctx.mintDevConnectCredential` (strictly dev-gated; soft no-op outside dev).
   let fixtureActor: DevConnectActor | null = null;
+  refusedFixtureUserId = null;
   try {
     fixtureActor = await ensureDevConnectActor();
   } catch (err) {
@@ -1206,8 +1251,12 @@ export async function runDevAutoSetup(): Promise<{
   // cinatra#4112 — no fixture account on this boot (refused on a reachable
   // instance, or its sign-up refused by a closed registration): the
   // install-made connections belong to the first administrator instead. Pushed
-  // BEFORE the connector hooks below run, like the fixture actor above.
-  if (!fixtureActor) adoptFirstAdministratorAsConnectionOwner();
+  // BEFORE the connector hooks below run, like the fixture actor above; a
+  // connection the refused fixture account owns is handed over first.
+  if (!fixtureActor) {
+    const owner = adoptFirstAdministratorAsConnectionOwner();
+    if (owner && refusedFixtureUserId) await reownRefusedFixtureConnection(refusedFixtureUserId);
+  }
 
   // Discover + run the connector-owned devSetup hooks (vendor-neutral: the shell
   // names no connector; each hook wires its own local docker fixture).
