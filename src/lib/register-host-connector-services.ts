@@ -78,7 +78,6 @@ import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
-import { connectorAutoSetupAllowed } from "@/lib/install-profile";
 import { createNotification } from "@/lib/notifications";
 // The per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
 // #978): published so the RELOCATED vendor connection clients gate credential
@@ -334,6 +333,20 @@ let _registered = false;
 const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
 
 /**
+ * A preview instance: the `preview` install profile on a production runtime,
+ * exact equality on both settings — the reading of `isPreviewInstance` in
+ * `@/lib/install-profile` (cinatra#4098). It is written out here rather than
+ * imported: this module is reached by the app's locked routes, and importing
+ * the install-profile module would add a module to each of their graphs (the
+ * route-graph ratchet). The unit cases of the dev-only writers pin its
+ * answers: a preview is admitted; production, demo and a preview profile
+ * without the production runtime are refused.
+ */
+function isPreviewInstanceEnv(env: Record<string, string | undefined>): boolean {
+  return env.CINATRA_RUNTIME_MODE === "production" && env.CINATRA_INSTALL_PROFILE === "preview";
+}
+
+/**
  * Dev-boot provisioning WRITERS (cinatra#976, epic #978 W-D) are DEV-ONLY: they
  * persist unvalidated local-dev instance rows / drive a local docker credential
  * rotate. Only the connector `dev-setup.ts` hook (invoked by the strictly
@@ -344,10 +357,9 @@ const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
  *
  * cinatra#4098: a preview instance (the `preview` install profile on a
  * production runtime) runs the connector auto-setup too, so these members
- * answer there as well — by the same rule that admits the auto-setup
- * (`connectorAutoSetupAllowed`). A production deployment is still refused. */
+ * answer there as well. A production deployment is still refused. */
 function assertDevSetupHostOnly(member: string): void {
-  if (!isAppDevelopmentMode() && !connectorAutoSetupAllowed(process.env)) {
+  if (!isAppDevelopmentMode() && !isPreviewInstanceEnv(process.env)) {
     throw new Error(`${member} is a dev-only devSetup provisioning member; refused outside development.`);
   }
 }
