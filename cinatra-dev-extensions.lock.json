@@ -380,7 +380,7 @@
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
       "repo": "cinatra-ai/slide-deck-artifact",
-      "resolvedSha": "222095e919c0fdcfc1d55c9eb2ae8c1071f6f68c"
+      "resolvedSha": "1f8b5739feca0d942ff438325b3b8b41c1821963"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-matcher-skill",

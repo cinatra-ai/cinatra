@@ -108,7 +108,8 @@ describe.each(NEW_DISPLAYS)("$packageName is registered as a display (#3091)", (
       string,
       { entry: string; propsApiVersion: number; representations: string[] }
     >;
-    expect(Object.keys(renderers)).toEqual(["detail"]);
+    // The row icon (the listRow slot, cinatra#3319) draws no form; the detail slot stays the one display over the forms.
+    expect(Object.keys(renderers).filter((slot) => slot !== "listRow")).toEqual(["detail"]);
 
     const detail = renderers.detail;
     expect(detail.propsApiVersion).toBe(PROPS_API_VERSION);
