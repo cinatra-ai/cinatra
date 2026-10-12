@@ -4,15 +4,18 @@
 // deployment skips everything. The development fixture account stays unseeded
 // on a preview: its rule keeps refusing a production runtime.
 //
-// One fake connector is materialized on disk (the shell's discovery reads
-// `<cwd>/extensions/<vendor>/<slug>/package.json`) and its hook is served by the
-// generated loader map. Every database, sign-in and fixture-password seam is a
-// module mock registered ONCE (KB-133: no per-case re-registration), so no case
-// reaches a database, a file under the instance or a container.
+// The working directory has NO `extensions/` folder, as in the image: the
+// shell names the connectors from the generated loader map, which serves one
+// fake connector hook. Every database, sign-in, fixture-password and
+// connection-owner seam is a module mock registered ONCE (KB-133: no per-case
+// re-registration), so no case reaches a database, a file under the instance
+// or a container. On a preview the install-made connections belong to the
+// first administrator (cinatra#4112), and a connection an earlier development
+// boot made for the fixture account is handed over to them.
 //
 // SECRET BOUNDARY: assertions read statuses and call counts only.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,8 +30,28 @@ const h = vi.hoisted(() => ({
     throw new Error("no sign-in store in a unit test");
   }),
   resolveDevFixturePassword: vi.fn(() => ({ password: "unit-only", source: "generated" })),
+  setDevActorForExternalMcp: vi.fn(),
+  devReownRefusedFixtureTwentyConnection: vi.fn<(input: { refusedFixtureUserId: string }) => Promise<"reowned">>(
+    async () => "reowned",
+  ),
+  rotateDevFixturePassword: vi.fn(),
+  retireDevFixturePassword: vi.fn(),
+  // The rows the database answers by the query it is asked: the first
+  // administrator (the query that names the `admin` role), the fixture account
+  // (the query by e-mail address) and an organisation membership.
+  rows: { firstAdministrator: [] as Array<{ id: string }>, fixture: [] as Array<{ id: string }>, member: [] as Array<{ id: string }> },
 }));
-const { FAKE_PACKAGE, runDevSetup, runPostgresQueriesSync, signUpEmail, resolveDevFixturePassword } = h;
+const {
+  FAKE_PACKAGE,
+  runDevSetup,
+  runPostgresQueriesSync,
+  signUpEmail,
+  resolveDevFixturePassword,
+  setDevActorForExternalMcp,
+  devReownRefusedFixtureTwentyConnection,
+  rotateDevFixturePassword,
+  retireDevFixturePassword,
+} = h;
 
 vi.mock("node:child_process", () => ({ spawnSync: (...args: unknown[]) => h.spawnSync(...args) }));
 
@@ -54,8 +77,15 @@ vi.mock("@/lib/dev-fixture-secret", async (importOriginal) => ({
   resolveDevFixturePassword: () => h.resolveDevFixturePassword(),
   printDevFixtureSecretOnce: vi.fn(),
   removeDevFixturePasswordFile: vi.fn(),
-  retireDevFixturePassword: vi.fn(),
-  rotateDevFixturePassword: vi.fn(),
+  rotateDevFixturePassword: (...args: unknown[]) => h.rotateDevFixturePassword(...args),
+  retireDevFixturePassword: (...args: unknown[]) => h.retireDevFixturePassword(...args),
+}));
+
+vi.mock("@/lib/external-mcp-registry", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  setDevActorForExternalMcp: (...args: unknown[]) => h.setDevActorForExternalMcp(...args),
+  devReownRefusedFixtureTwentyConnection: (input: { refusedFixtureUserId: string }) =>
+    h.devReownRefusedFixtureTwentyConnection(input),
 }));
 
 vi.mock("@cinatra-ai/mcp-server/credentials", async (importOriginal) => ({
@@ -77,13 +107,8 @@ let saved: Record<string, string | undefined> = {};
 let cwdSpy: { mockRestore: () => void } | null = null;
 
 beforeAll(() => {
+  // An empty working directory: no `extensions/` checkout, as in the image.
   root = mkdtempSync(path.join(tmpdir(), "dev-auto-setup-4098-"));
-  const pkgDir = path.join(root, "extensions", "cinatra-unit", "fake-4098-connector");
-  mkdirSync(pkgDir, { recursive: true });
-  writeFileSync(
-    path.join(pkgDir, "package.json"),
-    JSON.stringify({ name: FAKE_PACKAGE, cinatra: { devSetup: "./src/dev-setup" } }),
-  );
 });
 
 afterAll(() => {
@@ -92,6 +117,19 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.rows.firstAdministrator = [];
+  h.rows.fixture = [];
+  h.rows.member = [];
+  runPostgresQueriesSync.mockImplementation((...args: unknown[]) => {
+    const input = args[0] as { queries?: Array<{ text?: string }> } | undefined;
+    return (input?.queries ?? []).map((q) => {
+      const text = q.text ?? "";
+      if (text.includes("'admin'")) return { rows: h.rows.firstAdministrator };
+      if (text.includes("WHERE email = $1")) return { rows: h.rows.fixture };
+      if (text.includes('public."member"')) return { rows: h.rows.member };
+      return { rows: [] };
+    });
+  });
   saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
   cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 });
@@ -115,6 +153,7 @@ function setEnv(env: Env): void {
 describe("runDevAutoSetup by install (cinatra#4098)", () => {
   it("development runs the connector hooks", async () => {
     setEnv({ CINATRA_RUNTIME_MODE: "development", NODE_ENV: "test" });
+    expect(existsSync(path.join(root, "extensions"))).toBe(false);
     const result = await runDevAutoSetup();
     expect(runDevSetup).toHaveBeenCalledTimes(1);
     expect(result.hooks.map((h) => h.packageName)).toEqual([FAKE_PACKAGE]);
@@ -129,10 +168,49 @@ describe("runDevAutoSetup by install (cinatra#4098)", () => {
       status: "skipped",
       reason: "preview instance: connector hooks only, no development fixtures",
     });
-    // No fixture account: no password resolved, no sign-up, no database read or write.
+    // No fixture account: no password resolved, rotated or retired, no sign-up,
+    // and nothing written to the database (reads only).
     expect(resolveDevFixturePassword).not.toHaveBeenCalled();
+    expect(rotateDevFixturePassword).not.toHaveBeenCalled();
+    expect(retireDevFixturePassword).not.toHaveBeenCalled();
     expect(signUpEmail).not.toHaveBeenCalled();
-    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+    const texts = runPostgresQueriesSync.mock.calls.flatMap((call) =>
+      ((call[0] as { queries?: Array<{ text?: string }> }).queries ?? []).map((q) => q.text ?? ""),
+    );
+    expect(texts.some((t) => /\b(INSERT|UPDATE|DELETE)\b/i.test(t))).toBe(false);
+    // With no first administrator yet, no owner is pushed and nothing is handed over.
+    expect(setDevActorForExternalMcp).toHaveBeenCalledWith(null);
+    expect(devReownRefusedFixtureTwentyConnection).not.toHaveBeenCalled();
+  });
+
+  it("a preview makes the install's connections for the first administrator, before the hooks run", async () => {
+    setEnv({ CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production", CINATRA_INSTALL_PROFILE: "preview" });
+    h.rows.firstAdministrator = [{ id: "admin-1" }];
+    h.rows.member = [{ id: "org-1" }];
+    let ownerWhenHookRan: unknown = "not run";
+    runDevSetup.mockImplementationOnce(async () => {
+      ownerWhenHookRan = setDevActorForExternalMcp.mock.calls.at(-1)?.[0];
+      return { status: "skipped" as const, reason: "unit fake hook" };
+    });
+    await runDevAutoSetup();
+    expect(setDevActorForExternalMcp).toHaveBeenCalledWith({ userId: "admin-1", organizationId: "org-1" });
+    expect(ownerWhenHookRan).toEqual({ userId: "admin-1", organizationId: "org-1" });
+    // No fixture account was left behind: there is nothing to hand over.
+    expect(devReownRefusedFixtureTwentyConnection).not.toHaveBeenCalled();
+  });
+
+  it("a preview hands the fixture account's connection from an earlier development boot to the first administrator", async () => {
+    setEnv({ CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production", CINATRA_INSTALL_PROFILE: "preview" });
+    h.rows.firstAdministrator = [{ id: "admin-1" }];
+    h.rows.member = [{ id: "org-1" }];
+    h.rows.fixture = [{ id: "fixture-1" }];
+    await runDevAutoSetup();
+    expect(devReownRefusedFixtureTwentyConnection).toHaveBeenCalledTimes(1);
+    expect(devReownRefusedFixtureTwentyConnection).toHaveBeenCalledWith({ refusedFixtureUserId: "fixture-1" });
+    // The account itself is only read: its password is never rotated or retired.
+    expect(rotateDevFixturePassword).not.toHaveBeenCalled();
+    expect(retireDevFixturePassword).not.toHaveBeenCalled();
+    expect(runDevSetup).toHaveBeenCalledTimes(1);
   });
 
   it("production without the preview profile skips the auto-setup", async () => {

@@ -48,7 +48,10 @@ import type {
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
-import { setDevActorForExternalMcp } from "@/lib/external-mcp-registry";
+import {
+  devReownRefusedFixtureTwentyConnection,
+  setDevActorForExternalMcp,
+} from "@/lib/external-mcp-registry";
 import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
@@ -296,8 +299,9 @@ const tag = "[dev-auto-setup]";
 
 type DeclaringDevSetupExtension = {
   packageName: string;
-  /** Package-relative `cinatra.devSetup` path (e.g. `./src/dev-setup`). */
-  devSetupPath: string;
+  /** Package-relative `cinatra.devSetup` path (e.g. `./src/dev-setup`), or
+   * null when the connector was named by the generated loader map. */
+  devSetupPath: string | null;
 };
 
 /**
@@ -305,8 +309,15 @@ type DeclaringDevSetupExtension = {
  * `dev-fixture-seeder.discoverDeclaringExtensions`: reads each materialized
  * `extensions/<vendor>/<slug>/package.json`, keeps the ones declaring a
  * string `cinatra.devSetup`. A malformed / absent package.json is skipped
- * (dev boot stays unblocked). Returns [] when there is no extensions checkout
- * (e.g. prod) so the shell is a clean no-op off dev.
+ * (dev boot stays unblocked).
+ *
+ * cinatra#4098: an IMAGE has no `extensions/` checkout — its extensions are
+ * compiled in — so when that folder does not exist the connectors are the
+ * keys of the generated loader map, which names exactly the connectors that
+ * declare `cinatra.devSetup`. Only a boot the auto-setup gate admits (strict
+ * development or a preview instance) reaches this reading; a production
+ * deployment returns before it. Any other read failure of the folder still
+ * yields [].
  */
 async function discoverDevSetupExtensions(): Promise<DeclaringDevSetupExtension[]> {
   const root = path.join(process.cwd(), "extensions");
@@ -314,8 +325,12 @@ async function discoverDevSetupExtensions(): Promise<DeclaringDevSetupExtension[
   let vendors: string[];
   try {
     vendors = await readdir(root);
-  } catch {
-    return out;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") return out;
+    return Object.keys(GENERATED_DEV_SETUP_MODULES).map((packageName) => ({
+      packageName,
+      devSetupPath: null,
+    }));
   }
   for (const vendor of vendors) {
     let slugs: string[];
@@ -478,20 +493,49 @@ function policyForVisibility(visibility: "admin" | "workspace"): AgentAuthPolicy
   };
 }
 
-async function autoSeedConnectorPolicyFixture(): Promise<Status> {
+// The earliest-created user of any kind: the connector access seed's owner.
+const EARLIEST_USER_SQL = `SELECT id FROM public."user" ORDER BY "createdAt" ASC LIMIT 1`;
+
+// The instance's FIRST ADMINISTRATOR (cinatra#4112): the earliest-created REAL
+// PERSON holding the platform `admin` role — the account the product's
+// first-user bootstrap promoted. A machine account (the fixture account, the
+// built-in assistant) is never it, whatever its age, and neither is a
+// demo-dataset account (`usr-…` ids; the same reading as the demo seed's
+// "human admin exists"). The fixture account is ALSO excluded by its fixed
+// address ($1 = `DEV_UAT_USER.email`): an older boot seeded it as a human and
+// the first-user bootstrap could promote it (cinatra#1135), and a reachable
+// instance refuses it before the boot that would re-mark it runs.
+const FIRST_ADMINISTRATOR_SQL = `SELECT id FROM public."user"
+  WHERE EXISTS (
+    SELECT 1 FROM regexp_split_to_table(COALESCE(role, ''), '\\s*,\\s*') r WHERE r = 'admin'
+  )
+  AND id NOT LIKE 'usr-%'
+  AND COALESCE("userType", 'human') = 'human'
+  AND lower(email) <> lower($1)
+  ORDER BY "createdAt" ASC
+  LIMIT 1`;
+
+/**
+ * The owner pair a development boot binds its install-made rows to: a user
+ * and that user's FIRST organisation membership. `earliest-user` is the
+ * connector access seed's reading; `first-administrator` is the owner of the
+ * install-made connections when the fixture account is not available
+ * (cinatra#4112). One reader, so both name the same organisation.
+ */
+function readOwnerPair(
+  who: "earliest-user" | "first-administrator",
+): { userId: string | null; organizationId: string | null } {
   const connectionString = getPostgresConnectionString();
   const userRows = runPostgresQueriesSync({
     connectionString,
     queries: [
-      {
-        text: `SELECT id FROM public."user" ORDER BY "createdAt" ASC LIMIT 1`,
-      },
+      who === "first-administrator"
+        ? { text: FIRST_ADMINISTRATOR_SQL, values: [DEV_UAT_USER.email] }
+        : { text: EARLIEST_USER_SQL },
     ],
   })[0]?.rows as { id: string }[] | undefined;
-  const ownerUserId = userRows?.[0]?.id;
-  if (!ownerUserId) {
-    return { status: "skipped", reason: "no users registered yet" };
-  }
+  const userId = userRows?.[0]?.id ?? null;
+  if (!userId) return { userId: null, organizationId: null };
 
   const orgRows = runPostgresQueriesSync({
     connectionString,
@@ -502,11 +546,18 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
                WHERE m."userId" = $1
                ORDER BY m."createdAt" ASC
                LIMIT 1`,
-        values: [ownerUserId],
+        values: [userId],
       },
     ],
   })[0]?.rows as { id: string }[] | undefined;
-  const orgId = orgRows?.[0]?.id;
+  return { userId, organizationId: orgRows?.[0]?.id ?? null };
+}
+
+async function autoSeedConnectorPolicyFixture(): Promise<Status> {
+  const { userId: ownerUserId, organizationId: orgId } = readOwnerPair("earliest-user");
+  if (!ownerUserId) {
+    return { status: "skipped", reason: "no users registered yet" };
+  }
   if (!orgId) {
     return { status: "skipped", reason: `no org membership for user ${ownerUserId}` };
   }
@@ -703,6 +754,12 @@ type DevConnectActor = { userId: string; orgId: string; email: string };
 
 let cachedDevActor: DevConnectActor | null = null;
 
+// The fixture account THIS boot refused (cinatra#4112): set only on the refusal
+// branch (`retireStaleDevFixtureAccount`), when an earlier boot left the
+// account behind. It is the one owner whose connections this boot may hand to
+// the first administrator.
+let refusedFixtureUserId: string | null = null;
+
 /**
  * The three sign-in-store operations a fixture-password rotation needs, taken
  * from the app's own auth stack so the rotation hashes exactly the way a real
@@ -769,6 +826,7 @@ async function retireStaleDevFixtureAccount(): Promise<void> {
       })[0]?.rows as { id: string }[] | undefined
     )?.[0]?.id;
     if (!userId) return;
+    refusedFixtureUserId = userId;
     const retired = await retireDevFixturePassword(userId, await devFixtureCredentialStore());
     console.log(
       retired
@@ -780,6 +838,32 @@ async function retireStaleDevFixtureAccount(): Promise<void> {
       `${tag}:connect could not check for a fixture account left by an earlier boot ` +
         `(${err instanceof Error ? err.message : "unknown"}) — if one exists, remove it by hand`,
     );
+  }
+}
+
+/**
+ * The fixture account an earlier development boot left in this instance's
+ * database, READ ONLY (cinatra#4098). A preview instance shares that database
+ * with the development boots of the same install, and their next boot rotates
+ * the fixture's password itself, so a preview never seeds, rotates or retires
+ * the account; it only names it, so that a Twenty connection the account owns
+ * is handed to the first administrator. Null when there is none or the read
+ * fails. Never throws.
+ */
+function readLeftFixtureAccountId(): string | null {
+  try {
+    return (
+      (
+        runPostgresQueriesSync({
+          connectionString: getPostgresConnectionString(),
+          queries: [
+            { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+          ],
+        })[0]?.rows as { id: string }[] | undefined
+      )?.[0]?.id ?? null
+    );
+  } catch {
+    return null;
   }
 }
 
@@ -1060,6 +1144,118 @@ function normalizeOriginStrictLocal(value: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// cinatra#4112 — the owner of the install-made connections when the fixture
+// account is not available.
+//
+// The connections an install makes at boot (the Twenty CRM attach,
+// `devAttachTwentyBearerFromMintedKey`) are owned by the actor pushed through
+// `setDevActorForExternalMcp`. On a private development boot that is the
+// fixture account. An instance that can be reached from outside refuses the
+// fixture account (`ensureDevConnectActor`, unchanged), and a closed
+// registration refuses its sign-up — then no fixture actor is pushed and the
+// attach alone would return "not resolved". The owner's rule: the CRM
+// connection is part of the development and the preview installation and is
+// made automatically. When the fixture account is not available, the
+// connection belongs to the instance's FIRST ADMINISTRATOR and that
+// administrator's organisation, through the same sanctioned save
+// (`saveTwentyConnection`) the setup page uses — no row is written here.
+//
+// A production deployment never gets this: the owner is pushed only on a
+// strict development runtime or a preview instance (the `preview` install
+// profile on a production runtime, cinatra#4098).
+// ---------------------------------------------------------------------------
+
+type InstallConnectionOwner = { userId: string; organizationId: string };
+
+/**
+ * May this boot make the install's connections for the first administrator?
+ * Strict development (the same rule the whole shell asks) or a preview
+ * instance: exact equality on both settings, as cinatra#4098 reads it. A
+ * production deployment — any other combination — never.
+ */
+function installConnectionOwnerRuntime(): boolean {
+  if (isStrictDevelopmentRuntime()) return true;
+  return (
+    process.env.CINATRA_RUNTIME_MODE === "production" &&
+    process.env.CINATRA_INSTALL_PROFILE === "preview"
+  );
+}
+
+/**
+ * Push the first administrator and their organisation as the owner of the
+ * install-made connections, for a boot on which the fixture account is not
+ * available. Returns the owner, or null — with one log line saying why — when
+ * there is none yet: then the connection stays unattached until a boot that
+ * finds one. Never throws.
+ */
+export function adoptFirstAdministratorAsConnectionOwner(): InstallConnectionOwner | null {
+  if (!installConnectionOwnerRuntime()) return null;
+  let owner: { userId: string | null; organizationId: string | null };
+  try {
+    owner = readOwnerPair("first-administrator");
+  } catch (err) {
+    console.log(
+      `${tag}:connect could not read the first administrator ` +
+        `(${err instanceof Error ? err.message : "unknown"}) — install-made connections ` +
+        "(Twenty CRM) stay unattached on this boot",
+    );
+    setDevActorForExternalMcp(null);
+    return null;
+  }
+  if (!owner.userId) {
+    console.log(
+      `${tag}:connect no first administrator on this instance yet — install-made connections ` +
+        "(Twenty CRM) stay unattached; the first boot after the first administrator exists attaches them",
+    );
+    setDevActorForExternalMcp(null);
+    return null;
+  }
+  if (!owner.organizationId) {
+    console.log(
+      `${tag}:connect the first administrator ${owner.userId} has no organisation yet — ` +
+        "install-made connections (Twenty CRM) stay unattached on this boot",
+    );
+    setDevActorForExternalMcp(null);
+    return null;
+  }
+  const adopted: InstallConnectionOwner = { userId: owner.userId, organizationId: owner.organizationId };
+  setDevActorForExternalMcp(adopted);
+  console.log(
+    `${tag}:connect the fixture account is not available on this boot — install-made connections ` +
+      `(Twenty CRM) are made for the first administrator ${adopted.userId} in organisation ${adopted.organizationId}`,
+  );
+  return adopted;
+}
+
+/**
+ * Hand the connection the REFUSED fixture account owns to the first
+ * administrator just adopted (cinatra#4112). An earlier, private boot attached
+ * Twenty for the fixture account; once this instance refuses that account, its
+ * connection must follow the new owner — otherwise the hook keeps a connection
+ * nobody can own and, once its key dies, mints a key per boot that the
+ * foreign-owner guard refuses. Only the fixture account refused on THIS boot
+ * qualifies; every other owner keeps the guard. Never throws.
+ */
+async function reownRefusedFixtureConnection(fixtureUserId: string): Promise<void> {
+  const outcome = await devReownRefusedFixtureTwentyConnection({ refusedFixtureUserId: fixtureUserId });
+  const said: Partial<Record<typeof outcome, string>> = {
+    reowned:
+      "the refused fixture account's Twenty connection now belongs to the first administrator (same key)",
+    cleared:
+      "the refused fixture account's Twenty connection had no working key and was removed — " +
+      "the Twenty hook attaches one fresh key for the first administrator",
+    deferred:
+      "the refused fixture account's Twenty connection is kept as it is for now: its key could not be " +
+      "checked against Twenty, or the hand-over did not complete and was undone; a later boot hands it over",
+    failed:
+      "could not hand the refused fixture account's Twenty connection over on this boot — if Twenty " +
+      "stays unconnected, disconnect and reconnect it on the Twenty setup page",
+  };
+  const line = said[outcome];
+  if (line) console.log(`${tag}:connect ${line}`);
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
 
@@ -1083,6 +1279,13 @@ export async function runDevAutoSetup(): Promise<{
     // runs there: no fixture account (`ensureDevConnectActor` and the `cnx_`
     // mint keep their strict-development gate) and no connector-policy fixture.
     if (isPreviewInstance(process.env)) {
+      // cinatra#4112 on a preview: the fixture account is never seeded here,
+      // so the install-made connections (Twenty CRM) belong to the first
+      // administrator, pushed BEFORE the hooks run. A connection an earlier
+      // development boot made for the fixture account is handed over first.
+      refusedFixtureUserId = readLeftFixtureAccountId();
+      const owner = adoptFirstAdministratorAsConnectionOwner();
+      if (owner && refusedFixtureUserId) await reownRefusedFixtureConnection(refusedFixtureUserId);
       const hooks = await runDevSetupHooks();
       const connectorPolicies: Status = {
         status: "skipped",
@@ -1097,12 +1300,24 @@ export async function runDevAutoSetup(): Promise<{
   // cinatra#410 — seed the deterministic dev user+org FIRST so the connector CMS
   // hooks below can mint per-site `cnx_` credentials bound to it via
   // `ctx.mintDevConnectCredential` (strictly dev-gated; soft no-op outside dev).
+  let fixtureActor: DevConnectActor | null = null;
+  refusedFixtureUserId = null;
   try {
-    await ensureDevConnectActor();
+    fixtureActor = await ensureDevConnectActor();
   } catch (err) {
     console.log(
       `${tag}:connect dev actor seed skipped (${err instanceof Error ? err.message : "unknown"})`,
     );
+  }
+
+  // cinatra#4112 — no fixture account on this boot (refused on a reachable
+  // instance, or its sign-up refused by a closed registration): the
+  // install-made connections belong to the first administrator instead. Pushed
+  // BEFORE the connector hooks below run, like the fixture actor above; a
+  // connection the refused fixture account owns is handed over first.
+  if (!fixtureActor) {
+    const owner = adoptFirstAdministratorAsConnectionOwner();
+    if (owner && refusedFixtureUserId) await reownRefusedFixtureConnection(refusedFixtureUserId);
   }
 
   // Discover + run the connector-owned devSetup hooks (vendor-neutral: the shell

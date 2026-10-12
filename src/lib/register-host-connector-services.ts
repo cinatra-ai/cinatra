@@ -78,6 +78,7 @@ import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
+import { connectorAutoSetupAllowed } from "@/lib/install-profile";
 import { createNotification } from "@/lib/notifications";
 // The per-instance connection use-gate seam (#975 Wave 3 prerequisite, epic
 // #978): published so the RELOCATED vendor connection clients gate credential
@@ -339,9 +340,14 @@ const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
  * dev-gated `dev-auto-setup` shell) resolves them, but we defense-in-depth
  * refuse outside development so a member can never be a production affordance
  * even if resolved on another path. The persist helpers themselves ALSO enforce
- * loopback-only host-side. */
+ * loopback-only host-side.
+ *
+ * cinatra#4098: a preview instance (the `preview` install profile on a
+ * production runtime) runs the connector auto-setup too, so these members
+ * answer there as well — by the same rule that admits the auto-setup
+ * (`connectorAutoSetupAllowed`). A production deployment is still refused. */
 function assertDevSetupHostOnly(member: string): void {
-  if (!isAppDevelopmentMode()) {
+  if (!isAppDevelopmentMode() && !connectorAutoSetupAllowed(process.env)) {
     throw new Error(`${member} is a dev-only devSetup provisioning member; refused outside development.`);
   }
 }
