@@ -305,10 +305,36 @@ export async function hasRequiredConnectorConnectionForUse(input: {packageId:str
     // A Google OAuth client configured for the application is the owner's
     // configuration-only representation. It is NOT a Gmail/Calendar account.
     if (descriptor?.connectionConfigurationOnly) {
-      const { readGoogleOAuthConfigurationPresenceForPreflight } = await import("@cinatra-ai/google-oauth-connection");
-      const result = await readGoogleOAuthConfigurationPresenceForPreflight();
-      if (result.state === "unknown") throw new ConnectionAvailabilityUnknownError();
-      return result.state === "present" ? true : await missing();
+      const ownerPackageId = descriptor.packageId;
+      let state: "present" | "absent";
+      try {
+        const { resolveCapabilityProviders } = await import("@/lib/extension-capabilities-registry");
+        const owners = resolveCapabilityProviders("connection-configuration-presence")
+          .filter(provider => provider.packageName === ownerPackageId);
+        if (owners.length !== 1) throw new ConnectionAvailabilityUnknownError();
+        const impl = owners[0].impl;
+        if (!impl || typeof impl !== "object" ||
+            typeof (impl as { readPresence?: unknown }).readPresence !== "function") {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        // Resolve the live owning reader on each call. Never import its vendor
+        // implementation or treat an unwired/invalid provider as a known miss.
+        const result: unknown = await (impl as { readPresence(): Promise<unknown> }).readPresence();
+        if (!result || typeof result !== "object" || Array.isArray(result) ||
+            Object.keys(result).length !== 1 || !("state" in result)) {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        const observed = result.state;
+        if (observed !== "present" && observed !== "absent") {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        state = observed;
+      } catch {
+        // A provider may throw credential-bearing or authorization errors. Its
+        // unavailable evidence is UNKNOWN, never an echoed error or absence.
+        throw new ConnectionAvailabilityUnknownError();
+      }
+      return state === "present" ? true : await missing();
     }
     const packageId = descriptor?.packageId ?? input.packageId;
     const aliases = new Set(catalog.connectorKeysForPackageId(packageId));

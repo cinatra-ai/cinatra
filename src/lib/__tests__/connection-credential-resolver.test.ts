@@ -38,6 +38,10 @@ const configRead = vi.fn();
 const metadataList = vi.fn();
 const getNangoSystem = vi.fn();
 const googlePresence = vi.fn();
+const configurationProviders = vi.fn();
+vi.mock("@/lib/extension-capabilities-registry", () => ({
+  resolveCapabilityProviders: (...args: unknown[]) => configurationProviders(...args),
+}));
 const externalRows = vi.fn();
 vi.mock("@/lib/database-metadata", () => ({readConnectorConfigurationForPreflight: (...a: unknown[]) => configRead(...a)}));
 vi.mock("@cinatra-ai/google-oauth-connection", () => ({readGoogleOAuthConfigurationPresenceForPreflight: (...a: unknown[]) => googlePresence(...a)}));
@@ -224,6 +228,9 @@ describe("blob address + caching contract", () => {
 });
 
 describe("production required-connection predicate", () => {
+ beforeEach(() => configurationProviders.mockReturnValue([{
+   packageName: "@cinatra-ai/google-oauth-connector", impl: { readPresence: googlePresence },
+ }]));
  beforeEach(() => { listNangoConnectionsForScopeFilter.mockResolvedValue([]); configRead.mockResolvedValue({connections:{github:[{connectionId:"c-1",providerConfigKey:"cinatra-github"}]}}); getNangoSystem.mockReturnValue({providerConfigKeys:{github:"cinatra-github",googleCalendar:"cinatra-google-calendar",tailscale:"old",tailscaleOauth:"new"}}); metadataList.mockResolvedValue({state:"present",addresses:[{providerConfigKey:"cinatra-github",connectionId:"c-1"}]}); googlePresence.mockResolvedValue({state:"present"}); externalRows.mockResolvedValue([]); });
  it("refuses admin without any usable identity; admin is not a fabricated private grant", async () => { expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor:{...actor,platformRole:"platform_admin"}})).toBe(false); expect(metadataList).not.toHaveBeenCalled(); });
  it("accepts actual own address after readerUSE then performs exactly one final gate", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:ME,connectionId:"c-1"})]); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(true); expect(decideConnectionUse).toHaveBeenCalledBefore(metadataList); expect(enforceConnectionUse).toHaveBeenCalledTimes(1); expect(listSavedNangoConnections).not.toHaveBeenCalled(); });
@@ -275,5 +282,104 @@ describe("required preflight keeps own primary before presence",()=>{
     getNangoSystem.mockReturnValue({providerConfigKeys:{github:"cinatra-github"}});
     metadataList.mockResolvedValue({state:"present",addresses:[{connectionId:"shared-present",providerConfigKey:"cinatra-github"}]});
     expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(false);
+  });
+});
+
+describe("configuration-only preflight resolves the activated owner", () => {
+  const packageId = "@cinatra-ai/google-oauth-connector";
+  const use = () => hasRequiredConnectorConnectionForUse({ packageId, actor });
+  const registered = (impl: unknown = { readPresence: googlePresence }) =>
+    configurationProviders.mockReturnValue([{ packageName: packageId, impl }]);
+
+  beforeEach(() => {
+    configurationProviders.mockReset();
+    googlePresence.mockReset().mockResolvedValue({ state: "present" });
+  });
+
+  it("reports UNKNOWN when no configuration reader is registered", async () => {
+    configurationProviders.mockReturnValue([]);
+    googlePresence.mockResolvedValue({ state: "present" });
+    await expect(hasRequiredConnectorConnectionForUse({
+      packageId: "@cinatra-ai/google-oauth-connector", actor,
+    })).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(googlePresence).not.toHaveBeenCalled();
+    expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+  });
+
+  it("uses only the descriptor's package owner and never another reader", async () => {
+    const foreign = vi.fn().mockResolvedValue({ state: "present" });
+    configurationProviders.mockReturnValue([{ packageName: "unrelated-connector", impl: { readPresence: foreign } }]);
+    await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(foreign).not.toHaveBeenCalled();
+    expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+  });
+
+  it("accepts registered presence without reading an account or credentials", async () => {
+    registered();
+    expect(await use()).toBe(true);
+    expect(configurationProviders).toHaveBeenCalledWith("connection-configuration-presence");
+    expect(googlePresence).toHaveBeenCalledTimes(1);
+    expect(configRead).not.toHaveBeenCalled();
+    expect(metadataList).not.toHaveBeenCalled();
+    expect(listNangoConnectionsForScopeFilter).not.toHaveBeenCalled();
+    expect(enforceConnectionUse).not.toHaveBeenCalled();
+    expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+  });
+
+  it("audits a known absence, without treating an account as app configuration", async () => {
+    registered();
+    googlePresence.mockResolvedValue({ state: "absent" });
+    expect(await use()).toBe(false);
+    expect(logDeniedAuditEventStrictWithCooldown).toHaveBeenCalledTimes(1);
+    expect(logDeniedAuditEventStrictWithCooldown).toHaveBeenCalledWith(expect.objectContaining({
+      resourceId: `connector:${packageId}`, metadata: expect.objectContaining({ reason: "no_candidate" }),
+    }));
+    expect(metadataList).not.toHaveBeenCalled();
+    expect(listNangoConnectionsForScopeFilter).not.toHaveBeenCalled();
+  });
+
+  it.each([null, [], {}, { readPresence: true }])("refuses a malformed reader %j as UNKNOWN", async impl => {
+    registered(impl);
+    await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+  });
+
+  it.each([null, [], {}, { state: "unknown" }, { state: "maybe" }, { state: true }, { state: "present", secret: "SECRET" }])(
+    "refuses unavailable or malformed evidence %j as UNKNOWN", async result => {
+      registered();
+      googlePresence.mockResolvedValue(result);
+      await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+      expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+    },
+  );
+
+  it("sanitizes reader errors, including authorization errors and result getters", async () => {
+    registered();
+    for (const error of [new Error("CLIENT_SECRET_SENTINEL"), new NoUsableConnectionError({ statusCode: 403, reason: "forbidden", message: "CLIENT_SECRET_SENTINEL" })]) {
+      googlePresence.mockRejectedValue(error);
+      await expect(use()).rejects.toMatchObject({ name: "ConnectionAvailabilityUnknownError", message: "Connection availability could not be confirmed. Try again later." });
+    }
+    googlePresence.mockResolvedValue({ get state() { throw new Error("CLIENT_SECRET_SENTINEL"); } });
+    await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(logDeniedAuditEventStrictWithCooldown).not.toHaveBeenCalled();
+  });
+
+  it("re-resolves changed presence and removed owners rather than caching a verdict", async () => {
+    registered();
+    expect(await use()).toBe(true);
+    googlePresence.mockResolvedValue({ state: "absent" });
+    expect(await use()).toBe(false);
+    configurationProviders.mockReturnValue([]);
+    await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(configurationProviders).toHaveBeenCalledTimes(3);
+    expect(googlePresence).toHaveBeenCalledTimes(2);
+  });
+  it("refuses ambiguous owner registrations rather than selecting one", async () => {
+    configurationProviders.mockReturnValue([
+      { packageName: packageId, impl: { readPresence: googlePresence } },
+      { packageName: packageId, impl: { readPresence: googlePresence } },
+    ]);
+    await expect(use()).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError);
+    expect(googlePresence).not.toHaveBeenCalled();
   });
 });
