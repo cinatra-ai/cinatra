@@ -635,10 +635,10 @@ export function RunSurfaceRail({
             inside (`RunStepRailPanel`), which is why only the join is drawn
             here. */}
         {headSteps.map((step, index) => {
+          // ONE MARK PER JOIN (cinatra#4114): the join to a closing row is
+          // drawn above that row, below, so it is never drawn here as well.
           const markBelow =
-            index < headSteps.length - 1 ||
-            runSurfaceNodeExists(rail) ||
-            tailSteps.length > 0;
+            index < headSteps.length - 1 || runSurfaceNodeExists(rail);
           return (
             <Fragment key={step.key}>
               {step.row}
