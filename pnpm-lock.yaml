@@ -541,6 +541,10 @@ importers:
         version: 5.9.3
 
   extensions/cinatra-ai/audio-artifact:
+    dependencies:
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -574,6 +578,10 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(jsdom@25.0.1)(lightningcss@1.32.0)(terser@5.48.0)
 
   extensions/cinatra-ai/binary-artifact:
+    dependencies:
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -1220,6 +1228,9 @@ importers:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       react:
         specifier: 19.2.7
@@ -1404,6 +1415,9 @@ importers:
       '@cinatra-ai/sdk-ui':
         specifier: workspace:*
         version: link:../../../packages/sdk-ui
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0
@@ -1598,6 +1612,9 @@ importers:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
       react:
         specifier: 19.2.7
         version: 19.2.7

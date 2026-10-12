@@ -17,6 +17,7 @@ import {
 } from "@/lib/artifacts/review-surface-model";
 
 import { ReviewGateBlocked } from "./review-gate-states";
+import { useComposerFocusStore, useInsideConversation, useLifecycleCardHost } from "./lifecycle-card-runtime";
 
 export type SubmitReviewDecisionAction = (input: {
   disposition: ReviewDisposition;
@@ -60,9 +61,12 @@ export function ReviewDecisionBar({
   submitAction,
   suggestionDecisionsFor,
   suggestionSummary,
+  recordedPrompt = null,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
+  /** Authorized producer words from the finalized pinned revision. */
+  recordedPrompt?: string | null;
   /**
    * The partition THIS decision would carry, asked PER DISPOSITION (cinatra#2572;
    * reworked by cinatra#2852). Owned by the CARD that draws the suggestions above
@@ -90,7 +94,12 @@ export function ReviewDecisionBar({
   suggestionSummary?: { accepted: number; total: number };
 }) {
   const router = useRouter();
-  const [comment, setComment] = useState("");
+  const insideConversation = useInsideConversation();
+  const hasComposerBinding = useComposerFocusStore() !== null;
+  const validatedHost = useLifecycleCardHost();
+  const hasPrimaryChatInput = insideConversation || validatedHost === "site_widget" || hasComposerBinding;
+  const [comment, setComment] = useState(recordedPrompt ?? "");
+  const [noteEdited, setNoteEdited] = useState(false);
   const [pending, startTransition] = useTransition();
   const [outcome, setOutcome] = useState<ReviewSubmitOutcome | null>(null);
 
@@ -105,7 +114,8 @@ export function ReviewDecisionBar({
     startTransition(async () => {
       const result = await submitAction({
         disposition,
-        comment: comment.trim() === "" ? null : comment.trim(),
+        // A producer prefill is not an annotation signed by the reader.
+        comment: !noteEdited || comment.trim() === "" ? null : comment.trim(),
         // TERMINAL ONLY, and OMITTED rather than nulled otherwise.
         //
         // A COMMENT does not resolve the gate, so it cannot carry the terminal
@@ -154,25 +164,15 @@ export function ReviewDecisionBar({
           } accepted — they ride this decision. A reject records them as not taken.`}
         </p>
       ) : null}
-      {/* Decision rationale (§IV) — optional on approve, expected on reject, the
-          substance of a comment. Travels into the audit trail + the resume note.
-
-          §I INPUT HIERARCHY — SUBORDINATE (design specs/app-lifecycle-cards.html
-          §I, the `.notefield` / `.nf-input` rules). A conversation carrying this
-          card has two places a reader could type — this note field and the
-          conversation's chat box — and drawn at the same weight they read as a
-          choice. They are not a choice: the chat box is the ONE primary input.
-          So the note field gives up the three things that make an input read as
-          somewhere to type — the enclosing box, the raised ground and the send
-          affordance — and keeps a single quiet dashed baseline under its mono
-          label. Nothing is hidden and nothing is disabled; only the weight
-          moves, and the label and placeholder are unchanged.
-
-          DISABLED / SETTLED. A disabled or settled note field keeps the SAME
-          dashed rule and takes the platform's standard disabled opacity. It
-          never falls back to the stock filled, boxed disabled treatment, which
-          would put back the box the hierarchy just took out. */}
-      <div data-conformance-id="review-note-field-subordinate" className="px-4 pt-3">
+      {/* app-lifecycle-cards §I: a conversation's chat box is primary, so
+          its card Note stays subordinate, including nested run cards.
+          Without a chat box, the run/review page Note is the primary input
+          and uses the boxed app-artifact-review §VI drawing. The host's
+          validated conversation frame remains authoritative before the
+          optional focus binding mounts, including nested run cards.
+          Outside it, an actual composer binding also declares a chatbox;
+          the reader's permission to submit never chooses input weight. */}
+      <div data-conformance-id={hasPrimaryChatInput ? "review-note-field-subordinate" : undefined} className="px-4 pt-3">
         <label
           htmlFor="review-rationale"
           className="mb-1.5 block font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground"
@@ -184,10 +184,12 @@ export function ReviewDecisionBar({
           id="review-rationale"
           data-testid="review-rationale"
           value={comment}
-          onChange={(e) => setComment(e.target.value)}
+          onChange={(e) => { setComment(e.target.value); setNoteEdited(true); }}
           disabled={pending || settled}
           placeholder="Add a note for the run and the audit trail…"
-          className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
+          className={hasPrimaryChatInput
+            ? "min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
+            : "min-h-[44px] rounded-[7px] border border-line bg-surface px-[11px] py-[9px] text-reading shadow-none md:text-reading dark:bg-surface"}
         />
       </div>
 

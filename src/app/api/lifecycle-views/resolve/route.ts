@@ -329,6 +329,18 @@ export async function POST(request: Request): Promise<Response> {
     actorCtx,
   });
 
+  // §VI producer prefill belongs beside the envelope, not inside the versioned
+  // card body. The same run/artifact authorization applies to cookie and widget
+  // readers. Settled, absent and unrelated kinds disclose no producer words.
+  let recordedPrompt: string | null = null;
+  if (parsed.data.viewType === "artifact_review_gate" && (withOutcome.state === "pending" || withOutcome.state === "restricted")) {
+    const gate = decodeLifecycleGateRef(parsed.data.ref);
+    if (gate) {
+      const { readReviewGateRecordedPrompt } = await import("@/app/artifacts/[id]/review-gate-ports");
+      recordedPrompt = await readReviewGateRecordedPrompt({ ...gate, actorCtx });
+    }
+  }
+
   // The island's credential (cinatra#2754) — minted HERE or not at all, and
   // only on the widget arm. A first-party answer omits the key entirely, so the
   // three cookie hosts receive the byte-identical response they received
@@ -344,6 +356,7 @@ export async function POST(request: Request): Promise<Response> {
       body: envelope.body,
       ...(islandSrc ? { islandSrc } : {}),
       ...(targetHeaders ? { targetHeaders } : {}),
+      ...(recordedPrompt === null ? {} : { recordedPrompt }),
     },
     { headers: { "Cache-Control": "no-store" } },
   );
