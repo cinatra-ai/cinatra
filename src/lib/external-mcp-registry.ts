@@ -1596,7 +1596,11 @@ export async function saveTwentyConnection(input: {
 // hook. `devAttachTwentyBearerFromMintedKey` reads it instead of importing the
 // wide dev-auto-setup module graph — that edge would grow the production
 // route-graph of every route reachable through this broadly-imported registry.
-// Null off dev boot; the writer fails closed when unset.
+// When the fixture account is not available on the boot (refused on a reachable
+// instance, or by a closed registration), the shell pushes the instance's first
+// administrator and their organisation instead (cinatra#4112,
+// `adoptFirstAdministratorAsConnectionOwner`). Null off dev boot; the writer
+// fails closed when unset.
 let seededDevActorForExternalMcp: { userId: string; organizationId: string } | null = null;
 
 /** DEV-ONLY: the dev-boot shell pushes (or clears) the seeded dev-actor owner. */
