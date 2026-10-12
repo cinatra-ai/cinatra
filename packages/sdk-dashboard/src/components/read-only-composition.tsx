@@ -38,9 +38,22 @@
 // without one. Without a road it renders exactly what it renders today. The road
 // is an ADDRESS: it carries no credential, and it adds no toolbar, filter,
 // modal, drag or save.
+//
+// THE NO-SERIES ROAD (cinatra#3092). A reading that holds no series still draws
+// the dashboard's chrome, titles and layout, with no numbers. Road `none` mounts
+// the same providers over a query client on which no query ever runs, so the
+// grid lays the portlets out by the configuration's own `grid`, `layoutMode` and
+// `rows`, and nothing is fetched and no address is read.
 
 import { useState, type ComponentProps, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type DefaultError,
+  type DefaultedQueryObserverOptions,
+  type QueryKey,
+  type QueryObserverOptions,
+} from "@tanstack/react-query";
 import { CubeProvider, DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
 
 import {
@@ -49,14 +62,15 @@ import {
 } from "./narrow-to-single-portlet";
 
 /**
- * The data road a display hands the composition: the address its series are
- * fetched from. `session` is the application's own cube route, reached with the
- * reader's session. (The island's sealed road is a later leg.)
+ * The data road a display hands the composition. `session` is the address its
+ * series are fetched from: the application's own cube route, reached with the
+ * reader's session. `none` is a reading with no series: the dashboard's chrome,
+ * titles and layout are drawn, and nothing is fetched. (The island's sealed road
+ * is a later leg.)
  */
-export type ReadOnlyCompositionDataRoad = {
-  readonly road: "session";
-  readonly apiUrl: string;
-};
+export type ReadOnlyCompositionDataRoad =
+  | { readonly road: "session"; readonly apiUrl: string }
+  | { readonly road: "none" };
 
 /** The props the read-only dashboard takes — the provider's, minus every
  *  editing-shaped one the composition deliberately does not mount, plus the
@@ -65,8 +79,9 @@ export type ReadOnlyComposedDashboardProps = Omit<
   ComponentProps<typeof DashboardProvider>,
   "children" | "dashboardModes" | "hideToolbar" | "editable"
 > & {
-  /** Given, the view mounts its own query client and cube provider over it;
-   *  absent, it draws inside the providers its caller already mounts. */
+  /** Given, the view mounts its own query client and cube provider over it
+   *  (road `none`: over no address, with no query run); absent, it draws inside
+   *  the providers its caller already mounts. */
   dataRoad?: ReadOnlyCompositionDataRoad;
 };
 
@@ -83,7 +98,61 @@ function DataRoadProviders({
   children: ReactNode;
 }) {
   if (!dataRoad) return <>{children}</>;
+  if (dataRoad.road === "none") return <MountedNoSeriesRoad>{children}</MountedNoSeriesRoad>;
   return <MountedDataRoad dataRoad={dataRoad}>{children}</MountedDataRoad>;
+}
+
+/** The shell's own query settings, shared by both roads. */
+const ROAD_QUERY_DEFAULTS = {
+  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
+};
+
+/** A query function that never settles and never calls the cube client. */
+const neverAnswers = () => new Promise<never>(() => {});
+
+/**
+ * THE NO-SERIES ROAD'S QUERY CLIENT. drizzle-cube 0.6.6 builds its cube client
+ * from `apiOptions` inside its provider and does not read a `cubeApi` it is
+ * given, so the one seam that every query of the grid passes through is the
+ * query client the provider is given (`queryClient`): each portlet's series, the
+ * cube metadata and a portlet's refresh. On this client every query is off and
+ * its function is `neverAnswers`, so no query reaches the cube client: the road
+ * fetches nothing, and the portlets show no numbers.
+ */
+class NoSeriesQueryClient extends QueryClient {
+  override defaultQueryOptions<
+    TQueryFnData = unknown,
+    TError = DefaultError,
+    TData = TQueryFnData,
+    TQueryData = TQueryFnData,
+    TQueryKey extends QueryKey = QueryKey,
+    TPageParam = never,
+  >(
+    options:
+      | QueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey, TPageParam>
+      | DefaultedQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey>,
+  ): DefaultedQueryObserverOptions<TQueryFnData, TError, TData, TQueryData, TQueryKey> {
+    return { ...super.defaultQueryOptions(options), enabled: false, queryFn: neverAnswers };
+  }
+}
+
+/** The no-series road: the session road's providers over a query client on
+ *  which no query runs, and no address. */
+function MountedNoSeriesRoad({ children }: { children: ReactNode }) {
+  // One query client per mount, created once — the shell's own lifetime rule.
+  const [queryClient] = useState(() => new NoSeriesQueryClient(ROAD_QUERY_DEFAULTS));
+  return (
+    <QueryClientProvider client={queryClient}>
+      <CubeProvider
+        queryClient={queryClient}
+        apiOptions={{ credentials: "omit" }}
+        features={{ enableAI: false }}
+        enableBatching={false}
+      >
+        {children}
+      </CubeProvider>
+    </QueryClientProvider>
+  );
 }
 
 /** The query client and the cube provider over the road's address — the
@@ -92,16 +161,11 @@ function MountedDataRoad({
   dataRoad,
   children,
 }: {
-  dataRoad: ReadOnlyCompositionDataRoad;
+  dataRoad: Extract<ReadOnlyCompositionDataRoad, { road: "session" }>;
   children: ReactNode;
 }) {
   // One query client per mount, created once — the shell's own lifetime rule.
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
-      }),
-  );
+  const [queryClient] = useState(() => new QueryClient(ROAD_QUERY_DEFAULTS));
   return (
     <QueryClientProvider client={queryClient}>
       <CubeProvider
