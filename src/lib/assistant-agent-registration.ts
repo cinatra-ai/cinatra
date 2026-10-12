@@ -149,8 +149,6 @@ export async function registerAssistantAgent(params: {
 
   if (mintedCreds) {
     console.log(`[cinatra-assistant] Registered built-in @${username} assistant agent + principal.`);
-    console.log(`  CINATRA_BUILTIN_CLIENT_ID=${mintedCreds.clientId}`);
-    console.log(`  CINATRA_BUILTIN_CLIENT_SECRET=${mintedCreds.clientSecret}`);
   }
 
   // 2. Mint the mention handle (best-effort; boot backfill is the self-healing net).
