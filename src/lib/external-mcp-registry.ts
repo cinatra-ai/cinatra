@@ -1679,15 +1679,23 @@ export async function devAttachTwentyBearerFromMintedKey(input: {
  * alone, so the foreign-owner guard keeps refusing a save under somebody else's
  * connection exactly as before.
  *
- *   - Twenty cannot be reached to check the stored key: nothing changes
- *     ("deferred"); a later boot retries.
- *   - The stored key still authenticates: the fixture identity is revoked
- *     first, then the SAME key is re-saved through the sanctioned
- *     `saveTwentyConnection` for the new owner ("reowned") — no key is minted.
- *   - The stored key is missing or rejected (401/403), or the re-save fails:
- *     the connection is removed through `disconnectTwentyConnection`
- *     ("cleared"), so the Twenty hook that runs next mints ONE fresh key and
- *     attaches it for the new owner.
+ * NEVER WORSE THAN BEFORE. Only Twenty itself rejecting the stored key is a
+ * reason to remove anything; every other uncertainty leaves the connection as
+ * it is for a later boot:
+ *   - The stored key cannot be read (the gated resolver answers nothing — the
+ *     connection service's reader cannot tell a missing key from a failed
+ *     read), or Twenty cannot be reached to check it: nothing changes
+ *     ("deferred").
+ *   - Twenty answers the stored key with 401/403: the connection is removed
+ *     through `disconnectTwentyConnection` ("cleared"), so the Twenty hook that
+ *     runs next mints ONE fresh key and attaches it for the new owner.
+ *   - The stored key authenticates: the key, the Nango connection and the row
+ *     stay exactly as they are and only the OWNERSHIP moves — the fixture's
+ *     identity is revoked and the new owner's identity is registered through
+ *     the same identity seam `saveTwentyConnection` uses, with the same
+ *     workspace grant seed ("reowned"; no key is minted, nothing is probed
+ *     between the two writes). If the registration fails, an identity it left
+ *     behind is revoked and the fixture's ownership is restored ("deferred").
  *
  * Never throws. SECRET BOUNDARY: the key is never logged or returned.
  */
@@ -1701,43 +1709,72 @@ export async function devReownRefusedFixtureTwentyConnection(input: {
   if (!owner?.userId || !owner?.organizationId || !fixtureUserId || owner.userId === fixtureUserId) {
     return "no-owner";
   }
+  let identity: { id: string; ownerUserId: string; organizationId: string | null } | null = null;
+  let connectionId: string | null = null;
+  let identityStore: typeof import("@cinatra-ai/extensions/connection-identity-store");
+  let identitySeam: typeof import("@/lib/connection-identity-seam");
   try {
+    identityStore = await import("@cinatra-ai/extensions/connection-identity-store");
+    identitySeam = await import("@/lib/connection-identity-seam");
     const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
     if (!row?.nangoConnectionId) return "no-connection";
-    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
-      "@cinatra-ai/extensions/connection-identity-store"
-    );
-    const identity = await readNangoConnectionByNaturalKey("externalMcp", row.nangoConnectionId);
+    connectionId = row.nangoConnectionId;
+    identity = await identityStore.readNangoConnectionByNaturalKey("externalMcp", connectionId);
     if (!identity || identity.ownerUserId !== fixtureUserId) return "not-fixture-owned";
     if (!isNangoConfigured()) return "deferred";
 
-    // The stored key is read through the GATED resolver (the connection's own
-    // use-gate), never a raw credential read.
+    // Read through the GATED resolver (the connection's own use-gate), never
+    // a raw credential read. No answer is not proof the key is gone.
     const apiKey = await resolveExternalMcpServerBearer(row);
+    if (typeof apiKey !== "string" || apiKey.length === 0) return "deferred";
     const { restBase } = normalizeTwentyInstanceUrl(row.serverUrl);
-    const probe = apiKey ? await probeTwentyKey(restBase, apiKey) : "unauthorized";
+    const probe = await probeTwentyKey(restBase, apiKey);
     if (probe === "unreachable") return "deferred";
-
-    if (probe === "ok" && apiKey) {
-      // Revocation first: the fixture's identity stops minting before the new
-      // owner's identity is seeded by the sanctioned save.
-      await softDeleteNangoConnection(identity.id);
-      try {
-        await saveTwentyConnection({
-          instanceUrl: row.serverUrl,
-          apiKey,
-          owner: { userId: owner.userId, organizationId: owner.organizationId },
-        });
-        return "reowned";
-      } catch {
-        // Fall through: a connection without a live identity would never mint
-        // again and the hook would never replace it, so it is removed instead.
-      }
+    if (probe === "unauthorized") {
+      await disconnectTwentyConnection();
+      return "cleared";
     }
-    await disconnectTwentyConnection();
-    return "cleared";
   } catch {
+    // Nothing has been written on any path that reaches here.
     return "failed";
+  }
+
+  // probe === "ok": move the ownership only.
+  if (!identity || !connectionId) return "failed";
+  const { softDeleteNangoConnection } = identityStore;
+  const { registerSavedConnectionIdentity } = identitySeam;
+  const fixtureIdentity = identity;
+  const installed: { row: { id: string; created: boolean } | null } = { row: null };
+  try {
+    await softDeleteNangoConnection(fixtureIdentity.id);
+    await registerSavedConnectionIdentity({
+      connectorKey: "externalMcp",
+      connectionId,
+      ownerUserId: owner.userId,
+      organizationId: owner.organizationId,
+      seed: "workspace",
+      onIdentityRow: (row) => {
+        installed.row = { id: row.id, created: row.created };
+      },
+    });
+    return "reowned";
+  } catch {
+    // Put the fixture's ownership back so the connection keeps working and a
+    // later boot can retry: revoke what this attempt installed, then register
+    // the fixture's identity again with the same workspace seed.
+    try {
+      if (installed.row?.created) await softDeleteNangoConnection(installed.row.id);
+      await registerSavedConnectionIdentity({
+        connectorKey: "externalMcp",
+        connectionId,
+        ownerUserId: fixtureIdentity.ownerUserId,
+        organizationId: fixtureIdentity.organizationId,
+        seed: "workspace",
+      });
+      return "deferred";
+    } catch {
+      return "failed";
+    }
   }
 }
 

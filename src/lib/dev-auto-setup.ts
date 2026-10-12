@@ -1206,9 +1206,11 @@ async function reownRefusedFixtureConnection(fixtureUserId: string): Promise<voi
       "the refused fixture account's Twenty connection had no working key and was removed — " +
       "the Twenty hook attaches one fresh key for the first administrator",
     deferred:
-      "the refused fixture account's Twenty connection is kept for now: Twenty could not be reached " +
-      "to check its key; a later boot hands it over",
-    failed: "could not hand the refused fixture account's Twenty connection over on this boot",
+      "the refused fixture account's Twenty connection is kept as it is for now: its key could not be " +
+      "checked against Twenty, or the hand-over did not complete and was undone; a later boot hands it over",
+    failed:
+      "could not hand the refused fixture account's Twenty connection over on this boot — if Twenty " +
+      "stays unconnected, disconnect and reconnect it on the Twenty setup page",
   };
   const line = said[outcome];
   if (line) console.log(`${tag}:connect ${line}`);

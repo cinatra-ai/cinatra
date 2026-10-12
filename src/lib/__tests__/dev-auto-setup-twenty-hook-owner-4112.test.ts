@@ -75,7 +75,17 @@ const h = vi.hoisted(() => {
   const identities: Array<Record<string, unknown> & { id: string; connectorKey: string; connectionId: string; ownerUserId: string; organizationId: string | null; deletedAt: Date | null }> = [];
   const grants = new Set<string>();
   const twenty = { validKeys: new Set<string>(), down: false, minted: 0 };
+  // Injected faults (each one-shot or budgeted, reset per case).
+  const faults = {
+    /** The next N connection-service credential reads throw. */
+    nangoReadThrows: 0,
+    /** The next identity registration for this owner inserts its row, then fails. */
+    identityFailOwner: null as string | null,
+    /** After this many authenticated REST answers, Twenty answers 503. */
+    restOkBudget: null as number | null,
+  };
   return {
+    faults,
     db,
     nango,
     identities,
@@ -179,6 +189,10 @@ vi.mock("@/lib/nango-system", async (importOriginal) => ({
     h.nango.set(input.connectionId, input.credentials.apiKey);
   },
   getNangoCredentials: async (_key: string, connectionId: string) => {
+    if (h.faults.nangoReadThrows > 0) {
+      h.faults.nangoReadThrows -= 1;
+      throw new Error("connection service unavailable (injected)");
+    }
     const apiKey = h.nango.get(connectionId);
     return apiKey ? { type: "API_KEY", apiKey } : null;
   },
@@ -213,6 +227,7 @@ vi.mock("@/lib/connection-identity-seam", async (importOriginal) => ({
     ownerUserId: string;
     organizationId: string | null;
     seed?: "owner" | "workspace";
+    onIdentityRow?: (row: { id: string; created: boolean }) => void;
   }) => {
     // ON CONFLICT against the live-unique index returns the existing live row.
     let row = liveIdentity(input.connectorKey, input.connectionId);
@@ -231,8 +246,14 @@ vi.mock("@/lib/connection-identity-seam", async (importOriginal) => ({
       h.identities.push(row);
       created = true;
     }
+    input.onIdentityRow?.({ id: row.id, created });
     if (row.ownerUserId !== input.ownerUserId) {
       throw new Error("The connection is already registered to a different user");
+    }
+    if (h.faults.identityFailOwner === input.ownerUserId) {
+      // The row is standing; the grant seed after it fails.
+      h.faults.identityFailOwner = null;
+      throw new Error("grant seed failed (injected)");
     }
     if (input.seed === "workspace") h.grants.add(row.id);
     return { ...row, created };
@@ -373,6 +394,9 @@ beforeEach(() => {
   h.twenty.validKeys.clear();
   h.twenty.down = false;
   h.twenty.minted = 0;
+  h.faults.nangoReadThrows = 0;
+  h.faults.identityFailOwner = null;
+  h.faults.restOkBudget = null;
   h.publicBaseUrl.value = null;
   saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
   for (const k of KEYS) delete ENV[k];
@@ -386,6 +410,10 @@ beforeEach(() => {
     if (h.twenty.down) return new Response(null, { status: 503 });
     if (String(url) === `${TWENTY_REST}/rest/companies?limit=1`) {
       const key = (init?.headers?.Authorization ?? "").replace(/^Bearer /, "");
+      if (h.faults.restOkBudget !== null) {
+        if (h.faults.restOkBudget <= 0) return new Response(null, { status: 503 });
+        h.faults.restOkBudget -= 1;
+      }
       return new Response(null, { status: h.twenty.validKeys.has(key) ? 200 : 401 });
     }
     return new Response(null, { status: 404 });
@@ -583,6 +611,81 @@ describe.skipIf(!hookPresent)("the Twenty connection a development boot makes (c
     await boot();
 
     expect(twentyOwner()).toEqual({ ownerUserId: FIXTURE_ID, organizationId: ORG });
+    expect(h.nango.get(CONNECTION_ID)).toBe(key);
+    expect(h.twenty.minted).toBe(0);
+  });
+
+  // ---- fault injection: an uncertain moment never makes things worse --------
+
+  it("a transient connection-service read failure changes nothing; the next boot hands the connection over", async () => {
+    h.publicBaseUrl.value = LANE_ADDRESS;
+    seatUser({ id: FIXTURE_ID, email: FIXTURE_EMAIL, userType: "uat-fixture", createdAt: 10 });
+    seatFirstAdministrator();
+    const key = existingConnection(FIXTURE_ID, true);
+    h.faults.nangoReadThrows = 1;
+
+    await boot();
+
+    expect(twentyOwner()).toEqual({ ownerUserId: FIXTURE_ID, organizationId: ORG });
+    expect(twentyRow()?.nango_connection_id).toBe(CONNECTION_ID);
+    expect(h.nango.get(CONNECTION_ID)).toBe(key);
+    expect(h.twenty.minted).toBe(0);
+
+    await boot();
+    expect(twentyOwner()).toEqual({ ownerUserId: ADMIN_ID, organizationId: ORG });
+    expect(h.nango.get(CONNECTION_ID)).toBe(key);
+    expect(h.twenty.minted).toBe(0);
+  });
+
+  it("a transient read failure while Twenty is also down changes nothing", async () => {
+    h.publicBaseUrl.value = LANE_ADDRESS;
+    seatUser({ id: FIXTURE_ID, email: FIXTURE_EMAIL, userType: "uat-fixture", createdAt: 10 });
+    seatFirstAdministrator();
+    const key = existingConnection(FIXTURE_ID, true);
+    h.faults.nangoReadThrows = 1;
+    h.twenty.down = true;
+
+    await boot();
+
+    expect(twentyOwner()).toEqual({ ownerUserId: FIXTURE_ID, organizationId: ORG });
+    expect(twentyRow()?.nango_connection_id).toBe(CONNECTION_ID);
+    expect(h.nango.get(CONNECTION_ID)).toBe(key);
+    expect(h.twenty.minted).toBe(0);
+  });
+
+  it("Twenty failing (503) right after the key check leaves the connection with its key and a live owner", async () => {
+    h.publicBaseUrl.value = LANE_ADDRESS;
+    seatUser({ id: FIXTURE_ID, email: FIXTURE_EMAIL, userType: "uat-fixture", createdAt: 10 });
+    seatFirstAdministrator();
+    const key = existingConnection(FIXTURE_ID, true);
+    // The key check answers; every later Twenty call answers 503.
+    h.faults.restOkBudget = 1;
+
+    await boot();
+
+    expect(twentyRow()?.nango_connection_id).toBe(CONNECTION_ID);
+    expect(h.nango.get(CONNECTION_ID)).toBe(key);
+    expect(twentyOwner()).not.toBeNull();
+    expect(h.twenty.minted).toBe(0);
+  });
+
+  it("a failed ownership registration is undone: the fixture keeps its working connection for a later retry", async () => {
+    h.publicBaseUrl.value = LANE_ADDRESS;
+    seatUser({ id: FIXTURE_ID, email: FIXTURE_EMAIL, userType: "uat-fixture", createdAt: 10 });
+    seatFirstAdministrator();
+    const key = existingConnection(FIXTURE_ID, true);
+    h.faults.identityFailOwner = ADMIN_ID;
+
+    await boot();
+
+    expect(twentyOwner()).toEqual({ ownerUserId: FIXTURE_ID, organizationId: ORG });
+    expect(twentyRow()?.nango_connection_id).toBe(CONNECTION_ID);
+    expect(h.nango.get(CONNECTION_ID)).toBe(key);
+    expect(await resolvesWorkingKey()).toBe(true);
+    expect(h.twenty.minted).toBe(0);
+
+    await boot();
+    expect(twentyOwner()).toEqual({ ownerUserId: ADMIN_ID, organizationId: ORG });
     expect(h.nango.get(CONNECTION_ID)).toBe(key);
     expect(h.twenty.minted).toBe(0);
   });
