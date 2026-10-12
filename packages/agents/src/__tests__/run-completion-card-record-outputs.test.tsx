@@ -149,7 +149,12 @@ vi.mock("@/lib/authz", () => ({ AuthzError: class AuthzError extends Error {} })
 vi.mock("../store", () => store);
 vi.mock("@/lib/objects-store", () => objectsStore);
 vi.mock("@/lib/artifacts/artifact-service", () => artifactService);
-vi.mock("@/lib/db/pooled", () => ({ getPooledDb: () => ({ query: ledger.query }) }));
+vi.mock("@/lib/db/pooled", async () => ({
+  initializePostgresAsyncRunner: (
+    await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled")
+  ).initializePostgresAsyncRunner,
+  getPooledDb: () => ({ query: ledger.query }),
+}));
 vi.mock("@/lib/postgres-config", () => ({
   postgresSchema: "cinatra",
   getPostgresConnectionString: () => "postgres://test",
