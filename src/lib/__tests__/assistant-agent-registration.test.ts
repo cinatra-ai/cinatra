@@ -11,7 +11,7 @@
 //   * drift (existing user, no oauthClient) -> repairs the oauth pair, no mint;
 //   * the built-in Cinatra config seeds the linked template.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   txExecute: vi.fn(),
@@ -338,5 +338,82 @@ describe("three-assistant boot convergence (cinatra#1823)", () => {
     expect(new Set(configs).size).toBe(3); // three DISTINCT persisted configs
     const principalIds = upserts.map((u) => u.assistantUserId);
     expect(new Set(principalIds)).toEqual(new Set(["p-cinatra", "p-wordpress", "p-drupal"]));
+  });
+});
+
+
+describe("registration output", () => {
+  beforeEach(() => {
+    mocks.txExecute.mockReset();
+    mocks.createAssistantUserWithTx.mockReset();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function expectNameOnlyOutput() {
+    expect(console.log).toHaveBeenCalledExactlyOnceWith(
+      "[cinatra-assistant] Registered built-in @cinatra assistant agent + principal.",
+    );
+    expect(console.warn).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  }
+
+  it("logs only the assistant name when minting a principal", async () => {
+    mocks.txExecute
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    mocks.createAssistantUserWithTx.mockResolvedValue({
+      id: "synthetic-principal",
+      clientId: "synthetic-client-id-not-for-output",
+      clientSecret: "synthetic-client-secret-not-for-output",
+    });
+
+    await registerAssistantAgent({ username: "cinatra", config: cinatraAssistantConfig, name: "Cinatra" });
+
+    expectNameOnlyOutput();
+  });
+
+  it("logs only the assistant name when repairing the oauth pair", async () => {
+    const clientId = "11111111-1111-4111-8111-111111111111";
+    const clientSecret = "22222222-2222-4222-8222-222222222222";
+    vi.spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce(clientId)
+      .mockReturnValueOnce(clientSecret);
+    mocks.txExecute
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: "synthetic-principal" }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await registerAssistantAgent({ username: "cinatra", config: cinatraAssistantConfig, name: "Cinatra" });
+
+    expect(mocks.insertOAuthClientWithTx).toHaveBeenCalledWith(fakeTx, {
+      id: "synthetic-principal",
+      userId: "synthetic-principal",
+      clientId,
+      clientSecret,
+      name: "assistant-cinatra",
+    });
+    expectNameOnlyOutput();
+  });
+
+  it("keeps an idempotent steady-state registration quiet", async () => {
+    mocks.txExecute
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: "synthetic-principal" }] })
+      .mockResolvedValueOnce({ rows: [{ count: "1" }] });
+
+    await registerAssistantAgent({ username: "cinatra", config: cinatraAssistantConfig, name: "Cinatra" });
+
+    expect(console.log).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+    expect(mocks.createAssistantUserWithTx).not.toHaveBeenCalled();
+    expect(mocks.insertOAuthClientWithTx).not.toHaveBeenCalled();
   });
 });

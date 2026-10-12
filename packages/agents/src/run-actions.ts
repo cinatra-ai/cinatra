@@ -259,6 +259,13 @@ async function createAndTriggerRunCore(
   // stays here, where the caller can act on it.
   let launched;
   try {
+    // The trusted launching human is checked BEFORE a run/queue/snapshot can
+    // be created. Missing actor evidence fail-closes; no synthetic worker.
+    if (template.connectorDependencies && Object.values(template.connectorDependencies).some(dep => typeof dep === "string" || dep.requirement === "required")) {
+      if (!scopeActor) throw new Error("Run-start actor could not be confirmed.");
+      const { runConnectorPreflight } = await import("@/lib/agent-run-enqueue");
+      await runConnectorPreflight(template.connectorDependencies,scopeActor,"use");
+    }
     launched = await launchAgentRun({
       producer: "run_page_create_and_trigger",
       frame: { userId },

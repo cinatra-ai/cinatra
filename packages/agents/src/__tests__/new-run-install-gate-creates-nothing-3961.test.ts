@@ -29,6 +29,7 @@ const transitionRunStatus = vi.fn();
 const createAgentRunPendingInput = vi.fn();
 const createAgentRun = vi.fn();
 const enqueueAgentRun = vi.fn();
+const runConnectorPreflight = vi.fn();
 const requireAuthSession = vi.fn();
 const getActorContext = vi.fn();
 const verifySessionAuthority = vi.fn();
@@ -66,6 +67,7 @@ vi.mock("../recommendation-hold", () => ({
   readRecommendationParkForRun: vi.fn(async () => null),
 }));
 vi.mock("@/lib/agent-run-enqueue", () => ({
+  runConnectorPreflight: (...a: unknown[]) => runConnectorPreflight(...a),
   enqueueAgentRun: (...a: unknown[]) => enqueueAgentRun(...a),
   enqueueDepsForTemplate: vi.fn(() => ({})),
 }));
@@ -134,6 +136,7 @@ beforeEach(() => {
   transitionRunStatus.mockResolvedValue(undefined);
   recordRunLifecycleMoment.mockResolvedValue(undefined);
   enqueueAgentRun.mockResolvedValue(undefined);
+  runConnectorPreflight.mockResolvedValue({skippedOptional:[]});
 });
 
 describe("real install refusal creates no run (cinatra#3961)", () => {
@@ -262,3 +265,10 @@ describe("required connector start refusal (cinatra#4041)", () => {
     expect(await createAndTriggerRunWithContext(USER, ORG, template)).not.toHaveProperty("connectorConfigurationRefusal");
   });
 });
+
+describe("required connection checked before run creation", () => {
+ it("draws/logs the named connector and creates no run when authority allowed but usable connection missing", async () => { const connector="@cinatra-ai/apollo-connector"; const e=Object.assign(new Error("connection missing"),{code:"CONNECTOR_NOT_CONFIGURED",packageId:connector,settingsHref:"/connectors/cinatra-ai/apollo-connector/setup"}); runConnectorPreflight.mockRejectedValue(e); registry.catalog[connector]={...record(connector,[],"Apollo"),kind:"connector"} as AgentCatalogRecord; const warn=vi.spyOn(console,"warn").mockImplementation(()=>{}); try { const result=await createAndTriggerRunWithContext(USER,ORG,{...template,connectorDependencies:{[connector]:"*"}}); expect(result).toMatchObject({ok:false,connectorConfigurationRefusal:{packageId:connector,displayName:"Apollo"}}); expect(createAgentRunPendingInput).not.toHaveBeenCalled(); expect(createAgentRun).not.toHaveBeenCalled(); expect(enqueueAgentRun).not.toHaveBeenCalled(); expect(warn).toHaveBeenCalledWith("[agents] run start refused: required connector is not configured",expect.objectContaining({connectorName:"Apollo",connectorPackage:connector})); } finally {warn.mockRestore();} });
+ it("passes the real launching human before writes and preserves valid start", async () => { const t={...template,connectorDependencies:{"@cinatra-ai/apollo-connector":"*"}}; expect(await createAndTriggerRunWithContext(USER,ORG,t)).toMatchObject({ok:true}); expect(runConnectorPreflight).toHaveBeenCalledWith(t.connectorDependencies,expect.objectContaining({principalType:"HumanUser",principalId:USER,organizationId:ORG}),"use"); expect(runConnectorPreflight).toHaveBeenCalledBefore(createAgentRunPendingInput); });
+});
+
+it("optional-only start remains valid without inventing a new availability actor",async()=>{getActorContext.mockResolvedValue(null);const deps={"@cinatra-ai/apollo-connector":{range:"*",requirement:"optional" as const}};expect(await createAndTriggerRunWithContext(USER,ORG,{...template,connectorDependencies:deps})).toMatchObject({ok:true});expect(runConnectorPreflight).not.toHaveBeenCalled();});

@@ -164,6 +164,10 @@ export type NangoRouteResult = {
 };
 
 export type NangoSystemSurface = {
+  // Optional for old installed providers: absence is UNKNOWN, never missing.
+  listNangoConnectionAddresses?(query: {providerConfigKeys:string[];connectionIds?:string[]}, readStored: (options?: {secretKeySuppliedByEnv?:boolean}) => Promise<NangoSettings>): Promise<{state:"present"|"absent"|"unknown";addresses:{providerConfigKey:string;connectionId:string}[]}>;
+  readNangoOAuthClientConfigurationPresence?(providerConfigKey:string, readStored: (options?: {secretKeySuppliedByEnv?:boolean}) => Promise<NangoSettings>): Promise<{state:"present"|"absent"|"unknown"}>;
+
   // settings/status (sync)
   isNangoConfigured(): boolean;
   getNangoStatus(): { status: "connected" | "not_connected"; detail: string };

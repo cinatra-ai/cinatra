@@ -379,3 +379,26 @@ export function writeSealedOpenAIConnectionRow(
 export function upgradeLegacyOpenAIConnectionRow(): void {
   upgradeLegacyOpenAIConnectionRowVia(LIVE_OPENAI_CONNECTION_PORT);
 }
+
+// Read-only run-start configuration owner. Never use the sync getter, ensure,
+// defaults/CAS/seal-on-read or a configuration cache on this path.
+export async function readConnectorConfigurationForPreflight(connectorId: string, options?: {secretKeySuppliedByEnv?:boolean}): Promise<Record<string, unknown> | null> {
+  if (process.env.NEXT_PHASE === "phase-production-build") throw new Error("Connection configuration evidence unavailable");
+  try {
+    const { runPostgresQueriesAsync } = await import("@/lib/postgres-async");
+    const [result] = await runPostgresQueriesAsync({connectionString:getPostgresConnectionString(),queries:[buildReadMetadataQuery(postgresSchema,`connector_config:${connectorId}`)],transaction:false});
+    const row = result?.rows?.[0] as {value?:unknown} | undefined;
+    if (!row) return null;
+    if (typeof row.value !== "string") throw new Error();
+    const value: unknown = JSON.parse(row.value);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    const { unsealSecretFields } = await import("@/lib/connector-config-secret-fields");
+    const decoded = unsealSecretFields(connectorId,value);
+    if (decoded.decryptFailed && !(connectorId === "nango" && options?.secretKeySuppliedByEnv)) throw new Error();
+    return decoded.value as Record<string,unknown>;
+  } catch { throw new Error("Connection configuration evidence unavailable"); }
+}
+export async function readStoredNangoPlatformSettingsForPreflight(options?: {secretKeySuppliedByEnv?:boolean}): Promise<{secretKey?:string;serverUrl?:string}> {
+  const value = await readConnectorConfigurationForPreflight("nango",options);
+  return {secretKey:typeof value?.secretKey === "string" ? value.secretKey : undefined,serverUrl:typeof value?.serverUrl === "string" ? value.serverUrl : undefined};
+}

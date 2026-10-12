@@ -1697,3 +1697,16 @@ export async function disconnectTwentyConnection(): Promise<void> {
     }
   }
 }
+
+/** Call-time row-only run-start read. No schema init, cache fill, endpoint
+ * sweep, bearer retrieval, or identity creation. The existing use-gate decides
+ * access after this reader; enabled row/address alone grants nobody use. */
+export async function listExternalMcpServersForPreflight(): Promise<ExternalMcpServerRecord[]> {
+  if (process.env.NEXT_PHASE === "phase-production-build") throw new Error("Connection metadata unavailable");
+  try {
+    const { runPostgresQueriesAsync } = await import("@/lib/postgres-async");
+    const [result] = await runPostgresQueriesAsync({connectionString:getPostgresConnectionString(),transaction:false,queries:[{text:`SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" ORDER BY created_at ASC`}]});
+    if (!Array.isArray(result?.rows)) throw new Error();
+    return (result.rows as RawRow[]).map(toRecord);
+  } catch { throw new Error("Connection metadata unavailable"); }
+}

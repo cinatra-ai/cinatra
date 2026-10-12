@@ -27,6 +27,8 @@ vi.mock("@cinatra-ai/mcp-server/credentials", () => ({
   getMcpPublicBaseUrl: () => ({ publicBaseUrl: null }),
 }));
 
+const preflightSelect = vi.fn();
+vi.mock("@/lib/postgres-async",()=>({runPostgresQueriesAsync:(...a:unknown[])=>preflightSelect(...a)}));
 const ensureNangoIntegration = vi.fn();
 const importNangoConnection = vi.fn();
 const deleteNangoConnection = vi.fn();
@@ -68,6 +70,7 @@ vi.mock("@/lib/extension-host-actor", () => ({
 
 import {
   importExternalMcpApiKeyConnection,
+  listExternalMcpServersForPreflight,
   revokeExternalMcpApiKeyConnection,
   resolveExternalMcpServerBearer,
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
@@ -336,4 +339,9 @@ describe("a KEYLESS external-MCP registration (cinatra#3485)", () => {
     expect(softDeleteNangoConnection).not.toHaveBeenCalled();
     expect(deleteNangoConnection).not.toHaveBeenCalled();
   });
+});
+
+describe("external MCP readonly row existence",()=>{
+ it("reads complete keyed/keyless rows via one SELECT without vault calls or cache/sweep",async()=>{preflightSelect.mockResolvedValue([{rows:[{id:"s",label:"S",server_url:"https://mcp.invalid",nango_connection_id:null,scope:"user",org_id:null,user_id:"u",enabled:true,created_at:new Date().toISOString(),updated_at:new Date().toISOString()}]}]);const rows=await listExternalMcpServersForPreflight();expect(rows[0]).toMatchObject({id:"s",enabled:true,nangoConnectionId:null,serverUrl:"https://mcp.invalid"});expect(preflightSelect).toHaveBeenCalledTimes(1);expect(preflightSelect.mock.calls[0][0]).toMatchObject({transaction:false,queries:[expect.objectContaining({text:expect.stringMatching(/^SELECT/)})]});expect(getNangoCredentials).not.toHaveBeenCalled();expect(importNangoConnection).not.toHaveBeenCalled();});
+ it("never turns transport failure into an empty confirmed row set",async()=>{preflightSelect.mockRejectedValue(new Error("ROW_SECRET_SENTINEL"));await expect(listExternalMcpServersForPreflight()).rejects.toThrow("Connection metadata unavailable");});
 });

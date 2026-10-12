@@ -8,8 +8,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ActorContext } from "@/lib/authz";
 import type { NangoConnectionIdentity } from "@cinatra-ai/extensions/connection-identity-store";
 
+const listNangoConnectionsForScopeFilter = vi.fn();
 const listNangoConnectionsByConnector = vi.fn();
 vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
+  listNangoConnectionsForScopeFilter: (...a: unknown[]) => listNangoConnectionsForScopeFilter(...a),
   listNangoConnectionsByConnector: (...a: unknown[]) => listNangoConnectionsByConnector(...a),
 }));
 
@@ -32,9 +34,19 @@ vi.mock("@/lib/connection-use-gate", () => ({
     actor.principalType === "HumanUser" ? actor.principalId : actor.runAsUserId,
 }));
 
+const configRead = vi.fn();
+const metadataList = vi.fn();
+const getNangoSystem = vi.fn();
+const googlePresence = vi.fn();
+const externalRows = vi.fn();
+vi.mock("@/lib/database-metadata", () => ({readConnectorConfigurationForPreflight: (...a: unknown[]) => configRead(...a)}));
+vi.mock("@cinatra-ai/google-oauth-connection", () => ({readGoogleOAuthConfigurationPresenceForPreflight: (...a: unknown[]) => googlePresence(...a)}));
+vi.mock("@/lib/external-mcp-registry", () => ({listExternalMcpServersForPreflight: (...a: unknown[]) => externalRows(...a),externalMcpKeylessConnectionId: (id: string) => "external-mcp-keyless-"+id}));
 const listSavedNangoConnections = vi.fn();
 const logDeniedAuditEventStrictWithCooldown = vi.fn(async (_input: Record<string, unknown>) => ({ id: "a" }));
 vi.mock("@/lib/nango-system", () => ({
+  getNangoSystem: (...a: unknown[]) => getNangoSystem(...a),
+  listNangoConnectionAddressesForPreflight: (...a: unknown[]) => metadataList(...a),
   listSavedNangoConnections: (...a: unknown[]) => listSavedNangoConnections(...a),
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS: { github: "cinatra-github" },
 }));
@@ -45,6 +57,8 @@ vi.mock("@/lib/authz/audit", () => ({
 
 import {
   resolveConnectionForUse,
+  hasRequiredConnectorConnectionForUse,
+  ConnectionAvailabilityUnknownError,
   AmbiguousSharedConnectionError,
   NoUsableConnectionError,
   ConnectionRecordMissingError,
@@ -207,4 +221,17 @@ describe("blob address + caching contract", () => {
     expect(listNangoConnectionsByConnector).toHaveBeenCalledTimes(2);
     expect(enforceConnectionUse).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("production required-connection predicate", () => {
+ beforeEach(() => { listNangoConnectionsForScopeFilter.mockResolvedValue([]); configRead.mockResolvedValue({connections:{github:[{connectionId:"c-1",providerConfigKey:"cinatra-github"}]}}); getNangoSystem.mockReturnValue({providerConfigKeys:{github:"cinatra-github",googleCalendar:"cinatra-google-calendar",tailscale:"old",tailscaleOauth:"new"}}); metadataList.mockResolvedValue({state:"present",addresses:[{providerConfigKey:"cinatra-github",connectionId:"c-1"}]}); googlePresence.mockResolvedValue({state:"present"}); externalRows.mockResolvedValue([]); });
+ it("refuses admin without any usable identity; admin is not a fabricated private grant", async () => { expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor:{...actor,platformRole:"platform_admin"}})).toBe(false); expect(metadataList).not.toHaveBeenCalled(); });
+ it("accepts actual own address after readerUSE then performs exactly one final gate", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:ME,connectionId:"c-1"})]); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(true); expect(decideConnectionUse).toHaveBeenCalledBefore(metadataList); expect(enforceConnectionUse).toHaveBeenCalledTimes(1); expect(listSavedNangoConnections).not.toHaveBeenCalled(); });
+ it("refuses a denied use ceiling without querying the provider", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:OTHER_A})]); decideConnectionUse.mockResolvedValue({allowed:false}); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(false); expect(metadataList).not.toHaveBeenCalled(); });
+ it("distinguishes UNKNOWN from confirmed missing and never exposes raw transport errors", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:ME})]); metadataList.mockResolvedValue({state:"unknown",addresses:[]}); await expect(hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).rejects.toBeInstanceOf(ConnectionAvailabilityUnknownError); metadataList.mockRejectedValue(new Error("SECRET_SENTINEL")); await expect(hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).rejects.not.toThrow("SECRET_SENTINEL"); });
+ it("requires a saved local address as well as its live provider tuple", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:ME})]); configRead.mockResolvedValue(null); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(false); expect(metadataList).not.toHaveBeenCalled(); });
+ it("preserves a provider-only Google config without an account, but not Calendar", async () => { expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/google-oauth-connector",actor})).toBe(true); expect(metadataList).not.toHaveBeenCalled(); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/google-calendar-connector",actor})).toBe(false); });
+ it("follows consumesConnectionFrom and keeps one-to-many host aliases", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({connectorPackageId:"@cinatra-ai/google-calendar-connector",connectorKey:"googleCalendar",ownerUserId:ME})]); configRead.mockResolvedValue({connections:{googleCalendar:[{connectionId:"c-1",providerConfigKey:"cinatra-google-calendar"}]}}); metadataList.mockResolvedValue({state:"present",addresses:[{providerConfigKey:"cinatra-google-calendar",connectionId:"c-1"}]}); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/google-appointment-schedules-connector",actor})).toBe(true); });
+ it("preserves actual keyless external MCP identity and row without a fake Nango address", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({connectorPackageId:"@cinatra-ai/host:external-mcp",connectorKey:"externalMcp",connectionId:"external-mcp-keyless-s",ownerUserId:ME})]); externalRows.mockResolvedValue([{id:"s",enabled:true,serverUrl:"https://rss.invalid/mcp",nangoConnectionId:null,scope:"user",userId:ME,orgId:ORG}]); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/host:external-mcp",actor})).toBe(true); expect(metadataList).not.toHaveBeenCalled(); });
+ it("enforces shared ambiguity only after authorized actual addresses are discovered", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:OTHER_A,connectionId:"c-1"}),row({ownerUserId:OTHER_B,connectionId:"c-2"})]); configRead.mockResolvedValue({connections:{github:[{connectionId:"c-1",providerConfigKey:"cinatra-github"},{connectionId:"c-2",providerConfigKey:"cinatra-github"}]}}); metadataList.mockResolvedValue({state:"present",addresses:[{providerConfigKey:"cinatra-github",connectionId:"c-1"},{providerConfigKey:"cinatra-github",connectionId:"c-2"}]}); await expect(hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).rejects.toBeInstanceOf(AmbiguousSharedConnectionError); expect(enforceConnectionUse).not.toHaveBeenCalled(); });
 });
