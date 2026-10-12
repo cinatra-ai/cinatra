@@ -530,6 +530,7 @@
       "@cinatra-ai/podcast-artifacts/src/renderers/preview": ["./extensions/cinatra-ai/podcast-artifacts/src/renderers/preview.tsx"],
       "@cinatra-ai/screenshot-artifact/src/renderers/detail": ["./extensions/cinatra-ai/screenshot-artifact/src/renderers/detail.tsx"],
       "@cinatra-ai/slide-deck-artifact/src/renderers/detail": ["./extensions/cinatra-ai/slide-deck-artifact/src/renderers/detail.tsx"],
+      "@cinatra-ai/slide-deck-artifact/src/renderers/list-row": ["./extensions/cinatra-ai/slide-deck-artifact/src/renderers/list-row.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-scrape-schema-renderer.tsx"],
       "@cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer": ["./extensions/cinatra-ai/list-curator-agent/src/list-curator-final-list-renderer.tsx"],
       "@cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review": ["./extensions/cinatra-ai/blog-linkedin-publish-agent/src/renderers/draft-review.tsx"],

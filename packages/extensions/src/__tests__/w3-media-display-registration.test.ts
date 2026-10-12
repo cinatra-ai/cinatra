@@ -34,6 +34,11 @@ type MediaDisplay = {
   readonly repoSlug: string;
   readonly shortName: string;
   readonly forms: readonly string[];
+  // The package's EXACT renderer slots, in sorted order: the detail slot is the
+  // one display over the forms, and a package that also ships the row icon (the
+  // listRow slot, cinatra#3319) names it here. A slot the package lacks, or one
+  // it ships beyond this list, reads red.
+  readonly slots: readonly string[];
 };
 
 // The two packages whose display half is new in this wave. The nine other
@@ -45,12 +50,14 @@ const NEW_DISPLAYS: readonly MediaDisplay[] = [
     repoSlug: "cinatra-ai/screenshot-artifact",
     shortName: "screenshot-artifact",
     forms: ["image/png", "image/jpeg", "image/webp"],
+    slots: ["detail"],
   },
   {
     packageName: "@cinatra-ai/slide-deck-artifact",
     repoSlug: "cinatra-ai/slide-deck-artifact",
     shortName: "slide-deck-artifact",
     forms: ["application/pdf"],
+    slots: ["detail", "listRow"],
   },
 ] as const;
 
@@ -108,7 +115,9 @@ describe.each(NEW_DISPLAYS)("$packageName is registered as a display (#3091)", (
       string,
       { entry: string; propsApiVersion: number; representations: string[] }
     >;
-    expect(Object.keys(renderers)).toEqual(["detail"]);
+    // Exactly the package's own slots: the detail slot over the forms, and the
+    // row icon (the listRow slot, cinatra#3319) only where the package ships it.
+    expect(Object.keys(renderers).sort()).toEqual([...display.slots]);
 
     const detail = renderers.detail;
     expect(detail.propsApiVersion).toBe(PROPS_API_VERSION);
