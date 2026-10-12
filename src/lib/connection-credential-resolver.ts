@@ -322,6 +322,15 @@ export async function hasRequiredConnectorConnectionForUse(input: {packageId:str
       if (decision.allowed) authorized.push(row);
     }
     if (!authorized.length) return await missing();
+    const authorizedOwn = authorized.filter(row => subjectUserId && row.ownerUserId === subjectUserId);
+    const authorizedShared = authorized.filter(row => row.ownerUserId !== subjectUserId && row.organizationId != null && row.organizationId === actor.organizationId);
+    // Match canonical resolution BEFORE provider presence can prune an
+    // ambiguous grant set into an apparent single usable connection.
+    if (!authorizedOwn.length && authorizedShared.length > 1) {
+      await auditSentinelDeny({connectorKey:packageId,actor,subjectUserId,reason:"ambiguous_shared_candidates",candidateCount:authorizedShared.length});
+      throw new AmbiguousSharedConnectionError({statusCode:403,reason:"forbidden",message:"More than one shared connection is available. Ask its owners to narrow the grants."});
+    }
+    let ownPrimary = authorizedOwn[0];
     const existing: NangoConnectionIdentity[] = [];
     const external = authorized.filter(row => row.connectorKey === "externalMcp");
     if (external.length) {
@@ -342,6 +351,13 @@ export async function hasRequiredConnectorConnectionForUse(input: {packageId:str
       const store = await readConnectorConfigurationForPreflight("nango_connections");
       const records = store?.connections;
       if (records !== undefined && (!records || typeof records !== "object" || Array.isArray(records))) throw new ConnectionAvailabilityUnknownError();
+      if (ownPrimary && authorizedOwn.length > 1) {
+        const primaryOrder = (records as Record<string,unknown> | undefined)?.[ownPrimary.connectorKey];
+        if (Array.isArray(primaryOrder)) {
+          const first = (primaryOrder as SavedNangoConnection[]).find(record => authorizedOwn.some(row => row.connectorKey === ownPrimary.connectorKey && row.connectionId === record.connectionId));
+          if (first) ownPrimary = authorizedOwn.find(row => row.connectorKey === ownPrimary.connectorKey && row.connectionId === first.connectionId) ?? ownPrimary;
+        }
+      }
       const surface = getNangoSystem();
       if (!surface) throw new ConnectionAvailabilityUnknownError();
       const addresses = accountRows.flatMap(identity => {
@@ -357,13 +373,8 @@ export async function hasRequiredConnectorConnectionForUse(input: {packageId:str
         for (const address of addresses) if (presence.addresses.some(r=>r.providerConfigKey===address.providerConfigKey && r.connectionId===address.connectionId)) existing.push(address.identity);
       }
     }
-    const own = existing.filter(row => subjectUserId && row.ownerUserId === subjectUserId);
-    const shared = existing.filter(row => row.ownerUserId !== subjectUserId && row.organizationId != null && row.organizationId === actor.organizationId);
-    if (!own.length && shared.length > 1) {
-      await auditSentinelDeny({connectorKey:packageId,actor,subjectUserId,reason:"ambiguous_shared_candidates",candidateCount:shared.length});
-      throw new AmbiguousSharedConnectionError({statusCode:403,reason:"forbidden",message:"More than one shared connection is available. Ask its owners to narrow the grants."});
-    }
-    const selected = own[0] ?? shared[0];
+    const selected = ownPrimary ?? authorizedShared[0];
+    if (selected && !existing.some(row => row.id === selected.id)) return await missing();
     if (!selected) return await missing();
     await enforceConnectionUse({identity:selected,actor,subjectUserId,source:"required-run-start"});
     return true;

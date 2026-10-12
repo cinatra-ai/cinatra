@@ -32,6 +32,7 @@ const enqueueAgentRun = vi.fn();
 const runConnectorPreflight = vi.fn();
 const requireAuthSession = vi.fn();
 const getActorContext = vi.fn();
+const resolveActorGrantsForUserInOrg = vi.fn();
 const verifySessionAuthority = vi.fn();
 const recordRunLifecycleMoment = vi.fn();
 
@@ -51,6 +52,7 @@ vi.mock("../store", () => ({
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
   getActorContext: (...a: unknown[]) => getActorContext(...a),
+  resolveActorGrantsForUserInOrg: (...a: unknown[]) => resolveActorGrantsForUserInOrg(...a),
 }));
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),
@@ -128,6 +130,8 @@ function noWrites() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  requireAuthSession.mockResolvedValue({user:{id:USER,role:"user"},session:{activeOrganizationId:ORG}});
+  resolveActorGrantsForUserInOrg.mockResolvedValue({orgRole:"member",teamIds:[],teamRoles:{},projectGrants:[]});
   catalog(); status("installed");
   getActorContext.mockResolvedValue({ principalType: "HumanUser", principalId: USER, organizationId: ORG, orgRole: "member", teamIds: [], projectGrants: [] });
   verifySessionAuthority.mockResolvedValue({ kind: "session" });
@@ -272,3 +276,54 @@ describe("required connection checked before run creation", () => {
 });
 
 it("optional-only start remains valid without inventing a new availability actor",async()=>{getActorContext.mockResolvedValue(null);const deps={"@cinatra-ai/apollo-connector":{range:"*",requirement:"optional" as const}};expect(await createAndTriggerRunWithContext(USER,ORG,{...template,connectorDependencies:deps})).toMatchObject({ok:true});expect(runConnectorPreflight).not.toHaveBeenCalled();});
+
+
+describe("verified scoped launch connector actor (cinatra#3693)", () => {
+  const launchOrg = "launch-org-B";
+  const requiredTemplate = {...template,connectorDependencies:{"@cinatra-ai/apollo-connector":"*"}};
+  function absentRunEffects() {
+    expect(createAgentRunPendingInput).not.toHaveBeenCalled();
+    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(transitionRunStatus).not.toHaveBeenCalled();
+    expect(recordRunLifecycleMoment).not.toHaveBeenCalled();
+    expect(enqueueAgentRun).not.toHaveBeenCalled();
+  }
+  it("starts a configured required connector in verified orgB while active orgA", async () => {
+    getActorContext.mockResolvedValue({principalType:"HumanUser",principalId:USER,organizationId:ORG,orgRole:"org_admin",teamIds:["team-A"],teamRoles:{"team-A":"team_admin"},projectGrants:[{projectId:"project-A",role:"owner"}]});
+    resolveActorGrantsForUserInOrg.mockResolvedValue({orgRole:"member",teamIds:["team-B"],teamRoles:{"team-B":"member"},projectGrants:[{projectId:"project-B",role:"read"}]});
+    expect(await createAndTriggerRunWithContext(USER,launchOrg,requiredTemplate)).toMatchObject({ok:true});
+    expect(verifySessionAuthority).toHaveBeenCalledWith(USER,launchOrg);
+    expect(resolveActorGrantsForUserInOrg).toHaveBeenCalledWith(USER,launchOrg);
+    expect(runConnectorPreflight).toHaveBeenCalledWith(requiredTemplate.connectorDependencies,expect.objectContaining({principalType:"HumanUser",principalId:USER,organizationId:launchOrg,platformRole:"member",orgRole:"member",teamIds:["team-B"],teamRoles:{"team-B":"member"},projectIds:["project-B"]}),"use");
+    expect(runConnectorPreflight).toHaveBeenCalledBefore(createAgentRunPendingInput);
+  });
+  it("refuses missing target membership without borrowing active-org admin", async () => {
+    getActorContext.mockResolvedValue({principalType:"HumanUser",principalId:USER,organizationId:ORG,orgRole:"org_admin"});
+    resolveActorGrantsForUserInOrg.mockResolvedValue({teamIds:[],projectGrants:[]});
+    await expect(createAndTriggerRunWithContext(USER,launchOrg,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("refuses a request human different from the verified launch user", async () => {
+    requireAuthSession.mockResolvedValue({user:{id:"another-human",role:"admin"},session:{activeOrganizationId:ORG}});
+    await expect(createAndTriggerRunWithContext(USER,ORG,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(resolveActorGrantsForUserInOrg).not.toHaveBeenCalled();expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("refuses a missing request session before connection queries or creation", async () => {
+    requireAuthSession.mockResolvedValue(null);
+    await expect(createAndTriggerRunWithContext(USER,ORG,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(resolveActorGrantsForUserInOrg).not.toHaveBeenCalled();expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("refuses unresolved target grants without a fallback org", async () => {
+    resolveActorGrantsForUserInOrg.mockRejectedValue(new Error("target grants unavailable"));
+    await expect(createAndTriggerRunWithContext(USER,ORG,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("keeps target connection USE refusal before every run side effect", async () => {
+    runConnectorPreflight.mockRejectedValue(Object.assign(new Error("connection unavailable for reader"),{code:"CONNECTOR_NOT_CONFIGURED",packageId:"@cinatra-ai/apollo-connector",settingsHref:"/connectors/cinatra-ai/apollo-connector/setup"}));
+    const warn=vi.spyOn(console,"warn").mockImplementation(()=>{});
+    try {
+      expect(await createAndTriggerRunWithContext(USER,launchOrg,requiredTemplate)).toMatchObject({ok:false,connectorConfigurationRefusal:{packageId:"@cinatra-ai/apollo-connector"}});
+      expect(runConnectorPreflight).toHaveBeenCalledWith(requiredTemplate.connectorDependencies,expect.objectContaining({organizationId:launchOrg,orgRole:"member"}),"use");absentRunEffects();
+    } finally {warn.mockRestore();}
+  });
+});

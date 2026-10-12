@@ -235,3 +235,45 @@ describe("production required-connection predicate", () => {
  it("preserves actual keyless external MCP identity and row without a fake Nango address", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({connectorPackageId:"@cinatra-ai/host:external-mcp",connectorKey:"externalMcp",connectionId:"external-mcp-keyless-s",ownerUserId:ME})]); externalRows.mockResolvedValue([{id:"s",enabled:true,serverUrl:"https://rss.invalid/mcp",nangoConnectionId:null,scope:"user",userId:ME,orgId:ORG}]); expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/host:external-mcp",actor})).toBe(true); expect(metadataList).not.toHaveBeenCalled(); });
  it("enforces shared ambiguity only after authorized actual addresses are discovered", async () => { listNangoConnectionsForScopeFilter.mockResolvedValue([row({ownerUserId:OTHER_A,connectionId:"c-1"}),row({ownerUserId:OTHER_B,connectionId:"c-2"})]); configRead.mockResolvedValue({connections:{github:[{connectionId:"c-1",providerConfigKey:"cinatra-github"},{connectionId:"c-2",providerConfigKey:"cinatra-github"}]}}); metadataList.mockResolvedValue({state:"present",addresses:[{providerConfigKey:"cinatra-github",connectionId:"c-1"},{providerConfigKey:"cinatra-github",connectionId:"c-2"}]}); await expect(hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).rejects.toBeInstanceOf(AmbiguousSharedConnectionError); expect(enforceConnectionUse).not.toHaveBeenCalled(); });
 });
+
+
+describe("required preflight preserves canonical shared ambiguity", () => {
+  it("rejects two authorized shared identities even when provider lists only one",async()=>{
+    const a=row({id:"shared-a",connectionId:"address-a",ownerUserId:OTHER_A});
+    const b=row({id:"shared-b",connectionId:"address-b",ownerUserId:OTHER_B});
+    listNangoConnectionsForScopeFilter.mockResolvedValue([a,b]);
+    listNangoConnectionsByConnector.mockResolvedValue([a,b]);
+    decideConnectionUse.mockResolvedValue({allowed:true});
+    configRead.mockResolvedValue({connections:{github:[{connectionId:"address-a",providerConfigKey:"cinatra-github"},{connectionId:"address-b",providerConfigKey:"cinatra-github"}]}});
+    getNangoSystem.mockReturnValue({providerConfigKeys:{github:"cinatra-github"}});
+    metadataList.mockResolvedValue({state:"present",addresses:[{connectionId:"address-a",providerConfigKey:"cinatra-github"}]});
+    await expect(resolveConnectionForUse({connectorKey:"github",actor})).rejects.toBeInstanceOf(AmbiguousSharedConnectionError);
+    await expect(hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).rejects.toBeInstanceOf(AmbiguousSharedConnectionError);
+    expect(metadataList).not.toHaveBeenCalled();expect(configRead).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("required preflight keeps own primary before presence",()=>{
+  it("does not switch from absent own primary to another present own address",async()=>{
+    const first=row({id:"own-first",connectionId:"primary-first",ownerUserId:ME});
+    const second=row({id:"own-second",connectionId:"primary-second",ownerUserId:ME});
+    listNangoConnectionsForScopeFilter.mockResolvedValue([second,first]);
+    listNangoConnectionsByConnector.mockResolvedValue([second,first]);
+    listSavedNangoConnections.mockReturnValue([{connectionId:"primary-first",providerConfigKey:"cinatra-github"},{connectionId:"primary-second",providerConfigKey:"cinatra-github"}]);
+    configRead.mockResolvedValue({connections:{github:[{connectionId:"primary-first",providerConfigKey:"cinatra-github"},{connectionId:"primary-second",providerConfigKey:"cinatra-github"}]}});
+    getNangoSystem.mockReturnValue({providerConfigKeys:{github:"cinatra-github"}});
+    metadataList.mockResolvedValue({state:"present",addresses:[{connectionId:"primary-second",providerConfigKey:"cinatra-github"}]});
+    expect((await resolveConnectionForUse({connectorKey:"github",actor})).connectionId).toBe("primary-first");
+    expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(false);
+  });
+  it("does not borrow shared presence after an own address is absent",async()=>{
+    const own=row({id:"own",connectionId:"own-absent",ownerUserId:ME});
+    const shared=row({id:"shared",connectionId:"shared-present",ownerUserId:OTHER_A});
+    listNangoConnectionsForScopeFilter.mockResolvedValue([own,shared]);
+    configRead.mockResolvedValue({connections:{github:[{connectionId:"own-absent",providerConfigKey:"cinatra-github"},{connectionId:"shared-present",providerConfigKey:"cinatra-github"}]}});
+    getNangoSystem.mockReturnValue({providerConfigKeys:{github:"cinatra-github"}});
+    metadataList.mockResolvedValue({state:"present",addresses:[{connectionId:"shared-present",providerConfigKey:"cinatra-github"}]});
+    expect(await hasRequiredConnectorConnectionForUse({packageId:"@cinatra-ai/github-connector",actor})).toBe(false);
+  });
+});

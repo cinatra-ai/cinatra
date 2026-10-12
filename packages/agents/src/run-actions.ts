@@ -4,12 +4,14 @@ import {
   requireActorContext,
   isPlatformAdmin,
   resolveOrgRoleForSession,
+  resolveActorGrantsForUserInOrg,
   // cinatra#3692: the session-lineage ActorContext RESOLVER, aliased as the
   // in-process A2A action aliases it — it is not the ALS frame reader of the
   // same name in `@cinatra-ai/llm/actor-context`.
   getActorContext as resolveSessionActorContext,
 } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
+import { buildActorContext } from "@/lib/authz/enforce";
 // cinatra#1939 wave 2 (§2a): every run-status transition here is grounded by the
 // acting MEMBER's session (owner / org-admin, already checked above). A member
 // mint fail-closes if membership was revoked — acceptable per the design.
@@ -99,6 +101,25 @@ async function resolveRunPageScopeActor(userId: string, orgId: string) {
     return undefined;
   }
   return actor;
+}
+
+/** Required connector checks use the verified launch org, which can differ
+ * from the active org (#3693). Resolve all target-org axes; never retarget an
+ * active-org actor with its old admin/team/project grants. Membership authority
+ * is checked by the caller before this read-only resolution. */
+async function resolveRequiredRunConnectorActor(userId: string, orgId: string) {
+  try {
+    const session = await requireAuthSession();
+    if (!orgId || session?.user?.id !== userId) throw new Error();
+    const grants = await resolveActorGrantsForUserInOrg(userId, orgId);
+    if (!grants.orgRole) throw new Error();
+    return buildActorContext(
+      { user: session.user, session: { activeOrganizationId: orgId } },
+      grants,
+    );
+  } catch {
+    throw new Error("Run-start actor could not be confirmed.");
+  }
 }
 
 /**
@@ -262,9 +283,9 @@ async function createAndTriggerRunCore(
     // The trusted launching human is checked BEFORE a run/queue/snapshot can
     // be created. Missing actor evidence fail-closes; no synthetic worker.
     if (template.connectorDependencies && Object.values(template.connectorDependencies).some(dep => typeof dep === "string" || dep.requirement === "required")) {
-      if (!scopeActor) throw new Error("Run-start actor could not be confirmed.");
+      const connectorActor = await resolveRequiredRunConnectorActor(userId, orgId);
       const { runConnectorPreflight } = await import("@/lib/agent-run-enqueue");
-      await runConnectorPreflight(template.connectorDependencies,scopeActor,"use");
+      await runConnectorPreflight(template.connectorDependencies,connectorActor,"use");
     }
     launched = await launchAgentRun({
       producer: "run_page_create_and_trigger",
