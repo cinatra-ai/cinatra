@@ -74,6 +74,10 @@ const COPY = reviewBlockedCopy("no-longer-pending");
 const REFRESH = '[data-action="refresh-gate -> live-gate"]';
 const PANEL = '[data-conformance-id="review-gate-blocked"]';
 
+/** A type-size utility: a standard step, a named type-scale token or a bracket form. */
+const TYPE_SIZE =
+  /^text-(?:xs|sm|base|lg|[2-9]?xl|badge-(?:xs|2xs)|listing-title|page-title-(?:sm|md|lg)|\[[^\]]*\])$/;
+
 /** Two native case/declaration guards. The light case reads .cinatra declarations; the dark case reads .dark.
  *  Root fallback models declaration inheritance only, never computed cascade.
  *  App-owned actual .cinatra/.dark computed proof remains owed. */
@@ -175,6 +179,21 @@ describe("the Refresh affordance sits inside the sentence it ends", () => {
       // block box: an inline link takes the line's own metrics.
       expect(tokens).toContain("h-auto");
       expect(tokens).toContain("p-0");
+    });
+
+    it(`${palette} — it is drawn at the sentence's own size, not a size of its own`, () => {
+      const { body, control } = renderBlocked(palette);
+
+      // §VII draws the sentence at 11.5px and repeats 11.5px on the link only
+      // to cancel the `.btn` rule's own 13px: the link is the size of the
+      // sentence it ends. So the control names no type size of its own and
+      // defers to the paragraph with `text-[length:inherit]`, the one bracket
+      // form the type rules allow; the paragraph keeps its own ramp token.
+      // jsdom resolves no cascade: the computed equality is the browser pin's.
+      expect(classTokens(control).filter((t) => TYPE_SIZE.test(t))).toEqual([
+        "text-[length:inherit]",
+      ]);
+      expect(classTokens(body).filter((t) => TYPE_SIZE.test(t))).toEqual(["text-xs"]);
     });
   }
 });

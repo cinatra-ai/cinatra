@@ -1,7 +1,8 @@
 /**
  * specs/app-artifact-review.html#review-gate-blocked (VII) and
  * specs/app-lifecycle-cards.html (IV, No longer open): Refresh ends the body
- * paragraph, with the drawing's blue #364e81, resting underline and 3px offset.
+ * paragraph, with the drawing's blue #364e81, resting underline and 3px offset,
+ * at the sentence's own computed font size (the link follows the paragraph).
  * Read the shipped props-only blocked panel on the existing conformance route.
  * No markup/CSS/transport substitution; no capture or stale-gate grade is
  * claimed by authoring these cases. Hosted execution and App proof remain owed.
@@ -48,6 +49,13 @@ for (const palette of PALETTES) {
         if (!lastLine) throw new Error("The sentence has no rendered line box");
         const control = element.getBoundingClientRect();
         const style = getComputedStyle(element);
+        const fontSize = style.fontSize;
+        const sentenceFontSize = getComputedStyle(body).fontSize;
+        // The link has no size of its own: give the paragraph a probe size
+        // and the link must follow it; then the paragraph's own size returns.
+        body.style.fontSize = "20px";
+        const followsTheSentence = getComputedStyle(element).fontSize === "20px";
+        body.style.fontSize = "";
         return {
           bodyText: body.textContent,
           endsTheParagraph: element === body.lastElementChild && element.nextSibling === null,
@@ -56,6 +64,7 @@ for (const palette of PALETTES) {
           decoration: style.textDecorationLine, offset: style.textUnderlineOffset,
           padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft],
           margins: [style.marginTop, style.marginBottom],
+          fontSize, sentenceFontSize, followsTheSentence,
         };
       });
       expect(reading.bodyText).toBe("The gate was already decided or the run moved on. Refresh");
@@ -68,6 +77,8 @@ for (const palette of PALETTES) {
       expect(reading.offset).toBe("3px");
       expect(reading.padding).toEqual(["0px", "0px", "0px", "0px"]);
       expect(reading.margins).toEqual(["0px", "0px"]);
+      expect(reading.fontSize).toBe(reading.sentenceFontSize);
+      expect(reading.followsTheSentence).toBe(true);
     });
   }
 }
