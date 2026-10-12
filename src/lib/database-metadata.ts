@@ -385,7 +385,7 @@ export function upgradeLegacyOpenAIConnectionRow(): void {
 export async function readConnectorConfigurationForPreflight(connectorId: string, options?: {secretKeySuppliedByEnv?:boolean}): Promise<Record<string, unknown> | null> {
   if (process.env.NEXT_PHASE === "phase-production-build") throw new Error("Connection configuration evidence unavailable");
   try {
-    const { runPostgresQueriesAsync } = await import("@/lib/postgres-async");
+    const { runPostgresQueriesAsync } = await import("@/lib/db/pooled");
     const [result] = await runPostgresQueriesAsync({connectionString:getPostgresConnectionString(),queries:[buildReadMetadataQuery(postgresSchema,`connector_config:${connectorId}`)],transaction:false});
     const row = result?.rows?.[0] as {value?:unknown} | undefined;
     if (!row) return null;

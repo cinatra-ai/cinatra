@@ -199,7 +199,7 @@ export async function runConnectorPreflight(
         }
       }
       if (decision.allowed && requirement === "required" && mode === "use") {
-        const { hasRequiredConnectorConnectionForUse } = await import("@/lib/connection-credential-resolver");
+        const { hasRequiredConnectorConnectionForUse } = await import("@/lib/connection-use-gate");
         if (!await hasRequiredConnectorConnectionForUse({packageId,actor})) throw new ConnectorNotConfiguredError(packageId,"no_usable_connection");
       }
     } else {

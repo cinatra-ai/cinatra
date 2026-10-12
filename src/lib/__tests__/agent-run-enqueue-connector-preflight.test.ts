@@ -15,7 +15,7 @@ vi.mock("@/lib/connector-authority", () => ({
 }));
 
 const availability = vi.fn();
-vi.mock("@/lib/connection-credential-resolver", () => ({ hasRequiredConnectorConnectionForUse: (...args: unknown[]) => availability(...args) }));
+vi.mock("@/lib/connection-use-gate", () => ({ hasRequiredConnectorConnectionForUse: (...args: unknown[]) => availability(...args) }));
 const enforceConnectorPolicy = vi.fn();
 vi.mock("@/lib/connector-policy", () => ({
   enforceConnectorPolicy: (...a: unknown[]) => enforceConnectorPolicy(...(a as [])),

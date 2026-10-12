@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const m=vi.hoisted(()=>({query:vi.fn(),unseal:vi.fn(),ensure:vi.fn(),surface:undefined as undefined | Record<string,unknown>}));
 vi.mock("server-only",()=>({}));
 vi.mock("@/lib/postgres-config",()=>({postgresSchema:"preflight_test",getPostgresConnectionString:()=>"postgres://synthetic"}));
-vi.mock("@/lib/postgres-async",()=>({runPostgresQueriesAsync:(...a:unknown[])=>m.query(...a)}));
+vi.mock("@/lib/db/pooled",()=>({runPostgresQueriesAsync:(...a:unknown[])=>m.query(...a)}));
 vi.mock("@/lib/postgres-schema-init",()=>({ensurePostgresSchema:m.ensure}));
 vi.mock("@/lib/connector-config-secret-fields",()=>({unsealSecretFields:(...a:unknown[])=>m.unseal(...a)}));
 vi.mock("@/lib/extension-capabilities-registry",()=>({resolveCapabilityProviders:()=>m.surface?[{impl:m.surface}]:[]}));
