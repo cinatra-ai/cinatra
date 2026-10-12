@@ -177,6 +177,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::listRow", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/image-artifact::preview", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/json-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/json-artifact::listRow", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/json-artifact::preview", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/markdown-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/markdown-artifact::listRow", resolution: "required" },
@@ -188,9 +189,12 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/podcast-artifacts::preview", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/screenshot-artifact::detail", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/slide-deck-artifact::detail", resolution: "guardedOptional" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/slide-deck-artifact::listRow", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/text-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/text-artifact::listRow", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/video-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/zip-artifact::detail", resolution: "required" },
+  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/zip-artifact::listRow", resolution: "required" },
   { map: "GENERATED_CHAT_VIEWS", key: "chart", resolution: "required" },
 ];
 

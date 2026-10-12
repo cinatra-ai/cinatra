@@ -1487,6 +1487,7 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/podcast-artifacts/src/renderers/preview",
       "@cinatra-ai/screenshot-artifact/src/renderers/detail",
       "@cinatra-ai/slide-deck-artifact/src/renderers/detail",
+      "@cinatra-ai/slide-deck-artifact/src/renderers/list-row",
       // The email body display joins the same guarded-optional road with the email
       // pack's pin advance: its detail and list-row subpaths stand in the roster by
       // name, at the roster's end; the assertion below sorts the roster so its
