@@ -50,7 +50,7 @@ const NEW_DISPLAYS: readonly MediaDisplay[] = [
     repoSlug: "cinatra-ai/screenshot-artifact",
     shortName: "screenshot-artifact",
     forms: ["image/png", "image/jpeg", "image/webp"],
-    slots: ["detail"],
+    slots: ["detail", "listRow"],
   },
   {
     packageName: "@cinatra-ai/slide-deck-artifact",
