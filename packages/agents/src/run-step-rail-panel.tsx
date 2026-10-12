@@ -263,6 +263,7 @@ export function RunStepRailPanel({
                       data-run-surface-rail-step=""
                       data-run-surface-rail-reached={railReached ? "true" : "false"}
                       data-run-surface-rail-settled={railSettled ? "true" : "false"}
+                      aria-current={railSelected ? "step" : undefined}
                       data-run-surface-rail-selected={railSelected ? "true" : "false"}
                     >
                       {indicatorNode}
@@ -281,6 +282,7 @@ export function RunStepRailPanel({
                       data-run-surface-rail-step=""
                       data-run-surface-rail-reached={railReached ? "true" : "false"}
                       data-run-surface-rail-settled={railSettled ? "true" : "false"}
+                      aria-current={railSelected ? "step" : undefined}
                       data-run-surface-rail-selected={railSelected ? "true" : "false"}
                     >
                       {indicatorNode}
