@@ -89,6 +89,7 @@ const RUN_ID = "run-3285";
 
 /** THE RUN, AS THE STORE HOLDS IT — one row, moved from moment to moment. */
 const row = vi.hoisted(() => ({
+  runId: "run-3285",
   status: "pending_input" as string,
   lifecycleMoment: null as string | null,
   lifecycleCardKind: null as string | null,
@@ -145,7 +146,7 @@ function makeTemplate() {
 
 function makeRun() {
   return {
-    id: RUN_ID,
+    id: row.runId,
     templateId: TEMPLATE.id,
     versionId: null,
     runBy: "user-1",
@@ -395,7 +396,7 @@ function inputTreatment(container: HTMLElement, key = "input:0") {
 async function serverTree(): Promise<React.ReactElement> {
   return (await SetupScreen({
     agentId: "blog-draft-writer",
-    instanceId: RUN_ID,
+    instanceId: row.runId,
   })) as React.ReactElement;
 }
 
@@ -445,6 +446,7 @@ async function continueOnTheSkillsStep() {
 
 beforeEach(() => {
   vi.stubGlobal("EventSource", StubEventSource);
+  row.runId = RUN_ID;
   row.required = ["brief"];
   decision.confirm = vi.fn(async () => ({ ok: true, dispatched: true }));
   decision.skip = vi.fn(async () => ({ ok: true, dispatched: true }));
@@ -585,5 +587,60 @@ describe("runDetailInitialStep elects the step the released run walks to", () =>
     expect(elect({ hasRecommendationStep: false, inputStepAfterRelease: "input:0" })).toBe(
       "detail",
     );
+  });
+});
+
+
+// The caller supplies the actual run id; identical Skills/Setup shapes do not identify a run.
+describe("Skills release belongs to the composed run", () => {
+  async function showHeldRun(view: ReturnType<typeof render>, runId: string) {
+    row.runId = runId;
+    atMoment("held");
+    await act(async () => { view.rerender(await serverTree()); });
+    await waitFor(() => expect(view.container.querySelector("[data-recommendation-rail-step]")).not.toBeNull());
+  }
+
+  it("matches a fresh held B when the released A subtree is reused, preserving same-run history", async () => {
+    const { view } = await continueOnTheSkillsStep();
+    expect(skillsSettled(view.container)).toBe("true");
+    expect(railCurrent(view.container)).toEqual(["Setup"]);
+    // The same run's held server refresh retains the successful local release.
+    await showHeldRun(view, RUN_ID);
+    expect(skillsSettled(view.container)).toBe("true");
+    expect(railCurrent(view.container)).toEqual(["Setup"]);
+    await showHeldRun(view, "run-3285-B");
+    const reusedB = { current: railCurrent(view.container), settled: skillsSettled(view.container), input: inputTreatment(view.container) };
+    expect(reusedB.current).toEqual(["Skills"]);
+    expect(reusedB.settled).toBe("false");
+    expect(reusedB.input.disabled).toBe("true");
+    cleanup();
+    const freshB = render(await serverTree());
+    await waitFor(() => expect(boxes(freshB.container).length).toBeGreaterThan(0));
+    expect({ current: railCurrent(freshB.container), settled: skillsSettled(freshB.container), input: inputTreatment(freshB.container) }).toEqual(reusedB);
+  });
+
+  it.each([true, false])("late A result (%s) cannot release held B, whose own release still works", async (accepted) => {
+    let finishA!: (result: unknown) => void;
+    const pendingA = new Promise((resolve) => { finishA = resolve; });
+    decision.confirm = vi.fn(() => pendingA);
+    decision.skip = vi.fn(() => pendingA);
+    const refresh = vi.fn();
+    wired.refreshed.current = refresh;
+    const view = render(await serverTree());
+    await waitFor(() => expect(boxes(view.container).length).toBeGreaterThan(0));
+    await act(async () => { fireEvent.click(view.container.querySelector<HTMLElement>("[data-skills-step-continue]")!); });
+    await waitFor(() => expect((decision.confirm as ReturnType<typeof vi.fn>).mock.calls.length + (decision.skip as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1));
+    await showHeldRun(view, "run-3285-B");
+    expect(railCurrent(view.container)).toEqual(["Skills"]);
+    await act(async () => { finishA(accepted ? { ok: true, dispatched: true } : { ok: false, error: "Refused A" }); await pendingA; });
+    expect(skillsSettled(view.container)).toBe("false");
+    expect(railCurrent(view.container)).toEqual(["Skills"]);
+    expect(inputTreatment(view.container).disabled).toBe("true");
+    decision.confirm = vi.fn(async () => ({ ok: true, dispatched: true }));
+    decision.skip = vi.fn(async () => ({ ok: true, dispatched: true }));
+    await act(async () => { fireEvent.click(view.container.querySelector<HTMLElement>("[data-skills-step-continue]")!); });
+    await waitFor(() => expect(skillsSettled(view.container)).toBe("true"));
+    expect(railCurrent(view.container)).toEqual(["Setup"]);
+    expect(inputTreatment(view.container).disabled).toBeNull();
   });
 });

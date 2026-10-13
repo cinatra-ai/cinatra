@@ -43,6 +43,7 @@ import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
   useEffect,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
@@ -521,6 +522,13 @@ export function RunSurfaceRail({
     resolveRunSurfaceSelection(steps, detail, initialSelection),
   );
   const [skillsReleased, setSkillsReleased] = useState(false);
+  // The run page keys this frame by its real run id. A decision from a frame
+  // that has left the page must not release its replacement.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   // The existing working placeholder is the released frame's fallback when
   // the held server tree has no run detail yet. Selection reads that same
   // fallback; it must not refuse a row the frame can already draw.
@@ -587,6 +595,7 @@ export function RunSurfaceRail({
   };
   // The instant the Skills decision lands, the entry reads settled and the selection moves to the step the page elects for the released run, before the refresh does (cinatra#3285).
   const releaseSkills = () => {
+    if (!mounted.current) return;
     setSkillsReleased(true);
     if (releasedSelection !== undefined) {
       const releasedSteps = releasedInputStep

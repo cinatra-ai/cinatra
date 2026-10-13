@@ -3506,6 +3506,7 @@ export async function SetupScreen({
                 return (
                   <>
                   <RunSurfaceRail
+                    key={run.id}
                     steps={railSteps}
                     rail={railNode}
                     detail={runDetailFallback}
