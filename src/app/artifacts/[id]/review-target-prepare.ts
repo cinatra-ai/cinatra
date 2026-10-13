@@ -44,6 +44,7 @@ import {
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  type ArtifactRendererProps,
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
@@ -72,8 +73,10 @@ import type {
   ArtifactByteUrlMinter,
 } from "./review-surface-roads";
 import {
+  beginReviewTargetsCore,
   prepareReviewTargetsCore,
   type ArtifactReadOutcome,
+  type BeginReviewResult,
   type PrepareReviewInput,
   type PrepareReviewPorts,
   type PrepareReviewResult,
@@ -254,6 +257,7 @@ export function bindArtifactReviewPorts(ctx: {
         slot: mount.slot,
         packageName: mount.packageName,
         generatedKey: mount.generatedKey,
+        ...(mount.propsApiVersion === undefined ? {} : { propsApiVersion: mount.propsApiVersion }),
       };
     }
     if (mount.kind === "runtime") {
@@ -331,6 +335,7 @@ export function bindArtifactReviewPorts(ctx: {
     mime: string;
     propsApiVersion: number;
     member: NonNullable<RevisionMemberOutcome>;
+    review?: ArtifactRendererProps["review"];
   }) => {
     // Host-authorized, version-PINNED hrefs (the exact reviewed revision, never
     // the artifact's latest) — the same content/preview endpoints the detail
@@ -433,6 +438,7 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
+      ...(input.propsApiVersion >= 5 && input.review ? { review: input.review } : {}),
       content,
       bytes,
     });
@@ -487,4 +493,35 @@ export async function prepareArtifactReviewTargets(args: {
     buildContent: args.buildContent,
   });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
+}
+
+/**
+ * The STREAMING reading of the same call (cinatra#3334): the authorization,
+ * gate and substitution preflight is awaited, and the per-target preparations
+ * come back started, capped and in the gate's order. Same core, same ports,
+ * same hard failures — only the moment the caller is answered moves.
+ */
+export async function beginArtifactReviewTargets(args: {
+  input: PrepareReviewInput;
+  orgId: string;
+  actor: ActorContext;
+  runGatePorts: ReviewRunGatePorts;
+  /** The island's byte minter, when this preparation is for an island reader
+   *  (wave 3). Absent on every cookie surface. */
+  byteMinter?: ArtifactByteUrlMinter;
+  /** How this surface reads content (wave 3). Absent on a surface that has not
+   *  named a road. */
+  buildContent?: ArtifactContentBuilder;
+}): Promise<BeginReviewResult> {
+  // THE ROADS TRAVEL THE STREAMING ARM TOO. The island is the one surface that
+  // names a road and, since cinatra#3334, the one surface that enters through
+  // this arm: binding the ports without them here would hand the island the
+  // session addresses and the channel's named absence it cannot fetch.
+  const artifactPorts = bindArtifactReviewPorts({
+    orgId: args.orgId,
+    actor: args.actor,
+    byteMinter: args.byteMinter,
+    buildContent: args.buildContent,
+  });
+  return beginReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }

@@ -32,10 +32,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const BOUND_MS = 12_345;
 process.env.POSTGRES_ASYNC_TIMEOUT_MS = String(BOUND_MS);
 
-const getPooledDbMock = vi.fn();
+const poolConstructorMock = vi.fn();
+let fakeClient: { query(text: string, values?: unknown[]): Promise<{rows: Array<Record<string, unknown>>; rowCount: number}>; release(error?: unknown): void };
 
-vi.mock("@/lib/db/pooled", () => ({
-  getPooledDb: (...args: unknown[]) => getPooledDbMock(...args),
+// Exercise the REAL pooled scaffold and relocated runner over a fake pg port.
+// No actual pg.Pool, connection, provider or database is instantiated.
+vi.mock("pg", () => ({
+  Pool: class FakePool {
+    constructor(config: unknown) { poolConstructorMock(config); }
+    listenerCount() { return 0; }
+    on() { return this; }
+    async connect() { return fakeClient; }
+  },
 }));
 
 type PoolConfig = Record<string, unknown>;
@@ -64,16 +72,15 @@ function installFakePool(options?: {
       released.push(err);
     },
   };
-  getPooledDbMock.mockReturnValue({ connect: async () => client });
+  fakeClient = client;
   return { texts, released };
 }
 
 /** The `poolConfig` the seam handed to `getPooledDb` on its last call. */
 function lastPoolConfig(): PoolConfig {
-  const call = getPooledDbMock.mock.calls.at(-1);
+  const call = poolConstructorMock.mock.calls.at(-1);
   expect(call, "getPooledDb was never called").toBeDefined();
-  const options = (call as unknown[])[0] as { poolConfig?: PoolConfig };
-  return options.poolConfig ?? {};
+  return (call as unknown[])[0] as PoolConfig;
 }
 
 async function seam() {
@@ -88,7 +95,7 @@ async function seam() {
  * variable and the registry go back afterwards, so the tests above and below
  * still see a seam built from `BOUND_MS`. Resetting the registry does not
  * disturb `vi.mock`: the factory is re-applied on re-import and still
- * delegates to the same `getPooledDbMock`.
+ * delegates to the same `poolConstructorMock`.
  */
 async function seamWithTimeoutEnv(value: string) {
   const previous = process.env.POSTGRES_ASYNC_TIMEOUT_MS;
@@ -102,8 +109,10 @@ async function seamWithTimeoutEnv(value: string) {
   }
 }
 
-beforeEach(() => {
-  getPooledDbMock.mockReset();
+beforeEach(async () => {
+  const { __resetPooledDbForTests } = await import("@/lib/db/pooled");
+  __resetPooledDbForTests();
+  poolConstructorMock.mockReset();
   installFakePool();
 });
 
@@ -402,5 +411,60 @@ describe("cinatra#2882 async seam — a failed ROLLBACK destroys the client", ()
     expect(texts.at(-1)).toBe("ROLLBACK");
     expect(released).toHaveLength(1);
     expect(released[0]).toBeUndefined();
+  });
+});
+
+
+describe("relocated async entry initialization and compatibility", () => {
+  it("does not capture env or open a pool on pooled-only import; compat entry captures once", async () => {
+    const previous = process.env.POSTGRES_ASYNC_TIMEOUT_MS;
+    vi.resetModules();
+    try {
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = "1111";
+      const pooled = await import("@/lib/db/pooled");
+      expect(poolConstructorMock).not.toHaveBeenCalled();
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = "2222";
+      const oldEntry = await import("@/lib/postgres-async");
+      expect(poolConstructorMock).not.toHaveBeenCalled();
+      expect(oldEntry.runPostgresQueriesAsync).toBe(pooled.runPostgresQueriesAsync);
+      expect(oldEntry.getPostgresAsyncPool).toBe(pooled.getPostgresAsyncPool);
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = "3333";
+      oldEntry.getPostgresAsyncPool("postgres://compat-init/db");
+      expect(lastPoolConfig().query_timeout).toBe(2222);
+      expect(lastPoolConfig().connectionTimeoutMillis).toBe(2222);
+      expect(poolConstructorMock).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = previous;
+      vi.resetModules();
+    }
+  });
+  it("direct async first use captures once before later compatibility import", async () => {
+    const previous = process.env.POSTGRES_ASYNC_TIMEOUT_MS;
+    vi.resetModules();
+    try {
+      const pooled = await import("@/lib/db/pooled");
+      expect(poolConstructorMock).not.toHaveBeenCalled();
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = "4444";
+      const first = pooled.initializePostgresAsyncRunner();
+      expect(poolConstructorMock).not.toHaveBeenCalled();
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = "5555";
+      const oldEntry = await import("@/lib/postgres-async");
+      expect(pooled.initializePostgresAsyncRunner()).toBe(first);
+      oldEntry.getPostgresAsyncPool("postgres://direct-init/db");
+      expect(lastPoolConfig().query_timeout).toBe(4444);
+      expect(lastPoolConfig().connectionTimeoutMillis).toBe(4444);
+    } finally {
+      process.env.POSTGRES_ASYNC_TIMEOUT_MS = previous;
+      vi.resetModules();
+    }
+  });
+  it("preserves parameter values, row/result shape and exactly-once release", async () => {
+    const released: unknown[] = [];
+    const query = vi.fn(async () => ({ rows: [{ value: "synthetic" }], rowCount: 1 }));
+    fakeClient = { query, release: error => { released.push(error); } } as typeof fakeClient;
+    const { runPostgresQueriesAsync } = await seam();
+    expect(await runPostgresQueriesAsync({ connectionString: "postgres://parameters/db", queries: [{ text: "SELECT value WHERE key = $1", values: ["synthetic-key"] }], transaction: false })).toEqual([{ rows: [{ value: "synthetic" }], rowCount: 1 }]);
+    expect(query).toHaveBeenCalledExactlyOnceWith("SELECT value WHERE key = $1", ["synthetic-key"]);
+    expect(released).toEqual([undefined]);
   });
 });

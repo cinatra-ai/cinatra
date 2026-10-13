@@ -267,10 +267,11 @@ describe("the gate's card stands alone in the run detail", () => {
   // That slot is drawn in the SAME run detail as the gate card, so section I's
   // "two cards are never stacked in one detail" governs it exactly as it
   // governs the progress plate above: whoever draws the frame owns the chrome.
-  // The slot never learned the rule, so inside the frame it wrapped the gate's
-  // own card in a second one.
+  // App262 clarifies the review slot owns the one .runcard frame under the
+  // rail; its gate/placeholder content draws no second frame. The unrelated
+  // progress-shell contracts above keep their original ownership rule.
   // ---------------------------------------------------------------------------
-  it("stacks no card around the park's own box inside the frame either", async () => {
+  it("gives the park one strong slot frame under the rail", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     const framed = render(
       <AgenticRunPanel {...agenticProps({ railDrawsTheFrame: true })} />,
@@ -278,7 +279,12 @@ describe("the gate's card stands alone in the run detail", () => {
     const slot = framed.container.querySelector<HTMLElement>("[data-run-review-slot]");
     expect(slot).not.toBeNull();
     expect(slot!.className).not.toContain("soft-panel");
-    expect(slot!.className).not.toContain("rounded-card");
+    expect(slot!.className).toContain("rounded-[12px]");
+    expect(slot!.className).toContain("border-line");
+    expect(slot!.className).toContain("bg-surface-strong");
+    const child = slot!.querySelector<HTMLElement>('[data-conformance-id="review-gate-placeholder"]');
+    expect(child).not.toBeNull();
+    expect(child!.classList.contains("border")).toBe(false);
   });
 
   // AND THE GROUND cinatra#3044 MEASURED IS UNTOUCHED off the frame. The eleventh

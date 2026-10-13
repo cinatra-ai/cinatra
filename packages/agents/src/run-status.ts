@@ -793,6 +793,21 @@ export const RUN_START_SCHEDULE_WAIT_CLAUSE =
   "this conversation is where that schedule is decided.";
 
 /**
+ * The line the ratified drawing puts over a schedule that has not fired
+ * (cinatra#2853 fix leg 2).
+ *
+ * Section VI gives a turn that carries a schedule card exactly one prose line,
+ * and it is the section's own: "the first shown, configured and expired
+ * readings drawn below all carry" this sentence word for word, in place of the
+ * assistant's own lead-in. A schedule that has fired, or that was stopped,
+ * carries its own sentence instead — see the fired and stopped sentences of
+ * this file.
+ */
+export const RUN_START_SCHEDULE_PROPOSAL_SENTENCE =
+  "Schedule proposal is ready. Confirm it on the card below and I will arm it; " +
+  "change the rows first if it is not right.";
+
+/**
  * Is this reading of a run one of a run WAITING FOR ITS SCHEDULE?
  *
  * ONE definition, so the sentence the start mints and the correction the
@@ -1104,15 +1119,29 @@ export const RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE =
 
 /**
  * THE LINE THE RATIFIED DRAWING PUTS OVER A SCHEDULE THAT WAS STOPPED
- * (cinatra#3174 fix leg 8, criterion 4).
+ * (cinatra#3174 fix leg 8, criterion 4; the words corrected in cinatra#3304).
  *
- * Section VI gives Cancel schedule its own reading and its own words. The
- * control "appears only where the schedule is recurring, and it stops the
- * recurring schedule and then leaves the rows no longer editable", and the
- * section writes the reading it leaves behind as:
+ * SECTION VI GIVES THE STOPPED READING ITS OWN PAST-TENSE LINE. Cancel schedule
+ * "appears only where the schedule is recurring, and it stops the recurring
+ * schedule and then leaves the rows no longer editable", and the section's note
+ * for the reading it leaves behind reads:
  *
- *   "Pressing it stops the recurring schedule, and the rows are not editable
- *    after that."
+ *   "Once it is stopped, the turn says so in the past tense. Above a stopped
+ *    recurring card the one line the rule above fixes for every reading is The
+ *    recurring schedule was stopped; its rows are no longer editable. — it
+ *    reports the press that was already taken, and it is never the description
+ *    of the control itself, which speaks of a press still to come."
+ *
+ * So this sentence is a REPORT. By the time the turn carrying it is drawn the
+ * press has been made, and the line says what happened to the schedule.
+ *
+ * THE CONTROL'S DESCRIPTION IS NOT THIS READING'S SENTENCE. The words about
+ * pressing Cancel schedule belong to section VI's FIRED-RECURRING note, where
+ * the control still stands on the floor and the press is still to come. Fix leg
+ * 8 took that description as this reading's sentence, and the seventh graded
+ * round of cinatra#3193 measured what it reads like after the stop: a settled
+ * turn describing an action the reader had already taken. The description stays
+ * where the drawing puts it, and this reading takes the report above.
  *
  * WHY IT CANNOT SHARE THE FIRED-RECURRING SENTENCE. The fourth graded round
  * pressed Cancel schedule, confirmed it, and measured the card go read-only and
@@ -1129,7 +1158,7 @@ export const RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE =
  * the same reason: what the sentence says is that the rows are not editable.
  */
 export const RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE =
-  "Pressing it stops the recurring schedule, and the rows are not editable after that.";
+  "The recurring schedule was stopped; its rows are no longer editable.";
 
 /** Regex-escape a literal. */
 function escapeLiteral(value: string): string {
