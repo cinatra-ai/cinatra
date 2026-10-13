@@ -917,7 +917,7 @@ export function AppShell({
           data-testid="app-shell-topbar"
           style={{ top: "var(--banner-height, 0px)" }}
           className={cn(
-            "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background/90 backdrop-blur-xl transition-shadow",
+            "sticky z-[140] h-16 w-full border-b border-sidebar-border bg-background transition-shadow",
             scrollOffset > 10 ? "shadow-sm" : "shadow-none",
           )}
         >

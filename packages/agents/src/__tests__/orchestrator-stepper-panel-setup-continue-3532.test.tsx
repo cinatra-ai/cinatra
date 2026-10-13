@@ -50,7 +50,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
-import { registerFieldRendererBindings, ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
@@ -734,49 +734,134 @@ describe("OrchestratorStepperPanel — a setup field whose renderer draws no con
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#3562 — A RENDERER THAT REPORTS ITS VALUE UNSENDABLE HOLDS THE
+// CONTINUE DRAWN FOR ITS GATE, on the setup road and mid-run alike.
+// ---------------------------------------------------------------------------
 
-// The real binding, list renderer, staging and product-owned Continue.
-vi.mock("../list-picker-actions", () => ({ fetchAvailableLists: vi.fn() }));
-const MULTI_PICKER = "@cinatra-test/pack-agent:multiple-picks";
-async function registerMultiplePicker() {
-  const { fetchAvailableLists } = await import("../list-picker-actions");
-  vi.mocked(fetchAvailableLists).mockResolvedValue([
-    { id: "one", name: "First view", memberCount: null, lastUpdated: null, memberType: "contact" },
-    { id: "two", name: "Second list", memberCount: null, lastUpdated: null, memberType: "account" },
-  ]);
-  registerFieldRendererBindings([{
-    id: MULTI_PICKER, kind: "list-picker", priority: 200,
-    params: { selection: "multiple", minSelected: 1, question: "Pick entries", emptyState: "Create an entry first." },
-  }]);
+/**
+ * A pack-shaped list step that takes several picks: two boxes, nothing ticked
+ * when it opens, and it reports through `onValidityChange` whether anything is
+ * ticked. A string-typed input receives the ticks as JSON; any other input
+ * receives the object itself.
+ */
+const TICKING_RENDERER_ID = "@cinatra-test/pack-agent:ticking";
+/** The same, on a gate this panel classifies as mid-run (`:list-picker`). */
+const MID_RUN_TICKING_RENDERER_ID = "@cinatra-test/pack-agent:list-picker";
+
+function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    onValidityChange?.(ticked.length > 0);
+  }, [onValidityChange, ticked]);
+  const toggle = (id: string) => {
+    const next = ticked.includes(id) ? ticked.filter((t) => t !== id) : [...ticked, id];
+    setTicked(next);
+    const picks = { type: "list", listIds: next, listNames: next.map((t) => `View ${t}`) };
+    void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+  };
+  return (
+    <div>
+      {["one", "two"].map((id) => (
+        <Input
+          key={id}
+          type="checkbox"
+          aria-label={`View ${id}`}
+          checked={ticked.includes(id)}
+          onChange={() => toggle(id)}
+        />
+      ))}
+    </div>
+  );
 }
 
-it("keeps its one Continue unavailable with no list ticked and submits every tick under the gate field", async () => {
-  await registerMultiplePicker();
-  const view = await mountGate({ xRenderer: MULTI_PICKER, fieldName: "accountScope" });
-  await view.findByRole("checkbox", { name: "First view" });
-  expect(productContinues()[0]!.disabled).toBe(true);
-  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
-  expect(productContinues()[0]!.disabled).toBe(false);
-  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
-  expect(productContinues()[0]!.disabled).toBe(true);
-  fireEvent.click(productContinues()[0]!);
-  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
-  fireEvent.click(view.getByRole("checkbox", { name: "Second list" }));
-  fireEvent.click(view.getByRole("checkbox", { name: "First view" }));
-  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
-  fireEvent.click(productContinues()[0]!);
-  await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
-    "setup-run-3532", { accountScope: JSON.stringify({ type: "list", listIds: ["two", "one"], listNames: ["Second list", "First view"] }) }, "accountScope", { type: "string" },
-  ));
-});
+describe("OrchestratorStepperPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
+  beforeEach(() => {
+    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
+      fieldRendererRegistry.register({
+        id,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+        renderer: TickingRenderer,
+      });
+    }
+  });
 
-it("a valid pick cannot enable the next gate before that gate has a choice", async () => {
-  await registerMultiplePicker();
-  const view = await mountGate({ xRenderer: MULTI_PICKER, fieldName: "accountScope" });
-  fireEvent.click(await view.findByRole("checkbox", { name: "First view" }));
-  expect(productContinues()[0]!.disabled).toBe(false);
-  view.advanceTo({ xRenderer: MULTI_PICKER, fieldName: "anotherScope" });
-  await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
-  fireEvent.click(productContinues()[0]!);
-  expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  it("holds the setup field's Continue while nothing is ticked and sends every tick once one is", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    fireEvent.click(productContinues()[0]!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(false));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(productContinues()[0]!);
+    await waitFor(() =>
+      expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+        "setup-run-3532",
+        {
+          accountScope: JSON.stringify({
+            type: "list",
+            listIds: ["two", "one"],
+            listNames: ["View two", "View one"],
+          }),
+        },
+        "accountScope",
+        { type: "string" },
+      ),
+    );
+  });
+
+  it("holds a mid-run gate's Continue while nothing is ticked and resumes with every tick", async () => {
+    const view = await mountGate({
+      xRenderer: MID_RUN_TICKING_RENDERER_ID,
+      fieldName: "accountScope",
+      schema: { type: "object" },
+      reviewTaskId: "review-run-3562",
+    });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    expect(productContinues()).toHaveLength(0);
+    const outer = () => view.getByRole("button", { name: /Continue/ }) as HTMLButtonElement;
+    await waitFor(() => expect(outer().disabled).toBe(true));
+    fireEvent.click(outer());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(outer().disabled).toBe(false));
+    fireEvent.click(outer());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("review-run-3562");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({
+      type: "list",
+      listIds: ["two", "one"],
+      listNames: ["View two", "View one"],
+    });
+  });
+
+  it("a report belongs to its own gate: the next gate, whose renderer reports nothing, is not held", async () => {
+    const view = await mountGate({ xRenderer: TICKING_RENDERER_ID, fieldName: "accountScope" });
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinues()[0]!.disabled).toBe(true));
+    view.advanceTo({ xRenderer: CONTROL_LESS_RENDERER_ID, fieldName: "callToAction" });
+    await waitFor(() => expect(ctaBox()).not.toBeNull());
+    await waitFor(() => expect(productContinues()).toHaveLength(1));
+    expect(productContinues()[0]!.disabled).toBe(false);
+  });
 });

@@ -3,9 +3,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 // Heavy host deps the binder pulls in at module load — stubbed so the boot-time
 // auto-run (registerBlogProviders()) completes in a unit context.
-vi.mock("@/lib/blog-image-materializer", () => ({
-  materializeBlogImageArtifact: async () => ({}),
-}));
 vi.mock("@/lib/blog-project-store", () => ({
   createBlogProjectStore: () => ({}),
 }));
@@ -54,7 +51,7 @@ function activateBlogFacade() {
   // registry — re-publish the narrow routing service the facade requires.
   registerCapabilityProvider("@cinatra-ai/host:blog-routing", {
     packageName: "@cinatra-ai/host",
-    impl: { materializeBlogImage: async () => ({}), projectStore: {} },
+    impl: { projectStore: {} },
   });
   registerBlogExtension(fakeActivationCtx());
 }

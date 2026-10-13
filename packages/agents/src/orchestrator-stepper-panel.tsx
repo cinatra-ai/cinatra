@@ -81,6 +81,7 @@ import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
   useRunReviewSlot,
+  useRunReviewRailRefresh,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
@@ -148,6 +149,7 @@ import {
   RUN_PAGE_RAIL_INDICATOR_CLASS,
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
+  RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -441,16 +443,23 @@ function ReviewGateStepCard({
 }) {
   if (cardRef) {
     return (
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard
-          view={{
-            viewType: "artifact_review_gate",
-            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-            ref: cardRef,
-          }}
-          runId={runId}
-        />
-      </LifecycleCardSurfaceProvider>
+      // The step rail is the layout; this is its one review .runcard (§I).
+      // ReviewGateCard draws content inside the slot, with no second frame.
+      <section
+        className="rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+        data-run-review-slot="review"
+      >
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard
+            view={{
+              viewType: "artifact_review_gate",
+              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+              ref: cardRef,
+            }}
+            runId={runId}
+          />
+        </LifecycleCardSurfaceProvider>
+      </section>
     );
   }
   return (
@@ -934,6 +943,10 @@ function HitlApprovalCard({
   };
 
   const handleContinue = async () => {
+    // Reported unsendable (see `gateValidity`): the press sends nothing, before
+    // the run-name check and the optimistic spinner below.
+    const validity = gateValidityRef.current;
+    if (validity !== null && validity.key === setupGateKey && !validity.valid) return;
     if (!(await checkRunName())) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
@@ -1106,13 +1119,27 @@ function HitlApprovalCard({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
-  const [setupValidity, setSetupValidity] = useState<{ key: string; valid: boolean } | null>(null);
-  const setupValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
-  const reportSetupValidity = useCallback((key: string, valid: boolean) => {
-    setupValidityRef.current = { key, valid };
-    setSetupValidity((previous) => previous?.key === key && previous.valid === valid
-      ? previous : { key, valid });
-  }, []);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); the latest report is kept per gate, by the
+  // gate's identity. While the last report for the gate on screen is `false`,
+  // the Continue drawn for it (the setup field's or the mid-run one) is
+  // unavailable and a press sends nothing. A renderer that never reports blocks
+  // nothing, so no undeclared reason ever stops a reader (cinatra#3532). State
+  // for the drawn control, a ref for the press, which reads it in the same turn.
+  const [gateValidity, setGateValidity] = useState<{ key: string; valid: boolean } | null>(null);
+  const gateValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  // A plain function, not a useCallback: the React Compiler memoizes this
+  // card itself, and a manual memo keyed by the gate identity would make it
+  // skip the whole component. The report is idempotent, so a renderer that
+  // reports again after a re-render changes nothing.
+  const reportGateValidity = (valid: boolean) => {
+    gateValidityRef.current = { key: setupGateKey, valid };
+    setGateValidity((previous) => previous?.key === setupGateKey && previous.valid === valid
+      ? previous : { key: setupGateKey, valid });
+  };
+  const gateReportedInvalid =
+    gateValidity !== null && gateValidity.key === setupGateKey && !gateValidity.valid;
   // cinatra#3532 (convergence) — THE GATE WHOSE ANSWER WAS ALREADY ACCEPTED.
   // The submit core returns without throwing for an accepted answer, for the
   // blocked outcome and for an already-resolved gate; in every one of those the
@@ -1180,8 +1207,9 @@ function HitlApprovalCard({
   // value the way the renderer's own button would, then submits what the change
   // road staged — nothing more.
   const submitStagedSetupAnswer = async (key: string): Promise<void> => {
-    if (entry?.requiresValidValue === true
-      && (setupValidityRef.current?.key !== key || !setupValidityRef.current.valid)) return;
+    // Reported unsendable (see `gateValidity`): the press sends nothing.
+    const validity = gateValidityRef.current;
+    if (validity !== null && validity.key === key && !validity.valid) return;
     // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
     // the flush is asynchronous and `isApproving` is React state, so two presses
     // in one tick would both reach the submit core.
@@ -1411,13 +1439,15 @@ function HitlApprovalCard({
             onApply={handleApply}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}
+            // Any gate's renderer may report its value unsendable; the report
+            // holds the Continue drawn for this gate (see `gateValidity`), on
+            // the setup road and mid-run.
+            onValidityChange={reportGateValidity}
             // cinatra#3532 — where the product owns the send, the renderer's own
             // submit is not drawn inside the field (the shared props contract
             // says a renderer that draws its own Continue must skip it), and the
             // product's Continue asks the field for its value through the same
             // flush the renderer's own button would have used.
-            onValidityChange={productOwnsSetupSend
-              ? (valid) => reportSetupValidity(setupGateKey, valid) : undefined}
             hideSubmit={productOwnsSetupSend}
             registerFlush={
               productOwnsSetupSend
@@ -1440,15 +1470,19 @@ function HitlApprovalCard({
           <SetupFieldContinue
             submitting={isApproving}
             alreadySent={setupSentKey === setupGateKey}
-            blocked={entry?.requiresValidValue === true
-              && (setupValidity?.key !== setupGateKey || !setupValidity.valid)}
+            blocked={gateReportedInvalid}
             onContinue={() => submitStagedSetupAnswer(setupGateKey)}
           />
         ) : null}
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            <Button
+              size="sm"
+              disabled={isApproving || gateReportedInvalid}
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -1708,7 +1742,7 @@ function StepperColumn({
         data-conformance-id="run-step-rail"
         data-action="open-run-step -> step-detail"
         aria-label="Agent run steps"
-        className="flex shrink-0 flex-col pt-1"
+        className="flex w-[196px] shrink-0 flex-col pt-1"
       >
         <Stepper
           value={activeStep}
@@ -1756,6 +1790,18 @@ function StepperColumn({
                   >
                     <StepperTrigger
                       className={RUN_PAGE_RAIL_ROW_CLASS}
+                      // THE ROW IS WHERE THE RAIL'S STATE IS MARKED
+                      // (cinatra#3449), in the rail's one vocabulary and
+                      // derived as the rail's other rows derive it
+                      // (`run-step-rail-extra-entry`): a step still ahead is
+                      // not reached, a completed one is settled. This mount's
+                      // spine rows carried no mark at all, so a reading of THIS
+                      // rail answered for its trailing entries only.
+                      data-run-surface-rail-step=""
+                      data-run-surface-rail-reached={isCompleted || isActive ? "true" : "false"}
+                      data-run-surface-rail-settled={isCompleted ? "true" : "false"}
+                      data-run-surface-rail-selected={isActive ? "true" : "false"}
+                      aria-label={`${s.index} ${s.label}`}
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
                       tabIndex={isCompleted || (isActive && onActiveStepClick) ? 0 : -1}
                       onClick={
@@ -1771,7 +1817,7 @@ function StepperColumn({
                       <StepperIndicator className={RUN_PAGE_RAIL_INDICATOR_CLASS}>
                         {showPauseIcon ? <Pause className="h-3 w-3" /> : s.index}
                       </StepperIndicator>
-                      <StepperTitle className="data-[state=inactive]:text-muted-foreground data-[state=completed]:text-muted-foreground">
+                      <StepperTitle className={RUN_PAGE_RAIL_TITLE_COLOUR_CLASS}>
                         {s.label}
                       </StepperTitle>
                     </StepperTrigger>
@@ -2717,6 +2763,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     mayStillOpen: reviewMayStillOpen,
     stillReading: reviewStillReading,
   } = useRunReviewSlot({
+    runId,
     status,
     initial: initialReviewGate,
     read: slotReader,
@@ -2766,6 +2813,29 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   const parkedOnProducedReview =
     status === "pending_approval" &&
     (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+  // Follow the card branch: the produced-output park wins over its spent
+  // interrupt, and only a discovered card carries a stable rail identity.
+  const reviewTaskId = parkedOnProducedReview
+    ? reviewSlot.ref !== null
+      ? reviewSlot.reviewTaskId
+      : null
+    : status === "pending_approval" &&
+    !awaitingNextStep &&
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
+        ? effectiveInterruptContext.values.reviewTaskId
+        : null
+      : status === "completed"
+        ? reviewSlot.reviewTaskId
+        : null;
+  useRunReviewRailRefresh({
+    runId,
+    reviewTaskId,
+    initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
+    refresh: embedMode ? undefined : router.refresh,
+  });
+
 
   // -------------------------------------------------------------------------
   // A READER TAB THAT LOST THE RACE DRAWS THE CARD, NEVER AN EMPTY PANEL
@@ -2850,7 +2920,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard = reviewSlot.ref ? (
       <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
     ) : (
-      <Card data-run-review-slot="working">
+      <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
         <CardContent className="p-6">
           {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
               reading took this exact box on both themes and found "a large
@@ -2939,6 +3009,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           setAnsweredSetupReading({ key: gateKey, ...answer });
         }}
         onApprovalSubmitted={(values, schema, xRenderer) => {
+          if (!embedMode) router.refresh();
           const entry = stepperSteps.find((s) => (s as { xRenderer?: string }).xRenderer === xRenderer);
           if (entry) {
             setLiveSubmissionMap((prev) => new Map([...prev, [entry.index, {
@@ -3045,7 +3116,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         reviewSlot.ref ? (
           <ReviewGateStepCard cardRef={reviewSlot.ref} reviewSurfaceUrl={null} runId={runId} />
         ) : reviewMayStillOpen ? (
-          <Card data-run-review-slot="working">
+          <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
             <CardContent className="p-6">
               <ReviewGatePlaceholder />
             </CardContent>
@@ -3071,7 +3142,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // for the same reason every other wordless box on this page does.
   if (stageCard === null && status === "pending_approval" && reviewStillReading) {
     stageCard = (
-      <Card data-run-review-slot="working">
+      <Card className="rounded-[12px] border border-line bg-surface-strong ring-0" data-run-review-slot="working">
         <CardContent className="p-6">
           {/* NAMED, and it stops when the wait does (fix leg 7). The sixth
               reading took this exact box on both themes and found "a large

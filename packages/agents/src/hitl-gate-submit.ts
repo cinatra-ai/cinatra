@@ -320,6 +320,32 @@ export function liftRendererApprovalNote(
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
   if (xRenderer.endsWith(":list-picker")) {
+    // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
+    // buffers `listIds` (and `listNames`, in the same order). The snapshot then
+    // carries every ticked id in the order ticked, each once, with its name;
+    // the server re-resolves each id via crm_list_get, so a name is advisory.
+    const ticked = (buffered as { listIds?: unknown }).listIds;
+    if (Array.isArray(ticked)) {
+      const names = (buffered as { listNames?: unknown }).listNames;
+      const listIds: string[] = [];
+      const listNames: string[] = [];
+      ticked.forEach((id, index) => {
+        if (typeof id !== "string" || id.length === 0 || listIds.includes(id)) return;
+        listIds.push(id);
+        const name = Array.isArray(names) ? names[index] : undefined;
+        listNames.push(typeof name === "string" ? name : "");
+      });
+      if (listIds.length > 0) {
+        return {
+          approvalNote: JSON.stringify({
+            type: "list" as const,
+            listIds,
+            listNames,
+            snapshotAt: now,
+          }),
+        };
+      }
+    }
     // Snapshot the selected list at approval time so downstream stages can
     // reference it; the server re-resolves via crm_list_get.
     const { listId, listName, memberCount } = buffered as {

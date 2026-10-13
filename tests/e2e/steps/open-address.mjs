@@ -34,6 +34,7 @@ import {
   queryOf,
   readBounds,
   refuse,
+  refuseFrameScope,
   requireMs,
   requireRecord,
   within,
@@ -117,6 +118,7 @@ function describeQuery({ query, others }) {
  * @returns {Promise<{ path: string, status: number | null, from: string, elapsedMs: number, query?: Record<string, string | null>, others?: number }>}
  */
 export async function openAddress(page, { path, params, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "no address was typed");
   requireRecord(STEP, record);
   const nothing = "no address was typed";
   const from = pathOf(page.url());
@@ -210,6 +212,7 @@ const ADDRESS_OPTIONS = Object.freeze(["params", "record", "settleMs", "pollMs",
 export async function readAddress(page, options = /** @type {any} */ ({})) {
   const given = options && typeof options === "object" ? options : {};
   const { params, record, settleMs = ADDRESS_SETTLE_MS, pollMs = ADDRESS_POLL_MS, bound = ADDRESS_BOUND_MS } = /** @type {any} */ (given);
+  refuseFrameScope(READ_STEP, record, page, "nothing was read");
   requireRecord(READ_STEP, record);
   const nothing = "nothing was read";
   for (const name of Object.keys(given)) {

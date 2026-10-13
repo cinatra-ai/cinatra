@@ -265,10 +265,10 @@ export type ReviewDisposition = "approve" | "reject" | "comment";
  * type — never accepted from the client. `digest` is set only for a runtime
  * (main-realm dynamic) load — the exact package + content digest. */
 export interface ReviewRendererProvenance {
-  /** `first-party` is the FORM RUNG (plan (B) §5): the host's own renderer for a
-   * declared text form. It is recorded as its own kind and never as `floor`,
-   * because a rendered draft is not a review that fell through — and the floor
-   * gate counts `floor` rows. */
+  /** `first-party` is a RETIRED reading: it recorded the host's own renderer for
+   * a declared text form, and the host draws no artifact content any more. The
+   * value stays in the vocabulary because audit rows written before the
+   * retirement carry it; nothing writes it now. */
   kind: "build-map" | "runtime" | "first-party" | "floor";
   packageName: string | null;
   digest: string | null;
@@ -287,8 +287,6 @@ export function rendererProvenanceFromMount(mount: ReviewTargetMount): ReviewRen
         packageName: mount.packageName,
         digest: mount.descriptor.tuple.digest,
       };
-    case "form":
-      return { kind: "first-party", packageName: null, digest: null };
     case "floor":
       return { kind: "floor", packageName: mount.packageName, digest: null };
   }
@@ -561,6 +559,10 @@ export async function submitReviewDecisionCore(
   if (!SUPPORTED_DECISION_API_VERSIONS.has(decision.decisionApiVersion)) {
     return invalid(`Unsupported decisionApiVersion ${decision.decisionApiVersion}.`);
   }
+  // §VI: legacy Reject rows stay readable, but no new operation may produce one.
+  if (decision.disposition === "reject") {
+    return invalid("There is no Reject decision. Leave the review open, Comment, or Continue.");
+  }
   if (!VALID_DISPOSITIONS.has(decision.disposition)) {
     return invalid(`Unknown disposition "${decision.disposition}".`);
   }
@@ -594,13 +596,6 @@ export async function submitReviewDecisionCore(
     // pathway #2047 row 8 bans: a stream of comments each "accepting" items on a
     // gate that never resolves.
     return invalid("Suggestion decisions require a terminal disposition (approve or reject).");
-  }
-  if (partition && decision.disposition === "reject" && partition.accepted.length > 0) {
-    // A reject TOMBSTONES every reviewed revision. Applying a patch to a revision
-    // the same decision is tombstoning is incoherent, and the intent drain would
-    // be writing into rejected work. Dismissals on a reject are fine — they
-    // record what the reviewer looked at and declined.
-    return invalid("A reject decision cannot accept suggestions.");
   }
   const fingerprint = reviewDecisionFingerprint({
     runId: decision.runId,
@@ -705,17 +700,10 @@ export async function submitReviewDecisionCore(
     return { ok: false, error: { kind: "revision-not-member", targets: notMember } };
   }
 
-  // 6. Build the atomic commit plan. A reject records a TOMBSTONE per reviewed
-  // artifact (never a hard delete — the op union admits none). The terminal
-  // resume intent is part of the plan so the commit persists it transactionally.
-  const dispositionOps: ReviewDispositionOp[] =
-    decision.disposition === "reject"
-      ? reviewedTargets.map((t) => ({
-          artifactId: t.artifactId,
-          representationRevisionId: t.representationRevisionId,
-          kind: "tombstone" as const,
-        }))
-      : [];
+  // 6. Build the atomic commit plan. New Reject requests have already refused,
+  // so accepted decisions do not create tombstones. The disposition op type
+  // remains available for legacy readback. Persist terminal resume atomically.
+  const dispositionOps: ReviewDispositionOp[] = [];
   const resumeIntent = terminal ? buildResumeIntent(decision, reviewedTargets) : null;
   const plan: ReviewDecisionCommitPlan = {
     runId: decision.runId,

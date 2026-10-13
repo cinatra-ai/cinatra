@@ -108,6 +108,6 @@ describe("host-side reader helpers exist and have the documented `liveOnly: true
   it("readBlogImageArtifactBytes is exported; WP image upload still flows through it", async () => {
     const module = await import("@/lib/blog-image-materializer");
     expect(typeof module.readBlogImageArtifactBytes).toBe("function");
-    expect(typeof module.materializeBlogImageArtifact).toBe("function");
+    expect("materializeBlogImageArtifact" in module).toBe(false);
   });
 });

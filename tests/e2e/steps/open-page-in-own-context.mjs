@@ -30,7 +30,7 @@
 import { visibleLinksTo } from "./navigate-to.mjs";
 import { originOf, standingRequests, takeStandingReading } from "./read-standing-requests.mjs";
 import { SIGN_IN_PAGE_PATH } from "./sign-in-through-page.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 
 const STEP = "openPageInOwnContext";
 
@@ -78,6 +78,7 @@ async function closeContext(context) {
  * }>}
  */
 export async function openPageInOwnContext(page, { path, record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was opened");
   requireRecord(STEP, record);
   const nothing = "nothing was opened";
   if (!isPagePath(path) || /[?#]/.test(path)) {

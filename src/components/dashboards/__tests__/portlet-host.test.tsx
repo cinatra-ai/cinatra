@@ -66,7 +66,6 @@ vi.mock("../portlets/object-detail-portlet", () => ({ ObjectDetailPortlet: () =>
 vi.mock("../portlets/artifact-list-portlet", () => ({ ArtifactListPortlet: () => React.createElement("div", { "data-testid": "artifact-list" }) }));
 vi.mock("../portlets/object-version-history-portlet", () => ({ ObjectVersionHistoryPortlet: () => React.createElement("div", { "data-testid": "object-version-history" }) }));
 vi.mock("../portlets/artifact-edit-text-portlet", () => ({ ArtifactEditTextPortlet: () => React.createElement("div", { "data-testid": "artifact-edit-text" }) }));
-vi.mock("../portlets/artifact-edit-binary-prompt-portlet", () => ({ ArtifactEditBinaryPromptPortlet: () => React.createElement("div", { "data-testid": "artifact-edit-binary-prompt" }) }));
 vi.mock("../portlets/agent-launcher-portlet", () => ({ AgentLauncherPortlet: () => React.createElement("div", { "data-testid": "agent-launcher" }) }));
 
 import { PortletHost, type PortletInstanceProp } from "../portlet-host";
@@ -156,6 +155,14 @@ describe("PortletHost — analytics bare-chrome policy (cinatra#325 §2b)", () =
     expect(c.querySelector(".border-line")).not.toBeNull();
     expect(c.textContent).toContain("object-list@1.0.0");
     expect(c.querySelector("[data-testid='analytics-view']")).toBeNull();
+  });
+
+  it("draws the generic unavailable line for the retired artifact-edit-binary-prompt kind", async () => {
+    const c = await mount([
+      { instanceId: "hero-image", kind: "artifact-edit-binary-prompt", version: "1.0.0", slot: "fixed", config: {} },
+    ]);
+    expect(c.textContent).toContain("is not yet available");
+    expect(c.querySelector("[data-testid='artifact-edit-binary-prompt']")).toBeNull();
   });
 
   it("degrades gracefully when an analytics portlet is missing its embedded dashboard", async () => {

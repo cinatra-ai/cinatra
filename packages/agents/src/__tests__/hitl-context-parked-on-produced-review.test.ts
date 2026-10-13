@@ -210,6 +210,7 @@ describe("a run parked on the review of what it produced derives no question (ci
         reviewTaskId: "review-task-3007-fx20",
         disposition: null,
         resolved: false,
+        current: true,
       },
     };
     const { container } = render(

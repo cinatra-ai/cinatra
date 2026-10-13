@@ -26,12 +26,11 @@
  *                  pending (the coalescing path honours "an OPEN repair leaves the
  *                  event PENDING" too), and after the repair lands the successor
  *                  settles while the sibling gets its own gate.
- *   STILL BATCHES— three productions on a landed repair run: the two SIBLINGS
- *                  coalesce into one batch partition gate (batching is not disabled
- *                  on a repair run) while the successor is excluded from the sealed
- *                  membership.
- *   NON-REPAIR   — the ordinary multi-artifact production still coalesces into a
- *                  single batch partition gate (no regression).
+ *   SINGLE REVIEWS— three productions on a landed repair run: the two SIBLINGS
+ *                  each own a singleton gate, while the successor stays excluded
+ *                  from the durable production membership.
+ *   NON-REPAIR   — an ordinary multi-artifact production seals its membership
+ *                  durably and opens separate reviews with independent effects.
  *   PRE-FIX EPOCH— an OPEN batch epoch only a pre-fix seal can have produced —
  *                  `sealBatchEpoch` REUSES a frozen membership regardless of the
  *                  candidate set, so excluding the successor from new candidates does
@@ -486,7 +485,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 OBS-2 — a repair successor is single-ga
     expect(siblingGates[0].review_task_id).toBe(autoReviewTaskId(sibling.eventId));
   });
 
-  it("STILL BATCHES: two siblings on a landed repair run coalesce with each other, never with the successor", async () => {
+  it("SINGLE REVIEWS: siblings on a landed repair run each own a gate, never the successor", async () => {
     const ctx = await driveToDispatchedRepair();
     const successorRev = `rev-repaired-${randomUUID()}`;
     await produce({
@@ -499,16 +498,19 @@ describe.skipIf(!HAS_DB)("cinatra#2047 OBS-2 — a repair successor is single-ga
     const successorGateId = await landRepair(ctx, successorRev);
     await runAppSweeps();
 
-    // Batching is NOT disabled on a repair run: the two siblings are a genuine
-    // multi-artifact production and coalesce into ONE batch partition gate.
+    // Production membership remains durable, but a review decision concerns one
+    // artifact revision. Each sibling owns its own singleton gate.
     const gatesA = await gatesPinning(siblingA.artifactId, siblingA.representationRevisionId);
     const gatesB = await gatesPinning(siblingB.artifactId, siblingB.representationRevisionId);
     expect(gatesA.length).toBe(1);
     expect(gatesB.length).toBe(1);
-    expect(gatesA[0].id).toBe(gatesB[0].id);
-    expect(isBatchAutoReviewTaskId(gatesA[0].review_task_id)).toBe(true);
+    expect(gatesA[0].id).not.toBe(gatesB[0].id);
+    expect(gatesA[0].review_task_id).toBe(autoReviewTaskId(siblingA.eventId));
+    expect(gatesB[0].review_task_id).toBe(autoReviewTaskId(siblingB.eventId));
+    expect((await gateStore.readReviewGate(ctx.repairRunId, gatesA[0].review_task_id))?.pinnedTargets).toEqual([{ artifactId: siblingA.artifactId, representationRevisionId: siblingA.representationRevisionId }]);
+    expect((await gateStore.readReviewGate(ctx.repairRunId, gatesB[0].review_task_id))?.pinnedTargets).toEqual([{ artifactId: siblingB.artifactId, representationRevisionId: siblingB.representationRevisionId }]);
 
-    // …and the successor is NOT in the sealed membership, nor in the batch gate.
+    // The successor is excluded from the membership and both sibling reviews.
     const memberships = await batchEpochMemberships(ctx.repairRunId);
     expect(memberships.length).toBe(1);
     expect(memberships[0].map((t) => t.representationRevisionId).sort()).toEqual(
@@ -625,7 +627,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 OBS-2 — a repair successor is single-ga
     );
   });
 
-  it("NON-REPAIR: an ordinary multi-artifact production still coalesces (no regression)", async () => {
+  it("NON-REPAIR: a production opens singleton reviews whose decisions release only their own effects", async () => {
     const templateId = await seedTemplate(`@cinatra-ai/plain-${randomUUID()}-agent`, null);
     const runId = await seedRun(templateId);
     const first = await produce({ producerRunId: runId });
@@ -635,8 +637,15 @@ describe.skipIf(!HAS_DB)("cinatra#2047 OBS-2 — a repair successor is single-ga
     const gatesFirst = await gatesPinning(first.artifactId, first.representationRevisionId);
     const gatesSecond = await gatesPinning(second.artifactId, second.representationRevisionId);
     expect(gatesFirst.length).toBe(1);
-    expect(gatesFirst[0].id).toBe(gatesSecond[0]?.id);
-    expect(isBatchAutoReviewTaskId(gatesFirst[0].review_task_id)).toBe(true);
+    expect(gatesSecond.length).toBe(1);
+    expect(gatesFirst[0].id).not.toBe(gatesSecond[0].id);
+    expect(gatesFirst[0].review_task_id).toBe(autoReviewTaskId(first.eventId));
+    expect(gatesSecond[0].review_task_id).toBe(autoReviewTaskId(second.eventId));
+    expect((await gateStore.readReviewGate(runId, gatesFirst[0].review_task_id))?.pinnedTargets).toEqual([{ artifactId: first.artifactId, representationRevisionId: first.representationRevisionId }]);
+    expect((await gateStore.readReviewGate(runId, gatesSecond[0].review_task_id))?.pinnedTargets).toEqual([{ artifactId: second.artifactId, representationRevisionId: second.representationRevisionId }]);
+    await resolveGateApprove(gatesFirst[0].id);
+    expect(await orch.resolveArtifactEffectDisposition(first)).toEqual({ disposition: "approved", gate: { gateId: gatesFirst[0].id, runId } });
+    expect(await orch.resolveArtifactEffectDisposition(second)).toEqual({ disposition: "held", gate: { gateId: gatesSecond[0].id, runId } });
     const memberships = await batchEpochMemberships(runId);
     expect(memberships.length).toBe(1);
     expect(memberships[0].length).toBe(2);

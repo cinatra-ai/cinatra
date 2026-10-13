@@ -50,7 +50,7 @@ import {
   unspacedNote,
   waitForPageHydration,
 } from "./page-controls.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, pathOf, pause, readBounds, refuse, refuseStaleScope, requireRecord, within } from "./step-kit.mjs";
 import { RUN_COMPLETION_SELECTOR, RUN_STATUS_SELECTOR, RUN_SURFACE_SELECTOR } from "./watch-run.mjs";
 
 const STEP = "dispatchRun";
@@ -178,6 +178,7 @@ export async function dispatchRun(
   const composerName = plainName(composer);
   if (typeof composer !== "string" || composerName === "") throw input("name the composer, such as Send message");
   const bound = readBounds(STEP, record, DISPATCH_RUN_BOUNDS, bounds, nothing);
+  refuseStaleScope(STEP, record, page, nothing);
   const cardName = quotedName(wanted);
   const named = quotedName(controlName);
   const composerNamed = quotedName(composerName);

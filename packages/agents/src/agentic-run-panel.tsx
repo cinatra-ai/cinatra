@@ -50,6 +50,7 @@ import {
   useComposerTarget,
   useLifecycleCardHost,
   useRunReviewSlot,
+  useRunReviewRailRefresh,
   type RunReviewSlot,
   type RunReviewSlotReader,
 } from "./lifecycle-card-runtime";
@@ -278,6 +279,8 @@ export type AgenticRunPanelProps = {
    * a resolved one is never pinned.
    */
   initialReviewGate?: RunReviewSlot | null;
+  /** Recompose the run-page rail when the existing reading finds a new gate. */
+  refreshReviewRail?: () => void;
   /**
    * HOW THIS SURFACE READS THE SLOT, when the run finishes while the card is on
    * screen. A first-party, same-origin surface (the run page) passes none and
@@ -500,6 +503,7 @@ export function AgenticRunPanel({
   initialHitlContext,
   recommendationDecided,
   initialReviewGate,
+  refreshReviewRail,
   readReviewSlot,
   onReviewReadingChange,
   inputStepInRail = false,
@@ -934,6 +938,7 @@ export function AgenticRunPanel({
     mayStillOpen: reviewMayStillOpen,
     stillReading: reviewStillReading,
   } = useRunReviewSlot({
+    runId,
     status,
     initial: initialReviewGate,
     read: readReviewSlot ?? fallbackSlotReader,
@@ -1222,19 +1227,43 @@ export function AgenticRunPanel({
   >(null);
   const setupFlushRef = useRef<{ key: string; fn: () => Promise<void> } | null>(null);
   const setupPressRef = useRef(false);
-  const [setupValidity, setSetupValidity] = useState<{ key: string; valid: boolean } | null>(null);
-  const setupValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
-  const reportSetupValidity = useCallback((key: string, valid: boolean) => {
-    setupValidityRef.current = { key, valid };
-    setSetupValidity((previous) => previous?.key === key && previous.valid === valid
-      ? previous : { key, valid });
-  }, []);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); the latest report is kept per gate, keyed
+  // by the same three parts the setup field's staged answer is keyed by. While
+  // the last report for the gate on screen is `false`, the Continue drawn for
+  // it (the setup field's or the mid-run one) is unavailable and a press sends
+  // nothing. A renderer that never reports blocks nothing, so no undeclared
+  // reason ever stops a reader (cinatra#3532). State for the drawn control, a
+  // ref for the press, which reads it in the same turn.
+  const [gateValidity, setGateValidity] = useState<{ key: string; valid: boolean } | null>(null);
+  const gateValidityRef = useRef<{ key: string; valid: boolean } | null>(null);
+  const activeGateKey = effectiveHitlContext
+    ? [
+        effectiveHitlContext.reviewTaskId,
+        effectiveHitlContext.xRenderer,
+        effectiveHitlContext.fieldName ?? "",
+      ].join("::")
+    : null;
+  const reportGateValidity = useCallback((valid: boolean) => {
+    if (activeGateKey === null) return;
+    gateValidityRef.current = { key: activeGateKey, valid };
+    setGateValidity((previous) => previous?.key === activeGateKey && previous.valid === valid
+      ? previous : { key: activeGateKey, valid });
+  }, [activeGateKey]);
+  const activeGateReportedInvalid =
+    activeGateKey !== null &&
+    gateValidity !== null &&
+    gateValidity.key === activeGateKey &&
+    !gateValidity.valid;
   const registerSetupFlush = useCallback((key: string, fn: () => Promise<void>) => {
     setupFlushRef.current = { key, fn };
   }, []);
   const submitStagedSetupAnswer = useCallback(
-    async (key: string, reviewTaskId: string, xRenderer: string, requiresValidValue: boolean) => {
-      if (requiresValidValue && (setupValidityRef.current?.key !== key || !setupValidityRef.current.valid)) return;
+    async (key: string, reviewTaskId: string, xRenderer: string) => {
+      // Reported unsendable (see `gateValidity`): the press sends nothing.
+      const validity = gateValidityRef.current;
+      if (validity !== null && validity.key === key && !validity.valid) return;
       // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
       // the flush is asynchronous and `isApproving` is React state, so two
       // presses in one tick would both reach the submit core.
@@ -1935,7 +1964,9 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        // Unavailable while the gate's renderer reports its value unsendable
+        // (see `gateValidity`); a renderer that never reports changes nothing.
+        disabled={isApproving || activeGateReportedInvalid}
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the
@@ -1944,6 +1975,10 @@ export function AgenticRunPanel({
         // anchor there would be reading a control the screen does not offer.
         {...(opts?.withReject ? {} : { "data-action": "submit-hitl-screen" })}
         onClick={async () => {
+          // Reported unsendable: the press sends nothing (the drawn state can
+          // lag the report by one frame; the ref cannot).
+          const validity = gateValidityRef.current;
+          if (validity !== null && validity.key === activeGateKey && !validity.valid) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -2439,6 +2474,20 @@ export function AgenticRunPanel({
   // change does not open; so the value is read for what it is, and a host that
   // needs the stronger question asks it of the card.
   const panelDrawsReview = Boolean(reviewRefInTheBox);
+  const reviewTaskId = !panelDrawsReview
+    ? null
+    : markedReviewGate
+      ? typeof effectiveHitlContext?.currentValues?.reviewTaskId === "string"
+        ? effectiveHitlContext.currentValues.reviewTaskId
+        : null
+      : reviewSlot.reviewTaskId;
+  useRunReviewRailRefresh({
+    runId,
+    reviewTaskId,
+    initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
+    refresh: widgetHostedPanel ? undefined : refreshReviewRail,
+  });
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);
   onReviewReadingChangeRef.current = onReviewReadingChange;
   useEffect(() => {
@@ -2599,31 +2648,16 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
-          // eleventh set). The drawn card frame is
-          // `border:1px solid var(--line); border-radius:12px;
-          //  background:var(--surface-strong)`. `.soft-panel` grounds on
-          // `var(--surface)` — one token light of it — and the review card's
-          // `run_card` frame draws no background of its own, so this section is
-          // the ground a reader actually sees. Only the WORKING reading is
-          // redrawn here: the review reading is the graded cell it already was
-          // and keeps the class string it was measured on.
-          //
-          // AND THE FRAME'S OWNER OWNS THIS BOX'S CHROME TOO (fix leg 14).
-          // Section I of the review drawing rules the run detail as a whole:
-          // "two cards are never stacked in one detail". This box is drawn in
-          // that same detail, so when the rail already draws the frame beside
-          // it the box gives up its card chrome for exactly the reason the
-          // progress plate below does — the chrome belongs to whoever draws the
-          // frame, and a card of our own around the gate's card is the second
-          // card section I forbids. Off the frame BOTH readings keep the class
-          // string each was measured on, untouched.
+          // The rail owns the two-column layout; this slot owns the one
+          // .runcard frame and strong ground in both working and review readings
+          // (cinatra#3242, App262, approved drawing §I). The gate and placeholder
+          // inside it draw content only, so the swap cannot lose the ground or
+          // stack a second card inside it. Progress/input frame ownership below
+          // retains its existing railDrawsTheFrame contract.
           className={
             railDrawsTheFrame
-              ? "flex flex-col gap-4"
-              : reviewCardDrawn
-                ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
-                : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+              ? "rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           }
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
@@ -2636,11 +2670,9 @@ export function AgenticRunPanel({
           {reviewCardDrawn ? null : (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
-              // THE CARD FRAME IS THE PLACEHOLDER'S OWN where the rail draws the
-              // frame and this box gives its chrome up (fix leg 20): "the card
-              // frame, and a spinning icon". Off the frame the box above draws
-              // it, and a second one would be a card inside a card.
-              framed={railDrawsTheFrame}
+              // The slot owns the frame on every run host, including the rail.
+              // Its placeholder must not draw another border or ground.
+              framed={false}
               // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
               // WAITS IN (fix leg 7). Measured on the sixth graded reading: the pair
               // shot for this card was taken with the run already completed and
@@ -3010,14 +3042,16 @@ export function AgenticRunPanel({
                       mode="edit"
                       onApply={handleApply}
                       aiSuggestions={aiSuggestions}
+                      // Any gate's renderer may report its value unsendable;
+                      // the report holds the Continue drawn for this gate
+                      // (see `gateValidity`), on the setup road and mid-run.
+                      onValidityChange={reportGateValidity}
                       // cinatra#3532 — where the product owns the send, the
                       // renderer's own submit is not drawn inside the field
                       // (the shared props contract says a renderer that draws
                       // its own Continue must skip it), and the card's Continue
                       // asks the field for its value through the same flush the
                       // renderer's own button would have used.
-                      onValidityChange={productOwnsSetupSend
-                        ? (valid) => reportSetupValidity(setupGateKey, valid) : undefined}
                       hideSubmit={productOwnsSetupSend}
                       registerFlush={
                         productOwnsSetupSend
@@ -3035,14 +3069,12 @@ export function AgenticRunPanel({
                     {productOwnsSetupSend ? (
                       <AgentHitlScreenSetupContinue
                         submitting={isApproving}
-                        blocked={hitlRendererEntry.entry.requiresValidValue === true
-                          && (setupValidity?.key !== setupGateKey || !setupValidity.valid)}
+                        blocked={activeGateReportedInvalid}
                         onContinue={() =>
                           submitStagedSetupAnswer(
                             setupGateKey,
                             effectiveHitlContext.reviewTaskId,
                             effectiveHitlContext.xRenderer,
-                            hitlRendererEntry.entry?.requiresValidValue === true,
                           )
                         }
                       />
@@ -3264,7 +3296,6 @@ export function AgenticRunPanel({
               example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
-              size="sm"
               variant="outline"
               disabled={isRetrying}
               onClick={handleRetryFailedRun}

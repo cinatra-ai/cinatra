@@ -80,8 +80,8 @@ const registryEntries = Object.entries(BACKGROUND_JOB_REGISTRY) as [
 // ---------------------------------------------------------------------------
 
 describe("background-jobs authority — classification completeness", () => {
-  it("classifies exactly 35 registered jobs (total record)", () => {
-    expect(registryEntries).toHaveLength(35);
+  it("classifies exactly 34 registered jobs (total record)", () => {
+    expect(registryEntries).toHaveLength(34);
   });
 
   it("every entry has authority that passes the runtime validator (fail-closed backstop)", () => {
@@ -95,7 +95,7 @@ describe("background-jobs authority — classification completeness", () => {
     }
   });
 
-  it("kind distribution matches the design (17 / 4 / 2 / 12)", () => {
+  it("kind distribution matches the design (17 / 3 / 2 / 12)", () => {
     const counts: Record<string, number> = {
       "no-org-write": 0,
       "originating-actor": 0,
@@ -105,7 +105,7 @@ describe("background-jobs authority — classification completeness", () => {
     for (const [, handler] of registryEntries) counts[handler.authority.authorityKind]++;
     expect(counts).toEqual({
       "no-org-write": 17,
-      "originating-actor": 4,
+      "originating-actor": 3,
       "grandfathered-run": 2,
       // cinatra#1940 P4 adds LEASE_EXPIRY_FINALIZE (mintable system-maintenance).
       "system-maintenance": 12,
@@ -136,7 +136,7 @@ describe("background-jobs authority — classification completeness", () => {
 // ---------------------------------------------------------------------------
 
 describe("background-jobs authority — per-row classification snapshot", () => {
-  it("pins the exact classification of all 35 jobs", () => {
+  it("pins the exact classification of all 34 jobs", () => {
     const actual = Object.fromEntries(
       registryEntries.map(([jobName, handler]) => [
         NAME_BY_VALUE[jobName] ?? jobName,
@@ -145,8 +145,7 @@ describe("background-jobs authority — per-row classification snapshot", () => 
     );
 
     const expected: Record<string, AuthoritySummary> = {
-      // originating-actor (4)
-      BLOG_POST_IMAGE_REGENERATION: { kind: "originating-actor", actorSource: "enqueuer-actor-context", orgSource: "actor-context", caps: ["content.write"], runField: null, purposes: null },
+      // originating-actor (3)
       BLOG_POST_WORDPRESS_DRAFT_CREATION: { kind: "originating-actor", actorSource: "enqueuer-actor-context", orgSource: "actor-context", caps: ["content.write"], runField: null, purposes: null },
       BLOG_POST_LINKEDIN_DRAFT_PUBLISH: { kind: "originating-actor", actorSource: "enqueuer-actor-context", orgSource: "actor-context", caps: ["content.write"], runField: null, purposes: null },
       TWENTY_POINTER_REPAIR: { kind: "originating-actor", actorSource: "payload-principal", orgSource: "payload", caps: ["content.write"], runField: null, purposes: null },

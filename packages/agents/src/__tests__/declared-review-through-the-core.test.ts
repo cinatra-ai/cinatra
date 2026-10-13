@@ -1,3 +1,4 @@
+import { planPerArtifactReviewGates } from "@/lib/artifacts/artifact-review-target";
 /**
  * THE DECLARED REVIEW GOES THROUGH THE CORE (cinatra#2929, epic #2926 W2b).
  *
@@ -125,6 +126,9 @@ const emitSpy = vi.fn<
 const readGateSpy = vi.fn<
   (runId: string, reviewTaskId: string) => Promise<{ orgId: string; status: string } | null>
 >(async () => null);
+// The actual boot seam always binds this inventory. A readable empty list is
+// distinct from an absent/unavailable method; the latter is tested below.
+const listGatesSpy = vi.fn<(runId: string) => Promise<Array<{ reviewTaskId: string; status: string }>>>(async () => []);
 type DeclaredDecision =
   | {
       review: true;
@@ -151,7 +155,15 @@ function bindSeam() {
   (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
     decideDeclaredReview: decideSpy,
     emit: emitSpy,
+    emitFamily: async (input: { runId: string; orgId: string; reviewTaskId: string; targets: unknown }) => {
+      for (const leg of planPerArtifactReviewGates(input)) {
+        const result = await emitSpy({ ...input, reviewTaskId: leg.reviewTaskId, targets: leg.targets });
+        if (!result.ok) return result;
+      }
+      return { ok: true };
+    },
     readGate: readGateSpy,
+    listGates: listGatesSpy,
   };
 }
 function unbindSeam() {
@@ -256,6 +268,7 @@ describe("the declared review asks the one core before it pins anything", () => 
     storeMock.updateAgentRunA2AContextId.mockResolvedValue(undefined);
     emitSpy.mockResolvedValue({ ok: true });
     readGateSpy.mockResolvedValue(null);
+    listGatesSpy.mockResolvedValue([]);
     decideSpy.mockResolvedValue({ review: true, reason: "fires by default", targets: TARGETS });
     bindSeam();
   });
@@ -287,7 +300,10 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(decideSpy.mock.invocationCallOrder[0]!).toBeLessThan(
       emitSpy.mock.invocationCallOrder[0]!,
     );
-    expect(emitSpy).toHaveBeenCalledTimes(1);
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    expect(emitSpy).toHaveBeenCalledTimes(2);
   });
 
   it("pins the set the CORE decided for, never the marker's raw value", async () => {
@@ -321,20 +337,18 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect((values as Record<string, unknown>).targetCount).toBe(1);
   });
 
-  it("a core that could not answer pins the raw value — it must not narrow what a person reviews", async () => {
-    decideSpy.mockRejectedValue(new Error("policy store unavailable"));
+  it("App163: a failed core preserves the raw request and authorizes no target", async () => {
+    const failure = new Error("policy store unavailable");
+    decideSpy.mockRejectedValue(failure);
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
-    const run = makeRun({ reviewTargets: TARGETS });
-
-    await handleWayflowTaskState({
-      authority: TEST_AUTHORITY,
-      runId: run.id,
-      run,
-      fromStatus: "running",
-      task: inputRequiredTask("summary"),
-    });
-
-    expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ targets: TARGETS }));
+    const raw = [...TARGETS];
+    const before = JSON.stringify(raw);
+    const run = makeRun({ reviewTargets: raw });
+    await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("summary") })).rejects.toBe(failure);
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(raw)).toBe(before);
   });
 
   it("a firing decision keeps the surface it always had", async () => {
@@ -352,7 +366,11 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer, values] = onInterruptSpy.mock.calls[0]!;
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
-    expect((values as Record<string, unknown>).targetCount).toBe(2);
+    // cinatra#3035 (epic #3023 W11) — ONE REVIEW PER ARTIFACT. A two-artifact
+    // set is two reviews, one gate each, in the order the set named them; the
+    // person is routed to the first. It used to be one gate over both.
+    // The surface a person lands on shows ONE artifact — the first of the two.
+    expect((values as Record<string, unknown>).targetCount).toBe(1);
   });
 
   it("an organization that FORBIDS this review pins NOTHING and falls through to the ordinary human gate", async () => {
@@ -431,22 +449,18 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
   });
 
-  it("a core that THROWS opens the review the marked step asked for — a decision that cannot be reached decides nothing", async () => {
-    decideSpy.mockRejectedValue(new Error("policy store unavailable"));
+  it("App163: a thrown core failure stays the exact existing error and authorizes no gate", async () => {
+    const failure = new Error("policy store unavailable");
+    decideSpy.mockRejectedValue(failure);
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
-    const run = makeRun({ reviewTargets: TARGETS });
-
-    await handleWayflowTaskState({
-      authority: TEST_AUTHORITY,
-      runId: run.id,
-      run,
-      fromStatus: "running",
-      task: inputRequiredTask("summary"),
-    });
-
-    expect(emitSpy).toHaveBeenCalledTimes(1);
-    const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
-    expect(xRenderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+    const raw = [...TARGETS];
+    const before = JSON.stringify(raw);
+    const run = makeRun({ reviewTargets: raw });
+    await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("summary") })).rejects.toBe(failure);
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(raw)).toBe(before);
   });
 
   it("an UNMARKED gate never asks the core at all", async () => {
@@ -464,4 +478,18 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(decideSpy).not.toHaveBeenCalled();
     expect(emitSpy).not.toHaveBeenCalled();
   });
+  it.each(["missing", "rejected"])("App160: a core-approved set cannot mint through an %s gate inventory", async (failureMode) => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = makeRun({ reviewTargets: TARGETS });
+    if (failureMode === "missing") {
+      const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listGates?: unknown } }).__cinatraArtifactReviewGateSeam!;
+      delete seam.listGates;
+    } else listGatesSpy.mockRejectedValue(new Error("inventory unavailable"));
+    await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("approved core targets") })).rejects.toThrow();
+    expect(decideSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
 });

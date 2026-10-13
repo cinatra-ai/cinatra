@@ -17,7 +17,7 @@
 // Its own readings are `absent` (no island framing that path on the page),
 // `unmarked` (an island without the attribute) and `unreadable` (the page could
 // not be read at that moment, for example mid-navigation).
-import { isPagePath, pollUntilSettled, refuse, requireMs, requireRecord, takeFrame } from "./step-kit.mjs";
+import { isPagePath, pollUntilSettled, refuse, refuseFrameScope, requireMs, requireRecord, takeFrame } from "./step-kit.mjs";
 
 const STEP = "waitForIsland";
 
@@ -77,6 +77,7 @@ export async function waitForIsland(
   page,
   { record, shutter, frameSrcPath = ISLAND_FRAME_SRC_PATH, bound = ISLAND_WAIT_BOUND_MS, pollMs = ISLAND_POLL_MS } = /** @type {any} */ ({}),
 ) {
+  refuseFrameScope(STEP, record, page, "nothing was read");
   requireRecord(STEP, record);
   const nothing = "nothing was read";
   if (typeof shutter !== "function") throw refuse(STEP, record, "input", `hand the step a shutter that takes the frame — ${nothing}`);

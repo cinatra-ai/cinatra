@@ -89,7 +89,13 @@ import {
   resolveAgentRunMcpActor,
   resolveAssignedSkillsActorForRun,
 } from "@/lib/agent-run-actor-resolve";
-import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
+import {
+  verifyRunToken,
+  RUN_TOKEN_HEADER,
+  verifyRunStepAttestation,
+  RUN_STEP_NODE_HEADER,
+  RUN_STEP_ATTESTATION_HEADER,
+} from "@/lib/agent-run-token";
 // exec-plane S3 A2 (cinatra#1708): the run-seam fail-closed decision matrix that
 // resolves a run's DECLARED L1 environment into a mountable layer + broker
 // executor (or refuses a declared env that cannot be honored — never a silent L0
@@ -976,6 +982,23 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // cinatra#3745 — the verified step of the calling model step. The flow
+  // runtime signs the executing step's id over the run's context id with its
+  // dedicated key. The step is read only on a call whose run token resolved a
+  // run (a bridge-authorized call) and whose context-id header names that same
+  // run, and only from the runtime's signed pair, verified with that context
+  // id. The body and every other header are never read for a step. An absent
+  // or unverified pair gives no step and changes nothing else.
+  const verifiedStepId =
+    runFromToken && a2aContextId && runFromContextId?.id === runFromToken.id
+      ? (verifyRunStepAttestation({
+          key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+          contextId: a2aContextId,
+          node: req.headers.get(RUN_STEP_NODE_HEADER),
+          attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
+        }) ?? undefined)
+      : undefined;
+
   // ---------------------------------------------------------------------------
   // Provider-aware dispatch resolution.
   //
@@ -1744,6 +1767,9 @@ export async function POST(req: Request): Promise<Response> {
                         agentId: body.agent_id,
                         packageVersion: body.package_version,
                         agentSpecVersion: body.agent_spec_version,
+                        // The verified step of the calling model step
+                        // (cinatra#3745) — written only when verified above.
+                        ...(verifiedStepId ? { stepId: verifiedStepId } : {}),
                       });
                       if (key) durableBindingKeys.push(key);
                     }
@@ -1830,6 +1856,9 @@ export async function POST(req: Request): Promise<Response> {
                   ...(runForPorts.executionAttemptId
                     ? { executionAttemptId: runForPorts.executionAttemptId }
                     : {}),
+                  // `stp` claim (cinatra#3745): the verified step of the
+                  // calling model step, carried to the tool server's frame.
+                  ...(verifiedStepId ? { verifiedStepId } : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,

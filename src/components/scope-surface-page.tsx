@@ -150,8 +150,9 @@ export function ScopeSurfacePage({
   return (
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher: the route resolved the name behind the
-          entity's own read gate before rendering this shell. */}
-      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, title)} />
+          entity's own read gate before rendering this shell. On the Agents
+          strip's Executions tab it also names the Executions leaf. */}
+      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, title, agentsTab)} />
       <PageHeader
         label={SCOPE_SURFACE_KIND_LABEL[scope.kind]}
         title={title ?? SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]}

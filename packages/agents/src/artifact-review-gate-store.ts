@@ -1,4 +1,5 @@
 import "server-only";
+import { electCurrentReviewGate } from "./run-step-rail";
 
 // ---------------------------------------------------------------------------
 // artifact-review-gate-store (cinatra#1796, epic #1620 S13)
@@ -84,6 +85,11 @@ import { AuthzError } from "@/lib/authz/errors";
 
 import {
   normalizeReviewTargets,
+  declaredReviewPlan,
+  baseReviewTaskId,
+  pinnedDeclaredReviewPlan,
+  sameDeclaredReviewPlan,
+  type DeclaredReviewPlan,
   reviewTargetKey,
   type ArtifactReviewTarget,
 } from "@/lib/artifacts/artifact-review-target";
@@ -163,7 +169,7 @@ export interface EmitReviewGateResult {
 }
 
 /**
- * PIN a run's review targets at gate creation. "Latest" is resolved by the
+ * PIN one artifact revision at gate creation. "Latest" is resolved by the
  * CALLER before it reaches here — this store freezes exactly what it is given, so
  * a reviewer approves the exact revision the gate froze (no review/serve TOCTOU).
  *
@@ -201,13 +207,42 @@ export async function emitArtifactReviewGate(input: {
    * none (null — the expiry drain never touches it). Set only on the INSERT: a
    * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
   expiresAt?: Date | null;
-}, executor: GateStoreExecutor = db): Promise<EmitReviewGateResult> {
+}, executor: GateStoreExecutor = db, plan?: DeclaredReviewPlan): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
     throw new ArtifactReviewGateError("invalid-targets", normalized.error);
   }
   const pinned = canonicalPinnedSet(normalized.targets);
-
+  if (plan) {
+    const canonical = declaredReviewPlan({ runId: input.runId, orgId: input.orgId,
+      reviewTaskId: plan.baseTaskId, targets: plan.legs.map(leg => leg.targets[0]) });
+    const leg = canonical?.legs.find(leg => leg.reviewTaskId === input.reviewTaskId);
+    if (!canonical || !sameDeclaredReviewPlan(plan, canonical) || !leg || pinned.length !== 1 ||
+        reviewTargetKey(pinned[0]) !== reviewTargetKey(leg.targets[0])) {
+      throw new ArtifactReviewGateError("invalid-targets", "The declared review plan does not bind this exact gate.");
+    }
+    Object.assign(pinned[0], { declaredReviewPlan: canonical });
+  }
+  // Only NEW gates must be singleton. An exact replay of a grandfathered gate
+  // is a read, not a mint: keep its original pins, status and decision untouched.
+  // Keep the general normalizer's historical bound for readback and decisions.
+  if (normalized.targets.length !== 1) {
+    const existing = await readReviewGateVia(executor, input.runId, input.reviewTaskId);
+    if (existing) {
+      const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
+      if (existing.orgId !== input.orgId || pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
+        throw new ArtifactReviewGateError(
+          "pin-conflict",
+          `Review gate ${input.reviewTaskId} on run ${input.runId} already belongs to another organization or target set.`,
+        );
+      }
+      return { gateId: existing.id, targets: rowsToTargets(existingPinned), idempotent: true };
+    }
+    throw new ArtifactReviewGateError(
+      "invalid-targets",
+      "A review gate must pin exactly one artifact revision. Open a separate review for each artifact.",
+    );
+  }
   const gateId = randomUUID();
   const [inserted] = await executor
     .insert(artifactReviewGates)
@@ -249,6 +284,9 @@ export async function emitArtifactReviewGate(input: {
     );
   }
   const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
+  if (plan && !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(existing.pinnedTargets), plan)) {
+    throw new ArtifactReviewGateError("pin-conflict", "The existing gate has no matching immutable declared review plan.");
+  }
   if (pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
     throw new ArtifactReviewGateError(
       "pin-conflict",
@@ -261,6 +299,34 @@ export async function emitArtifactReviewGate(input: {
 // ---------------------------------------------------------------------------
 // Read ports.
 // ---------------------------------------------------------------------------
+
+/** All required singleton rows become visible together. A later refusal or
+ * crash rolls back the earlier inserts using the store's existing transaction.
+ * Replays cannot change a previously frozen plan or accept a different revision. */
+export async function emitDeclaredReviewGateFamily(input: {
+  runId: string; orgId: string; reviewTaskId: string; targets: unknown;
+}): Promise<void> {
+  const plan = declaredReviewPlan(input);
+  if (!plan) throw new ArtifactReviewGateError("invalid-targets", "The declared review set cannot form exact singleton legs.");
+  await db.transaction(async tx => {
+    // Read before any insert; extra or mismatched historical slots cannot be
+    // reinterpreted as the current pause's exact required membership.
+    const existing = (await listReviewGatesForRun(input.runId, tx))
+      .filter(gate => baseReviewTaskId(gate.reviewTaskId) === plan.baseTaskId);
+    for (const gate of existing) {
+      const leg = plan.legs.find(leg => leg.reviewTaskId === gate.reviewTaskId);
+      const pins = normalizeReviewTargets(gate.pinnedTargets);
+      if (!leg || gate.orgId !== input.orgId || gate.pinnedTargets.length !== 1 || !pins.ok || pins.targets.length !== 1 ||
+          reviewTargetKey(pins.targets[0]) !== reviewTargetKey(leg.targets[0]) ||
+          !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(gate.pinnedTargets), plan)) {
+        throw new ArtifactReviewGateError("pin-conflict", "The existing declared review membership cannot be verified.");
+      }
+    }
+    for (const leg of plan.legs) {
+      await emitArtifactReviewGate({ ...input, reviewTaskId: leg.reviewTaskId, targets: leg.targets }, tx, plan);
+    }
+  });
+}
 
 export interface ReviewGateRow {
   id: string;
@@ -335,8 +401,8 @@ async function readReviewGateVia(
 // through the actor-aware `readAgentRunById`, which enforces the run's
 // effective policy in `enforceRunAccess`.
 // ---------------------------------------------------------------------------
-export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRow[]> {
-  const rows = await db
+export async function listReviewGatesForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateRow[]> {
+  const rows = await executor
     .select()
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
@@ -366,7 +432,8 @@ export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRo
  * surface, so it is answered from the run's own rows rather than from a model
  * turn or a pull tool:
  *
- *   `reviewTaskId` — the run's most recent review gate, PENDING OR RESOLVED. The
+ *   `reviewTaskId` — the FIRST pending gate in raise order, or the most recent
+ *     resolved gate when no pending gate remains. The
  *     resolved one is deliberately included: a reader who approves in place must
  *     keep seeing what they decided, and the card's own state ladder draws that
  *     (§IV settled) from the same ref. Dropping it here would replace the
@@ -431,12 +498,17 @@ export async function readRunReviewSlot(
       ),
     )
     .limit(1);
-  const [gate] = await db
-    .select({ reviewTaskId: artifactReviewGates.reviewTaskId })
+  // Use the rail's actual comparator, including task-key ties. Database text
+  // collation need not equal JavaScript localeCompare, so SQL cannot elect that
+  // tie on the rail's behalf. Keep SQL's old DESC order for settled history.
+  // This reads each run-scoped gate's small metadata projection instead of one
+  // row; the common path still makes three queries, without loading targets.
+  const gates = await db
+    .select({ reviewTaskId: artifactReviewGates.reviewTaskId, status: artifactReviewGates.status, createdAt: artifactReviewGates.createdAt })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
-    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id))
-    .limit(1);
+    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
+  const gate = electCurrentReviewGate(gates) ?? gates[0];
   // AND IS THE RUN ITSELF WAITING ON THIS REVIEW? (cinatra#3046.)
   //
   // The two facts above describe the REVIEW. This one describes the RUN, and no
@@ -467,9 +539,9 @@ export async function readRunReviewSlot(
 
   // AND FOR A PARKED RUN THE GATE IS THE ONE ITS OWN PRODUCTION LINKED.
   //
-  // "The run's most recent review gate, pending or resolved" is the right answer
-  // for a run that has FINISHED: a decided review stays on file as read-only
-  // history and the surface draws it. For a run PARKED on its produced output's
+  // "The run's most recent resolved review gate" is the right answer
+  // for a run that has FINISHED with no pending gate: a decided review stays on file as
+  // read-only history and the surface draws it. For a run PARKED on its produced output's
   // review it can be the wrong gate entirely. A run that owes a SECOND review
   // carries both at once — the first gate decided, the next one not minted yet
   // (or its linkage failed closed) — and naming the decided one there draws a
@@ -488,9 +560,9 @@ export async function readRunReviewSlot(
   // AND AMONG THAT LINKAGE, THE ORDER IS THE HOLD'S OWN LADDER, because "the
   // newest linked gate" is still the wrong gate in two reachable states:
   //
-  //   • AN UNDECIDED GATE WINS over a decided one, however new the decided one
-  //     is. The undecided one is what the run is being held for and the only one
-  //     the reader can act on; a newer decided gate would hide it.
+  //   • THE FIRST UNDECIDED GATE in rail raise order wins over a decided one,
+  //     however new the decided one is. The undecided one is what the run is being
+  //     held for and the only one the reader can act on; a newer decided gate would hide it.
   //   • NOTHING UNDECIDED, AND ANOTHER PRODUCTION STILL PENDING ⇒ NO GATE YET.
   //     A run reviewed once and then producing again carries its first gate's
   //     linkage for ever, so this is the state that would draw the review the
@@ -528,6 +600,7 @@ export async function readRunReviewSlot(
           .select({
             reviewTaskId: artifactReviewGates.reviewTaskId,
             status: artifactReviewGates.status,
+            createdAt: artifactReviewGates.createdAt,
           })
           .from(artifactReviewGates)
           .where(
@@ -537,7 +610,7 @@ export async function readRunReviewSlot(
             ),
           )
           .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
-  const undecided = linkedGates.find((g) => g.status !== "resolved");
+  const undecided = electCurrentReviewGate(linkedGates);
   const heldGate = undecided ?? (pendingProduced ? undefined : linkedGates[0]);
   return {
     reviewTaskId: heldGate?.reviewTaskId ?? null,
@@ -620,8 +693,9 @@ export async function readVerificationRecordsForGates(
 export async function readGatePinnedTargets(
   runId: string,
   reviewTaskId: string,
+  options?: { decisionFactsForOrgId?: string; executor?: GateStoreExecutor },
 ): Promise<GatePinnedOutcome> {
-  const gate = await readReviewGate(runId, reviewTaskId);
+  const gate = await readReviewGateVia(options?.executor ?? db, runId, reviewTaskId);
   if (!gate) return { status: "not-found" };
   // A DECIDED gate still names its frozen pinned set, because the reviewed work
   // stays on screen after the decision: "A resolved gate opens read-only: what
@@ -631,7 +705,17 @@ export async function readGatePinnedTargets(
   // artifact's latest. Preparing from it is OPT-IN at the core
   // (`acceptResolvedGate`), so every decision path still fails closed here.
   if (gate.status !== "pending") {
-    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets) };
+    const time = gate.resolvedAt;
+    const decision = gate.status === "resolved" &&
+      typeof options?.decisionFactsForOrgId === "string" && options.decisionFactsForOrgId.length > 0 &&
+      gate.orgId === options.decisionFactsForOrgId && gate.runId === runId && gate.reviewTaskId === reviewTaskId &&
+      typeof gate.id === "string" && gate.id.length > 0 && gate.disposition === "approve" &&
+      typeof gate.fingerprint === "string" && /^[a-f0-9]{64}$/.test(gate.fingerprint) &&
+      time instanceof Date && Number.isFinite(time.getTime())
+      ? { gateId: gate.id, orgId: gate.orgId, runId: gate.runId, reviewTaskId: gate.reviewTaskId,
+          fingerprint: gate.fingerprint, disposition: "approve" as const, decidedAt: time.toISOString() }
+      : undefined;
+    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets), ...(decision ? { decision } : {}) };
   }
   return { status: "pending", targets: rowsToTargets(gate.pinnedTargets) };
 }
@@ -1324,6 +1408,7 @@ export async function enforceReviewRunAccess(
   actor: PrimitiveActorContext,
   op: "read" | ReviewRunAccessOp,
   roles?: ActorRoleHints,
+  options?: { includeOrgId: true },
 ): Promise<RunAccessOutcome> {
   // Plain fetch (no actor ⇒ no internal enforce) — this helper OWNS the gate.
   const run = await readAgentRunById(runId);
@@ -1349,7 +1434,7 @@ export async function enforceReviewRunAccess(
   }
   try {
     await enforceRunAccess(runForCheck, actor, op, roles);
-    return { ok: true };
+    return { ok: true, ...(options?.includeOrgId && run ? { orgId: run.orgId } : {}) };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, status: err.statusCode };
     throw err;

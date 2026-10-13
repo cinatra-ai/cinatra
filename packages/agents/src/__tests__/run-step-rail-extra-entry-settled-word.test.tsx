@@ -11,16 +11,16 @@
  * rail is one of the surfaces that draws them.
  *
  * This suite mounts the real `RailExtraEntry` inside the stepper context it
- * requires and pins the rendered badge for EVERY disposition a gate row can be
+ * requires and pins the plain title plus canonical metadata for EVERY disposition a gate row can be
  * resolved with, plus the unreadable case that keeps the row's old fallback.
  *
  * Run:
  *   cd packages/agents && npx vitest run \
  *     src/__tests__/run-step-rail-extra-entry-settled-word.test.tsx
  */
-import React from "react";
+import React, { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -43,7 +43,9 @@ vi.mock("lucide-react", () => {
 
 import { Stepper, StepperItem } from "@/components/reui/stepper";
 
-import { RailExtraEntry } from "../run-step-rail-extra-entry";
+import { RailExtraEntry, RunStepSelectionProvider } from "../run-step-rail-extra-entry";
+import { buildRunStepRail } from "../run-step-rail";
+import type { RunStepSelection } from "../run-surface-rail-step";
 import type { RunStepRailEntry } from "../run-step-rail";
 
 afterEach(() => cleanup());
@@ -84,7 +86,9 @@ describe("the rail entry for a settled gate", () => {
     const { container } = renderEntry(resolvedGate(disposition));
     const badge = container.querySelector("[data-rail-gate-settlement]");
     expect(badge).not.toBeNull();
-    expect(badge!.textContent).toBe(word);
+    const title = container.querySelector('[data-slot="stepper-title"]');
+    expect(title!.textContent).toBe(`Review · ${word.toLowerCase()}`);
+    expect(title!.childElementCount).toBe(0);
     expect(badge!.getAttribute("data-rail-gate-settlement")).toBe(word);
   });
 
@@ -94,7 +98,7 @@ describe("the rail entry for a settled gate", () => {
       const { container } = renderEntry(resolvedGate(disposition));
       const row = container.querySelector('[data-rail-gate-history="true"]');
       expect(row).not.toBeNull();
-      // The badge is uppercased by CSS, so BOTH cases are the departure.
+      // A stored decision verb in either case is never the drawn settlement.
       expect(row!.textContent).not.toContain(disposition);
       expect(row!.textContent).not.toContain(disposition.toUpperCase());
     },
@@ -103,9 +107,10 @@ describe("the rail entry for a settled gate", () => {
   it("keeps the old fallback for a settled gate whose outcome cannot be read", () => {
     const { container } = renderEntry(resolvedGate(null));
     const badge = container.querySelector("[data-rail-gate-settlement]");
-    expect(badge!.textContent).toBe("resolved");
+    expect(container.querySelector('[data-slot="stepper-title"]')!.textContent).toBe("Review · resolved");
+    expect(badge!.getAttribute("data-rail-gate-settlement")).toBe("resolved");
     // Not the header's pending reading: this row HAS settled.
-    expect(badge!.textContent).not.toBe("Review requested");
+    expect(badge!.textContent).not.toContain("Review requested");
   });
 
   it("draws no settlement at all on a gate still pending", () => {
@@ -116,5 +121,71 @@ describe("the rail entry for a settled gate", () => {
     });
     expect(container.querySelector("[data-rail-gate-settlement]")).toBeNull();
     expect(container.querySelector('[data-rail-gate-pending="true"]')).not.toBeNull();
+  });
+});
+
+
+function namedGate(status: "pending" | "resolved", disposition: string | null = "approve") {
+  return buildRunStepRail({ gates: [{
+    gateId: "gate-1", reviewTaskId: "task-1", status,
+    disposition: status === "pending" ? null : disposition,
+    createdAt: "2026-10-06T00:00:00Z", artifactName: "the post",
+  }] }).entries[0]!;
+}
+
+function FramedEntry({ entry, selected }: { entry: RunStepRailEntry; selected: (key: RunStepSelection) => void }) {
+  const [current, setCurrent] = useState<RunStepSelection>("detail");
+  return <RunStepSelectionProvider value={{ selected: current, select: (key) => { selected(key); setCurrent(key); } }}>
+    <Stepper defaultValue={1} orientation="vertical">
+      <StepperItem step={1} completed={entry.status === "resolved"}>
+        <RailExtraEntry entry={entry} reviewHrefBase="/agents/v/p/i/review" />
+      </StepperItem>
+    </Stepper>
+  </RunStepSelectionProvider>;
+}
+
+describe("the I.3 review row is one plain text run", () => {
+  it.each([
+    ["approve", "continued"], ["reject", "changes requested"],
+    ["changes_requested", "changes requested"], [null, "resolved"],
+  ] as const)("renders the settled artifact and %s reading without a badge", (disposition, word) => {
+    const { container } = renderEntry(namedGate("resolved", disposition));
+    const title = container.querySelector('[data-slot="stepper-title"]')!;
+    expect(title.textContent).toBe(`Review · the post · ${word}`);
+    expect(title.childElementCount).toBe(0);
+    expect(container.querySelector('[data-rail-gate-history="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-rail-gate-pending="true"]')).toBeNull();
+    expect(container.querySelector('[data-rail-gate-link="task-1"]')!.getAttribute("href"))
+      .toBe("/agents/v/p/i/review/task-1");
+  });
+
+  it("preserves the pending text and current in-place control", () => {
+    const selected = vi.fn();
+    const { container } = render(<FramedEntry entry={namedGate("pending")} selected={selected} />);
+    const title = container.querySelector('[data-slot="stepper-title"]')!;
+    expect(title.textContent).toBe("Review · the post");
+    expect(title.childElementCount).toBe(0);
+    expect(container.querySelector('[data-rail-gate-settlement]')).toBeNull();
+    const trigger = container.querySelector('[data-rail-gate-open="task-1"]')!;
+    expect(trigger.getAttribute("aria-current")).toBe("step");
+    fireEvent.click(trigger);
+    expect(selected).toHaveBeenCalledExactlyOnceWith("detail");
+    expect(container.querySelector('[data-rail-gate-pending="true"]')).not.toBeNull();
+  });
+
+  it.each(["pointer", "Enter", "Space"])("keeps settled history selectable by %s with aria-current", (activation) => {
+    const selected = vi.fn();
+    const { container } = render(<FramedEntry entry={namedGate("resolved")} selected={selected} />);
+    const trigger = container.querySelector('[data-rail-gate-open="task-1"]')!;
+    expect(trigger.getAttribute("aria-current")).toBeNull();
+    expect(trigger.getAttribute("tabindex")).toBe("0");
+    if (activation === "pointer") fireEvent.click(trigger);
+    else fireEvent.keyDown(trigger, { key: activation === "Space" ? " " : activation });
+    expect(selected).toHaveBeenCalledExactlyOnceWith("review:task-1");
+    expect(trigger.getAttribute("aria-current")).toBe("step");
+    expect(trigger.getAttribute("data-run-surface-rail-selected")).toBe("true");
+    expect(container.querySelector('[data-rail-gate-history="true"]')).not.toBeNull();
+    expect(container.querySelector('[data-slot="stepper-title"]')!.textContent).toBe("Review · the post · continued");
+    expect(container.querySelector("a")).toBeNull();
   });
 });

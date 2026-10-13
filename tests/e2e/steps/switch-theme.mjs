@@ -22,7 +22,7 @@
 // toggles the palette: the step presses at most once. With `island: false` the
 // page's palette alone is read, for a page that frames no island.
 import { quoted } from "./control-kit.mjs";
-import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, pause, readBounds, refuse, requireRecord, within } from "./step-kit.mjs";
+import { READING_BOUND_MS, elapsedSince, errorClass, isPagePath, pathOf, pause, readBounds, refuse, refuseFrameScope, requireRecord, within } from "./step-kit.mjs";
 import { ISLAND_FRAME_SRC_PATH } from "./wait-for-island.mjs";
 
 const STEP = "switchTheme";
@@ -125,6 +125,7 @@ const theIslands = (count) => (count === 1 ? "its island" : `its ${count} island
  * @returns {Promise<{ to: string, pressed: boolean, islands: number, elapsedMs: number }>}
  */
 export async function switchTheme(page, { to, record, island = true, frameSrcPath = ISLAND_FRAME_SRC_PATH, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(STEP, record, page, "nothing was pressed");
   requireRecord(STEP, record);
   const nothing = "nothing was pressed";
   if (to !== "light" && to !== "dark") throw refuse(STEP, record, "input", `name the theme to switch to: light or dark — ${nothing}`);

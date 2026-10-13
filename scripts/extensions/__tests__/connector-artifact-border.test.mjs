@@ -199,12 +199,11 @@ describe("the road list is derived from the SDK's declaration, fail closed", () 
     "packages/sdk-ui/package.json",
   ];
 
-  it("U-g: loadLiveRules derives the five roads in their declared order", () => {
+  it("U-g: loadLiveRules derives the four roads in their declared order", () => {
     const rules = loadLiveRules(REPO_ROOT);
     expect(rules.ok).toBe(true);
     expect(rules.artifactCreatingRoads).toEqual([
       "@cinatra-ai/host:cms-review",
-      "@cinatra-ai/host:blog-routing",
       "@cinatra-ai/host:email-routing",
       "artifact_materialize",
       "artifact_authoring_emit",

@@ -24,7 +24,7 @@
 // A state written into the history at the same address is announced as well,
 // and is no change of the address.
 import { originOf } from "./read-standing-requests.mjs";
-import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, requireRecord } from "./step-kit.mjs";
+import { READING_BOUND_MS, errorClass, pathOf, readBounds, refuse, refuseFrameScope, requireRecord } from "./step-kit.mjs";
 
 const ARM = "armPageTape";
 const READ = "readPageTape";
@@ -169,6 +169,7 @@ function startTape(page, href, armedTimeOrigin) {
  * @returns {Promise<{ path: string, timeOrigin: number, rearmed: boolean }>}
  */
 export async function armPageTape(page, { record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(ARM, record, page, "no tape was armed");
   requireRecord(ARM, record);
   const nothing = "no tape was armed";
   const bound = readBounds(ARM, record, PAGE_TAPE_BOUNDS, bounds, nothing);
@@ -203,6 +204,7 @@ export async function armPageTape(page, { record, bounds } = /** @type {any} */ 
  * @returns {Promise<{ path: string, timeOrigin: number, armedTimeOrigin: number, documents: number, addressChanges: number, sameDocument: boolean }>}
  */
 export async function readPageTape(page, { record, bounds } = /** @type {any} */ ({})) {
+  refuseFrameScope(READ, record, page, "nothing was read");
   requireRecord(READ, record);
   const nothing = "nothing was read";
   const bound = readBounds(READ, record, PAGE_TAPE_BOUNDS, bounds, nothing);

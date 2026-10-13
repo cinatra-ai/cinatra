@@ -66,7 +66,7 @@ describe("the parked box draws the frame the drawing gives it", () => {
   it("keeps the arc on the indigo the drawing names", () => {
     const box = placeholder();
     const arc = box.querySelector("svg")!;
-    expect(arc.getAttribute("class") ?? "").toContain("text-primary");
+    expect(arc.getAttribute("class") ?? "").toContain("text-indigo-ink");
     expect(arc.getAttribute("class") ?? "").toContain("size-[22px]");
   });
 

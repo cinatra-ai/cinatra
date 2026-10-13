@@ -156,6 +156,12 @@ beforeEach(async () => {
   vi.clearAllMocks();
   readTemplate.mockResolvedValue(null);
   fixture.dir = await mkdtemp(join(tmpdir(), "install-template-gate-"));
+  await mkdir(join(fixture.dir, "cinatra"), { recursive: true });
+  await writeFile(join(fixture.dir, "cinatra", "oas.json"), JSON.stringify({
+    component_type: "Flow", id: "fixture", inputs: [],
+    start_node: { $component_ref: "start" },
+    $referenced_components: { start: { component_type: "StartNode", id: "start", inputs: [] } },
+  }));
 });
 afterEach(async () => {
   await rm(fixture.dir, { recursive: true, force: true });
@@ -204,4 +210,17 @@ describe("installAgentFromPackage — project-template kind gate wiring", () => 
     expect(materialize).not.toHaveBeenCalled();
     expect(createLocal).not.toHaveBeenCalled();
   });
+});
+
+
+it("refuses an undeclared visible input before the registry installer writes or materializes", async () => {
+  const input = { title: "brief", type: "string" };
+  await writeFile(join(fixture.dir, "cinatra", "oas.json"), JSON.stringify({
+    component_type: "Flow", id: "fixture", inputs: [input],
+    start_node: { $component_ref: "start" },
+    $referenced_components: { start: { component_type: "StartNode", id: "start", inputs: [input] } },
+  }));
+  await expect(installAgentFromPackage({ packageName: "@cinatra-ai/release-announcement-agent" })).rejects.toThrow(/brief/);
+  expect(materialize).not.toHaveBeenCalled();
+  expect(createLocal).not.toHaveBeenCalled();
 });

@@ -384,8 +384,9 @@ export function runCardOwnsLifecycleCopy(
 // register, the report is a no-op, and nothing about those surfaces changes.
 // ---------------------------------------------------------------------------
 
-/** Told by a card: this card, in this container, is (or is no longer) settled. */
-export type SettledScheduleRegister = (cardId: string, settled: boolean) => void;
+/** Told by a card: this mount is settled. A turn-level durable view may also
+ * identify its run through the admitted body; an opaque ref is never that ID. */
+export type SettledScheduleRegister = (cardId: string, settled: boolean, runId?: string | null) => void;
 
 const SettledScheduleRegisterContext = createContext<SettledScheduleRegister | null>(null);
 
@@ -421,15 +422,15 @@ export function SettledScheduleRegisterProvider({
  * unmounts, and one that leaves the settled reading, both have to give the
  * container its turn back.
  */
-export function useReportSettledSchedule(cardId: string, settled: boolean): void {
+export function useReportSettledSchedule(cardId: string, settled: boolean, runId?: string | null): void {
   const register = useContext(SettledScheduleRegisterContext);
   const mountId = useId();
   const key = `${cardId}#${mountId}`;
   useEffect(() => {
     if (register === null) return;
-    register(key, settled);
-    return () => register(key, false);
-  }, [register, key, settled]);
+    register(key, settled, runId);
+    return () => register(key, false, runId);
+  }, [register, key, settled, runId]);
 }
 
 // ---------------------------------------------------------------------------
@@ -576,8 +577,16 @@ export type ComposerFocusStore = {
    * LATEST registration owns the action, so a re-registering card replaces its
    * own closure rather than accumulating stale ones.
    */
-  registerEligible: (ref: string, comment: ComposerCommentAction) => () => void;
-  /** The comment path of an eligible gate, or `undefined` if it is not one. */
+  registerEligible: (ref: string, comment?: ComposerCommentAction) => () => void;
+  /**
+   * The comment path of an eligible gate, or `undefined` if it is not one.
+   *
+   * `undefined` is now TWO answers rather than one, and the difference does not
+   * matter to any caller: the ref is not eligible at all, or it is eligible and
+   * its card has no comment road. A schedule card is the second — its typed road
+   * is the server's grant, not a comment — and the one consumer of this lookup
+   * already refuses an absent action rather than inventing one.
+   */
   getCommentAction: (ref: string) => ComposerCommentAction | undefined;
   /** The reader chose this card. */
   focus: (ref: string) => void;
@@ -586,7 +595,7 @@ export type ComposerFocusStore = {
 };
 
 export function createComposerFocusStore(): ComposerFocusStore {
-  const entries = new Map<string, { count: number; comment: ComposerCommentAction }>();
+  const entries = new Map<string, { count: number; comment?: ComposerCommentAction }>();
   let focused: string | null = null;
   let released = false;
   // Cached because `useSyncExternalStore` compares snapshots by identity: a
@@ -676,6 +685,185 @@ export function useComposerFocusStore(): ComposerFocusStore | null {
   return useContext(ComposerFocusContext);
 }
 
+// ---------------------------------------------------------------------------
+// THE SETTLE BUS (cinatra#2853, the picture leg).
+//
+// THE DEFECT IT CLOSES. A card re-resolved on mount and on window focus, and on
+// nothing else. So a decision taken through the card's OWN button settled it —
+// the button calls `refresh()` — while a decision taken any other way in the
+// same page session did not: the gate was resolved, the person was answered in
+// the conversation, and the card underneath kept drawing `pending` with its
+// terminal Approve and Reject still pressable until the thread was re-opened.
+// Plan (A) §4.1 is explicit that the card "says in place what it did"; a card
+// still offering a decision over a resolved gate says the opposite.
+//
+// WHAT IT IS. One announcement — "this ref has been decided" — and a per-ref
+// counter every mounted card for that ref folds into its reload token. It
+// carries NO state about the decision: what settled the gate is the server's
+// answer, and the card re-reads it under the reader's own access exactly as it
+// does on mount. The bus can therefore only ever cost a re-resolve, which is
+// why nothing that publishes on it needs to be trusted.
+//
+// WHO ANNOUNCES. Two roads, and the card takes whichever arrives first:
+//   · THE DECIDE'S OWN RESULT — the conversation announces the refs a message
+//     carried a grant for once that turn has finished, because the one thing
+//     that could have pressed them is that message's own single-use grant;
+//   · THE GATE ROW — the conversation's registry of open gates announces a card
+//     whose gate has closed underneath it.
+// A card's own button announces too, so a gate drawn twice (a run card and a
+// thread card for one run) settles in both places rather than in the one that
+// was pressed.
+// ---------------------------------------------------------------------------
+
+/** Announce and observe "this card has been decided" within one page session. */
+export type LifecycleCardSettleBus = {
+  subscribe: (listener: () => void) => () => void;
+  /** How many times this ref has been announced. Compared BY VALUE. */
+  settledAt: (ref: string) => number;
+  /** Say that this ref has been decided. Costs the mounted cards a re-resolve. */
+  announceSettled: (ref: string) => void;
+  /**
+   * THE REF THAT REPLACED THIS ONE, or `null` (cinatra#2853, the second leg).
+   *
+   * A schedule proposal cannot be edited — a proposal ref IS the proposal — so
+   * changing one RE-PROPOSES and mints a replacement. A card mounted on the old
+   * ref has to be told, or it keeps drawing the schedule the person just asked
+   * to change with its own Confirm still live.
+   */
+  replacementFor: (ref: string) => string | null;
+  /**
+   * Say that `supersededRef`'s card is now drawn from `replacementRef`.
+   *
+   * IT IS STILL ONLY A RE-RESOLVE. Like `announceSettled`, this carries no claim
+   * the card acts on: the card swaps the ref it asks about and re-resolves under
+   * the READER'S OWN ACCESS, exactly as it does on mount, and a ref that is not
+   * theirs answers `absent`. It is the same swap the card's own Adjust button
+   * performs from the endpoint's answer, reached from the typed road.
+   *
+   * A CHAIN CONVERGES, AND IT CANNOT CLOSE. Two adjusts in one session announce
+   * a→b then b→c; a card on `a` follows to `b`, reads `b`'s own entry and
+   * follows to `c`. An announcement whose replacement already leads BACK to the
+   * ref being replaced is refused, so the walk a card performs is always finite
+   * — a cycle here would be a card re-pointing itself forever.
+   */
+  announceReplacement: (supersededRef: string, replacementRef: string) => void;
+};
+
+export function createLifecycleCardSettleBus(): LifecycleCardSettleBus {
+  const generations = new Map<string, number>();
+  const replacements = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  const notify = (): void => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    settledAt(ref) {
+      return generations.get(ref) ?? 0;
+    },
+    announceSettled(ref) {
+      // An empty ref is not an address. Announcing one would bump every card
+      // that asked about the empty string, which is none of them today and is
+      // not a behaviour worth leaving available.
+      if (typeof ref !== "string" || ref.length === 0) return;
+      generations.set(ref, (generations.get(ref) ?? 0) + 1);
+      notify();
+    },
+    replacementFor(ref) {
+      if (typeof ref !== "string" || ref.length === 0) return null;
+      return replacements.get(ref) ?? null;
+    },
+    announceReplacement(supersededRef, replacementRef) {
+      // Two real, different addresses or nothing happened. A self-replacement
+      // is the one input that could make a mounted card follow itself forever.
+      if (typeof supersededRef !== "string" || supersededRef.length === 0) return;
+      if (typeof replacementRef !== "string" || replacementRef.length === 0) return;
+      if (supersededRef === replacementRef) return;
+      // NO CYCLE, EVER. A card follows this map during render, so a chain that
+      // led back to where it started would re-point that card forever rather
+      // than settle. The walk is bounded by the number of entries: a longer one
+      // is impossible in a map this size, and refusing on the bound is the safe
+      // direction — an announcement dropped costs a re-draw, a cycle costs the
+      // page. Nothing legitimate builds one: every re-proposal mints a token
+      // that has never existed before.
+      let hop = replacementRef;
+      for (let step = 0; step <= replacements.size; step += 1) {
+        if (hop === supersededRef) return;
+        const next = replacements.get(hop);
+        if (next === undefined) break;
+        hop = next;
+      }
+      // FIRST ANNOUNCEMENT WINS. A ref is replaced once; a second word about the
+      // same one is a replay of the turn that said it (the driver replays a
+      // completed tool result on a durable-log resume) or a later message's
+      // announcement arriving about a ref no card is drawn from any more.
+      // Letting it overwrite would move a card that has already moved on.
+      if (replacements.has(supersededRef)) return;
+      replacements.set(supersededRef, replacementRef);
+      notify();
+    },
+  };
+}
+
+const LifecycleCardSettleContext = createContext<LifecycleCardSettleBus | null>(null);
+
+/**
+ * Declare that this subtree's cards may be told a decision landed. Mounted by
+ * the conversation around the transcript, for the same reason the composer
+ * binding is: the fact belongs to the pair, not to one card. A surface that
+ * declares none keeps the mount-and-focus behaviour it has always had.
+ */
+export function LifecycleCardSettleProvider({
+  bus,
+  children,
+}: {
+  bus: LifecycleCardSettleBus;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <LifecycleCardSettleContext.Provider value={bus}>{children}</LifecycleCardSettleContext.Provider>
+  );
+}
+
+export function useLifecycleCardSettleBus(): LifecycleCardSettleBus | null {
+  return useContext(LifecycleCardSettleContext);
+}
+
+const zeroGeneration = (): number => 0;
+
+/**
+ * The settle generation for one ref — a number to fold into a reload token.
+ *
+ * Zero, always, with no provider: a surface that declares no bus keeps exactly
+ * the resolve cadence it had before this existed.
+ */
+export function useLifecycleCardSettleSignal(ref: string): number {
+  const bus = useLifecycleCardSettleBus();
+  const read = useCallback(() => (bus ? bus.settledAt(ref) : 0), [bus, ref]);
+  return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, zeroGeneration);
+}
+
+const noReplacement = (): string | null => null;
+
+/**
+ * The ref that replaced this one within this page session, or `null`.
+ *
+ * Null, always, with no provider — a surface that declares no bus keeps exactly
+ * the behaviour it had before this existed. The value is a STRING the card
+ * compares by value, so a re-render that reads the same answer is not a change
+ * and cannot loop.
+ */
+export function useLifecycleCardReplacement(ref: string): string | null {
+  const bus = useLifecycleCardSettleBus();
+  const read = useCallback(() => (bus ? bus.replacementFor(ref) : null), [bus, ref]);
+  return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, noReplacement);
+}
+
 const NOOP_UNSUBSCRIBE = (): void => {};
 const noopSubscribe = (): (() => void) => NOOP_UNSUBSCRIBE;
 const emptySnapshot = (): ComposerFocusSnapshot => EMPTY_FOCUS_SNAPSHOT;
@@ -729,7 +917,16 @@ export type ComposerFocusBinding = {
 export function useComposerFocusBinding(params: {
   ref: string;
   eligible: boolean;
-  comment: ComposerCommentAction;
+  /**
+   * This card's own comment path, where it HAS one.
+   *
+   * Omitted by every card whose typed road is not a comment (cinatra#2853, the
+   * picture leg). Binding is what puts a card's ref in the claim the send
+   * carries, and until this parameter was optional only the review card could
+   * ever be in it — which is why a typed change to a schedule reached the
+   * producer and drew a second card instead of acting on the bound one.
+   */
+  comment?: ComposerCommentAction;
 }): ComposerFocusBinding {
   const { ref, eligible, comment } = params;
   const store = useComposerFocusStore();
@@ -737,13 +934,19 @@ export function useComposerFocusBinding(params: {
   const commentRef = useRef(comment);
   commentRef.current = comment;
   const stableComment = useCallback<ComposerCommentAction>(
-    (text) => commentRef.current(text),
+    (text) => commentRef.current!(text),
     [],
   );
+  // WHETHER there is a comment road, never WHICH one. A card that declares none
+  // registers `undefined`, so the lookup keeps answering "not a comment gate"
+  // for it rather than handing back a closure that would refuse on call; and
+  // depending on the BOOLEAN keeps the effect off the closure identity, which is
+  // the render loop the stable delegator above exists to prevent.
+  const hasComment = comment !== undefined;
   useEffect(() => {
     if (!store || !eligible) return;
-    return store.registerEligible(ref, stableComment);
-  }, [store, eligible, ref, stableComment]);
+    return store.registerEligible(ref, hasComment ? stableComment : undefined);
+  }, [store, eligible, ref, hasComment, stableComment]);
   const target = resolveComposerTarget(snapshot);
   const bound = target.kind === "target" && target.ref === ref;
   // The press is a TOGGLE on the binding as the reader sees it, not on the
@@ -1079,11 +1282,18 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
  * schedule was still reported as `fired-recurring`, because the firing that
  * elects that reading stays true after the stop, so the turn kept the
  * still-recurring claim standing over a card that had just gone read-only.
+ *
+ * AND A FIFTH (cinatra#2853 fix leg 2). The readings that have not fired —
+ * first shown, configured and expired — are named too: section VI gives them
+ * one sentence of their own, see `RUN_START_SCHEDULE_PROPOSAL_SENTENCE`, so a
+ * card with a body that is neither stopped nor fired reports `never-fired`, and
+ * `other` is left to a card with no reading at all.
  */
 export type ScheduleCardReading =
   | "spent-one-off"
   | "fired-recurring"
   | "stopped-recurring"
+  | "never-fired"
   | "other";
 
 const ScheduleReadingSinkContext = createContext<
@@ -1468,6 +1678,12 @@ export type RunReviewSlot = {
   ref: string | null;
   awaiting: boolean;
   producedReviewPark?: boolean;
+  /** Stable refresh identity (#3942), never a decision/action reference. */
+  reviewTaskId?: string | null;
+  /** SSR-only identities actually composed into the run rail (#3942). */
+  railReviewTaskIds?: readonly string[];
+  /** SSR-only current rail marking; separate from the live slot identity. */
+  railCurrentReviewTaskId?: string | null;
 };
 
 /**
@@ -1642,16 +1858,22 @@ const SLOT_LIVE_LOOK_SPACING_MS = 2000;
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */
 export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
-  const slot = (
-    data as {
-      reviewGate?: { ref?: unknown; awaiting?: unknown; producedReviewPark?: unknown };
-    }
-  )?.reviewGate;
-  if (!slot) return null;
+  const slot = (data as {
+    reviewGate?: { ref?: unknown; awaiting?: unknown; reviewTaskId?: unknown; producedReviewPark?: unknown };
+  })
+    ?.reviewGate;
+  if (!slot || typeof slot !== "object" || Array.isArray(slot)) return null;
   return {
     ref: typeof slot.ref === "string" && slot.ref.length > 0 ? slot.ref : null,
     awaiting: Boolean(slot.awaiting),
     producedReviewPark: Boolean(slot.producedReviewPark),
+    // Seeds without display identity keep the current parsed slot shape.
+    ...("reviewTaskId" in slot ? {
+      reviewTaskId:
+        typeof slot.reviewTaskId === "string" && slot.reviewTaskId.trim().length > 0
+          ? slot.reviewTaskId
+          : null,
+    } : {}),
   };
 }
 
@@ -1676,13 +1898,15 @@ export function defaultRunReviewSlotReader(runId: string): RunReviewSlotReader {
  * IS THE GATE THIS TICKET NAMES STILL THE PENDING ONE (cinatra#3007, F2)? Asked
  * of the same resolve route the card asks, with the same credential the card
  * would send, so the reader learns nothing the card could not. Any answer but a
- * pending state — a decided gate, a refusal, a failure — is "no".
+ * pending state — a decided gate or a refusal — withdraws the ticket. A
+ * transport failure or an unrecognizable response says nothing about that
+ * authorized reading; it is indeterminate rather than a gate decision.
  */
 async function reviewTicketStillPending(
   ref: string,
   auth: LifecycleCardAuth | null,
   signal: AbortSignal,
-): Promise<boolean> {
+): Promise<"pending" | "withdrawn" | "indeterminate"> {
   try {
     const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
       method: "POST",
@@ -1691,14 +1915,18 @@ async function reviewTicketStillPending(
       credentials: auth?.credentials ?? "same-origin",
       signal,
     });
-    if (!response.ok) return false;
+    // Credential invalidation is authoritative even without a protocol body:
+    // the resolve route answers 401 { error: "Unauthorized" } for that case.
+    if (response.status === 401 || response.status === 403) return "withdrawn";
     const envelope = parseLifecycleResolveEnvelope(
       "artifact_review_gate",
       await response.json(),
     );
-    return envelope?.state?.state === "pending";
+    if (envelope === null) return "indeterminate";
+    if (envelope.state?.state !== "pending") return "withdrawn";
+    return response.ok ? "pending" : "indeterminate";
   } catch {
-    return false;
+    return "indeterminate";
   }
 }
 
@@ -1723,12 +1951,15 @@ async function reviewTicketStillPending(
  * settled card over a run that is about to open a new one.
  */
 export function useRunReviewSlot({
+  runId,
   status,
   initial,
   read,
   liveSignal,
   stepOnFile,
 }: {
+  /** The actual run, not the identity of its replaceable read callback. */
+  runId?: string;
   status: string;
   initial?: RunReviewSlot | null;
   read: RunReviewSlotReader;
@@ -1855,6 +2086,11 @@ export function useRunReviewSlot({
   // The credential the card itself resolves with, for the one question the
   // reader asks of the resolve route (`reviewTicketStillPending`).
   const auth = useContext(LifecycleCardAuthContext);
+  // Only the opaque declaration is compared: no broker token is read or stored
+  // in React state. A new run/credential cannot inherit a previous wait's
+  // authorized ticket, including an answer still in flight for that wait.
+  const [seenRunId, setSeenRunId] = useState(runId);
+  const [seenAuth, setSeenAuth] = useState(auth);
   // WHEN THIS READER LAST LOOKED, and which liveness signal it looked against.
   // Held in refs because they are the schedule's own book-keeping and must never
   // themselves re-key the schedule — see the effect's note on the elapsed-time
@@ -1900,8 +2136,10 @@ export function useRunReviewSlot({
     },
     [],
   );
-  if (seenStatus !== status) {
+  if (seenStatus !== status || seenRunId !== runId || seenAuth !== auth) {
     setSeenStatus(status);
+    setSeenRunId(runId);
+    setSeenAuth(auth);
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
     setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
@@ -2321,18 +2559,25 @@ export function useRunReviewSlot({
                 // an empty detail between them. So while the run stays parked and
                 // the answer differs from the one on file in its ticket ALONE,
                 // the ticket on file is kept for as long as its gate is still
-                // the pending one; a gate that was decided, superseded or cannot
-                // be read any more gives way to the new ticket at once.
+                // the pending one. An indeterminate probe keeps that authorized
+                // identity too; a refusal, non-pending answer or known new gate
+                // gives way to the new ticket and its own authorized resolve.
                 const onlyTheTicketMoved =
                   parkedStatus &&
                   last.ref !== null &&
                   merged.ref !== null &&
                   merged.ref !== last.ref &&
                   merged.awaiting === last.awaiting &&
-                  merged.producedReviewPark === last.producedReviewPark;
+                  merged.producedReviewPark === last.producedReviewPark &&
+                  // Display identity grants no authority, but a different gate
+                  // must resolve its own ticket even if the old gate is pending.
+                  typeof last.reviewTaskId === "string" &&
+                  last.reviewTaskId.trim().length > 0 &&
+                  merged.reviewTaskId === last.reviewTaskId;
                 const keepTheTicketOnFile =
                   onlyTheTicketMoved &&
-                  (await reviewTicketStillPending(last.ref as string, auth, abort.signal));
+                  (await reviewTicketStillPending(last.ref as string, auth, abort.signal)) !==
+                    "withdrawn";
                 if (lookEpochRef.current !== epoch) return;
                 if (!keepTheTicketOnFile) {
                   changed =
@@ -2493,4 +2738,46 @@ export function useRunReviewSlot({
         ((status === "completed" && (slot.awaiting || unheardUnderThisStatus)) ||
           (parkedStatus && unheardOnTheFirstLookOnly))),
   };
+}
+
+/**
+ * The review reading is live; the run rail is composed by the server (#3942).
+ * Recompose that tree when the existing reader finds a new gate, without a
+ * second poller or navigation. Opaque tickets have a fresh nonce on each read,
+ * so only the stable task identity can dedupe a gate. It grants no authority;
+ * the card still resolves and acts through its opaque server-minted ticket.
+ */
+export function useRunReviewRailRefresh({
+  runId,
+  reviewTaskId,
+  initialReviewTaskIds,
+  railCurrentReviewTaskId,
+  refresh,
+}: {
+  runId: string;
+  reviewTaskId: string | null | undefined;
+  initialReviewTaskIds: readonly string[] | undefined;
+  railCurrentReviewTaskId?: string | null;
+  /** Supplied by the actual page owner; this hook needs no router context. */
+  refresh: (() => void) | undefined;
+}): void {
+  const observed = useRef({ runId, tasks: new Set<string>(), refreshed: new Set<string>() });
+
+  useEffect(() => {
+    if (observed.current.runId !== runId) {
+      observed.current = { runId, tasks: new Set<string>(), refreshed: new Set<string>() };
+    }
+    const tasks = observed.current.tasks;
+    // Seed only gates actually included in the server's rail query. The later
+    // slot read can discover a gate opened between those two reads; treating
+    // that slot's identity as already painted would lose its rail refresh.
+    // This also seeds refreshed/remounted trees without a refresh loop.
+    for (const taskId of initialReviewTaskIds ?? []) tasks.add(taskId);
+    if (!refresh || !reviewTaskId || observed.current.refreshed.has(reviewTaskId)) return;
+    const markingIsStale = railCurrentReviewTaskId != null && railCurrentReviewTaskId !== reviewTaskId;
+    if (tasks.has(reviewTaskId) && !markingIsStale) return;
+    tasks.add(reviewTaskId);
+    observed.current.refreshed.add(reviewTaskId);
+    refresh();
+  }, [initialReviewTaskIds, railCurrentReviewTaskId, refresh, reviewTaskId, runId]);
 }

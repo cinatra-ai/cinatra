@@ -23,6 +23,8 @@
 // only, and loses it right after.
 import { randomUUID } from "node:crypto";
 
+import { isFrameScope } from "./step-kit.mjs";
+
 /** One press or one selection: how long the control may take to take it. */
 export const CONTROL_ACTION_BOUND_MS = 10_000;
 /** How often a control step reads the page while it waits. */
@@ -40,8 +42,14 @@ export const CONTROL_HYDRATION_BOUND_MS = 60_000;
  * Backend node ids resolve to actual elements, never an index or a name match,
  * so two identically named controls remain two controls. The remote handles and
  * the session belong to this reading only and leave no attributes on the page.
+ *
+ * Given a frame scope (frameOf), it reads the accessibility tree of THAT
+ * frame's document and resolves each node to its element there (see
+ * openFrameReading), never the page's whole tree. `reader` is the in-page
+ * reading run over the document with the names read (readControls unless a
+ * step hands its own).
  */
-export async function readPageControls(page, query) {
+export async function readPageControls(page, query, reader = readControls) {
   const context = page.context();
   const browser = context.browser()?.browserType?.().name();
   if (typeof context.newCDPSession !== "function" || (browser && browser !== "chromium")) {
@@ -49,12 +57,13 @@ export async function readPageControls(page, query) {
     error.name = "UnsupportedBrowserError";
     throw error;
   }
-  const session = await context.newCDPSession(page);
+  const frame = isFrameScope(page) ? page.mainFrame() : null;
   const objectGroup = `step-controls-${randomUUID()}`;
+  const { session, frameId, documentNode } = frame ? await openFrameReading(context, frame, objectGroup) : { session: await context.newCDPSession(page) };
   try {
-    const { root } = await session.send("DOM.getDocument", { depth: 0 });
+    const { root } = documentNode === undefined ? await session.send("DOM.getDocument", { depth: 0 }) : { root: { backendNodeId: documentNode } };
     const { object: document } = await session.send("DOM.resolveNode", { backendNodeId: root.backendNodeId, objectGroup });
-    const { nodes } = await session.send("Accessibility.getFullAXTree");
+    const { nodes } = frameId === undefined ? await session.send("Accessibility.getFullAXTree") : await session.send("Accessibility.getFullAXTree", { frameId });
     // Text fragments carry backend ids too, but only DOM elements can be the
     // controls/parts this reader selects. Their names already include fragments.
     const elements = nodes.filter((node) => !node.ignored && node.backendDOMNodeId && node.name && !["StaticText", "InlineTextBox", "LineBreak"].includes(node.role?.value));
@@ -85,7 +94,7 @@ export async function readPageControls(page, query) {
             throw new Error("The accessibility document changed");
           accessibility.set(element, names[index]);
         });
-        return (${readControls.toString()})(query, accessibility);
+        return (${reader.toString()})(query, accessibility);
       }`,
       arguments: [{ value: query }, { value: names }, ...handles],
       returnByValue: true,
@@ -99,6 +108,52 @@ export async function readPageControls(page, query) {
     } finally {
       await session.detach();
     }
+  }
+}
+
+/**
+ * The reading of one frame's document, for readPageControls given a frame
+ * scope. When Chromium runs the frame out of process, the frame has a target of
+ * its own, and a CDP session on it (`context.newCDPSession(frame)`, which
+ * Playwright offers for such a frame only) reads that document as a page's
+ * session reads the page's. Otherwise the frame is part of its page's target:
+ * the page's session reads it by the frame's own id (the `frameId` of
+ * `Accessibility.getFullAXTree`) and the frame's own document node, both read
+ * from the frame's element (`DOM.describeNode`), which the session reaches
+ * through a name the reading puts on the page's window and takes off again.
+ * @returns {Promise<{ session: any, frameId?: string, documentNode?: number }>}
+ */
+async function openFrameReading(context, frame, objectGroup) {
+  let own = null;
+  try {
+    own = await context.newCDPSession(frame);
+  } catch {
+    own = null;
+  }
+  if (own) return { session: own };
+  const session = await context.newCDPSession(frame.page());
+  const key = `__stepFrameOwner${randomUUID().replace(/-/g, "")}`;
+  try {
+    const owner = await frame.frameElement();
+    try {
+      await owner.evaluate((element, name) => {
+        window[name] = element;
+      }, key);
+    } finally {
+      await owner.dispose();
+    }
+    try {
+      const { result } = await session.send("Runtime.evaluate", { expression: `window[${JSON.stringify(key)}]`, objectGroup });
+      if (!result || !result.objectId) throw new Error("The frame's element could not be reached");
+      const { node } = await session.send("DOM.describeNode", { objectId: result.objectId });
+      if (!node || !node.frameId || !node.contentDocument) throw new Error("The frame's document is not its page's to read");
+      return { session, frameId: node.frameId, documentNode: node.contentDocument.backendNodeId };
+    } finally {
+      await session.send("Runtime.evaluate", { expression: `delete window[${JSON.stringify(key)}]` }).catch(() => {});
+    }
+  } catch (error) {
+    await session.detach().catch(() => {});
+    throw error;
   }
 }
 
