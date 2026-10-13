@@ -622,3 +622,67 @@ describe("each target streams under its OWN boundary (cinatra#3334)", () => {
     expect(html).not.toContain("panel:a2");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4129 — ONE TARGET PER FRAME, for a gate that pins several.
+//
+// A gate opened before reviews became one per artifact, and still pending, can
+// pin several targets. The card draws each target's header directly above its
+// own frame, and each frame names the ONE pinned target it draws, by its pinned
+// revision. The name is a closed selector over the gate's own frozen set: it
+// authorizes nothing, and a name the gate does not pin draws the one empty
+// document every denial draws.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#4129 — a frame that names one pinned target draws that target alone", () => {
+  it("draws only the target the frame names", async () => {
+    const targets = [target("a1"), target("a2"), target("a3")];
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets,
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const el = await renderIsland(REF, { target: targets[1].target.representationRevisionId });
+    expect(isEmptyIsland(el)).toBe(false);
+    expect((el.props as Record<string, unknown>)["data-target-count"]).toBe(1);
+    const panels = panelProps(el);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].prepared).toBe(targets[1].prepared);
+  });
+
+  it("a frame naming a target the gate does not pin draws the same empty document every denial draws", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "not-authorized" });
+    const denied = await renderIsland(REF);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      // The gate's targets, each of whose preparation FAILS: a frame that draws
+      // none of them must still leave no rejection unhandled.
+      const failing = (artifactId: string) => ({
+        target: { artifactId, representationRevisionId: `${artifactId}-rev` },
+        prepared: Promise.reject(new Error(`prepare failed: ${artifactId}`)),
+        capturePair: Promise.reject(new Error(`capture failed: ${artifactId}`)),
+      });
+      loadReviewGateSurface.mockResolvedValue({
+        kind: "ready",
+        agentSummary: null,
+        targets: [failing("a1"), failing("a2")],
+        permissions: Promise.resolve({ canDecide: true, canComment: true }),
+      });
+      const el = await renderIsland(REF, { target: "rev_not_pinned" });
+      // One turn of the event loop, so the runtime reports any rejection that
+      // nothing handled.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(isEmptyIsland(el)).toBe(true);
+      expect(JSON.stringify(el)).toBe(JSON.stringify(denied));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});

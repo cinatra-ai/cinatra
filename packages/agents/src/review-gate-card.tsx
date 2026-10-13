@@ -259,6 +259,10 @@ const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
  *  server side by the island page's own suite. */
 const REVIEW_ISLAND_COLOR_SCHEME_PARAM = "scheme";
 
+/** The query parameter that names the ONE pinned target a frame draws — the
+ *  client half of the selector the island page (`src/app/lifecycle/review-island/page.tsx`) reads. */
+const REVIEW_ISLAND_TARGET_PARAM = "target";
+
 /**
  * The credential OUT of a server-issued island URL — never the URL itself.
  *
@@ -384,6 +388,22 @@ function islandTargetIdentity(src: string): string {
   const params = new URLSearchParams(src.slice(query + 1));
   params.delete(REVIEW_ISLAND_COLOR_SCHEME_PARAM);
   return `${src.slice(0, query)}?${params.toString()}`;
+}
+
+/**
+ * The island address of ONE pinned target (cinatra#4129): the gate's own
+ * address with that target's pinned revision added, so the frame drawn under
+ * the target's header draws that target alone. Every other parameter — the
+ * ref, the credential, the frame selectors and the palette — is kept as it
+ * was. The revision, not a position, names the target, because the answer's
+ * headers skip a target the reader may not read.
+ */
+export function reviewTargetIslandSrcForTarget(src: string, revisionId: string): string {
+  const query = src.indexOf("?");
+  const path = query < 0 ? src : src.slice(0, query);
+  const params = new URLSearchParams(query < 0 ? "" : src.slice(query + 1));
+  params.set(REVIEW_ISLAND_TARGET_PARAM, revisionId);
+  return `${path}?${params.toString()}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,6 +1217,8 @@ function renderState(args: {
         canComment: state.canComment,
       };
       const suggestions = state.suggestions ?? [];
+      const pairTargets =
+        targetHeaders !== null && targetHeaders.length > 1 && !islandCredentialed;
       return (
         <>
           <ReviewGateHeader pending />
@@ -1205,16 +1227,33 @@ function renderState(args: {
               Drawn HERE, by the card, so it survives every state of the island
               below it — the skeleton while the preview is still arriving and the
               recovery panel when it never did. Inert: no control, no revision
-              picker, because the target is versioned and frozen. */}
-          <ReviewTargetHeaders headers={targetHeaders} />
+              picker, because the target is versioned and frozen. A gate that
+              pins several targets on an address with no single-use credential
+              draws each header directly above its own island instead, one
+              target after another (cinatra#4129, `PairedReviewTargets`). The
+              two readings fill two sibling slots rather than one wrapper, so
+              the one island keeps the place the settled reading draws it in
+              and a gate that settles keeps its painted frame. */}
+          {pairTargets ? (
+            <PairedReviewTargets
+              headers={targetHeaders}
+              islandSrc={islandSrc}
+              islandCredentialed={islandCredentialed}
+              onRetryResolve={onRefresh}
+            />
+          ) : (
+            <ReviewTargetHeaders headers={targetHeaders} />
+          )}
           {/* §III — the target(s). ONE island renders every pinned target as
               sibling panels, exactly as the page stacks them, because the
               decision below is all-or-nothing across the whole gate. */}
-          <ReviewTargetIsland
-            src={islandSrc}
-            credentialed={islandCredentialed}
-            onRetryResolve={onRefresh}
-          />
+          {pairTargets ? null : (
+            <ReviewTargetIsland
+              src={islandSrc}
+              credentialed={islandCredentialed}
+              onRetryResolve={onRefresh}
+            />
+          )}
           {/* §VIII — the per-item chips, between the target they annotate and
               the floor that decides them. Marks are LIVE only for a reader who
               may take the terminal decision they would ride on: a reader with
@@ -2249,6 +2288,49 @@ export function ReviewTargetHeaders({
     <>
       {headers.map((header) => (
         <ReviewTargetHeader key={`${header.revisionId}:${header.objectType}`} header={header} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * EACH HEADER ABOVE ITS OWN BODY (cinatra#4129). A gate opened before reviews
+ * became one per artifact, and still pending, can pin several targets; the
+ * drawing pairs every target's header with its own representation slot, so
+ * such a gate draws one target after another — the header, then ONE island
+ * frame that names that header's pinned revision — in the answer's order, with
+ * the one decision floor below them all. The header stays the card's, outside
+ * the frame that can fail, so it is drawn while its body loads and when the
+ * body cannot be shown. An address carrying a single-use credential is not
+ * drawn this way: its grant paints ONE document, so a second frame would
+ * present a spent grant and draw nothing, and that address keeps one frame.
+ */
+export function PairedReviewTargets({
+  headers,
+  islandSrc,
+  islandCredentialed,
+  onRetryResolve,
+}: {
+  headers: readonly LifecycleTargetHeader[];
+  islandSrc: string;
+  islandCredentialed: boolean;
+  onRetryResolve: () => void;
+}): ReactElement {
+  return (
+    <>
+      {headers.map((header, index) => (
+        <div
+          key={`${header.revisionId}:${index}`}
+          data-review-target-pair={header.revisionId}
+          className="flex flex-col gap-3"
+        >
+          <ReviewTargetHeader header={header} />
+          <ReviewTargetIsland
+            src={reviewTargetIslandSrcForTarget(islandSrc, header.revisionId)}
+            credentialed={islandCredentialed}
+            onRetryResolve={onRetryResolve}
+          />
+        </div>
       ))}
     </>
   );

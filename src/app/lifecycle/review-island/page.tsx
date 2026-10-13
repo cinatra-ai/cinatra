@@ -146,6 +146,10 @@ import { IslandHeightReporter } from "./island-height-reporter";
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
 
+/** The query parameter that names the ONE pinned target a frame draws — the
+ *  card's `REVIEW_ISLAND_TARGET_PARAM`, mirrored here (cinatra#4129). */
+const REVIEW_ISLAND_TARGET_PARAM = "target";
+
 type PageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -193,6 +197,10 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   const scheme = parseIslandColorScheme(one(sp[REVIEW_ISLAND_COLOR_SCHEME_PARAM]));
   const groundCss = islandDocumentGroundCss(scheme);
   const empty = emptyIsland(scheme);
+  // The ONE pinned target this frame draws, when the card framed each target
+  // of a gate that pins several under its own header (cinatra#4129). A closed
+  // selector over the gate's own frozen set, read here and used only below.
+  const namedTarget = one(sp[REVIEW_ISLAND_TARGET_PARAM]);
 
   // Is this a VERIFIED widget frame? Resolved server-side from the SAME closed
   // binding the island's `frame-ancestors` wall uses, so the header and this
@@ -305,6 +313,26 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
   const decided = surface.kind === "settled";
 
+  // ONE TARGET PER FRAME (cinatra#4129). A frame that names a target draws the
+  // pinned target whose revision it names, and no other; a frame that names
+  // none draws the gate's whole set, exactly as before. The loader started
+  // every target's work, so a target this frame does not draw has its promises
+  // observed here — a failure there is the other frame's to show, never an
+  // unhandled rejection in this one. A name the gate does not pin draws the one
+  // empty document every denial draws: the selector is no oracle.
+  const drawn =
+    namedTarget === null
+      ? surface.targets
+      : surface.targets.filter(
+          (stream) => stream.target.representationRevisionId === namedTarget,
+        );
+  for (const stream of surface.targets) {
+    if (drawn.includes(stream)) continue;
+    void stream.prepared.catch(() => undefined);
+    void stream.capturePair.catch(() => undefined);
+  }
+  if (namedTarget !== null && drawn.length === 0) return empty;
+
   return (
     <div
       className={islandBodyClassName(scheme)}
@@ -313,7 +341,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
       // conformance check and for nothing else. Both readings draw the same
       // panels from the same frozen set; neither carries decision chrome.
       data-review-reading={decided ? "decided" : "pending"}
-      data-target-count={surface.targets.length}
+      data-target-count={drawn.length}
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
     >
@@ -342,7 +370,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
       {/* §II/§III — every pinned target as a sibling panel, in gate order. The
           card below the frame carries ONE floor for all of them, because the
           decision is all-or-nothing across the gate. */}
-      {surface.targets.map((stream) => (
+      {drawn.map((stream) => (
         <Suspense key={pinnedCaptureKey(stream.target)} fallback={<ReviewGateLoading />}>
           <StreamedReviewTarget
             prepared={stream.prepared}

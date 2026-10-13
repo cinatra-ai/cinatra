@@ -77,7 +77,7 @@ vi.mock("../run-window-actions", () => ({
 
 import { sendRunWindowTurn } from "../run-window-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { ReviewGateCard } from "../review-gate-card";
+import { REVIEW_TARGET_ISLAND_PATH, ReviewGateCard } from "../review-gate-card";
 
 afterEach(() => {
   cleanup();
@@ -151,6 +151,14 @@ const promptWindows = (root: ParentNode) =>
   root.querySelectorAll('[data-conformance-id="review-prompt-window"]');
 const headers = (root: ParentNode) =>
   root.querySelectorAll('[data-conformance-id="review-target-header"]');
+const pairs = (root: ParentNode) => root.querySelectorAll("[data-review-target-pair]");
+const islands = (root: ParentNode) =>
+  root.querySelectorAll('[data-conformance-id="review-target-island"]');
+/** The query of an island frame's address, read the way the island page reads it. */
+const frameQuery = (frame: Element | null | undefined): URLSearchParams => {
+  const src = frame?.getAttribute("src") ?? "";
+  return new URLSearchParams(src.slice(src.indexOf("?") + 1));
+};
 
 // ---------------------------------------------------------------------------
 // ITEM 1 — the conversational prompt window is inside the gate's frame
@@ -423,13 +431,23 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
       .toContain(HEADER_ONE.title);
   });
 
-  it("EXACTLY ONE header per pinned target, on a gate carrying several", async () => {
+  it("EXACTLY ONE header per pinned target, each directly above its own island, on a gate carrying several", async () => {
     const { container } = await renderPending("run_card", [HEADER_ONE, HEADER_TWO]);
     expect(headers(container)).toHaveLength(2);
     const revisions = [...headers(container)].map((h) =>
       h.querySelector("[data-review-target-revision]")?.getAttribute("data-review-target-revision"),
     );
     expect(revisions).toEqual([HEADER_ONE.revisionId, HEADER_TWO.revisionId]);
+    // cinatra#4129 — each header is followed by ITS OWN body: the island frame
+    // that names that header's pinned revision, not one shared frame drawn
+    // after every header.
+    [...headers(container)].forEach((header, i) => {
+      const island = header.nextElementSibling;
+      expect(island?.getAttribute("data-conformance-id")).toBe("review-target-island");
+      const query = frameQuery(island!.querySelector("iframe"));
+      expect(query.get("target")).toBe([HEADER_ONE.revisionId, HEADER_TWO.revisionId][i]);
+      expect(query.get("ref")).toBe("ref-3141");
+    });
   });
 
   it("the conversation's card draws the header in every island state too", async () => {
@@ -489,5 +507,164 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
       expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
     );
     expect(headers(container)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4129 — a gate opened before reviews became one per artifact, and
+// still pending, can pin several targets. The drawing pairs every target's
+// header with its own representation slot (§IV: "Every target opens with a
+// header that names what is under review … Beneath the header sits the
+// representation slot"), so such a gate draws one target after another, each
+// header directly above its own island, and keeps ONE decision floor below them.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#4129 — a pending gate that pins several targets draws each header above its own body", () => {
+  const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComment: true };
+  const PINNED = [HEADER_ONE.revisionId, HEADER_TWO.revisionId];
+  const TITLES = [HEADER_ONE.title, HEADER_TWO.title];
+
+  async function renderGate(
+    host: "run_card" | "chat_thread" | "page_gate_region",
+    state: LifecycleCardState = PENDING,
+    headerList = [HEADER_ONE, HEADER_TWO],
+  ) {
+    mockResolve(state, { targetHeaders: headerList });
+    const rendered = renderOn(host);
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      ).not.toBeNull(),
+    );
+    return rendered;
+  }
+
+  const revisionOf = (header: Element | null | undefined) =>
+    header
+      ?.querySelector("[data-review-target-revision]")
+      ?.getAttribute("data-review-target-revision");
+
+  it.each(["run_card", "chat_thread", "page_gate_region"] as const)(
+    "pairs each header with its own island, in pinned order — %s",
+    async (host) => {
+      const { container } = await renderGate(host);
+      const pairList = [...pairs(container)];
+      expect(pairList).toHaveLength(2);
+      expect(pairList.map((pair) => pair.getAttribute("data-review-target-pair"))).toEqual(PINNED);
+      expect(
+        pairList[0].compareDocumentPosition(pairList[1]) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      pairList.forEach((pair, i) => {
+        const children = [...pair.children];
+        expect(children).toHaveLength(2);
+        expect(children[0].getAttribute("data-conformance-id")).toBe("review-target-header");
+        expect(revisionOf(children[0])).toBe(PINNED[i]);
+        expect(children[1].getAttribute("data-conformance-id")).toBe("review-target-island");
+      });
+      for (const header of headers(container)) {
+        expect(header.closest("[data-review-target-pair]"), "no header outside a pair").not.toBeNull();
+      }
+    },
+  );
+
+  it("each island frames only its own target", async () => {
+    const { container } = await renderGate("run_card");
+    const frames = [...container.querySelectorAll("iframe")];
+    expect(frames).toHaveLength(2);
+    expect(frames.map((frame) => frameQuery(frame).get("target"))).toEqual(PINNED);
+    expect(frames.map((frame) => frameQuery(frame).get("ref"))).toEqual(["ref-3141", "ref-3141"]);
+  });
+
+  it("every header is drawn while its own island is still loading", async () => {
+    const { container } = await renderGate("run_card");
+    const islandList = [...islands(container)];
+    expect(islandList).toHaveLength(2);
+    for (const island of islandList) {
+      expect(island.getAttribute("data-island-load-state")).toBe("loading");
+    }
+    expect(headers(container)).toHaveLength(2);
+    const pairList = [...pairs(container)];
+    expect(pairList).toHaveLength(2);
+    pairList.forEach((pair, i) => {
+      const header = pair.querySelector('[data-conformance-id="review-target-header"]');
+      expect(header?.parentElement).toBe(pair);
+      expect(header?.textContent).toContain(TITLES[i]);
+      expect(pair.querySelector('[data-conformance-id="review-target-island"]')).toBe(islandList[i]);
+    });
+  });
+
+  it("past the 12-second bound each header stays above its own failed body", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { container } = await renderGate("run_card");
+    await act(async () => {
+      vi.advanceTimersByTime(12_500);
+    });
+    const islandList = [...islands(container)];
+    expect(islandList).toHaveLength(2);
+    for (const island of islandList) {
+      expect(island.getAttribute("data-island-load-state")).toBe("timed-out");
+      expect(
+        island.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+        "the recovery affordance is in each body",
+      ).not.toBeNull();
+    }
+    const pairList = [...pairs(container)];
+    expect(pairList).toHaveLength(2);
+    pairList.forEach((pair, i) => {
+      const header = pair.firstElementChild!;
+      expect(header.getAttribute("data-conformance-id")).toBe("review-target-header");
+      expect(header.textContent).toContain(TITLES[i]);
+      for (const island of islandList) expect(island.contains(header)).toBe(false);
+    });
+  });
+
+  it("a restricted reader of the same gate sees the same pairs", async () => {
+    const { container } = await renderGate("run_card", {
+      state: "restricted",
+      canDecide: false,
+      canComment: false,
+      reason: "You can view this review but not respond to it.",
+    });
+    const pairList = [...pairs(container)];
+    expect(pairList).toHaveLength(2);
+    expect(pairList.map((pair) => pair.getAttribute("data-review-target-pair"))).toEqual(PINNED);
+    pairList.forEach((pair, i) => {
+      expect(revisionOf(pair.firstElementChild)).toBe(PINNED[i]);
+      expect(pair.lastElementChild?.getAttribute("data-conformance-id")).toBe("review-target-island");
+    });
+  });
+
+  it("a gate that pins ONE target keeps its reading", async () => {
+    const { container } = await renderGate("run_card", PENDING, [HEADER_ONE]);
+    expect(pairs(container)).toHaveLength(0);
+    expect(headers(container)).toHaveLength(1);
+    const frames = container.querySelectorAll("iframe");
+    expect(frames).toHaveLength(1);
+    expect(frameQuery(frames[0]).has("target")).toBe(false);
+  });
+
+  it("an island address that carries a single-use credential keeps ONE frame for several targets", async () => {
+    mockResolve(PENDING, {
+      targetHeaders: [HEADER_ONE, HEADER_TWO],
+      islandSrc: `${REVIEW_TARGET_ISLAND_PATH}?ref=ref-3141&ic=ic-placeholder`,
+    });
+    const { container } = renderOn("site_widget");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(pairs(container)).toHaveLength(0);
+    expect(headers(container)).toHaveLength(2);
+    const frames = container.querySelectorAll("iframe");
+    expect(frames).toHaveLength(1);
+    expect(frameQuery(frames[0]).get("ic")).toBe("ic-placeholder");
+    expect(frameQuery(frames[0]).has("target")).toBe(false);
+  });
+
+  it("a SETTLED gate that pins several keeps its reading", async () => {
+    mockResolve({ state: "settled", outcome: "approved" }, { targetHeaders: [HEADER_ONE, HEADER_TWO] });
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(headers(container)).toHaveLength(2));
+    expect(pairs(container)).toHaveLength(0);
+    expect(container.querySelectorAll("iframe")).toHaveLength(1);
   });
 });
