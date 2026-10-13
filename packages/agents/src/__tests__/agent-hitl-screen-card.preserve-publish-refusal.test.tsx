@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry, type FieldRendererProps } from "../field-renderer-registry";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "../agent-builder-ids";
-import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
+import { AgentHitlScreenCard, type AgentHitlScreenCarrier } from "../agent-hitl-screen-card";
 
 const ports = vi.hoisted(() => ({ read: vi.fn(), approve: vi.fn() }));
 vi.mock("../agent-hitl-screen-actions", () => ({ getAgentHitlScreenStateAction: ports.read }));
@@ -146,5 +147,60 @@ describe("fallback grouped renderer submission", () => {
     await openGrouped("setup-grouped"); await press("Do not publish");
     await waitFor(() => expect(ports.approve).toHaveBeenCalledTimes(1));
     expect(payloadFor("chat_thread")).toEqual({ approved: false, draftId: "kept" });
+  });
+});
+
+// A DECLINE STAGED BEFORE THE CARD'S OWN EFFECTS RAN (cinatra#3650). A renderer
+// that stages its choice from its own effect as it mounts is the deterministic
+// form of a press that lands between the commit that draws a gate and the
+// card's effects: React runs a child's effects before its parent's, so a reset
+// of the card's stored choice in an effect would overwrite that decline.
+function StagesDeclineOnMount({ onChange, value }: FieldRendererProps) {
+  const staged = useRef(false);
+  useEffect(() => {
+    if (staged.current) return;
+    staged.current = true;
+    onChange({ approved: false, draftId: "kept" });
+  }, [onChange]);
+  return <output data-testid="staged-choice">{JSON.stringify(value)}</output>;
+}
+function registerRenderer(renderer: typeof Choice) {
+  fieldRendererRegistry.clear();
+  fieldRendererRegistry.register({ id: RENDERER, priority: 100, midRunHitl: true,
+    credentialSafe: true, condition: (_f, _s, c) => c.xRenderer === RENDERER, renderer });
+}
+async function declineShown() {
+  await waitFor(() => expect(JSON.parse(screen.getByTestId("staged-choice").textContent ?? "{}").approved).toBe(false));
+}
+
+describe.each(["chat_thread", "run_card", "page_gate_region", "site_widget"] as const)("a decline staged as the gate mounts on %s", (host) => {
+  it("is kept, and Continue sends it", async () => {
+    registerRenderer(StagesDeclineOnMount);
+    render(<LifecycleCardSurfaceProvider host={host}
+      {...(host === "site_widget" ? { auth: { headers: () => ({ Authorization: "Bearer cwu_test" }), credentials: "omit" as const } } : {})}>
+      <AgentHitlScreenCard runId={asking.runId} />
+    </LifecycleCardSurfaceProvider>);
+    await declineShown();
+    expectRefusal(await continued(host));
+  });
+});
+
+describe("a decline staged as the gate mounts, when the host moves the card", () => {
+  it("rides the host's box into the card drawn in the new place", async () => {
+    registerRenderer(StagesDeclineOnMount);
+    const carrier: AgentHitlScreenCarrier = { current: null };
+    const first = render(<LifecycleCardSurfaceProvider host="chat_thread">
+      <AgentHitlScreenCard runId={asking.runId} carrier={carrier} />
+    </LifecycleCardSurfaceProvider>);
+    await declineShown();
+    first.unmount();
+    // The renderer in the new place stages nothing, so only the box can carry
+    // the decline there.
+    registerRenderer(Choice);
+    render(<LifecycleCardSurfaceProvider host="chat_thread">
+      <AgentHitlScreenCard runId={asking.runId} carrier={carrier} />
+    </LifecycleCardSurfaceProvider>);
+    await declineShown();
+    expectRefusal(await continued("chat_thread"));
   });
 });
