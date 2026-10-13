@@ -10,6 +10,7 @@ import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { requireDashboardAccess, DashboardAccessError } from "@/lib/dashboards/authz";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
+import { artifactOwnerLabel } from "@/lib/artifacts/artifact-owner-label";
 import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
 // canonical-path has its OWN alias (not re-exported through the reads module):
 // the reads module rides the MCP handlers into the locked API-route graphs,
@@ -127,6 +128,12 @@ export async function DashboardDetailScreen({
   // Owner display name for the ScopeBadge (#1905) — best-effort, level-only
   // badge when unresolved.
   const ownerDisplayName = await readOwnerDisplayName(row.ownerLevel, row.ownerId);
+  // THE LEVEL WORD, NEVER THE STORED VALUE (cinatra#3475). The accessible name
+  // used to interpolate the raw stored level ("organization"), so the dashboard
+  // whose Artifacts library row reads "Organization: Acme Corp" named itself
+  // "organization" on its own page. The word comes from the one composer every
+  // scope surface reads; the name is still carried beside it.
+  const ownershipWord = artifactOwnerLabel(row.ownerLevel);
 
   let body: ReactNode;
   if (parsed.ok) {
@@ -157,8 +164,8 @@ export async function DashboardDetailScreen({
             ownerName={ownerDisplayName ?? undefined}
             aria-label={
               ownerDisplayName
-                ? `Ownership: ${row.ownerLevel} — ${ownerDisplayName}`
-                : `Ownership: ${row.ownerLevel}`
+                ? `Ownership: ${ownershipWord} — ${ownerDisplayName}`
+                : `Ownership: ${ownershipWord}`
             }
           />
         }

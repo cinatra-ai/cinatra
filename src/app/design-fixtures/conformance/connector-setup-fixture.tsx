@@ -24,7 +24,7 @@ import {
  *  - no duplicated title/description inside the content column;
  *  - role-less named actions render as their button only (no echoed label);
  *  - custom-tab content at the Narrow width;
- *  - Help = ONE read-only card of merged advisory sections.
+ *  - Help = bare read-only labeled sections at Narrow width (design#201 §II).
  *
  * FIELD KEYS ARE THE MANIFEST BINDINGS: the pinned manifest binds
  * `api-key = config.apiKey`, `service-tier = config.serviceTier`, … so each

@@ -53,9 +53,8 @@ const KNOWN_DB_PRICED_MODELS: ReadonlySet<string> = new Set<string>([
   "claude-opus-4-7",
   "claude-3-7-sonnet-latest",
   "claude-3-5-haiku-latest",
-  // Gemini — the 2.5/1.5 tail removed by the S3 Gemini 3.5-only train.
-  "gemini-2.5-flash-lite",
-  "gemini-1.5-pro",
+  // Gemini — rates belong to the online LiteLLM sync, never copied from 2.5.
+  "gemini-3.5-flash",
 ]);
 
 function allDeclaredModelIds(): string[] {

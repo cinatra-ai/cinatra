@@ -79,8 +79,10 @@ import type {
 } from "@cinatra-ai/sdk-ui/widget";
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 import {
+  LifecycleCardSettleProvider,
   LifecycleComposerFocusProvider,
   type ComposerFocusStore,
+  type LifecycleCardSettleBus,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import type { ThemeName } from "./syntax-highlight";
 import {
@@ -177,6 +179,16 @@ export type ConversationHostAdapter = {
    * past it. Enabling it there is that slice's, not this one's.
    */
   composerFocus?: ComposerFocusStore;
+  /**
+   * The bus a decided card is announced on (cinatra#2853, the picture leg).
+   *
+   * Declared by the same hosts that declare a composer binding, and for the same
+   * reason: a typed decision is taken on the pair, so the card that was decided
+   * and the box the sentence was typed into must be under one provider. A host
+   * that declares none keeps the mount-and-focus resolve cadence its cards have
+   * always had.
+   */
+  cardSettle?: LifecycleCardSettleBus;
 };
 
 /**
@@ -292,6 +304,7 @@ export function ConversationColumn({
   const hasActiveStream = streamingCount > 0;
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesContentRef = useRef<HTMLDivElement>(null);
   // Scroll lock: true when user has scrolled up intentionally. Auto-scroll is suppressed until
   // streaming ends OR user scrolls back to the bottom.
   const userScrolledUpRef = useRef(false);
@@ -317,6 +330,18 @@ export function ConversationColumn({
       requestAnimationFrame(() => { isProgrammaticScrollRef.current = false; });
     }
   }, []);
+
+  // Run cards can grow while the transcript and stream count stay unchanged,
+  // after the bounded cold-load settle pass has ended. Observe the growing
+  // content box, not the fixed scroll viewport. The existing pin owns the
+  // reader's scroll lock, so a late resize never pulls a scrolled-up reader.
+  useEffect(() => {
+    const content = messagesContentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(scrollToBottom);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
 
   // -------------------------------------------------------------------------
   // THE ROOM THE COMPOSER STANDS IN (cinatra#3044).
@@ -453,37 +478,39 @@ export function ConversationColumn({
           userScrolledUpRef.current = distanceFromBottom > 5;
         }}
       >
-        <ChatMessagesView
-          messages={messages}
-          isSlackMode={isSlackMode}
-          animating={animating}
-          theme={theme}
-          userId={userId}
-          sessionUser={sessionUser}
-          activeThreadId={activeThreadId}
-          activeAssistantHandle={activeAssistantHandle}
-          assistantHandleMap={assistantHandleMap}
-          taggedAssistantUserIds={taggedAssistantUserIds}
-          mentionables={mentionables}
-          pausedParticipants={pausedParticipants}
-          onTogglePause={onTogglePause}
-          requestEditMessageId={requestEditMessageId}
-          onRequestEditMessage={onRequestEditMessage}
-          onEditStarted={onEditStarted}
-          hasActiveStream={hasActiveStream}
-          isStreaming={isStreaming}
-          onEditAndResend={onEditAndResend}
-          onActivateResource={onActivateResource}
-          widgetRuntime={widgetRuntime}
-          widgetSubmitRef={widgetSubmitRef}
-          widgetRefreshKey={widgetRefreshKey}
-          onActiveGateChange={onActiveGateChange}
-          pendingExternalHandle={pendingExternalHandle}
-          typingIndicators={typingIndicators}
-          chatViews={chatViews}
-          lifecycleSurface={host.lifecycleSurface}
-          {...(host.onApplyIntent ? { onApplyIntent: host.onApplyIntent } : {})}
-        />
+        <div ref={messagesContentRef}>
+          <ChatMessagesView
+            messages={messages}
+            isSlackMode={isSlackMode}
+            animating={animating}
+            theme={theme}
+            userId={userId}
+            sessionUser={sessionUser}
+            activeThreadId={activeThreadId}
+            activeAssistantHandle={activeAssistantHandle}
+            assistantHandleMap={assistantHandleMap}
+            taggedAssistantUserIds={taggedAssistantUserIds}
+            mentionables={mentionables}
+            pausedParticipants={pausedParticipants}
+            onTogglePause={onTogglePause}
+            requestEditMessageId={requestEditMessageId}
+            onRequestEditMessage={onRequestEditMessage}
+            onEditStarted={onEditStarted}
+            hasActiveStream={hasActiveStream}
+            isStreaming={isStreaming}
+            onEditAndResend={onEditAndResend}
+            onActivateResource={onActivateResource}
+            widgetRuntime={widgetRuntime}
+            widgetSubmitRef={widgetSubmitRef}
+            widgetRefreshKey={widgetRefreshKey}
+            onActiveGateChange={onActiveGateChange}
+            pendingExternalHandle={pendingExternalHandle}
+            typingIndicators={typingIndicators}
+            chatViews={chatViews}
+            lifecycleSurface={host.lifecycleSurface}
+            {...(host.onApplyIntent ? { onApplyIntent: host.onApplyIntent } : {})}
+          />
+        </div>
       </div>
 
       {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
@@ -530,12 +557,18 @@ export function ConversationColumn({
   // the pair. A host that declares no store gets the column verbatim, so its
   // cards see no provider, register nothing, and draw no focus affordance: the
   // same fail-closed shape as the lifecycle host declaration itself.
-  return host.composerFocus ? (
+  // THE SETTLE BUS WRAPS THE SAME PAIR, for the same reason (cinatra#2853).
+  const bound = host.composerFocus ? (
     <LifecycleComposerFocusProvider store={host.composerFocus}>
       {column}
     </LifecycleComposerFocusProvider>
   ) : (
     column
+  );
+  return host.cardSettle ? (
+    <LifecycleCardSettleProvider bus={host.cardSettle}>{bound}</LifecycleCardSettleProvider>
+  ) : (
+    bound
   );
 }
 

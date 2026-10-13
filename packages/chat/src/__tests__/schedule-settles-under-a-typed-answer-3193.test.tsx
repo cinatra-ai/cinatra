@@ -28,7 +28,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, configure, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, waitFor } from "@testing-library/react";
 
 configure({ asyncUtilTimeout: 15_000 });
 
@@ -69,9 +69,9 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
 }));
 
-const hitlReading = { current: { state: "none" } as Record<string, unknown> };
+const hitlReading = { current: { state: "none" } as Record<string, unknown>, pending: null as Promise<Record<string, unknown>> | null, forRun: null as ((runId: string) => Record<string, unknown>) | null };
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
-  getAgentHitlScreenStateAction: async () => hitlReading.current,
+  getAgentHitlScreenStateAction: async (runId: string) => hitlReading.forRun?.(runId) ?? hitlReading.pending ?? hitlReading.current,
 }));
 
 const approveMock = vi.fn(async () => undefined);
@@ -109,7 +109,7 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/ren
 import { fieldRendererRegistry } from "../../../agents/src/field-renderer-registry";
 import { RUN_SEED_ROUTE } from "../run-seed-request";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
-import { mountSurface } from "./conversation-column-harness";
+import { chatSurfaceElement, mountSurface } from "./conversation-column-harness";
 import { Input } from "@/components/ui/input";
 
 /**
@@ -219,6 +219,8 @@ beforeEach(() => {
   registerTypedAnswerRenderer();
   approveMock.mockClear();
   hitlReading.current = HITL_SCREEN;
+  hitlReading.pending = null;
+  hitlReading.forRun = null;
   runReading.current = RUN_AT_SCHEDULE;
   cardReading.current = PENDING_ENVELOPE;
   restoreFetch = globalThis.fetch;
@@ -380,4 +382,254 @@ describe("the schedule settles after the screen was drawn (cinatra#3193)", () =>
     },
     45_000,
   );
+});
+
+
+/** Durable views with no producing-step stamp remain turn-level after reload. */
+function reloadedUnpositionedScheduleTurn(): UiMessage[] {
+  const messages = scheduleTurn();
+  const assistant = messages[1]!;
+  const positioned = assistant.parts![0]!;
+  return [messages[0]!, { ...assistant, parts: [{ ...positioned, views: [] }],
+    dataParts: [{ viewType: "trigger_schedule_proposal", schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref: CARD_REF }],
+  } as UiMessage];
+}
+
+describe("reloaded settled schedule and a late next screen (cinatra#3984)", () => {
+  it.each([false, true])("keeps the actual late screen after the durable schedule (Slack=%s)", async (slackMode) => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    let resolveScreen!: (reading: Record<string, unknown>) => void;
+    hitlReading.pending = new Promise((resolve) => { resolveScreen = resolve; });
+    const { container } = await mountSurface("chat", { messages: reloadedUnpositionedScheduleTurn(), slackMode });
+    await waitFor(() => expect(container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).not.toBeNull());
+    expect(container.querySelector(SCREEN)).toBeNull();
+    await act(async () => { resolveScreen(HITL_SCREEN); });
+    await waitFor(() => expect(container.querySelector(SCREEN)).not.toBeNull());
+    const schedule = container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')!;
+    const screen = container.querySelector(SCREEN)!;
+    expect(schedule.compareDocumentPosition(screen) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(turnContainer(container)?.contains(screen)).toBe(false);
+    expect(container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`)?.contains(screen)).toBe(true);
+    expect(container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')).toHaveLength(1);
+    expect(container.querySelectorAll(SCREEN)).toHaveLength(1);
+  });
+});
+
+
+describe("settled durable schedule ownership (cinatra#3984)", () => {
+  it("does not associate the schedule with a different run in the same turn", async () => {
+    const otherRunId = "39840000-1111-4222-8333-444444444444";
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    hitlReading.current = { ...HITL_SCREEN, runId: otherRunId, gate: { ...GATE, runId: otherRunId } };
+    const messages = reloadedUnpositionedScheduleTurn();
+    messages[1] = { ...messages[1]!, parts: [{ ...messages[1]!.parts![0]!, runId: otherRunId }] } as UiMessage;
+    const { container } = await mountSurface("chat", { messages });
+    await waitFor(() => {
+      expect(container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).not.toBeNull();
+      expect(container.querySelector(SCREEN)).not.toBeNull();
+    });
+    expect(container.querySelector(`[data-agent-run-slot="${otherRunId}"]`)?.contains(container.querySelector(SCREEN))).toBe(true);
+    expect(container.querySelector(`[data-agent-run-screen-slot="${otherRunId}"]`)).toBeNull();
+  });
+
+  it("does not move a next screen in another assistant turn with the same run ID", async () => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    const original = reloadedUnpositionedScheduleTurn();
+    const scheduleMessage = { ...original[1]!, parts: [] };
+    const nextMessage = { ...original[1]!, id: "a2", dataParts: [], parts: [{ ...original[1]!.parts![0]!, views: [] }] };
+    const { container } = await mountSurface("chat", { messages: [original[0]!, scheduleMessage, nextMessage] as UiMessage[] });
+    await waitFor(() => {
+      expect(container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).not.toBeNull();
+      expect(container.querySelector(SCREEN)).not.toBeNull();
+    });
+    expect(turnContainer(container)?.contains(container.querySelector(SCREEN))).toBe(true);
+    expect(container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`)).toBeNull();
+  });
+
+  it("gives the screen its ordinary slot back when the schedule is withdrawn", async () => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    const { container } = await mountSurface("chat", { messages: reloadedUnpositionedScheduleTurn() });
+    await waitFor(() => expect(container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`)?.contains(container.querySelector(SCREEN))).toBe(true));
+    cardReading.current = { ...SETTLED_ENVELOPE, state: { state: "absent" }, body: null } as unknown as typeof SETTLED_ENVELOPE;
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => {
+      expect(container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).toBeNull();
+      expect(turnContainer(container)?.contains(container.querySelector(SCREEN))).toBe(true);
+      expect(container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`)).toBeNull();
+    });
+  });
+});
+
+
+it("keeps a typed answer and its actual Continue when the durable schedule settles later (cinatra#3984)", async () => {
+  runReading.current = RUN_PAST_SCHEDULE;
+  const { container } = await mountSurface("chat", { messages: reloadedUnpositionedScheduleTurn() });
+  const field = await waitFor(() => {
+    const input = container.querySelector<HTMLInputElement>('[data-testid="typed-answer"]');
+    if (!input) throw new Error("the real next screen has not resolved");
+    return input;
+  });
+  expect(container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')).toHaveLength(1);
+  await act(async () => { fireEvent.change(field, { target: { value: HALF_TYPED } }); });
+  runReading.current = RUN_PAST_SCHEDULE;
+  cardReading.current = SETTLED_ENVELOPE;
+  await act(async () => { window.dispatchEvent(new Event("focus")); });
+  await waitFor(() => {
+    const slot = container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`);
+    const moved = container.querySelector<HTMLInputElement>('[data-testid="typed-answer"]');
+    expect(slot?.contains(moved)).toBe(true);
+    expect(moved?.value).toBe(HALF_TYPED);
+  });
+  await act(async () => { fireEvent.click(container.querySelector(CONTINUE)!); });
+  await waitFor(() => expect(approveMock).toHaveBeenCalled());
+  expect((approveMock.mock.calls[0] as unknown as [string, Record<string, unknown>])[1].answer).toBe(HALF_TYPED);
+});
+
+it("moves only the matching screen when two real run slots share the turn (cinatra#3984)", async () => {
+  const otherRunId = "39840000-1111-4222-8333-444444444444";
+  runReading.current = RUN_PAST_SCHEDULE;
+  cardReading.current = SETTLED_ENVELOPE;
+  hitlReading.forRun = (runId) => ({ ...HITL_SCREEN, runId, gate: { ...GATE, runId, reviewTaskId: `review-${runId}` } });
+  const messages = reloadedUnpositionedScheduleTurn();
+  const first = messages[1]!.parts![0]!;
+  messages[1] = { ...messages[1]!, parts: [first, { ...first, id: "t2", runId: otherRunId }] } as UiMessage;
+  const { container } = await mountSurface("chat", { messages });
+  await waitFor(() => expect(container.querySelectorAll(SCREEN)).toHaveLength(2));
+  const matchingSlot = await waitFor(() => {
+    const slot = container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`);
+    expect(slot).not.toBeNull();
+    expect(slot!.querySelector(SCREEN)).not.toBeNull();
+    return slot!;
+  });
+  const otherSlot = container.querySelector(`[data-agent-run-slot="${otherRunId}"]`);
+  expect(otherSlot).not.toBeNull();
+  expect(otherSlot!.querySelector(SCREEN)).not.toBeNull();
+  expect(container.querySelector(`[data-agent-run-screen-slot="${otherRunId}"]`)).toBeNull();
+  const schedule = container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
+  expect(schedule).not.toBeNull();
+  expect(schedule!.compareDocumentPosition(matchingSlot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+
+/** Live turns carry the schedule at the run's producing slot; durable reloads
+ * can carry the same admitted schedule in the turn-level data-part list. The
+ * prose is intentionally nonempty: without it the response-action row never
+ * mounts, which hid the reload ordering defect from the original controls. */
+function proseScheduleTurn(reloaded: boolean): UiMessage[] {
+  const messages = reloaded ? reloadedUnpositionedScheduleTurn() : scheduleTurn();
+  const assistant = messages[1]!;
+  messages[1] = {
+    ...assistant,
+    content: "The scheduled run has moved on to its next question.",
+    lifecycleParts: assistant.parts,
+    parts: undefined,
+  } as UiMessage;
+  return messages;
+}
+
+function expectScheduleScreenActionsInOrder(container: HTMLElement): void {
+  const schedule = container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
+  const screen = container.querySelector(SCREEN);
+  const copy = container.querySelector('[title="Copy response"]');
+  expect(schedule).not.toBeNull();
+  expect(screen).not.toBeNull();
+  expect(copy).not.toBeNull();
+  expect(schedule!.compareDocumentPosition(screen!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen!.compareDocumentPosition(copy!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(turnContainer(container)?.contains(screen)).toBe(false);
+  expect(container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`)?.contains(screen)).toBe(true);
+  expect(container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')).toHaveLength(1);
+  expect(container.querySelectorAll(SCREEN)).toHaveLength(1);
+  expect(container.querySelectorAll('[title="Copy response"]')).toHaveLength(1);
+}
+
+// App round C6 uses two assistant mentions, selecting multi-participant mode
+// (chat-routing.ts:33-39). Its AG-UI flat projection keeps lifecycleParts and
+// dataParts without parts (ag-ui-chat-client.ts:494-541). This is that same
+// shared-column prop/data shape; no external Slack connector is involved.
+async function mountProseTurn(reloaded: boolean, theme: "github-light" | "github-dark", streaming = false) {
+  const surface = chatSurfaceElement({ messages: proseScheduleTurn(reloaded), slackMode: true, streamingIds: streaming ? ["a1"] : [] });
+  const column = (surface.props as { children: React.ReactElement<{ theme: "github-light" | "github-dark" }> }).children;
+  const result = render(React.cloneElement(surface, {}, React.cloneElement(column, { theme })));
+  await waitFor(() => expect(result.container.querySelector("[data-conversation-list]")).not.toBeNull());
+  return result;
+}
+
+describe("response actions follow the schedule's next screen on live and reload roads (cinatra#3984)", () => {
+  it.each(["github-light", "github-dark"] as const)("keeps the same real card/action order in both turn shapes (%s)", async (theme) => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    for (const reloaded of [false, true]) {
+      const result = await mountProseTurn(reloaded, theme);
+      await waitFor(() => { expect(result.container.querySelector(SCREEN)).not.toBeNull(); expect(result.container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).not.toBeNull(); });
+      await act(async () => { window.dispatchEvent(new Event("focus")); });
+      expectScheduleScreenActionsInOrder(result.container);
+      const field = result.container.querySelector<HTMLInputElement>('[data-testid="typed-answer"]')!;
+      await act(async () => { fireEvent.change(field, { target: { value: HALF_TYPED } }); });
+      await act(async () => { fireEvent.click(result.container.querySelector(CONTINUE)!); });
+      await waitFor(() => expect(approveMock).toHaveBeenCalled());
+      expect((approveMock.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1].answer).toBe(HALF_TYPED);
+      result.unmount();
+      approveMock.mockClear();
+    }
+  });
+
+  it.each(["github-light", "github-dark"] as const)("places an actually late reloaded screen before existing actions (%s)", async (theme) => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    let resolveScreen!: (reading: Record<string, unknown>) => void;
+    hitlReading.pending = new Promise((resolve) => { resolveScreen = resolve; });
+    const { container } = await mountProseTurn(true, theme);
+    await waitFor(() => expect(container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).not.toBeNull());
+    expect(container.querySelector(SCREEN)).toBeNull();
+    expect(container.querySelectorAll('[title="Copy response"]')).toHaveLength(1);
+    await act(async () => { resolveScreen(HITL_SCREEN); });
+    await waitFor(() => expect(container.querySelector(SCREEN)).not.toBeNull());
+    expectScheduleScreenActionsInOrder(container);
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => expect(container.querySelector(SCREEN)).not.toBeNull());
+    expectScheduleScreenActionsInOrder(container);
+  });
+});
+
+
+it("keeps response actions absent while this scheduled turn is streaming (cinatra#3984)", async () => {
+  runReading.current = RUN_PAST_SCHEDULE;
+  cardReading.current = SETTLED_ENVELOPE;
+  const { container } = await mountProseTurn(true, "github-light", true);
+  await waitFor(() => expect(container.querySelector(`[data-agent-run-screen-slot="${RUN_ID}"]`)?.querySelector(SCREEN)).not.toBeNull());
+  expect(container.querySelectorAll(SCREEN)).toHaveLength(1);
+  expect(container.querySelector('[title="Copy response"]')).toBeNull();
+});
+
+describe("live and durable schedule cards share a non-collapsing screen stack (cinatra#3984)", () => {
+  it.each(["github-light", "github-dark"] as const)("preserves the live card stack when the screen reloads (%s)", async (theme) => {
+    runReading.current = RUN_PAST_SCHEDULE;
+    cardReading.current = SETTLED_ENVELOPE;
+    for (const reloaded of [false, true]) {
+      const result = await mountProseTurn(reloaded, theme);
+      await act(async () => { window.dispatchEvent(new Event("focus")); });
+      await waitFor(() => {
+        const schedule = result.container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
+        const screen = result.container.querySelector(SCREEN);
+        expect(schedule).not.toBeNull();
+        expect(screen).not.toBeNull();
+        let stack = schedule!.parentElement;
+        while (stack && !stack.contains(screen!)) stack = stack.parentElement;
+        // Both real cards retain their own vertical margins. The live column
+        // keeps them from collapsing and contributes its ordinary inter-slot
+        // gap; a reload must preserve that same composition, including a late
+        // screen, rather than compensate by changing either card's frame.
+        expect(stack?.classList.contains("flex")).toBe(true);
+        expect(stack?.classList.contains("flex-col")).toBe(true);
+        expect(stack?.classList.contains("gap-2")).toBe(true);
+        expectScheduleScreenActionsInOrder(result.container);
+      }, { timeout: 3_000 });
+      result.unmount();
+    }
+  });
 });

@@ -24,9 +24,13 @@
 //              card cannot operate another, and the fingerprint (not the ref)
 //              keeps the grant short and stops it from becoming a second,
 //              reversible carrier of the ref's contents.
-//   control  — the ONE button. "A card that offers no decision lends none" is
-//              enforced at mint (no control, no grant); "a grant presented with
-//              another control is refused" is enforced at verify.
+//   control  — the buttons THIS MESSAGE may press: the card's own controls,
+//              narrowed on the send path to the ones the person's own words
+//              named (cinatra#2853, `typed-decision-words.ts`). "A card that
+//              offers no decision lends none" is enforced at mint (no control,
+//              no grant); "a grant presented with another control is refused" is
+//              enforced at the match, against that menu. Exactly ONE of them is
+//              ever pressed, because the ledger spends the grant once.
 //   life     — a short expiry, because a grant that outlives its turn is a
 //              standing permission and this is deliberately not one.
 //
@@ -80,6 +84,19 @@ export const LENT_ACTION_CONTROLS = [
   "approve",
   "reject",
   "submit",
+  // The SKILLS card's own two buttons and the SCHEDULE card's (cinatra#2853).
+  // Each is a button the card already draws — "no card gains an action its
+  // controls do not already have" — and each is added together with the arm that
+  // presses it through that card's own server-side entry.
+  //
+  // `adjust` IS pressable and decides NOTHING: the schedule card's Adjust
+  // re-proposes, writing nothing and arming nothing, so it is this card's own
+  // equivalent of a fill. It is in this list rather than beside `fill` because
+  // it does run through the card's decision entry and must therefore be
+  // spendable; what keeps it harmless is the op it runs, not the list it is in.
+  "confirm",
+  "skip",
+  "adjust",
   // THE ARMED SCHEDULER FORM'S **Save changes** (cinatra#2934, the armed-trigger
   // tab). It is a real button on a real card — "its choices are exactly what the
   // card's own buttons offer" — and the plan puts it on the ask road in so many
@@ -110,17 +127,23 @@ export function isLentActionControl(value: unknown): value is LentActionControl 
  * pressable control to name, and naming one it does not lend would be a lie in
  * the ledger that a future reader could act on.
  *
- * A `fill` GRANT CAN NEVER PRESS ANYTHING, and that is enforced FOUR times over,
+ * A `fill` GRANT CAN NEVER PRESS ANYTHING, and that is enforced THREE times over,
  * each independently sufficient:
  *
  *   1. `lifecycle_bound_card_decide` accepts only `LENT_ACTION_CONTROLS` in its
  *      own input schema, so a call can never even name `fill`;
  *   2. `matchLentActionGrant` below refuses outright when the CLAIM is not a
- *      pressable control;
- *   3. the ledger's spend statement names the control in its predicate, so a row
- *      minted `fill` matches no spend;
- *   4. `controlsLentBy` gives the scheduler form `["fill"]`, and the lent
+ *      pressable control, and refuses a CALL naming one that is not on the
+ *      grant's menu;
+ *   3. `controlsLentBy` gives the scheduler form `["fill"]`, and the lent
  *      action's own gate 5 refuses a control the card does not lend.
+ *
+ * A FOURTH ONE USED TO BE LISTED HERE AND IS GONE (cinatra#2853, convergence
+ * round 2, finding 6): the ledger's spend predicate named the control, so a row
+ * minted `fill` matched no spend. The row now names the grant's ANCHOR, which
+ * for a fill grant IS `fill` — so that statement would match, and the three
+ * checks above are what actually hold. Restoring it means recording the menu
+ * beside the row, which is a schema change.
  */
 export const LENT_ACTION_GRANT_CONTROLS = [
   ...LENT_ACTION_CONTROLS,
@@ -151,10 +174,31 @@ export type LentActionGrantClaims = {
   /** The fingerprint of the bound card's ref. */
   readonly cardRefFingerprint: string;
   /**
-   * The ONE control this grant allows — or `fill`, which allows no press at all
-   * and exists so a card that lends only a fill can still be named by a grant.
+   * The grant's ANCHOR control — the first of `controls`, and the one the
+   * single-use ledger row records.
+   *
+   * WHY AN ANCHOR AND A MENU (cinatra#2853). W5a's grant named exactly one
+   * control because a send could only ever mint one: which button a sentence
+   * asks for is a reading of the person's words, and reading them was #2853's
+   * work. Now that the send narrows the card's own buttons by the person's own
+   * words, a message can legitimately reach more than one of them — "approve it"
+   * may land as the approve the person asked for, or as the comment their words
+   * always are — and the ASSISTANT picks between them, which is the plan's "the
+   * assistant interprets the words".
+   *
+   * WHAT IS UNCHANGED: exactly ONE control is ever pressed, once. The menu is
+   * what MAY be pressed; the ledger's single atomic spend is what makes it one.
    */
   readonly control: LentActionGrantControl;
+  /**
+   * The controls THIS MESSAGE may press — the card's own buttons, narrowed to
+   * the ones the person's own words named (`typed-decision-words.ts`).
+   *
+   * NON-EMPTY, and `control` is always its first entry. A grant minted before
+   * this slice carries no menu on the wire and reads back as `[control]`, so an
+   * in-flight grant behaves exactly as it did.
+   */
+  readonly controls: readonly LentActionGrantControl[];
   /** Expiry, epoch seconds. */
   readonly expiresAt: number;
 };
@@ -166,6 +210,11 @@ export type MintLentActionGrantInput = {
   readonly messageId: string;
   readonly cardRef: string;
   readonly control: LentActionGrantControl;
+  /**
+   * The menu (cinatra#2853). Omitted means `[control]` — the W5a shape, which
+   * every caller that mints for a single-button card keeps.
+   */
+  readonly controls?: readonly LentActionGrantControl[];
   /** Injectable clock — tests never wall-clock an expiry. */
   readonly now?: () => Date;
 };
@@ -177,8 +226,9 @@ export type MintLentActionGrantInput = {
  * IT IS A BEARER AUTHORITY FOR ITS LIFE, and this comment says so plainly
  * because an earlier draft did not (convergence round 1, finding 3). What the grant
  * pins is WHO may spend it (the frame's own identity must equal the grant's
- * person and organization), WHAT it may press (one card, one control) and HOW
- * OFTEN (once, by an atomic ledger spend). What it does NOT pin is which TURN
+ * person and organization), WHAT it may press (one card, and one control off the
+ * MENU the person's own words produced — cinatra#2853) and HOW OFTEN (once, by
+ * an atomic ledger spend). What it does NOT pin is which TURN
  * of that person spends it: the delegated frame carries no turn identity the
  * handler could match the `messageId` claim against, so a party who already
  * holds a valid delegated token for the SAME person and organization — i.e. who
@@ -253,6 +303,16 @@ export function mintLentActionGrant(
   const { userId, orgId, messageId, cardRef, control } = input;
   if (!isBounded(userId) || !isBounded(orgId) || !isBounded(messageId)) return null;
   if (!isLentActionGrantControl(control)) return null;
+  // THE MENU, AND ITS TWO INVARIANTS (cinatra#2853). It is never empty — a card
+  // that lends nothing gets no grant at all — and its FIRST entry is the anchor,
+  // because that anchor is what the ledger row records and what the spend
+  // predicates on. A caller that disagrees with itself about which control is
+  // the anchor mints nothing rather than a row the spend could never match.
+  const controls: readonly LentActionGrantControl[] = input.controls ?? [control];
+  if (controls.length === 0 || controls.length > LENT_ACTION_GRANT_CONTROLS.length) return null;
+  if (!controls.every((c) => isLentActionGrantControl(c))) return null;
+  if (controls[0] !== control) return null;
+  if (new Set(controls).size !== controls.length) return null;
   const cardRefFingerprint = lentActionCardFingerprint(cardRef);
   if (!cardRefFingerprint) return null;
   const key = grantKey();
@@ -265,6 +325,7 @@ export function mintLentActionGrant(
     messageId,
     cardRefFingerprint,
     control,
+    controls,
     expiresAt: Math.floor(nowMs / 1000) + LENT_ACTION_GRANT_TTL_SECONDS,
   };
   try {
@@ -279,6 +340,10 @@ export function mintLentActionGrant(
           m: claims.messageId,
           r: claims.cardRefFingerprint,
           c: claims.control,
+          // ON THE WIRE ONLY WHEN IT SAYS SOMETHING. A single-control menu is
+          // the anchor repeated, so it is left off — which keeps every grant
+          // this product minted before #2853 byte-identical.
+          ...(claims.controls.length > 1 ? { cs: claims.controls } : {}),
           e: claims.expiresAt,
         }),
         "utf8",
@@ -326,10 +391,25 @@ export function verifyLentActionGrant(
     const json = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
     const parsed: unknown = JSON.parse(json);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    const { j, u, o, m, r, c, e } = parsed as Record<string, unknown>;
+    const { j, u, o, m, r, c, cs, e } = parsed as Record<string, unknown>;
     if (!isBounded(j) || !isBounded(u) || !isBounded(o) || !isBounded(m)) return null;
     if (!isBounded(r) || !isLentActionGrantControl(c)) return null;
     if (typeof e !== "number" || !Number.isFinite(e)) return null;
+    // THE MENU, RE-CHECKED AS A CLAIM (cinatra#2853). A grant with no `cs` is a
+    // W5a grant and reads back as its one control; a `cs` that is not a
+    // non-empty, duplicate-free list of real controls anchored on `c` is not one
+    // of ours, and is refused exactly like a bad signature.
+    let controls: readonly LentActionGrantControl[];
+    if (cs === undefined) {
+      controls = [c];
+    } else {
+      if (!Array.isArray(cs) || cs.length === 0) return null;
+      if (cs.length > LENT_ACTION_GRANT_CONTROLS.length) return null;
+      if (!cs.every((x) => isLentActionGrantControl(x))) return null;
+      if (cs[0] !== c) return null;
+      if (new Set(cs as string[]).size !== cs.length) return null;
+      controls = cs as readonly LentActionGrantControl[];
+    }
     const nowSec = Math.floor((opts.now ?? (() => new Date()))().getTime() / 1000);
     if (nowSec >= e) return null;
     return {
@@ -339,6 +419,7 @@ export function verifyLentActionGrant(
       messageId: m,
       cardRefFingerprint: r,
       control: c,
+      controls,
       expiresAt: e,
     };
   } catch {
@@ -385,10 +466,16 @@ export function matchLentActionGrant(
   // rather than left to the string comparison below (cinatra#2934). A `fill`
   // grant is minted for a card whose button is the person's; it must not become
   // a press because some future caller passed `control: "fill"` through.
+  //
+  // WITH A MENU (cinatra#2853) the same rule is applied to the CALL: the control
+  // the call names must be a pressable one AND must be on the menu this
+  // message's own words produced. A menu that holds only `fill` therefore still
+  // authorizes nothing, whatever the call names.
   if (!isLentActionControl(claims.control)) return false;
+  if (!isLentActionControl(call.control)) return false;
   if (!constantTimeEquals(claims.userId, call.userId)) return false;
   if (!constantTimeEquals(claims.orgId, call.orgId)) return false;
-  if (claims.control !== call.control) return false;
+  if (!claims.controls.includes(call.control as LentActionGrantControl)) return false;
   const fingerprint = lentActionCardFingerprint(call.cardRef);
   if (!fingerprint) return false;
   return constantTimeEquals(claims.cardRefFingerprint, fingerprint);

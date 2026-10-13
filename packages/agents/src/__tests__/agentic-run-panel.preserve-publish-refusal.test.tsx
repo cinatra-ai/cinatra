@@ -129,6 +129,8 @@ function ChoiceRenderer({ onChange }: FieldRendererProps) {
 
 let gateTaskId = TASK_ID;
 let gateRendererId = RENDERER_ID;
+// A test may take the interrupt away for one reading (a poll's empty tick).
+let gateOnFile = true;
 
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: vi.fn(() => ({
@@ -136,12 +138,12 @@ vi.mock("../use-ag-ui-run-stream", () => ({
     error: null,
     presentationHint: null,
     isLive: true,
-    interruptContext: {
+    interruptContext: gateOnFile ? {
       schema: { type: "object", properties: { approved: { type: "boolean" } } },
       xRenderer: gateRendererId,
       values: {},
       reviewTaskId: gateTaskId,
-    },
+    } : null,
     streamedText: "",
     dataPartFrames: [],
   })),
@@ -150,6 +152,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 beforeEach(() => {
   gateTaskId = TASK_ID;
   gateRendererId = RENDERER_ID;
+  gateOnFile = true;
   fieldRendererRegistry.register({
     id: RENDERER_ID,
     priority: 100,
@@ -358,5 +361,87 @@ describe("chat composer decision precedence", () => {
     const payload = vi.mocked(approveReviewTask).mock.calls[0][1] as Record<string, unknown>;
     expect(payload.approved).toBe(false);
     expect(JSON.parse(payload.userResponse as string)).toMatchObject({ approved: false, draftId: "draft-kept", userResponse: value });
+  });
+});
+
+// cinatra#3650: a stored choice belongs to the review task it was made on. A
+// later mid-run gate can reuse the same renderer, and Continue sends what the
+// renderer stored, so the next task starts with no choice of its own; a poll's
+// empty reading between two readings of the same task keeps that task's choice.
+const NEXT_TASK_ID = "wayflow-publish-choice-next";
+
+async function mountSurface(surface: "chat" | "agent-detail" | "stepper") {
+  const element = async () => {
+    if (surface === "stepper") {
+      const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+      return <OrchestratorStepperPanel
+        runId="run-publish-choice" initialStatus="pending_approval" initialError={null}
+        agUiEnabled={true} agentPackageName="@example/publish-agent" inputParams={{}}
+        stepperSteps={[{ index: 1, stepNumber: 0, label: "Decision", xRenderer: gateRendererId }]}
+        agentId="example/publish-agent" lgThreadId={null} templateId="template-decision" templateName="Decision"
+      />;
+    }
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    return <AgenticRunPanel
+      runId="run-publish-choice" initialStatus="pending_approval" initialError={null}
+      initialMessages={[]} agUiEnabled={true} surface={surface}
+    />;
+  };
+  const mounted = render(await element());
+  await screen.findByRole("button", { name: "Do not publish" });
+  return async () => {
+    const next = await element();
+    await act(async () => { mounted.rerender(next); });
+  };
+}
+
+describe.each(["chat", "agent-detail", "stepper"] as const)("%s keeps a stored choice with its own review task", (surface) => {
+  it("a refusal stored for one task is not sent for the next task on the same renderer", async () => {
+    const rerender = await mountSurface(surface);
+    fireEvent.click(screen.getByRole("button", { name: "Do not publish" }));
+    gateTaskId = NEXT_TASK_ID;
+    await rerender();
+    const { approveReviewTask } = await import("../hitl-actions");
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = vi.mocked(approveReviewTask).mock.calls[0];
+    expect(taskId).toBe(NEXT_TASK_ID);
+    expect(payload).toMatchObject({ approved: true });
+    expect(payload).not.toHaveProperty("draftId");
+    expect(payload).not.toHaveProperty("userResponse");
+  });
+
+  it("a refusal sent for one task does not become the next task's choice", async () => {
+    const rerender = await mountSurface(surface);
+    fireEvent.click(screen.getByRole("button", { name: "Do not publish" }));
+    const sent = await continueGate();
+    expect(sent.approved).toBe(false);
+    gateTaskId = NEXT_TASK_ID;
+    await rerender();
+    const { approveReviewTask } = await import("../hitl-actions");
+    const next = await screen.findByRole("button", { name: "Continue" });
+    await waitFor(() => expect(next.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(next);
+    await waitFor(() => expect(approveReviewTask).toHaveBeenCalledTimes(2));
+    const [taskId, payload] = vi.mocked(approveReviewTask).mock.calls[1];
+    expect(taskId).toBe(NEXT_TASK_ID);
+    expect(payload).toMatchObject({ approved: true });
+    expect(payload).not.toHaveProperty("draftId");
+    expect(payload).not.toHaveProperty("userResponse");
+  });
+});
+
+describe.each(["chat", "agent-detail"] as const)("%s keeps the same task's choice through an empty reading", (surface) => {
+  it("an empty reading between two readings of the same task keeps the stored refusal", async () => {
+    const rerender = await mountSurface(surface);
+    fireEvent.click(screen.getByRole("button", { name: "Do not publish" }));
+    gateOnFile = false;
+    await rerender();
+    gateOnFile = true;
+    await rerender();
+    await screen.findByRole("button", { name: "Do not publish" });
+    const payload = await continueGate();
+    expect(payload.approved).toBe(false);
+    expect(payload.draftId).toBe("draft-kept");
   });
 });

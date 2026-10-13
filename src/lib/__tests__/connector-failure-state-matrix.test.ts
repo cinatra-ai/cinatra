@@ -36,7 +36,8 @@ vi.mock("@/lib/background-jobs", () => ({
 vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
   listNangoConnectionsByConnector: vi.fn(async () => []),
 }));
-vi.mock("@/lib/connection-use-gate", () => ({
+vi.mock("@/lib/connection-use-gate", async () => ({
+  ...await vi.importActual<typeof import("@/lib/connection-use-gate")>("@/lib/connection-use-gate"),
   decideConnectionUse: vi.fn(),
   enforceConnectionUse: vi.fn(),
   resolveConnectionAccessDeclaration: vi.fn(),
