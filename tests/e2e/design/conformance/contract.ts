@@ -982,13 +982,22 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
   switch (fixture.surfaceId) {
     case "schedule-card-first-shown":
       // The in-flight floor: the word and the dead control are both computed by
-      // the component while its answer is outstanding.
+      // the component while its answer is outstanding. BOTH ARE READ INSIDE THE
+      // PRESS'S RETRY. The floor is in flight only briefly: this row's harness
+      // answers 1.2 s after the press (`answerDelayMs` in
+      // lifecycle-schedule-card-fixture-data.ts) with a refusal, and the refusal
+      // turns the control back on. The first press often lands while the harness
+      // page is still hydrating, its slowest moment, so a dead-control reading
+      // taken after the retry could meet the settled floor and fail for good
+      // although the card drew both readings. Inside the retry, a floor that
+      // settled between the two readings is pressed again, and the press counts
+      // only when the word and the dead control are read in the same flight.
       driver.states.loading = async (_page, root) => {
         const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
         await pressScheduleUntil(confirm, async () => {
           await expect(confirm).toContainText("Confirming…", { timeout: 2_000 });
+          await expect(confirm).toBeDisabled({ timeout: 2_000 });
         });
-        await expect(confirm).toBeDisabled();
       };
       // The refusal, said on the card rather than swallowed. It never reveals
       // whether a token was expired, foreign or forged.
