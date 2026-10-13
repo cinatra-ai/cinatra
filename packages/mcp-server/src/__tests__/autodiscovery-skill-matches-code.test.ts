@@ -15,7 +15,10 @@
 //   - its `DATA_PART` rule says what the conformance corpus delivers: the part
 //     arrives during the run, before `RUN_FINISHED`;
 //   - a `pending_input` run is described as not yet executing, as the
-//     pre-execution status set declares it.
+//     pre-execution status set declares it;
+//   - a setup-input gate is resumed with `userResponse`, which the run
+//     tools' schema REQUIRES there, and `approvalNote` is offered only for
+//     a review-task decision.
 //
 // THE HONEST LIMIT: this is a lexical contract over prose. It pins the facts
 // above against the files that own them; it does not read every sentence.
@@ -109,5 +112,17 @@ describe("the MCP autodiscovery skill matches the code it describes (cinatra#289
     const body = skill();
     expect(body).not.toMatch(/mid-execution/i);
     expect(body).toMatch(/`pending_input`[^.]*before it began executing/);
+  });
+
+  it("requires userResponse at a setup-input gate and offers approvalNote only for a review-task decision, as the run tools' schema declares", () => {
+    const schemas = read(RUN_TOOL_SCHEMAS);
+    const resume = schemas.slice(schemas.indexOf('"agent_run_resume": {'));
+    const userResponse = /userResponse: z\.string\(\)[^\n]*/.exec(resume)?.[0] ?? "";
+    expect(userResponse).toContain("REQUIRED for a setup-input gate");
+    const body = skill();
+    expect(body).toMatch(/setup-input gate[^.]*REQUIRES `userResponse`/);
+    const noteSentences = body.split(/(?<=\.)\s+/).filter((s) => s.includes("`approvalNote`"));
+    expect(noteSentences.length).toBeGreaterThan(0);
+    expect(noteSentences.filter((s) => !/review-task decision/.test(s))).toEqual([]);
   });
 });
