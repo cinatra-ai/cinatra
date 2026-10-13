@@ -53,9 +53,16 @@ for (const palette of PALETTES) {
         const sentenceFontSize = getComputedStyle(body).fontSize;
         // The link has no size of its own: give the paragraph a probe size
         // and the link must follow it; then the paragraph's own size returns.
+        // The shared Button's `transition-all` animates the inherited change
+        // (a 150ms font-size transition whose first frame is the old size),
+        // so the probe settles the link's own transitions before it reads:
+        // it reads the size the link follows to. A link with a size of its
+        // own runs no transition and still reads its own size here.
         body.style.fontSize = "20px";
+        for (const animation of element.getAnimations()) animation.finish();
         const followsTheSentence = getComputedStyle(element).fontSize === "20px";
         body.style.fontSize = "";
+        for (const animation of element.getAnimations()) animation.finish();
         return {
           bodyText: body.textContent,
           endsTheParagraph: element === body.lastElementChild && element.nextSibling === null,
