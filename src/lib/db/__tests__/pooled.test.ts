@@ -131,3 +131,32 @@ describe("getPooledDb", () => {
     );
   });
 });
+
+
+describe("shared async runner factory capture", () => {
+  it("initializes without pool IO and keeps the first supplied factory", async () => {
+    vi.resetModules();
+    const pooled = await import("@/lib/db/pooled");
+    const queries: Array<{ text: string; values: unknown[] }> = [];
+    const released: unknown[] = [];
+    const firstFactory = vi.fn(() => ({
+      connect: async () => ({
+        query: async (text: string, values: unknown[]) => { queries.push({ text, values }); return { rows: [{ value: "fake" }], rowCount: 1 }; },
+        release: (error?: unknown) => { released.push(error); },
+      }),
+    }));
+    const replacementFactory = vi.fn(() => { throw new Error("must not replace the captured factory"); });
+    const before = constructed.length;
+    const runner = pooled.initializePostgresAsyncRunner(firstFactory as unknown as typeof pooled.getPooledDb);
+    expect(firstFactory).not.toHaveBeenCalled();
+    expect(constructed).toHaveLength(before);
+    expect(pooled.initializePostgresAsyncRunner(replacementFactory as typeof pooled.getPooledDb)).toBe(runner);
+    expect(await pooled.runPostgresQueriesAsync({ connectionString: "postgres://fake-factory/db", queries: [{ text: "SELECT value WHERE key = $1", values: ["key"] }], transaction: false })).toEqual([{ rows: [{ value: "fake" }], rowCount: 1 }]);
+    expect(queries).toEqual([{ text: "SELECT value WHERE key = $1", values: ["key"] }]);
+    expect(released).toEqual([undefined]);
+    expect(firstFactory).toHaveBeenCalledTimes(1);
+    expect(replacementFactory).not.toHaveBeenCalled();
+    expect(constructed).toHaveLength(before);
+    vi.resetModules();
+  });
+});

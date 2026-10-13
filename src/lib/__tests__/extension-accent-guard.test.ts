@@ -12,6 +12,8 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { contrastAgainst } from "@/lib/color-contrast";
+import { ACCENT_PALETTE as SDK_ACCENT_PALETTE } from "../../../packages/sdk-ui/src/lib/extension-accent";
 import {
   ACCENT_PALETTE,
   EXTENSION_ACCENTS,
@@ -33,7 +35,8 @@ describe("extension-accent palette drift guard", () => {
   });
 
   it("ACCENT_PALETTE hex codes match the pinned spec categorical tokens", () => {
-    // docs@b35fdf4 design-system.html `:root` L31–37.
+    // Other six entries retain the existing mapping; clay follows merged design#128
+    // and approved app-extensions §IV.3: #a2666d with white foreground.
     expect(ACCENT_PALETTE).toEqual({
       red: { bg: "#a6384f", fg: "#f1f1ed" },
       burgundy: { bg: "#7a2e3a", fg: "#f1f1ed" },
@@ -41,7 +44,7 @@ describe("extension-accent palette drift guard", () => {
       rust: { bg: "#b0613a", fg: "#f1f1ed" },
       olive: { bg: "#6c6a3a", fg: "#f1f1ed" },
       plum: { bg: "#574a68", fg: "#f1f1ed" },
-      clay: { bg: "#a86b72", fg: "#f1f1ed" },
+      clay: { bg: "#a2666d", fg: "#ffffff" },
     });
   });
 
@@ -69,5 +72,30 @@ describe("extension-accent palette drift guard", () => {
     expect(asExtensionAccent(null)).toBeNull();
     expect(asExtensionAccent(undefined)).toBeNull();
     expect(asExtensionAccent("")).toBeNull();
+  });
+});
+
+// The ratio is a native Source contract, not a browser-painted or palette grade.
+describe("rose categorical ground contrast (cinatra#2851)", () => {
+  it("carries ordinary text at the 4.5 floor with the approved opaque white pairing", () => {
+    const { bg, fg } = ACCENT_PALETTE.clay;
+    expect(contrastAgainst(fg, bg)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastAgainst(fg, bg)).toBeCloseTo(4.508711, 5);
+  });
+
+  it("keeps the public SDK mirror identical without changing accent identity or the other six entries", () => {
+    expect(SDK_ACCENT_PALETTE).toEqual(ACCENT_PALETTE);
+    expect(SDK_ACCENT_PALETTE.clay).toEqual({ bg: "#a2666d", fg: "#ffffff" });
+    expect(Object.keys(ACCENT_PALETTE)).toEqual([...EXTENSION_ACCENTS]);
+  });
+
+  it("rejects both the old paper/rose pair and a background-only adoption as below the floor", () => {
+    expect(contrastAgainst("#f1f1ed", "#a86b72")).toBeLessThan(4.5);
+    expect(contrastAgainst("#f1f1ed", "#a2666d")).toBeLessThan(4.5);
+    expect(contrastAgainst("#ffffff", "#a2666d")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("includes foreground alpha in the reading rather than treating opaque token contrast as painted proof", () => {
+    expect(contrastAgainst("rgba(255, 255, 255, 0.9)", "#a2666d")).toBeLessThan(4.5);
   });
 });

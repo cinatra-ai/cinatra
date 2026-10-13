@@ -48,7 +48,7 @@ import type { ArtifactEditCapability } from "./artifact-edit-channel";
  * road. A display that declared version 3, 2 or 1 is handed the capability at
  * edit-channel version 1, with no title road.
  */
-export const ARTIFACT_RENDERER_PROPS_API_VERSION = 4;
+export const ARTIFACT_RENDERER_PROPS_API_VERSION = 5;
 
 /**
  * The versioned, normalized, SERIALIZABLE props snapshot an extension-shipped
@@ -176,6 +176,8 @@ export interface ArtifactRendererProps {
   review?: {
     reading: "pending" | "continued";
     openLive: string | null;
+    /** v5 only: the canonical continued decision time for this reviewed revision. */
+    decidedAt?: string;
   };
   /**
    * THE DATA ROAD (props v3, cinatra#3092) — the address a display's live series

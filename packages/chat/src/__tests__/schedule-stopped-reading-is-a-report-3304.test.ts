@@ -54,6 +54,7 @@ import { describe, expect, it } from "vitest";
 import {
   RUN_START_SCHEDULE_FIRED_RECURRING_SENTENCE,
   RUN_START_SCHEDULE_FIRED_SENTENCE,
+  RUN_START_SCHEDULE_PROPOSAL_SENTENCE,
   RUN_START_SCHEDULE_STOPPED_RECURRING_SENTENCE,
 } from "@cinatra-ai/agents/run-status";
 
@@ -85,6 +86,21 @@ const EXPORTED_NAME: Readonly<Record<keyof typeof DRAWN_SENTENCE, string>> = {
 
 /** The settled readings the turn has a sentence for, in one sorted list. */
 const SETTLED_READINGS = Object.keys(DRAWN_SENTENCE).sort();
+
+/**
+ * THE ONE LINE OVER A SCHEDULE THAT HAS NOT FIRED (cinatra#2853). Section VI
+ * gives the first shown, configured and expired readings one sentence of its
+ * own, word for word, and the selection answers it for the never-fired reading.
+ * It is not a settled reading, so the three settled words above do not hold it;
+ * the census counts it beside them, through the constant measured below.
+ */
+const NEVER_FIRED_READING = "never-fired";
+const DRAWN_PROPOSAL_SENTENCE =
+  "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.";
+const PROPOSAL_SENTENCE_NAME = "RUN_START_SCHEDULE_PROPOSAL_SENTENCE";
+
+/** Every reading the selection answers a sentence for, in one sorted list. */
+const ANSWERED_READINGS = [...SETTLED_READINGS, NEVER_FIRED_READING].sort();
 
 /**
  * THE OPENER A CONTROL'S DESCRIPTION USES. Section VI's fired-recurring note
@@ -183,12 +199,17 @@ describe("cinatra#3304 — a settled reading's line is the drawing's own report"
     );
     expect(new Set(sentences).size).toBe(SETTLED_READINGS.length);
   });
+
+  it("draws section VI's own proposal sentence for the never-fired reading", () => {
+    expect(RUN_START_SCHEDULE_PROPOSAL_SENTENCE).toBe(DRAWN_PROPOSAL_SENTENCE);
+    expect(RUN_START_SCHEDULE_PROPOSAL_SENTENCE.includes(CONTROL_DESCRIPTION_OPENER)).toBe(false);
+  });
 });
 
 describe("cinatra#3304 — the census over the settled-turn prose selection", () => {
-  it("answers a sentence for exactly the three settled readings and no fourth", () => {
+  it("answers a sentence for exactly the three settled readings and the never-fired one", () => {
     const answered = readingsGivenASentence(selectionBody(SELECTION_SOURCE));
-    expect([...answered.keys()].sort()).toEqual(SETTLED_READINGS);
+    expect([...answered.keys()].sort()).toEqual(ANSWERED_READINGS);
   });
 
   it("answers each settled reading through the constant this file measured", () => {
@@ -197,16 +218,18 @@ describe("cinatra#3304 — the census over the settled-turn prose selection", ()
       const key = reading as keyof typeof DRAWN_SENTENCE;
       expect(answered.get(reading)).toBe(EXPORTED_NAME[key]);
     }
+    expect(answered.get(NEVER_FIRED_READING)).toBe(PROPOSAL_SENTENCE_NAME);
   });
 
-  it("names no reading beyond the three settled ones, in any branch shape", () => {
-    expect(readingsNamed(selectionBody(SELECTION_SOURCE))).toEqual(SETTLED_READINGS);
+  it("names no reading beyond the three settled ones and the never-fired one, in any branch shape", () => {
+    expect(readingsNamed(selectionBody(SELECTION_SOURCE))).toEqual(ANSWERED_READINGS);
   });
 
-  it("returns no sentence beyond the three constants this file measured", () => {
-    const expected = SETTLED_READINGS.map(
-      (reading) => EXPORTED_NAME[reading as keyof typeof DRAWN_SENTENCE],
-    ).sort();
+  it("returns no sentence beyond the four constants this file measured", () => {
+    const expected = [
+      ...SETTLED_READINGS.map((reading) => EXPORTED_NAME[reading as keyof typeof DRAWN_SENTENCE]),
+      PROPOSAL_SENTENCE_NAME,
+    ].sort();
     expect(sentencesReturned(selectionBody(SELECTION_SOURCE))).toEqual(expected);
   });
 });

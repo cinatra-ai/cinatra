@@ -2419,6 +2419,7 @@ export function AgenticRunPanel({
     runId,
     reviewTaskId,
     initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: widgetHostedPanel ? undefined : refreshReviewRail,
   });
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);
@@ -3224,7 +3225,6 @@ export function AgenticRunPanel({
               example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
-              size="sm"
               variant="outline"
               disabled={isRetrying}
               onClick={handleRetryFailedRun}

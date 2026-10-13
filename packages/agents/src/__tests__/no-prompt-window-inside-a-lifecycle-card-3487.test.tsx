@@ -115,12 +115,19 @@ function windowPartsInside(root: ParentNode): {
   return { fields, sendControls, anchors };
 }
 
-/** The floor the drawing DOES put inside the card, so its absence is a defect too. */
+/** The floor the drawing DOES put inside the card, so its absence is a defect too.
+ *
+ * THE NOTE FIELD IN EITHER WEIGHT (cinatra#4054). Where the host has a chat box
+ * the note is drawn subordinate (`review-note-field-subordinate`,
+ * app-lifecycle-cards §I); on the run and review page hosts, which have none, it
+ * is the boxed primary note of app-artifact-review §VI and carries no
+ * subordinate id. Either way it is the one `review-rationale` textarea, and a
+ * selector list counts that node once. */
 function noteFieldsInside(root: ParentNode): number {
   let n = 0;
   for (const card of root.querySelectorAll("[data-lifecycle-card-host]")) {
     n += card.querySelectorAll(
-      '[data-conformance-id="review-note-field-subordinate"] textarea',
+      '[data-conformance-id="review-note-field-subordinate"] textarea, textarea[data-testid="review-rationale"]',
     ).length;
   }
   return n;

@@ -65,3 +65,21 @@ describe("asActionablePreflightError (cinatra#1056/#1062)", () => {
     ]);
   });
 });
+
+
+describe("connector identity at the preflight boundary (cinatra#4041)", () => {
+  it("retains the actual canonical package only with its exact setup address", () => {
+    expect(asActionablePreflightError({ code: "CONNECTOR_NOT_CONFIGURED", message: "Blocked", packageId: "@cinatra-ai/apollo-connector", settingsHref: "/connectors/cinatra-ai/apollo-connector/setup" })).toMatchObject({ packageId: "@cinatra-ai/apollo-connector" });
+  });
+  it.each([
+    ["@cinatra-ai/../apollo", "/connectors/cinatra-ai/../apollo/setup"],
+    ["@cinatra-ai/apollo-connector", "https://untrusted.example/setup"],
+    ["@cinatra-ai/apollo-connector", "/connectors/other/apollo-connector/setup"],
+    ["apollo-connector", "/connectors/cinatra-ai/apollo-connector/setup"],
+  ])("does not promote unsafe or mismatched identity %s", (packageId, settingsHref) => {
+    expect(asActionablePreflightError({ code: "CONNECTOR_NOT_CONFIGURED", packageId, settingsHref })).not.toHaveProperty("packageId");
+  });
+  it("does not turn an LLM refusal into a connector identity", () => {
+    expect(asActionablePreflightError({ code: "LLM_PROVIDER_NOT_CONFIGURED", packageId: "@cinatra-ai/apollo-connector", settingsHref: "/connectors/cinatra-ai/apollo-connector/setup" })).not.toHaveProperty("packageId");
+  });
+});

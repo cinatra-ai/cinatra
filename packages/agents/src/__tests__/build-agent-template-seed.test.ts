@@ -33,6 +33,17 @@ const OAS_FIXTURE = readFileSync(
   "utf8",
 );
 
+// Positive fixture inputs are optional with explicit defaults. The shared
+// fixture file is unchanged; own negative cases remove defaults explicitly.
+const defaultedOasFixture = JSON.parse(OAS_FIXTURE);
+for (const input of defaultedOasFixture.inputs ?? []) {
+  if (!("default" in input)) input.default = "";
+}
+for (const input of defaultedOasFixture.$referenced_components.start.inputs ?? []) {
+  if (!("default" in input)) input.default = "";
+}
+const VALID_OAS_FIXTURE = JSON.stringify(defaultedOasFixture);
+
 const PACKAGE_NAME = "@cinatra-ai/synthetic-gemini-agent";
 
 function manifest(
@@ -71,7 +82,7 @@ async function stageOasOnlyPackage(opts?: {
 }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "eng378-seed-"));
   await mkdir(join(dir, "cinatra"), { recursive: true });
-  await writeFile(join(dir, "cinatra", "oas.json"), opts?.oas ?? OAS_FIXTURE, "utf8");
+  await writeFile(join(dir, "cinatra", "oas.json"), opts?.oas ?? VALID_OAS_FIXTURE, "utf8");
   await writeFile(
     join(dir, "package.json"),
     JSON.stringify({ name: PACKAGE_NAME, version: "0.1.0" }),
@@ -276,5 +287,42 @@ describe("buildAgentTemplateInstallSeed (OAS-only direct seed)", () => {
         manifest: manifest({ executionProvider: "langgraph" }),
       }),
     ).rejects.toThrow(/langgraph/i);
+  });
+});
+
+
+describe("visible start-input contract before an installable seed is returned", () => {
+  async function prepare(packageName: string, declaration: Record<string, unknown>, required = false, advertisedPackage = packageName) {
+    const oas = JSON.parse(OAS_FIXTURE);
+    const input = { title: "postId", type: "string", ...declaration };
+    oas.inputs = [input];
+    oas.metadata.cinatra.packageName = advertisedPackage;
+    const start = oas.$referenced_components[oas.start_node.$component_ref];
+    start.inputs = [input];
+    start.metadata = { cinatra: { required: required ? ["postId"] : [] } };
+    const dir = await stageOasOnlyPackage({ oas: JSON.stringify(oas) });
+    return buildAgentTemplateInstallSeed({
+      extractedTempDir: dir, packageName, packageVersion: "0.1.0", manifest: manifest({}, { name: packageName }),
+    });
+  }
+
+  it("refuses a visible input without a default or required declaration", async () => {
+    await expect(prepare(PACKAGE_NAME, {})).rejects.toThrow(/postId/);
+  });
+
+  it("accepts the package's required declaration", async () => {
+    expect((await prepare(PACKAGE_NAME, {}, true)).inputSchema).toMatchObject({ required: ["postId"] });
+  });
+
+  it.each(["", null, false, 0])("accepts the explicit declared default %j", async value => {
+    expect((await prepare(PACKAGE_NAME, { default: value })).inputSchema).toMatchObject({ properties: { postId: { default: value } } });
+  });
+
+  it("preserves the exact existing install baseline", async () => {
+    await expect(prepare("@cinatra-ai/wordpress-agent", {})).resolves.toBeDefined();
+  });
+
+  it("a different package cannot claim a baseline identity through OAS metadata", async () => {
+    await expect(prepare(PACKAGE_NAME, {}, false, "@cinatra-ai/wordpress-agent")).rejects.toThrow(/postId/);
   });
 });

@@ -326,3 +326,25 @@ describe("createAgentRunPendingInput — the guarded creation perimeter", () => 
     expect(shared.insertCalls).toBe(1);
   });
 });
+
+
+describe("the real guarded create writers retain independent starter provenance (#3749)", () => {
+  it("the full writer inserts and deserializes the starter without replacing an orchestrator parent", async () => {
+    shared.runRows = [{ ...fakeRunRowDefaults(), id: "curator", orgId: ORG }];
+    const run = await createAgentRun({ id: "child", templateId: "tmpl-1", orgId: ORG, inputParams: {}, startedByRunId: "curator", parentRunId: "orchestrator" }, SESSION);
+    expect(shared.insertedValues[0]).toMatchObject({ startedByRunId: "curator", parentRunId: "orchestrator" });
+    expect(run).toMatchObject({ startedByRunId: "curator", parentRunId: "orchestrator" });
+  });
+  it("the pending-input writer also retains and deserializes its starter", async () => {
+    shared.runRows = [{ ...fakeRunRowDefaults(), id: "curator", orgId: ORG }];
+    const run = await createAgentRunPendingInput({ templateId: "tmpl-1", runBy: null, orgId: ORG, startedByRunId: "curator" }, SESSION);
+    expect(shared.insertedValues[0]).toMatchObject({ startedByRunId: "curator" });
+    expect(run.startedByRunId).toBe("curator");
+    expect(run.parentRunId).toBeNull();
+  });
+  it("a missing starter is refused before either writer inserts", async () => {
+    await expect(createAgentRun({ id: "child", templateId: "tmpl-1", orgId: ORG, inputParams: {}, startedByRunId: "absent" }, SESSION)).rejects.toThrow(/starter run is absent/);
+    await expect(createAgentRunPendingInput({ templateId: "tmpl-1", runBy: null, orgId: ORG, startedByRunId: "absent" }, SESSION)).rejects.toThrow(/starter run is absent/);
+    expect(shared.insertCalls).toBe(0);
+  });
+});

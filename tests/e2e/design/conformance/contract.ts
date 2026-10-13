@@ -20,6 +20,7 @@
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
 import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
 
@@ -2034,8 +2035,22 @@ async function assertStartRefused(root: Locator): Promise<void> {
 // The static harness consumes actual product-Link navigation at its declared
 // fixture port. This proves dispatch and its exact address, not an authenticated
 // destination page; the latter belongs to the actual host's browser proof.
+// A link pressed before hydration can follow its native href and leave the
+// fixture. Wait on the actual control; never recover that navigation by retrying.
+async function waitForControlHydration(control: Locator): Promise<void> {
+  await expect
+    .poll(
+      () => control.evaluate((element) =>
+        Object.keys(element).some((key) => key.startsWith("__reactFiber$")),
+      ),
+      { timeout: HYDRATION_TIMEOUT_MS, message: "the control did not hydrate before interaction" },
+    )
+    .toBe(true);
+}
+
 async function followEligibilityLink(root: Locator, link: Locator, href: string, outcome: string): Promise<void> {
   await expect(link).toHaveAttribute("href", href);
+  await waitForControlHydration(link);
   await link.click();
   await expect(root).toHaveAttribute("data-outcome", outcome);
   await expect(root).toHaveAttribute("data-destination", href);
@@ -3733,6 +3748,7 @@ const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -3857,6 +3873,7 @@ const NOTIFICATION_ROW_DRIVER: SurfaceDriver = {
       {
         outcome: "toggled",
         run: async (_page, root) => {
+          await waitForControlHydration(root.locator('[data-action="activate -> toggled"]'));
           await clickUntil(
             root.locator('[data-action="activate -> toggled"]'),
             async () => {
@@ -4297,7 +4314,7 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
   root: (page) =>
     page.locator(`${setupTabbed("populated")} [data-conformance-id="connector-setup"]`),
-  present: async (_page, root) => {
+  present: async (page, root) => {
     // The §II two-column body: the configuration fields and the 236px status
     // card are BOTH inside the one annotated surface. (The form's FieldSet is
     // this surface's ANCESTOR — the tablist is page-header chrome hoisted
@@ -4309,6 +4326,63 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
     ).toBeVisible();
     await expect(root.locator('[data-testid="connector-connect"]')).toBeVisible();
     await expect(root.locator('[data-testid="connector-status-probe-card"]')).toBeVisible();
+    // design#201 §II / APP898: schema Help is read-only bare labeled prose,
+    // Narrow and flush-left under the Wide tabs. Use the REAL fixture and the
+    // existing network-bound action stub, never a second imitation renderer.
+    const mount = page.locator(setupTabbed("populated"));
+    const helpLog = await stubConnectorActionEndpoint(page);
+    const tabs = mount.getByRole("tablist");
+    const names = await tabs.getByRole("tab").allTextContents();
+    expect(names.at(-1)).toBe("Help");
+    const prose = mount.getByTestId("help-prose");
+    await clickUntil(mount.getByRole("tab", { name: "Help", exact: true }), async () => {
+      await expect(prose).toBeVisible({ timeout: 5_000 });
+    });
+    await expect(prose.locator('[data-slot="card"], [data-slot="card-content"], input, textarea, select, button, form, [role="switch"]')).toHaveCount(0);
+    await expect(prose.getByRole("heading", { level: 3 })).toHaveText(["Connect the fixture", "About the local shell"]);
+    await expect(prose.locator("p")).toHaveText([
+      "Create a fixture key and paste it into the API key field on the Setup tab.",
+      "The Local shell tab controls the fixture's sandbox policy.",
+    ]);
+    const readings = await prose.evaluate((body) => {
+      const css = getComputedStyle(body);
+      const rect = body.getBoundingClientRect();
+      const row = body.closest('[data-slot="tabs"]')!.querySelector('[role="tablist"]')!.parentElement!;
+      const rowRect = row.getBoundingClientRect();
+      const resolve = (property: "color" | "fontFamily", value: string) => {
+        const node = document.createElement("span");
+        node.style[property] = value; document.body.append(node);
+        const result = getComputedStyle(node)[property]; node.remove(); return result;
+      };
+      const sections = [...body.querySelectorAll('[data-testid="help-section"]')].map((section) => {
+        const heading = section.querySelector("h3")!;
+        const paragraph = section.querySelector("p")!;
+        const h = getComputedStyle(heading), p = getComputedStyle(paragraph);
+        return { heading: { size: h.fontSize, line: h.lineHeight, weight: h.fontWeight, family: h.fontFamily.split(",")[0], color: h.color }, paragraph: { size: p.fontSize, line: p.lineHeight, family: p.fontFamily.split(",")[0], color: p.color, margin: p.margin }, gap: paragraph.getBoundingClientRect().top - heading.getBoundingClientRect().bottom };
+      });
+      return { maxWidth: css.maxWidth, gap: css.rowGap, display: css.display, direction: css.flexDirection, background: css.backgroundColor, shadow: css.boxShadow, border: [css.borderTopWidth, css.borderRightWidth, css.borderBottomWidth, css.borderLeftWidth], padding: css.padding, leftDelta: rect.left - rowRect.left, belowTabs: rect.top - rowRect.bottom, width: rect.width, rowWidth: rowRect.width, sections, ink: resolve("color", "var(--ink)"), muted: resolve("color", "var(--muted)"), headingFamily: resolve("fontFamily", "var(--font-archivo)").split(",")[0], bodyFamily: resolve("fontFamily", "var(--font-inter)").split(",")[0] };
+    });
+    expect(readings.maxWidth).toBe("576px");
+    expect(readings.width).toBeCloseTo(Math.min(576, readings.rowWidth), 0);
+    expect(readings.leftDelta).toBeCloseTo(0, 1);
+    expect(readings.belowTabs).toBeCloseTo(24, 1);
+    expect(readings.gap).toBe("20px");
+    expect(readings.display).toBe("flex"); expect(readings.direction).toBe("column");
+    expect(readings.background).toBe("rgba(0, 0, 0, 0)"); expect(readings.shadow).toBe("none");
+    expect(readings.border).toEqual(["0px", "0px", "0px", "0px"]); expect(readings.padding).toBe("0px");
+    for (const section of readings.sections) {
+      expect(section.heading).toEqual({ size: "14px", line: "20px", weight: "600", family: readings.headingFamily, color: readings.ink });
+      expect(section.paragraph).toEqual({ size: "14px", line: "24px", family: readings.bodyFamily, color: readings.muted, margin: "0px" });
+      expect(section.gap).toBeCloseTo(4, 1);
+    }
+    expect(helpLog.rejected).toEqual([]);
+    expect(helpLog.accepted.filter((call) => WRITE_ACTION_IDS.has(call.actionId))).toEqual([]);
+    // Every manifest field/action/state still starts on Setup. Help must not
+    // hide the original annotated surface from the remaining contract checks.
+    await clickUntil(mount.getByRole("tab", { name: "Setup", exact: true }), async () => {
+      await expect(root).toBeVisible({ timeout: 5_000 });
+    });
+    await expect(root.locator(`input[name="${CONNECTOR_SETUP_CONFIG.apiKey.key}"]`)).toBeVisible();
   },
   fields: {
     "api-key": boundSecret("config.apiKey", CONNECTOR_SETUP_CONFIG.apiKey.key),
@@ -5045,10 +5119,9 @@ const CONNECTOR_SHARING_DRIVER: SurfaceDriver = {
       outcome: "people-listed",
       run: async (page, root) => {
         const search = root.getByPlaceholder("Search by name or email…");
-        // Hydration-sensitive: under a loaded box the click and the keystrokes
-        // can land before this island hydrates, and React then re-renders the
-        // controlled field back to empty with the popover shut, so the typing
-        // is retried until the listbox answers (the same road as `clickUntil`).
+        // Wait on this controlled field before the first keystroke so React
+        // cannot replace a pre-hydration edit with its initial empty value.
+        await waitForControlHydration(search);
         await fillUntil(search, CONNECTOR_SHARING_SEARCH_QUERY, async () => {
           // The listbox is portalled, so it is asserted at the page level.
           await expect(
@@ -7376,13 +7449,14 @@ const UPLOAD_PANEL_NODE = '[data-conformance-id="upload-resolved-install-panel"]
 const UPLOAD_RESOLVE_CONTROL = '[data-conformance-id="resolve-reference"]';
 
 /**
- * Type the drawn link and press Continue until the panel mounts, retrying
- * through hydration (a click landing before React hydrates is silently
- * swallowed on the standalone build). Typing clears any previous resolution, so
- * a retry converges rather than compounding.
+ * Wait for the URL field and Continue button to hydrate before typing the
+ * drawn link. Typing clears any previous resolution, so the existing panel
+ * readiness retry converges rather than compounding.
  */
 async function resolveUploadReference(root: Locator): Promise<Locator> {
   const panel = root.locator(UPLOAD_PANEL_NODE);
+  await waitForControlHydration(root.locator("#github-repo-url"));
+  await waitForControlHydration(root.locator(UPLOAD_RESOLVE_CONTROL));
   await expect(async () => {
     // An unbounded action consumes the outer budget before toPass can refill.
     await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });

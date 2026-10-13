@@ -379,3 +379,49 @@ for (const viewport of VIEWPORTS) {
     });
   });
 }
+
+
+// cinatra#3449 / owner grading ruling: the approved artifact-review drawing
+// §I runframe uses a 196px rail column; §I.3 places each entry in that rail.
+// 196px is inherited main behavior. This change's width claim is that the
+// real nav and its row boxes fill that column instead of shrinking to labels.
+// These are browser oracles, not a claim of a local measured result.
+for (const theme of ["cinatra", "dark"] as const) {
+  test(`artifact-review §I / §I.3 — rail nav and rows fill the 196px column — ${theme}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(FIXTURE_PATH, { waitUntil: "domcontentloaded" });
+    // The existing next-themes persistence road; no CSS or fixture injection.
+    await page.evaluate((value) => localStorage.setItem("theme", value), theme);
+    await page.reload({ waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready);
+    await expect(page.locator("html"), "§I palette reading").toHaveClass(new RegExp(`\\b${theme}\\b`));
+
+    for (const selector of [PLAIN_RAIL, '[data-testid="run-surface-rail-width-host"]']) {
+      const column = page.locator(selector).locator("[data-run-step-rail]");
+      await expect(column, "§I: one real rail column in the unchanged fixture").toHaveCount(1);
+      await expect(column, "§I: the rail must be laid out").toBeVisible();
+      const nav = column.locator('[data-slot="stepper-nav"]');
+      await expect(nav, "§I.3: one real navigation rail").toHaveCount(1);
+      const rows = nav.locator(ROW_BOX);
+      await expect(rows, "§I.3: the fixture's three actual entries").toHaveCount(3);
+      const widths = await column.evaluate((element) => {
+        const measure = (node: Element) => ({
+          computed: Number.parseFloat(getComputedStyle(node).width),
+          rendered: node.getBoundingClientRect().width,
+        });
+        return {
+          column: measure(element),
+          nav: measure(element.querySelector('[data-slot="stepper-nav"]')!),
+          rows: [...element.querySelectorAll('[data-slot="stepper-trigger"]')].map(measure),
+        };
+      });
+      for (const reading of ["computed", "rendered"] as const) {
+        expect(widths.column[reading], `§I runframe: inherited ${reading} column width`).toBeCloseTo(196, 1);
+        expect(widths.nav[reading], `§I / §I.3: ${reading} nav fills the rail column`).toBeCloseTo(widths.column[reading], 1);
+        for (const [index, row] of widths.rows.entries()) {
+          expect(row[reading], `§I / §I.3: entry ${index} ${reading} row fills its nav`).toBeCloseTo(widths.nav[reading], 1);
+        }
+      }
+    }
+  });
+}

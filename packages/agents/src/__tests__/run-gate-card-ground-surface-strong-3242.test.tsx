@@ -239,6 +239,10 @@ vi.mock("../store", () => ({
   readRunCoOwners: vi.fn(async () => []),
 }));
 
+vi.mock("../visible-started-runs", () => ({
+  readVisibleStartedRuns: vi.fn(async () => []),
+}));
+
 vi.mock("../auth-policy", () => ({
   resolveEffectivePolicy: vi.fn(() => ({ runDataVisibility: "owner" })),
   buildScopeReason: vi.fn(() => null),

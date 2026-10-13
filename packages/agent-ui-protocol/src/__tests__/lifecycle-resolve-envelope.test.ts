@@ -701,3 +701,23 @@ describe("the island URL rides the answer", () => {
     expect(parsed?.islandSrc).toBeNull();
   });
 });
+
+
+describe("approved app-artifact-review §VI envelope-only producer Note", () => {
+  const pending = { kind: "artifact_review_gate", state: { state: "pending", canDecide: true, canComment: true }, body: null };
+  it("preserves producer words exactly without adding a versioned body", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, recordedPrompt: "  a red fox  " });
+    expect(parsed?.recordedPrompt).toBe("  a red fox  "); expect(parsed?.body).toBeNull();
+  });
+  it("old answers stay readable and missing/null words do not invent a Note", () => {
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", pending)?.recordedPrompt).toBeUndefined();
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, recordedPrompt: null })?.recordedPrompt).toBeNull();
+  });
+  it("refuses malformed words and any words beside absent or settled", () => {
+    for (const recordedPrompt of [42, {}, []]) expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, recordedPrompt })).toBeNull();
+    for (const state of [{ state: "absent" }, { state: "settled" }]) expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, state, recordedPrompt: "private producer words" })).toBeNull();
+  });
+  it("does not disclose a review Note beside another card kind", () => {
+    expect(parseLifecycleResolveEnvelope("verification_summary", { kind: "verification_summary", state: { state: "advisory" }, body: VERIFICATION_BODY, recordedPrompt: "private producer words" })).toBeNull();
+  });
+});

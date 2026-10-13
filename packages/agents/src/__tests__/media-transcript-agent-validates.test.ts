@@ -53,7 +53,7 @@ describe("media-transcript-agent OAS validates against agent JSON and StartNode 
     const llm = cinatra.llm as Record<string, unknown>;
     expect(llm).toEqual({
       preferredProvider: "gemini",
-      preferredModel: "gemini-2.5-flash",
+      preferredModel: "gemini-3.5-flash",
       capabilityRequired: "media_input",
     });
   });

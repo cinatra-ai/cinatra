@@ -20,7 +20,7 @@
  * blocks the turn draws (the two hooks a prose block can wear, counted
  * together) and which sentence each one carries.
  *
- * AND THE VOCABULARY ITSELF IS READ BACK from the declaration, so a FIFTH
+ * AND THE VOCABULARY ITSELF IS READ BACK from the declaration, so a SIXTH
  * reading added later fails this file rather than passing unnoticed with no
  * row of its own.
  *
@@ -114,6 +114,9 @@ const FIRED_RECURRING_SENTENCE =
   "It is still recurring, so the rows below still take a change — it applies to the runs still to come.";
 const STOPPED_RECURRING_SENTENCE =
   "The recurring schedule was stopped; its rows are no longer editable.";
+// Section VI gives the first shown, configured and expired readings this one sentence.
+const NEVER_FIRED_SENTENCE =
+  "Schedule proposal is ready. Confirm it on the card below and I will arm it; change the rows first if it is not right.";
 
 const RUN_ID = "7f1c9b24-5d08-4a6e-b3f1-92c4de0a5b77";
 const CARD_REF = "schedule-ref-3281";
@@ -197,7 +200,7 @@ const RUN_PAST_SCHEDULE = {
  */
 const READINGS: readonly {
   reading: string;
-  body: Record<string, unknown>;
+  body: Record<string, unknown> | null;
   firedOnce: boolean;
   /** The sentence §VI gives this reading, or `null` where it gives none. */
   sentence: string | null;
@@ -215,10 +218,15 @@ const READINGS: readonly {
     firedOnce: true,
     sentence: STOPPED_RECURRING_SENTENCE,
   },
-  { reading: "other", body: RECURRING_BODY, firedOnce: false, sentence: null },
+  // `never-fired` is a schedule that has not fired — the drawing's first shown,
+  // configured and expired readings. `other` is a card that resolved no body —
+  // the server's `absent` answer — so it draws no card and no line.
+  { reading: "never-fired", body: RECURRING_BODY, firedOnce: false, sentence: NEVER_FIRED_SENTENCE },
+  { reading: "other", body: null, firedOnce: false, sentence: null },
 ];
 
 let restoreFetch: typeof globalThis.fetch;
+let resolveAnswers = 0;
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -228,11 +236,15 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 /** Stand a server up that answers the run's row and the card's own resolve. */
-function serveReading(body: Record<string, unknown>, firedOnce: boolean): void {
+function serveReading(body: Record<string, unknown> | null, firedOnce: boolean): void {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith("/api/agents/runs/")) return jsonResponse(RUN_PAST_SCHEDULE);
     if (url === "/api/lifecycle-views/resolve") {
+      resolveAnswers += 1;
+      if (body === null) {
+        return jsonResponse({ kind: "trigger_schedule_proposal", state: { state: "absent" } });
+      }
       return jsonResponse({
         kind: "trigger_schedule_proposal",
         state: { state: "settled" },
@@ -246,6 +258,7 @@ function serveReading(body: Record<string, unknown>, firedOnce: boolean): void {
 
 beforeEach(() => {
   restoreFetch = globalThis.fetch;
+  resolveAnswers = 0;
 });
 
 afterEach(() => {
@@ -310,11 +323,21 @@ function assistantProseBlocks(container: HTMLElement): Element[] {
 }
 
 /** Mount the flat turn and wait for the card to settle on the reading named. */
-async function mountFlatTurn(reading: string) {
+async function mountFlatTurn(reading: string | null) {
   const result = await mountSurface("chat", {
     messages: flatProposalTurn(),
     slackMode: true,
   });
+  if (reading === null) {
+    await waitFor(() => {
+      if (resolveAnswers === 0) throw new Error("the card's resolve was never answered");
+    });
+    await act(async () => {});
+    expect(
+      result.container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]'),
+    ).toHaveLength(0);
+    return result;
+  }
   await waitFor(() => {
     const card = result.container.querySelector(
       '[data-conformance-id="schedule-proposal-card"]',
@@ -331,14 +354,16 @@ async function mountFlatTurn(reading: string) {
 
 /**
  * WHICH READING THE CARD'S OWN ATTRIBUTE SHOWS for each reported value. The
- * card draws its own five-name reading; the turn is told the four-name one.
+ * card draws its own five-name reading; the turn is told its own five-name one.
  */
-const CARD_ATTRIBUTE: Record<string, string> = {
+const CARD_ATTRIBUTE: Record<string, string | null> = {
   "spent-one-off": "fired-one-off",
   "fired-recurring": "fired-recurring",
   // A stopped recurring schedule is still a fired one to the card's own rows.
   "stopped-recurring": "fired-recurring",
-  other: "configured",
+  "never-fired": "configured",
+  // A card that resolved no body draws nothing, so it shows no attribute.
+  other: null,
 };
 
 describe("cinatra#3281 — the flat road draws §VI's own sentence and nothing above it", () => {
@@ -380,13 +405,17 @@ describe("cinatra#3281 — a reading with no sentence of its own keeps the lead-
   const row = READINGS.find((r) => r.sentence === null)!;
   it(`leaves the ${row.reading} turn drawing exactly the model's own lead-in`, async () => {
     serveReading(row.body, row.firedOnce);
-    const { container } = await mountFlatTurn(CARD_ATTRIBUTE[row.reading]!);
+    const { container } = await mountFlatTurn(CARD_ATTRIBUTE[row.reading] ?? null);
 
     const blocks = assistantProseBlocks(container);
     expect(blocks).toHaveLength(1);
     expect(blocks[0]!.hasAttribute("data-schedule-standing-line")).toBe(false);
     expect(visibleText(container)).toContain(MODEL_LEAD_IN);
     expect(visibleText(container)).toContain(READER_REQUEST);
+    // No schedule card is drawn for a card that resolved no body.
+    expect(
+      container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]'),
+    ).toHaveLength(0);
   }, 60_000);
 });
 
@@ -639,11 +668,17 @@ describe("cinatra#3281 — durable reload keeps the card's standing reading", ()
         serveReading(row.body, row.firedOnce);
         const messages = reloadedProposalTurn(road === "ordered");
         const { container } = await mountSurface("chat", { messages, slackMode: road === "slack" });
-        await waitFor(() => expect(container.querySelector('[data-conformance-id="schedule-proposal-card"]')?.getAttribute("data-schedule-reading")).toBe(CARD_ATTRIBUTE[row.reading]));
+        const attribute = CARD_ATTRIBUTE[row.reading] ?? null;
+        if (attribute !== null) {
+          await waitFor(() => expect(container.querySelector('[data-conformance-id="schedule-proposal-card"]')?.getAttribute("data-schedule-reading")).toBe(attribute));
+        } else {
+          await waitFor(() => expect(resolveAnswers).toBeGreaterThan(0));
+          await act(async () => {});
+        }
         await act(async () => {});
         const prose = assistantProseBlocks(container).map(block => block.textContent);
         expect(prose).toEqual(["Earlier reply stays unchanged.", row.sentence ?? MODEL_LEAD_IN]);
-        expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
+        expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(CARD_ATTRIBUTE[row.reading] === null ? 0 : 1);
         expect(visibleText(container)).toContain(READER_REQUEST);
         if (row.sentence !== null) expect(visibleText(container)).not.toContain(MODEL_LEAD_IN);
         // Rendering the current reading never rewrites what was persisted.
@@ -680,7 +715,7 @@ it("preserves a durable known producing slot and its later prose", async () => {
   });
   expect(projected!.dataParts).toBeUndefined();
   const { container } = await mountSurface("chat", { messages: [projected as unknown as UiMessage] });
-  await waitFor(() => expect(assistantProseBlocks(container).map(block => block.textContent?.trim())).toEqual([SPENT_ONE_OFF_SENTENCE, "Later explanation is still visible."]));
+  await waitFor(() => expect(assistantProseBlocks(container).map(block => block.textContent?.trim())).toEqual([SPENT_ONE_OFF_SENTENCE]));
   expect(container.querySelectorAll('[data-conformance-id="schedule-proposal-card"]')).toHaveLength(1);
 });
 
@@ -732,7 +767,10 @@ it("withdraws the old reading while a replacement reference resolves", async () 
   });
   await act(async () => { releaseReplacement(); });
   await waitFor(() => expect(view.container.querySelector('[data-conformance-id="schedule-proposal-card"]')?.getAttribute("data-schedule-reading")).toBe("configured"));
-  expect(assistantProseBlocks(view.container).at(-1)?.textContent).toBe(MODEL_LEAD_IN);
+  // The replacement resolves a configured schedule that has not fired, which
+  // section VI gives the proposal sentence; the lead-in stands only while
+  // nothing has resolved, which the wait above still pins.
+  await waitFor(() => { const last = assistantProseBlocks(view.container).at(-1); expect(last?.textContent).toBe(NEVER_FIRED_SENTENCE); expect(last?.getAttribute("data-schedule-standing-line")).toBe("never-fired"); });
 });
 
 describe("cinatra#3281 — the line stands where section VI draws it, 8 px above its card", () => {

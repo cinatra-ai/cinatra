@@ -644,9 +644,23 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     // moved out of the card and into the run page's chrome, its anchor did not.
     const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window"];
     const closed = new Set<string>([...SPEC_IDS, ...RUN_EMBEDDED_IDS, ...HOST_STANDARD_IDS]);
-    for (const src of [RUN_SURFACE, RUN_STEP_RAIL, RUN_CHIP_ROW, RUN_WINDOW_PANEL, RUN_WINDOW_CHROME]) {
+    // THE SCHEDULE STEP'S OWN WINDOW ANCHORS. The chrome also draws the schedule
+    // screen's closed window once its run is over (cinatra#2972, #2934; plan (A)
+    // §7.2): `schedule-prompt-window` and `schedule-window-over` are the anchors
+    // main draws in schedule-prompt-window.tsx, MOVED with that window into the
+    // chrome by cinatra#3487 and never invented, so they are allowed for the
+    // chrome alone.
+    const SCHEDULE_WINDOW_IDS = ["schedule-prompt-window", "schedule-window-over"];
+    const SITES: Array<[string, Set<string>]> = [
+      [RUN_SURFACE, closed],
+      [RUN_STEP_RAIL, closed],
+      [RUN_CHIP_ROW, closed],
+      [RUN_WINDOW_PANEL, closed],
+      [RUN_WINDOW_CHROME, new Set<string>([...closed, ...SCHEDULE_WINDOW_IDS])],
+    ];
+    for (const [src, allowed] of SITES) {
       for (const foundId of conformanceIdsIn(src)) {
-        expect(closed.has(foundId)).toBe(true);
+        expect(allowed.has(foundId)).toBe(true);
       }
     }
   });

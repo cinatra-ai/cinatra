@@ -33,6 +33,8 @@
  *     src/__tests__/run-page-composition-single-rail.test.tsx
  */
 import React from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 
@@ -87,6 +89,13 @@ vi.mock("@/lib/generated/field-renderer-components", () => ({
 }));
 
 const RUN_ID = "run-3478";
+const startedRuns = vi.hoisted(() => ({
+  rows: [] as Array<{ id: string; agentDisplayName: string; status: string; href: string }>,
+  read: vi.fn(),
+}));
+vi.mock("../visible-started-runs", () => ({
+  readVisibleStartedRuns: async (...args: unknown[]) => { startedRuns.read(...args); return startedRuns.rows; },
+}));
 
 const capturedSubmissions = vi.hoisted(() => ({
   rows: [] as Array<[number, {
@@ -203,7 +212,8 @@ function gateRow(status: "pending" | "resolved") {
     pinnedTargets: [] as Array<{ artifactId: string; representationRevisionId: string }>,
     reviewTaskId: "task-review-1",
     status,
-    disposition: status === "resolved" ? "approved" : null,
+    // The stored decision is the wire verb; the real rail derives Continued.
+    disposition: status === "resolved" ? "approve" : null,
     createdAt: new Date("2026-09-13T12:00:00Z"),
   };
 }
@@ -450,6 +460,8 @@ class StubEventSource {
 }
 
 beforeEach(() => {
+  startedRuns.rows = [];
+  startedRuns.read.mockClear();
   vi.stubGlobal("EventSource", StubEventSource);
   row.templateType = "orchestrator";
   row.status = "pending_approval";
@@ -526,7 +538,7 @@ function railEntries(column: HTMLElement): string[] {
         "[data-schedule-rail-step],[data-recommendation-rail-step]",
     ),
   )
-    .filter((el) => el.parentElement?.closest("[data-run-surface-rail-step]") == null)
+    .filter((el) => el.parentElement?.closest("[data-rail-kind]") == null)
     .map((el) => (el.textContent ?? "").trim())
     .filter((text) => text.length > 0);
 }
@@ -1344,6 +1356,100 @@ describe("a step the reader selects opens its own card, never a blank run detail
 });
 
 
+describe("the actual run page's independent started-runs list (#3749)", () => {
+  it.each(["light", "dark"] as const)("binds each real started-run link to the drawing's indigo in the %s palette", async palette => {
+    startedRuns.rows = [
+      { id: "color-child", agentDisplayName: "Started agent", status: "failed", href: "/projects/child-project/agents/example/child/color-child" },
+    ];
+    const { container } = await renderRunPage();
+    const link = container.querySelector<HTMLAnchorElement>('[data-conformance-id="run-started-runs"] [data-field="agent-name"]');
+    expect(link).not.toBeNull();
+    expect(link!.textContent).toBe("Started agent");
+    expect(link!.getAttribute("href")).toBe(startedRuns.rows[0].href);
+    expect(link!.closest('li')!.querySelector('[data-field="state"]')!.textContent).toBe("Failed");
+
+    // Resolve the rendered color utility through the actual host's token road.
+    // This is a token-backed native regression, not computed browser paint.
+    const css = readFileSync(path.resolve(__dirname, "../../../../src/app/globals.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const declarations = (selector: string) => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const body = css.match(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+      return new Map(Array.from(body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g), m => [m[1], m[2].trim()]));
+    };
+    const tokens = new Map([...declarations(":root"), ...declarations(".cinatra"), ...(palette === "dark" ? declarations(".dark") : [])]);
+    const theme = declarations("@theme inline");
+    expect(theme.get("--color-indigo-ink")).toBe("var(--indigo-ink)");
+    expect(tokens.get("--indigo-ink")).toBe("#364e81");
+    const colorUtility = Array.from(link!.classList).find(name => name.startsWith("text-"));
+    let color = theme.get(`--color-${colorUtility?.slice(5)}`);
+    for (let depth = 0; depth < 8 && color?.startsWith("var("); depth++) {
+      color = tokens.get(color.slice(4, -1));
+    }
+    expect(color?.toLowerCase()).toBe("#364e81");
+    expect(link!.classList.contains("underline")).toBe(true);
+    expect(link!.classList.contains("underline-offset-[3px]")).toBe(true);
+    expect(link!.getAttribute("data-action")).toBe("open-started-run");
+  });
+  it("draws exactly the authorized recorded children beneath the unchanged frame", async () => {
+    startedRuns.rows = [
+      { id: "scraper-run", agentDisplayName: "First started agent", status: "running", href: "/teams/child-team/agents/example/first-agent/scraper-run" },
+      { id: "finder-run", agentDisplayName: "Second started agent", status: "failed", href: "/projects/child-project/agents/example/second-agent/finder-run" },
+    ];
+    const { container } = await renderRunPage();
+    const list = container.querySelector('[data-conformance-id="run-started-runs"]');
+    expect(list).not.toBeNull();
+    expect(list!.querySelectorAll("li")).toHaveLength(2);
+    expect(Array.from(list!.querySelectorAll("a")).map(a => [a.textContent, a.getAttribute("href")])).toEqual(startedRuns.rows.map(r => [r.agentDisplayName, r.href]));
+    expect(Array.from(list!.querySelectorAll('[data-field="state"]')).map(n => n.getAttribute("data-run-status"))).toEqual(["running", "failed"]);
+    const frame = container.querySelector('[data-conformance-id="run-surface"]');
+    expect(frame).not.toBeNull();
+    expect(frame!.contains(list)).toBe(false);
+    expect(frame!.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(startedRuns.read).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: RUN_ID, orgId: "org-1" }), expect.objectContaining({ userId: "user-1" }), expect.objectContaining({ actorOrganizationId: "org-1" }));
+  });
+  it.each(["pending", "resolved"] as const)("keeps the produced-review park's record state when the child list is present (%s)", async gateStatus => {
+    const { encodeProducedReviewPark } = await vi.importActual<
+      typeof import("../run-produced-review-hold")
+    >("../run-produced-review-hold");
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    row.producedReviewPark = encodeProducedReviewPark({ status: "completed" });
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow(gateStatus)];
+    startedRuns.rows = [
+      { id: "child-run", agentDisplayName: "Started agent", status: "failed", href: "/projects/child-project/agents/example/child/child-run" },
+    ];
+
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const steps = Array.from(columns[0].querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"));
+    const made = steps.find(el => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(steps[steps.length - 1]).toBe(made);
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe(String(gateStatus === "resolved"));
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe(String(gateStatus === "resolved"));
+    const list = container.querySelector('[data-conformance-id="run-started-runs"]');
+    expect(list).not.toBeNull();
+    expect(list!.querySelector("a")!.getAttribute("href")).toBe(startedRuns.rows[0].href);
+    const frame = container.querySelector('[data-conformance-id="run-surface"]');
+    expect(frame!.contains(list)).toBe(false);
+    expect(frame!.compareDocumentPosition(list!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("draws no heading, list or empty-state copy when nothing was started", async () => {
+    const { container } = await renderRunPage();
+    expect(container.querySelector('[data-conformance-id="run-started-runs"]')).toBeNull();
+    expect(container.textContent).not.toContain("Runs this run started");
+  });
+});
+
+
 // #3679: exercise the real page/frame/input mapper and persisted gate rail,
 // with only existing external store/auth/route ports supplied by this suite.
 // DOM order is Source behavior; actual page grading remains App-owned.
@@ -1491,4 +1597,161 @@ it("keeps the round's schema policy row third when its answer is captured and th
   expect(schemaAfter!.getAttribute("data-rail-status")).toBe("completed");
   expect(railEntries(afterColumn)).toContain("4Approve the list");
   expect(capturedSubmissions.rows).toEqual(snapshot);
+});
+
+/**
+ * THE RAIL HALF OF cinatra#3449, PINNED — NOT REBUILT.
+ *
+ * The issue measured two readings at once on 2026-09-13 (head 8cae6989b2ca):
+ * the finished run's page never drew the run's output, AND "the rail loses its
+ * resolved steps at the same time". The second reading is ALREADY CLOSED on
+ * main: the one-rail composition landed as 95b85a4b0 (cinatra#3478 via pull
+ * request #3489), and the suite above pins a finished run's single column.
+ *
+ * What those pins do NOT cover is the case the issue actually measured — a
+ * finished run that SETTLED A REVIEW GATE before it ended. The drawing
+ * (specs/app-artifact-review.html §I, the step rail): "A resolved gate stays on
+ * the rail as read-only history — its entry keeps its place and records how it
+ * was settled (continued, superseded by a regeneration, changes requested), so
+ * the rail is the run's whole lifecycle at a glance, not just its live tip."
+ *
+ * So this case is a REGRESSION PIN, not a repair: it is expected green before
+ * the output change of this lane and green after it, which is what proves the
+ * completion card's evidence road left the rail alone.
+ */
+describe("a finished run keeps its resolved gate on the one rail (cinatra#3449)", () => {
+  it("keeps the resolved review entry in its own place, as read-only history, above the record", async () => {
+    row.status = "completed";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    reviewSlot.awaiting = false;
+    reviewSlot.reviewTaskId = "task-review-1";
+    reviewGates.rows = [gateRow("resolved")];
+
+    const { container } = await renderRunPage();
+
+    // ONE rail, not the second column the issue's frame carried.
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    const [column] = columns;
+
+    // The run's whole lifecycle at a glance: the work steps, the settled gate
+    // in the place it was settled at, and the run's own record last.
+    expect(railEntryLabels(column)).toEqual([
+      "Draft the post",
+      "Pick the image",
+      "Review · continued",
+      "What this run made",
+    ]);
+
+    // …and the settled gate is drawn AS history — it records how it was
+    // settled and is no longer the run's live tip.
+    const history = column.querySelector<HTMLElement>('[data-rail-gate-history="true"]');
+    expect(history).not.toBeNull();
+    expect(history!.getAttribute("data-rail-kind")).toBe("gate");
+    expect(history!.getAttribute("data-rail-status")).toBe("resolved");
+
+    // The record still closes the rail, reached and settled, for a run that is
+    // over with nothing holding it.
+    const made = Array.from(
+      column.querySelectorAll<HTMLElement>("[data-run-surface-rail-step]"),
+    ).find((el) => el.getAttribute("data-run-surface-rail-step-key") === "made");
+    expect(made).toBeDefined();
+    expect(made!.getAttribute("data-run-surface-rail-reached")).toBe("true");
+    expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
+  });
+});
+
+/**
+ * A RUN THAT CONTINUES ACROSS MIXED ARTIFACT KINDS (cinatra#4117).
+ *
+ * Review I.3 draws a run that made a post and an image: one review per
+ * artifact, each its own entry on the rail, named by its own artifact; the
+ * post's review settled ("continued"), the image's review the one the run
+ * waits at. cinatra#3952 opens one gate per artifact and cinatra#3951 names
+ * the one artifact of each gate; this reads the two together on the real run
+ * page, for two artifacts of different kinds on one run.
+ *
+ * A review opened before one review per artifact pins several targets. It is
+ * GRANDFATHERED, never migrated: it keeps its generic entry and its
+ * settlement, and no title of any of its targets is read to name it (the
+ * approved rail draws one reviewed target and defines no aggregate name).
+ */
+describe("a run that continues across mixed artifact kinds names each review by its own artifact (cinatra#4117)", () => {
+  const POST = { artifactId: "artifact-post-4117", representationRevisionId: "revision-post-1" };
+  const IMAGE = { artifactId: "artifact-image-4117", representationRevisionId: "revision-image-1" };
+  const TITLES: Record<string, string> = {
+    [POST.artifactId]: "Why migrations are the hardest part",
+    [IMAGE.artifactId]: "A lighthouse at dusk",
+  };
+  const readTitle = ({ artifactId }: { artifactId: string }) =>
+    TITLES[artifactId] ? { kind: "ok", artifact: { title: TITLES[artifactId] } } : { kind: "not-found" };
+  const postReview = () => ({
+    ...gateRow("resolved"), id: "gate-post", reviewTaskId: "task-review-post",
+    pinnedTargets: [{ ...POST }], createdAt: new Date("2026-09-13T12:00:00Z"),
+  });
+  const imageReview = () => ({
+    ...gateRow("pending"), id: "gate-image", reviewTaskId: "task-review-image",
+    pinnedTargets: [{ ...IMAGE }], createdAt: new Date("2026-09-13T12:05:00Z"),
+  });
+  const reviewEntries = (column: HTMLElement) => railEntryLabels(column).filter((label) => label.startsWith("Review"));
+
+  beforeEach(() => {
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    artifactReads.historical.mockImplementation(readTitle);
+    artifactReads.live.mockImplementation(readTitle);
+  });
+
+  it("draws the continued post's review and the image's waiting review as two entries, each named by its own artifact (§I.3)", async () => {
+    reviewGates.rows = [postReview(), imageReview()];
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    expect(reviewEntries(columns[0])).toEqual([
+      "Review · Why migrations are the hardest part · continued",
+      "Review · A lighthouse at dusk",
+    ]);
+    // Each name is read from that gate's own frozen target, by the reader its state takes.
+    expect(artifactReads.historical).toHaveBeenCalledExactlyOnceWith({
+      artifactId: POST.artifactId, orgId: "org-1",
+      actor: expect.objectContaining({ principalId: "user-1", authSource: "ui" }),
+    });
+    expect(artifactReads.live).toHaveBeenCalledExactlyOnceWith({
+      artifactId: IMAGE.artifactId, orgId: "org-1",
+      actor: expect.objectContaining({ principalId: "user-1", authSource: "ui" }),
+    });
+  });
+
+  it("keeps a review opened before one review per artifact as its own generic entry beside them, reading no title for it", async () => {
+    const combined = {
+      ...gateRow("resolved"), id: "gate-combined", reviewTaskId: "task-review-combined",
+      pinnedTargets: [
+        { ...POST, representationRevisionId: "revision-post-0" },
+        { ...IMAGE, representationRevisionId: "revision-image-0" },
+      ],
+      createdAt: new Date("2026-09-13T11:00:00Z"),
+    };
+    const frozen = structuredClone(combined.pinnedTargets);
+    reviewGates.rows = [combined, postReview(), imageReview()];
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    expect(reviewEntries(columns[0])).toEqual([
+      "Review · continued",
+      "Review · Why migrations are the hardest part · continued",
+      "Review · A lighthouse at dusk",
+    ]);
+    // Only the two single-artifact reviews are named; the combined one is read for nothing.
+    expect(artifactReads.historical).toHaveBeenCalledTimes(1);
+    expect(artifactReads.live).toHaveBeenCalledTimes(1);
+    expect(combined.pinnedTargets).toEqual(frozen);
+  });
 });
