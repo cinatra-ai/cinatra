@@ -172,7 +172,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/dev-auto-setup.ts": {
     class: "migratable-background-setup",
     justification:
-      "Dev-only auto-setup; gated on CINATRA_RUNTIME_MODE===development, fire-and-forget on boot. Never on a production request path.",
+      "Development and preview-instance auto-setup; gated on CINATRA_RUNTIME_MODE===development or a preview instance (the preview install profile on a production runtime, cinatra#4098), fire-and-forget at boot. On a preview it runs the connector hooks without the development fixtures, and its sync calls there are read-only lookups (the first administrator, and the fixture account an earlier development boot left). Never on a production deployment, never on a request path.",
   },
   "src/lib/dev-fixture-seeder.ts": {
     class: "migratable-background-setup",
