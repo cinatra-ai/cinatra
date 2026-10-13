@@ -955,13 +955,28 @@ function DisconnectButton({
           size-3.5, so the glyph stays the same bare one the trigger draws). */}
       <AlertDialogContent className="max-w-[min(400px,calc(100%-2rem))] rounded-[10px] p-[16px_18px_15px] shadow-[0_24px_60px_rgba(21,33,58,0.34)] sm:max-w-[400px]">
         <div>
-          <AlertDialogTitle className="mb-[10px] border-b border-line-strong pb-[9px] font-display leading-normal font-extrabold text-foreground italic">
-            Disconnect connector?
-          </AlertDialogTitle>
-          <AlertDialogDescription className="leading-[1.55]">
-            Disconnect this connector and remove its saved configuration? It will stop working
-            until you connect it again.
-          </AlertDialogDescription>
+          {/* The drawing's 15px title and 13px text (cinatra#4123) are the
+              named --text-confirm-title and --text-confirm-body roles. Each
+              stands on its own plain wrapper with a plain className, never
+              cn(): the app's tailwind-merge reads an unknown text-* token as a
+              colour, so inside the shared title's or description's cn() it
+              would drop the colour or lose to the primitive's text-lg/text-sm.
+              The title and the text take the wrapper's size through
+              text-[length:inherit] (the one bracket size the lint allows),
+              which tailwind-merge does read as a size, so the primitive's
+              text-lg/text-sm give way. It stands FIRST in each list: a size
+              class displaces an EARLIER leading-* in tailwind-merge. */}
+          <div className="text-confirm-title">
+            <AlertDialogTitle className="text-[length:inherit] mb-[10px] border-b border-line-strong pb-[9px] font-display leading-normal font-extrabold text-foreground italic">
+              Disconnect connector?
+            </AlertDialogTitle>
+          </div>
+          <div className="text-confirm-body">
+            <AlertDialogDescription className="text-[length:inherit] leading-[1.55]">
+              Disconnect this connector and remove its saved configuration? It will stop working
+              until you connect it again.
+            </AlertDialogDescription>
+          </div>
         </div>
         <AlertDialogFooter className="flex-row justify-end gap-2.5">
           <AlertDialogCancel
