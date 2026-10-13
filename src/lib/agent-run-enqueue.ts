@@ -198,6 +198,10 @@ export async function runConnectorPreflight(
           throw new ConnectorNotConfiguredError(packageId, decision.reason);
         }
       }
+      if (decision.allowed && requirement === "required" && mode === "use") {
+        const { hasRequiredConnectorConnectionForUse } = await import("@/lib/connection-use-gate");
+        if (!await hasRequiredConnectorConnectionForUse({packageId,actor})) throw new ConnectorNotConfiguredError(packageId,"no_usable_connection");
+      }
     } else {
       // No actor to attribute — un-audited synchronous gate. With a non-empty
       // map this branch fail-closes on `no_actor` for every dep, so
