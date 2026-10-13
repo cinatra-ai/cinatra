@@ -1664,3 +1664,94 @@ describe("a finished run keeps its resolved gate on the one rail (cinatra#3449)"
     expect(made!.getAttribute("data-run-surface-rail-settled")).toBe("true");
   });
 });
+
+/**
+ * A RUN THAT CONTINUES ACROSS MIXED ARTIFACT KINDS (cinatra#4117).
+ *
+ * Review I.3 draws a run that made a post and an image: one review per
+ * artifact, each its own entry on the rail, named by its own artifact; the
+ * post's review settled ("continued"), the image's review the one the run
+ * waits at. cinatra#3952 opens one gate per artifact and cinatra#3951 names
+ * the one artifact of each gate; this reads the two together on the real run
+ * page, for two artifacts of different kinds on one run.
+ *
+ * A review opened before one review per artifact pins several targets. It is
+ * GRANDFATHERED, never migrated: it keeps its generic entry and its
+ * settlement, and no title of any of its targets is read to name it (the
+ * approved rail draws one reviewed target and defines no aggregate name).
+ */
+describe("a run that continues across mixed artifact kinds names each review by its own artifact (cinatra#4117)", () => {
+  const POST = { artifactId: "artifact-post-4117", representationRevisionId: "revision-post-1" };
+  const IMAGE = { artifactId: "artifact-image-4117", representationRevisionId: "revision-image-1" };
+  const TITLES: Record<string, string> = {
+    [POST.artifactId]: "Why migrations are the hardest part",
+    [IMAGE.artifactId]: "A lighthouse at dusk",
+  };
+  const readTitle = ({ artifactId }: { artifactId: string }) =>
+    TITLES[artifactId] ? { kind: "ok", artifact: { title: TITLES[artifactId] } } : { kind: "not-found" };
+  const postReview = () => ({
+    ...gateRow("resolved"), id: "gate-post", reviewTaskId: "task-review-post",
+    pinnedTargets: [{ ...POST }], createdAt: new Date("2026-09-13T12:00:00Z"),
+  });
+  const imageReview = () => ({
+    ...gateRow("pending"), id: "gate-image", reviewTaskId: "task-review-image",
+    pinnedTargets: [{ ...IMAGE }], createdAt: new Date("2026-09-13T12:05:00Z"),
+  });
+  const reviewEntries = (column: HTMLElement) => railEntryLabels(column).filter((label) => label.startsWith("Review"));
+
+  beforeEach(() => {
+    row.status = "pending_approval";
+    row.lifecycleMoment = null;
+    row.lifecycleCardKind = null;
+    row.lifecycleCardRef = null;
+    row.hitlContext = null;
+    row.required = [];
+    artifactReads.historical.mockImplementation(readTitle);
+    artifactReads.live.mockImplementation(readTitle);
+  });
+
+  it("draws the continued post's review and the image's waiting review as two entries, each named by its own artifact (§I.3)", async () => {
+    reviewGates.rows = [postReview(), imageReview()];
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    expect(reviewEntries(columns[0])).toEqual([
+      "Review · Why migrations are the hardest part · continued",
+      "Review · A lighthouse at dusk",
+    ]);
+    // Each name is read from that gate's own frozen target, by the reader its state takes.
+    expect(artifactReads.historical).toHaveBeenCalledExactlyOnceWith({
+      artifactId: POST.artifactId, orgId: "org-1",
+      actor: expect.objectContaining({ principalId: "user-1", authSource: "ui" }),
+    });
+    expect(artifactReads.live).toHaveBeenCalledExactlyOnceWith({
+      artifactId: IMAGE.artifactId, orgId: "org-1",
+      actor: expect.objectContaining({ principalId: "user-1", authSource: "ui" }),
+    });
+  });
+
+  it("keeps a review opened before one review per artifact as its own generic entry beside them, reading no title for it", async () => {
+    const combined = {
+      ...gateRow("resolved"), id: "gate-combined", reviewTaskId: "task-review-combined",
+      pinnedTargets: [
+        { ...POST, representationRevisionId: "revision-post-0" },
+        { ...IMAGE, representationRevisionId: "revision-image-0" },
+      ],
+      createdAt: new Date("2026-09-13T11:00:00Z"),
+    };
+    const frozen = structuredClone(combined.pinnedTargets);
+    reviewGates.rows = [combined, postReview(), imageReview()];
+    const { container } = await renderRunPage();
+    const columns = railColumns(container);
+    expect(columns).toHaveLength(1);
+    expect(reviewEntries(columns[0])).toEqual([
+      "Review · continued",
+      "Review · Why migrations are the hardest part · continued",
+      "Review · A lighthouse at dusk",
+    ]);
+    // Only the two single-artifact reviews are named; the combined one is read for nothing.
+    expect(artifactReads.historical).toHaveBeenCalledTimes(1);
+    expect(artifactReads.live).toHaveBeenCalledTimes(1);
+    expect(combined.pinnedTargets).toEqual(frozen);
+  });
+});

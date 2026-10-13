@@ -318,8 +318,8 @@ describe("visible start-input contract before an installable seed is returned", 
     expect((await prepare(PACKAGE_NAME, { default: value })).inputSchema).toMatchObject({ properties: { postId: { default: value } } });
   });
 
-  it("preserves the exact existing install baseline", async () => {
-    await expect(prepare("@cinatra-ai/wordpress-agent", {})).resolves.toBeDefined();
+  it("refuses a former install-baseline identity now that the baseline is empty", async () => {
+    await expect(prepare("@cinatra-ai/wordpress-agent", {})).rejects.toThrow(/postId/);
   });
 
   it("a different package cannot claim a baseline identity through OAS metadata", async () => {
