@@ -22,15 +22,22 @@
 // Pure env logic (no server-only APIs, no IO) so it is importable from the boot
 // phases, the seeder, and unit tests alike.
 
-export type InstallProfile = "dev" | "demo";
+// `preview` (cinatra#4098) is the profile of a preview instance: the local,
+// non-production image that `cinatra install --mode preview` builds and boots.
+// It runs on a PRODUCTION runtime (`CINATRA_RUNTIME_MODE=production`), so every
+// development-mode gate stays shut; the profile only lets the connector
+// auto-setup run (`connectorAutoSetupAllowed`). Fixtures never seed on it.
+export type InstallProfile = "dev" | "demo" | "preview";
 
 /**
  * The install profile for this instance. Defaults to `"dev"` when the env is
- * unset or holds any unrecognised value (fail-safe: only the exact string
- * `"demo"` opts into the demo overlay).
+ * unset or holds any unrecognised value (fail-safe: only the exact strings
+ * `"demo"` and `"preview"` opt into their overlays).
  */
 export function getInstallProfile(env: Record<string, string | undefined> = process.env): InstallProfile {
-  return env.CINATRA_INSTALL_PROFILE === "demo" ? "demo" : "dev";
+  if (env.CINATRA_INSTALL_PROFILE === "demo") return "demo";
+  if (env.CINATRA_INSTALL_PROFILE === "preview") return "preview";
+  return "dev";
 }
 
 /** True when this instance runs the demo overlay (`CINATRA_INSTALL_PROFILE=demo`). */
@@ -55,6 +62,28 @@ export function isEnvFlagEnabled(value: string | undefined): boolean {
  */
 export function isStrictDevelopmentRuntime(env: Record<string, string | undefined> = process.env): boolean {
   return env.CINATRA_RUNTIME_MODE === "development" && env.NODE_ENV !== "production";
+}
+
+/**
+ * A preview instance (cinatra#4098): the `preview` profile on a production
+ * runtime (exact equality on both). Any other runtime mode with the profile set
+ * is not a preview, and a production runtime without it is a production
+ * deployment.
+ */
+export function isPreviewInstance(env: Record<string, string | undefined> = process.env): boolean {
+  return env.CINATRA_RUNTIME_MODE === "production" && getInstallProfile(env) === "preview";
+}
+
+/**
+ * May this boot run the connector auto-setup (the `cinatra.devSetup` hooks)?
+ * Strict development always; a preview instance too (cinatra#4098: a preview is
+ * not a production deployment). A production deployment never. This decides
+ * the connector hooks only: the development fixture account and the fixtures
+ * keep their own development-only gates (`shouldSeedDevFixtures` above and
+ * `devFixtureSeedingAllowed`).
+ */
+export function connectorAutoSetupAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  return isStrictDevelopmentRuntime(env) || isPreviewInstance(env);
 }
 
 /**
