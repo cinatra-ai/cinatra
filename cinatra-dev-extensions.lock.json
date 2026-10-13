@@ -165,7 +165,7 @@
     {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
-      "resolvedSha": "ddd9c9d3a72cdeec0d7301616b3bf3ade7de47c3"
+      "resolvedSha": "a008415ac2497d528de46dfb41a3ba300ea6ca5b"
     },
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "bfff1b329be2e7ffe6b0229f1f0d2653021e6c3b"
+      "resolvedSha": "881883e7824311f1e4f1d5a000d251b5bad73c36"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
