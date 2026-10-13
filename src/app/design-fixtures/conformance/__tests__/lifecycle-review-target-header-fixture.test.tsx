@@ -127,8 +127,8 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
 });
 
 
-describe("R3 authorized scope labels on the shipped header", () => {
-  it("renders the stored Team and Private facts with approved first-character casing", () => {
+describe("the shipped header names the owner's scope by its type and its name (cinatra#3443)", () => {
+  it("renders the team's row as the drawing's Team: Growth · Private", () => {
     const { container } = render(<LifecycleReviewTargetHeaderFixtures />);
     let matched = 0;
     for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
@@ -137,8 +137,8 @@ describe("R3 authorized scope labels on the shipped header", () => {
       fixture.headers.forEach((seed, index) => {
         if (seed.row.ownerLevel === "team" && seed.row.visibility === "private") {
           matched++;
-          expect(headers[index]!.textContent).toContain("Team · Private · " + seed.row.mime);
-          expect(headers[index]!.textContent).not.toContain("team · private");
+          expect(headers[index]!.textContent).toContain("Team: Growth · Private · " + seed.row.mime);
+          expect(headers[index]!.textContent).not.toContain("Team · Private");
         }
       });
     }

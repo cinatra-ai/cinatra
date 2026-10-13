@@ -335,10 +335,11 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
   // the same line again in §V.1's read-only review target). The labelled form
   // shipped here was a local reading of a plan sentence; the drawing decides, so
   // the labels go and both facts stay.
-  it("prints the two scope facts BARE, in the drawing's order", () => {
+  it("prints the scope facts BARE, in the drawing's order", () => {
     const facts = reviewTargetRowFacts(
       {
         ownerLevel: "organization",
+        ownerName: "Acme Corp",
         visibility: "organization",
         mime: "text/markdown",
         updatedAt: "2026-08-31T08:19:26.458Z",
@@ -346,7 +347,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       new Date("2026-08-31T08:27:26.458Z"),
     );
     const line = facts.join(" · ");
-    expect(line).toBe("Organization · Organization · text/markdown · updated 8 min ago");
+    expect(line).toBe("Organization: Acme Corp · text/markdown · updated 8 min ago");
     expect(line).not.toContain("Ownership:");
     expect(line).not.toContain("Visibility:");
   });
@@ -355,13 +356,14 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
     const facts = reviewTargetRowFacts(
       {
         ownerLevel: "team",
+        ownerName: "Growth",
         visibility: "private",
         mime: "text/html",
         updatedAt: "2026-08-31T08:19:26.458Z",
       },
       new Date("2026-08-31T08:27:26.458Z"),
     );
-    expect(facts).toEqual(["Team", "Private", "text/html", "updated 8 min ago"]);
+    expect(facts).toEqual(["Team: Growth", "Private", "text/html", "updated 8 min ago"]);
   });
 
   // ITEM 6 of cinatra#3141 — "the time is raw". The drawing draws a RELATIVE
@@ -378,7 +380,7 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
       },
       now,
     );
-    expect(facts[3]).toBe("updated 8 min ago");
+    expect(facts.at(-1)).toBe("updated 8 min ago");
     expect(facts.join(" · ")).not.toContain("2026-08-31T08:19:26.458Z");
   });
 
@@ -414,17 +416,75 @@ describe("reviewTargetRowFacts — the header meta line's read-only row facts", 
 });
 
 
-describe("R3 scope labels — approved artifact-review §IV", () => {
-  it.each([
-    ["team", "private", "Team", "Private"],
-    ["organization", "organization", "Organization", "Organization"],
-    ["user", "public", "User", "Public"],
-    ["team-owned", "orgPrivate", "Team-owned", "OrgPrivate"],
-    ["Team", "Private", "Team", "Private"],
-    ["", "", "", ""],
-  ])("draws %s/%s with only the first character capitalized", (ownerLevel, visibility, owner, visible) => {
-    const row = { ownerLevel, visibility, mime: "application/x-Custom", updatedAt: "not-an-instant" };
-    expect(reviewTargetRowFacts(row)).toEqual([owner, visible, row.mime, "updated not-an-instant"]);
-    expect(row).toEqual({ ownerLevel, visibility, mime: "application/x-Custom", updatedAt: "not-an-instant" });
+describe("each scope by its type and its name, named once (cinatra#3443, §IV)", () => {
+  // The approved drawing: "Organization" is the kind of scope,
+  // not the scope, so the line names each scope as its type and its actual
+  // name, and a visibility that reaches the owner's own scope adds no second
+  // scope. The measured line read "organization · organization".
+  const NOW = new Date("2026-08-31T08:27:26.458Z");
+  const UPDATED = "2026-08-31T08:19:26.458Z";
+
+  it("names an organization's artifact visible to its organization ONCE, by type and name", () => {
+    const line = reviewTargetRowFacts(
+      { ownerLevel: "organization", ownerName: "Acme Corp", visibility: "organization", mime: "text/html", updatedAt: UPDATED },
+      NOW,
+    ).join(" · ");
+    expect(line).toBe("Organization: Acme Corp · text/html · updated 8 min ago");
+    expect(line).not.toContain("Organization · Organization");
+  });
+
+  it("names a team's private artifact as the drawing's target does", () => {
+    expect(
+      reviewTargetRowFacts(
+        { ownerLevel: "team", ownerName: "Growth", visibility: "private", mime: "text/html", updatedAt: UPDATED },
+        NOW,
+      ).join(" · "),
+    ).toBe("Team: Growth · Private · text/html · updated 8 min ago");
+  });
+
+  it("names a visibility that reaches another scope second, in the same form", () => {
+    expect(
+      reviewTargetRowFacts(
+        {
+          ownerLevel: "team",
+          ownerName: "Growth",
+          visibility: "organization",
+          organizationName: "Acme Corp",
+          mime: "text/html",
+          updatedAt: UPDATED,
+        },
+        NOW,
+      ),
+    ).toEqual(["Team: Growth", "Organization: Acme Corp", "text/html", "updated 8 min ago"]);
+  });
+
+  it("names a team's artifact visible to its team once", () => {
+    expect(
+      reviewTargetRowFacts(
+        { ownerLevel: "team", ownerName: "Growth", visibility: "team", mime: "text/html", updatedAt: UPDATED },
+        NOW,
+      ),
+    ).toEqual(["Team: Growth", "text/html", "updated 8 min ago"]);
+  });
+
+  it("floors a name that did not resolve to the drawn type word, never the stored value", () => {
+    const facts = reviewTargetRowFacts(
+      { ownerLevel: "organization", ownerName: null, visibility: "organization", mime: "text/html", updatedAt: UPDATED },
+      NOW,
+    );
+    expect(facts).toEqual(["Organization", "text/html", "updated 8 min ago"]);
+    expect(facts.join(" · ")).not.toContain("organization");
+  });
+
+  it("draws a personal row with the drawn word, and the visibility capitalized", () => {
+    expect(
+      reviewTargetRowFacts({ ownerLevel: "user", visibility: "public", mime: "text/plain", updatedAt: "now" }).slice(0, 2),
+    ).toEqual(["Personal", "Public"]);
+  });
+
+  it("leaves the row it was handed unchanged", () => {
+    const row = { ownerLevel: "team", ownerName: "Growth", visibility: "private", mime: "text/html", updatedAt: UPDATED };
+    reviewTargetRowFacts(row, NOW);
+    expect(row).toEqual({ ownerLevel: "team", ownerName: "Growth", visibility: "private", mime: "text/html", updatedAt: UPDATED });
   });
 });

@@ -33,6 +33,12 @@ import type {
 } from "@/lib/artifacts/artifact-review-decision";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
+// Import-free data in, a string out: the one composer every surface words a
+// scope with (cinatra#3475), so this line adds no module graph of its own.
+import {
+  artifactOwnerLabel,
+  artifactVisibilityLabel,
+} from "@/lib/artifacts/artifact-owner-label";
 
 // ---------------------------------------------------------------------------
 // The closed blocked axis (§V) — the gate can no longer be prepared or decided.
@@ -333,14 +339,21 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
  * drawing names: "the read-only row facts the host authorized — owner level /
  * visibility, MIME, and updated time".
  *
- * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
- * meta line in the ratified drawings prints the two scope facts with no label at
- * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
- * line again over §V.1's read-only review target. The labelled form this line
- * carried came from a local reading of a plan sentence ("the line gets labels or
- * drops the storage fact") rather than from the drawing, and the graded proof frames
- * measured it as a departure. The drawing decides: the labels go, both facts
- * stay, and the order is the drawing's.
+ * EACH SCOPE BY ITS TYPE AND ITS NAME, NAMED ONCE (cinatra#3443; the §IV rule
+ * as the approved drawing redraws it). The owner level and the visibility are
+ * two row facts; where a fact names a scope, the line names it the way every
+ * scope surface does — its type, then its actual name: "Team: Growth",
+ * "Organization: Acme Corp". The type alone is the kind of scope, not the scope.
+ * A visibility that reaches the owner's own scope adds no second scope, so an
+ * organization's artifact visible to its organization reads "Organization: Acme
+ * Corp" once, never twice; a visibility that reaches another scope names it
+ * second in the same form ("Team: Growth · Organization: Acme Corp"); a
+ * visibility that reaches no scope stays its one word ("Team: Growth ·
+ * Private"). The facts carry no label, as the drawing draws them.
+ *
+ * THE NAMES ARE THE HOST'S. A row carries ids, not names; the host resolves
+ * them through the one owner-name resolver and passes them here. A name that
+ * did not resolve floors to the drawn type word, never to a stored value.
  *
  * Pure copy, no type keying — every artifact type reads the same line.
  */
@@ -350,14 +363,19 @@ export function reviewTargetRowFacts(
     visibility: string;
     mime: string;
     updatedAt: string;
+    /** The owning team's or organization's display name, as the host
+     *  resolved it; absent or null where none resolved. */
+    ownerName?: string | null;
+    /** The organization's display name, read where the visibility reaches
+     *  the organization; absent or null where none resolved. */
+    organizationName?: string | null;
   },
   /** The instant to read `updatedAt` against. Injected so the reading is
    *  testable; defaults to now, which is what every caller wants. */
   now: Date = new Date(),
 ): string[] {
   return [
-    artifact.ownerLevel.charAt(0).toUpperCase() + artifact.ownerLevel.slice(1),
-    artifact.visibility.charAt(0).toUpperCase() + artifact.visibility.slice(1),
+    ...reviewTargetScopeFacts(artifact),
     artifact.mime,
     // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
     // writes "updated 8 min ago"; the decided target printed the stored column
@@ -368,6 +386,30 @@ export function reviewTargetRowFacts(
     // cannot render one column two ways.
     `updated ${relativeInstant(artifact.updatedAt, now)}`,
   ];
+}
+
+/** The scope levels that name an entity of their own: a visibility equal to
+ *  one of them reaches the owner's own scope when the owner is that level. */
+const SCOPE_VISIBILITIES: ReadonlySet<string> = new Set(["team", "organization"]);
+
+/**
+ * The scope facts of the meta line (§IV): the owner's scope, then the
+ * visibility unless it reaches the owner's own scope. One or two facts.
+ */
+export function reviewTargetScopeFacts(artifact: {
+  ownerLevel: string;
+  visibility: string;
+  ownerName?: string | null;
+  organizationName?: string | null;
+}): string[] {
+  const owner = artifactOwnerLabel(artifact.ownerLevel, artifact.ownerName);
+  if (artifact.visibility === artifact.ownerLevel && SCOPE_VISIBILITIES.has(artifact.visibility)) {
+    return [owner];
+  }
+  if (artifact.visibility === "organization") {
+    return [owner, artifactOwnerLabel("organization", artifact.organizationName)];
+  }
+  return [owner, artifactVisibilityLabel(artifact.visibility)];
 }
 
 /** How the drawn readings step, longest first. Minutes are the drawing's own

@@ -1213,6 +1213,16 @@ export async function startFixtureApp({ answer = 200, secure = false, hydrate, s
         );
         return;
       }
+      // holdResponse and releaseResponse: the page with a short-lived state and
+      // its answers live in fixture-app-hold.mjs, so this file changes in this
+      // one place.
+      if (url.pathname.startsWith("/hold/")) {
+        import("./fixture-app-hold.mjs").then(
+          ({ serveHoldPage }) => serveHoldPage({ method: request.method, url, response, requests }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
       // openPageInOwnContext: its pages, served only to a session, and the
       // sign-in page they send a request without one to, live in
       // fixture-app-contexts.mjs, so this file changes in this one place.

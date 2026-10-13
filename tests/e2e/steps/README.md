@@ -38,7 +38,9 @@ defect of a step, with a test, fixed once for every run.
 | `pressWithoutName` | One control without an accessible name, such as a site widget's launcher, pressed by its selector through open shadow roots, never a guess, with the fault said, and the page's next settled state. |
 | `openPageOfOrigin` | A page of another origin than the page's, such as a site that embeds the product, loaded once by its address in an empty browser context of its own or in the page's own. |
 | `signInThroughWindow` | One sign-in through the window a control opens, as an embedded product signs in: the window that returns by itself, or its form typed into key by key and the window closed again. |
-<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress; then frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow. -->
+| `holdResponse` | Every request of a page that a pattern matches, held unsent from the arming until the release, so the short-lived state their answers would end stays on the page; a pattern that matches nothing within its bound is refused. |
+| `releaseResponse` | The held requests sent on unchanged, in the order they came, with how many there were and how long the first was held, or the refusal of a hold that caught nothing. |
+<!-- The rows from uploadFile on: uploadFile, fillForm, switchTheme and decideGate; then typeInWindow, waitForTurn, reloadPage, sendInComposer and openAddress; then frameOf, pressWithoutName, openPageOfOrigin and signInThroughWindow; then holdResponse and releaseResponse. -->
 
 `index.mjs` exports every step, the once-only budget (`createSignInBudget`), the
 refusal (`StepRefusal`) and every bound. It is plain ESM with JSDoc types that
@@ -76,7 +78,8 @@ imports only Node's builtins and its own files, so both of these work:
   a page's. `reloadPage`, `openAddress`, `readAddress`, `navigateTo`,
   `openPageInOwnContext`, `signInThroughPage`, `armPageTape`, `readPageTape`,
   `selectFrom`, `readOptions`, `uploadFile`, `switchTheme`, `decideGate`,
-  `watchRun`, `readStandingRequests`, `readTitle` and `waitForIsland` refuse a
+  `watchRun`, `readStandingRequests`, `readTitle`, `waitForIsland`,
+  `holdResponse` and `releaseResponse` refuse a
   scope (`input`) before they read, load, press or record anything else: a
   frame is never reloaded, typed into or photographed; the page is. A scope
   whose frame was replaced (the page reloaded, the frame mounted anew) is
@@ -1146,6 +1149,75 @@ The bounds are `SIGN_IN_WINDOW_BOUNDS`. Refusal kinds: `input` and `spent`
 `signInThroughPage`'s), and `not-returned` (the window neither closed nor showed
 the form within the bound, or stayed open after the answer, naming the
 window's path).
+
+<!-- holdResponse and releaseResponse: a short-lived state held on the page by holding the requests whose answers would end it. -->
+
+## `holdResponse(page, { urlPattern, record, method?, bounds? })` and `releaseResponse(page, { record })`
+
+A picture of a state that lasts less than a wait and a shutter, such as the
+moment between a decision and the page's refresh, can only be raced: by the
+time the wait has met and the shutter fires, the refresh has landed and the
+frame shows the next state. When a request's answer is what ends the state,
+holding that request holds the state.
+
+`holdResponse` arms a hold on the page, before the act that sends the
+request: from then on every request whose address the regular expression
+`urlPattern` matches, and whose method is `method` when one is named (one of
+`HOLD_METHODS`; any method when none is), is caught and waits UNSENT. Every
+request, not the first alone: a page can ask for the same answer twice (a
+refresh right after a decision, and a watcher's refresh a few seconds later),
+and holding the first alone would let the second end the state. Every other
+request goes on at once. It writes one line when it is armed and answers
+`{ path, method, matchMs, holdMs }` at once, before anything is caught; it
+writes another line for each request it catches, naming its method, its path,
+its number and how long after the arming it came, such as `holdResponse:
+holding GET /hold/answer (held request 1), caught 412 ms after the arming; it
+is not sent until the release`.
+
+`releaseResponse` lets the held requests go on, in the order they were
+caught, and answers `{ method, path, caughtAfterMs, heldMs, held, released }`
+once they have: the first held request's method, path and catch, how long it
+was held, and how many were held. It never waits for an answer, so the caller
+waits for the page's next state with its own wait. Each request goes on
+UNCHANGED: no header, method, address or body of it is overridden, and its
+answer reaches the page as the app sends it (the step never reads, builds or
+changes a response). It goes on through the page's other routes first
+(`route.fallback()`), then the network; since it was not sent before the
+release, the app answers it as things stand at the release. Once they have
+gone on, the step's route is removed, and a later request goes on unheld.
+
+- **A pattern that matches nothing is refused.** When no request is caught
+  within `matchMs` of the arming, the step writes the refusal `no-match` at
+  that moment and removes its route, and `releaseResponse` refuses `no-match`
+  as well. A release before anything is caught refuses `no-match` too and
+  removes the hold.
+- **No hold lasts forever.** No request is held past `holdMs`, counted from
+  the first catch: the step lets the held requests go on by itself, writes
+  that the hold bound ran out, and `releaseResponse` then answers
+  `released: "bound"` instead of `"call"`, so a caller can tell a frame taken
+  while the requests were held from one taken after.
+- **One hold at a time.** The hold belongs to the page object, as the page
+  tape does: a page holds one hold at a time (a second `holdResponse` before
+  the release is refused `held`), it ends with the page, and the module keeps
+  no state of its own. `releaseResponse` ends the hold whatever it answers.
+- **Lines name paths.** A line names the page and the requests by their
+  paths, never an origin, an address, a query string or the pattern.
+
+While a hold is armed, the page's requests go through a route, and Playwright
+turns the browser's HTTP cache off for a page with a route.
+
+| Bound | Default | Covers |
+| --- | --- | --- |
+| `HOLD_MATCH_BOUND_MS` | 30_000 | from the arming to the first request the pattern matches (`matchMs`) |
+| `HOLD_BOUND_MS` | 120_000 | the longest the requests are held, from the first catch (`holdMs`) |
+
+The bounds are `HOLD_BOUNDS`. Refusal kinds of `holdResponse`: `input` (no
+record, a scope, a pattern that is no regular expression or carries the g or
+the y flag, a method not in `HOLD_METHODS`, an unknown or non-positive bound),
+`closed`, `held` and `driver-failure`, each before anything is armed, and
+`no-match`, written when the match bound runs out. Refusal kinds of
+`releaseResponse`: `input`, `no-hold` (no hold is armed on the page), `no-match`,
+`closed` and `driver-failure` (a held request could not go on).
 
 ## Shared bounds
 

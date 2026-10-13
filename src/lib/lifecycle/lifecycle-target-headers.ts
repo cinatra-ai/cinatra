@@ -71,6 +71,7 @@ import {
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 /**
@@ -116,6 +117,18 @@ export async function readReviewTargetHeaders(input: {
       actorCtx.orgId,
       actorCtx.roleHints,
     );
+    // A NAME IS READ ONLY FOR A SCOPE THE READER BELONGS TO (cinatra#3443).
+    // Reading the row does not make its owning team's or organization's name
+    // the reader's to see: the line names a team only when the reader's own
+    // resolved memberships (the actor's `teamIds`, the axis run access
+    // consults) carry it, and an organization only when it is the reader's own
+    // organization. Any other scope is drawn by its type word alone and its
+    // name is never read. Unresolved memberships name nothing.
+    const memberTeams = new Set(actor.teamIds ?? []);
+    const mayName = (level: string, id: string | null | undefined): boolean =>
+      !!id &&
+      ((level === "team" && memberTeams.has(id)) ||
+        (level === "organization" && id === actor.organizationId));
     const headers: LifecycleTargetHeader[] = [];
     for (const target of gate.pinnedTargets) {
       // WHICH READING, AND WHY THE TWO ARE NOT INTERCHANGEABLE. Both carry the
@@ -149,6 +162,25 @@ export async function readReviewTargetHeaders(input: {
             });
       if (read.kind !== "ok") continue;
       const artifact = read.artifact;
+      // THE SCOPES ARE NAMED (cinatra#3443): the meta line names each scope by
+      // its type and its actual name, so the names are read here, through the
+      // one owner-name resolver the artifact page reads (best-effort: a name
+      // that does not resolve floors to the drawn type word). The organization's
+      // name is read only where the visibility reaches it; an organization's
+      // own artifact is named once, by its owner name. A personal row names no
+      // entity ("Personal"), so no name is read for it, and a scope the reader
+      // does not belong to is never named (above).
+      const ownerId =
+        artifact.ownerLevel === "organization" ? artifact.organizationId : artifact.ownerId;
+      const ownerName = mayName(artifact.ownerLevel, ownerId)
+        ? await readOwnerDisplayName(artifact.ownerLevel, ownerId ?? "")
+        : null;
+      const organizationName =
+        artifact.visibility === "organization" &&
+        artifact.ownerLevel !== "organization" &&
+        mayName("organization", artifact.organizationId)
+          ? await readOwnerDisplayName("organization", artifact.organizationId ?? "")
+          : null;
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
         typeLabel: artifact.objectType
@@ -164,6 +196,8 @@ export async function readReviewTargetHeaders(input: {
           visibility: artifact.visibility,
           mime: artifact.mime,
           updatedAt: artifact.updatedAt,
+          ownerName,
+          organizationName,
         })
           .slice(0, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
           .map((fact) => clamp(fact, "—")),
