@@ -120,7 +120,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "691853d6346cf86a2f1aadf6354a7937b66ee56e"
+      "resolvedSha": "1a87c2ead539e435ab7d3e19cd03356e1b35753e"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
@@ -190,7 +190,7 @@
     {
       "packageName": "@cinatra-ai/email-artifacts",
       "repo": "cinatra-ai/email-artifacts",
-      "resolvedSha": "6721f1e83b385be506ad1dab842d900503925444"
+      "resolvedSha": "fe936a27b6aae6e4e985a1baf6e4747d7ea0a6d8"
     },
     {
       "packageName": "@cinatra-ai/email-body-matcher-skill",
@@ -230,7 +230,7 @@
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "ed23ebd806809bbf6bc71ef84c94f4df11428561"
+      "resolvedSha": "29e0909da0e056097f0d82345e25ca8f44bdaaae"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
@@ -330,7 +330,7 @@
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
       "repo": "cinatra-ai/media-transcript-agent",
-      "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
+      "resolvedSha": "dad157fbc8e6809035c734d6f463218e48f257b7"
     },
     {
       "packageName": "@cinatra-ai/plane-connector",
@@ -340,7 +340,7 @@
     {
       "packageName": "@cinatra-ai/podcast-artifacts",
       "repo": "cinatra-ai/podcast-artifacts",
-      "resolvedSha": "1af543ceb5c714b537d5249b9416a713b5508ba2"
+      "resolvedSha": "18a82232a7147ffe39c08ae5bed3dd62f8ebe237"
     },
     {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
@@ -365,7 +365,7 @@
     {
       "packageName": "@cinatra-ai/screenshot-artifact",
       "repo": "cinatra-ai/screenshot-artifact",
-      "resolvedSha": "742a0a6b903c1fed400c14e807cd8f04b2d0dc8f"
+      "resolvedSha": "c901c855b061cb4299125043fcb738f9a42459fc"
     },
     {
       "packageName": "@cinatra-ai/screenshot-matcher-skill",
@@ -380,7 +380,7 @@
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
       "repo": "cinatra-ai/slide-deck-artifact",
-      "resolvedSha": "222095e919c0fdcfc1d55c9eb2ae8c1071f6f68c"
+      "resolvedSha": "1f8b5739feca0d942ff438325b3b8b41c1821963"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-matcher-skill",

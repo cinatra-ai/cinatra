@@ -20,15 +20,15 @@
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "published",
-      "manifestSha256": "1151283bee4ba4233783c457ceb6e332add4972d72a28e3d22aaa4854c6cdafc",
-      "specContentHash": "sha256:7b92cb200116a444434d63f28c04cdb2e8f8113674f96302a8085bf3fcc6e2c9"
+      "manifestSha256": "b1f00ffcf9aed87793ed0d1ae7604a030d98a09e0c43db987356484e817533d0",
+      "specContentHash": "sha256:9c86b3006aa25dad2c255088c10f7e3f4d1dc387dd16a6dc40c8527e92235a1a"
     },
     {
       "id": "app-connectors",
       "file": "app-connectors.json",
-      "source": "repo",
-      "manifestSha256": "2b98802f27fbaf921b44e0a5f634823d88c326f4edcf7f67b74cd81c48973468",
-      "specContentHash": "sha256:4efb755296759033deb8a56e691c85761cb31c45e38a969b8a6cbf691ef174a0"
+      "source": "published",
+      "manifestSha256": "2293c96c7b10363fcaf15549fd2690ad52b9b0ba4794d1679b1c8f0a150211b4",
+      "specContentHash": "sha256:be15e54fb6267260cdd6b196ff77bab8a6f8a6c76e0758a5528e920121a7b576"
     },
     {
       "id": "app-notifications",

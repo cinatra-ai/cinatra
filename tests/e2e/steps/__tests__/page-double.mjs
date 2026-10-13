@@ -37,6 +37,10 @@
 //     unless the page has it ignore the key (see pressEscape);
 //   - a press on a checkbox, a radio or a switch the page draws itself plays the
 //     page's handler for it, which flips its checked state;
+//   - a press on a control that refreshes its step (see fixture-app-hold.mjs)
+//     plays the page's handler for it: the step's loading state at once, and
+//     the app's answer in its place once the app has answered; its request is
+//     routed as every request is, so a route that holds it holds the state;
 //   - a press on a row drawn without a role plays the page's handlers for it: it
 //     counts the press, selects the row, or leaves the page;
 //   - text filled into a search field, and a press on an entry of its list, run
@@ -121,6 +125,7 @@ import {
   typeInSearchField,
 } from "./fixture-app.mjs";
 import { inputInFixtureWindow, sendInFixtureWindow } from "./fixture-app-windows.mjs";
+import { showFixtureAnswer, showFixtureLoading } from "./fixture-app-hold.mjs";
 import { mountFixtureSite, pressFixtureLauncher } from "./fixture-app-site.mjs";
 
 export class TimeoutError extends Error {
@@ -1210,6 +1215,22 @@ export class PageDouble {
       const on = element.getAttribute("aria-checked") !== "true";
       element.setAttribute("aria-checked", String(on));
       element.setAttribute("data-state", on ? "checked" : "unchecked");
+      return;
+    }
+    // The page's handler of a control that refreshes its step (see
+    // fixture-app-hold.mjs): the loading state at once, then the app's answer
+    // in its place once it has come. Its request is routed as every request is.
+    const refresher = element.closest("[data-fixture-refreshes]");
+    if (refresher) {
+      const dom = this.#dom;
+      showFixtureLoading(refresher);
+      this.#send("GET", new URL(refresher.getAttribute("data-fixture-refreshes"), this.#href).href, null, false).then(
+        (sent) => {
+          if (this.#closed || this.#dom !== dom || sent.aborted) return;
+          showFixtureAnswer(refresher, sent.text);
+        },
+        () => {},
+      );
       return;
     }
     if (element.localName === "a" && element.hasAttribute("href")) {

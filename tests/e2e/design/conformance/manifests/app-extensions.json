@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-extensions.html",
-  "contentHash": "sha256:7b92cb200116a444434d63f28c04cdb2e8f8113674f96302a8085bf3fcc6e2c9",
+  "contentHash": "sha256:9c86b3006aa25dad2c255088c10f7e3f4d1dc387dd16a6dc40c8527e92235a1a",
   "surfaces": [
     {
       "id": "extension-listing-grid",
@@ -243,6 +243,33 @@
         }
       ],
       "states": [
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "agent-start-needs-connection",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "connector",
+          "source": "connector.manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "back-to-agents",
+          "outcome": "scope-agents-tab"
+        },
+        {
+          "action": "configure",
+          "outcome": "connector-setup"
+        }
+      ],
+      "states": [
+        "error",
         "kind:agent"
       ]
     },

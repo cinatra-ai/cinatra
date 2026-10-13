@@ -230,7 +230,7 @@ describe("the actual loader releases its preflight while target I/O remains pend
 
   it.each(["pending", "resolved"] as const)("releases the %s historical multi-target surface before artifact reads finish", async (status) => {
     const pins = [target(1), target(2)];
-    vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true });
+    vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true, orgId: ORG });
     vi.mocked(readReviewGateState).mockResolvedValue(status === "pending" ? { status, targets: pins } : { status, fingerprint: "historical" });
     vi.mocked(readGatePinnedTargets).mockResolvedValue({ status, targets: pins });
     readGate.mockResolvedValue({ pinnedTargets: pins } as Awaited<ReturnType<typeof readReviewGate>>);
@@ -265,7 +265,7 @@ describe("the actual loader releases its preflight while target I/O remains pend
 
   it("a substituted pinned set remains blocked before any target I/O", async () => {
     artifactIo.readArtifact.mockClear();
-    vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true });
+    vi.mocked(enforceReviewRunAccess).mockResolvedValue({ ok: true, orgId: ORG });
     vi.mocked(readReviewGateState).mockResolvedValue({ status: "pending", targets: [target(1)] });
     vi.mocked(readGatePinnedTargets).mockResolvedValue({ status: "pending", targets: [target(2)] });
     expect(await loadReviewGateSurface({ runId: RUN, reviewTaskId: ORDINARY_TASK, actorCtx })).toEqual({ kind: "blocked", reason: "targets-mismatch" });

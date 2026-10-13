@@ -19,7 +19,7 @@
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
-import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_CONNECTOR, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
 import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
@@ -2124,6 +2124,58 @@ const AGENT_START_REFUSED_DRIVER: SurfaceDriver = {
   states: {
     error: async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
     "kind:agent": async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+  },
+};
+
+// Approved Extensions §IV.4: a start a missing connection refuses. The same
+// static mount road as §IV.2, on the product's own needs-connection panel. The
+// reader who may set the connection up gets the strip and its configure link;
+// a member is told to ask a platform administrator and gets no setup address.
+async function assertStartNeedsConnection(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const panel = eligibilityReader(root, reader);
+    const alert = panel.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveAttribute("data-conformance-id", "agent-start-needs-connection");
+    await expect(alert).toHaveAttribute("data-state", "error kind:agent");
+    await expect(alert.locator('[data-field="name=manifest.displayName"]')).toHaveText(`${RUN_ELIGIBILITY_AGENT.name} can't start`);
+    const named = alert.locator('[data-field="connector=connector.manifest.displayName"]');
+    await expect(named.locator("b")).toHaveText(RUN_ELIGIBILITY_CONNECTOR.displayName);
+    await expect(named.locator(".font-mono")).toHaveText(RUN_ELIGIBILITY_CONNECTOR.packageId);
+    await expect(panel.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(panel.getByText("not found", { exact: false })).toHaveCount(0);
+    await expect(panel.getByRole("link", { name: "Back to Agents" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.agentsHref);
+    const configure = panel.locator('[data-action="configure -> connector-setup"]');
+    if (reader === "administrator") {
+      await expect(alert).toContainText("Set up connections first:");
+      await expect(configure).toHaveText(RUN_ELIGIBILITY_CONNECTOR.displayName);
+      await expect(configure).toHaveAttribute("href", RUN_ELIGIBILITY_CONNECTOR.settingsHref);
+      await expect(named).toContainText("Set it up, then start the agent again.");
+    } else {
+      await expect(alert).not.toContainText("Set up connections first:");
+      await expect(configure).toHaveCount(0);
+      await expect(named).toContainText("Ask a platform administrator to set it up for you, then start the agent again.");
+    }
+  }
+}
+
+const AGENT_START_NEEDS_CONNECTION_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-start-needs-connection"]'),
+  present: async (_page, root) => assertStartNeedsConnection(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => assertStartNeedsConnection(root) },
+    connector: { source: "connector.manifest.displayName", assert: async (_page, root) => assertStartNeedsConnection(root) },
+  },
+  actions: {
+    "back-to-agents": { outcome: "scope-agents-tab", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "member"), eligibilityReader(root, "member").getByRole("link", { name: "Back to Agents" }), RUN_ELIGIBILITY_AGENT.agentsHref, "scope-agents-tab") },
+    configure: { outcome: "connector-setup", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").locator('[data-action="configure -> connector-setup"]'), RUN_ELIGIBILITY_CONNECTOR.settingsHref, "connector-setup") },
+  },
+  states: {
+    error: async (page) => assertStartNeedsConnection(page.locator('[data-surface-id="agent-start-needs-connection"]')),
+    "kind:agent": async (page) => assertStartNeedsConnection(page.locator('[data-surface-id="agent-start-needs-connection"]')),
   },
 };
 
@@ -4326,7 +4378,7 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
   root: (page) =>
     page.locator(`${setupTabbed("populated")} [data-conformance-id="connector-setup"]`),
-  present: async (_page, root) => {
+  present: async (page, root) => {
     // The §II two-column body: the configuration fields and the 236px status
     // card are BOTH inside the one annotated surface. (The form's FieldSet is
     // this surface's ANCESTOR — the tablist is page-header chrome hoisted
@@ -4338,6 +4390,63 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
     ).toBeVisible();
     await expect(root.locator('[data-testid="connector-connect"]')).toBeVisible();
     await expect(root.locator('[data-testid="connector-status-probe-card"]')).toBeVisible();
+    // design#201 §II / APP898: schema Help is read-only bare labeled prose,
+    // Narrow and flush-left under the Wide tabs. Use the REAL fixture and the
+    // existing network-bound action stub, never a second imitation renderer.
+    const mount = page.locator(setupTabbed("populated"));
+    const helpLog = await stubConnectorActionEndpoint(page);
+    const tabs = mount.getByRole("tablist");
+    const names = await tabs.getByRole("tab").allTextContents();
+    expect(names.at(-1)).toBe("Help");
+    const prose = mount.getByTestId("help-prose");
+    await clickUntil(mount.getByRole("tab", { name: "Help", exact: true }), async () => {
+      await expect(prose).toBeVisible({ timeout: 5_000 });
+    });
+    await expect(prose.locator('[data-slot="card"], [data-slot="card-content"], input, textarea, select, button, form, [role="switch"]')).toHaveCount(0);
+    await expect(prose.getByRole("heading", { level: 3 })).toHaveText(["Connect the fixture", "About the local shell"]);
+    await expect(prose.locator("p")).toHaveText([
+      "Create a fixture key and paste it into the API key field on the Setup tab.",
+      "The Local shell tab controls the fixture's sandbox policy.",
+    ]);
+    const readings = await prose.evaluate((body) => {
+      const css = getComputedStyle(body);
+      const rect = body.getBoundingClientRect();
+      const row = body.closest('[data-slot="tabs"]')!.querySelector('[role="tablist"]')!.parentElement!;
+      const rowRect = row.getBoundingClientRect();
+      const resolve = (property: "color" | "fontFamily", value: string) => {
+        const node = document.createElement("span");
+        node.style[property] = value; document.body.append(node);
+        const result = getComputedStyle(node)[property]; node.remove(); return result;
+      };
+      const sections = [...body.querySelectorAll('[data-testid="help-section"]')].map((section) => {
+        const heading = section.querySelector("h3")!;
+        const paragraph = section.querySelector("p")!;
+        const h = getComputedStyle(heading), p = getComputedStyle(paragraph);
+        return { heading: { size: h.fontSize, line: h.lineHeight, weight: h.fontWeight, family: h.fontFamily.split(",")[0], color: h.color }, paragraph: { size: p.fontSize, line: p.lineHeight, family: p.fontFamily.split(",")[0], color: p.color, margin: p.margin }, gap: paragraph.getBoundingClientRect().top - heading.getBoundingClientRect().bottom };
+      });
+      return { maxWidth: css.maxWidth, gap: css.rowGap, display: css.display, direction: css.flexDirection, background: css.backgroundColor, shadow: css.boxShadow, border: [css.borderTopWidth, css.borderRightWidth, css.borderBottomWidth, css.borderLeftWidth], padding: css.padding, leftDelta: rect.left - rowRect.left, belowTabs: rect.top - rowRect.bottom, width: rect.width, rowWidth: rowRect.width, sections, ink: resolve("color", "var(--ink)"), muted: resolve("color", "var(--muted)"), headingFamily: resolve("fontFamily", "var(--font-archivo)").split(",")[0], bodyFamily: resolve("fontFamily", "var(--font-inter)").split(",")[0] };
+    });
+    expect(readings.maxWidth).toBe("576px");
+    expect(readings.width).toBeCloseTo(Math.min(576, readings.rowWidth), 0);
+    expect(readings.leftDelta).toBeCloseTo(0, 1);
+    expect(readings.belowTabs).toBeCloseTo(24, 1);
+    expect(readings.gap).toBe("20px");
+    expect(readings.display).toBe("flex"); expect(readings.direction).toBe("column");
+    expect(readings.background).toBe("rgba(0, 0, 0, 0)"); expect(readings.shadow).toBe("none");
+    expect(readings.border).toEqual(["0px", "0px", "0px", "0px"]); expect(readings.padding).toBe("0px");
+    for (const section of readings.sections) {
+      expect(section.heading).toEqual({ size: "14px", line: "20px", weight: "600", family: readings.headingFamily, color: readings.ink });
+      expect(section.paragraph).toEqual({ size: "14px", line: "24px", family: readings.bodyFamily, color: readings.muted, margin: "0px" });
+      expect(section.gap).toBeCloseTo(4, 1);
+    }
+    expect(helpLog.rejected).toEqual([]);
+    expect(helpLog.accepted.filter((call) => WRITE_ACTION_IDS.has(call.actionId))).toEqual([]);
+    // Every manifest field/action/state still starts on Setup. Help must not
+    // hide the original annotated surface from the remaining contract checks.
+    await clickUntil(mount.getByRole("tab", { name: "Setup", exact: true }), async () => {
+      await expect(root).toBeVisible({ timeout: 5_000 });
+    });
+    await expect(root.locator(`input[name="${CONNECTOR_SETUP_CONFIG.apiKey.key}"]`)).toBeVisible();
   },
   fields: {
     "api-key": boundSecret("config.apiKey", CONNECTOR_SETUP_CONFIG.apiKey.key),
@@ -7771,6 +7880,7 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER,
   "agent-start-refused": AGENT_START_REFUSED_DRIVER,
   "agent-card-accent-hover": AGENT_CARD_ACCENT_HOVER_DRIVER, // The coloured-panel hover of the extensions drawing (cinatra#2851).
+  "agent-start-needs-connection": AGENT_START_NEEDS_CONNECTION_DRIVER, // Extensions §IV.4, a start a missing connection refuses (cinatra#4041).
   toast: TOAST_DRIVER,
   "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,

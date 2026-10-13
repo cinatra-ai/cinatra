@@ -13,8 +13,10 @@ import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surf
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
-import { RunStartRefusedPanel } from "./run-start-refused-panel";
+import { RunStartRefusedPanel, RunStartNeedsConnectionPanel } from "./run-start-refused-panel";
+import { connectorSetupRoute } from "./actionable-preflight-error";
 import {
+  getActorContext,
   getAuthSession,
   isPlatformAdmin,
   resolveOrgRoleForSession,
@@ -27,6 +29,7 @@ import {
 } from "@/lib/better-auth-db";
 import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAgentTemplates, ensureRunTitle, readRunCoOwners } from "./store";
 import { randomUUID } from "node:crypto";
+import { RunStartedRuns } from "./run-started-runs";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor, buildActorContextFromPrimitive } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
@@ -39,7 +42,7 @@ import {
   type ReviewGateRow,
 } from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
-import { buildRunStepRail, type RailGate, type RailMessage } from "./run-step-rail";
+import { buildRunStepRail, electCurrentReviewGate, type RailGate, type RailMessage } from "./run-step-rail";
 import { reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
@@ -1534,6 +1537,39 @@ export async function SetupScreen({
         ]}
       />;
     }
+    if (result.connectorConfigurationRefusal) {
+      // Whether THIS reader may open the connector's setup page is read here,
+      // on the page: the run-start core is reachable from four ratchet-locked
+      // routes (run-actions.ts), so the setup identity module stays off them and
+      // off this page's other roads, loaded lazily inside this branch only.
+      const refusal = result.connectorConfigurationRefusal;
+      const route = connectorSetupRoute(refusal.packageId);
+      let displayName = refusal.displayName;
+      let settingsHref: string | null = null;
+      try {
+        const actor = await getActorContext();
+        if (route && actor && actor.principalType === "HumanUser"
+          && actor.principalId === actorUserId && actor.organizationId === actorOrgId) {
+          const { resolveConnectorRouteIdentity } = await import("@/lib/connector-route-identity.server");
+          const identity = await resolveConnectorRouteIdentity({ vendor: route.vendor, slug: route.slug, subroute: "setup" }, actor);
+          if (identity.kind === "identity" && identity.packageId === refusal.packageId) {
+            displayName = identity.displayName.trim() || displayName;
+            settingsHref = route.settingsHref;
+          }
+        }
+      } catch {
+        // An unreadable actor or setup policy never grants a setup link; the
+        // refusal and the connector's declared name stay.
+      }
+      return <RunStartNeedsConnectionPanel
+        agentName={template.name} connector={{ packageId: refusal.packageId, displayName, settingsHref }}
+        agentsHref={`${scopeBase ?? ""}/agents`}
+        crumbEntries={[
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
+        ]}
+      />;
+    }
     notFound();
   }
 
@@ -1612,6 +1648,9 @@ export async function SetupScreen({
       redirect(named ? buildRunStepPath(home, named) : home);
     }
   }
+
+  const { readVisibleStartedRuns } = await import("./visible-started-runs");
+  const startedRuns = run ? await readVisibleStartedRuns(run, setupActor, setupRoles) : [];
 
   // cinatra#2933 — the window's own access answer for this run. `true` with no
   // run: there is nothing to ask, and the screen keeps the box it has today.
@@ -2051,6 +2090,7 @@ export async function SetupScreen({
         // The rail's earlier query is authoritative for what it actually drew.
         // A gate may open before this later slot read in the SAME render.
         railReviewTaskIds: railGates.map((gate) => gate.reviewTaskId),
+        railCurrentReviewTaskId: electCurrentReviewGate(reviewRailGates)?.reviewTaskId ?? null,
       }
     : null;
   // ── THE REVIEW ROWS' OWN STEPS, ON THIS PAGE (cinatra#3693) ──────────────
@@ -3285,6 +3325,7 @@ export async function SetupScreen({
               );
             })()}
           </div>
+          <RunStartedRuns rows={startedRuns} />
           </AgentPanelBody>
         ) : (
           // An empty-state notice is neither a form nor a control stack, so it

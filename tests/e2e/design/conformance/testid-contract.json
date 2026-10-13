@@ -1296,6 +1296,20 @@
           "literals": ["data-slot=\"installed-extension-kind-label\""]
         }
       ]
+    },
+    "agent-start-needs-connection": {
+      "manifest": "app-extensions",
+      "selector": "[data-surface-id=\"agent-start-needs-connection\"] on the conformance harness mounts the real RunStartNeedsConnectionPanel once per reader ([data-reader=\"administrator\"] with the connector setup route, [data-reader=\"member\"] without); the driver reads the panel's own [data-conformance-id=\"agent-start-needs-connection\"] alert, its two data-field bindings, Back to Agents and, for the administrator, the strip's configure link.",
+      "requires": [
+        {
+          "file": "src/app/design-fixtures/conformance/agent-run-eligibility-fixtures.tsx",
+          "literals": ["data-surface-id=\"agent-start-needs-connection\"", "RunStartNeedsConnectionPanel"]
+        },
+        {
+          "file": "packages/agents/src/run-start-refused-panel.tsx",
+          "literals": ["data-conformance-id=\"agent-start-needs-connection\"", "data-field=\"name=manifest.displayName\"", "data-field=\"connector=connector.manifest.displayName\"", "data-action=\"back-to-agents -> scope-agents-tab\"", "data-action=\"configure -> connector-setup\""]
+        }
+      ]
     }
   },
   "shared": {
