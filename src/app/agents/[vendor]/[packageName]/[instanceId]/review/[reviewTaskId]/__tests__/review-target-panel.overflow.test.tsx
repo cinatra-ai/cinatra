@@ -97,3 +97,37 @@ describe("the representation is reachable, never cut", () => {
     }
   });
 });
+
+// cinatra#3441 — inside a gate that pins ONE target the CARD draws the target's
+// one frame (specs/app-artifact-review.html §IV: the header over the
+// representation inside a single border), so the panel inside the island draws
+// none of its own. Every other caller keeps the frame it always drew.
+describe("cinatra#3441 — the panel draws its frame only where it is the target's frame", () => {
+  function frameOf(markup: string): Element {
+    document.body.innerHTML = markup;
+    const frame = document.body.querySelector("[data-conformance-id='review-target']");
+    if (!frame) throw new Error("no target panel");
+    return frame;
+  }
+
+  it("framed by default: the border and the control radius every caller has drawn", () => {
+    const frame = frameOf(
+      renderToStaticMarkup(<ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />),
+    );
+    expect(classesOf(frame)).toEqual(expect.arrayContaining(["rounded-control", "border", "border-line"]));
+  });
+
+  it("unframed inside a one-target card: no border and no radius; the anchor and the scrolling slot stay", () => {
+    const frame = frameOf(
+      renderToStaticMarkup(
+        <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} framed={false} />,
+      ),
+    );
+    expect(classesOf(frame)).not.toContain("border");
+    expect(classesOf(frame)).not.toContain("rounded-control");
+    expect(classesOf(frame)).not.toContain("overflow-hidden");
+    const slot = frame.querySelector("[data-review-representation-slot]");
+    expect(slot).not.toBeNull();
+    expect(classesOf(slot!)).toContain("overflow-x-auto");
+  });
+});
