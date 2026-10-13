@@ -116,7 +116,9 @@ describe("the installed episode package is complete (#3093 acceptance 1)", () =>
     expect(ui.abiVersion).toBe(1);
 
     const renderers = ui.renderers as Record<string, { entry: string; propsApiVersion: number; representations: string[] }>;
-    expect(Object.keys(renderers).sort()).toEqual(["detail", "preview"]);
+    // Exactly the package's own slots: its two displays over the episode, and the
+    // row icon (the listRow slot, cinatra#3319), which draws no form.
+    expect(Object.keys(renderers).sort()).toEqual(["detail", "listRow", "preview"]);
 
     const exportsMap = manifest.exports as Record<string, string>;
     for (const slot of ["detail", "preview"] as const) {
