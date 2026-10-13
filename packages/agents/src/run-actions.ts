@@ -4,12 +4,14 @@ import {
   requireActorContext,
   isPlatformAdmin,
   resolveOrgRoleForSession,
+  resolveActorGrantsForUserInOrg,
   // cinatra#3692: the session-lineage ActorContext RESOLVER, aliased as the
   // in-process A2A action aliases it — it is not the ALS frame reader of the
   // same name in `@cinatra-ai/llm/actor-context`.
   getActorContext as resolveSessionActorContext,
 } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
+import { buildActorContext } from "@/lib/authz/enforce";
 // cinatra#1939 wave 2 (§2a): every run-status transition here is grounded by the
 // acting MEMBER's session (owner / org-admin, already checked above). A member
 // mint fail-closes if membership was revoked — acceptable per the design.
@@ -18,7 +20,7 @@ import { resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
-import { asActionablePreflightError } from "./actionable-preflight-error";
+import { asActionablePreflightError, connectorSetupRoute, type ConnectorConfigurationRefusal } from "./actionable-preflight-error";
 import { assertAgentPackageRunnable, type AgentInstallRefusal } from "./runtime-install-gate";
 import {
   readAgentRunById,
@@ -101,6 +103,25 @@ async function resolveRunPageScopeActor(userId: string, orgId: string) {
   return actor;
 }
 
+/** Required connector checks use the verified launch org, which can differ
+ * from the active org (#3693). Resolve all target-org axes; never retarget an
+ * active-org actor with its old admin/team/project grants. Membership authority
+ * is checked by the caller before this read-only resolution. */
+async function resolveRequiredRunConnectorActor(userId: string, orgId: string) {
+  try {
+    const session = await requireAuthSession();
+    if (!orgId || session?.user?.id !== userId) throw new Error();
+    const grants = await resolveActorGrantsForUserInOrg(userId, orgId);
+    if (!grants.orgRole) throw new Error();
+    return buildActorContext(
+      { user: session.user, session: { activeOrganizationId: orgId } },
+      grants,
+    );
+  } catch {
+    throw new Error("Run-start actor could not be confirmed.");
+  }
+}
+
 /**
  * THE COOKIE HOST'S RUN-START DISPATCH (the Run button, the run dialog, and the
  * chip-row's release on a signed-in surface).
@@ -135,7 +156,7 @@ export type CreatePendingRunArgs = {
 export type CreatePendingRunResult =
   | { ok: true; runId: string }
   // See TriggerAgentRunResult — actionable preflight failure fields.
-  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal };
+  | { ok: false; error: string; code?: string; settingsHref?: string; installRefusal?: AgentInstallRefusal; connectorConfigurationRefusal?: Omit<ConnectorConfigurationRefusal, "settingsHref"> };
 
 /**
  * Creates an empty `pending_input` run for any template. The dispatcher's
@@ -259,6 +280,13 @@ async function createAndTriggerRunCore(
   // stays here, where the caller can act on it.
   let launched;
   try {
+    // The trusted launching human is checked BEFORE a run/queue/snapshot can
+    // be created. Missing actor evidence fail-closes; no synthetic worker.
+    if (template.connectorDependencies && Object.values(template.connectorDependencies).some(dep => typeof dep === "string" || dep.requirement === "required")) {
+      const connectorActor = await resolveRequiredRunConnectorActor(userId, orgId);
+      const { runConnectorPreflight } = await import("@/lib/agent-run-enqueue");
+      await runConnectorPreflight(template.connectorDependencies,connectorActor,"use");
+    }
     launched = await launchAgentRun({
       producer: "run_page_create_and_trigger",
       frame: { userId },
@@ -297,7 +325,36 @@ async function createAndTriggerRunCore(
     // run has already been compensated back to a decidable state by the
     // coordinator, so the retry the message asks for has somewhere to land.
     const actionable = asActionablePreflightError(enqueueErr);
-    if (actionable) return { ok: false, ...actionable };
+    if (actionable) {
+      const packageId = actionable.packageId;
+      const route = connectorSetupRoute(packageId);
+      const dependencies = template.connectorDependencies;
+      const dependency = packageId && dependencies && Object.hasOwn(dependencies, packageId)
+        ? dependencies[packageId] : undefined;
+      // Only a declared required connector can produce this reading. The legacy
+      // string dependency form means required, as it does in enqueue preflight.
+      if (packageId && route && (typeof dependency === "string" || dependency?.requirement === "required")) {
+        // Read lazily, the way the install gate reads the same catalog
+        // (runtime-install-gate.ts), so this module gains no eager edge.
+        const manifest = (await import("@/lib/generated/extensions.server").catch(() => null))?.STATIC_EXTENSION_MANIFEST;
+        const declared = manifest && Object.hasOwn(manifest, packageId)
+          ? manifest[packageId] : undefined;
+        const displayName = declared?.kind === "connector" && declared.displayName?.trim()
+          ? declared.displayName : packageId;
+        // Log the named refusal without exposing backend diagnostics or hidden
+        // connection records. The coordinator's compensation stays unchanged.
+        // Whether THIS reader may open the connector's setup page is read on the
+        // page, not here: this module is reachable from four ratchet-locked
+        // routes (see the note on readRecordedRunOutputArtifactIds), and the setup
+        // identity module would grow each of them.
+        console.warn("[agents] run start refused: required connector is not configured", {
+          code: actionable.code, agentPackage: template.packageName,
+          connectorPackage: packageId, connectorName: displayName,
+        });
+        return { ok: false, ...actionable, connectorConfigurationRefusal: { packageId, displayName } };
+      }
+      return { ok: false, ...actionable };
+    }
     throw enqueueErr;
   }
   if (launched.carrier.kind !== "run") {

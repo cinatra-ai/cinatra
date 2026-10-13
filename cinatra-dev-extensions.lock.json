@@ -120,7 +120,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "691853d6346cf86a2f1aadf6354a7937b66ee56e"
+      "resolvedSha": "1a87c2ead539e435ab7d3e19cd03356e1b35753e"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
@@ -255,7 +255,7 @@
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
       "repo": "cinatra-ai/google-oauth-connector",
-      "resolvedSha": "f631752b491ac0f31ee48f126b2647e07e6f59af"
+      "resolvedSha": "eebe77650ddf1d53cf0bb734ce7c9d7a96041ba7"
     },
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
@@ -335,12 +335,12 @@
     {
       "packageName": "@cinatra-ai/plane-connector",
       "repo": "cinatra-ai/plane-connector",
-      "resolvedSha": "42ca4f3bd9e50f7082cee2eb66070d86fb378383"
+      "resolvedSha": "652498fb4535e3b20e633e421c5a6266ec24ff7e"
     },
     {
       "packageName": "@cinatra-ai/podcast-artifacts",
       "repo": "cinatra-ai/podcast-artifacts",
-      "resolvedSha": "1af543ceb5c714b537d5249b9416a713b5508ba2"
+      "resolvedSha": "18a82232a7147ffe39c08ae5bed3dd62f8ebe237"
     },
     {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
@@ -365,7 +365,7 @@
     {
       "packageName": "@cinatra-ai/screenshot-artifact",
       "repo": "cinatra-ai/screenshot-artifact",
-      "resolvedSha": "742a0a6b903c1fed400c14e807cd8f04b2d0dc8f"
+      "resolvedSha": "c901c855b061cb4299125043fcb738f9a42459fc"
     },
     {
       "packageName": "@cinatra-ai/screenshot-matcher-skill",
@@ -380,7 +380,7 @@
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
       "repo": "cinatra-ai/slide-deck-artifact",
-      "resolvedSha": "222095e919c0fdcfc1d55c9eb2ae8c1071f6f68c"
+      "resolvedSha": "1f8b5739feca0d942ff438325b3b8b41c1821963"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-matcher-skill",

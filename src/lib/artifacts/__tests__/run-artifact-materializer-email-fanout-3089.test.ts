@@ -59,7 +59,8 @@ const {
   readArtifactTypeClaimsForOrgMock: vi.fn(),
 }));
 
-vi.mock("@/lib/db/pooled", () => ({
+vi.mock("@/lib/db/pooled", async () => ({
+  ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
   getPooledDb: () => ({ query: poolQueryMock }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
