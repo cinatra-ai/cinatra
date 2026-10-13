@@ -389,7 +389,7 @@ describe("cinatra#3759 — install-only floor never grows", () => {
     expect(Object.isFrozen(floor)).toBe(true);
     expect(floor).not.toHaveProperty("@cinatra-ai/project-manager-agent");
     expect(allowed("@cinatra-ai/project-manager-agent", "as_of")).toBe(false);
-    expect(Object.values(floor).flat()).toHaveLength(10);
+    expect(Object.values(floor).flat()).toHaveLength(0);
     expect(allowed("@other/wordpress-agent", "postId")).toBe(false);
     expect(allowed("constructor", "postId")).toBe(false);
   });
