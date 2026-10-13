@@ -13,8 +13,10 @@ import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surf
 import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
-import { RunStartRefusedPanel } from "./run-start-refused-panel";
+import { RunStartRefusedPanel, RunStartNeedsConnectionPanel } from "./run-start-refused-panel";
+import { connectorSetupRoute } from "./actionable-preflight-error";
 import {
+  getActorContext,
   getAuthSession,
   isPlatformAdmin,
   resolveOrgRoleForSession,
@@ -1528,6 +1530,39 @@ export async function SetupScreen({
       return <RunStartRefusedPanel
         agentName={template.name} missing={result.installRefusal.missing}
         requirementsHref={buildExtensionHeaderLink(template.packageName, isPlatformAdmin(session))?.extensionHref ?? null}
+        agentsHref={`${scopeBase ?? ""}/agents`}
+        crumbEntries={[
+          ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),
+          { prefix: buildAgentWorkspacePath(agentId, { scopeBase: scopeBase ?? null }), label: "Agent run" },
+        ]}
+      />;
+    }
+    if (result.connectorConfigurationRefusal) {
+      // Whether THIS reader may open the connector's setup page is read here,
+      // on the page: the run-start core is reachable from four ratchet-locked
+      // routes (run-actions.ts), so the setup identity module stays off them and
+      // off this page's other roads, loaded lazily inside this branch only.
+      const refusal = result.connectorConfigurationRefusal;
+      const route = connectorSetupRoute(refusal.packageId);
+      let displayName = refusal.displayName;
+      let settingsHref: string | null = null;
+      try {
+        const actor = await getActorContext();
+        if (route && actor && actor.principalType === "HumanUser"
+          && actor.principalId === actorUserId && actor.organizationId === actorOrgId) {
+          const { resolveConnectorRouteIdentity } = await import("@/lib/connector-route-identity.server");
+          const identity = await resolveConnectorRouteIdentity({ vendor: route.vendor, slug: route.slug, subroute: "setup" }, actor);
+          if (identity.kind === "identity" && identity.packageId === refusal.packageId) {
+            displayName = identity.displayName.trim() || displayName;
+            settingsHref = route.settingsHref;
+          }
+        }
+      } catch {
+        // An unreadable actor or setup policy never grants a setup link; the
+        // refusal and the connector's declared name stay.
+      }
+      return <RunStartNeedsConnectionPanel
+        agentName={template.name} connector={{ packageId: refusal.packageId, displayName, settingsHref }}
         agentsHref={`${scopeBase ?? ""}/agents`}
         crumbEntries={[
           ...(launchScope ? scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined) : []),

@@ -23,6 +23,8 @@ import type {
   LlmFileReference,
   LlmBatchSubmitInput,
   LlmBatchSubmitResult,
+  LlmToolReference,
+  LlmToolReduction,
 } from "@cinatra-ai/sdk-extensions/llm-provider-adapter-contract";
 
 // A connector-shaped, provider-agnostic adapter typed SOLELY against the leaf.
@@ -76,4 +78,58 @@ describe("llm-provider-adapter-contract (S4.0 carve-out)", () => {
     });
     expect(ref?.provider).toBe("openai");
   });
+});
+
+// The new callback compiles against the public SDK subpath alone. The original
+// fixture above intentionally never invokes it: older adapters remain valid.
+const removedTools: readonly LlmToolReference[] = [
+  { type: "function", name: "lookup" },
+  { type: "mcp", serverLabel: "caller-label" },
+  { type: "shell" },
+  { type: "web_search" },
+  { type: "container_skills" },
+  { type: "sandbox_execution" },
+];
+const reduction: LlmToolReduction = { removed: removedTools };
+const reducingAdapter: LlmProviderAdapter = {
+  ...fixtureAdapter,
+  async generate(input) {
+    input.onToolsReduced?.(reduction);
+    return fixtureAdapter.generate(input);
+  },
+  async stream(input) {
+    input.onToolsReduced?.(reduction);
+    await fixtureAdapter.stream(input);
+  },
+};
+
+// These negative assignments are checked by the real compiler, not Vitest's
+// type erasure. The callback contract must not grow a transport payload.
+const rejectedReference: LlmToolReference = {
+  type: "mcp", serverLabel: "caller-label",
+  // @ts-expect-error Tool references cannot carry server addresses.
+  serverUrl: "https://example.test/mcp",
+};
+const rejectedReduction: LlmToolReduction = {
+  removed: removedTools,
+  // @ts-expect-error No provider-specific reason or diagnostic payload.
+  reason: "provider failure",
+};
+void rejectedReference;
+void rejectedReduction;
+
+it("supports optional tool-reduction notification for both generation paths", async () => {
+  const observed: LlmToolReduction[] = [];
+  await reducingAdapter.generate({
+    system: "s", prompt: "hello", onToolsReduced: (event) => observed.push(event),
+  });
+  const streamInput: StreamInput = {
+    system: "s", messages: [],
+    onTextDelta: () => {}, onToolCall: () => {}, onToolResult: () => {},
+    onStepStart: () => {}, onStepEnd: () => {}, onError: () => {},
+  };
+  await reducingAdapter.stream({ ...streamInput, onToolsReduced: (event) => observed.push(event) });
+  expect(observed).toEqual([reduction, reduction]);
+  await reducingAdapter.generate({ system: "s", prompt: "without callback" });
+  await reducingAdapter.stream(streamInput);
 });

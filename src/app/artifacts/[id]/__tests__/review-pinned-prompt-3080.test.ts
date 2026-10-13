@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({ query: vi.fn(), access: vi.fn(), gate: vi.fn(), artifact: vi.fn(), member: vi.fn() }));
-vi.mock("@/lib/db/pooled", () => ({ getPooledDb: () => db }));
+vi.mock("@/lib/db/pooled", async () => ({
+  ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"), getPooledDb: () => db }));
 vi.mock("@/lib/postgres-config", () => ({ getPostgresConnectionString: () => "unused", postgresSchema: "cinatra" }));
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: vi.fn() }));
 import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";

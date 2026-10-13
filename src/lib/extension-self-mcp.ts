@@ -1,4 +1,4 @@
-import { isGuardedRunDispatch, isGuardedRunLeaf, markGuardedRunDispatch } from "@/lib/extension-capabilities-registry";
+import { isGuardedRunDispatch, isGuardedRunLeaf, markDeclaredOutwardRunFrame, markGuardedRunDispatch } from "@/lib/extension-capabilities-registry";
 import "server-only";
 
 // Host self-primitive invoker for `ctx.mcp.callPrimitive`.
@@ -289,14 +289,22 @@ export async function callHostPrimitive(
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.
     // Fail CLOSED on a deny OR any boundary error.
     let decision: { allowed: boolean; shouldBlock?: boolean; reason?: string };
+    // Set only for a guarded leaf whose planned entry declares outward.
+    let heldDeclaredOutward = false;
     try {
       const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
       const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
       input = await prepareDeclaredRunToolArguments(primitiveName, input);
-      decision = ctx?.runId && isGuardedRunDispatch(handler)
+      // The outward declaration of the captured primitive's planned entry.
+      const declaresOutward = captured.planned.declaredOutward !== null;
+      // A guarded leaf decides itself; the frame it runs in carries the
+      // planned declaration (cinatra#3745).
+      const guarded = !!ctx?.runId && isGuardedRunDispatch(handler);
+      heldDeclaredOutward = guarded && declaresOutward;
+      decision = guarded
         ? { allowed: true }
         : await enforceMcpBoundary({ primitiveName, arguments: input, ctx,
-            delegatedRestricted: !!ctx?.delegatedRestricted });
+            delegatedRestricted: !!ctx?.delegatedRestricted, declaresOutward });
     } catch (err) {
       throw new Error(
         `[extension-self-mcp] authorization unavailable for "${primitiveName}" (boundary_error): ` +
@@ -313,7 +321,9 @@ export async function callHostPrimitive(
     // runtimes, so re-run under `ctx` exactly as policedRegisterTool does, or the
     // handler would see a missing request context.
     const runHandler = () => handler(input, makeMinimalExtra());
-    const result = (await (ctx ? mcpRequestContextStorage.run(ctx, runHandler) : runHandler())) as
+    // A fresh frame for each held call, so the mark never reaches a sibling call.
+    const runFrame = ctx && heldDeclaredOutward ? markDeclaredOutwardRunFrame({ ...ctx }) : ctx;
+    const result = (await (runFrame ? mcpRequestContextStorage.run(runFrame, runHandler) : runHandler())) as
       | { structuredContent?: unknown; content?: Array<{ type?: string; text?: string }> }
       | undefined;
     return unwrapCallToolResult(result);

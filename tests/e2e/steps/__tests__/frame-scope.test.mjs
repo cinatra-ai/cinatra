@@ -209,6 +209,8 @@ const REFUSING = [
   ["readStandingRequests", (s, scope, record) => s.readStandingRequests(scope, { record }), "nothing was read"],
   ["readTitle", (s, scope, record) => s.readTitle(scope, { record }), "nothing was read"],
   ["waitForIsland", (s, scope, record) => s.waitForIsland(scope, { record, shutter: shutterDouble().shutter }), "nothing was read"],
+  ["holdResponse", (s, scope, record) => s.holdResponse(scope, { urlPattern: /\/embed\//, record }), "nothing was held"],
+  ["releaseResponse", (s, scope, record) => s.releaseResponse(scope, { record }), "nothing was released"],
 ];
 
 for (const backend of [...BACKENDS, ISOLATED]) {

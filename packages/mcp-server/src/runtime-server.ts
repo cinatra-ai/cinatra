@@ -372,17 +372,24 @@ export async function createMcpRuntimeServer(input: {
       // closure. Any failure of the boundary check (failed import, runtime
       // exception, etc.) MUST fail closed — never fall through to the user
       // handler.
+      // Set only for a guarded leaf whose planned entry declares outward.
+      let markDeclaredOutward: (<F extends object>(frame: F) => F) | null = null;
       try {
         const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
-        const { isGuardedRunDispatch } = await import("@/lib/extension-capabilities-registry");
+        const { isGuardedRunDispatch, markDeclaredOutwardRunFrame } = await import("@/lib/extension-capabilities-registry");
         const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
         cbArgs[0] = await prepareDeclaredRunToolArguments(name, cbArgs[0]);
+        // The outward declaration planned at registration, never re-read here.
+        const declaresOutward = planned.declaredOutward !== null;
         // A branded host bridge can only dispatch a guarded captured leaf.
-        // That leaf performs the full ordinary boundary and argument-bound burn.
-        const decision = ctx?.runId && isGuardedRunDispatch(cb)
+        // That leaf performs the full ordinary boundary and argument-bound burn;
+        // the frame it runs in carries the planned declaration (cinatra#3745).
+        const guarded = !!ctx?.runId && isGuardedRunDispatch(cb);
+        if (guarded && declaresOutward) markDeclaredOutward = markDeclaredOutwardRunFrame;
+        const decision = guarded
           ? { allowed: true as const }
           : await enforceMcpBoundary({ primitiveName: name, arguments: cbArgs[0], ctx,
-              delegatedRestricted: !!ctx?.delegatedRestricted });
+              delegatedRestricted: !!ctx?.delegatedRestricted, declaresOutward });
         if (!decision.allowed && decision.shouldBlock) {
           return {
             content: [
@@ -421,10 +428,13 @@ export async function createMcpRuntimeServer(input: {
       // instead of loading a fresher one. Two snapshots inside one request is
       // exactly the disagreement class the immutable snapshot exists to end:
       // the later one could admit what this request's perimeter refused.
-      const frame =
+      const snapshotFrame =
         policyMode === "delegated-chat" && ctx
           ? { ...ctx, delegatedChatAdmissionSnapshot: admissionSnapshot }
           : ctx;
+      // A fresh frame for each held call, so the mark never reaches a sibling call.
+      const frame =
+        snapshotFrame && markDeclaredOutward ? markDeclaredOutward({ ...snapshotFrame }) : snapshotFrame;
       return frame ? mcpRequestContextStorage.run(frame, () => cb(...cbArgs)) : cb(...cbArgs);
       });
     } catch (error) {

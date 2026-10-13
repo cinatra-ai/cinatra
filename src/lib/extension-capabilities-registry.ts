@@ -490,5 +490,18 @@ export function isGuardedRunDispatch(handler: unknown): boolean {
   return typeof handler === "function" && guardedDispatches.has(handler);
 }
 
+// cinatra#3745: the frame a guarded leaf runs in when the tool's PLANNED entry
+// declares that it acts outward. Set by the host dispatch bridge only, on a
+// fresh frame per call. Narrow-only: the mark can hold a call, never admit one.
+const DECLARED_OUTWARD_KEY = Symbol.for("@cinatra-ai/host:declared-outward-run-frames/v1");
+const declaredHolder = globalThis as unknown as { [DECLARED_OUTWARD_KEY]?: WeakSet<object> };
+const declaredOutwardFrames = declaredHolder[DECLARED_OUTWARD_KEY] ??= new WeakSet<object>();
+export function markDeclaredOutwardRunFrame<F extends object>(frame: F): F {
+  declaredOutwardFrames.add(frame); return frame;
+}
+export function isDeclaredOutwardRunFrame(frame: unknown): boolean {
+  return typeof frame === "object" && frame !== null && declaredOutwardFrames.has(frame);
+}
+
 /** Host only: marks an actual captured effect guard, not an admission. */
 export function markGuardedRunLeaf<T extends (...args: never[])=>unknown>(handler:T):T { guardedLeaves.add(handler); return handler; }

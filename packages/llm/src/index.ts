@@ -12,6 +12,8 @@ export type {
   LlmProvider,
   LlmCapabilityRequirement,
   LlmTool,
+  LlmToolReference,
+  LlmToolReduction,
   LlmFunctionTool,
   LlmMcpServerTool,
   LlmWebSearchTool,

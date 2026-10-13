@@ -1906,13 +1906,16 @@ export async function withGuardedRunActionInvocation<T>(input: {
 }, effect: (frozenArguments: ActionJson) => Promise<T>): Promise<T> {
   const frame = mcpRequestContextStorage.getStore();
   if (!frame?.runId) return effect(input.arguments as ActionJson);
+  // The tool's planned outward declaration (cinatra#3745), read from the
+  // dispatch bridge's frame before any await: it can only hold this call.
+  const declaresOutward = isDeclaredOutwardRunFrame(frame);
   // Capture the selected owner/tool before any asynchronous policy lookup.
   const action = immutableActionJson(input.action) as unknown as ArtifactActionIdentity;
   const args = await prepareDeclaredRunToolArguments(action.toolName, input.arguments);
   const { enforceMcpBoundary, enforceMcpBoundaryPrerequisites, OUTWARD_EFFECT_TOOL_NAMES } = await import("@/lib/authz/mcp-boundary");
   if (action.wrapper === "primitive") {
     const ordinary = await enforceMcpBoundaryPrerequisites({ primitiveName: action.toolName,
-      arguments: args, ctx: frame, delegatedRestricted: !!frame.delegatedRestricted });
+      arguments: args, ctx: frame, delegatedRestricted: !!frame.delegatedRestricted, declaresOutward });
     if (!ordinary.allowed && ordinary.shouldBlock) throw new OutwardActionRefusal("action_ordinary_authorization_denied");
   }
   if (GATELESS_ACTION_NAMES.has(action.toolName)) throw new OutwardActionRefusal("action_has_no_artifact_gate");
@@ -1922,7 +1925,7 @@ export async function withGuardedRunActionInvocation<T>(input: {
   const reading = classify ? immutableActionJson(classify({ action: action, arguments: args as ActionJson })) : { kind: "outward" };
   const kind = (reading as { kind?: unknown }).kind;
   if (!["read-only", "delegate", "outward"].includes(String(kind))) throw new OutwardActionRefusal("action_classification_incompatible");
-  if (!OUTWARD_EFFECT_TOOL_NAMES.has(action.toolName) && (kind === "read-only" || kind === "delegate")) {
+  if (!OUTWARD_EFFECT_TOOL_NAMES.has(action.toolName) && !declaresOutward && (kind === "read-only" || kind === "delegate")) {
     if (resolveArtifactActionChecker(action) !== checker || !isLoadedExtensionIdentityCurrent(action)) throw new OutwardActionRefusal("action_checker_changed");
     return withActionOwner(action, () => effect(args as ActionJson));
   }
@@ -1930,7 +1933,7 @@ export async function withGuardedRunActionInvocation<T>(input: {
     const admitted = mcpRequestContextStorage.getStore();
     if (action.wrapper === "primitive") {
       const decision = await enforceMcpBoundary({ primitiveName: action.toolName, arguments: frozen,
-        ctx: admitted, delegatedRestricted: !!admitted?.delegatedRestricted });
+        ctx: admitted, delegatedRestricted: !!admitted?.delegatedRestricted, declaresOutward });
       if (!decision.allowed && decision.shouldBlock) throw new OutwardActionRefusal("action_ordinary_authorization_denied");
     }
     if (!isLoadedExtensionIdentityCurrent(action)) throw new OutwardActionRefusal("action_loaded_identity_stale");
@@ -1955,7 +1958,7 @@ async function withActionOwner<T>(action: ArtifactActionIdentity, effect: () => 
   finally { actionOwners.delete(frame); }
 }
 
-import { markGuardedRunDispatch, markGuardedRunLeaf } from "./extension-capabilities-registry";
+import { isDeclaredOutwardRunFrame, markGuardedRunDispatch, markGuardedRunLeaf } from "./extension-capabilities-registry";
 /** Bind the exact loader-selected owner to the actual registered handler. No
  * later registry/package-name lookup can replace this captured effect. */
 export function bindArtifactGuardedMcpHandler<T>(toolName: string,
