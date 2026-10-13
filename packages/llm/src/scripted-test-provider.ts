@@ -363,12 +363,24 @@ const AGENT_START_INTENT = /\b(use|run|invoke|call|dispatch|execute|launch)\b/i;
 /**
  * The canonical package form, `@cinatra-ai/<slug>`.
  *
- * Read from the LOWERCASED sentence: npm scope and package names are lowercase
- * by definition, and the chat client's own mention tokenizer folds case when it
- * lexes a scoped reference, so `@Cinatra-AI/Some-Agent` and
- * `@cinatra-ai/some-agent` are one identifier and must resolve to one package.
+ * ONE GRAMMAR WITH THE CHAT CLIENT (cinatra#2942). This is the scoped arm of
+ * the client's mention tokenizer (`packages/chat/src/mention-tokenizer.ts`,
+ * MENTION_RE) with its vendor fixed, character for character: a slug starts
+ * with a letter OR a digit; the lookbehind skips an `@` that follows a URL
+ * path or query character (`/ . : =`), an email local-part character (a word
+ * character, `+`, `%`) or a second `@`; the right boundary refuses a slug that
+ * runs on into a word character, `/` or `-`, so `@cinatra-ai/foo_bar` and
+ * `@cinatra-ai/foo/bar` name no package at all instead of a truncated
+ * `@cinatra-ai/foo`; and the match is case-insensitive on the RAW sentence with
+ * the slug folded to lower case afterwards, exactly as the tokenizer folds it,
+ * so `@Cinatra-AI/Some-Agent` and `@cinatra-ai/some-agent` resolve to one
+ * package. This package cannot import the chat package (the chat package
+ * depends on this one), so the grammar is restated here and the parity table
+ * in `packages/chat/src/__tests__/scoped-agent-dispatch-streams.test.ts` drives
+ * both readers over the same sentences: a change to either one alone is red.
  */
-const CANONICAL_AGENT_PACKAGE_PATTERN = /@cinatra-ai\/([a-z][a-z0-9-]*)/;
+const CANONICAL_AGENT_PACKAGE_PATTERN =
+  /(?<![\w/.:@+%=])@cinatra-ai\/([a-z0-9][a-z0-9-]*)(?![\w/-])/i;
 
 /**
  * The legacy `cinatra_<slug>` wording, which is what a person writes when they
@@ -394,8 +406,8 @@ const LEGACY_AGENT_PACKAGE_PATTERN = /\bcinatra_([a-z][a-z0-9-]+)(?:[-_ ]tool|\b
  */
 export function scriptedTurnStartsAgent(instructions: string): string | null {
   if (!AGENT_START_INTENT.test(instructions)) return null;
-  const canonical = instructions.toLowerCase().match(CANONICAL_AGENT_PACKAGE_PATTERN);
-  if (canonical) return `@cinatra-ai/${canonical[1]}`;
+  const canonical = instructions.match(CANONICAL_AGENT_PACKAGE_PATTERN);
+  if (canonical) return `@cinatra-ai/${canonical[1].toLowerCase()}`;
   const legacy = instructions.match(LEGACY_AGENT_PACKAGE_PATTERN);
   if (legacy) return `@cinatra-ai/${legacy[1]}`;
   return null;
