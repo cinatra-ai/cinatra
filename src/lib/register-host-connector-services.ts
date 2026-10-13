@@ -270,7 +270,7 @@ import {
   type WordPressNativeReadInjectionSurface,
 } from "@/lib/connector-instance-native-read-injection";
 import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
-import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
 // The vendor connection/instance CLIENTS are GONE from core (cinatra#975
