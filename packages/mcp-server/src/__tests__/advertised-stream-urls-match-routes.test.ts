@@ -66,6 +66,22 @@ function capabilityBlock(name: string): string {
   return block!;
 }
 
+/** The `export type InterruptEvent` declaration of the events file, up to its closing `};` at the start of a line. */
+function interruptEventBlock(events: string): string {
+  const start = events.indexOf("export type InterruptEvent ");
+  expect(start, `${EVENTS}: export type InterruptEvent`).toBeGreaterThanOrEqual(0);
+  const end = events.indexOf("\n};", start);
+  expect(end, `${EVENTS}: the closing '};' of InterruptEvent`).toBeGreaterThan(start);
+  return events.slice(start, end);
+}
+
+/** The INTERRUPT event itself declares `<key>: string`, required (not optional), on a line of its own. */
+function expectInterruptDeclares(events: string, key: string): void {
+  expect(interruptEventBlock(events), `InterruptEvent declares ${key}: string`).toMatch(
+    new RegExp(`^\\s+${key}:\\s*string;`, "m"),
+  );
+}
+
 /** The stream path must be a real SSE route file: it exists, exports GET and answers text/event-stream. */
 function expectSseRoute(url: string | undefined, what: string): void {
   expect(url, what).toBeDefined();
@@ -114,7 +130,17 @@ describe("the advertised run stream and surface key match the code (cinatra#4141
     expect(/surfaceEvent:\s*"(\w+)"/.exec(a2ui)?.[1]).toBe("INTERRUPT");
     const key = /surfaceKeyField:\s*"(\w+)"/.exec(a2ui)?.[1];
     expect(key, "the capability's a2ui.surfaceKeyField").toBe("xRenderer");
-    expect(events).toMatch(new RegExp(`\\b${key}\\??:\\s*string`));
+    expectInterruptDeclares(events, key!);
+    // The negative control: the same field moved onto another event type still satisfies a whole-file
+    // match, but it is not the INTERRUPT event's surface key, so the check above must refuse it.
+    const moved = events
+      .replace(/^ {2}xRenderer: string;\n/m, "")
+      .replace(
+        "export type ResumeEvent = BaseAgUiEvent & {\n",
+        "export type ResumeEvent = BaseAgUiEvent & {\n  xRenderer: string;\n",
+      );
+    expect(moved).toMatch(new RegExp(`\\b${key}\\??:\\s*string`));
+    expect(() => expectInterruptDeclares(moved, key!)).toThrow();
     expect(read(CAPABILITY)).not.toMatch(/a2uiSurfaceId|surfaceIdField|surfaceOverrideField/);
     const source = read(DISCOVERY);
     const start = source.indexOf("export function formatA2uiSurfaceRef(");
