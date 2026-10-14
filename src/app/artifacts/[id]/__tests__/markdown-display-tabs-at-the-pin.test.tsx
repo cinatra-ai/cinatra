@@ -84,7 +84,7 @@ let MarkdownArtifactDetail: ComponentType<ArtifactRendererProps>;
 beforeAll(async () => {
   const entry = GENERATED_ARTIFACT_RENDERERS[MARKDOWN_DETAIL_KEY];
   expect(entry?.resolution).toBe("required");
-  expect(entry?.propsApiVersion).toBe(1);
+  expect(entry?.propsApiVersion).toBe(5);
   const mod = (await entry!.load()) as { default?: unknown };
   expect(typeof mod.default).toBe("function");
   MarkdownArtifactDetail = mod.default as ComponentType<ArtifactRendererProps>;
@@ -122,15 +122,18 @@ const artifact: ArtifactSummary = {
 };
 
 /** The props the host builds for this display: the build map declares it at
- *  props version 1, so the snapshot is built at 1. */
-function propsWith(edit: ReturnType<typeof grantArtifactEdit>) {
+ *  props version 5, so the snapshot is built at 5. */
+function propsWith(
+  edit: ReturnType<typeof grantArtifactEdit>,
+  extra: { artifact?: Partial<ArtifactSummary>; review?: ArtifactRendererProps["review"] } = {},
+) {
   const byteLength = new TextEncoder().encode(DOCUMENT).byteLength;
   return buildArtifactRendererProps({
-    artifact,
+    artifact: { ...artifact, ...extra.artifact },
     representation: { revisionId: "rev_md_1", mime: "text/markdown" },
     previewHref: null,
     downloadHref: "/api/artifacts/art_md_1/versions/rev_md_1/content",
-    propsApiVersion: 1,
+    propsApiVersion: 5,
     content: {
       kind: "text",
       channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,
@@ -143,6 +146,7 @@ function propsWith(edit: ReturnType<typeof grantArtifactEdit>) {
       truncated: false,
     },
     edit,
+    ...(extra.review ? { review: extra.review } : {}),
   });
 }
 
@@ -261,6 +265,58 @@ describe("the markdown display at the required pin, on a review target (read-onl
   });
 });
 
+// THE POST'S CONTINUED READING (cinatra#3978). A blog post is drawn by this
+// display, and the drawing puts the post's continuation sentence inside it,
+// under the document, once the review is continued. The host builds the
+// reading; the pinned display draws the sentence only when every fact it
+// states is there.
+describe("the markdown display at the required pin, over a reviewed post", () => {
+  const SENTENCE = "The post keeps the revision it was continued at, and this review does not re-open.";
+  const POST = { objectType: "@cinatra-ai/blog-post-artifact:post", artifactType: "@cinatra-ai/blog-post-artifact:post" };
+  const DECIDED_AT = "2026-10-07T09:35:30.000Z";
+  const readOnlyPost = (review?: ArtifactRendererProps["review"], artifactOverride: Partial<ArtifactSummary> = POST) =>
+    propsWith(readOnlyArtifactEdit("read-only-surface"), { artifact: artifactOverride, review });
+
+  it("draws the post's sentence inside the display, under the document, once the review is continued", () => {
+    const { container } = render(
+      <MarkdownArtifactDetail {...readOnlyPost({ reading: "continued", openLive: null, decidedAt: DECIDED_AT })} />,
+    );
+    const display = container.querySelector("[data-artifact-renderer='markdown']");
+    const reading = display?.querySelector("[data-conformance-id='post-continued-reading']");
+    expect(reading?.textContent).toBe(SENTENCE);
+    // The drawing's paragraph: the reading's field, the empty state, and the
+    // decision time's span around the sentence.
+    expect(reading?.getAttribute("data-field")).toBe("reading=review.reading");
+    expect(reading?.getAttribute("data-state")).toBe("empty");
+    expect(reading?.querySelector("[data-field='decision=review.decidedAt']")?.textContent).toBe(SENTENCE);
+    const panel = display?.querySelector("[role='tabpanel']") as Node;
+    expect(panel.compareDocumentPosition(reading as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText(SENTENCE)).toHaveLength(1);
+  });
+
+  it("draws no sentence while the review is pending", () => {
+    const { container } = render(<MarkdownArtifactDetail {...readOnlyPost({ reading: "pending", openLive: null })} />);
+    expect(container.querySelector("[data-artifact-renderer='markdown']")).not.toBeNull();
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+
+  it("draws no sentence when the host carries no decision time", () => {
+    const { container } = render(<MarkdownArtifactDetail {...readOnlyPost({ reading: "continued", openLive: null })} />);
+    expect(container.querySelector("[data-artifact-renderer='markdown']")).not.toBeNull();
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+
+  it("draws no sentence over a markdown document that is not a post", () => {
+    const { container } = render(
+      <MarkdownArtifactDetail
+        {...readOnlyPost({ reading: "continued", openLive: null, decidedAt: DECIDED_AT }, {})}
+      />,
+    );
+    expect(container.querySelector("[data-artifact-renderer='markdown']")).not.toBeNull();
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+});
+
 const isThenable = (value: unknown): value is PromiseLike<unknown> =>
   typeof (value as { then?: unknown } | null | undefined)?.then === "function";
 
@@ -356,7 +412,7 @@ describe("the settled review island composes the actual pinned markdown display"
       representation: { revisionId: frozenRevision, mime: "text/markdown" },
       previewHref: null,
       downloadHref: `/api/artifacts/art_md_1/versions/${frozenRevision}/content`,
-      propsApiVersion: 1,
+      propsApiVersion: 5,
       content: {
         kind: "text",
         channelVersion: ARTIFACT_CONTENT_CHANNEL_VERSION,
@@ -410,10 +466,10 @@ describe("the settled review island composes the actual pinned markdown display"
     expect(prepared.props.content).toMatchObject({
       kind: "text", representationRevisionId: frozenRevision, text: DOCUMENT,
     });
-    // The production builder narrows its current v2 refusal to the display's
-    // negotiated v1 edit-channel shape; the refusal semantics stay exact.
+    // The display negotiates props v5, so the production builder hands the
+    // current v2 refusal unchanged; the refusal semantics stay exact.
     expect(prepared.props.edit).toMatchObject({
-      channelVersion: 1, kind: "read-only", reason: "read-only-surface",
+      channelVersion: 2, kind: "read-only", reason: "read-only-surface",
     });
     expect(await streamed[0].props.capturePair).toBeNull();
     const seen: string[] = [];
