@@ -1,0 +1,37 @@
+# build-slot wrapper tests (cinatra#4103).
+#
+# Runs the behaviour tests of .github/scripts/build-slot.sh on a GitHub-hosted
+# Linux runner, with the real util-linux flock and the /proc/uptime clock. The
+# harness tests copies of the wrapper in its own test folder under the runner's
+# temp directory; it never touches a slot directory. Its green run gates the
+# rollout of the wrapped build steps.
+name: build-slot-tests
+
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/build-slot.sh"
+      - ".github/scripts/test_build_slot.sh"
+      - ".github/scripts/test-bin/flock"
+      - ".github/workflows/build-slot-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/build-slot.sh"
+      - ".github/scripts/test_build_slot.sh"
+      - ".github/scripts/test-bin/flock"
+      - ".github/workflows/build-slot-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-slot-tests:
+    name: build-slot wrapper tests
+    if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build-slot.sh behaviour tests (real util-linux flock)
+        run: bash .github/scripts/test_build_slot.sh

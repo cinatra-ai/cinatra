@@ -284,10 +284,10 @@ jobs:
         # each route cold on first hit, which is exactly why render-smoke timed
         # out locally. A prebuilt standalone server serves routes instantly with
         # low, steady memory. See the RBAC e2e build step for the memory notes.
-        timeout-minutes: 20
+        timeout-minutes: 31
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
+        run: bash .github/scripts/build-slot.sh 1 600 -- timeout --kill-after=30 1200 pnpm build
 
       - name: Start production server on port 3000
         # next.config sets output: "standalone", so run server.js exactly like the
@@ -514,10 +514,10 @@ jobs:
           exit 0
 
       - name: Build app (production)
-        timeout-minutes: 20
+        timeout-minutes: 31
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
+        run: bash .github/scripts/build-slot.sh 1 600 -- timeout --kill-after=30 1200 pnpm build
 
       - name: Start production server on port 3000
         run: |
