@@ -35,6 +35,7 @@ import { extensionActivationPhases } from "@/lib/boot/phases/extension-activatio
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { bundledSkillRegistrationPhases } from "@/lib/boot/phases/bundled-skill-registration";
+import { bundledArtifactClaimHealPhases } from "@/lib/boot/phases/bundled-artifact-claim-heal";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { agentTemplateOrgReconcilePhases } from "@/lib/boot/phases/agent-template-org-reconcile";
@@ -152,6 +153,15 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
 
   // ── extension activation: dual loaders + required-set enforcement + cleanup ──
   await run(extensionActivationPhases(bootActivationResults));
+
+  // ── bundled artifact claim heal (cinatra#4158) ─────────────────────────────────
+  // ALWAYS-ON (dev AND prod), right after extension activation, whose static
+  // seeder wrote the image-bundled packages' platform rows. That seeder writes
+  // no artifact type claim, and the claim-activation backstop above only
+  // re-fires for runtime-store packages, so this phase runs the cinatra#2536
+  // repair for every image-bundled artifact package whose row is live.
+  // Idempotent; `retryable`: a failure logs and boot continues.
+  await run(bundledArtifactClaimHealPhases());
 
   // ── required-extension OAS materialize (cinatra-ai/ops#436) ───────────────────
   // PROD: fail-closed reconcile of the image-baked required-extension OAS seed
