@@ -324,6 +324,17 @@ export default defineConfig({
         root,
         "packages/objects/src/integration/register-artifact-extensions.ts",
       ),
+      // src/lib/artifacts/run-context-selections-store.ts (reached via the @/lib
+      // alias) imports ./ensure-artifact-registry, which imports
+      // src/lib/register-all-object-types.ts, which imports
+      // @cinatra-ai/objects/register-object-types. Its package.json export maps
+      // it to src/integration/register-types.ts, a NESTED target the bare dir
+      // alias below cannot resolve — the same class as
+      // register-artifact-extensions above. Must precede the bare alias.
+      "@cinatra-ai/objects/register-object-types": path.join(
+        root,
+        "packages/objects/src/integration/register-types.ts",
+      ),
       // crm-connector's mcp/module.ts imports from this subpath; tests
       // that transitively pull crm-connector (via @cinatra-ai/agents barrel
       // or its plugin layer) need the explicit alias because the bare
