@@ -47,13 +47,16 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
  */
 const STAGED = {
   // The artifacts drawing, adopted at the ratification that made the entity-page
-  // tablist the five-entry strip and added the workspace scope (epic cinatra#2806).
+  // tablist the five-entry strip and added the workspace scope (epic cinatra#2806),
+  // and re-copied verbatim at version 0.12.0 (design@bda0cf8d, cinatra#4126): the copy carries
+  // every surface the drawing has added since, among them the console's fourth tab,
+  // review-policy, and its gate-volume.
   // Unpinned because only one of its surfaces is in scope for that adoption; it
   // joins the pin gate when every surface of the drawing has a driver.
   "app-artifacts.json": {
     spec: "specs/app-artifacts.html",
-    manifestSha256: "555413acbeb45f943a39cdcaba4fce519d51eaddbbf2338f875a54033c5933a0",
-    contentHash: "sha256:c6cad4b9f61f50ecccb3185913afa0f400a41ca6f06327ab57fcbcda68f1e563",
+    manifestSha256: "213e69761afecc68527cd97ca1bfdd9d2f6af011c1209026f43146f2eb7c0ae4",
+    contentHash: "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
   "app-lifecycle-cards.json": {

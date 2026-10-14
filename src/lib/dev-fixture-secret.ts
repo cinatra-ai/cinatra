@@ -78,6 +78,20 @@ export function devFixturePasswordFilePath(cwd: string = process.cwd()): string 
 }
 
 /**
+ * Where a boot that wires the fixture account writes its IDENTITY (never its
+ * password) for the end-to-end UAT suite's Playwright setup, relative to the
+ * instance's working directory. The suite's own folder (gitignored `.uat/`)
+ * is the core-owned integration harness; its setup reads the file there.
+ */
+export const DEV_UAT_ACTOR_FILE_RELATIVE = path.join(
+  "tests",
+  "e2e",
+  "wp-drupal-uat",
+  ".uat",
+  "dev-actor.json",
+);
+
+/**
  * Write this boot's password where the operator, a harness or the command line
  * can read it. Returns the path written, or null when the instance could not
  * write it — a boot that cannot write the file still boots, and says so.
