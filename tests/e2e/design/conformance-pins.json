@@ -12,16 +12,16 @@
     {
       "id": "app-components",
       "file": "app-components.json",
-      "source": "repo",
-      "manifestSha256": "f91eee6c9f3238830e2a7e11ff637b37ddfdbea44b11a5a10f893acff81d93a2",
-      "specContentHash": "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c"
+      "source": "published",
+      "manifestSha256": "8fa79fafa6cfe7d259f7ba89e9f909d2985b6d3af1d0f6fe7321a99494dccf72",
+      "specContentHash": "sha256:e408e9f6cf4bdaf119861dbc2ac7ccda69e9cd3c20d4c790ddba9a95e0b602cd"
     },
     {
       "id": "app-extensions",
       "file": "app-extensions.json",
-      "source": "repo",
-      "manifestSha256": "a9d82c313356a7ac1ae02e0124500c4bc4287ab51e5330471ca04ff4a8d996d7",
-      "specContentHash": "sha256:6cef4dce99482754c7ffc7ec879c1fe43ff0c321db6c7057f7e4d04ac4402187"
+      "source": "published",
+      "manifestSha256": "b1f00ffcf9aed87793ed0d1ae7604a030d98a09e0c43db987356484e817533d0",
+      "specContentHash": "sha256:9c86b3006aa25dad2c255088c10f7e3f4d1dc387dd16a6dc40c8527e92235a1a"
     },
     {
       "id": "app-connectors",

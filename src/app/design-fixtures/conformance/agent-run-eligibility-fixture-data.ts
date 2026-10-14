@@ -1,5 +1,6 @@
 import type { AgentAllCardRow } from "@/components/extensions/agent-all-card";
 import type { MissingAgentDependency } from "../../../../packages/agents/src/runtime-install-gate";
+import type { ConnectorConfigurationRefusal } from "../../../../packages/agents/src/actionable-preflight-error";
 
 /** Fictional catalog DATA; the production card and refusal panel own presentation. */
 export const RUN_ELIGIBILITY_AGENT = {
@@ -38,5 +39,27 @@ export function runEligibilityCardRow(reader: RunEligibilityReader, missing: rea
       ctaHref: administrator ? RUN_ELIGIBILITY_AGENT.listingHref : null,
       ctaAriaLabel: `${RUN_ELIGIBILITY_AGENT.name} cannot run — ${names} not installed.${administrator ? " View requirements" : ""}`,
     } : null,
+  };
+}
+
+/**
+ * Fictional connection DATA for Extensions §IV.4 (a start a missing connection
+ * refuses). The display name shares no token with the package identity, so a
+ * field bound to the identity instead of the declared name reads differently.
+ * `settingsHref` is the setup route connectorSetupRoute derives for this
+ * identity (the fixture test pins the two equal).
+ */
+export const RUN_ELIGIBILITY_CONNECTOR = {
+  packageId: "@cinatra-fixtures/tidewater-connector",
+  displayName: "Harbor Records",
+  settingsHref: "/connectors/cinatra-fixtures/tidewater-connector/setup",
+} as const;
+
+/** The reader who may set the connection up gets its setup route; a member gets none. */
+export function runEligibilityConnectorRefusal(reader: RunEligibilityReader): ConnectorConfigurationRefusal {
+  return {
+    packageId: RUN_ELIGIBILITY_CONNECTOR.packageId,
+    displayName: RUN_ELIGIBILITY_CONNECTOR.displayName,
+    settingsHref: reader === "administrator" ? RUN_ELIGIBILITY_CONNECTOR.settingsHref : null,
   };
 }

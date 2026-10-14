@@ -2,13 +2,15 @@
 
 import { useState, type MouseEvent, type ReactNode } from "react";
 import { AgentAllCard } from "@/components/extensions/agent-all-card";
-import { RunStartRefusedPanel } from "../../../../packages/agents/src/run-start-refused-panel";
+import { RunStartNeedsConnectionPanel, RunStartRefusedPanel } from "../../../../packages/agents/src/run-start-refused-panel";
 import type { MarketplaceDetailLoadResult } from "@/lib/marketplace-detail-view";
 import {
   RUN_ELIGIBILITY_AGENT,
+  RUN_ELIGIBILITY_CONNECTOR,
   RUN_ELIGIBILITY_MISSING,
   RUN_ELIGIBILITY_READERS,
   runEligibilityCardRow,
+  runEligibilityConnectorRefusal,
   type RunEligibilityReader,
 } from "./agent-run-eligibility-fixture-data";
 
@@ -25,7 +27,7 @@ const loadDetail = async (): Promise<MarketplaceDetailLoadResult> => ({ ok: fals
  */
 function NavigationPort({ reader, surface, children }: {
   reader: RunEligibilityReader;
-  surface: "agent-card-cannot-run" | "agent-start-refused";
+  surface: "agent-card-cannot-run" | "agent-start-refused" | "agent-start-needs-connection";
   children: ReactNode;
 }) {
   const [navigation, setNavigation] = useState<{ outcome: string; destination: string } | null>(null);
@@ -38,20 +40,23 @@ function NavigationPort({ reader, surface, children }: {
       target.getAttribute("data-slot") === "agent-card-unavailable-action" ||
       target.getAttribute("data-action") === "view-requirements -> agent-listing-open"
     )) outcome = "agent-listing-open";
-    if (surface === "agent-start-refused" && href === RUN_ELIGIBILITY_AGENT.agentsHref &&
+    if (surface !== "agent-card-cannot-run" && href === RUN_ELIGIBILITY_AGENT.agentsHref &&
       target.getAttribute("data-action") === "back-to-agents -> scope-agents-tab") outcome = "scope-agents-tab";
+    if (surface === "agent-start-needs-connection" && reader === "administrator" &&
+      href === RUN_ELIGIBILITY_CONNECTOR.settingsHref &&
+      target.getAttribute("data-action") === "configure -> connector-setup") outcome = "connector-setup";
     if (!outcome || !href) return;
     event.preventDefault();
     event.stopPropagation();
     setNavigation({ outcome, destination: href });
   }
-  return <div data-reader={reader} data-state={surface === "agent-start-refused" ? "error kind:agent" : "kind:agent"}
+  return <div data-reader={reader} data-state={surface === "agent-card-cannot-run" ? "kind:agent" : "error kind:agent"}
     data-outcome={navigation?.outcome ?? "idle"} data-destination={navigation?.destination ?? ""} onClickCapture={dispatch}>
     {children}
   </div>;
 }
 
-/** Extensions §IV.1–2 on the already required functional-acceptance harness. */
+/** Extensions §IV.1–2 and §IV.4 on the already required functional-acceptance harness. */
 export function AgentRunEligibilityFixtures() {
   return (
     <>
@@ -69,6 +74,18 @@ export function AgentRunEligibilityFixtures() {
               agentName={RUN_ELIGIBILITY_AGENT.name}
               missing={RUN_ELIGIBILITY_MISSING.slice(0, 1)}
               requirementsHref={reader === "administrator" ? RUN_ELIGIBILITY_AGENT.listingHref : null}
+              agentsHref={RUN_ELIGIBILITY_AGENT.agentsHref}
+              crumbEntries={[]}
+            />
+          </NavigationPort>
+        ))}
+      </section>
+      <section data-surface-id="agent-start-needs-connection" className="grid gap-6">
+        {RUN_ELIGIBILITY_READERS.map((reader) => (
+          <NavigationPort key={reader} reader={reader} surface="agent-start-needs-connection">
+            <RunStartNeedsConnectionPanel
+              agentName={RUN_ELIGIBILITY_AGENT.name}
+              connector={runEligibilityConnectorRefusal(reader)}
               agentsHref={RUN_ELIGIBILITY_AGENT.agentsHref}
               crumbEntries={[]}
             />
