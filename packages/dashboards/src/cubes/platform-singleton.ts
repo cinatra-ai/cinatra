@@ -110,6 +110,11 @@ function getPool(): Pool {
     );
   }
   const pool = new Pool({ connectionString });
+  // An idle connection the database drops makes the pool emit 'error'; with no
+  // listener that ends the process (cinatra#4151).
+  pool.on("error", (err) => {
+    console.error("[dashboards-cubes] pg pool idle client error:", err.message);
+  });
   globalThis.__cinatraDashboardsCubePool = pool;
   return pool;
 }
