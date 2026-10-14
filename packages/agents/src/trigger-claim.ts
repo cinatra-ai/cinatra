@@ -112,6 +112,16 @@ function getTriggerClaimPool(): Pool {
   pool.on("error", (err) => {
     console.error("[trigger-claim] pg pool idle client error:", err.message);
   });
+  // pg-pool removes its own 'error' listener from a client while the client is
+  // checked out, so a connection cut during a transaction would end the process
+  // (cinatra#4151). One listener per client, added once when the pool creates the
+  // client; it logs the pool name and the message only, and the pool discards the
+  // dead client at release.
+  pool.on("connect", (client) => {
+    client.on("error", (err: Error) => {
+      console.error("[trigger-claim] pg pool client error:", err.message);
+    });
+  });
   claimPoolInstance = pool;
   if (process.env.NODE_ENV !== "production") {
     globalThis.__cinatraTriggerClaimPool = pool;
