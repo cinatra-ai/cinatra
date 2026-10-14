@@ -622,3 +622,38 @@ describe("each target streams under its OWN boundary (cinatra#3334)", () => {
     expect(html).not.toContain("panel:a2");
   });
 });
+
+// cinatra#3441 — a gate that pins ONE target is framed by the CARD: its header
+// over this document inside one border (specs/app-artifact-review.html §IV). So
+// the island hands its one panel no frame, and frames each panel only on a gate
+// opened before one review per artifact that still pins several (cinatra#3356
+// owns how that one is composed).
+describe("cinatra#3441 — the island frames a panel only on a gate that pins several", () => {
+  it("a pending gate over ONE target hands its panel no frame", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1")],
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const panels = panelProps(await renderIsland(REF));
+    expect(panels.map((p) => p.framed)).toEqual([false]);
+  });
+
+  it("a decided gate over ONE target hands its panel no frame either", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "settled", agentSummary: null, targets: [target("a1")] });
+    const panels = panelProps(await renderIsland(REF));
+    expect(panels.map((p) => p.framed)).toEqual([false]);
+  });
+
+  it("a gate that still pins several targets frames each of its panels", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1"), target("a2")],
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const panels = panelProps(await renderIsland(REF));
+    expect(panels.map((p) => p.framed)).toEqual([true, true]);
+  });
+});
