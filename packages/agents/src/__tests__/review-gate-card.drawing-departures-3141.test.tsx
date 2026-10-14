@@ -643,21 +643,297 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     expect(frameQuery(frames[0]).has("target")).toBe(false);
   });
 
-  it("an island address that carries a single-use credential keeps ONE frame for several targets", async () => {
-    mockResolve(PENDING, {
-      targetHeaders: [HEADER_ONE, HEADER_TWO],
+  // -------------------------------------------------------------------------
+  // ONE IMPLEMENTATION ON EVERY HOST. The site widget is the same stream and the
+  // same card as the chat thread, so it draws the same pairs. Only the TRANSPORT
+  // of each frame differs, and it is read from the answer: a cookie host's answer
+  // carries no credential, and the widget's answer carries one single-use
+  // address per pinned target — one grant paints one document.
+  // -------------------------------------------------------------------------
+
+  /** The address the widget's answer carries for one target, as the route mints it. */
+  const servedFor = (target: string, credential: string) =>
+    `${REVIEW_TARGET_ISLAND_PATH}?${new URLSearchParams({ ref: VIEW.ref, ic: credential, target }).toString()}`;
+
+  /** Answer the cookie host and the widget with their own answers to one gate. */
+  function mockResolveByHost(cookie: Record<string, unknown>, widget: Record<string, unknown>) {
+    globalThis.fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const sent = (init?.headers ?? {}) as Record<string, string>;
+      const extra = "X-Cinatra-Widget-User-Token" in sent ? widget : cookie;
+      return new Response(
+        JSON.stringify({ kind: "artifact_review_gate", state: PENDING, body: null, ...extra }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+  }
+
+  async function renderWidgetGate(extra: Record<string, unknown>) {
+    mockResolve(PENDING, { targetHeaders: [HEADER_ONE, HEADER_TWO], ...extra });
+    const rendered = renderOn("site_widget");
+    await waitFor(() =>
+      expect(
+        rendered.container.querySelector('[data-conformance-id="review-decision-bar"]'),
+      ).not.toBeNull(),
+    );
+    return rendered;
+  }
+
+  /** The pairs region, read the same way on every host — never the host frame's spacing. */
+  const pairsRegion = (root: ParentNode) =>
+    [...pairs(root)].map((pair) => {
+      const [header, island] = [...pair.children];
+      const frame = island?.querySelector("iframe");
+      return {
+        pair: pair.getAttribute("data-review-target-pair"),
+        children: [...pair.children].map((child) => child.getAttribute("data-conformance-id")),
+        revision: revisionOf(header),
+        title: header?.querySelector("span")?.textContent,
+        loadState: island?.getAttribute("data-island-load-state"),
+        target: frameQuery(frame).get("target"),
+        ref: frameQuery(frame).get("ref"),
+      };
+    });
+
+  const timedOutWithPlateAndNoFrame = (island: Element | undefined) => {
+    expect(island?.getAttribute("data-conformance-id")).toBe("review-target-island");
+    expect(island?.getAttribute("data-island-load-state")).toBe("timed-out");
+    expect(
+      island?.querySelector('[data-conformance-id="review-target-island-timeout"]')?.textContent,
+    ).toContain("The preview did not load");
+    expect(island?.querySelector("iframe"), "a refused pair mounts no frame").toBeNull();
+  };
+
+  it("the site widget draws the SAME pairs as a cookie host", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const map = {
+      [HEADER_ONE.revisionId]: servedFor(HEADER_ONE.revisionId, "ic-one"),
+      [HEADER_TWO.revisionId]: servedFor(HEADER_TWO.revisionId, "ic-two"),
+    };
+    mockResolveByHost(
+      { targetHeaders: [HEADER_ONE, HEADER_TWO] },
+      { targetHeaders: [HEADER_ONE, HEADER_TWO], islandSrcByRevision: map },
+    );
+    const cookie = renderOn("chat_thread");
+    const widget = renderOn("site_widget");
+    for (const { container } of [cookie, widget]) {
+      await waitFor(() => expect(pairs(container)).toHaveLength(2));
+    }
+
+    const drawn = pairsRegion(cookie.container);
+    expect(drawn).toEqual(
+      [HEADER_ONE, HEADER_TWO].map((header) => ({
+        pair: header.revisionId,
+        children: ["review-target-header", "review-target-island"],
+        revision: header.revisionId,
+        title: header.title,
+        loadState: "loading",
+        target: header.revisionId,
+        ref: VIEW.ref,
+      })),
+    );
+    expect(pairsRegion(widget.container), "the widget draws the cookie host's pairs").toEqual(drawn);
+
+    // Only the transport differs, and it is the answer's: each widget frame
+    // carries the credential of its OWN revision's entry; a cookie frame none.
+    const widgetFrames = [...widget.container.querySelectorAll("[data-review-target-pair] iframe")];
+    expect(widgetFrames.map((frame) => frameQuery(frame).get("ic"))).toEqual(["ic-one", "ic-two"]);
+    const cookieFrames = [...cookie.container.querySelectorAll("[data-review-target-pair] iframe")];
+    expect(cookieFrames).toHaveLength(2);
+    for (const frame of cookieFrames) expect(frameQuery(frame).has("ic")).toBe(false);
+
+    await act(async () => {
+      vi.advanceTimersByTime(12_500);
+    });
+    for (const { container } of [cookie, widget]) {
+      const islandList = [...islands(container)];
+      expect(islandList).toHaveLength(2);
+      for (const island of islandList) {
+        expect(island.getAttribute("data-island-load-state")).toBe("timed-out");
+        expect(
+          island.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+        ).not.toBeNull();
+      }
+      for (const header of headers(container)) {
+        for (const island of islandList) expect(island.contains(header)).toBe(false);
+      }
+    }
+    expect(pairsRegion(widget.container).map((pair) => pair.loadState)).toEqual([
+      "timed-out",
+      "timed-out",
+    ]);
+    expect(pairsRegion(widget.container)).toEqual(pairsRegion(cookie.container));
+  });
+
+  it("each widget pair frames its OWN single-use address", async () => {
+    const { container } = await renderWidgetGate({
+      islandSrcByRevision: {
+        [HEADER_ONE.revisionId]: servedFor(HEADER_ONE.revisionId, "ic-one"),
+        [HEADER_TWO.revisionId]: servedFor(HEADER_TWO.revisionId, "ic-two"),
+      },
+    });
+    const pairList = [...pairs(container)];
+    expect(pairList).toHaveLength(2);
+    const frames = pairList.map((pair) => pair.querySelector("iframe"));
+    expect(frames.map((frame) => frameQuery(frame).get("ic"))).toEqual(["ic-one", "ic-two"]);
+    expect(frames.map((frame) => frameQuery(frame).get("target"))).toEqual([
+      HEADER_ONE.revisionId,
+      HEADER_TWO.revisionId,
+    ]);
+    // A perishable bearer cannot wait for a scroll, on every pair.
+    expect(frames.map((frame) => frame?.getAttribute("loading"))).toEqual(["eager", "eager"]);
+  });
+
+  it("a target whose address failed draws its failed body, never another target's", async () => {
+    for (const second of [
+      // The mint failed for this target.
+      null,
+      // An address bound to the OTHER target.
+      servedFor(HEADER_ONE.revisionId, "ic-two"),
+    ]) {
+      const { container, unmount } = await renderWidgetGate({
+        islandSrcByRevision: {
+          [HEADER_ONE.revisionId]: servedFor(HEADER_ONE.revisionId, "ic-one"),
+          [HEADER_TWO.revisionId]: second,
+        },
+      });
+      const pairList = [...pairs(container)];
+      expect(pairList).toHaveLength(2);
+      expect(pairList.map((pair) => pair.getAttribute("data-review-target-pair"))).toEqual(PINNED);
+      // The first target is framed at its own address.
+      const firstFrame = pairList[0].querySelector("iframe");
+      expect(frameQuery(firstFrame).get("ic")).toBe("ic-one");
+      expect(frameQuery(firstFrame).get("target")).toBe(HEADER_ONE.revisionId);
+      // The second keeps its header and draws its own failed body, with no frame.
+      expect(revisionOf(pairList[1].firstElementChild)).toBe(HEADER_TWO.revisionId);
+      timedOutWithPlateAndNoFrame(pairList[1].lastElementChild ?? undefined);
+      expect(container.querySelectorAll("iframe")).toHaveLength(1);
+      unmount();
+    }
+  });
+
+  it("a single credential is never shared between pairs", async () => {
+    const { container } = await renderWidgetGate({
       islandSrc: `${REVIEW_TARGET_ISLAND_PATH}?ref=ref-3141&ic=ic-placeholder`,
     });
-    const { container } = renderOn("site_widget");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
-    );
-    expect(pairs(container)).toHaveLength(0);
-    expect(headers(container)).toHaveLength(2);
-    const frames = container.querySelectorAll("iframe");
-    expect(frames).toHaveLength(1);
-    expect(frameQuery(frames[0]).get("ic")).toBe("ic-placeholder");
-    expect(frameQuery(frames[0]).has("target")).toBe(false);
+    const pairList = [...pairs(container)];
+    expect(pairList).toHaveLength(2);
+    expect(pairList.map((pair) => pair.getAttribute("data-review-target-pair"))).toEqual(PINNED);
+    for (const pair of pairList) timedOutWithPlateAndNoFrame(pair.lastElementChild ?? undefined);
+    for (const frame of container.querySelectorAll("iframe")) {
+      expect(frameQuery(frame).get("ic")).not.toBe("ic-placeholder");
+    }
+  });
+
+  it("a fresh answer gives every target a fresh grant", async () => {
+    /** The palette class the app writes on a document root for each scheme. */
+    const paintHost = (scheme: "light" | "dark" | "none") => {
+      document.documentElement.className =
+        scheme === "none" ? "" : scheme === "dark" ? "dark" : "cinatra";
+    };
+    const mapOf = (one: string, two: string) => ({
+      targetHeaders: [HEADER_ONE, HEADER_TWO],
+      islandSrcByRevision: {
+        [HEADER_ONE.revisionId]: servedFor(HEADER_ONE.revisionId, one),
+        [HEADER_TWO.revisionId]: servedFor(HEADER_TWO.revisionId, two),
+      },
+    });
+    /** Answer each successive resolve with the next answer in the list. */
+    const mockResolveSequence = (answers: Array<Record<string, unknown>>) => {
+      let call = 0;
+      const fetchMock = vi.fn(async () => {
+        const extra = answers[Math.min(call, answers.length - 1)];
+        call += 1;
+        return new Response(
+          JSON.stringify({ kind: "artifact_review_gate", state: PENDING, body: null, ...extra }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      return fetchMock;
+    };
+    const settle = async () => {
+      for (let i = 0; i < 6; i += 1) {
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+    };
+    const queryOfSrc = (src: string) => new URLSearchParams(src.slice(src.indexOf("?") + 1));
+    const framedAt = (root: ParentNode) =>
+      [...pairs(root)].map((pair) => {
+        const query = frameQuery(pair.querySelector("iframe"));
+        return { ic: query.get("ic"), scheme: query.get("scheme"), target: query.get("target") };
+      });
+    const firstGrants = [
+      { ic: "grant-one-a", scheme: "light", target: HEADER_ONE.revisionId },
+      { ic: "grant-one-b", scheme: "light", target: HEADER_TWO.revisionId },
+    ];
+
+    try {
+      // A repaint with a held set asks ONCE for a fresh answer, and the fresh
+      // answer's grants — one per target — replace both frames' addresses.
+      const fetchMock = mockResolveSequence([
+        mapOf("grant-one-a", "grant-one-b"),
+        mapOf("grant-two-a", "grant-two-b"),
+      ]);
+      paintHost("light");
+      const fresh = renderOn("site_widget");
+      await settle();
+      expect(framedAt(fresh.container)).toEqual(firstGrants);
+
+      // EVERY address a frame is ever handed, not just the one it settles on:
+      // one committed render pairing a spent grant with the new palette is the
+      // defect this guards.
+      const seen = new Set<string>();
+      const record = () => {
+        for (const frame of fresh.container.querySelectorAll("iframe")) {
+          seen.add(frame.getAttribute("src") ?? "");
+        }
+      };
+      record();
+      const observer = new MutationObserver(record);
+      observer.observe(fresh.container, {
+        attributes: true,
+        attributeFilter: ["src"],
+        subtree: true,
+        childList: true,
+      });
+      await act(async () => {
+        paintHost("dark");
+      });
+      await settle();
+      await settle();
+      record();
+      observer.disconnect();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const replayed = [...seen].filter(
+        (src) =>
+          (queryOfSrc(src).get("ic") ?? "").startsWith("grant-one") &&
+          queryOfSrc(src).get("scheme") === "dark",
+      );
+      expect(replayed, `a spent grant replayed in a new palette: ${[...seen].join(" | ")}`).toEqual([]);
+      expect(framedAt(fresh.container)).toEqual([
+        { ic: "grant-two-a", scheme: "dark", target: HEADER_ONE.revisionId },
+        { ic: "grant-two-b", scheme: "dark", target: HEADER_TWO.revisionId },
+      ]);
+      fresh.unmount();
+
+      // An answer that carries no credential leaves both held addresses whole.
+      paintHost("light");
+      mockResolveSequence([mapOf("grant-one-a", "grant-one-b"), { targetHeaders: [HEADER_ONE, HEADER_TWO] }]);
+      const held = renderOn("site_widget");
+      await settle();
+      expect(framedAt(held.container)).toEqual(firstGrants);
+      await act(async () => {
+        paintHost("dark");
+      });
+      await settle();
+      await settle();
+      expect(framedAt(held.container)).toEqual(firstGrants);
+    } finally {
+      paintHost("none");
+    }
   });
 
   it("a SETTLED gate that pins several keeps its reading", async () => {

@@ -1218,10 +1218,23 @@ export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
  * model-visible DATA_PART still carries a ref and nothing else.
  *
  * A same-site host receives `null` here and keeps composing its own cookie URL.
+ *
+ * ONE ADDRESS PER PINNED TARGET, WHERE THE CARD PAIRS (cinatra#4129). A pending
+ * or restricted gate that pins several targets is drawn as pairs on every host:
+ * each target's header directly above its own island frame. A credentialed
+ * address is worth ONE paint, so one address cannot serve several frames; the
+ * answer then carries `islandSrcByRevision` instead of `islandSrc` — a map from
+ * each pinned revision to its own address, or to `null` where that target's
+ * mint failed. The key is OPTIONAL and present only when the wire carried it,
+ * so an answer that never carried it reads exactly as it did before it existed.
  */
 export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
   LifecycleResolveEnvelopeFor<K> & {
     islandSrc: string | null;
+    /** One island address per pinned target of a paired gate (cinatra#4129),
+     * keyed by the pinned revision; `null` for a target whose address could not
+     * be made. Absent on every answer that did not carry it. */
+    islandSrcByRevision?: Record<string, string | null> | null;
     aside: LifecycleCardAsideByKind[K] | null;
     /** The reviewed target(s)' headers (cinatra#3141 item 7), or `null` when the
      * answer carried none. See {@link LifecycleTargetHeader}. */
@@ -1345,6 +1358,40 @@ function readIslandSrc(raw: unknown): string | null | undefined {
   return raw;
 }
 
+/** Ceiling on one key of the per-target island map: a pinned revision id. */
+const LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH = 128;
+
+/**
+ * The per-target island addresses (cinatra#4129), read as ONE bounded shape: a
+ * plain object of at most `LIFECYCLE_TARGET_HEADERS_MAX` entries, each key a
+ * pinned revision id of 1 to 128 characters, each value `null` (that target's
+ * address could not be made) or an address `readIslandSrc` accepts. `null`
+ * means the answer carried none; `undefined` REFUSES the envelope, exactly as a
+ * single address that is not one of ours does.
+ */
+function readIslandSrcByRevision(raw: unknown): Record<string, string | null> | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const prototype = Object.getPrototypeOf(raw);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > LIFECYCLE_TARGET_HEADERS_MAX) return undefined;
+  const read: Array<[string, string | null]> = [];
+  for (const [revision, value] of entries) {
+    if (revision.length === 0 || revision.length > LIFECYCLE_ISLAND_TARGET_KEY_MAX_LENGTH) {
+      return undefined;
+    }
+    if (value === null) {
+      read.push([revision, null]);
+      continue;
+    }
+    const src = readIslandSrc(value);
+    if (src === undefined || src === null) return undefined;
+    read.push([revision, src]);
+  }
+  return Object.fromEntries(read);
+}
+
 /**
  * The ONE parse seam for a lifecycle resolve answer. NEVER throws: an
  * adversarial payload, a forward version, a mismatched kind and a missing body
@@ -1372,6 +1419,8 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     const bodyPresent = rawBody !== undefined && rawBody !== null;
     const islandSrc = readIslandSrc(record.islandSrc);
     if (islandSrc === undefined) return null;
+    const islandSrcByRevision = readIslandSrcByRevision(record.islandSrcByRevision);
+    if (islandSrcByRevision === undefined) return null;
     const targetHeaders = readTargetHeaders(record.targetHeaders);
     if (targetHeaders === undefined) return null;
     const recordedPrompt = record.recordedPrompt;
@@ -1384,12 +1433,26 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     // to a question that kind never asks — a shape this build cannot have
     // composed, and therefore one it will not read.
     if (expectedKind !== "artifact_review_gate" && targetHeaders !== null) return null;
+    // The per-target island addresses belong to the same one kind, for the same
+    // reason: only the review gate frames an island per pinned target.
+    if (expectedKind !== "artifact_review_gate" && islandSrcByRevision !== null) return null;
+    // PLACED ONLY WHEN THE WIRE CARRIED IT, so an answer composed without it
+    // parses to exactly the shape it parsed to before the key existed.
+    const carriedIslandSrcByRevision =
+      expectedKind === "artifact_review_gate" && record.islandSrcByRevision !== undefined;
 
     if (state.data.state === "absent") {
       // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
       // gate, so one arriving next to the collapse of every denial would be the
       // oracle the collapse exists to close — refused exactly like a body.
-      if (bodyPresent || islandSrc !== null || targetHeaders !== null) return null;
+      if (
+        bodyPresent ||
+        islandSrc !== null ||
+        islandSrcByRevision !== null ||
+        targetHeaders !== null
+      ) {
+        return null;
+      }
       return {
         kind: expectedKind,
         state: state.data,
@@ -1414,6 +1477,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         state: state.data,
         body: null,
         islandSrc,
+        ...(carriedIslandSrcByRevision ? { islandSrcByRevision } : {}),
         targetHeaders,
         ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
         aside,
@@ -1428,6 +1492,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       state: state.data,
       body: body.data,
       islandSrc,
+      ...(carriedIslandSrcByRevision ? { islandSrcByRevision } : {}),
       targetHeaders,
       ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
       aside,

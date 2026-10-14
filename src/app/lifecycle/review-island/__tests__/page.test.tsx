@@ -438,6 +438,34 @@ describe("a frame that presents an island credential", () => {
     expect(isEmptyIsland(el)).toBe(true);
     expect(redirect).not.toHaveBeenCalled();
   });
+
+  // cinatra#4129 — the widget frames one island per pinned target of a gate
+  // that pins several, each at its own single-use address naming its target.
+  it("a credentialed frame that names one pinned target draws that target alone", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+    });
+    const targets = [target("a1"), target("a2")];
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets,
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const el = await renderIsland(REF, {
+      ic: CREDENTIAL,
+      target: targets[0].target.representationRevisionId,
+    });
+    expect(resolveIslandCredentialReader).toHaveBeenCalledWith({ credential: CREDENTIAL, ref: REF });
+    expect(isEmptyIsland(el)).toBe(false);
+    expect((el.props as Record<string, unknown>)["data-target-count"]).toBe(1);
+    const panels = panelProps(el);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].prepared).toBe(targets[0].prepared);
+    expect(panels.some((p) => p.prepared === targets[1].prepared)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
