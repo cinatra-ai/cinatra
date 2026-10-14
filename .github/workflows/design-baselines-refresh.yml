@@ -103,7 +103,7 @@ jobs:
     - name: Provision Better Auth tables (public schema)
       run: node scripts/apply-public-schema.mjs
     - name: Build (standalone production server)
-      run: pnpm build
+      run: bash .github/scripts/build-slot.sh 1 2100 -- pnpm build
     - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
       run: |
         set -euo pipefail

@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: 589393084ee1f8064ce8e778362ba624c51fa2ab64afb8c18fe8a6a9b0711125
+  # Source job SHA256: 550ab676bd668a42cbe7215242f4a9ffb7f8f6955ece777b203ceebb8e3dea0f
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -365,7 +365,7 @@ jobs:
           # (design-build-cache.sh rebuild), and that build's result is this
           # step's result; with it off, the build's own exit code stands.
           CINATRA_TURBOPACK_BUILD_FS_CACHE: ${{ steps.build-cache.outputs.fs-cache }}
-        run: pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"
+        run: bash .github/scripts/build-slot.sh 1 1500 -- bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"'
 
       - name: Keep the design build cache for the next job (self-hosted only)
         # Keeps what the build just wrote for the next job on this runner
@@ -585,7 +585,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: c8d4ebcf30b11c98bcce2799c8627ead31a008367c13098ae9cd5fde79c9c133
+  # Source job SHA256: 5a947ab07e07de836415218286fecac2ee9b9e27b4dc3974ec6950e9c339287c
   dashboard:
     name: trial / dashboard / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'dashboard' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -823,7 +823,7 @@ jobs:
           trap 'kill "$SAMPLER_PID" 2>/dev/null || true' EXIT
           echo "memory sampler launched as PID ${SAMPLER_PID} writing ${SAMPLE_FILE}"
 
-          pnpm build
+          bash .github/scripts/build-slot.sh 1 600 -- pnpm build
 
           kill "$SAMPLER_PID" 2>/dev/null || true
 

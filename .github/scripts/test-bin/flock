@@ -1,0 +1,29 @@
+#!/usr/bin/perl
+# TEST-ONLY stand-in for util-linux flock(1), used by test_build_slot.sh ONLY when no real flock is on PATH
+# (macOS). It implements the subset build-slot.sh uses: flock [-n] [-w <seconds>] [-E <code>] <fd>, with an
+# exclusive flock(2) on the inherited descriptor. flock(2) has the same semantics on macOS and Linux: the lock
+# belongs to the open file description and ends when its last descriptor closes. Never install this anywhere.
+use strict;
+use warnings;
+use Fcntl qw(:flock);
+use Time::HiRes qw(sleep time);
+
+my ($nb, $wait, $conflict) = (0, undef, 1);
+while (@ARGV && $ARGV[0] =~ /^-/) {
+    my $o = shift @ARGV;
+    if    ($o eq '-n') { $nb = 1 }
+    elsif ($o eq '-w') { $wait = shift @ARGV }
+    elsif ($o eq '-E') { $conflict = shift @ARGV }
+    else  { print STDERR "flock shim: unsupported option $o\n"; exit 64 }
+}
+my $fd = shift @ARGV;
+if (!defined $fd || $fd !~ /^\d+$/ || @ARGV) { print STDERR "flock shim: only the <fd> form is supported\n"; exit 64 }
+open(my $fh, '+<&=', $fd) or do { print STDERR "flock shim: bad fd $fd: $!\n"; exit 66 };
+if ($nb) { exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : $conflict) }
+if (!defined $wait) { exit(flock($fh, LOCK_EX) ? 0 : 1) }
+my $end = time + $wait;
+while (1) {
+    exit 0 if flock($fh, LOCK_EX | LOCK_NB);
+    exit $conflict if time >= $end;
+    sleep 0.05;
+}

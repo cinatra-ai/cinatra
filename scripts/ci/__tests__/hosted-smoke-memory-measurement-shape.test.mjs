@@ -93,7 +93,7 @@ const SAMPLED_SMOKE = () =>
     (s) => SAMPLE_LOOP(s) && s.text.includes(SMOKE_CMD),
     "sampler-carrying smoke",
   );
-const BUILD_CMD = "pnpm build";
+const BUILD_CMD = "bash .github/scripts/build-slot.sh 1 600 -- pnpm build";
 const REPORT = () =>
   step((s) => /Stop the memory sampler/i.test(s.name), "sampler-stop/report");
 const UPLOAD = () =>

@@ -3319,16 +3319,18 @@ jobs:
         # 45-min job cap. Bumped 15 -> 20: a healthy cold-CI build now runs
         # ~10-15 min (the app grew past the old ~8-min assumption, so a 15-min cap
         # FALSE-cancelled legitimately-slow-but-healthy builds on contended runners
-        # — observed here as a flaky e2e). 20 keeps headroom under the 45-min job
-        # cap for server-wait + the ~13-min Playwright budget while still failing a
-        # true hang well before the job cap.
-        timeout-minutes: 20
+        # — observed here as a flaky e2e). The step's 31 = a 10-min build-slot
+        # wait + the build's own hard 20-min cap (`timeout --kill-after=30 1200`),
+        # which keeps headroom under the 45-min job cap for server-wait + the
+        # ~13-min Playwright budget while still failing a true hang well before
+        # the job cap.
+        timeout-minutes: 31
         env:
           # ~3GB worker heap. 4096 over-committed on this 7GB runner alongside the
           # postgres sidecar (swap-thrash → hang); the default ~2GB OOMs. 3072 is
           # the stable middle that GCs cleanly instead of thrashing.
           NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
+        run: bash .github/scripts/build-slot.sh 1 600 -- timeout --kill-after=30 1200 pnpm build
 
       - name: Start production server on port 3000
         if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
@@ -4452,6 +4454,16 @@ jobs:
             sudo rm -f "$SWAPFILE" || true
           fi
           exit 0
+
+      - name: Refuse an image build without a build slot (self-hosted only)
+        # cinatra#4103: an image build runs in the docker daemon, outside the
+        # runners' memory slice, and must hold both build slots (weight 2). This
+        # `uses:` step cannot run under .github/scripts/build-slot.sh, so it must
+        # not run on a self-hosted runner until it is converted to a wrapped run: step.
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          echo "::error title=build slot::this image build is not wrapped in .github/scripts/build-slot.sh 2 <wait>; it must not run on the self-hosted runner box (cinatra#4103)"
+          exit 1
 
       # Identical build arguments preserve cache compatibility. A missing cache
       # still performs a real build and is covered by the memory provision above.

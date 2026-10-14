@@ -114,7 +114,9 @@ describe("design-visual-verify.yml pixel-diff: the runner-local build cache", ()
     expect(stepText(BUILD)).toMatch(
       /^ {10}CINATRA_TURBOPACK_BUILD_FS_CACHE: \$\{\{ steps\.build-cache\.outputs\.fs-cache \}\}$/m,
     );
-    expect(runLine(BUILD)).toBe('pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"');
+    expect(runLine(BUILD)).toBe(
+      "bash .github/scripts/build-slot.sh 1 1500 -- bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild \"$?\"'",
+    );
   });
 
   it("keeps the cache only after a build that succeeded with it on", () => {
@@ -166,8 +168,32 @@ const FAKE_PNPM = [
 const KEY = /^[0-9a-f]{16}-[0-9a-f]{16}$/;
 const made = [];
 afterEach(() => {
-  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of made.splice(0)) {
+    // A runner's build slot directory is read-only (see makeRunner); make it writable again to remove it.
+    spawnSync("chmod", ["-R", "u+rwx", dir], { stdio: "ignore" });
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
+
+// The pixel-diff build runs under the build slot wrapper .github/scripts/build-slot.sh. The stand-in runner
+// gets a COPY of the repository's own wrapper whose two constants name a slot directory of the runner's own and
+// the test user as its owner, exactly as .github/scripts/test_build_slot.sh runs it: the directory holds the two
+// slot files and the holders folder and is then made read-only (0555), so the test user cannot replace a slot.
+// The test-only flock stand-in of .github/scripts/test-bin is used only where no flock(1) is on PATH.
+const SLOT_WRAPPER = path.join(REPO_ROOT, ".github", "scripts", "build-slot.sh");
+const FLOCK_STAND_IN = path.join(REPO_ROOT, ".github", "scripts", "test-bin", "flock");
+const HAS_FLOCK = spawnSync("bash", ["-c", "command -v flock"], { stdio: "ignore" }).status === 0;
+
+function slotWrapperFor(slots) {
+  const uid = process.getuid();
+  const copy = readFileSync(SLOT_WRAPPER, "utf8")
+    .replace(/^readonly SLOT_DIR=\/srv\/build-slots$/m, () => `readonly SLOT_DIR=${slots}`)
+    .replace(/^readonly SLOT_OWNER_UID=0$/m, () => `readonly SLOT_OWNER_UID=${uid}`);
+  if (!copy.includes(`\nreadonly SLOT_DIR=${slots}\n`) || !copy.includes(`\nreadonly SLOT_OWNER_UID=${uid}\n`)) {
+    throw new Error(`cannot point the constants of ${SLOT_WRAPPER} at the stand-in runner`);
+  }
+  return copy;
+}
 
 function makeRunner() {
   const root = mkdtempSync(path.join(tmpdir(), "design-build-cache-"));
@@ -177,9 +203,23 @@ function makeRunner() {
   const store = path.join(root, "runner", "_work", "_design-build-cache");
   const bin = path.join(root, "bin");
   const log = path.join(root, "pnpm.log");
+  const slots = path.join(root, "build-slots");
   mkdirSync(path.join(checkout, "scripts", "ci"), { recursive: true });
+  mkdirSync(path.join(checkout, ".github", "scripts"), { recursive: true });
   mkdirSync(bin);
   copyFileSync(SCRIPT, path.join(checkout, "scripts", "ci", "design-build-cache.sh"));
+  writeFileSync(path.join(checkout, ".github", "scripts", "build-slot.sh"), slotWrapperFor(slots));
+  mkdirSync(path.join(slots, "holders"), { recursive: true });
+  chmodSync(path.join(slots, "holders"), 0o700);
+  for (const slot of ["slot-1", "slot-2"]) {
+    writeFileSync(path.join(slots, slot), "");
+    chmodSync(path.join(slots, slot), 0o644);
+  }
+  chmodSync(slots, 0o555);
+  if (!HAS_FLOCK) {
+    copyFileSync(FLOCK_STAND_IN, path.join(bin, "flock"));
+    chmodSync(path.join(bin, "flock"), 0o755);
+  }
   writeFileSync(path.join(checkout, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(path.join(checkout, "next.config.ts"), "export default {};\n");
   writeFileSync(path.join(bin, "pnpm"), FAKE_PNPM);

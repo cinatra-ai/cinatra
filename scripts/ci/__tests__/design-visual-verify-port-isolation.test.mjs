@@ -102,7 +102,7 @@ describe("the design server's port belongs to one runner, never to the whole box
 
   it("derives it before the build that bakes those URLs in", () => {
     const derivation = PIXEL_DIFF.indexOf("E2E_DESIGN_PORT=");
-    const build = PIXEL_DIFF.indexOf("run: pnpm build");
+    const build = PIXEL_DIFF.indexOf("-- bash -c 'pnpm build");
     expect(derivation).toBeGreaterThan(-1);
     expect(build).toBeGreaterThan(-1);
     expect(derivation).toBeLessThan(build);

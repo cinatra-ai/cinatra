@@ -221,6 +221,16 @@ jobs:
           mkdir -p "$dir"
           echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
 
+      - name: Refuse an image build without a build slot (self-hosted only)
+        # cinatra#4103: an image build runs in the docker daemon, outside the
+        # runners' memory slice, and must hold both build slots (weight 2). This
+        # `uses:` step cannot run under .github/scripts/build-slot.sh, so it must
+        # not run on a self-hosted runner until it is converted to a wrapped run: step.
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          echo "::error title=build slot::this image build is not wrapped in .github/scripts/build-slot.sh 2 <wait>; it must not run on the self-hosted runner box (cinatra#4103)"
+          exit 1
+
       # Single-arch amd64, loaded into the local daemon for the smoke test. The
       # cache scope is pinned to `exec-l0` so this never collides with the app
       # image's default-scoped gha cache; the release publish re-reads it.
@@ -499,6 +509,16 @@ jobs:
           if [ "${size_mb:-0}" -gt 10240 ]; then rm -rf "${dir:?}"; fi
           mkdir -p "$dir"
           echo "LOCAL_BUILDX_CACHE_DIR=$dir" >> "$GITHUB_ENV"
+
+      - name: Refuse an image build without a build slot (self-hosted only)
+        # cinatra#4103: an image build runs in the docker daemon, outside the
+        # runners' memory slice, and must hold both build slots (weight 2). This
+        # `uses:` step cannot run under .github/scripts/build-slot.sh, so it must
+        # not run on a self-hosted runner until it is converted to a wrapped run: step.
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          echo "::error title=build slot::this image build is not wrapped in .github/scripts/build-slot.sh 2 <wait>; it must not run on the self-hosted runner box (cinatra#4103)"
+          exit 1
 
       # Context = the REPO ROOT (the Dockerfile COPYs package manifests,
       # packages/, patches/, scripts/ and tsconfig.json), Dockerfile named
