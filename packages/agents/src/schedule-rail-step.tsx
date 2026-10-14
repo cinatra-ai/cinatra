@@ -165,6 +165,7 @@ export function ScheduleRailStepRow({
       aria-current={scheduleSelected ? "step" : undefined}
       onClick={() => selection?.select("schedule")}
       className={RUN_SURFACE_RAIL_ROW_CLASS}
+
     >
       <span
         data-conformance-id="schedule-rail-indicator"
