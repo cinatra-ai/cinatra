@@ -77,6 +77,8 @@ export function RecommendationRailStepRow({
 }): ReactElement {
   const selection = useRunStepSelection();
   const selected = selection?.selected === "recommendation";
+  // Answered on this page reads as answered before the refresh brings the server's own reading (cinatra#3285).
+  const settledReading = settled || selection?.skillsReleased === true;
 
   return (
     <Button
@@ -85,17 +87,10 @@ export function RecommendationRailStepRow({
       data-conformance-id="recommendation-rail-step"
       data-recommendation-rail-step=""
       data-recommendation-step-selected={selected ? "true" : "false"}
-      data-recommendation-step-settled={settled ? "true" : "false"}
-      // AND THE RAIL'S OWN STATE MARKS, ON THIS ROW (cinatra#3449). This row is
-      // the page's own, and the frame "decorates only its generic rows on the
-      // way through" (`instance-screens`) -- so the rail's first gate was drawn
-      // with none of the marks every generic row carries. The readings are the
-      // ones this row already computes: `openable` is the frame's own answer to
-      // whether the run has reached this step, and the settled and selected
-      // readings are the two it draws its circle from.
+      data-recommendation-step-settled={settledReading ? "true" : "false"}
       data-run-surface-rail-step=""
       data-run-surface-rail-reached={openable ? "true" : "false"}
-      data-run-surface-rail-settled={settled ? "true" : "false"}
+      data-run-surface-rail-settled={settledReading ? "true" : "false"}
       data-run-surface-rail-selected={selected ? "true" : "false"}
       // The same two names the rail's generic row uses, so one walk reads one
       // vocabulary on every row of the rail.
@@ -113,7 +108,7 @@ export function RecommendationRailStepRow({
         // The settled circle takes the drawing's muted ground, never the
         // indigo fill (cinatra#3188 item 1) — the shared helper holds the rule
         // so this row and the shared row cannot part company on it.
-        className={runSurfaceRailIndicatorClass(selected, settled)}
+        className={runSurfaceRailIndicatorClass(selected, settledReading)}
       >
         {/* A GLYPH ON EITHER READING, NEVER A NUMERAL (cinatra#3047, the
             re-shoot's third defect). The drawing gives this entry its own
@@ -123,7 +118,7 @@ export function RecommendationRailStepRow({
             and draw it, which is what put "1" on the pending Skills row and
             pushed the run's first work step to "2"; the prop is gone rather
             than ignored, so no caller can hand this row a numeral again. */}
-        {settled ? <Check className="h-3 w-3" /> : <RunSurfaceRailStepGlyph />}
+        {settledReading ? <Check className="h-3 w-3" /> : <RunSurfaceRailStepGlyph />}
       </span>
       <span className={runSurfaceRailTitleClass(selected)}>
         {RECOMMENDATION_RAIL_STEP_LABEL}
