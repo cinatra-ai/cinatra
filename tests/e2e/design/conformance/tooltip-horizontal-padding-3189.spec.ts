@@ -1,5 +1,7 @@
 /**
- * specs/app-components.html#Tooltip (#3189): approved Tooltip example has padding 6px 10px and a 6px corner.
+ * specs/app-components.html#Tooltip / Popover (#3189): approved Tooltip example has padding 6px 10px and a 6px corner.
+ * specs/app-components.html#Tooltip / Popover 0.6.0 (#4036): the shadow is set per palette — the light tooltip keeps
+ * 0 4px 8px -2px rgba(21,33,58,0.3), the dark tooltip draws 0 4px 8px rgba(0,0,0,0.5).
  * Read the existing unoverridden gallery tooltip's real computed cascade in
  * both application palettes. No fixture, CSS, theme class or primitive is
  * substituted. Authoring does not claim a browser run or independent UI grade.
@@ -7,12 +9,15 @@
 import { expect, test } from "@playwright/test";
 
 const PALETTES = [
-  { name: "light", theme: "cinatra" },
-  { name: "dark", theme: "dark" },
+  { name: "light", theme: "cinatra", shadow: "rgba(21, 33, 58, 0.3) 0px 4px 8px -2px" },
+  { name: "dark", theme: "dark", shadow: "rgba(0, 0, 0, 0.5) 0px 4px 8px 0px" },
 ] as const;
 
+// Tailwind composes box-shadow from five layers; the four it leaves unset compute to this transparent zero layer.
+const UNSET_SHADOW_LAYER = "rgba(0, 0, 0, 0) 0px 0px 0px 0px";
+
 for (const palette of PALETTES) {
-  test(`specs/app-components.html#Tooltip default padding and corners — ${palette.name}`, async ({ page }) => {
+  test(`specs/app-components.html#Tooltip / Popover default padding, corners and shadow — ${palette.name}`, async ({ page }) => {
     // Initialize next-themes as the maintained primitive conformance cases do.
     await page.addInitScript((theme) => {
       window.localStorage.setItem("theme", theme);
@@ -41,5 +46,9 @@ for (const palette of PALETTES) {
     });
     expect(geometry).toEqual({ left: "10px", right: "10px", top: "6px", bottom: "6px",
       topLeft: "6px", topRight: "6px", bottomLeft: "6px", bottomRight: "6px" });
+    const shadow = await content.evaluate((element) => getComputedStyle(element).boxShadow);
+    // Split on the commas between layers, never on the commas inside a colour.
+    const drawn = shadow.split(/,(?![^(]*\))/).map((layer) => layer.trim()).filter((layer) => layer !== UNSET_SHADOW_LAYER);
+    expect(drawn).toEqual([palette.shadow]);
   });
 }
