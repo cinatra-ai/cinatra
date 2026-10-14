@@ -11,7 +11,8 @@
 // re-registration), so no case reaches a database, a file under the instance
 // or a container. On a preview the install-made connections belong to the
 // first administrator (cinatra#4112), and a connection an earlier development
-// boot made for the fixture account is handed over to them.
+// boot made for the fixture account is handed over to them when the hook that
+// made it asks the host's generic hand-over helper on its context (cinatra#4137).
 //
 // SECRET BOUNDARY: assertions read statuses and call counts only.
 
@@ -31,9 +32,10 @@ const h = vi.hoisted(() => ({
   }),
   resolveDevFixturePassword: vi.fn(() => ({ password: "unit-only", source: "generated" })),
   setDevActorForExternalMcp: vi.fn(),
-  devReownRefusedFixtureTwentyConnection: vi.fn<(input: { refusedFixtureUserId: string }) => Promise<"reowned">>(
-    async () => "reowned",
-  ),
+  devReownRefusedFixtureConnection: vi.fn<
+    (input: { serverId: string; refusedFixtureUserId: string; checkKey: unknown }) => Promise<"reowned">
+  >(async () => "reowned"),
+  checkKey: vi.fn(async () => "ok" as const),
   rotateDevFixturePassword: vi.fn(),
   retireDevFixturePassword: vi.fn(),
   // The rows the database answers by the query it is asked: the first
@@ -48,7 +50,7 @@ const {
   signUpEmail,
   resolveDevFixturePassword,
   setDevActorForExternalMcp,
-  devReownRefusedFixtureTwentyConnection,
+  devReownRefusedFixtureConnection,
   rotateDevFixturePassword,
   retireDevFixturePassword,
 } = h;
@@ -84,8 +86,8 @@ vi.mock("@/lib/dev-fixture-secret", async (importOriginal) => ({
 vi.mock("@/lib/external-mcp-registry", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   setDevActorForExternalMcp: (...args: unknown[]) => h.setDevActorForExternalMcp(...args),
-  devReownRefusedFixtureTwentyConnection: (input: { refusedFixtureUserId: string }) =>
-    h.devReownRefusedFixtureTwentyConnection(input),
+  devReownRefusedFixtureConnection: (input: { serverId: string; refusedFixtureUserId: string; checkKey: unknown }) =>
+    h.devReownRefusedFixtureConnection(input),
 }));
 
 vi.mock("@cinatra-ai/mcp-server/credentials", async (importOriginal) => ({
@@ -180,7 +182,7 @@ describe("runDevAutoSetup by install (cinatra#4098)", () => {
     expect(texts.some((t) => /\b(INSERT|UPDATE|DELETE)\b/i.test(t))).toBe(false);
     // With no first administrator yet, no owner is pushed and nothing is handed over.
     expect(setDevActorForExternalMcp).toHaveBeenCalledWith(null);
-    expect(devReownRefusedFixtureTwentyConnection).not.toHaveBeenCalled();
+    expect(devReownRefusedFixtureConnection).not.toHaveBeenCalled();
   });
 
   it("a preview makes the install's connections for the first administrator, before the hooks run", async () => {
@@ -196,7 +198,7 @@ describe("runDevAutoSetup by install (cinatra#4098)", () => {
     expect(setDevActorForExternalMcp).toHaveBeenCalledWith({ userId: "admin-1", organizationId: "org-1" });
     expect(ownerWhenHookRan).toEqual({ userId: "admin-1", organizationId: "org-1" });
     // No fixture account was left behind: there is nothing to hand over.
-    expect(devReownRefusedFixtureTwentyConnection).not.toHaveBeenCalled();
+    expect(devReownRefusedFixtureConnection).not.toHaveBeenCalled();
   });
 
   it("a preview hands the fixture account's connection from an earlier development boot to the first administrator", async () => {
@@ -204,9 +206,20 @@ describe("runDevAutoSetup by install (cinatra#4098)", () => {
     h.rows.firstAdministrator = [{ id: "admin-1" }];
     h.rows.member = [{ id: "org-1" }];
     h.rows.fixture = [{ id: "fixture-1" }];
+    // The hook that made the connection asks for it through its context.
+    let outcome: unknown = "not asked";
+    runDevSetup.mockImplementationOnce((async (ctx: { helpers: { reownRefusedFixtureConnection?: (input: unknown) => Promise<unknown> } }) => {
+      outcome = await ctx.helpers.reownRefusedFixtureConnection?.({ serverId: "fake-row", checkKey: h.checkKey });
+      return { status: "skipped" as const, reason: "unit fake hook" };
+    }) as never);
     await runDevAutoSetup();
-    expect(devReownRefusedFixtureTwentyConnection).toHaveBeenCalledTimes(1);
-    expect(devReownRefusedFixtureTwentyConnection).toHaveBeenCalledWith({ refusedFixtureUserId: "fixture-1" });
+    expect(outcome).toBe("reowned");
+    expect(devReownRefusedFixtureConnection).toHaveBeenCalledTimes(1);
+    expect(devReownRefusedFixtureConnection).toHaveBeenCalledWith({
+      serverId: "fake-row",
+      refusedFixtureUserId: "fixture-1",
+      checkKey: h.checkKey,
+    });
     // The account itself is only read: its password is never rotated or retired.
     expect(rotateDevFixturePassword).not.toHaveBeenCalled();
     expect(retireDevFixturePassword).not.toHaveBeenCalled();

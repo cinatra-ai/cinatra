@@ -7626,6 +7626,12 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
     // loading — "reads Looking up... while the lookup is in flight", and the
     // form says so on its own root only while it is.
     loading: async (_page, root) => {
+      // Wait for the URL field and Continue to hydrate before the first fill,
+      // as resolveUploadReference does for the same form: a fill that lands
+      // before hydration never reaches the form's state, so Continue stays
+      // disabled and refilling the same link does not turn it on (cinatra#4131).
+      await waitForControlHydration(root.locator("#github-repo-url"));
+      await waitForControlHydration(root.locator(UPLOAD_RESOLVE_CONTROL));
       const cleanups = new Map<string, () => Promise<void>>();
       let finished = false;
       try {
@@ -7721,6 +7727,10 @@ const UPLOAD_GITHUB_FORM_DRIVER: SurfaceDriver = {
             }, { key, selector: UPLOAD_RESOLVE_CONTROL, mountSelector: UPLOAD_GITHUB_FORM_MOUNT, formSelector: UPLOAD_FORM_NODE });
             if (finished) throw new Error("The loading observation has finished");
             await root.locator("#github-repo-url").fill(UPLOAD_CONFORMANCE_REPO_URL, { timeout: 5_000 });
+            // Continue is read enabled in THIS attempt, before the observer is
+            // armed and the button pressed: a Continue still disabled fails the
+            // attempt in 2 s and the retry fills again, inside the same 30 s.
+            await expect(submit).toBeEnabled({ timeout: 2_000 });
             if (finished) throw new Error("The loading observation has finished");
             await form.evaluate((node, key) => {
               const record = (node as HTMLElement & Record<string, unknown>)[key] as { armed: boolean };
