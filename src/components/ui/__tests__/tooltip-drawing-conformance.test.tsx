@@ -13,7 +13,7 @@
 //   "Tooltips are navy with cream type; popovers are surface-strong with navy
 //    text. Tooltips read at 12px."
 //
-// specs/app-components.html#Tooltip: the approved example also specifies padding 6px 10px. Native checks pin
+// specs/app-components.html#Tooltip / Popover: the approved example also specifies padding 6px 10px. Native checks pin
 // that recipe on actual Radix DOM; browser-computed geometry is separate.
 // Its content corner is 6px. The corner checks below read the actual Radix
 // recipe and caller merge behavior; cached Tailwind declaration evidence and
@@ -102,7 +102,7 @@ describe('clause: "12px tooltip" / "Tooltips read at 12px"', () => {
   });
 });
 
-describe('specs/app-components.html#Tooltip approved example: "padding: 6px 10px"', () => {
+describe('specs/app-components.html#Tooltip / Popover approved example: "padding: 6px 10px"', () => {
   it("renders the default ten-pixel horizontal and six-pixel vertical recipe", () => {
     const classes = renderTooltip().className.split(/\s+/);
     // jsdom has no generated Tailwind stylesheet: this pins the shipped recipe,
@@ -128,7 +128,7 @@ describe('specs/app-components.html#Tooltip approved example: "padding: 6px 10px
   });
 });
 
-describe('specs/app-components.html#Tooltip approved example: "border-radius: 6px"', () => {
+describe('specs/app-components.html#Tooltip / Popover approved example: "border-radius: 6px"', () => {
   it("renders a fixed six-pixel content corner instead of the palette-dependent step", () => {
     const classes = renderTooltip().className.split(/\s+/);
     expect(classes).toContain("rounded-[6px]");
@@ -157,11 +157,11 @@ describe('specs/app-components.html#Tooltip approved example: "border-radius: 6p
   });
 });
 
-// specs/app-components.html#Tooltip, version 0.6.0 (cinatra#4036): the shadow is set per palette. The light tooltip keeps
+// specs/app-components.html#Tooltip / Popover, version 0.6.0 (cinatra#4036): the shadow is set per palette. The light tooltip keeps
 // the approved example's shadow, 0 4px 8px -2px rgba(21,33,58,0.3); the dark-palette tooltip draws 0 4px 8px
 // rgba(0,0,0,0.5), the dark value of the application's strong elevation shadow (--cinatra-shadow-strong in .dark).
 // The browser case tests/e2e/design/conformance/tooltip-horizontal-padding-3189.spec.ts reads the live cascade.
-describe("specs/app-components.html#Tooltip: the shadow is set per palette", () => {
+describe("specs/app-components.html#Tooltip / Popover: the shadow is set per palette", () => {
   const LIGHT_SHADOW = "shadow-[0_4px_8px_-2px_rgba(21,33,58,0.3)]";
   const DARK_SHADOW = "dark:shadow-[0_4px_8px_rgba(0,0,0,0.5)]";
   const isShadow = (token: string) => /(^|:)shadow(-|$)/.test(token);

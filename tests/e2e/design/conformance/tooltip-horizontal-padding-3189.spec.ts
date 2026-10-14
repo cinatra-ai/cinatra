@@ -1,6 +1,6 @@
 /**
- * specs/app-components.html#Tooltip (#3189): approved Tooltip example has padding 6px 10px and a 6px corner.
- * specs/app-components.html#Tooltip 0.6.0 (#4036): the shadow is set per palette — the light tooltip keeps
+ * specs/app-components.html#Tooltip / Popover (#3189): approved Tooltip example has padding 6px 10px and a 6px corner.
+ * specs/app-components.html#Tooltip / Popover 0.6.0 (#4036): the shadow is set per palette — the light tooltip keeps
  * 0 4px 8px -2px rgba(21,33,58,0.3), the dark tooltip draws 0 4px 8px rgba(0,0,0,0.5).
  * Read the existing unoverridden gallery tooltip's real computed cascade in
  * both application palettes. No fixture, CSS, theme class or primitive is
@@ -17,7 +17,7 @@ const PALETTES = [
 const UNSET_SHADOW_LAYER = "rgba(0, 0, 0, 0) 0px 0px 0px 0px";
 
 for (const palette of PALETTES) {
-  test(`specs/app-components.html#Tooltip default padding, corners and shadow — ${palette.name}`, async ({ page }) => {
+  test(`specs/app-components.html#Tooltip / Popover default padding, corners and shadow — ${palette.name}`, async ({ page }) => {
     // Initialize next-themes as the maintained primitive conformance cases do.
     await page.addInitScript((theme) => {
       window.localStorage.setItem("theme", theme);
