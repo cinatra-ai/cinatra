@@ -75,9 +75,12 @@ describe("each of the five windows outside the chat is a per-run conversation", 
       const src = read(w.file);
       expect(src).toContain("useRunWindowConversation");
       expect(src).toContain(`surface: "${w.surface}"`);
-      // The panel is fed the STORE's entries, never a local transcript.
-      expect(src).toContain("conversation={");
-      expect(src).toMatch(/conversation=\{\[?\.\.\.?runWindow\.entries|conversation=\{runWindow\.entries/);
+      // The window is fed the STORE's entries, never a local transcript. Since
+      // cinatra#3487 the screen hands them to the PAGE (the registration it
+      // publishes) rather than to a panel of its own — the field is the same
+      // field, read off the same store; only who mounts the window moved.
+      expect(src).toContain("conversation: ");
+      expect(src).toMatch(/conversation: \[?\.\.\.?runWindow\.entries|conversation: runWindow\.entries/);
     });
 
     // cinatra#3016 — THE MOUNT NAMES ITS RUN. The frame the assistant is handed
@@ -124,7 +127,10 @@ describe("each of the five windows outside the chat is a per-run conversation", 
       // more, so no window can drift from the drawing on its own.
       expect(src).not.toContain('placeholder="');
       expect(src).not.toContain("placeholder={");
-      expect(src).toContain(`surface="${w.surface}"`);
+      // Since cinatra#3487 the reading is declared in the REGISTRATION the
+      // screen publishes, and the page's one window reads §X's sentence for it.
+      // The claim is unchanged: the mount names WHICH READING and never wording.
+      expect(src).toContain(`surface: "${w.surface}"`);
     });
   }
 
