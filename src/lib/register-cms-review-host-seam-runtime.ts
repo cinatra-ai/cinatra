@@ -10,8 +10,8 @@ import "server-only";
 // from `register-host-connector-services.ts`, which sits in the LOCKED dev-perf
 // routes' reachable first-party graph. The four real seam bindings reach the
 // heavy core stores (`@/lib/artifacts/cms-content-snapshot-capture` → the
-// objects/artifact-authoring graph; `@cinatra-ai/agents/lifecycle-review-
-// orchestration` → the gate/park/outbox graph; `@cinatra-ai/agents/cms-snapshot-
+// objects/artifact-authoring graph; `@cinatra-ai/agents/lifecycle-effect-hold`
+// → the gate/park/outbox reads; `@cinatra-ai/agents/cms-snapshot-
 // readback-store` → the agents store graph; `@/lib/extension-host-actor`;
 // `@cinatra-ai/mcp-server`). A dynamic `import("<literal>")` of any of those in a
 // route-reachable module STILL counts as an edge in `scripts/route-graph.mjs`
@@ -109,7 +109,7 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
     // widening a cross-repo union.
     resolveArtifactEffectDisposition: async (i) => {
       const { disposition, gate } = await (
-        await import("@cinatra-ai/agents/lifecycle-review-orchestration")
+        await import("@cinatra-ai/agents/lifecycle-effect-hold")
       ).resolveArtifactEffectDisposition(i);
       return { disposition: disposition === "policy_unresolved" ? "held" : disposition, gate };
     },
