@@ -35,6 +35,10 @@ async function setTheme(page: import("@playwright/test").Page, theme: "cinatra" 
   await page.reload({ waitUntil: "networkidle" });
   // 4. Wait for fonts to settle so AA hinting is stable across runs.
   await page.evaluate(() => document.fonts?.ready ?? Promise.resolve());
+  // 5. A lazy review island below the fold settles only at its 12-second bound.
+  await expect(page.locator('[data-island-load-state="loading"]')).toHaveCount(0, {
+    timeout: 30_000,
+  });
 }
 
 async function expectAxeClean(page: import("@playwright/test").Page, label: string) {
