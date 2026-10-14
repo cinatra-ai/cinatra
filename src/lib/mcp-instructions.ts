@@ -45,23 +45,28 @@ export const CINATRA_MCP_INSTRUCTIONS: string = (() => {
  * - agUi 0.1 (ag-ui-agent-spec is pre-1.0)
  * - a2a  0.3 (codebase already uses @a2a-js/sdk ^0.3.13)
  * - a2ui 0.9 with compatibleVersions: ["0.8"]
+ *
+ * protocolRevision "2" (cinatra#4141): agUi.endpoint names the per-run SSE
+ * stream route (revision 1 named the A2A JSON-RPC endpoint there), and a2ui
+ * names the INTERRUPT event's `xRenderer` as the surface key in place of the
+ * two compiler authoring fields a client never receives.
  */
 export const CINATRA_MCP_EXPERIMENTAL = {
   "io.cinatra.protocols": {
-    protocolRevision: "1",
+    protocolRevision: "2",
     agUi: {
       version: "0.1",
       specRevision: "2026-03-28",
       specUrl: "https://docs.ag-ui.com",
       transports: ["sse"],
-      endpoint: "/api/a2a",
+      endpoint: "/api/agents/runs/{runId}/stream",
     },
     a2ui: {
       version: "0.9",
       compatibleVersions: ["0.8"],
       specUrl: "https://a2ui.org",
-      surfaceIdField: "a2uiSurfaceId",
-      surfaceOverrideField: "a2uiSurfaceIdOverride",
+      surfaceEvent: "INTERRUPT",
+      surfaceKeyField: "xRenderer",
       registryEndpoint: "/api/a2ui/surfaces",
     },
     a2a: {
