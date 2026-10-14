@@ -56,9 +56,11 @@ describe("email-outreach-agent follow-up cleanup", () => {
     expect(deps).not.toHaveProperty("@cinatra-ai/email-follow-up-agent");
   });
 
-  it("package.json version was bumped past 0.1.7", () => {
+  it("the pinned outreach release is at least 0.1.7, the first whose delivery copy files the recipient records", () => {
     const pkg = JSON.parse(pkgText) as { version: string };
-    expect(pkg.version).not.toBe("0.1.7");
+    const [major, minor, patch] = pkg.version.split(".").map((part) => Number.parseInt(part, 10));
+    const atLeast = major !== 0 ? major > 0 : minor !== 1 ? minor > 1 : patch >= 7;
+    expect(atLeast, `the outreach release ${pkg.version} is older than 0.1.7, which files the recipient records`).toBe(true);
   });
 
   it("OAS still parses as valid JSON", () => {
