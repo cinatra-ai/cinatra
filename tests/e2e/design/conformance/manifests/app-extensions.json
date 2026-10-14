@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-extensions.html",
-  "contentHash": "sha256:6cef4dce99482754c7ffc7ec879c1fe43ff0c321db6c7057f7e4d04ac4402187",
+  "contentHash": "sha256:9c86b3006aa25dad2c255088c10f7e3f4d1dc387dd16a6dc40c8527e92235a1a",
   "surfaces": [
     {
       "id": "extension-listing-grid",
@@ -226,6 +226,46 @@
         {
           "action": "back-to-agents",
           "outcome": "scope-agents-tab"
+        }
+      ],
+      "states": [
+        "error",
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "agent-card-accent-hover",
+      "fields": [],
+      "actions": [
+        {
+          "action": "open-details",
+          "outcome": "detail-modal-open"
+        }
+      ],
+      "states": [
+        "kind:agent"
+      ]
+    },
+    {
+      "id": "agent-start-needs-connection",
+      "fields": [
+        {
+          "field": "name",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "connector",
+          "source": "connector.manifest.displayName"
+        }
+      ],
+      "actions": [
+        {
+          "action": "back-to-agents",
+          "outcome": "scope-agents-tab"
+        },
+        {
+          "action": "configure",
+          "outcome": "connector-setup"
         }
       ],
       "states": [
