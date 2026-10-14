@@ -6,9 +6,11 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  connectorAutoSetupAllowed,
   getInstallProfile,
   isDemoProfile,
   isEnvFlagEnabled,
+  isPreviewInstance,
   shouldRunDemoSeed,
   shouldSeedDevFixtures,
 } from "@/lib/install-profile";
@@ -125,5 +127,43 @@ describe("shouldRunDemoSeed — the pending monolithic-seed one-shot", () => {
         CINATRA_INSTALL_PROFILE: "demo",
       }),
     ).toBe(false);
+  });
+});
+
+// cinatra#4098 — a preview instance is the `preview` profile on a PRODUCTION
+// runtime. It runs the connector auto-setup; a production deployment does not;
+// neither ever seeds the development fixtures.
+describe("preview profile and the connector auto-setup (cinatra#4098)", () => {
+  const preview = (extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv =>
+    ({ CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production", CINATRA_INSTALL_PROFILE: "preview", ...extra });
+  const prod = (extra: Record<string, string | undefined> = {}): NodeJS.ProcessEnv =>
+    ({ CINATRA_RUNTIME_MODE: "production", NODE_ENV: "production", ...extra });
+
+  it("is 'preview' ONLY for the exact string 'preview'", () => {
+    expect(getInstallProfile({ CINATRA_INSTALL_PROFILE: "preview" })).toBe("preview");
+    expect(getInstallProfile({ CINATRA_INSTALL_PROFILE: "PREVIEW" })).toBe("dev");
+    expect(isDemoProfile({ CINATRA_INSTALL_PROFILE: "preview" })).toBe(false);
+  });
+
+  it("a preview instance is the preview profile on a production runtime, nothing else", () => {
+    expect(isPreviewInstance(preview())).toBe(true);
+    expect(isPreviewInstance(prod())).toBe(false);
+    expect(isPreviewInstance(prod({ CINATRA_INSTALL_PROFILE: "demo" }))).toBe(false);
+    expect(isPreviewInstance({ CINATRA_INSTALL_PROFILE: "preview" })).toBe(false);
+    expect(isPreviewInstance(strictDev({ CINATRA_INSTALL_PROFILE: "preview" }))).toBe(false);
+  });
+
+  it("allows the connector auto-setup in development and on a preview, never on a production deployment", () => {
+    expect(connectorAutoSetupAllowed(strictDev())).toBe(true);
+    expect(connectorAutoSetupAllowed(preview())).toBe(true);
+    expect(connectorAutoSetupAllowed(prod())).toBe(false);
+    expect(connectorAutoSetupAllowed(prod({ CINATRA_INSTALL_PROFILE: "demo" }))).toBe(false);
+    expect(connectorAutoSetupAllowed(prod({ CINATRA_INSTALL_PROFILE: "prod" }))).toBe(false);
+    expect(connectorAutoSetupAllowed({})).toBe(false);
+  });
+
+  it("never seeds the development fixtures on a preview, even when opted in", () => {
+    expect(shouldSeedDevFixtures(preview())).toBe(false);
+    expect(shouldSeedDevFixtures(preview({ CINATRA_DEV_FIXTURES: "1" }))).toBe(false);
   });
 });

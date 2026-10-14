@@ -277,6 +277,62 @@ describe("runBoot orchestration", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cinatra#4098 — the detached connector auto-setup on a preview instance. The
+// orchestrator's OWN env predicates are exercised (no injected mode), so these
+// pin what a real boot decides from CINATRA_RUNTIME_MODE and
+// CINATRA_INSTALL_PROFILE.
+// ---------------------------------------------------------------------------
+describe("runBoot connector auto-setup by install (cinatra#4098)", () => {
+  const KEYS = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE"] as const;
+  let saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    vi.clearAllMocks();
+    saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    vi.clearAllMocks();
+  });
+
+  async function bootWith(env: Partial<Record<(typeof KEYS)[number], string>>): Promise<string[]> {
+    for (const k of KEYS) {
+      if (env[k] === undefined) delete process.env[k];
+      else process.env[k] = env[k];
+    }
+    const order: string[] = [];
+    const runPhase = vi.fn(async (phase: { name: string }) => {
+      order.push(phase.name);
+      return undefined as never;
+    });
+    await runBoot({ runPhase });
+    return order;
+  }
+
+  it("development starts the auto-setup", async () => {
+    await bootWith({ CINATRA_RUNTIME_MODE: "development" });
+    expect(startDetachedDevAutoSetupPhase).toHaveBeenCalledTimes(1);
+  });
+
+  it("production with the preview profile starts the auto-setup and no other dev-only step", async () => {
+    const order = await bootWith({ CINATRA_RUNTIME_MODE: "production", CINATRA_INSTALL_PROFILE: "preview" });
+    expect(startDetachedDevAutoSetupPhase).toHaveBeenCalledTimes(1);
+    expect(startDetachedDevExtensionsPhase).not.toHaveBeenCalled();
+    expect(order).not.toContain("dev-agent-ingest");
+    expect(order).not.toContain("a2a-dev-auto-connect");
+  });
+
+  it("production without the preview profile skips the auto-setup", async () => {
+    await bootWith({ CINATRA_RUNTIME_MODE: "production" });
+    await bootWith({ CINATRA_RUNTIME_MODE: "production", CINATRA_INSTALL_PROFILE: "demo" });
+    await bootWith({ CINATRA_INSTALL_PROFILE: "preview" });
+    expect(startDetachedDevAutoSetupPhase).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #2554 — the startup deadline, wired through the REAL orchestrator.
 //
 // boot-stall-watchdog.test.ts pins the watchdog's own dev-exit / prod-repeat
