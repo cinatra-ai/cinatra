@@ -328,47 +328,11 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 // the review route still grows no client-graph coupling). The former local
 // derivation is deleted — it was the third copy of the same string surgery.
 
-/**
- * The read-only row facts the header's meta line carries (§IV) — the ones the
- * drawing names: "the read-only row facts the host authorized — owner level /
- * visibility, MIME, and updated time".
- *
- * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
- * meta line in the ratified drawings prints the two scope facts with no label at
- * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
- * line again over §V.1's read-only review target. The labelled form this line
- * carried came from a local reading of a plan sentence ("the line gets labels or
- * drops the storage fact") rather than from the drawing, and the graded proof frames
- * measured it as a departure. The drawing decides: the labels go, both facts
- * stay, and the order is the drawing's.
- *
- * Pure copy, no type keying — every artifact type reads the same line.
- */
-export function reviewTargetRowFacts(
-  artifact: {
-    ownerLevel: string;
-    visibility: string;
-    mime: string;
-    updatedAt: string;
-  },
-  /** The instant to read `updatedAt` against. Injected so the reading is
-   *  testable; defaults to now, which is what every caller wants. */
-  now: Date = new Date(),
-): string[] {
-  return [
-    artifact.ownerLevel,
-    artifact.visibility,
-    artifact.mime,
-    // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
-    // writes "updated 8 min ago"; the decided target printed the stored column
-    // straight through — `2026-08-29T06:18:07.421Z`, milliseconds and all — which
-    // is a machine's reading of the same fact and is not what §IV draws. One
-    // formatter does it, for this line and for the header row facts the sibling
-    // leg (pull request 3058) draws from the same projection, so the two surfaces
-    // cannot render one column two ways.
-    `updated ${relativeInstant(artifact.updatedAt, now)}`,
-  ];
-}
+// The header meta line's row facts (§IV), reviewTargetRowFacts, are composed in
+// `@/lib/artifacts/review-target-row-facts`, beside the scope composer they word
+// the owner and the visibility with. They are not composed here: this module is
+// reached from the chat surface's own module graph (THE DEEP ENTRY above), and
+// only the hosts that draw the header read that line.
 
 /** How the drawn readings step, longest first. Minutes are the drawing's own
  *  unit ("8 min ago"); the rungs above it exist so a week-old artifact does not
