@@ -17,7 +17,8 @@ import { scopeSurfaceTabHrefs } from "@/lib/scope-surfaces";
 import { AgentAllCard } from "@/components/extensions/agent-all-card";
 import { RunStartRefusedPanel } from "../../../../../packages/agents/src/run-start-refused-panel";
 import { AgentRunEligibilityFixtures } from "../agent-run-eligibility-fixtures";
-import { RUN_ELIGIBILITY_AGENT as agent, RUN_ELIGIBILITY_MISSING as missing, runEligibilityCardRow } from "../agent-run-eligibility-fixture-data";
+import { connectorSetupRoute } from "../../../../../packages/agents/src/actionable-preflight-error";
+import { RUN_ELIGIBILITY_AGENT as agent, RUN_ELIGIBILITY_CONNECTOR as connector, RUN_ELIGIBILITY_MISSING as missing, runEligibilityCardRow } from "../agent-run-eligibility-fixture-data";
 
 afterEach(cleanup);
 const repo = path.resolve(__dirname, "../../../../..");
@@ -39,13 +40,14 @@ describe("approved Extensions IV.1–2 real-component fixtures", () => {
     const contract = source("tests/e2e/design/conformance/contract.ts");
     expect(contract).toContain('"agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER');
     expect(contract).toContain('"agent-start-refused": AGENT_START_REFUSED_DRIVER');
+    expect(contract).toContain('"agent-start-needs-connection": AGENT_START_NEEDS_CONNECTION_DRIVER');
     const allow = JSON.parse(source("tests/e2e/design/conformance/allowlist.json")).allow;
-    expect(allow.filter((entry: { surface: string }) => ["agent-card-cannot-run", "agent-start-refused"].includes(entry.surface))).toEqual([]);
+    expect(allow.filter((entry: { surface: string }) => ["agent-card-cannot-run", "agent-start-refused", "agent-start-needs-connection"].includes(entry.surface))).toEqual([]);
   });
   it("actual driver entries cover every declared field, outcome, and state in the approved manifest", async () => {
     const { SURFACE_DRIVERS } = await import("../../../../../tests/e2e/design/conformance/contract");
     const manifest = JSON.parse(source("tests/e2e/design/conformance/manifests/app-extensions.json"));
-    for (const id of ["agent-card-cannot-run", "agent-start-refused"]) {
+    for (const id of ["agent-card-cannot-run", "agent-start-refused", "agent-start-needs-connection"]) {
       const surface = manifest.surfaces.find((entry: { id: string }) => entry.id === id);
       expect(surface).toBeDefined();
       const driver = SURFACE_DRIVERS[id];
@@ -60,7 +62,7 @@ describe("approved Extensions IV.1–2 real-component fixtures", () => {
   });
   it("draws both reader variants from the same real card and refusal panel", () => {
     const { container } = render(<AgentRunEligibilityFixtures />);
-    for (const id of ["agent-card-cannot-run", "agent-start-refused"]) {
+    for (const id of ["agent-card-cannot-run", "agent-start-refused", "agent-start-needs-connection"]) {
       const root = container.querySelector(`[data-surface-id="${id}"]`)!;
       expect(root.querySelectorAll("[data-reader]")).toHaveLength(2);
       expect(within(root as HTMLElement).queryByRole("link", { name: /^Run$/ })).toBeNull();
@@ -165,5 +167,50 @@ describe("approved Extensions IV.1–2 real-component fixtures", () => {
     expect(within(container).getByRole("link", { name: /^Run$/ }).getAttribute("href")).toBe(agent.runHref);
     expect(container.querySelector('[data-icon="inline-start"]')).not.toBeNull();
     expect(within(container).queryByText("Unavailable")).toBeNull();
+  });
+  it("uses the actual connector setup route for the §IV.4 configure recourse", () => {
+    expect(connectorSetupRoute(connector.packageId)?.settingsHref).toBe(connector.settingsHref);
+  });
+  for (const reader of ["administrator", "member"] as const) {
+    it(`${reader} §IV.4 refusal names the agent and the connection, never a run or a not-found`, () => {
+      const { container } = render(<AgentRunEligibilityFixtures />);
+      const root = container.querySelector(`[data-surface-id="agent-start-needs-connection"] [data-reader="${reader}"]`)! as HTMLElement;
+      const alert = within(root).getByRole("alert");
+      expect(alert.getAttribute("data-conformance-id")).toBe("agent-start-needs-connection");
+      expect(alert.getAttribute("data-state")).toBe("error kind:agent");
+      expect(alert.querySelector('[data-field="name=manifest.displayName"]')?.textContent).toBe(`${agent.name} can't start`);
+      const named = alert.querySelector('[data-field="connector=connector.manifest.displayName"]')!;
+      expect(named.querySelector("b")?.textContent).toBe(connector.displayName);
+      expect(named.querySelector(".font-mono")?.textContent).toBe(connector.packageId);
+      expect(alert.textContent).not.toContain("not found");
+      expect(within(root).queryByRole("link", { name: /^Run$/ })).toBeNull();
+      expect(within(root).getByRole("link", { name: "Back to Agents" }).getAttribute("href")).toBe(agent.agentsHref);
+      const configure = root.querySelector('[data-action="configure -> connector-setup"]');
+      if (reader === "administrator") {
+        expect(alert.textContent).toContain("Set up connections first:");
+        expect(configure?.textContent).toBe(connector.displayName);
+        expect(configure?.getAttribute("href")).toBe(connector.settingsHref);
+        expect(named.textContent).toContain("Set it up, then start the agent again.");
+      } else {
+        expect(alert.textContent).not.toContain("Set up connections first:");
+        expect(configure).toBeNull();
+        expect(named.textContent).toContain("Ask a platform administrator to set it up for you, then start the agent again.");
+      }
+    });
+  }
+  it("dispatches the administrator's §IV.4 configure link to the connector setup port", () => {
+    const { container } = render(<AgentRunEligibilityFixtures />);
+    const root = container.querySelector('[data-surface-id="agent-start-needs-connection"] [data-reader="administrator"]')! as HTMLElement;
+    const link = root.querySelector('[data-action="configure -> connector-setup"]')! as HTMLElement;
+    expect(fireEvent.click(link)).toBe(false); // consumed only at the navigation boundary
+    expect(root.dataset.outcome).toBe("connector-setup");
+    expect(root.dataset.destination).toBe(connector.settingsHref);
+  });
+  it.each(["administrator", "member"])("dispatches %s Back to Agents on §IV.4 to the actual scoped tab port", (reader) => {
+    const { container } = render(<AgentRunEligibilityFixtures />);
+    const root = container.querySelector(`[data-surface-id="agent-start-needs-connection"] [data-reader="${reader}"]`)! as HTMLElement;
+    fireEvent.click(within(root).getByRole("link", { name: "Back to Agents" }));
+    expect(root.dataset.outcome).toBe("scope-agents-tab");
+    expect(root.dataset.destination).toBe(scopeSurfaceTabHrefs({ kind: "workspace" }).agentsHref);
   });
 });
