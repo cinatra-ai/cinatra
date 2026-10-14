@@ -412,8 +412,6 @@ export const CONNECTOR_KNOWN_FINDINGS_FLOOR = Object.freeze({
     "env-ban.direct-process-env-access — removed by cinatra#3828",
   "@cinatra-ai/plane-connector:src/dev-setup.ts:env-ban.direct-process-env-access":
     "env-ban.direct-process-env-access — removed by cinatra#3828",
-  "@cinatra-ai/plane-connector:src/plane-provision.ts:env-ban.direct-process-env-access":
-    "env-ban.direct-process-env-access — removed by cinatra#3828",
 });
 
 /**

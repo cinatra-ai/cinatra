@@ -19,10 +19,42 @@
  * coverage ratchet (allowlist.json, shrink-only) is the only escape hatch.
  */
 import { expect, request as playwrightRequest, test, type Locator, type Page } from "@playwright/test";
-import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
+import { RUN_ELIGIBILITY_AGENT, RUN_ELIGIBILITY_CONNECTOR, RUN_ELIGIBILITY_MISSING } from "../../../../src/app/design-fixtures/conformance/agent-run-eligibility-fixture-data";
 import { HYDRATION_TIMEOUT_MS } from "../../config/hydration";
 import { TOAST_DRIVER } from "./toast-driver";
 import { AGENT_ASSIGNMENT_SKILLS_DRIVER } from "./scope-assignment-skills-driver";
+import {
+  BUTTON_SURFACE_DRIVER,
+  CARD_SURFACE_DRIVER,
+  INPUT_SURFACE_DRIVER,
+  SELECT_SURFACE_DRIVER,
+  DIALOG_SURFACE_DRIVER,
+  BADGE_SURFACE_DRIVER,
+  TABS_SURFACE_DRIVER,
+  TOOLBAR_SURFACE_DRIVER,
+  TOOLBAR_NESTED_SURFACE_DRIVER,
+  SIDEBAR_SURFACE_DRIVER,
+  SIDEBAR_GROUP_LABEL_SURFACE_DRIVER,
+  TOOLTIP_SURFACE_DRIVER,
+  AVATAR_SURFACE_DRIVER,
+  FORM_SURFACE_DRIVER,
+  CHECKBOX_SURFACE_DRIVER,
+  ALERT_SURFACE_DRIVER,
+  TABLE_SURFACE_DRIVER,
+  COMMAND_SURFACE_DRIVER,
+  BREADCRUMB_SURFACE_DRIVER,
+  PAGINATION_SURFACE_DRIVER,
+  SKELETON_SURFACE_DRIVER,
+  EMPTY_SURFACE_DRIVER,
+  ACCORDION_SURFACE_DRIVER,
+  SEPARATOR_SURFACE_DRIVER,
+  TOGGLE_SURFACE_DRIVER,
+  CALENDAR_SURFACE_DRIVER,
+  COMBOBOX_SURFACE_DRIVER,
+  SCROLL_AREA_SURFACE_DRIVER,
+  INPUT_OTP_SURFACE_DRIVER,
+} from "./component-surface-drivers";
+import { AGENT_CARD_ACCENT_HOVER_DRIVER } from "./agent-card-accent-hover-driver";
 
 import { CONFORMANCE_SEED_REFUSAL_HEADER } from "../../../../src/lib/test-support/conformance-seed-fence";
 import {
@@ -950,13 +982,22 @@ export function scheduleCardDriver(fixture: LifecycleScheduleCardFixture): Surfa
   switch (fixture.surfaceId) {
     case "schedule-card-first-shown":
       // The in-flight floor: the word and the dead control are both computed by
-      // the component while its answer is outstanding.
+      // the component while its answer is outstanding. BOTH ARE READ INSIDE THE
+      // PRESS'S RETRY. The floor is in flight only briefly: this row's harness
+      // answers 1.2 s after the press (`answerDelayMs` in
+      // lifecycle-schedule-card-fixture-data.ts) with a refusal, and the refusal
+      // turns the control back on. The first press often lands while the harness
+      // page is still hydrating, its slowest moment, so a dead-control reading
+      // taken after the retry could meet the settled floor and fail for good
+      // although the card drew both readings. Inside the retry, a floor that
+      // settled between the two readings is pressed again, and the press counts
+      // only when the word and the dead control are read in the same flight.
       driver.states.loading = async (_page, root) => {
         const confirm = scheduleFloor(root).locator(CONFIRM_CONTROL);
         await pressScheduleUntil(confirm, async () => {
           await expect(confirm).toContainText("Confirming…", { timeout: 2_000 });
+          await expect(confirm).toBeDisabled({ timeout: 2_000 });
         });
-        await expect(confirm).toBeDisabled();
       };
       // The refusal, said on the card rather than swallowed. It never reveals
       // whether a token was expired, foreign or forged.
@@ -2092,6 +2133,58 @@ const AGENT_START_REFUSED_DRIVER: SurfaceDriver = {
   states: {
     error: async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
     "kind:agent": async (page) => assertStartRefused(page.locator('[data-surface-id="agent-start-refused"]')),
+  },
+};
+
+// Approved Extensions §IV.4: a start a missing connection refuses. The same
+// static mount road as §IV.2, on the product's own needs-connection panel. The
+// reader who may set the connection up gets the strip and its configure link;
+// a member is told to ask a platform administrator and gets no setup address.
+async function assertStartNeedsConnection(root: Locator): Promise<void> {
+  for (const reader of ["administrator", "member"] as const) {
+    const panel = eligibilityReader(root, reader);
+    const alert = panel.getByRole("alert");
+    await expect(alert).toBeVisible();
+    await expect(alert).toHaveAttribute("data-conformance-id", "agent-start-needs-connection");
+    await expect(alert).toHaveAttribute("data-state", "error kind:agent");
+    await expect(alert.locator('[data-field="name=manifest.displayName"]')).toHaveText(`${RUN_ELIGIBILITY_AGENT.name} can't start`);
+    const named = alert.locator('[data-field="connector=connector.manifest.displayName"]');
+    await expect(named.locator("b")).toHaveText(RUN_ELIGIBILITY_CONNECTOR.displayName);
+    await expect(named.locator(".font-mono")).toHaveText(RUN_ELIGIBILITY_CONNECTOR.packageId);
+    await expect(panel.getByRole("link", { name: "Run", exact: true })).toHaveCount(0);
+    await expect(panel.getByText("not found", { exact: false })).toHaveCount(0);
+    await expect(panel.getByRole("link", { name: "Back to Agents" })).toHaveAttribute("href", RUN_ELIGIBILITY_AGENT.agentsHref);
+    const configure = panel.locator('[data-action="configure -> connector-setup"]');
+    if (reader === "administrator") {
+      await expect(alert).toContainText("Set up connections first:");
+      await expect(configure).toHaveText(RUN_ELIGIBILITY_CONNECTOR.displayName);
+      await expect(configure).toHaveAttribute("href", RUN_ELIGIBILITY_CONNECTOR.settingsHref);
+      await expect(named).toContainText("Set it up, then start the agent again.");
+    } else {
+      await expect(alert).not.toContainText("Set up connections first:");
+      await expect(configure).toHaveCount(0);
+      await expect(named).toContainText("Ask a platform administrator to set it up for you, then start the agent again.");
+    }
+  }
+}
+
+const AGENT_START_NEEDS_CONNECTION_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator('[data-surface-id="agent-start-needs-connection"]'),
+  present: async (_page, root) => assertStartNeedsConnection(root),
+  fields: {
+    name: { source: "manifest.displayName", assert: async (_page, root) => assertStartNeedsConnection(root) },
+    connector: { source: "connector.manifest.displayName", assert: async (_page, root) => assertStartNeedsConnection(root) },
+  },
+  actions: {
+    "back-to-agents": { outcome: "scope-agents-tab", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "member"), eligibilityReader(root, "member").getByRole("link", { name: "Back to Agents" }), RUN_ELIGIBILITY_AGENT.agentsHref, "scope-agents-tab") },
+    configure: { outcome: "connector-setup", run: async (_page, root) =>
+      followEligibilityLink(eligibilityReader(root, "administrator"), eligibilityReader(root, "administrator").locator('[data-action="configure -> connector-setup"]'), RUN_ELIGIBILITY_CONNECTOR.settingsHref, "connector-setup") },
+  },
+  states: {
+    error: async (page) => assertStartNeedsConnection(page.locator('[data-surface-id="agent-start-needs-connection"]')),
+    "kind:agent": async (page) => assertStartNeedsConnection(page.locator('[data-surface-id="agent-start-needs-connection"]')),
   },
 };
 
@@ -7829,6 +7922,8 @@ const UPLOAD_RESOLVED_INSTALL_PANEL_DRIVER: SurfaceDriver = {
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "agent-card-cannot-run": AGENT_CARD_CANNOT_RUN_DRIVER,
   "agent-start-refused": AGENT_START_REFUSED_DRIVER,
+  "agent-card-accent-hover": AGENT_CARD_ACCENT_HOVER_DRIVER, // The coloured-panel hover of the extensions drawing (cinatra#2851).
+  "agent-start-needs-connection": AGENT_START_NEEDS_CONNECTION_DRIVER, // Extensions §IV.4, a start a missing connection refuses (cinatra#4041).
   toast: TOAST_DRIVER,
   "agent-assignment-skills": AGENT_ASSIGNMENT_SKILLS_DRIVER,
   "extension-install-panel": INSTALL_PANEL_DRIVER,
@@ -7872,6 +7967,35 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "scheduling-step-configured": SCHEDULING_STEP_CONFIGURED_DRIVER,
   "sidebar-assistants-entry": SIDEBAR_ASSISTANTS_ENTRY_DRIVER,
   "breadcrumb-entity-resolution": BREADCRUMB_ENTITY_RESOLUTION_DRIVER,
+  "button": BUTTON_SURFACE_DRIVER, // The components drawing's shared primitives, one mount each (cinatra#3189).
+  "card": CARD_SURFACE_DRIVER,
+  "input": INPUT_SURFACE_DRIVER,
+  "select": SELECT_SURFACE_DRIVER,
+  "dialog": DIALOG_SURFACE_DRIVER,
+  "badge": BADGE_SURFACE_DRIVER,
+  "tabs": TABS_SURFACE_DRIVER,
+  "toolbar": TOOLBAR_SURFACE_DRIVER,
+  "toolbar-nested": TOOLBAR_NESTED_SURFACE_DRIVER,
+  "sidebar": SIDEBAR_SURFACE_DRIVER,
+  "sidebar-group-label": SIDEBAR_GROUP_LABEL_SURFACE_DRIVER,
+  "tooltip": TOOLTIP_SURFACE_DRIVER,
+  "avatar": AVATAR_SURFACE_DRIVER,
+  "form": FORM_SURFACE_DRIVER,
+  "checkbox": CHECKBOX_SURFACE_DRIVER,
+  "alert": ALERT_SURFACE_DRIVER,
+  "table": TABLE_SURFACE_DRIVER,
+  "command": COMMAND_SURFACE_DRIVER,
+  "breadcrumb": BREADCRUMB_SURFACE_DRIVER,
+  "pagination": PAGINATION_SURFACE_DRIVER,
+  "skeleton": SKELETON_SURFACE_DRIVER,
+  "empty": EMPTY_SURFACE_DRIVER,
+  "accordion": ACCORDION_SURFACE_DRIVER,
+  "separator": SEPARATOR_SURFACE_DRIVER,
+  "toggle": TOGGLE_SURFACE_DRIVER,
+  "calendar": CALENDAR_SURFACE_DRIVER,
+  "combobox": COMBOBOX_SURFACE_DRIVER,
+  "scroll-area": SCROLL_AREA_SURFACE_DRIVER,
+  "input-otp": INPUT_OTP_SURFACE_DRIVER,
   // The Workspace surfaces the ratified drawing adds (epic cinatra#2806). Their
   // manifest is not pinned yet, so these generate no test today; they are what
   // the recorded pin advance is waiting for, and they SKIP with a reason until

@@ -80,6 +80,7 @@ import {
 } from "@/lib/dev-fixture-secret";
 import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
 import { upsertConnectSiteAndMintCredential } from "@/lib/connect-provisioning";
+import { isPreviewInstance } from "@/lib/install-profile";
 
 type Status =
   | { status: "created"; siteUrl: string; detail?: string }
@@ -298,8 +299,9 @@ const tag = "[dev-auto-setup]";
 
 type DeclaringDevSetupExtension = {
   packageName: string;
-  /** Package-relative `cinatra.devSetup` path (e.g. `./src/dev-setup`). */
-  devSetupPath: string;
+  /** Package-relative `cinatra.devSetup` path (e.g. `./src/dev-setup`), or
+   * null when the connector was named by the generated loader map. */
+  devSetupPath: string | null;
 };
 
 /**
@@ -307,8 +309,15 @@ type DeclaringDevSetupExtension = {
  * `dev-fixture-seeder.discoverDeclaringExtensions`: reads each materialized
  * `extensions/<vendor>/<slug>/package.json`, keeps the ones declaring a
  * string `cinatra.devSetup`. A malformed / absent package.json is skipped
- * (dev boot stays unblocked). Returns [] when there is no extensions checkout
- * (e.g. prod) so the shell is a clean no-op off dev.
+ * (dev boot stays unblocked).
+ *
+ * cinatra#4098: an IMAGE has no `extensions/` checkout — its extensions are
+ * compiled in — so when that folder does not exist the connectors are the
+ * keys of the generated loader map, which names exactly the connectors that
+ * declare `cinatra.devSetup`. Only a boot the auto-setup gate admits (strict
+ * development or a preview instance) reaches this reading; a production
+ * deployment returns before it. Any other read failure of the folder still
+ * yields [].
  */
 async function discoverDevSetupExtensions(): Promise<DeclaringDevSetupExtension[]> {
   const root = path.join(process.cwd(), "extensions");
@@ -316,8 +325,12 @@ async function discoverDevSetupExtensions(): Promise<DeclaringDevSetupExtension[
   let vendors: string[];
   try {
     vendors = await readdir(root);
-  } catch {
-    return out;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") return out;
+    return Object.keys(GENERATED_DEV_SETUP_MODULES).map((packageName) => ({
+      packageName,
+      devSetupPath: null,
+    }));
   }
   for (const vendor of vendors) {
     let slugs: string[];
@@ -829,6 +842,32 @@ async function retireStaleDevFixtureAccount(): Promise<void> {
 }
 
 /**
+ * The fixture account an earlier development boot left in this instance's
+ * database, READ ONLY (cinatra#4098). A preview instance shares that database
+ * with the development boots of the same install, and their next boot rotates
+ * the fixture's password itself, so a preview never seeds, rotates or retires
+ * the account; it only names it, so that a Twenty connection the account owns
+ * is handed to the first administrator. Null when there is none or the read
+ * fails. Never throws.
+ */
+function readLeftFixtureAccountId(): string | null {
+  try {
+    return (
+      (
+        runPostgresQueriesSync({
+          connectionString: getPostgresConnectionString(),
+          queries: [
+            { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+          ],
+        })[0]?.rows as { id: string }[] | undefined
+      )?.[0]?.id ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Idempotently ensure the deterministic dev UAT user + Default org membership,
  * reusing an existing user if present. The fixture is a MACHINE account
  * (`userType='uat-fixture'`) with a plain 'member' membership of the Default
@@ -1234,6 +1273,27 @@ export async function runDevAutoSetup(): Promise<{
   // direct import must never run the docker/credential provisioning + fixture
   // seeding outside strict development. A no-op skipped result off dev.
   if (!isStrictDevelopmentRuntime()) {
+    // cinatra#4098: a preview instance (the `preview` install profile on a
+    // production runtime) is not a production deployment, so it runs the
+    // connector-owned devSetup hooks. Nothing else of the development setup
+    // runs there: no fixture account (`ensureDevConnectActor` and the `cnx_`
+    // mint keep their strict-development gate) and no connector-policy fixture.
+    if (isPreviewInstance(process.env)) {
+      // cinatra#4112 on a preview: the fixture account is never seeded here,
+      // so the install-made connections (Twenty CRM) belong to the first
+      // administrator, pushed BEFORE the hooks run. A connection an earlier
+      // development boot made for the fixture account is handed over first.
+      refusedFixtureUserId = readLeftFixtureAccountId();
+      const owner = adoptFirstAdministratorAsConnectionOwner();
+      if (owner && refusedFixtureUserId) await reownRefusedFixtureConnection(refusedFixtureUserId);
+      const hooks = await runDevSetupHooks();
+      const connectorPolicies: Status = {
+        status: "skipped",
+        reason: "preview instance: connector hooks only, no development fixtures",
+      };
+      logResult("connector-policy", connectorPolicies);
+      return { hooks, connectorPolicies };
+    }
     return { hooks: [], connectorPolicies: { status: "skipped", reason: "not development" } };
   }
 
