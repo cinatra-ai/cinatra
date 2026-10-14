@@ -348,3 +348,140 @@ describe("validateAuthorizeParams", () => {
     ).toBe(false);
   });
 });
+
+// The http exception follows the app's RUNTIME MODE, not the build: an
+// application built for production that its operator runs in development mode
+// (CINATRA_RUNTIME_MODE / APP_RUNTIME_MODE) takes a loopback http callback and
+// widget origin; an instance in production mode never does, and a non-loopback
+// http address is refused in every mode. Each case sets both mode keys itself so
+// the reading never depends on the environment the suite runs in.
+describe("loopback http follows the runtime mode, not the build", () => {
+  type Mode = { NODE_ENV: string; CINATRA_RUNTIME_MODE?: string; APP_RUNTIME_MODE?: string };
+  function runAs(mode: Mode) {
+    vi.stubEnv("NODE_ENV", mode.NODE_ENV);
+    vi.stubEnv("CINATRA_RUNTIME_MODE", mode.CINATRA_RUNTIME_MODE ?? "");
+    vi.stubEnv("APP_RUNTIME_MODE", mode.APP_RUNTIME_MODE ?? "");
+  }
+  const PRODUCTION_BUILD_DEVELOPMENT_MODE: Mode = {
+    NODE_ENV: "production",
+    CINATRA_RUNTIME_MODE: "development",
+  };
+  const EVERY_MODE: Mode[] = [
+    { NODE_ENV: "production" },
+    { NODE_ENV: "production", CINATRA_RUNTIME_MODE: "production" },
+    PRODUCTION_BUILD_DEVELOPMENT_MODE,
+    { NODE_ENV: "production", APP_RUNTIME_MODE: "development" },
+    { NODE_ENV: "development" },
+    { NODE_ENV: "development", CINATRA_RUNTIME_MODE: "production" },
+  ];
+  const WP_LOOPBACK =
+    "http://localhost:8080/wp-admin/admin-post.php?action=cinatra_connect_callback";
+  const DRUPAL_LOOPBACK = "http://127.0.0.1:8081/admin/config/services/cinatra/connect/callback";
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a production build in development mode accepts a loopback http redirect_uri", () => {
+    runAs(PRODUCTION_BUILD_DEVELOPMENT_MODE);
+    const wp = validateRedirectUri("wordpress", WP_LOOPBACK);
+    expect(wp).toEqual({ ok: true, callbackOrigin: "http://localhost:8080" });
+    const drupal = validateRedirectUri("drupal", DRUPAL_LOOPBACK);
+    expect(drupal).toEqual({ ok: true, callbackOrigin: "http://127.0.0.1:8081" });
+  });
+
+  it("a production build in development mode accepts a loopback http widget_origin", () => {
+    runAs(PRODUCTION_BUILD_DEVELOPMENT_MODE);
+    expect(validateWidgetOrigin("http://localhost:8080")).toEqual({
+      ok: true,
+      widgetOrigin: "http://localhost:8080",
+    });
+    expect(validateWidgetOrigin("http://127.0.0.1:8081")).toEqual({
+      ok: true,
+      widgetOrigin: "http://127.0.0.1:8081",
+    });
+  });
+
+  it("the second mode key reads the same way when the first is unset", () => {
+    runAs({ NODE_ENV: "production", APP_RUNTIME_MODE: "development" });
+    expect(validateRedirectUri("wordpress", WP_LOOPBACK).ok).toBe(true);
+    expect(validateWidgetOrigin("http://localhost:8080").ok).toBe(true);
+  });
+
+  it("a production build in development mode validates a whole loopback authorize request", () => {
+    runAs(PRODUCTION_BUILD_DEVELOPMENT_MODE);
+    const r = validateAuthorizeParams({
+      client: "wordpress",
+      redirect_uri: WP_LOOPBACK,
+      widget_origin: "http://localhost:8080",
+      state: "opaque-state",
+      scope: CONNECT_SCOPE,
+      code_challenge: "c".repeat(43),
+      code_challenge_method: "S256",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.params.callbackOrigin).toBe("http://localhost:8080");
+      expect(r.params.widgetOrigin).toBe("http://localhost:8080");
+    }
+  });
+
+  it("a development build declared production refuses loopback http (the mode decides both ways)", () => {
+    runAs({ NODE_ENV: "development", CINATRA_RUNTIME_MODE: "production" });
+    expect(validateRedirectUri("wordpress", WP_LOOPBACK).ok).toBe(false);
+    expect(validateWidgetOrigin("http://localhost:8080")).toEqual({
+      ok: false,
+      reason: "Use an https:// address.",
+    });
+  });
+
+  it("a production build in production mode refuses loopback http, with no mode key and with the production key", () => {
+    for (const mode of [
+      { NODE_ENV: "production" },
+      { NODE_ENV: "production", CINATRA_RUNTIME_MODE: "production" },
+    ]) {
+      runAs(mode);
+      expect(validateRedirectUri("wordpress", WP_LOOPBACK).ok).toBe(false);
+      expect(validateRedirectUri("drupal", DRUPAL_LOOPBACK).ok).toBe(false);
+      expect(validateWidgetOrigin("http://localhost:8080")).toEqual({
+        ok: false,
+        reason: "Use an https:// address.",
+      });
+    }
+  });
+
+  it("refuses non-loopback http in every mode", () => {
+    for (const mode of EVERY_MODE) {
+      runAs(mode);
+      for (const host of ["shop.example.com", "localhost.example.com", "10.0.0.5"]) {
+        expect(
+          validateRedirectUri(
+            "wordpress",
+            `http://${host}/wp-admin/admin-post.php?action=cinatra_connect_callback`,
+          ).ok,
+        ).toBe(false);
+        expect(validateWidgetOrigin(`http://${host}`).ok).toBe(false);
+      }
+    }
+  });
+
+  it("https reads the same in every mode", () => {
+    for (const mode of EVERY_MODE) {
+      runAs(mode);
+      expect(validateRedirectUri("wordpress", WP_CALLBACK)).toEqual({
+        ok: true,
+        callbackOrigin: "https://shop.example.com",
+      });
+      expect(validateRedirectUri("drupal", DRUPAL_CALLBACK)).toEqual({
+        ok: true,
+        callbackOrigin: "https://news.example.com",
+      });
+      expect(validateRedirectUri("wordpress", "https://shop.example.com/x").ok).toBe(false);
+      expect(validateWidgetOrigin("https://localhost:8443")).toEqual({
+        ok: true,
+        widgetOrigin: "https://localhost:8443",
+      });
+      expect(validateWidgetOrigin("https://shop.example.com/path").ok).toBe(false);
+    }
+  });
+});
