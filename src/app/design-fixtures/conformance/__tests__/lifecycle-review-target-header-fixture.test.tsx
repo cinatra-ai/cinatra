@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
-import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 
 import { LifecycleReviewTargetHeaderFixtures } from "../lifecycle-review-target-header-fixtures";
 import {

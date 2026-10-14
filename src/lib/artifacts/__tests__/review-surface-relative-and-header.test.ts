@@ -28,8 +28,8 @@ import {
   reviewGateRailSettlement,
   reviewSettledCopy,
   reviewSettledOutcomeFromDisposition,
-  reviewTargetRowFacts,
 } from "../review-surface-model";
+import { reviewTargetRowFacts } from "../review-target-row-facts";
 
 const NOW = new Date("2026-08-29T06:26:52.662Z");
 const at = (msAgo: number) => new Date(NOW.getTime() - msAgo).toISOString();

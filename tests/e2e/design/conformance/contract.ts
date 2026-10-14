@@ -66,10 +66,8 @@ import {
 // The PRODUCT's own readings, read here so the driver's expectation is derived
 // the way the shipped composer derives it and never restated by the test.
 import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
-import {
-  reviewRevisionMarker,
-  reviewTargetRowFacts,
-} from "../../../../src/lib/artifacts/review-surface-model";
+import { reviewRevisionMarker } from "../../../../src/lib/artifacts/review-surface-model";
+import { reviewTargetRowFacts } from "../../../../src/lib/artifacts/review-target-row-facts";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
   type ArtifactKindDisplay,

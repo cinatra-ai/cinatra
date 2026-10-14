@@ -21,10 +21,10 @@ import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
-  reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
 import type { ReviewSettledOutcome } from "../review-surface-model";
+import { reviewTargetRowFacts } from "../review-target-row-facts";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
