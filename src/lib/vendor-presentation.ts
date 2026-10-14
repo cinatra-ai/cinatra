@@ -46,11 +46,31 @@
  *      a SEPARATE, non-rendering parameter that never influences the returned label.
  *
  * Missing-data contract: a null / empty / whitespace-only display name resolves
- * to the explicit `missing` state, which the surfaces render as a localized
- * placeholder ({@link VENDOR_MISSING_LABEL}) — never a slug, never a package
- * scope, never a silent omission, never a hard failure. `missing` is a STATE,
- * not a placeholder string masquerading as a name, so a surface can withhold
- * the VERIFIED mark and never link the placeholder.
+ * to the explicit `missing` state — never a slug, never a package scope, never
+ * a hard failure. `missing` is a STATE, not a placeholder string masquerading
+ * as a name, so a surface can withhold the VERIFIED mark and never link the
+ * placeholder.
+ *
+ * WHAT A SURFACE DRAWS FOR `missing` IS THE SURFACE'S OWN READING, and this
+ * resolver never asserts one (its diagnostic reports the data defect, not a
+ * rendering). Two readings exist, and each is owned where it is ratified:
+ *   · THE PLACEHOLDER, {@link VENDOR_MISSING_LABEL} — the EXTENSION byline
+ *     surfaces, whose reader is choosing whose code to install: the marketplace
+ *     listing card, the detail modal, the installed-extension card and the
+ *     /agents card. There the vendor is the point of the line, so its absence
+ *     is stated rather than omitted.
+ *   · THE NAME ALONE — the run / chat / widget Skills pill
+ *     (`packages/agents/src/run-recommendation-chip-row.tsx`, cinatra#3062).
+ *     The ratified drawing gives that pill "the skill's name and then BY its
+ *     vendor" and lets it carry "a checkbox, the skill's name and its vendor,
+ *     and nothing else"; it draws no vendorless pill, so it prescribes no
+ *     stand-in for one, and the by-clause is what introduces a vendor. There
+ *     the skill is already assigned to the agent and the drawing governs, so
+ *     the pill draws the name and publishes the resolved STATE on its root
+ *     (`data-skills-step-vendor-state`) — the omission is stated in the DOM,
+ *     never silent.
+ * A surface may not invent a THIRD reading: the label is this module's or the
+ * name is alone; a slug or a package scope is neither, on any surface.
  *
  * Localization: this app carries no i18n framework, so "the existing
  * localization mechanism" is realized as the centralized string constants
@@ -160,9 +180,12 @@ function emitMissingVendorDiagnostic(context: VendorDiagnosticContext): void {
   emittedMissingKeys.add(key);
   // Structured, deduplicated diagnostic so the underlying catalog/manifest data
   // defect (a vendor with no human display name) is detectable without breaking
-  // the page. One malformed entry logs once and still renders the placeholder.
+  // the page. One malformed entry logs once. The message reports the DATA
+  // defect and says nothing about what was drawn: this resolver returns a
+  // state, it does not render, and the surfaces no longer draw the `missing`
+  // state the same way (see the missing-data contract in the module doc).
   console.warn(
-    "[vendor-presentation] missing vendor display name — rendered the localized placeholder",
+    "[vendor-presentation] missing vendor display name — the surface draws its own missing-state reading",
     { event: "vendor.display_name.missing", surface: context.surface, ref: context.ref ?? null },
   );
 }
