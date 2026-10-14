@@ -740,6 +740,38 @@ of the two bodies stays outside the repository: no body is frozen under the
 checker's fixtures, because the frozen-capture road ended with the suite header
 the toast adoption wrote.
 
+## Reconciliation record — 2026-10-14
+
+Measured 2026-10-14 against the manifests published under `publishedBaseUrl`,
+for the tooltip's shadow in both palettes (cinatra#4036). All five bodies were
+fetched with one anonymous `curl -sS` each into a scratch directory outside
+every repository tree, and their hashes were compared with the five pins as
+this change leaves them: every published body is byte-identical to the
+artifact its pin names. `app`, `app-extensions`, `app-connectors` and
+`app-notifications` came back byte-identical to the artifacts their pins
+already named. `app-components` had republished after its drawing (version
+0.6.0) drew the tooltip's shadow per palette, and the adopted body was
+compared, as parsed JSON, with the committed copy under
+`tests/e2e/design/conformance/manifests/` that it replaces: `schemaVersion`,
+`spec` and all thirty-three surfaces are field-for-field identical, and only
+`contentHash` moved. This is the case "Why a hash-only re-pin is refused"
+names: the drawing changed under an unchanged surface list. The same change
+adopts what moved: `src/components/ui/tooltip.tsx` draws the light tooltip's
+approved shadow and the dark tooltip's shadow, and its unit check and its
+browser case read both palettes. The committed artifact is now the verbatim
+published body, and both hashes of the entry in `conformance-pins.json` were
+re-derived from the adopted bytes on the branch — the manifest hash over the
+file's bytes, the spec-content hash read back out of the adopted body's own
+`contentHash` field — never typed. No other pin moved.
+
+| Pin | Was | What the adoption changed | Cost |
+| --- | --- | --- | --- |
+| `app` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-components` | `drift` | no surface; `contentHash` moved with the tooltip's shadow per palette (`tooltip`) | the tooltip's two shadow classes, one unit check, one browser reading |
+| `app-extensions` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-connectors` | `match` | nothing — the published body is still the pinned artifact | none |
+| `app-notifications` | `match` | nothing — the published body is still the pinned artifact | none |
+
 ## Running it locally
 
 ```sh

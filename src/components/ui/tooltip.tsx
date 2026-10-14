@@ -53,8 +53,13 @@ function TooltipContent({
         // the rail (Approvals, Configuration), since `sideOffset=0` leaves no
         // clearance. A tooltip is a transient hover overlay: it belongs on top
         // of the surface it is anchored to, never behind it.
+        // cinatra#4036: the shadow is set per palette, as the components
+        // drawing (0.6.0) draws it. The light palette keeps the approved
+        // navy shadow; the dark palette takes the dark value of the
+        // strong elevation shadow (--cinatra-shadow-strong in .dark),
+        // because the navy would draw a faint glow on the dark page.
         className={cn(
-          "z-[210] inline-flex w-fit max-w-xs origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-[6px] bg-foreground px-2.5 py-1.5 text-xs text-background has-data-[slot=kbd]:pr-1.5 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "z-[210] inline-flex w-fit max-w-xs origin-(--radix-tooltip-content-transform-origin) items-center gap-1.5 rounded-[6px] bg-foreground px-2.5 py-1.5 text-xs text-background shadow-[0_4px_8px_-2px_rgba(21,33,58,0.3)] dark:shadow-[0_4px_8px_rgba(0,0,0,0.5)] has-data-[slot=kbd]:pr-1.5 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-50 **:data-[slot=kbd]:rounded-sm data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
