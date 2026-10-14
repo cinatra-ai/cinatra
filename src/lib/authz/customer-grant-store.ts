@@ -29,6 +29,21 @@ let _pool: Pool | null = null;
 function pool(): Pool {
   if (!_pool) {
     _pool = new Pool({ connectionString: process.env.SUPABASE_DB_URL ?? "postgres://localhost" });
+    // An idle connection the database drops makes the pool emit 'error'; with no
+    // listener that ends the process.
+    _pool.on("error", (err) => {
+      console.error("[customer-grant-store] pg pool idle client error:", err.message);
+    });
+    // pg-pool removes its own 'error' listener from a client while the client is
+    // checked out, so a connection cut during a transaction would end the process
+    // (cinatra#4151). One listener per client, added once when the pool creates the
+    // client; it logs the pool name and the message only, and the pool discards the
+    // dead client at release.
+    _pool.on("connect", (client) => {
+      client.on("error", (err: Error) => {
+        console.error("[customer-grant-store] pg pool client error:", err.message);
+      });
+    });
   }
   return _pool;
 }
