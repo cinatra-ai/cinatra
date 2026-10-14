@@ -18,7 +18,11 @@
 // Its content corner is 6px. The corner checks below read the actual Radix
 // recipe and caller merge behavior; cached Tailwind declaration evidence and
 // the authored browser case separately cover the geometry contract.
-import { afterEach, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { compile } from "tailwindcss";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 import {
@@ -150,6 +154,78 @@ describe('specs/app-components.html#Tooltip approved example: "border-radius: 6p
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
     expect(content.querySelector('[data-slot="kbd"]')?.textContent).toBe("⌘K");
+  });
+});
+
+// specs/app-components.html#Tooltip, version 0.6.0 (cinatra#4036): the shadow is set per palette. The light tooltip keeps
+// the approved example's shadow, 0 4px 8px -2px rgba(21,33,58,0.3); the dark-palette tooltip draws 0 4px 8px
+// rgba(0,0,0,0.5), the dark value of the application's strong elevation shadow (--cinatra-shadow-strong in .dark).
+// The browser case tests/e2e/design/conformance/tooltip-horizontal-padding-3189.spec.ts reads the live cascade.
+describe("specs/app-components.html#Tooltip: the shadow is set per palette", () => {
+  const LIGHT_SHADOW = "shadow-[0_4px_8px_-2px_rgba(21,33,58,0.3)]";
+  const DARK_SHADOW = "dark:shadow-[0_4px_8px_rgba(0,0,0,0.5)]";
+  const isShadow = (token: string) => /(^|:)shadow(-|$)/.test(token);
+
+  // Compile the shipped stylesheet, as the dialog check does, so the classes are read as the declarations
+  // Tailwind generates for them rather than as strings jsdom never styles.
+  let globals: string;
+  let compiled: Awaited<ReturnType<typeof compile>>;
+  beforeAll(async () => {
+    const stylesheet = resolve(process.cwd(), "src/app/globals.css");
+    globals = await readFile(stylesheet, "utf8");
+    const require = createRequire(resolve(process.cwd(), "package.json"));
+    compiled = await compile(globals, {
+      base: dirname(stylesheet),
+      loadStylesheet: async (id, base) => {
+        let path: string;
+        if (id === "tw-animate-css") {
+          // This dependency exports CSS under the standard style condition.
+          const root = resolve(dirname(stylesheet), "../../node_modules", id);
+          const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+          path = resolve(root, manifest.exports["."].style);
+        } else {
+          path = id.startsWith(".") ? resolve(base, id) : require.resolve(id, { paths: [base] });
+        }
+        return { path, base: dirname(path), content: await readFile(path, "utf8") };
+      },
+    });
+  });
+
+  /** The --tw-shadow value of every compiled rule of these classes, by the palette the rule applies in. */
+  function shadowsByPalette(tokens: string[]) {
+    const css = compiled.build(tokens);
+    const found: Record<"light" | "dark", string[]> = { light: [], dark: [] };
+    for (const rule of css.matchAll(/\n {2}(\.[^\n{]+) \{\n([\s\S]*?)\n {2}\}/g)) {
+      const value = rule[2].match(/--tw-shadow:\s*([^;]+);/)?.[1];
+      if (value) found[rule[2].includes("&:is(.dark *)") ? "dark" : "light"].push(value);
+    }
+    return found;
+  }
+
+  it("carries the light and the dark shadow as its only shadow classes", () => {
+    const classes = renderTooltip().className.split(/\s+/);
+    expect(classes).toContain(LIGHT_SHADOW);
+    expect(classes).toContain(DARK_SHADOW);
+    expect(classes.filter(isShadow).sort()).toEqual([DARK_SHADOW, LIGHT_SHADOW].sort());
+  });
+
+  it("compiles to the drawn shadow in each palette and to no other shadow", () => {
+    expect(shadowsByPalette(renderTooltip().className.split(/\s+/))).toEqual({
+      light: ["0 4px 8px -2px var(--tw-shadow-color, rgba(21,33,58,0.3))"],
+      dark: ["0 4px 8px var(--tw-shadow-color, rgba(0,0,0,0.5))"],
+    });
+  });
+
+  it("takes the dark value from the dark palette's strong elevation shadow", () => {
+    const dark = globals.match(/\.dark\s*\{([^}]+)\}/)?.[1];
+    const strong = dark?.match(/--cinatra-shadow-strong:\s*([^;]+);/)?.[1];
+    expect(strong?.replace(/\s+/g, "")).toBe("0 4px 8px rgba(0,0,0,0.5)".replace(/\s+/g, ""));
+  });
+
+  it("adds no shadow to the arrow", () => {
+    renderTooltip();
+    const arrow = document.querySelector('[data-slot="tooltip-content"]')!.querySelector("svg");
+    expect((arrow?.getAttribute("class") ?? "").split(/\s+/).filter(isShadow)).toEqual([]);
   });
 });
 
