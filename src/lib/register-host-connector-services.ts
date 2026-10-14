@@ -270,7 +270,7 @@ import {
   type WordPressNativeReadInjectionSurface,
 } from "@/lib/connector-instance-native-read-injection";
 import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
-import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
 // The vendor connection/instance CLIENTS are GONE from core (cinatra#975
@@ -333,15 +333,33 @@ let _registered = false;
 const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
 
 /**
+ * A preview instance: the `preview` install profile on a production runtime,
+ * exact equality on both settings — the reading of `isPreviewInstance` in
+ * `@/lib/install-profile` (cinatra#4098). It is written out here rather than
+ * imported: this module is reached by the app's locked routes, and importing
+ * the install-profile module would add a module to each of their graphs (the
+ * route-graph ratchet). The unit cases of the dev-only writers pin its
+ * answers: a preview is admitted; production, demo and a preview profile
+ * without the production runtime are refused.
+ */
+function isPreviewInstanceEnv(env: Record<string, string | undefined>): boolean {
+  return env.CINATRA_RUNTIME_MODE === "production" && env.CINATRA_INSTALL_PROFILE === "preview";
+}
+
+/**
  * Dev-boot provisioning WRITERS (cinatra#976, epic #978 W-D) are DEV-ONLY: they
  * persist unvalidated local-dev instance rows / drive a local docker credential
  * rotate. Only the connector `dev-setup.ts` hook (invoked by the strictly
  * dev-gated `dev-auto-setup` shell) resolves them, but we defense-in-depth
  * refuse outside development so a member can never be a production affordance
  * even if resolved on another path. The persist helpers themselves ALSO enforce
- * loopback-only host-side. */
+ * loopback-only host-side.
+ *
+ * cinatra#4098: a preview instance (the `preview` install profile on a
+ * production runtime) runs the connector auto-setup too, so these members
+ * answer there as well. A production deployment is still refused. */
 function assertDevSetupHostOnly(member: string): void {
-  if (!isAppDevelopmentMode()) {
+  if (!isAppDevelopmentMode() && !isPreviewInstanceEnv(process.env)) {
     throw new Error(`${member} is a dev-only devSetup provisioning member; refused outside development.`);
   }
 }
