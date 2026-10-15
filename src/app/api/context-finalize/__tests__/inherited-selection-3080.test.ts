@@ -243,6 +243,49 @@ describe("/api/context-finalize — a repair's inherited selection", () => {
     expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
   });
 
+  it("refuses the answered refs in ANOTHER order, and writes the recorded order as recorded", async () => {
+    // The producing run answered [b, a]. The same two refs submitted as
+    // [a, b] are not that answer: the order is part of what was recorded.
+    resolveInheritedContextSelection.mockReturnValue({
+      refs: [otherRef, answeredRef],
+      selectedBy: "user",
+    });
+
+    const reordered = await POST(
+      request({ selectionMode: "autonomous", refs: [answeredRef, otherRef] }),
+    );
+    expect(reordered.status).toBe(422);
+    expect((await reordered.json()).error).toBe("inherited_selection_mismatch");
+    expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
+
+    // The answer in its recorded order is written in that order.
+    const asRecorded = await POST(
+      request({ selectionMode: "autonomous", refs: [otherRef, answeredRef] }),
+    );
+    expect(asRecorded.status).toBe(200);
+    const written = finalizeContextSelectionPinsAtomic.mock.calls[0]![0] as Array<{
+      selection: { artifactId: string };
+    }>;
+    expect(written.map((w) => w.selection.artifactId)).toEqual([
+      otherRef.artifactId,
+      answeredRef.artifactId,
+    ]);
+  });
+
+  it("refuses the answered ref submitted twice, and writes NOTHING", async () => {
+    resolveInheritedContextSelection.mockReturnValue({
+      refs: [answeredRef],
+      selectedBy: "user",
+    });
+
+    const res = await POST(
+      request({ selectionMode: "autonomous", refs: [answeredRef, answeredRef] }),
+    );
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe("inherited_selection_mismatch");
+    expect(finalizeContextSelectionPinsAtomic).not.toHaveBeenCalled();
+  });
+
   it("still refuses an ORDINARY run that merely claims the no-person mode", async () => {
     // Nothing a caller can say makes a run a repair holding a stored answer.
     resolveInheritedContextSelection.mockReturnValue(null);

@@ -6,7 +6,7 @@ import {
   parseUserResponseEnvelope,
   revalidateSelectedRefs,
   buildSelectionRows,
-  canonicalizeTriples,
+  refTripleKey,
   ContextRouteError,
 } from "@/lib/artifacts/context-route-support";
 import {
@@ -236,11 +236,14 @@ export async function POST(req: Request): Promise<Response> {
     // without this, anything able to reach the route with the repair run's
     // binding could submit ANY other member of the allocation and have it
     // written as the repair's context under the producing run's provenance.
-    // The refs are compared as canonical triples — the same identity the audit
-    // row is content-addressed by.
+    // The inherited answer is its refs AND their order as the producing run
+    // recorded them, so the comparison is POSITION BY POSITION: the submitted
+    // triples in the order submitted (each one already validated above, none
+    // deduplicated) against the recorded refs in the recorded order. A
+    // reordered, shortened, lengthened or repeated list is not that answer.
     if (inherited) {
-      const submittedKeys = canonicalizeTriples(trusted);
-      const inheritedKeys = canonicalizeTriples(inherited.refs);
+      const submittedKeys = envelope.selectedRefs.map((ref) => refTripleKey(ref));
+      const inheritedKeys = inherited.refs.map((ref) => refTripleKey(ref));
       if (
         submittedKeys.length !== inheritedKeys.length ||
         submittedKeys.some((key, i) => key !== inheritedKeys[i])
@@ -248,7 +251,7 @@ export async function POST(req: Request): Promise<Response> {
         throw new ContextRouteError(
           422,
           "inherited_selection_mismatch",
-          `submitted ${submittedKeys.length} refs != the ${inheritedKeys.length} the producing run answered`,
+          `the ${submittedKeys.length} submitted refs are not the ${inheritedKeys.length} the producing run answered, in its order`,
         );
       }
     }
