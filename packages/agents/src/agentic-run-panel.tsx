@@ -71,6 +71,8 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  buildGateContinuePayload,
+  mergeGateRendererValues,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
@@ -1042,9 +1044,16 @@ export function AgenticRunPanel({
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
   // returning pending_approval with the stale context before the graph advances.
   // Clear suppression when a different xRenderer arrives (next step's HITL).
+  // A later review task can reuse the answered task's renderer (cinatra#3650):
+  // the guard holds back only the answered task, so the next task's gate shows
+  // while a stale reading of the answered task stays hidden.
+  const showsAnotherReviewTask =
+    rawEffectiveHitlContext !== null &&
+    answeredReviewTaskId !== null &&
+    rawEffectiveHitlContext.reviewTaskId !== answeredReviewTaskId;
   const suppression = applyJustSubmittedSuppression(
     rawEffectiveHitlContext,
-    justSubmittedXRendererRef.current,
+    showsAnotherReviewTask ? null : justSubmittedXRendererRef.current,
   );
   if (suppression.clearSuppression) {
     justSubmittedXRendererRef.current = null;
@@ -1501,11 +1510,14 @@ export function AgenticRunPanel({
   // state was already fixed by the composite React `key` (cinatra#2541/#2556);
   // this is the analogous fix for the panel-level buffer.
   //
-  // The key collapses to `${xRenderer}::` for mid-run gates (no fieldName),
-  // so those keep resetting on xRenderer change alone — unchanged from today.
+  // The key also carries the review task (cinatra#3650): Continue sends the
+  // choice the renderer stored, so a refusal stored for one review task must
+  // never be sent for the next task that reuses the renderer and the field.
+  // Setup fields share one review task, so they still reset per field; a
+  // null reading computes no key and keeps the same task's buffer.
   const bufferedHitlValueKey =
     currentXRenderer !== null
-      ? `${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
+      ? `${currentReviewTaskId ?? ""}::${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
       : null;
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
@@ -1948,18 +1960,20 @@ export function AgenticRunPanel({
           // `onChange({userResponse: ...})` — see auditor / campaign /
           // email-drafts renderers). Three cases:
           //   1. setup gate => no userResponse at all;
-          //   2. non-setup, no attachments => keep whatever the renderer wrote
-          //      (or omit if it wrote none; review-task-actions falls back to
-          //      "[Approved by operator]");
+          //   2. non-setup, no attachments => keep whatever the renderer wrote;
+          //      serialize a refusal if it wrote none, otherwise the server
+          //      falls back to "[Approved by operator]";
           //   3. non-setup, attachments present => wrap the renderer's text (or
           //      the server's default text) with the envelope
           //      (applyAttachmentEnvelopeUserResponseOnly).
           // Compute payload synchronously from current state to avoid a setState read race.
-          let nextBuffered: Record<string, unknown> = {
-            ...bufferedHitlValue,
-            approved: true,
-            approvedAt: new Date().toISOString(),
-          };
+          let nextBuffered = buildGateContinuePayload(
+            effectiveHitlContext.reviewTaskId,
+            // Continue carries the stored choice; bare Approve is explicit.
+            opts?.withReject === true
+              ? { ...bufferedHitlValue, approved: true }
+              : bufferedHitlValue,
+          );
           if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
             nextBuffered = applyAttachmentEnvelopeUserResponseOnly(
               nextBuffered,
@@ -2941,7 +2955,7 @@ export function AgenticRunPanel({
                         let nextBuffered = bufferedHitlValue;
                         if (next && typeof next === "object" && !Array.isArray(next)) {
                           const newValues = next as Record<string, unknown>;
-                          nextBuffered = { ...bufferedHitlValue, ...newValues };
+                          nextBuffered = mergeGateRendererValues(effectiveHitlContext.reviewTaskId, bufferedHitlValue, newValues);
                           setBufferedHitlValue(nextBuffered); // visual update
                         }
                         // Grouped-setup forms: approve immediately on form submit so the
@@ -2950,7 +2964,7 @@ export function AgenticRunPanel({
                           await performGateSubmit({
                             reviewTaskId: effectiveHitlContext.reviewTaskId,
                             xRenderer: effectiveHitlContext.xRenderer,
-                            payload: { ...nextBuffered, approved: true, approvedAt: new Date().toISOString() },
+                            payload: buildGateContinuePayload(effectiveHitlContext.reviewTaskId, nextBuffered),
                             trackApproving: true,
                             suppressGate: true,
                             clearAttachmentsOnSuccess: false,
