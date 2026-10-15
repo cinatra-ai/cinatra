@@ -244,6 +244,11 @@ const TIMELINE_RUNNER = `<script>
   // A search field's own handlers (see PICK_SEARCH_PAGE): the page double runs the same two functions.
   var typeInSearchField = ${typeInSearchField};
   var pressSearchEntry = ${pressSearchEntry};
+  // pressKey: a roving radio group's own keys (see PRESS_KEY_PAGE); the page double runs the same function.
+  var keyInFixtureGroup = ${keyInFixtureGroup};
+  document.addEventListener("keydown", function (event) {
+    if (keyInFixtureGroup(event.target, event.key)) event.preventDefault();
+  });
   document.addEventListener("input", function (event) {
     var field = event.target;
     if (!field || !field.hasAttribute || !field.hasAttribute("data-fixture-searches")) return;
@@ -572,6 +577,46 @@ export const PRESS_PAGE = [
   '<ul aria-label="Rows"><li aria-label="First row"><button type="button">Delete</button></li><li aria-label="Second row"><button type="button">Delete</button></li></ul>',
   // More buttons than a refusal lists.
   `<div role="toolbar" aria-label="Tools">${Array.from({ length: 8 }, (_, i) => `<button type="button">Tool ${i + 1}</button>`).join(" ")}</div>`,
+].join("");
+
+/**
+ * pressKey: every key that reaches the page is counted on its body
+ * (`data-fixture-keys`); a key on a radio of a roving group
+ * (`data-fixture-roving`) moves the choice and the focus as such a group does:
+ * ArrowDown and ArrowRight to the next radio, ArrowUp and ArrowLeft to the
+ * previous one, each wrapping at the ends, Home to the first and End to the
+ * last. Answers whether it moved. The page's inline script runs it on every
+ * keydown, and page-double.mjs runs the same function on every key it presses.
+ */
+export function keyInFixtureGroup(target, key) {
+  const document = target.ownerDocument;
+  const body = document.body;
+  if (body) body.setAttribute("data-fixture-keys", String(Number(body.getAttribute("data-fixture-keys") || 0) + 1));
+  const group = target.closest ? target.closest("[data-fixture-roving]") : null;
+  if (!group || target.getAttribute("role") !== "radio") return false;
+  const radios = Array.from(group.querySelectorAll("[role='radio']"));
+  const at = radios.indexOf(target);
+  const moves = { ArrowDown: at + 1, ArrowRight: at + 1, ArrowUp: at - 1, ArrowLeft: at - 1, Home: 0, End: radios.length - 1 };
+  if (at < 0 || !Object.hasOwn(moves, key)) return false;
+  const next = radios[(moves[key] + radios.length) % radios.length];
+  for (const radio of radios) {
+    radio.setAttribute("aria-checked", String(radio === next));
+    radio.setAttribute("tabindex", radio === next ? "0" : "-1");
+  }
+  next.focus();
+  return true;
+}
+
+/** The controls the key cases press keys on: a roving radio group of three ideas, a button, a checkbox the page draws, a link. */
+export const PRESS_KEY_PAGE = [
+  '<div role="radiogroup" aria-label="Blog ideas" data-fixture-roving>',
+  '<button type="button" role="radio" aria-checked="true" tabindex="0">Idea one</button>',
+  '<button type="button" role="radio" aria-checked="false" tabindex="-1">Idea two</button>',
+  '<button type="button" role="radio" aria-checked="false" tabindex="-1">Idea three</button>',
+  "</div>",
+  '<button type="button">Show summary</button>',
+  '<button type="button" role="checkbox" aria-checked="false" data-state="unchecked" data-fixture-toggles>Keep drafts</button>',
+  '<a href="/nav/target">Target</a>',
 ].join("");
 
 /**
@@ -1168,6 +1213,7 @@ export async function startFixtureApp({ answer = 200, secure = false, hydrate, s
         "/press/start": PRESS_PAGE,
         "/press/saved": "<p>Saved.</p>",
         "/press/sections": PRESS_SECTIONS_PAGE,
+        "/press-key/start": PRESS_KEY_PAGE,
         "/pick/start": PICK_PAGE,
         "/pick/unnamed": PICK_UNNAMED_PAGE,
         "/pick/hiding": PICK_HIDING_PAGE,
@@ -1209,6 +1255,16 @@ export async function startFixtureApp({ answer = 200, secure = false, hydrate, s
       if (/^\/(window|composer|address|reload)\//.test(url.pathname)) {
         import("./fixture-app-windows.mjs").then(
           ({ serveWindowPage }) => serveWindowPage({ method: request.method, url, response, loads }),
+          () => html(500, "<!doctype html><title>Unavailable</title>"),
+        );
+        return;
+      }
+      // holdResponse and releaseResponse: the page with a short-lived state and
+      // its answers live in fixture-app-hold.mjs, so this file changes in this
+      // one place.
+      if (url.pathname.startsWith("/hold/")) {
+        import("./fixture-app-hold.mjs").then(
+          ({ serveHoldPage }) => serveHoldPage({ method: request.method, url, response, requests }),
           () => html(500, "<!doctype html><title>Unavailable</title>"),
         );
         return;

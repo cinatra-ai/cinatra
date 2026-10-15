@@ -4,11 +4,10 @@
  *
  * Two things are locked here:
  *
- *   1. BEHAVIOR-IDENTICAL: the build-known declaration catalog reproduces the
- *      pre-S1 hardcoded matrix (capabilities + model allowlists + defaults)
- *      EXACTLY, and the historical `llm-provider-policy` exports still derive
- *      the same answers from it. S1 changes the *source of truth* (imperative
- *      switch → declared data), not the answers.
+ *   1. The build-known declaration catalog preserves the capability matrix
+ *      and projects the current model allowlists and defaults. The S3 Gemini
+ *      train (#1714) advances the text/media catalog to 3.5 Flash only; the
+ *      cross-repository parity gate lives in gemini-model-train.test.ts.
  *
  *   2. FAIL-CLOSED live resolver: the effective (live) resolver = declaration ∩
  *      activated surface ∩ adapter readiness; any absent factor forces false —
@@ -35,16 +34,14 @@ import {
   type LlmProviderDeclaration,
 } from "../llm-provider-policy";
 
-// The pre-S1 hardcoded truth, transcribed verbatim from the imperative switch
-// + ALLOWED_MODEL_IDS that S1 replaced. If S1 drifts behavior, one of these
-// fails.
+// Capabilities stay at the S1 contract; model expectations include the S3 train.
 const HISTORICAL_CAPABILITY_MATRIX: Record<string, Record<string, boolean>> = {
   openai: { media_input: false, function_tools: true, native_mcp: true },
   anthropic: { media_input: false, function_tools: true, native_mcp: true },
   gemini: { media_input: true, function_tools: true, native_mcp: false },
 };
 
-const HISTORICAL_ALLOWED_MODEL_IDS: Record<string, readonly string[]> = {
+const EXPECTED_ALLOWED_MODEL_IDS: Record<string, readonly string[]> = {
   openai: [
     "gpt-5.5",
     "gpt-5.4",
@@ -62,13 +59,13 @@ const HISTORICAL_ALLOWED_MODEL_IDS: Record<string, readonly string[]> = {
     "claude-3-7-sonnet-latest",
     "claude-3-5-haiku-latest",
   ],
-  gemini: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-1.5-pro"],
+  gemini: ["gemini-3.5-flash"],
 };
 
-const HISTORICAL_DEFAULTS: Record<string, string> = {
+const EXPECTED_DEFAULTS: Record<string, string> = {
   openai: "gpt-5.5",
   anthropic: "claude-sonnet-4-6",
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3.5-flash",
 };
 
 describe("build-known declaration catalog", () => {
@@ -96,18 +93,18 @@ describe("build-known declaration catalog", () => {
     }
   });
 
-  it("reproduces the pre-S1 model allowlists + defaults EXACTLY", () => {
+  it("projects the current model allowlists and defaults, including the S3 Gemini train", () => {
     for (const provider of LLM_PROVIDERS) {
       const decl = BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS[provider];
-      expect(decl.models.allowed).toEqual(HISTORICAL_ALLOWED_MODEL_IDS[provider]);
-      expect(decl.models.default).toBe(HISTORICAL_DEFAULTS[provider]);
+      expect(decl.models.allowed).toEqual(EXPECTED_ALLOWED_MODEL_IDS[provider]);
+      expect(decl.models.default).toBe(EXPECTED_DEFAULTS[provider]);
       // The default is always a member of its own allowlist.
       expect(decl.models.allowed).toContain(decl.models.default);
     }
   });
 });
 
-describe("derived llm-provider-policy exports stay behavior-identical", () => {
+describe("derived llm-provider-policy exports agree with the current catalog", () => {
   it("canProviderSatisfyCapability matches the historical matrix", () => {
     for (const provider of LLM_PROVIDERS) {
       for (const capability of LLM_CAPABILITIES) {
@@ -118,9 +115,9 @@ describe("derived llm-provider-policy exports stay behavior-identical", () => {
     }
   });
 
-  it("ALLOWED_MODEL_IDS is derived from the catalog and unchanged", () => {
+  it("ALLOWED_MODEL_IDS is derived from the current catalog", () => {
     for (const provider of LLM_PROVIDERS) {
-      expect(ALLOWED_MODEL_IDS[provider]).toEqual(HISTORICAL_ALLOWED_MODEL_IDS[provider]);
+      expect(ALLOWED_MODEL_IDS[provider]).toEqual(EXPECTED_ALLOWED_MODEL_IDS[provider]);
     }
   });
 

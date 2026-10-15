@@ -111,9 +111,10 @@ export function __clearContextAllocationGateCache(): void {
 /**
  * Plan the WHOLE manifest for one gate and content-address the result.
  *
- * Throws whatever the OAS read or the resolver throws — the resolve route
- * treats that as "no token this time" (the landed per-slot contract is
- * unchanged without one), while the finalize route fails closed.
+ * Throws whatever the OAS read or the resolver throws. Both routes fail
+ * closed on it, each under its own stable code: resolve refuses the gate
+ * with 409 `allocation_planning_failed` (cinatra#4146), and finalize with
+ * 409 `allocation_unavailable`.
  *
  * `fresh` skips the memo and recomputes. Finalize asks with it, because a
  * finalize that replayed a cached allocation could never detect the drift the

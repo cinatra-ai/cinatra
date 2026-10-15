@@ -1872,6 +1872,7 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
     results = await runCheck({ pins, fetchManifest: fixtureFetcher(SUPERSEDED) });
     const failing = [byId(results, "app-components")];
     message = formatRedMessage(failing);
+    const pinned = pins.manifests.find((pin) => pin.id === "app-components");
 
     expect(message).toContain("app-components");
     expect(message).toContain("app-components.json");
@@ -1881,15 +1882,11 @@ describe("criterion 4 — the red message says exactly what it must, and nothing
     expect(message).toContain(
       "023c1b130dd695306bbf31c2199663fc3a4c01cb48d2f3453f6bfa9f9aba64a9",
     );
-    expect(message).toContain(
-      "f91eee6c9f3238830e2a7e11ff637b37ddfdbea44b11a5a10f893acff81d93a2",
-    );
+    expect(message).toContain(pinned.manifestSha256);
     expect(message).toContain(
       "sha256:b1ea506e3f3e5884865a524a3c01a518da7af69c20a48a68919d5164613e6d8e",
     );
-    expect(message).toContain(
-      "sha256:2be889540aced3df6ca9f1c6998b54c3d3e53a97b5f84c40ad460ac15680072c",
-    );
+    expect(message).toContain(pinned.specContentHash);
     expect(message).toContain("drift");
     expect(message).toContain(MOVE_RULE);
     expect(MOVE_RULE).toContain("hash-only re-pin");

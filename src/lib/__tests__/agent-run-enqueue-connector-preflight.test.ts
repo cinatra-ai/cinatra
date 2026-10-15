@@ -14,6 +14,8 @@ vi.mock("@/lib/connector-authority", () => ({
   requireConnectorAuthority: (...a: unknown[]) => requireConnectorAuthority(...(a as [])),
 }));
 
+const availability = vi.fn();
+vi.mock("@/lib/connection-use-gate", () => ({ hasRequiredConnectorConnectionForUse: (...args: unknown[]) => availability(...args) }));
 const enforceConnectorPolicy = vi.fn();
 vi.mock("@/lib/connector-policy", () => ({
   enforceConnectorPolicy: (...a: unknown[]) => enforceConnectorPolicy(...(a as [])),
@@ -44,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   enqueueBackgroundJob.mockResolvedValue("job-1");
   requireConnectorAuthority.mockResolvedValue({ allowed: true });
+  availability.mockResolvedValue(true);
 });
 
 describe("runConnectorPreflight — requirement carry-through (cinatra#1056)", () => {
@@ -90,6 +93,7 @@ describe("enqueueAgentRun — actor self-heal (cinatra#1056, codex D4)", () => {
     readAgentRunById.mockResolvedValue({ id: "run-1", runBy: "u1", orgId: "org1" });
     buildActorContextFromRun.mockResolvedValue(ACTOR);
     requireConnectorAuthority.mockResolvedValue({ allowed: true });
+  availability.mockResolvedValue(true);
 
     await enqueueAgentRun(
       { runId: "run-1" },
@@ -168,4 +172,9 @@ describe("enqueueAgentRun — actor self-heal (cinatra#1056, codex D4)", () => {
     expect(res.status).toBe("queued");
     expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("required usable connection guard", () => {
+ it("refuses a required connector even when platform/package authority allowed", async () => { availability.mockResolvedValue(false); await expect(runConnectorPreflight({"@vendor/connector":"*"},ACTOR,"use")).rejects.toBeInstanceOf(ConnectorNotConfiguredError); expect(availability).toHaveBeenCalledWith({packageId:"@vendor/connector",actor:ACTOR}); expect(enqueueBackgroundJob).not.toHaveBeenCalled(); });
+ it("does not query availability for optional or package-denied connectors", async () => { await runConnectorPreflight({"@vendor/optional":{range:"*",requirement:"optional"}},ACTOR,"use"); expect(availability).not.toHaveBeenCalled(); requireConnectorAuthority.mockResolvedValue({allowed:false,reason:"scope_denied"}); await expect(runConnectorPreflight({"@vendor/required":"*"},ACTOR,"use")).rejects.toBeInstanceOf(ConnectorNotConfiguredError); expect(availability).not.toHaveBeenCalled(); });
 });

@@ -138,13 +138,16 @@ describe("cinatra#2815 S3 part 3 — the allocation token across resolve and fin
     expect((body.plannedRefs as ContextCandidate[]).map((r) => r.artifactId)).toEqual(["a"]);
   });
 
-  it("resolve still serves its slot when the manifest cannot be planned — no token", async () => {
+  it("resolve refuses its gate under its own code when the manifest cannot be planned — never a 200 without the token", async () => {
+    // cinatra#4146: a 200 without the token could only end in finalize's
+    // allocation_token_required, which blames the caller for this fault.
     planAllocationForGate.mockRejectedValue(new Error("oas unreadable"));
     const res = await RESOLVE(resolveRequest());
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
     const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("allocation_planning_failed");
     expect(body.allocationToken).toBeUndefined();
-    expect(body.candidates).toBeDefined();
+    expect(body.candidates).toBeUndefined();
   });
 
   it("the allocation is IDENTICAL at resolve and finalize — the finalize proceeds", async () => {

@@ -42,13 +42,17 @@
 import { Check, ClipboardCheck } from "lucide-react";
 import {
   Fragment,
+  useEffect,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ReviewGatePlaceholder } from "./review-gate-states";
 // THE FRAME STATES THAT IT DRAWS THE RAIL (cinatra#3478) -- see the
 // declaration beside the rail vocabulary in ./run-step-rail-extra-entry.
 import {
@@ -321,10 +325,14 @@ export function RunSurfaceRailRow({
 }): ReactElement {
   const selection = useRunStepSelection();
   const selected = selection?.selected === selectionKey;
+  const releasedInput = selection?.releasedInputStep === selectionKey;
+  const effectiveReached = releasedInput ? true : reached;
+  const effectiveSelectable = selectable || releasedInput;
   // The emphasised treatment is for the row the surface is actually on. A row
   // that cannot be opened never gets it — and neither does a row its page has
   // said the run has not reached.
-  const emphasised = Boolean(selected) && selectable && reached !== false;
+  const emphasised =
+    Boolean(selected) && effectiveSelectable && effectiveReached !== false;
   // Only confirmed, successfully continued context gates get a settlement
   // word. Ordinary answered inputs keep their plain Setup/field label.
   const title = settled && selectionKey.startsWith("context:") ? `${label} · continued` : label;
@@ -335,12 +343,12 @@ export function RunSurfaceRailRow({
       data-run-surface-rail-step=""
       data-run-surface-rail-step-key={selectionKey}
       data-run-surface-rail-selected={selected ? "true" : "false"}
-      data-run-surface-rail-reached={reached === undefined ? undefined : reached ? "true" : "false"}
+      data-run-surface-rail-reached={effectiveReached === undefined ? undefined : effectiveReached ? "true" : "false"}
       // Mirrors the gate rows' own `data-…-step-settled`, so one capture reads
       // the settled circle the same way on every rail it appears in.
       data-run-surface-rail-settled={settled ? "true" : "false"}
       data-conformance-id={conformanceId}
-      data-action={action}
+      data-action={releasedInput ? "open-input-step" : action}
       aria-current={selected ? "step" : undefined}
       aria-label={displayStep !== null && !runSurfaceStepDrawsGlyph(selectionKey) ? `${displayStep} ${title}` : undefined}
       // `aria-disabled`, NOT the native `disabled`. Native `disabled` takes the
@@ -348,9 +356,9 @@ export function RunSurfaceRailRow({
       // and "its row stays on the rail, so the series is visible" is precisely
       // what cinatra#2970 keeps. `aria-disabled` leaves the row in the tab order
       // and announces it as unavailable when focus arrives on it.
-      aria-disabled={selectable ? undefined : "true"}
-      onClick={selectable ? () => selection?.select(selectionKey) : undefined}
-      className={selectable ? RUN_SURFACE_RAIL_ROW_CLASS : RUN_SURFACE_RAIL_ROW_CLOSED_CLASS}
+      aria-disabled={effectiveSelectable ? undefined : "true"}
+      onClick={effectiveSelectable ? () => selection?.select(selectionKey) : undefined}
+      className={effectiveSelectable ? RUN_SURFACE_RAIL_ROW_CLASS : RUN_SURFACE_RAIL_ROW_CLOSED_CLASS}
       {...rowAttributes}
     >
       <span
@@ -411,11 +419,90 @@ export function RunSurfaceRailSeparator(): ReactElement {
   );
 }
 
+/**
+ * DOES THE RUN'S OWN ROW NAME A STOP THE RAIL DOES NOT CARRY? (cinatra#3246.)
+ * A rail composed while the run worked carries no entry for the gate it stops
+ * at: the run's row reads `pending_approval` with its recorded moment.
+ */
+export function runRowReadsAnUncarriedStop(read: {
+  status?: string | null;
+  lifecycleMoment?: string | null;
+}): boolean {
+  return (
+    read.status === "pending_approval" &&
+    typeof read.lifecycleMoment === "string" &&
+    read.lifecycleMoment.length > 0
+  );
+}
+
+/**
+ * THE PAGE FOLLOWS THE RUN TO THE GATE IT STOPS AT (cinatra#3246), on the model
+ * of `TriggerStepWatcher`: one `GET /api/agents/runs/<id>` at a time, every two
+ * seconds, and `router.refresh()` ONCE when the row names a stop -- then it
+ * stands down, as it does on any status the run no longer works in.
+ */
+export function RunStopFollower({ runId }: { runId: string }): null {
+  const router = useRouter();
+
+  useEffect(() => {
+    // Completion belongs to this effect generation, not to a later run that
+    // reuses the component. Cleanup cancels every old response before restart.
+    let done = false;
+    let cancelled = false;
+    let inFlight = false;
+    const controller = new AbortController();
+    const intervalId = window.setInterval(() => {
+      if (done) {
+        window.clearInterval(intervalId);
+        return;
+      }
+      if (inFlight) return;
+      inFlight = true;
+      fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      })
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error("not ok"))))
+        .then((data: { status?: string | null; lifecycleMoment?: string | null }) => {
+          if (cancelled || done) return;
+          if (runRowReadsAnUncarriedStop(data)) {
+            done = true;
+            window.clearInterval(intervalId);
+            router.refresh();
+            return;
+          }
+          const stillWorking =
+            data.status === "queued" ||
+            data.status === "running" ||
+            data.status === "pending_approval";
+          if (typeof data.status === "string" && !stillWorking) {
+            done = true;
+            window.clearInterval(intervalId);
+          }
+        })
+        // A read that fails is retried on the next tick; the page never fails on it.
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
+    }, 2_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      controller.abort();
+    };
+  }, [runId, router]);
+
+  return null;
+}
+
 export function RunSurfaceRail({
   steps,
   rail = null,
   detail = null,
   initialSelection,
+  releasedSelection,
 }: {
   /** The steps heading the rail, in the order the plan puts them. */
   steps: readonly RunSurfaceRailStep[];
@@ -428,10 +515,37 @@ export function RunSurfaceRail({
    * knows whether the agent has run and whether it is paused on a gate.
    */
   initialSelection: RunStepSelection;
+  /** The step the page's own election names once the Skills question is answered (cinatra#3285). */
+  releasedSelection?: RunStepSelection;
 }): ReactElement {
   const [selected, setSelected] = useState<RunStepSelection>(() =>
     resolveRunSurfaceSelection(steps, detail, initialSelection),
   );
+  const [skillsReleased, setSkillsReleased] = useState(false);
+  // The run page keys this frame by its real run id. A decision from a frame
+  // that has left the page must not release its replacement.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  // The existing working placeholder is the released frame's fallback when
+  // the held server tree has no run detail yet. Selection reads that same
+  // fallback; it must not refuse a row the frame can already draw.
+  const releasedDetail = runSurfaceNodeExists(detail) ? detail : <ReviewGatePlaceholder />;
+  const selectionDetail = skillsReleased ? releasedDetail : detail;
+  const releasedInput = releasedSelection?.startsWith("input:")
+    ? steps.find((step) => step.key === releasedSelection)
+    : undefined;
+  // Release reaches exactly the elected owed input, and only if its real
+  // surface exists. Retain that identity when the reader revisits Skills;
+  // selecting another row must not close the input just reached.
+  const releasedInputStep = releasedInput && isRunSurfaceStepSelectable({ ...releasedInput, reached: true, selectable: true }, releasedDetail)
+    ? releasedInput.key
+    : null;
+  const effectiveSteps = skillsReleased && releasedInputStep
+    ? steps.map((step) => step.key === releasedInputStep ? { ...step, reached: true, selectable: true } : step)
+    : steps;
   // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken
   // inside a gate step calls `router.refresh()`, which re-renders the server tree
   // WITHOUT remounting this client component — so a selection kept only from the
@@ -453,9 +567,9 @@ export function RunSurfaceRail({
   const [lastInitial, setLastInitial] = useState<RunStepSelection>(initialSelection);
   if (initialSelection !== lastInitial) {
     setLastInitial(initialSelection);
-    setSelected(resolveRunSurfaceSelection(steps, detail, initialSelection));
+    setSelected(resolveRunSurfaceSelection(effectiveSteps, selectionDetail, initialSelection));
   }
-  const open = steps.find((step) => step.key === selected) ?? null;
+  const open = effectiveSteps.find((step) => step.key === selected) ?? null;
   // The rows that HEAD the rail, and the one that CLOSES it — see
   // `RunSurfaceRailStep.tail`. The selection reads `steps` whole, so splitting
   // the ROWS moves nothing about what can be opened.
@@ -476,12 +590,23 @@ export function RunSurfaceRail({
   // step that cannot be opened is dropped and the reader stays where they were,
   // which is "clicking it does nothing" written where it cannot be bypassed.
   const select = (next: RunStepSelection) => {
-    if (resolveRunSurfaceSelection(steps, detail, next) !== next) return;
+    if (resolveRunSurfaceSelection(effectiveSteps, selectionDetail, next) !== next) return;
     setSelected(next);
+  };
+  // The instant the Skills decision lands, the entry reads settled and the selection moves to the step the page elects for the released run, before the refresh does (cinatra#3285).
+  const releaseSkills = () => {
+    if (!mounted.current) return;
+    setSkillsReleased(true);
+    if (releasedSelection !== undefined) {
+      const releasedSteps = releasedInputStep
+        ? steps.map((step) => step.key === releasedInputStep ? { ...step, reached: true, selectable: true } : step)
+        : steps;
+      setSelected(resolveRunSurfaceSelection(releasedSteps, releasedDetail, releasedSelection));
+    }
   };
 
   return (
-    <RunStepSelectionProvider value={{ selected, select }}>
+    <RunStepSelectionProvider value={{ selected, select, skillsReleased, releaseSkills, releasedInputStep: skillsReleased ? releasedInputStep : null }}>
       {/* THE RAIL IS THIS FRAME'S, AND THE DETAIL IS TOLD SO (cinatra#3478).
 
           A run panel drawn inside this detail raises a live rail column of
@@ -519,10 +644,10 @@ export function RunSurfaceRail({
             inside (`RunStepRailPanel`), which is why only the join is drawn
             here. */}
         {headSteps.map((step, index) => {
+          // ONE MARK PER JOIN (cinatra#4114): the join to a closing row is
+          // drawn above that row, below, so it is never drawn here as well.
           const markBelow =
-            index < headSteps.length - 1 ||
-            runSurfaceNodeExists(rail) ||
-            tailSteps.length > 0;
+            index < headSteps.length - 1 || runSurfaceNodeExists(rail);
           return (
             <Fragment key={step.key}>
               {step.row}
@@ -566,7 +691,19 @@ export function RunSurfaceRail({
             as the step's own surface and suppresses the fallback — an openable
             row over an empty column, which is the one thing this rail must not
             produce. */}
-        {open && runSurfaceNodeExists(open.surface) ? open.surface : detail}
+        {/* Released, with nothing of its own to draw yet, the selected entry's page is the run-progress placeholder -- never the answered Skills card (cinatra#3246). */}
+        {open && runSurfaceNodeExists(open.surface) ? (
+          open.surface
+        ) : runSurfaceNodeExists(detail) || !skillsReleased ? (
+          detail
+        ) : (
+          <section
+            className="rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+            data-run-review-slot="working"
+          >
+            <ReviewGatePlaceholder />
+          </section>
+        )}
       </div>
       </RunSurfaceRailFrameProvider>
     </RunStepSelectionProvider>

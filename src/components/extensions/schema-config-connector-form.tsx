@@ -41,7 +41,6 @@ import {
   FieldLabel,
   FieldSet,
 } from "@/components/ui/field";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Empty,
   EmptyContent,
@@ -519,8 +518,8 @@ export function SchemaConfigConnectorForm({
         {declaredTabs.map((tab) =>
           tab.id === HELP_TAB_ID ? (
             // Reserved Help tab (§II): read-only setup how-to at the Narrow
-            // width — ONE card, no form, no Save. Rendered by HelpPanel
-            // (advisories become sections of a single card; input-bearing
+            // width — bare prose, no form, no Save. Rendered by HelpPanel
+            // (advisories become labeled sections; input-bearing
             // kinds are not rendered, so they never enter the submit scan).
             <TabsContent
               key={tab.id}
@@ -528,9 +527,7 @@ export function SchemaConfigConnectorForm({
               forceMount
               className="data-[state=inactive]:hidden"
             >
-              <div className="max-w-xl">
-                <HelpPanel fields={tab.fields} installId={installId} />
-              </div>
+              <HelpPanel fields={tab.fields} installId={installId} />
             </TabsContent>
           ) : (
             // Custom config tab (§II, surface `connector-config-tab`):
@@ -943,18 +940,54 @@ function DisconnectButton({
           {field.label}
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Disconnect connector?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Disconnect this connector and remove its saved configuration? It will stop working
-            until you connect it again.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+      {/* The confirmation as design/specs/app-connectors.html §II draws it
+          ("Example — disconnect · confirmation"; cinatra#3297). The shared
+          content keeps the --paper ground (bg-background) and its hairline
+          border; the drawing's own box is 16/18/15 padding, a 10px corner, a
+          400px measure and its deep shadow. The strong hairline rule stands
+          under the TITLE, between the title and the description, so title
+          and description share a plain block rather than the shared header,
+          whose etched rule would stand under the text. The buttons sit
+          right-aligned 10px apart: Cancel is the drawing's outline (the
+          surface ground under the strong hairline border, in both palettes)
+          beside the red confirm, whose border is the red at 24% and whose
+          unplug is 14px (the shared Button's own unsized-icon rule, set to
+          size-3.5, so the glyph stays the same bare one the trigger draws). */}
+      <AlertDialogContent className="max-w-[min(400px,calc(100%-2rem))] rounded-[10px] p-[16px_18px_15px] shadow-[0_24px_60px_rgba(21,33,58,0.34)] sm:max-w-[400px]">
+        <div>
+          {/* The drawing's 15px title and 13px text (cinatra#4123) are the
+              named --text-confirm-title and --text-confirm-body roles. Each
+              stands on its own plain wrapper with a plain className, never
+              cn(): the app's tailwind-merge reads an unknown text-* token as a
+              colour, so inside the shared title's or description's cn() it
+              would drop the colour or lose to the primitive's text-lg/text-sm.
+              The title and the text take the wrapper's size through
+              text-[length:inherit] (the one bracket size the lint allows),
+              which tailwind-merge does read as a size, so the primitive's
+              text-lg/text-sm give way. It stands FIRST in each list: a size
+              class displaces an EARLIER leading-* in tailwind-merge. */}
+          <div className="text-confirm-title">
+            <AlertDialogTitle className="text-[length:inherit] mb-[10px] border-b border-line-strong pb-[9px] font-display leading-normal font-extrabold text-foreground italic">
+              Disconnect connector?
+            </AlertDialogTitle>
+          </div>
+          <div className="text-confirm-body">
+            <AlertDialogDescription className="text-[length:inherit] leading-[1.55]">
+              Disconnect this connector and remove its saved configuration? It will stop working
+              until you connect it again.
+            </AlertDialogDescription>
+          </div>
+        </div>
+        <AlertDialogFooter className="flex-row justify-end gap-2.5">
+          <AlertDialogCancel
+            disabled={pending}
+            className="border-line-strong bg-surface text-foreground dark:border-line-strong dark:bg-surface"
+          >
+            Cancel
+          </AlertDialogCancel>
           <AlertDialogAction
             data-testid="connector-disconnect-confirm"
+            className="border-destructive/24 [&_svg:not([class*='size-'])]:size-3.5"
             disabled={pending}
             onClick={(e) => {
               // Keep the dialog mounted through the async action; we close it
@@ -1397,26 +1430,20 @@ function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: st
 }
 
 /**
- * The reserved Help tab's panel (design/specs/app-connectors.html §II): the
- * connector's setup how-to — read-only prose at the Narrow width, rendered as
- * ONE card ("no form, no Save"). Every advisory field becomes a titled SECTION
- * of that single card (its copy still resolved by the same readiness probe the
- * inline AdvisoryRow uses) — never its own separate card. Input-bearing field
- * kinds are NOT rendered here: the Help surface is read-only by contract, and
- * not rendering them also keeps stray inputs out of the `collectFormInputs()`
- * live-DOM scan (the panels are force-mounted).
+ * design/specs/app-connectors.html §II (design#201): schema-declared Help
+ * is bare prose at Narrow width. Each advisory keeps its label as the heading
+ * and its literal text as the paragraph. Readiness and read-only filtering are
+ * unchanged; no connector markup is parsed or executed here.
  */
 function HelpPanel({ fields, installId }: { fields: SchemaConfigField[]; installId: string }) {
   const advisories = fields.filter((f): f is AdvisoryField => f.kind === "advisory");
   if (advisories.length === 0) return null;
   return (
-    <Card data-testid="help-card" size="sm">
-      <CardContent className="flex flex-col gap-4">
-        {advisories.map((field, i) => (
-          <HelpSection key={`${field.probeActionId}-${i}`} field={field} installId={installId} />
-        ))}
-      </CardContent>
-    </Card>
+    <div data-testid="help-prose" className="flex max-w-xl flex-col gap-5">
+      {advisories.map((field, i) => (
+        <HelpSection key={`${field.probeActionId}-${i}`} field={field} installId={installId} />
+      ))}
+    </div>
   );
 }
 
@@ -1424,10 +1451,10 @@ function HelpSection({ field, installId }: { field: AdvisoryField; installId: st
   const ready = useAdvisoryReady(installId, field.probeActionId);
   return (
     <section data-testid="help-section" className="flex flex-col gap-1">
-      <h3 className="text-sm font-medium">{field.label}</h3>
-      <FieldDescription>
+      <h3 className="m-0 font-display text-sm font-semibold leading-5 text-foreground">{field.label}</h3>
+      <p className="m-0 font-sans text-sm leading-6 text-muted-foreground">
         {ready === null ? null : ready ? field.whenReady : field.whenNotReady}
-      </FieldDescription>
+      </p>
     </section>
   );
 }

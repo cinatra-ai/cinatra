@@ -29,8 +29,10 @@ const transitionRunStatus = vi.fn();
 const createAgentRunPendingInput = vi.fn();
 const createAgentRun = vi.fn();
 const enqueueAgentRun = vi.fn();
+const runConnectorPreflight = vi.fn();
 const requireAuthSession = vi.fn();
 const getActorContext = vi.fn();
+const resolveActorGrantsForUserInOrg = vi.fn();
 const verifySessionAuthority = vi.fn();
 const recordRunLifecycleMoment = vi.fn();
 
@@ -50,6 +52,7 @@ vi.mock("../store", () => ({
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
   getActorContext: (...a: unknown[]) => getActorContext(...a),
+  resolveActorGrantsForUserInOrg: (...a: unknown[]) => resolveActorGrantsForUserInOrg(...a),
 }));
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: (...a: unknown[]) => verifySessionAuthority(...a),
@@ -66,6 +69,7 @@ vi.mock("../recommendation-hold", () => ({
   readRecommendationParkForRun: vi.fn(async () => null),
 }));
 vi.mock("@/lib/agent-run-enqueue", () => ({
+  runConnectorPreflight: (...a: unknown[]) => runConnectorPreflight(...a),
   enqueueAgentRun: (...a: unknown[]) => enqueueAgentRun(...a),
   enqueueDepsForTemplate: vi.fn(() => ({})),
 }));
@@ -126,6 +130,8 @@ function noWrites() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  requireAuthSession.mockResolvedValue({user:{id:USER,role:"user"},session:{activeOrganizationId:ORG}});
+  resolveActorGrantsForUserInOrg.mockResolvedValue({orgRole:"member",teamIds:[],teamRoles:{},projectGrants:[]});
   catalog(); status("installed");
   getActorContext.mockResolvedValue({ principalType: "HumanUser", principalId: USER, organizationId: ORG, orgRole: "member", teamIds: [], projectGrants: [] });
   verifySessionAuthority.mockResolvedValue({ kind: "session" });
@@ -134,6 +140,7 @@ beforeEach(() => {
   transitionRunStatus.mockResolvedValue(undefined);
   recordRunLifecycleMoment.mockResolvedValue(undefined);
   enqueueAgentRun.mockResolvedValue(undefined);
+  runConnectorPreflight.mockResolvedValue({skippedOptional:[]});
 });
 
 describe("real install refusal creates no run (cinatra#3961)", () => {
@@ -204,5 +211,123 @@ describe("real install refusal creates no run (cinatra#3961)", () => {
     const failed = new Error("queue unavailable"); enqueueAgentRun.mockRejectedValueOnce(failed);
     await expect(createAndTriggerRunWithContext(USER, ORG, template)).rejects.toBe(failed);
     expect(transitionRunStatus).toHaveBeenNthCalledWith(2, RUN_ID, "queued", "pending_input", undefined, { kind: "session" });
+  });
+});
+
+
+describe("required connector start refusal (cinatra#4041)", () => {
+  // The reader's setup reading belongs to the page, never to this core: the
+  // refusal names the declared connector and nothing about the reader.
+  const packageId = "@cinatra-ai/apollo-connector";
+  const settingsHref = "/connectors/cinatra-ai/apollo-connector/setup";
+  function arrange(requirement: "required" | "optional" = "required") {
+    registry.catalog = { ...registry.catalog, [packageId]: { packageName: packageId, kind: "connector", version: "1.0.0", resolution: "guardedOptional", displayName: "Apollo", dependencies: [] } } as AgentCatalogView;
+    enqueueAgentRun.mockRejectedValueOnce(Object.assign(new Error("PRIVATE_BACKEND_DIAGNOSTIC"), { code: "CONNECTOR_NOT_CONFIGURED", packageId, settingsHref }));
+    return { ...template, connectorDependencies: { [packageId]: { range: "^1.0.0", requirement } } };
+  }
+  it("retains the declared identity and trusted name, and logs the refused connector", async () => {
+    const current = arrange();
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await createAndTriggerRunWithContext(USER, ORG, current);
+      expect(result).toMatchObject({ ok: false, code: "CONNECTOR_NOT_CONFIGURED", connectorConfigurationRefusal: { packageId, displayName: "Apollo" } });
+      expect(result).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: "Apollo" });
+      expect(log).toHaveBeenCalledWith("[agents] run start refused: required connector is not configured", expect.objectContaining({ connectorPackage: packageId, connectorName: "Apollo", agentPackage: PKG }));
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE_BACKEND_DIAGNOSTIC");
+      expect(createAgentRunPendingInput).toHaveBeenCalledTimes(1);
+      expect(enqueueAgentRun).toHaveBeenCalledTimes(1);
+      expect(transitionRunStatus).toHaveBeenNthCalledWith(2, RUN_ID, "queued", "pending_input", undefined, { kind: "session" });
+    } finally { log.mockRestore(); }
+  });
+  it("uses the declared package identity when no public display name exists", async () => {
+    const current = arrange();
+    registry.catalog = { ...registry.catalog, [packageId]: { ...registry.catalog![packageId], displayName: "  " } };
+    expect(await createAndTriggerRunWithContext(USER, ORG, current)).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: packageId });
+  });
+  it("does not borrow a non-connector record's name", async () => {
+    const current = arrange(); registry.catalog = { ...registry.catalog, [packageId]: { ...registry.catalog![packageId], kind: "skill", displayName: "Unrelated secret" } };
+    expect(await createAndTriggerRunWithContext(USER, ORG, current)).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: packageId });
+  });
+  it("preserves the preflight's legacy string declaration as a required edge", async () => {
+    const current = arrange();
+    expect(await createAndTriggerRunWithContext(USER, ORG, { ...current, connectorDependencies: { [packageId]: "^1.0.0" } })).toHaveProperty("connectorConfigurationRefusal", { packageId, displayName: "Apollo" });
+  });
+  it("never turns an LLM failure into a named connector or connector log", async () => {
+    enqueueAgentRun.mockRejectedValueOnce(Object.assign(new Error("Configure LLM"), { code: "LLM_PROVIDER_NOT_CONFIGURED", packageId, settingsHref: "/configuration/llm" }));
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await createAndTriggerRunWithContext(USER, ORG, template)).toEqual({ ok: false, error: "Configure LLM", code: "LLM_PROVIDER_NOT_CONFIGURED", settingsHref: "/configuration/llm" });
+      expect(log).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+  it("does not promote an optional edge into a required-connector refusal", async () => {
+    expect(await createAndTriggerRunWithContext(USER, ORG, arrange("optional"))).not.toHaveProperty("connectorConfigurationRefusal");
+  });
+  it("does not trust an undeclared thrown connector", async () => {
+    arrange();
+    expect(await createAndTriggerRunWithContext(USER, ORG, template)).not.toHaveProperty("connectorConfigurationRefusal");
+  });
+});
+
+describe("required connection checked before run creation", () => {
+ it("draws/logs the named connector and creates no run when authority allowed but usable connection missing", async () => { const connector="@cinatra-ai/apollo-connector"; const e=Object.assign(new Error("connection missing"),{code:"CONNECTOR_NOT_CONFIGURED",packageId:connector,settingsHref:"/connectors/cinatra-ai/apollo-connector/setup"}); runConnectorPreflight.mockRejectedValue(e); const configuredCatalog: Record<string, AgentCatalogRecord> = {
+    ...(registry.catalog ?? {}),
+    [connector]: { ...record(connector, [], "Apollo"), kind: "connector" },
+  };
+  registry.catalog = configuredCatalog; const warn=vi.spyOn(console,"warn").mockImplementation(()=>{}); try { const result=await createAndTriggerRunWithContext(USER,ORG,{...template,connectorDependencies:{[connector]:"*"}}); expect(result).toMatchObject({ok:false,connectorConfigurationRefusal:{packageId:connector,displayName:"Apollo"}}); expect(createAgentRunPendingInput).not.toHaveBeenCalled(); expect(createAgentRun).not.toHaveBeenCalled(); expect(enqueueAgentRun).not.toHaveBeenCalled(); expect(warn).toHaveBeenCalledWith("[agents] run start refused: required connector is not configured",expect.objectContaining({connectorName:"Apollo",connectorPackage:connector})); } finally {warn.mockRestore();} });
+ it("passes the real launching human before writes and preserves valid start", async () => { const t={...template,connectorDependencies:{"@cinatra-ai/apollo-connector":"*"}}; expect(await createAndTriggerRunWithContext(USER,ORG,t)).toMatchObject({ok:true}); expect(runConnectorPreflight).toHaveBeenCalledWith(t.connectorDependencies,expect.objectContaining({principalType:"HumanUser",principalId:USER,organizationId:ORG}),"use"); expect(runConnectorPreflight).toHaveBeenCalledBefore(createAgentRunPendingInput); });
+});
+
+it("optional-only start remains valid without inventing a new availability actor",async()=>{getActorContext.mockResolvedValue(null);const deps={"@cinatra-ai/apollo-connector":{range:"*",requirement:"optional" as const}};expect(await createAndTriggerRunWithContext(USER,ORG,{...template,connectorDependencies:deps})).toMatchObject({ok:true});expect(runConnectorPreflight).not.toHaveBeenCalled();});
+
+
+describe("verified scoped launch connector actor (cinatra#3693)", () => {
+  const launchOrg = "launch-org-B";
+  const requiredTemplate = {...template,connectorDependencies:{"@cinatra-ai/apollo-connector":"*"}};
+  function absentRunEffects() {
+    expect(createAgentRunPendingInput).not.toHaveBeenCalled();
+    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(transitionRunStatus).not.toHaveBeenCalled();
+    expect(recordRunLifecycleMoment).not.toHaveBeenCalled();
+    expect(enqueueAgentRun).not.toHaveBeenCalled();
+  }
+  it("starts a configured required connector in verified orgB while active orgA", async () => {
+    getActorContext.mockResolvedValue({principalType:"HumanUser",principalId:USER,organizationId:ORG,orgRole:"org_admin",teamIds:["team-A"],teamRoles:{"team-A":"team_admin"},projectGrants:[{projectId:"project-A",role:"owner"}]});
+    resolveActorGrantsForUserInOrg.mockResolvedValue({orgRole:"member",teamIds:["team-B"],teamRoles:{"team-B":"member"},projectGrants:[{projectId:"project-B",role:"read"}]});
+    expect(await createAndTriggerRunWithContext(USER,launchOrg,requiredTemplate)).toMatchObject({ok:true});
+    expect(verifySessionAuthority).toHaveBeenCalledWith(USER,launchOrg);
+    expect(resolveActorGrantsForUserInOrg).toHaveBeenCalledWith(USER,launchOrg);
+    expect(runConnectorPreflight).toHaveBeenCalledWith(requiredTemplate.connectorDependencies,expect.objectContaining({principalType:"HumanUser",principalId:USER,organizationId:launchOrg,platformRole:"member",orgRole:"member",teamIds:["team-B"],teamRoles:{"team-B":"member"},projectIds:["project-B"]}),"use");
+    expect(runConnectorPreflight).toHaveBeenCalledBefore(createAgentRunPendingInput);
+  });
+  it("refuses missing target membership without borrowing active-org admin", async () => {
+    getActorContext.mockResolvedValue({principalType:"HumanUser",principalId:USER,organizationId:ORG,orgRole:"org_admin"});
+    resolveActorGrantsForUserInOrg.mockResolvedValue({teamIds:[],projectGrants:[]});
+    await expect(createAndTriggerRunWithContext(USER,launchOrg,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("refuses a request human different from the verified launch user", async () => {
+    requireAuthSession.mockResolvedValue({user:{id:"another-human",role:"admin"},session:{activeOrganizationId:ORG}});
+    await expect(createAndTriggerRunWithContext(USER,ORG,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(resolveActorGrantsForUserInOrg).not.toHaveBeenCalled();expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("refuses a missing request session before connection queries or creation", async () => {
+    requireAuthSession.mockResolvedValue(null);
+    await expect(createAndTriggerRunWithContext(USER,ORG,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(resolveActorGrantsForUserInOrg).not.toHaveBeenCalled();expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("refuses unresolved target grants without a fallback org", async () => {
+    resolveActorGrantsForUserInOrg.mockRejectedValue(new Error("target grants unavailable"));
+    await expect(createAndTriggerRunWithContext(USER,ORG,requiredTemplate)).rejects.toThrow("Run-start actor could not be confirmed.");
+    expect(runConnectorPreflight).not.toHaveBeenCalled();absentRunEffects();
+  });
+  it("keeps target connection USE refusal before every run side effect", async () => {
+    runConnectorPreflight.mockRejectedValue(Object.assign(new Error("connection unavailable for reader"),{code:"CONNECTOR_NOT_CONFIGURED",packageId:"@cinatra-ai/apollo-connector",settingsHref:"/connectors/cinatra-ai/apollo-connector/setup"}));
+    const warn=vi.spyOn(console,"warn").mockImplementation(()=>{});
+    try {
+      expect(await createAndTriggerRunWithContext(USER,launchOrg,requiredTemplate)).toMatchObject({ok:false,connectorConfigurationRefusal:{packageId:"@cinatra-ai/apollo-connector"}});
+      expect(runConnectorPreflight).toHaveBeenCalledWith(requiredTemplate.connectorDependencies,expect.objectContaining({organizationId:launchOrg,orgRole:"member"}),"use");absentRunEffects();
+    } finally {warn.mockRestore();}
   });
 });

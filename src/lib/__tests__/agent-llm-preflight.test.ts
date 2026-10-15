@@ -39,7 +39,7 @@ function probeFor(...available: LlmProvider[]) {
 // media-transcript-agent's declared requirement (its OAS metadata.cinatra.llm).
 const MEDIA_TRANSCRIPT = {
   preferredProvider: "gemini",
-  preferredModel: "gemini-2.5-flash",
+  preferredModel: "gemini-3.5-flash",
   capabilityRequired: "media_input",
 } as const;
 
