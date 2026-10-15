@@ -98,6 +98,9 @@ describe("validateRedirectUri (anti open-redirect)", () => {
   });
 
   it("rejects http in production but allows http loopback in dev", () => {
+    // Blank runtime-mode keys: the build decides, whatever the shell exports.
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "");
+    vi.stubEnv("APP_RUNTIME_MODE", "");
     vi.stubEnv("NODE_ENV", "production");
     expect(
       validateRedirectUri(
@@ -205,6 +208,9 @@ describe("validateWidgetOrigin", () => {
   });
 
   it("rejects http in prod, allows http loopback in dev", () => {
+    // Blank runtime-mode keys: the build decides, whatever the shell exports.
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "");
+    vi.stubEnv("APP_RUNTIME_MODE", "");
     vi.stubEnv("NODE_ENV", "production");
     expect(validateWidgetOrigin("http://shop.example.com").ok).toBe(false);
     expect(validateWidgetOrigin("http://localhost:3000").ok).toBe(false);
