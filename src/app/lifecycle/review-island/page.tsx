@@ -347,6 +347,12 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           <StreamedReviewTarget
             prepared={stream.prepared}
             capturePair={stream.capturePair}
+            // ONE BORDER PER TARGET (cinatra#3441). A gate that pins ONE target
+            // is framed by the CARD — its header over this document inside one
+            // panel — so a border here too would be the nested body card §IV
+            // does not draw. Only a gate that still pins several frames each
+            // of its panels here, as before.
+            framed={surface.targets.length > 1}
             // The TRUSTED organization scope, from the reader this island just
             // authorized — never from the query string and never from the
             // display props. The form rung reads the pinned bytes under it.
@@ -381,17 +387,20 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
 function StreamedReviewTarget({
   prepared,
   capturePair,
+  framed,
   orgId,
 }: {
   prepared: ReviewTargetStream["prepared"];
   capturePair: ReviewTargetStream["capturePair"];
+  /** Whether this panel draws its own frame (cinatra#3441) — see the caller. */
+  framed: boolean;
   orgId: string;
 }) {
   const target = use(prepared);
   const pair = use(capturePair);
   return (
     <>
-      <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} />
+      <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} framed={framed} />
       {/* The card's idle-progress bound restarts on this: a gate that is still
           streaming panels is never painted over with a failure plate. */}
       <IslandPanelMountedSignal />

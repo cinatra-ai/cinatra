@@ -1185,6 +1185,11 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       cmsRepairsCompleted: 0,
       cmsRepairsUnresolved: 0,
       cmsRepairsUncaptured: 0,
+      // cinatra#3862 leg 1 (the completer of cinatra#3080) added the GENERIC
+      // repair-completion sub-drain right after the CMS one; same fence, same
+      // short-circuit.
+      producerRepairsCompleted: 0,
+      producerRepairsUnresolved: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

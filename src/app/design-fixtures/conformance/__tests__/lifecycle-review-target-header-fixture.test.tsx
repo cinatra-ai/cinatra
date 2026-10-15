@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
-import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 
 import { LifecycleReviewTargetHeaderFixtures } from "../lifecycle-review-target-header-fixtures";
 import {
@@ -97,7 +97,7 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
         // The meta line reads exactly what the shipped composer composes from
         // the row — owner level, visibility, MIME and the relative updated time,
         // in the drawing's order. A fixture that ever carried a finished fact
-        // instead (a platform, an address, a capitalized scope) is red here,
+        // instead (a platform, an address, a preworded scope) is red here,
         // because the product has no reading that produces one.
         const facts = reviewTargetRowFacts(seed.row, now);
         expect(facts.length, `${fixture.surfaceId} fact count`).toBe(4);
@@ -123,5 +123,25 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
     for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
       expect(fixture.headers.length, `${fixture.surfaceId} pins one target`).toBe(1);
     }
+  });
+});
+
+
+describe("the shipped header names the owner's scope by its type and its name (cinatra#3443)", () => {
+  it("renders the team's row as the drawing's Team: Growth · Private", () => {
+    const { container } = render(<LifecycleReviewTargetHeaderFixtures />);
+    let matched = 0;
+    for (const fixture of LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES) {
+      const headers = container.querySelector(`[data-surface-id="${fixture.surfaceId}"]`)!
+        .querySelectorAll('[data-conformance-id="review-target-header"]');
+      fixture.headers.forEach((seed, index) => {
+        if (seed.row.ownerLevel === "team" && seed.row.visibility === "private") {
+          matched++;
+          expect(headers[index]!.textContent).toContain("Team: Growth · Private · " + seed.row.mime);
+          expect(headers[index]!.textContent).not.toContain("Team · Private");
+        }
+      });
+    }
+    expect(matched).toBeGreaterThan(0);
   });
 });

@@ -940,18 +940,54 @@ function DisconnectButton({
           {field.label}
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Disconnect connector?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Disconnect this connector and remove its saved configuration? It will stop working
-            until you connect it again.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+      {/* The confirmation as design/specs/app-connectors.html §II draws it
+          ("Example — disconnect · confirmation"; cinatra#3297). The shared
+          content keeps the --paper ground (bg-background) and its hairline
+          border; the drawing's own box is 16/18/15 padding, a 10px corner, a
+          400px measure and its deep shadow. The strong hairline rule stands
+          under the TITLE, between the title and the description, so title
+          and description share a plain block rather than the shared header,
+          whose etched rule would stand under the text. The buttons sit
+          right-aligned 10px apart: Cancel is the drawing's outline (the
+          surface ground under the strong hairline border, in both palettes)
+          beside the red confirm, whose border is the red at 24% and whose
+          unplug is 14px (the shared Button's own unsized-icon rule, set to
+          size-3.5, so the glyph stays the same bare one the trigger draws). */}
+      <AlertDialogContent className="max-w-[min(400px,calc(100%-2rem))] rounded-[10px] p-[16px_18px_15px] shadow-[0_24px_60px_rgba(21,33,58,0.34)] sm:max-w-[400px]">
+        <div>
+          {/* The drawing's 15px title and 13px text (cinatra#4123) are the
+              named --text-confirm-title and --text-confirm-body roles. Each
+              stands on its own plain wrapper with a plain className, never
+              cn(): the app's tailwind-merge reads an unknown text-* token as a
+              colour, so inside the shared title's or description's cn() it
+              would drop the colour or lose to the primitive's text-lg/text-sm.
+              The title and the text take the wrapper's size through
+              text-[length:inherit] (the one bracket size the lint allows),
+              which tailwind-merge does read as a size, so the primitive's
+              text-lg/text-sm give way. It stands FIRST in each list: a size
+              class displaces an EARLIER leading-* in tailwind-merge. */}
+          <div className="text-confirm-title">
+            <AlertDialogTitle className="text-[length:inherit] mb-[10px] border-b border-line-strong pb-[9px] font-display leading-normal font-extrabold text-foreground italic">
+              Disconnect connector?
+            </AlertDialogTitle>
+          </div>
+          <div className="text-confirm-body">
+            <AlertDialogDescription className="text-[length:inherit] leading-[1.55]">
+              Disconnect this connector and remove its saved configuration? It will stop working
+              until you connect it again.
+            </AlertDialogDescription>
+          </div>
+        </div>
+        <AlertDialogFooter className="flex-row justify-end gap-2.5">
+          <AlertDialogCancel
+            disabled={pending}
+            className="border-line-strong bg-surface text-foreground dark:border-line-strong dark:bg-surface"
+          >
+            Cancel
+          </AlertDialogCancel>
           <AlertDialogAction
             data-testid="connector-disconnect-confirm"
+            className="border-destructive/24 [&_svg:not([class*='size-'])]:size-3.5"
             disabled={pending}
             onClick={(e) => {
               // Keep the dialog mounted through the async action; we close it

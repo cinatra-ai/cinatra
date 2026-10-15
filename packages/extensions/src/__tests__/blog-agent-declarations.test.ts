@@ -22,11 +22,13 @@ const EXT = join(__dirname, "..", "..", "..", "..", "extensions", "cinatra-ai");
 const IDEA = "@cinatra-ai/blog-idea-artifact";
 const POST = "@cinatra-ai/blog-post-artifact";
 const IMAGE = "@cinatra-ai/blog-image-artifact";
+const PICTURE = "@cinatra-ai/image-artifact";
 const LINKEDIN = "@cinatra-ai/linkedin-artifacts";
 
 const IDEA_TYPE = "@cinatra-ai/blog-idea-artifact:blog-idea";
 const POST_TYPE = "@cinatra-ai/blog-post-artifact:post";
 const IMAGE_TYPE = "@cinatra-ai/blog-image-artifact:blog-image";
+const PICTURE_TYPE = "@cinatra-ai/image-artifact:image";
 const LINKEDIN_TYPE = "@cinatra-ai/linkedin:post-draft";
 
 type Manifest = {
@@ -104,17 +106,18 @@ const TABLE: Array<{
   },
   {
     agent: "blog-pipeline-agent",
-    // A produces entry is a promise the run keeps: the pipeline files its draft
-    // and its LinkedIn post through terminal bindings today. Its ideas and its
-    // pictures go through mid-run write roads that are not built yet, so those
-    // two entries wait for them — the fleet's adoption gate refuses a declared
-    // production nothing materializes. All four EDGES stay: they say what the
-    // run touches, which is true either way.
+    // A produces entry is a promise the run keeps: the pipeline writes its draft
+    // and its LinkedIn post mid-run through the host's materialize tool, and
+    // files its featured image mid-run through the host's image tool as an
+    // image artifact. Only its ideas entry still waits for a write road — the
+    // fleet's adoption gate refuses a declared production nothing
+    // materializes. All four EDGES stay: they say what the run touches.
     produces: [
       { extension: POST, objectTypeId: POST_TYPE },
+      { extension: PICTURE, objectTypeId: PICTURE_TYPE },
       { extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE },
     ],
-    edges: [IDEA, POST, IMAGE, LINKEDIN].sort(),
+    edges: [IDEA, POST, PICTURE, LINKEDIN].sort(),
   },
 ];
 
@@ -138,15 +141,15 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     expect(total).toBe(14);
   });
 
-  it("declares five of the nine typed produces entries", () => {
-    // Nine after the prototype. Three wait for their write roads, not for their
-    // packages: the image agent's own entry and the pipeline's idea and picture
-    // entries. No road an agent can take reaches a picture today. The fourth
-    // absence is different in kind: the LinkedIn PUBLISHER's entry is RETIRED,
-    // not waiting — at its pin it writes an address onto the writer's artifact
-    // instead of producing one, so it declares no produces entry at all.
+  it("declares six of the nine typed produces entries", () => {
+    // Nine after the prototype. Two wait, not for their packages: the image
+    // agent's own entry (the pipeline files the picture through its own image
+    // step) and the pipeline's ideas entry, which waits for its write road. The
+    // third absence is different in kind: the LinkedIn PUBLISHER's entry is
+    // RETIRED, not waiting — at its pin it writes an address onto the writer's
+    // artifact instead of producing one, so it declares no produces entry at all.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
-    expect(total).toBe(5);
+    expect(total).toBe(6);
     for (const row of TABLE) {
       for (const entry of row.produces) {
         expect(entry.objectTypeId).toMatch(/^@[\w-]+\/[\w-]+:[\w-]+$/);

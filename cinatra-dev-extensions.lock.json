@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "f5a5dba5f0f409b49a8a0eb00750bce7358b0eeb"
+      "resolvedSha": "19cb2cd1f9f6b3430d0d21f14b6fffa62d893771"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -165,7 +165,7 @@
     {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
-      "resolvedSha": "ddd9c9d3a72cdeec0d7301616b3bf3ade7de47c3"
+      "resolvedSha": "a008415ac2497d528de46dfb41a3ba300ea6ca5b"
     },
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
@@ -255,7 +255,7 @@
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
       "repo": "cinatra-ai/google-oauth-connector",
-      "resolvedSha": "f631752b491ac0f31ee48f126b2647e07e6f59af"
+      "resolvedSha": "eebe77650ddf1d53cf0bb734ce7c9d7a96041ba7"
     },
     {
       "packageName": "@cinatra-ai/linkedin-artifacts",
@@ -335,7 +335,7 @@
     {
       "packageName": "@cinatra-ai/plane-connector",
       "repo": "cinatra-ai/plane-connector",
-      "resolvedSha": "42ca4f3bd9e50f7082cee2eb66070d86fb378383"
+      "resolvedSha": "652498fb4535e3b20e633e421c5a6266ec24ff7e"
     },
     {
       "packageName": "@cinatra-ai/podcast-artifacts",
@@ -400,7 +400,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "4c6f4098513e46e482638320dfb318ef412adcea"
+      "resolvedSha": "a7bfa1499a6709bed831599083b13b06fa7b3166"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",
@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "bfff1b329be2e7ffe6b0229f1f0d2653021e6c3b"
+      "resolvedSha": "881883e7824311f1e4f1d5a000d251b5bad73c36"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
