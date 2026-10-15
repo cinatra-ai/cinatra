@@ -520,6 +520,8 @@ export {
   isScriptedLlmRuntime,
   SCRIPTED_TEST_MODEL,
   type ScriptedLlmRuntime,
+  resolveScriptedImageProvider,
+  type ScriptedImageProvider,
 } from "./scripted-test-provider";
 
 // Fail-closed gate for LLM entry points.
