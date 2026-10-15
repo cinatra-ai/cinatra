@@ -7,6 +7,7 @@ import {
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
+  type LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
@@ -186,6 +187,60 @@ function mintIslandSrcForWidget(
   });
 }
 
+/**
+ * Mint ONE island address PER PINNED TARGET for a WIDGET reader whose card
+ * draws the gate as pairs (cinatra#4129): a pending or restricted gate whose
+ * answer carries more than one target header.
+ *
+ * WHY ONE PER TARGET. The card draws each pinned target's header directly above
+ * its own island frame, on every host alike, and each frame names the one
+ * pinned revision it draws. A credentialed address is worth exactly ONE paint,
+ * so a single address cannot serve two frames: the second would present a spent
+ * grant and draw nothing. Each target therefore gets its own call of the same,
+ * unchanged minter — its own credential and its own grant — and its address
+ * names that target's revision. The credential still authorizes the gate and
+ * nothing more; the target is the frame's selector, and the island draws only a
+ * revision the gate pins.
+ *
+ * A FAILED MINT IS `null` for that target only. The card draws that target's
+ * preview-failed state under its own header and frames nothing there; it never
+ * hands one target's address to another.
+ */
+function mintIslandSrcByRevisionForWidget(
+  branch: WidgetBranch,
+  ref: string,
+  headers: readonly LifecycleTargetHeader[],
+): Record<string, string | null> {
+  const gate = decodeLifecycleGateRef(ref);
+  const byRevision = new Map<string, string | null>();
+  for (const header of headers) {
+    // One address per pinned revision: a revision already addressed is never
+    // minted twice, so no address is handed out that no frame takes.
+    if (byRevision.has(header.revisionId)) continue;
+    const minted = gate
+      ? mintWidgetReviewIslandUrl({
+          claims: branch.claims,
+          ref,
+          runId: gate.runId,
+          reviewTaskId: gate.reviewTaskId,
+        })
+      : null;
+    byRevision.set(
+      header.revisionId,
+      minted === null ? null : withIslandTarget(minted, header.revisionId),
+    );
+  }
+  return Object.fromEntries(byRevision);
+}
+
+/** The minted island address with the ONE pinned target it frames added. */
+function withIslandTarget(src: string, revisionId: string): string {
+  const query = src.indexOf("?");
+  const params = new URLSearchParams(query < 0 ? "" : src.slice(query + 1));
+  params.set("target", revisionId);
+  return `${query < 0 ? src : src.slice(0, query)}?${params.toString()}`;
+}
+
 export async function POST(request: Request): Promise<Response> {
   // A presented widget user token SELECTS the widget branch and there is no
   // session fallback behind it: this endpoint is same-origin to the embed
@@ -345,9 +400,29 @@ export async function POST(request: Request): Promise<Response> {
   // only on the widget arm. A first-party answer omits the key entirely, so the
   // three cookie hosts receive the byte-identical response they received
   // before this slice and keep composing their own island URL.
-  const islandSrc = widgetBranch
-    ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
-    : null;
+  //
+  // ONE ADDRESS PER PINNED TARGET WHERE THE CARD PAIRS (cinatra#4129). A
+  // pending or restricted gate with more than one target header is drawn as
+  // pairs on every host — each target's header directly above its own frame —
+  // and one grant paints one document, so each pinned target gets its own
+  // address, minted by the same minter. A failed mint is `null` for that target
+  // and the card refuses that pair alone. No gate-wide address is minted beside
+  // them: a bearer that no frame takes is a bearer for free. Every other answer
+  // keeps the single address, or none.
+  const pairsTargets =
+    widgetBranch !== null &&
+    parsed.data.viewType === "artifact_review_gate" &&
+    (withOutcome.state === "pending" || withOutcome.state === "restricted") &&
+    targetHeaders !== null &&
+    targetHeaders.length > 1;
+  const islandSrcByRevision =
+    pairsTargets && widgetBranch !== null && targetHeaders !== null
+      ? mintIslandSrcByRevisionForWidget(widgetBranch, parsed.data.ref, targetHeaders)
+      : null;
+  const islandSrc =
+    widgetBranch && !pairsTargets
+      ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
+      : null;
 
   return Response.json(
     {
@@ -355,6 +430,7 @@ export async function POST(request: Request): Promise<Response> {
       state: withOutcome,
       body: envelope.body,
       ...(islandSrc ? { islandSrc } : {}),
+      ...(islandSrcByRevision ? { islandSrcByRevision } : {}),
       ...(targetHeaders ? { targetHeaders } : {}),
       ...(recordedPrompt === null ? {} : { recordedPrompt }),
     },
