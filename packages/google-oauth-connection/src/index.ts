@@ -661,3 +661,15 @@ export async function googleApiFetch<T>(input: {
   return payload;
 }
 
+
+export async function readGoogleOAuthConfigurationPresenceForPreflight(): Promise<{state:"present"|"absent"|"unknown"}> {
+  const { readConnectorConfigurationForPreflight } = await import("@/lib/database-metadata");
+  const { readNangoOAuthClientConfigurationPresenceForPreflight } = await import("@/lib/nango-system");
+  const remote = await readNangoOAuthClientConfigurationPresenceForPreflight();
+  if (remote.state === "present") return remote;
+  try {
+    const local = await readConnectorConfigurationForPreflight("google_oauth");
+    if (typeof local?.clientId === "string" && local.clientId.trim() && typeof local?.clientSecret === "string" && local.clientSecret.trim()) return {state:"present"};
+    return remote;
+  } catch { return {state:"unknown"}; }
+}

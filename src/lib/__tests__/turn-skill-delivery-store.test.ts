@@ -17,7 +17,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/lib/db/pooled", () => ({
+vi.mock("@/lib/db/pooled", async () => ({
+  ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
   getPooledDb: () => {
     throw new Error("the pooled DB must not be touched — these cases inject a query fn");
   },

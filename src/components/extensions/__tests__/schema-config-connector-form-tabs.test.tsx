@@ -11,7 +11,7 @@
 //    `surface.description` are dropped — the page chrome owns them);
 //  - a role-less named action renders as its button ONLY (no FieldLabel
 //    echoing the identical text);
-//  - the reserved Help tab is read-only: advisories merge into ONE card and
+//  - the reserved Help tab is read-only: advisories form bare labeled prose and
 //    input-bearing kinds are NOT rendered (they also never enter the
 //    `collectFormInputs()` live-DOM scan);
 //  - every OTHER panel stays force-mounted so `collectFormInputs()` still sees
@@ -166,19 +166,69 @@ describe("SchemaConfigConnectorForm — tabbed surface", () => {
     expect(shellInput.closest(".max-w-xl")).toBeTruthy();
   });
 
-  it("renders the Help tab as ONE card of read-only sections (advisories merged, inputs dropped)", async () => {
+  it("renders §II design201 Help as bare read-only labeled prose (inputs dropped)", async () => {
     await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf(tabbedRaw) });
-    const cards = container.querySelectorAll('[data-testid="help-card"]');
-    expect(cards).toHaveLength(1);
-    const sections = cards[0].querySelectorAll('[data-testid="help-section"]');
+    const prose = container.querySelector('[data-testid="help-prose"]')!;
+    expect(prose).toBeTruthy();
+    expect(container.querySelector('[data-testid="help-card"]')).toBeNull();
+    expect(prose.closest('[data-slot="card"]')).toBeNull();
+    expect(prose.querySelector('[data-slot="card-content"], [data-testid="schema-config-advisory"]')).toBeNull();
+    const sections = prose.querySelectorAll('[data-testid="help-section"]');
     expect(sections).toHaveLength(2);
-    expect(sections[0].textContent).toContain("Connect Acme");
-    expect(sections[1].textContent).toContain("About uploads");
-    // The advisories do NOT render as separate Alert cards on the Help tab.
-    expect(cards[0].querySelector('[data-testid="schema-config-advisory"]')).toBeNull();
-    // Input-bearing kinds are NOT rendered on the read-only Help tab — so they
-    // are also invisible to the collectFormInputs() live-DOM scan.
+    expect([...sections].map((s) => s.querySelector("h3")?.textContent)).toEqual(["Connect Acme", "About uploads"]);
+    expect([...sections].map((s) => s.querySelector("p")?.textContent?.trim())).toEqual([
+      "Create a key and paste it on the Setup tab.", "Uploads are retained by the vendor.",
+    ]);
+    expect(prose.querySelector('input, select, textarea, button, [role="switch"], form')).toBeNull();
     expect(container.querySelector('input[name="helpNote"]')).toBeNull();
+  });
+
+  it("pins §II design201 Narrow/section/type contracts while Sharing remains separate", async () => {
+    await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf(tabbedRaw), sharingTab: <div data-testid="shared-content">Shared</div> });
+    const prose = container.querySelector('[data-testid="help-prose"]')!;
+    expect(prose.classList.contains("max-w-xl")).toBe(true); // Narrow 576px; browser pin below.
+    expect(prose.classList.contains("gap-5")).toBe(true); // 20px between sections.
+    expect(prose.closest('[data-slot="tabs"]')?.classList.contains("gap-6")).toBe(true); // 24px below the tab row.
+    for (const section of prose.querySelectorAll('[data-testid="help-section"]')) {
+      expect(section.classList.contains("gap-1")).toBe(true); // heading-over-paragraph 4px.
+      const heading = section.querySelector("h3")!;
+      expect(heading.className).toContain("font-display"); // Archivo: drawing --font-sans, app --font-display.
+      expect(heading.className).toContain("font-semibold");
+      expect(heading.className).toContain("leading-5");
+      expect(section.querySelector("p")?.className).toContain("leading-6");
+    }
+    expect(prose.querySelector('[data-testid="shared-content"]')).toBeNull();
+    expect(container.querySelector('[data-testid="shared-content"]')?.closest('[role="tabpanel"]')).not.toBe(prose.closest('[role="tabpanel"]'));
+  });
+
+  it.each([["ready", true], ["not ready", false], ["failed", null]] as const)("preserves the literal Help text selection when the probe is %s", async (_name, ready) => {
+    const copy = { whenReady: "Ready: use the Setup tab.", whenNotReady: "Not ready: connect first." };
+    vi.stubGlobal("fetch", vi.fn(async () => ready === null
+      ? new Response("unavailable", { status: 503 })
+      : new Response(JSON.stringify({ result: { ready } }), { status: 200 })));
+    await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf({ fields: [{ kind: "text", key: "setupNote", label: "Setup note" }], tabs: [{ id: "help", label: "Help", fields: [{ kind: "advisory", label: "Next step", tone: "info", probeActionId: "helpReady", ...copy }] }] }) });
+    const section = container.querySelector('[data-testid="help-section"]')!;
+    expect(section.querySelector("h3")?.textContent).toBe("Next step");
+    expect(section.querySelector("p")?.textContent?.trim()).toBe(ready === true ? copy.whenReady : copy.whenNotReady);
+  });
+
+  it("keeps the Help heading while the existing readiness probe is pending", async () => {
+    let answer!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf({ fields: [{ kind: "text", key: "setupNote", label: "Setup note" }], tabs: [{ id: "help", label: "Help", fields: [{ kind: "advisory", label: "Next step", tone: "info", probeActionId: "helpReady", whenReady: "Ready", whenNotReady: "Not ready" }] }] }) });
+    const section = container.querySelector('[data-testid="help-section"]')!;
+    expect(section.querySelector("h3")?.textContent).toBe("Next step");
+    expect(section.querySelector("p")?.textContent?.trim()).toBe("");
+    await act(async () => { answer(new Response(JSON.stringify({ result: { ready: true } }), { status: 200 })); });
+    expect(section.querySelector("p")?.textContent?.trim()).toBe("Ready");
+  });
+
+  it("treats markup-looking connector Help as literal text, without links or executable nodes", async () => {
+    const text = '<img src=x onerror="alert(1)"> [Console](javascript:alert(1)) - a literal step';
+    await renderForm({ installId: "i1", packageName: "@x/y", surface: surfaceOf({ fields: [{ kind: "text", key: "setupNote", label: "Setup note" }], tabs: [{ id: "help", label: "Help", fields: [{ kind: "advisory", label: "Literal content", tone: "info", probeActionId: "helpReady", whenReady: text, whenNotReady: text }] }] }) });
+    const prose = container.querySelector('[data-testid="help-prose"]')!;
+    expect(prose.querySelector("p")?.textContent?.trim()).toBe(text);
+    expect(prose.querySelector("a, img, script, iframe, ul, ol")).toBeNull();
   });
 
   it("force-mounts the non-Help panels so inactive-tab inputs stay collectable", async () => {
