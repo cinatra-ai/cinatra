@@ -180,6 +180,8 @@ import {
   type LifecycleCardFrame,
   type LifecycleColorScheme,
 } from "./lifecycle-card-runtime";
+// The request-time credential check of a lifecycle request (#3051).
+import { lifecycleRequestCredential } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
 import {
   ReviewGateBlocked,
@@ -745,13 +747,23 @@ export function ReviewGateCard({
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
+        // A broker declaration with no widget user token now sends nothing,
+        // and the refusal reads as any other (#3051).
+        const credential = lifecycleRequestCredential(auth);
+        if (credential === null) {
+          return {
+            kind: "not-permitted",
+            message:
+              "This decision could not be recorded on this surface. Open the review to continue.",
+          };
+        }
         const response = await fetch(LIFECYCLE_VIEW_DECIDE_PATH, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(auth?.headers() ?? {}),
+            ...credential.headers,
           },
-          credentials: auth?.credentials ?? "same-origin",
+          credentials: credential.credentials,
           body: JSON.stringify({
             ref: view.ref,
             disposition: input.disposition,

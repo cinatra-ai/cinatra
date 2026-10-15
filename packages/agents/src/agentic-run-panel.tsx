@@ -46,6 +46,7 @@ import {
   LifecycleCardSurfaceProvider,
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
+  lifecycleRequestCredential,
   parseRunReviewSlot,
   useComposerFocusStore,
   useComposerTarget,
@@ -685,7 +686,13 @@ export function AgenticRunPanel({
   // fields; retiring it — and the second model with it — belongs to #2934,
   // which ships the fill mechanism that replaces it. Removing it here would
   // take the fill away before its replacement exists.
-  const runWindow = useRunWindowConversation({ runId, surface: "run-page" });
+  //
+  // THE RUN WINDOW IS COOKIE-BOUND (#3051): its history and its turns are server
+  // actions that answer for the first-party session. A broker host (the site
+  // widget) and a refused declaration therefore name no run to it, here or to
+  // the review card below, so no run-window read or turn leaves such a host.
+  const runWindowRunId = ambientLifecycleAuth === null && !ambientDeclarationRefused ? runId : null;
+  const runWindow = useRunWindowConversation({ runId: runWindowRunId, surface: "run-page" });
   const convIdRef = useRef(0);
   // Parent-side apply handler — merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
@@ -936,12 +943,19 @@ export function AgenticRunPanel({
   const reviewSlotReader = useCallback<RunReviewSlotReader>(
     async (signal) => {
       if (ambientDeclarationRefused) return null;
+      // A broker declaration with no widget user token now reads nothing,
+      // through a supplied reader or the default one.
+      const broker =
+        ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
+          ? lifecycleRequestCredential(ambientLifecycleAuth)
+          : undefined;
+      if (broker === null) return null;
       if (readReviewSlot) return readReviewSlot(signal);
-      if (ambientLifecycleHost === "site_widget" && ambientLifecycleAuth) {
+      if (broker) {
         const response = await fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
           cache: "no-store",
-          headers: ambientLifecycleAuth.headers(),
-          credentials: ambientLifecycleAuth.credentials,
+          headers: broker.headers,
+          credentials: broker.credentials,
           signal,
         });
         if (!response.ok) return null;
@@ -1643,10 +1657,16 @@ export function AgenticRunPanel({
         }
       } else {
         // Fallback path for runs with no a2a_task_id.
+        const broker =
+          ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
+            ? lifecycleRequestCredential(ambientLifecycleAuth)
+            : undefined;
+        // No widget user token now: no tokenless poll.
+        if (broker === null) return;
         const response = await fetch(
           `/api/agents/runs/${encodeURIComponent(runId)}`,
-          ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
-            ? { cache: "no-store", headers: ambientLifecycleAuth.headers(), credentials: ambientLifecycleAuth.credentials }
+          broker
+            ? { cache: "no-store", headers: broker.headers, credentials: broker.credentials }
             : { cache: "no-store" },
         );
         if (!response.ok) {
@@ -2552,8 +2572,10 @@ export function AgenticRunPanel({
           ref: reviewRefInTheBox,
         }}
         // §VI — the gate's conversational prompt window keeps its exchange with
-        // the RUN (cinatra#3141 item 1).
-        runId={runId}
+        // the RUN (cinatra#3141 item 1). On a broker host the run is not named
+        // (`runWindowRunId`), so the card mounts neither the prompt window nor
+        // the settled exchange there: both are cookie-bound (#3051).
+        runId={runWindowRunId}
       />
     ) : (
       <LifecycleCardSurfaceProvider host="run_card">

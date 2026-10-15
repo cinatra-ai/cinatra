@@ -4,11 +4,12 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { LifecycleCardSurfaceProvider, type LifecycleCardAuth } from "../lifecycle-card-runtime";
+import { LifecycleCardSurfaceProvider, lifecycleRequestCredential, type LifecycleCardAuth } from "../lifecycle-card-runtime";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgenticRunPanel } from "../agentic-run-panel";
 import { getAgentBuilderTask } from "../a2a-actions";
+import { loadRunWindowConversation, sendRunWindowTurn } from "../run-window-actions";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -316,5 +317,130 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     await waitFor(() => expect(lifecycleCalls(port).some(([url]) => String(url).endsWith("/decide"))).toBe(true));
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe(host);
     for (const [, init] of lifecycleCalls(port)) { expect(init?.credentials).toBe("same-origin"); expect(init?.headers).not.toHaveProperty("X-Cinatra-Widget-User-Token"); }
+  });
+});
+
+// The run window's history and turns are cookie-bound server actions. A broker
+// host names no run to them, so none of them is called and neither the prompt
+// window nor the settled exchange is drawn there. A cookie host keeps both.
+describe("#3051 — a broker host mounts no cookie-bound run window", () => {
+  const WINDOW = '[data-conformance-id="review-prompt-window"]';
+  const EXCHANGE = "[data-review-settled-exchange]";
+  const SETTLED = '[data-conformance-id="review-gate-settled"]';
+  const changesRequested = { state: "settled", outcome: "changes_requested" };
+  beforeEach(() => {
+    vi.mocked(loadRunWindowConversation).mockResolvedValue([
+      { id: 1, role: "user", content: "Make it shorter." },
+      { id: 2, role: "assistant", content: "Shortened." },
+    ]);
+  });
+  async function settle() { await act(async () => { await new Promise((done) => setTimeout(done, 50)); }); }
+  function expectNoRunWindowAction() {
+    expect(loadRunWindowConversation).not.toHaveBeenCalled();
+    expect(sendRunWindowTurn).not.toHaveBeenCalled();
+  }
+
+  it("a widget pending review draws no prompt window and reads no run-window history", async () => {
+    const port = service();
+    const { container } = render(widget(<AgenticRunPanel {...props()} />));
+    await screen.findByRole("button", { name: "Approve" }); await settle();
+    expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+    expect(container.querySelector(WINDOW)).toBeNull();
+    expectNoRunWindowAction(); assertBrokerCalls(port);
+  });
+
+  it("a widget review settled as changes requested draws no settled exchange", async () => {
+    const port = service({ initialState: changesRequested as typeof settled });
+    const { container } = render(widget(<AgenticRunPanel {...props()} />));
+    await waitFor(() => expect(container.querySelector(SETTLED)).not.toBeNull()); await settle();
+    expect(container.querySelector(EXCHANGE)).toBeNull();
+    expectNoRunWindowAction(); assertBrokerCalls(port);
+  });
+
+  it("the marked widget review draws no prompt window either", async () => {
+    const port = service();
+    const { container } = render(widget(<AgenticRunPanel {...props()} initialStatus="pending_approval" initialHitlContext={{ xRenderer: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, childRunId: null, reviewTaskId: "review-task-3051", inputSchema: { type: "object" }, currentValues: { lifecycleCardRef: "marked-ref-3051" } }} />));
+    await screen.findByRole("button", { name: "Approve" }); await settle();
+    expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
+    expect(container.querySelector(WINDOW)).toBeNull();
+    expectNoRunWindowAction(); assertBrokerCalls(port);
+  });
+
+  it("a standalone run_card review keeps its prompt window on the run's exchange", async () => {
+    service();
+    const { container } = render(<AgenticRunPanel {...props()} />);
+    await screen.findByRole("button", { name: "Approve" });
+    await waitFor(() => expect(container.querySelector(WINDOW)).not.toBeNull());
+    expect(loadRunWindowConversation).toHaveBeenCalledWith(RUN);
+  });
+
+  it("a run_card review settled as changes requested keeps its settled exchange", async () => {
+    service({ initialState: changesRequested as typeof settled });
+    const { container } = render(<AgenticRunPanel {...props()} />);
+    await waitFor(() => expect(container.querySelector(EXCHANGE)).not.toBeNull());
+    expect(loadRunWindowConversation).toHaveBeenCalledWith(RUN);
+  });
+
+  it("a chat_thread review still draws no prompt window inside the conversation", async () => {
+    service();
+    const { container } = render(<LifecycleCardSurfaceProvider host="chat_thread"><AgenticRunPanel {...props()} /></LifecycleCardSurfaceProvider>);
+    await screen.findByRole("button", { name: "Approve" }); await settle();
+    expect(container.querySelector(WINDOW)).toBeNull();
+    expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+});
+
+// A broker declaration is valid while its tokens come and go, so each lifecycle
+// request checks for a widget user token when it is sent, and sends nothing
+// without one.
+describe("#3051 — a broker declaration without a widget user token sends nothing", () => {
+  const TOKENLESS: Array<[string, Record<string, string>]> = [
+    ["no headers", {}],
+    ["a blank token", { "X-Cinatra-Widget-User-Token": "  " }],
+    ["a transport token only", { Authorization: "Bearer unit-transport-3051" }],
+  ];
+  function tokenless(headers: Record<string, string>): LifecycleCardAuth {
+    return { headers: () => headers, credentials: "omit" };
+  }
+  function runReads(port: ReturnType<typeof service>) {
+    return port.mock.calls.filter(([url]) => String(url).includes(`/runs/${RUN}`));
+  }
+
+  it.each(TOKENLESS)("%s: no slot read, resolve or decide, and no card", async (_name, headers) => {
+    vi.useFakeTimers();
+    const port = service();
+    const { container } = render(widget(<AgenticRunPanel {...props()} initialReviewGate={{ ref: null, awaiting: true }} />, tokenless(headers)));
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(runReads(port)).toHaveLength(0);
+    expect(lifecycleCalls(port)).toHaveLength(0);
+    expect(container.querySelector(CARD)).toBeNull();
+  });
+
+  it.each(TOKENLESS)("%s: a seeded review ref issues no resolve", async (_name, headers) => {
+    const port = service();
+    const { container } = render(widget(<AgenticRunPanel {...props()} />, tokenless(headers)));
+    await act(async () => { await new Promise((done) => setTimeout(done, 50)); });
+    expect(lifecycleCalls(port)).toHaveLength(0);
+    expect(container.querySelector(CARD)).toBeNull();
+  });
+
+  it("a token lost after the resolve sends no decision", async () => {
+    let token = "unit-broker-3051";
+    const port = service();
+    const live: LifecycleCardAuth = { headers: (): Record<string, string> => (token ? { "X-Cinatra-Widget-User-Token": token } : {}), credentials: "omit" };
+    const { container } = render(widget(<AgenticRunPanel {...props()} />, live));
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    token = "";
+    fireEvent.click(approve);
+    await waitFor(() => expect(container.querySelector('[data-review-outcome="not-permitted"]')).not.toBeNull());
+    expect(lifecycleCalls(port).some(([url]) => String(url).endsWith("/decide"))).toBe(false);
+  });
+
+  it("the request-time check passes a cookie host and a tokened broker, and refuses a tokenless one", () => {
+    expect(lifecycleRequestCredential(null)).toEqual({ headers: {}, credentials: "same-origin" });
+    expect(lifecycleRequestCredential(AUTH)).toEqual({ headers: AUTH.headers(), credentials: "omit" });
+    expect(lifecycleRequestCredential({ headers: () => ({ "x-cinatra-widget-user-token": "t" }), credentials: "omit" }))
+      .toEqual({ headers: { "x-cinatra-widget-user-token": "t" }, credentials: "omit" });
+    for (const [, headers] of TOKENLESS) expect(lifecycleRequestCredential(tokenless(headers))).toBeNull();
   });
 });

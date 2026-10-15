@@ -53,9 +53,10 @@ const HOSTS: LifecycleCardHost[] = [
   "site_widget",
 ];
 
-/** A non-cookie host must declare a credential, or the provider refuses it. */
+/** A non-cookie host must declare a credential, or the provider refuses it; a
+ *  request is sent only while it carries the widget user token (#3051). */
 const WIDGET_AUTH = {
-  headers: () => ({ Authorization: "Bearer cit_site" }),
+  headers: () => ({ Authorization: "Bearer cit_site", "X-Cinatra-Widget-User-Token": "cwu_user" }),
   credentials: "omit" as const,
 };
 
