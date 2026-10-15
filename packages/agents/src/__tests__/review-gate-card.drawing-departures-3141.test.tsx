@@ -27,7 +27,7 @@
 // Both are proven on the CARD, which is the one renderer every surface mounts.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -1139,5 +1139,223 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     await waitFor(() => expect(headers(container)).toHaveLength(2));
     expect(pairs(container)).toHaveLength(0);
     expect(container.querySelectorAll("iframe")).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // A GATE SETTLED ON THIS CARD. A decision taken here settles the card before
+  // the settled answer arrives, and the settled reading draws the gate as ONE
+  // island. The widget's held set addresses each pinned target on its own and
+  // carries no address for the gate, so that island frames nothing - and never
+  // the cookie address - until the settled answer's own grant is adopted. A gate
+  // with one target, and every cookie host, settle exactly as before.
+  // -------------------------------------------------------------------------
+
+  const SETTLED: LifecycleCardState = { state: "settled", outcome: "approved" };
+  const respond = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  /** The gate-wide address the route mints for a widget reader of one island. */
+  const servedForGate = (credential: string) =>
+    `${REVIEW_TARGET_ISLAND_PATH}?${new URLSearchParams({ ref: VIEW.ref, ic: credential }).toString()}`;
+  const pairedMap = () => ({
+    [HEADER_ONE.revisionId]: servedFor(HEADER_ONE.revisionId, "ic-one"),
+    [HEADER_TWO.revisionId]: servedFor(HEADER_TWO.revisionId, "ic-two"),
+  });
+  const settledAnswer = (extra: Record<string, unknown>) =>
+    respond({ kind: "artifact_review_gate", state: SETTLED, body: null, ...extra });
+
+  /** The first resolve answers `first`; every later one is `later()`; the
+   *  decision itself lands as a committed approve. */
+  function mockDecision(first: Record<string, unknown>, later: () => Promise<Response>) {
+    let resolves = 0;
+    globalThis.fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      if (String(input).endsWith("/decide") && init?.method === "POST") {
+        return respond({ outcome: { kind: "decided", disposition: "approve", idempotent: false } });
+      }
+      resolves += 1;
+      return resolves === 1
+        ? respond({ kind: "artifact_review_gate", state: PENDING, body: null, ...first })
+        : later();
+    }) as unknown as typeof fetch;
+    return { resolves: () => resolves };
+  }
+
+  /** Every address a frame inside `root` is handed from now on, read from the
+   *  mutation records themselves, so a frame mounted and dropped again between
+   *  two reads is counted too. */
+  function watchFrameAddresses(root: HTMLElement) {
+    const seen: string[] = [];
+    const note = (node: Node) => {
+      if (!(node instanceof Element)) return;
+      const frames = node.tagName === "IFRAME" ? [node] : [...node.querySelectorAll("iframe")];
+      for (const frame of frames) seen.push(frame.getAttribute("src") ?? "");
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "attributes") note(record.target);
+        for (const added of record.addedNodes) note(added);
+      }
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ["src"], subtree: true, childList: true });
+    return {
+      seen,
+      stop: () => {
+        for (const record of observer.takeRecords()) {
+          if (record.type === "attributes") note(record.target);
+          for (const added of record.addedNodes) note(added);
+        }
+        observer.disconnect();
+      },
+    };
+  }
+
+  const settledMarker = (root: ParentNode) =>
+    root.querySelector('[data-conformance-id="review-gate-settled"]');
+
+  it("a widget gate that pins several, settled here, frames nothing until the settled answer's own grant", async () => {
+    let answer!: (response: Response) => void;
+    const pendingAnswer = new Promise<Response>((done) => {
+      answer = done;
+    });
+    const { resolves } = mockDecision(
+      { targetHeaders: [HEADER_ONE, HEADER_TWO], islandSrcByRevision: pairedMap() },
+      () => pendingAnswer,
+    );
+    const { container } = renderOn("site_widget");
+    await waitFor(() => expect(pairs(container)).toHaveLength(2));
+    const addresses = watchFrameAddresses(container);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(resolves()).toBe(2));
+    await waitFor(() => expect(settledMarker(container)).not.toBeNull());
+
+    // Settled here, the settled answer still outstanding: the ONE island draws
+    // its loading state under the headers, and no frame stands anywhere.
+    expect(pairs(container)).toHaveLength(0);
+    expect(headers(container)).toHaveLength(2);
+    const waiting = [...islands(container)];
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0].getAttribute("data-island-load-state")).toBe("loading");
+    expect(waiting[0].querySelector('[data-conformance-id="review-target-island-skeleton"]')).not.toBeNull();
+    expect(container.querySelectorAll("iframe")).toHaveLength(0);
+
+    await act(async () => {
+      answer(settledAnswer({ targetHeaders: [HEADER_ONE, HEADER_TWO], islandSrc: servedForGate("ic-settled") }));
+    });
+    await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(1));
+    addresses.stop();
+
+    // Adopted: exactly one frame, at the settled answer's own grant, for the gate.
+    const framed = frameQuery(container.querySelector("iframe"));
+    expect(framed.get("ic")).toBe("ic-settled");
+    expect(framed.get("ref")).toBe(VIEW.ref);
+    expect(framed.has("target")).toBe(false);
+    expect(container.querySelector("iframe")?.getAttribute("loading")).toBe("eager");
+    // From the press on, no frame was ever handed another address: never the
+    // cookie address, never a spent per-target grant.
+    expect(addresses.seen.length).toBeGreaterThan(0);
+    for (const src of addresses.seen) {
+      expect(new URLSearchParams(src.slice(src.indexOf("?") + 1)).get("ic"), src).toBe("ic-settled");
+    }
+  });
+
+  it("a widget gate that pins several, settled here, draws its failed body with no frame when the settled answer fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let later: () => Promise<Response> = async () => respond({ error: "unavailable" }, 503);
+    const { resolves } = mockDecision(
+      { targetHeaders: [HEADER_ONE, HEADER_TWO], islandSrcByRevision: pairedMap() },
+      () => later(),
+    );
+    const { container } = renderOn("site_widget");
+    await waitFor(() => expect(pairs(container)).toHaveLength(2));
+    const addresses = watchFrameAddresses(container);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(resolves()).toBe(2));
+    await waitFor(() => expect(settledMarker(container)).not.toBeNull());
+    await act(async () => {
+      vi.advanceTimersByTime(12_500);
+    });
+
+    // The settled answer never came: the one island draws its failed body under
+    // the headers and frames nothing.
+    const failed = [...islands(container)];
+    expect(failed).toHaveLength(1);
+    timedOutWithPlateAndNoFrame(failed[0]);
+    expect(headers(container)).toHaveLength(2);
+    expect(container.querySelectorAll("iframe")).toHaveLength(0);
+
+    // Its retry re-resolves, and the answer's own grant is framed once.
+    later = async () =>
+      settledAnswer({ targetHeaders: [HEADER_ONE, HEADER_TWO], islandSrc: servedForGate("ic-retried") });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(resolves()).toBe(3));
+    await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(1));
+    addresses.stop();
+    expect(frameQuery(container.querySelector("iframe")).get("ic")).toBe("ic-retried");
+    for (const src of addresses.seen) {
+      expect(new URLSearchParams(src.slice(src.indexOf("?") + 1)).get("ic"), src).toBe("ic-retried");
+    }
+  });
+
+  it("a widget gate that pins ONE target keeps its painted island across a settle here", async () => {
+    let answer!: (response: Response) => void;
+    const pendingAnswer = new Promise<Response>((done) => {
+      answer = done;
+    });
+    const { resolves } = mockDecision(
+      { targetHeaders: [HEADER_ONE], islandSrc: servedForGate("ic-gate") },
+      () => pendingAnswer,
+    );
+    const { container } = renderOn("site_widget");
+    await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(1));
+    const painted = container.querySelector("iframe")!;
+    expect(frameQuery(painted).get("ic")).toBe("ic-gate");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(resolves()).toBe(2));
+    await waitFor(() => expect(settledMarker(container)).not.toBeNull());
+    // The same frame, at the same grant, through the settle.
+    expect(container.querySelectorAll("iframe")).toHaveLength(1);
+    expect(container.querySelector("iframe")).toBe(painted);
+    expect(frameQuery(painted).get("ic")).toBe("ic-gate");
+
+    await act(async () => {
+      answer(settledAnswer({ targetHeaders: [HEADER_ONE], islandSrc: servedForGate("ic-settled") }));
+    });
+    await waitFor(() =>
+      expect(frameQuery(container.querySelector("iframe")).get("ic")).toBe("ic-settled"),
+    );
+    expect(container.querySelectorAll("iframe")).toHaveLength(1);
+  });
+
+  it("a cookie host's gate that pins several, settled here, frames the gate's own cookie address at once", async () => {
+    let answer!: (response: Response) => void;
+    const pendingAnswer = new Promise<Response>((done) => {
+      answer = done;
+    });
+    const { resolves } = mockDecision({ targetHeaders: [HEADER_ONE, HEADER_TWO] }, () => pendingAnswer);
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(pairs(container)).toHaveLength(2));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(resolves()).toBe(2));
+    await waitFor(() => expect(settledMarker(container)).not.toBeNull());
+    // The settled reading's one island, at the reader's cookie, before any answer.
+    expect(pairs(container)).toHaveLength(0);
+    expect(headers(container)).toHaveLength(2);
+    const frames = container.querySelectorAll("iframe");
+    expect(frames).toHaveLength(1);
+    const query = frameQuery(frames[0]);
+    expect(query.get("ref")).toBe(VIEW.ref);
+    expect(query.has("ic")).toBe(false);
+    expect(query.has("target")).toBe(false);
+    expect(frames[0].getAttribute("loading")).toBe("lazy");
+
+    await act(async () => {
+      answer(settledAnswer({ targetHeaders: [HEADER_ONE, HEADER_TWO] }));
+    });
+    await waitFor(() => expect(resolves()).toBe(2));
+    expect(container.querySelectorAll("iframe")).toHaveLength(1);
+    expect(container.querySelector("iframe")).toBe(frames[0]);
   });
 });

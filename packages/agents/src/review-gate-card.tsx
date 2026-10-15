@@ -1095,6 +1095,19 @@ export function ReviewGateCard({
   // host the two are the same `null` and this composes byte-for-byte what it
   // composed before.
   const serverIslandSrc = islandAddress.islandSrc;
+  // ONE ISLAND OVER A SET THAT ADDRESSES EACH TARGET ON ITS OWN (cinatra#4129).
+  // A held set with per-target addresses and no gate-wide one is the answer a
+  // widget reader gets for a gate drawn as pairs: each of its grants is bound to
+  // one pinned target, and no cookie authenticates a frame on a third-party
+  // page. A reading that draws such a gate as ONE island — the settled reading,
+  // when a decision taken on this card settles it before the settled answer
+  // arrives — therefore has no address of its own. The island composes none
+  // and frames nothing; it draws its loading state until an answer brings the
+  // gate's own grant, which the card adopts by the rules above, and its own
+  // bound turns a wait that never ends into the failed state, whose retry
+  // re-resolves. Every answer without per-target addresses composes exactly
+  // what it composed before.
+  const islandAwaitsAddress = islandAddress.islandSrcByRevision !== null && heldCredential === null;
   // EACH PAIR'S OWN ADDRESS (cinatra#4129), composed from the HELD set by the
   // one host-neutral function above, for a gate whose answer names several
   // targets.
@@ -1159,8 +1172,11 @@ export function ReviewGateCard({
       runId != null && runId !== "" && !insideConversation ? (
         <ReviewGateSettledExchange runId={runId} boundCardRef={view.ref} />
       ) : null,
-    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
+    islandSrc: islandAwaitsAddress
+      ? ""
+      : reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc, islandAddress.scheme),
     islandCredentialed: heldCredential !== null,
+    islandAwaitsAddress,
     submit: submitAndRefresh,
     onRefresh: refresh,
     dismissed,
@@ -1223,6 +1239,9 @@ function renderState(args: {
   settledExchange: ReactElement | null;
   islandSrc: string;
   islandCredentialed: boolean;
+  /** The one island has no address yet: the held set addresses each pinned
+   * target on its own and carries none for the gate (see the card above). */
+  islandAwaitsAddress: boolean;
   submit: SubmitReviewDecisionAction;
   onRefresh: () => void;
   dismissed: Readonly<Record<string, true>>;
@@ -1241,6 +1260,7 @@ function renderState(args: {
     settledExchange,
     islandSrc,
     islandCredentialed,
+    islandAwaitsAddress,
     submit,
     onRefresh,
     dismissed,
@@ -1313,11 +1333,15 @@ function renderState(args: {
               reading drew them: the header over one island, inside ONE bordered
               panel when the gate pins one target (cinatra#3441), the renderer
               resolved from the artifact's own type. The island carries no
-              decision chrome on either reading. */}
+              decision chrome on either reading. A gate that pins several,
+              settled on this card while the widget holds only its per-target
+              addresses, draws this island without a frame until the settled
+              answer's own grant arrives (`awaiting`). */}
           <ReviewTargetFrame
             headers={targetHeaders}
             islandSrc={islandSrc}
             islandCredentialed={islandCredentialed}
+            awaiting={islandAwaitsAddress}
             onRetryResolve={onRefresh}
           />
           {/* §VIII — the RECORDED partition, in the place it annotated: between
@@ -1382,6 +1406,7 @@ function renderState(args: {
               headers={targetHeaders}
               islandSrc={islandSrc}
               islandCredentialed={islandCredentialed}
+              awaiting={islandAwaitsAddress}
               onRetryResolve={onRefresh}
             />
           )}
@@ -1976,6 +2001,7 @@ function ReviewTargetIsland({
   src,
   credentialed,
   refused = false,
+  awaiting = false,
   onRetryResolve,
   inPanel = false,
 }: {
@@ -1986,6 +2012,10 @@ function ReviewTargetIsland({
    * target (cinatra#4129): the island draws its failed state at once and mounts
    * no frame, and its retry re-resolves for fresh addresses. */
   refused?: boolean;
+  /** True while the island has no address it may frame (cinatra#4129): it
+   * draws its loading state and mounts no frame, its bound turns that into the
+   * failed state, and its retry re-resolves for the address. */
+  awaiting?: boolean;
   /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
   onRetryResolve: () => void;
   /** Drawn inside the target's one panel (cinatra#3441), whose border is the
@@ -2079,11 +2109,17 @@ function ReviewTargetIsland({
   // the known residual above. `island-ready` cancels it and starts the
   // IDLE-PROGRESS bound in its place, and every `panel-mounted` restarts that
   // one. The plate is painted ONLY when a bound expires, and the frame's own
-  // `load` still cancels whichever is running and heals the plate.
+  // `load` still cancels whichever is running and heals the plate. An island
+  // that awaits its address has no frame to start the clock, so its bound runs
+  // from the moment it began to wait, and again from each retry.
   const bound = load.ready ? ISLAND_IDLE_PROGRESS_TIMEOUT_MS : ISLAND_LOAD_TIMEOUT_MS;
   useEffect(() => {
     if (load.loaded || refused) return;
-    const started = load.ready ? protocolClock.current.progress : protocolClock.current.navigation;
+    const started = awaiting
+      ? Date.now()
+      : load.ready
+        ? protocolClock.current.progress
+        : protocolClock.current.navigation;
     const remaining = Math.max(0, bound - (Date.now() - started));
     const timer = setTimeout(() => {
       setLoad((current) =>
@@ -2091,7 +2127,7 @@ function ReviewTargetIsland({
       );
     }, remaining);
     return () => clearTimeout(timer);
-  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound, refused]);
+  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound, refused, awaiting]);
 
   // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
   // load bag is keyed on, and for the same reason: a palette repaint is the SAME
@@ -2150,6 +2186,8 @@ function ReviewTargetIsland({
         ? "timed-out"
         : "loading";
   const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
+  // A refused island and one that awaits its address mount no frame at all.
+  const framed = !refused && !awaiting;
 
   return (
     <div
@@ -2161,7 +2199,7 @@ function ReviewTargetIsland({
           : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
       }
     >
-      {refused ? null : (
+      {!framed ? null : (
         <iframe
           // Keyed by src+attempt so a retry (or a genuinely new target) forces a
           // real remount — a re-render alone would leave the SAME iframe element
@@ -2225,8 +2263,8 @@ function ReviewTargetIsland({
           self-heals the display instead of leaving a reviewer stuck on a
           retry panel for content that did, eventually, arrive. */}
       {state !== "loaded" ? (
-        // A refused pair has no frame to overlay, so its panel holds the box.
-        <div className={refused ? undefined : "absolute inset-x-0 top-0"} style={{ height }}>
+        // An island with no frame has nothing to overlay, so its panel holds the box.
+        <div className={framed ? "absolute inset-x-0 top-0" : undefined} style={{ height }}>
           {state === "loading" ? (
             <IslandLoadingSkeleton />
           ) : (
@@ -2498,7 +2536,10 @@ export function ReviewTargetHeaders({
  * reading is drawn as before. An answer that carried no header draws the island
  * alone in its own frame (a header the card cannot source is one it would have
  * to invent), and the settled reading of a gate that pins several keeps its
- * headers over its one framed island.
+ * headers over its one framed island. `awaiting` marks an island that has no
+ * address it may frame yet (a gate that pins several, settled on the card while
+ * the widget holds only its per-target addresses): it draws its loading state
+ * with no frame until the settled answer's own grant arrives.
  *
  * ONE ELEMENT HOLDS THE ISLAND ON EVERY READING. The island is a live frame: its
  * load state, its bound, the height its document reported, the focus inside it
@@ -2519,6 +2560,7 @@ export function ReviewTargetFrame({
   islandCredentialed,
   onRetryResolve,
   refused = false,
+  awaiting = false,
   pair,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
@@ -2528,6 +2570,9 @@ export function ReviewTargetFrame({
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
   refused?: boolean;
+  /** The island has no address it may frame yet (cinatra#4129): it draws its
+   *  loading state and frames nothing until an answer brings one. */
+  awaiting?: boolean;
   /** The pinned revision this panel draws, when it is one pair of a gate drawn
    *  as pairs (cinatra#4129); absent on every other reading. */
   pair?: string;
@@ -2561,6 +2606,7 @@ export function ReviewTargetFrame({
         src={islandSrc}
         credentialed={islandCredentialed}
         refused={refused}
+        awaiting={awaiting}
         onRetryResolve={onRetryResolve}
         inPanel={Boolean(only)}
       />
