@@ -438,6 +438,34 @@ describe("a frame that presents an island credential", () => {
     expect(isEmptyIsland(el)).toBe(true);
     expect(redirect).not.toHaveBeenCalled();
   });
+
+  // cinatra#4129 — the widget frames one island per pinned target of a gate
+  // that pins several, each at its own single-use address naming its target.
+  it("a credentialed frame that names one pinned target draws that target alone", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+    });
+    const targets = [target("a1"), target("a2")];
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets,
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const el = await renderIsland(REF, {
+      ic: CREDENTIAL,
+      target: targets[0].target.representationRevisionId,
+    });
+    expect(resolveIslandCredentialReader).toHaveBeenCalledWith({ credential: CREDENTIAL, ref: REF });
+    expect(isEmptyIsland(el)).toBe(false);
+    expect((el.props as Record<string, unknown>)["data-target-count"]).toBe(1);
+    const panels = panelProps(el);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].prepared).toBe(targets[0].prepared);
+    expect(panels.some((p) => p.prepared === targets[1].prepared)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -623,12 +651,13 @@ describe("each target streams under its OWN boundary (cinatra#3334)", () => {
   });
 });
 
-// cinatra#3441 — a gate that pins ONE target is framed by the CARD: its header
-// over this document inside one border (specs/app-artifact-review.html §IV). So
-// the island hands its one panel no frame, and frames each panel only on a gate
-// opened before one review per artifact that still pins several (cinatra#3356
-// owns how that one is composed).
-describe("cinatra#3441 — the island frames a panel only on a gate that pins several", () => {
+// cinatra#3441 — a document that draws ONE target is framed by the CARD: that
+// target's header over this document inside one border
+// (specs/app-artifact-review.html §IV). So the island hands its one panel no
+// frame — on a gate that pins one target, and on each frame of a gate the card
+// draws as pairs, which names its one target (cinatra#4129) — and frames each
+// panel only on a document that still draws several.
+describe("cinatra#3441 — the island frames a panel only on a document that draws several", () => {
   it("a pending gate over ONE target hands its panel no frame", async () => {
     loadReviewGateSurface.mockResolvedValue({
       kind: "ready",
@@ -655,5 +684,94 @@ describe("cinatra#3441 — the island frames a panel only on a gate that pins se
     });
     const panels = panelProps(await renderIsland(REF));
     expect(panels.map((p) => p.framed)).toEqual([true, true]);
+  });
+
+  it("a frame of that gate that names ONE pinned target hands its panel no frame (cinatra#4129)", async () => {
+    const targets = [target("a1"), target("a2")];
+    for (const [i, kind] of [
+      [0, "ready"],
+      [1, "ready"],
+      [1, "settled"],
+    ] as const) {
+      loadReviewGateSurface.mockResolvedValue({
+        kind,
+        agentSummary: null,
+        targets,
+        ...(kind === "ready"
+          ? { permissions: Promise.resolve({ canDecide: true, canComment: true }) }
+          : {}),
+      });
+      const panels = panelProps(
+        await renderIsland(REF, { target: targets[i]!.target.representationRevisionId }),
+      );
+      expect(panels).toHaveLength(1);
+      expect(panels[0]!.prepared).toBe(targets[i]!.prepared);
+      // The card's pair panel is this target's one frame.
+      expect(panels[0]!.framed).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4129 — ONE TARGET PER FRAME, for a gate that pins several.
+//
+// A gate opened before reviews became one per artifact, and still pending, can
+// pin several targets. The card draws each target's header directly above its
+// own frame, and each frame names the ONE pinned target it draws, by its pinned
+// revision. The name is a closed selector over the gate's own frozen set: it
+// authorizes nothing, and a name the gate does not pin draws the one empty
+// document every denial draws.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#4129 — a frame that names one pinned target draws that target alone", () => {
+  it("draws only the target the frame names", async () => {
+    const targets = [target("a1"), target("a2"), target("a3")];
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets,
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const el = await renderIsland(REF, { target: targets[1].target.representationRevisionId });
+    expect(isEmptyIsland(el)).toBe(false);
+    expect((el.props as Record<string, unknown>)["data-target-count"]).toBe(1);
+    const panels = panelProps(el);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].prepared).toBe(targets[1].prepared);
+  });
+
+  it("a frame naming a target the gate does not pin draws the same empty document every denial draws", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "not-authorized" });
+    const denied = await renderIsland(REF);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      // The gate's targets, each of whose preparation FAILS: a frame that draws
+      // none of them must still leave no rejection unhandled.
+      const failing = (artifactId: string) => ({
+        target: { artifactId, representationRevisionId: `${artifactId}-rev` },
+        prepared: Promise.reject(new Error(`prepare failed: ${artifactId}`)),
+        capturePair: Promise.reject(new Error(`capture failed: ${artifactId}`)),
+      });
+      loadReviewGateSurface.mockResolvedValue({
+        kind: "ready",
+        agentSummary: null,
+        targets: [failing("a1"), failing("a2")],
+        permissions: Promise.resolve({ canDecide: true, canComment: true }),
+      });
+      const el = await renderIsland(REF, { target: "rev_not_pinned" });
+      // One turn of the event loop, so the runtime reports any rejection that
+      // nothing handled.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(isEmptyIsland(el)).toBe(true);
+      expect(JSON.stringify(el)).toBe(JSON.stringify(denied));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });
