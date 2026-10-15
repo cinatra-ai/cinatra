@@ -19,6 +19,10 @@ import {
 } from "@/lib/artifacts/context-allocation-gate";
 import { allocationForSlot } from "@/lib/artifacts/context-allocation-planner";
 import {
+  effectiveSelectionMode,
+  resolveInheritedContextSelection,
+} from "@/lib/artifacts/context-repair-inheritance";
+import {
   extractContextRouteLogIds,
   recordContextRouteRejection,
   recordContextRouteSuccess,
@@ -79,8 +83,6 @@ export async function POST(req: Request): Promise<Response> {
       slot,
       projectId: ctx.projectId,
     });
-    const slotMeta = buildSlotMeta(slot);
-    const selectedRefs = computeRouteSelectedRefs(candidates, slot);
     // cinatra#2815 S3 part (3): the MANIFEST-WIDE allocation this gate is
     // drawn against, content-addressed into a ContextAllocationTokenV1. The
     // renderer carries the token back to /api/context-finalize, which
@@ -113,8 +115,44 @@ export async function POST(req: Request): Promise<Response> {
         }`,
       );
     }
-    const plannedRefs =
+    const allocatedRefs =
       allocationForSlot(gate.allocation, parsed.data.slotId)?.refs ?? [];
+    const declaredSlotMeta = buildSlotMeta(slot);
+    // cinatra#3080 — a slot the producing run ALREADY ANSWERED is not a
+    // question for the repair that follows it. When this run is a repair
+    // carrying its own producing run's audited answer for this slot, the slot
+    // runs in the flow's own no-person mode with THAT answer as the selection,
+    // so nothing human stands between the press and the work. Every other run
+    // — and a repair whose producing run answered nothing, or whose answer is
+    // no longer inside this slot's allocation — keeps the slot exactly as the
+    // slot declares it.
+    //
+    // The answer is matched against the slot's ALLOCATION, not the candidate
+    // pool: finalize accepts only allocated refs, so a ref the planner no
+    // longer allocates is a vanished ref and the screen opens instead.
+    const inherited = resolveInheritedContextSelection({
+      run: ctx.run,
+      slotId: parsed.data.slotId,
+      // The audit rows are scoped to the run's own TEMPLATE package — the same
+      // value finalize writes them under — so an earlier package identity's
+      // rows are never read as this run's answer.
+      parentPackageName: ctx.trustedPackageName,
+      candidates: allocatedRefs,
+      slotMinItems: declaredSlotMeta.minItems,
+      // The slot's own declared mode, so an inherited EMPTY answer records the
+      // provenance it actually had rather than asserting a person.
+      declaredSelectionMode: slot.selectionMode,
+    });
+    const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
+    const slotMeta = { ...declaredSlotMeta, selectionMode };
+    const selectedRefs = inherited
+      ? inherited.refs
+      : computeRouteSelectedRefs(candidates, slot);
+    // The no-person branch submits `plannedRefs`, so an inherited answer is
+    // handed to it AS the planned set: finalize then checks the submission is
+    // exactly that answer. The token is unchanged — the allocation is the
+    // world's, never the repair's.
+    const plannedRefs = inherited ? inherited.refs : allocatedRefs;
     // #1197: debug-level lifecycle trace + per-kind ok counter.
     recordContextRouteSuccess({
       kind: "resolve",
@@ -127,7 +165,9 @@ export async function POST(req: Request): Promise<Response> {
     // context-selection-agent OAS: select_mode (BranchingNode) routes on
     // `selectionMode`, and finalize_interactive + finalize_autonomous DFE
     // both fields into their data payloads. They are derived from the trusted
-    // slot loaded server-side (slotMeta), not from request input.
+    // slot loaded server-side (slotMeta) and — for a repair inheriting its own
+    // producing run's answer — from that stored answer, never from request
+    // input. `/api/context-finalize` re-derives the same mode the same way.
     return NextResponse.json({
       candidates,
       slotMeta,
