@@ -721,3 +721,80 @@ describe("approved app-artifact-review §VI envelope-only producer Note", () => 
     expect(parseLifecycleResolveEnvelope("verification_summary", { kind: "verification_summary", state: { state: "advisory" }, body: VERIFICATION_BODY, recordedPrompt: "private producer words" })).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#4129 — the per-target island map
+// ---------------------------------------------------------------------------
+//
+// A pending gate that pins several targets is drawn as pairs on every host, and
+// where a frame is authenticated by a single-use credential each pinned target
+// needs its own address: one grant paints one document. The answer carries them
+// as one map from each pinned revision to its own address, read as ONE bounded
+// shape, and refused whole for anything else — exactly as the single address is.
+
+describe("cinatra#4129 — the per-target island map", () => {
+  const pending = (extra: Record<string, unknown>) => ({
+    kind: "artifact_review_gate",
+    state: { state: "pending", canDecide: true, canComment: true },
+    body: null,
+    ...extra,
+  });
+  const MAP = {
+    rev_8f3a1c2d4e5f6a7b: "/lifecycle/review-island?ref=r&ic=sealed-one&target=rev_8f3a1c2d4e5f6a7b",
+    rev_11223344556677: null,
+  };
+
+  it("keeps a valid map — a failed target's entry stays null", () => {
+    const wire = pending({ islandSrcByRevision: MAP });
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", JSON.parse(JSON.stringify(wire)));
+    expect(parsed).toEqual({ ...wire, islandSrc: null, targetHeaders: null, aside: null });
+    expect(parsed?.islandSrcByRevision).toEqual(MAP);
+  });
+
+  it("adds no such key to an answer that carried none", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", pending({}));
+    expect(parsed).not.toBeNull();
+    expect("islandSrcByRevision" in parsed!).toBe(false);
+  });
+
+  it("REFUSES the whole answer for a map beside `absent`", () => {
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "absent" },
+        body: null,
+        islandSrcByRevision: MAP,
+      }),
+    ).toBeNull();
+  });
+
+  it("REFUSES the whole answer for a map on another kind", () => {
+    const answer = {
+      kind: "verification_summary" as const,
+      state: { state: "advisory" as const },
+      body: VERIFICATION_BODY,
+    };
+    // The control first: the same answer without the map parses.
+    expect(parseLifecycleResolveEnvelope("verification_summary", answer)).not.toBeNull();
+    expect(
+      parseLifecycleResolveEnvelope("verification_summary", { ...answer, islandSrcByRevision: MAP }),
+    ).toBeNull();
+  });
+
+  it("REFUSES the whole answer for a map that is not one bounded shape", () => {
+    const thirteen = Object.fromEntries(
+      Array.from({ length: 13 }, (_, i) => [`rev-${i}`, null]),
+    );
+    for (const bad of [
+      [MAP.rev_8f3a1c2d4e5f6a7b],
+      thirteen,
+      { "": MAP.rev_8f3a1c2d4e5f6a7b },
+      { rev_8f3a1c2d4e5f6a7b: "//evil.example/x" },
+    ]) {
+      expect(
+        parseLifecycleResolveEnvelope("artifact_review_gate", pending({ islandSrcByRevision: bad })),
+        JSON.stringify(bad).slice(0, 80),
+      ).toBeNull();
+    }
+  });
+});
