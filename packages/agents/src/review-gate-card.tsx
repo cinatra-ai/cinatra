@@ -166,6 +166,7 @@ import type {
 
 import {
   useComposerFocusBinding,
+  useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardColorScheme,
   useLifecycleCardFrame,
@@ -1963,6 +1964,35 @@ function ReviewTargetIsland({
 
   const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
   const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
+
+  // THE ISLAND'S SINGLE-USE GRANT IN EVERY FRAME OFF A COOKIE SESSION. On a
+  // first-party host the island document is authenticated by the page's own
+  // session, which is the reader's. On every other host (the site widget,
+  // whose reader is proven by a broker token, never by a cookie) the
+  // server-minted credential is the only proof of the reader the island
+  // receives, so an address without one is not framed at all. The region keeps
+  // its place in the host's palette and draws nothing: no target content and
+  // no explanation. An answer that brings a credential frames the island from
+  // the card's held address, and an answer that brings none never moves a
+  // frame that already holds one (the held address above). Inside the
+  // one-target panel the region, like the island, draws no frame of its own.
+  // Read after every hook of this component, so the hook order is the same
+  // on every render.
+  const cookieSession = useCookieSessionSurface();
+  if (!credentialed && !cookieSession) {
+    return (
+      <div
+        data-conformance-id="review-target-island"
+        data-island-load-state="empty"
+        className={
+          inPanel
+            ? "relative overflow-hidden bg-surface-strong"
+            : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
+        }
+        style={{ height: ISLAND_MIN_HEIGHT }}
+      />
+    );
+  }
 
   return (
     <div
