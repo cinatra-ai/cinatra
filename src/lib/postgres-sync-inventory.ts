@@ -172,7 +172,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/dev-auto-setup.ts": {
     class: "migratable-background-setup",
     justification:
-      "Dev-only auto-setup; gated on CINATRA_RUNTIME_MODE===development, fire-and-forget on boot. Never on a production request path.",
+      "Development and preview-instance auto-setup; gated on CINATRA_RUNTIME_MODE===development or a preview instance (the preview install profile on a production runtime, cinatra#4098), fire-and-forget at boot. On a preview it runs the connector hooks without the development fixtures, and its sync calls there are read-only lookups (the first administrator, and the fixture account an earlier development boot left). Never on a production deployment, never on a request path.",
   },
   "src/lib/dev-fixture-seeder.ts": {
     class: "migratable-background-setup",
@@ -340,6 +340,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     class: "migratable-request-path",
     justification:
       "Artifact creation write on request paths. Migratable with the artifacts subsystem.",
+  },
+  "src/lib/artifacts/artifact-revision-append.ts": {
+    class: "migratable-request-path",
+    justification:
+      "The append-a-revision-to-an-EXISTING-artifact writer (cinatra#3080, fix leg 8): the sibling of artifact-creation.ts on the other side of the same road \u2014 creation mints an artifact, this one files the NEXT REVISION of an artifact the host already owns, which is what the change road needs when Regenerate must settle its successor over the SAME artifact rather than a second, unrelated piece of work. Five call sites, all five of them transactional writes or the guarded read immediately before one: the target row's liveness and accepted-MIME read, the bytes door's resource/blob/representation/pointer/witness transaction, the re-file door's source-revision read, the re-file transaction itself, and the pointer compare-and-set a repair completion makes after its successor is accepted. It is on the bridge for exactly the reason its three neighbours are (artifact-creation.ts, cms-content-snapshot-capture.ts, cms-preview-capture-store.ts): it composes into the SAME synchronous artifacts store graph and shares their query builders, so one writer of the group cannot move to the async pooled layer alone. Request/run-time write; migratable to async pooled access with the artifacts subsystem, as a unit with those three.",
   },
   "src/lib/artifacts/local-disk-blob-store.ts": {
     class: "migratable-request-path",

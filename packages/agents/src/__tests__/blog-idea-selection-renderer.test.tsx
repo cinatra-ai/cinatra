@@ -34,6 +34,7 @@ import {
   type FieldRendererContext,
 } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { hasFieldRendererComponent } from "../field-renderer-components";
 import {
   classifyMidRunHitl,
   hasMidRunHitlBinding,
@@ -131,7 +132,11 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
     ensureDefaultFieldRenderersRegistered();
   });
 
-  it("the dedicated binding id resolves to BlogIdeaSelectionRenderer at priority 80", () => {
+  it("the dedicated binding id resolves at priority 80 to the component the pinned pipeline pack ships", () => {
+    // The pinned pipeline pack declares its own component for this binding, so the
+    // build map carries it and the binding mounts the pack's chooser; the host's
+    // chooser stays the kind's fallback for a build without the pack's component.
+    expect(hasFieldRendererComponent(BINDING_ID)).toBe(true);
     const entry = fieldRendererRegistry.resolve(
       "selectedIdeaJson",
       { "x-renderer": BINDING_ID },
@@ -139,7 +144,7 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
     );
     expect(entry).toBeTruthy();
     expect(entry!.priority).toBe(80);
-    expect(entry!.renderer).toBe(BlogIdeaSelectionRenderer);
+    expect(entry!.renderer).not.toBe(BlogIdeaSelectionRenderer);
   });
 
   it("classifies as a mid-run HITL gate (parity with the retired :output-suffix classification)", () => {
@@ -153,7 +158,8 @@ describe("BlogIdeaSelectionRenderer — binding resolution + mid-run classificat
       { "x-renderer": BINDING_ID },
       CTX as never,
     );
-    expect(dedicated!.renderer).toBe(BlogIdeaSelectionRenderer);
+    expect(dedicated).toBeTruthy();
+    expect(dedicated!.renderer).not.toBe(BlogIdeaSelectionRenderer);
     // cinatra#1796 teardown: the shared reviewer binding the chooser relocated
     // OFF is gone — its package is retired, its kind is out of the vocabulary
     // and its dispatcher is deleted. Reconstructed here from parts so this file

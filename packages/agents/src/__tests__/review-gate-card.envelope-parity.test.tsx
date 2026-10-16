@@ -55,6 +55,22 @@
 // committed: that reading really does still say "Review requested", because it
 // cannot say what the decision was.
 
+// TWENTY-EIGHT ENTRIES WERE RE-TAKEN ON PURPOSE (cinatra#3441). A gate that pins
+// one target draws its header and the island inside ONE bordered panel, and the
+// island must not be mounted a second time when a later answer for the same
+// gate carries another number of headers. So ONE element now always holds the
+// island, on every reading: the panel when the answer carries exactly one
+// header, and otherwise a box that draws nothing (`class="contents"`), which
+// leaves the island in the card's own column exactly where it was.
+//
+// THE REGENERATION DIFF IS THE PROOF: every one of these captures carries no
+// header, so the 28 that draw the island — `pending`, `pending-no-comment`,
+// `pending-with-suggestions`, `restricted`, `settled-approved`,
+// `settled-rejected` and `settled-approved-no-decider` on each of the four hosts
+// — gained exactly that element's opening tag before the island and its closing
+// tag after it, and no other byte. The 16 entries that draw no island are
+// byte-identical to what was committed.
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 

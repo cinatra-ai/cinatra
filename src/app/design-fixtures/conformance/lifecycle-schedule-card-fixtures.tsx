@@ -30,6 +30,11 @@
 // elected by, and the rendered estimated-duration line), and the ONE ANSWER its
 // decision endpoint gives. That is the whole substitution — the transport, never
 // the composition.
+// The cancel road supplies a separately declared resolver readback after the
+// decision lands, just as the full card's transport refreshes its resolve. It
+// never creates stopped fields from an outcome. The full-card native tests pin
+// that real opaque-ref decide/refresh/resolve road; this sessionless fixture
+// covers the presentation after those typed answers, not authentication.
 // The harness computes nothing from an answer and re-derives no body from it:
 // which phase is drawn, which controls the floor offers, what they are named,
 // when they go quiet, what the card says in flight, what it says once a save
@@ -80,6 +85,7 @@ function ScheduleCardFixture({
   fixture: LifecycleScheduleCardFixture;
 }): ReactElement {
   const [requests, setRequests] = useState<readonly RecordedRequest[]>([]);
+  const [resolved, setResolved] = useState({ state: fixture.state, body: fixture.body });
 
   const answer = useCallback(
     async (
@@ -89,6 +95,10 @@ function ScheduleCardFixture({
       setRequests((current) => [...current, { road, schedule: schedule ?? null }]);
       if (fixture.answerDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, fixture.answerDelayMs));
+      }
+      if (road === "cancel" && fixture.cancel) {
+        setResolved(fixture.cancel.readback);
+        return fixture.cancel.answer;
       }
       return fixture.answer;
     },
@@ -102,8 +112,8 @@ function ScheduleCardFixture({
           the card reads the host from it rather than being told. */}
       <LifecycleCardSurfaceProvider host="chat_thread">
         <ScheduleProposalCardBody
-          state={fixture.state}
-          body={fixture.body}
+          state={resolved.state}
+          body={resolved.body}
           firedOnce={fixture.firedOnce}
           durationCopy={fixture.durationCopy}
           onDecide={(op, schedule) => answer(op, schedule)}

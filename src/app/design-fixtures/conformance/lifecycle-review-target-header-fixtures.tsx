@@ -53,7 +53,7 @@ import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-
 import { ReviewTargetHeaders } from "@cinatra-ai/agents/review-gate-card";
 
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
-import { reviewTargetRowFacts } from "@/lib/artifacts/review-surface-model";
+import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 
 import {
   LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES,
