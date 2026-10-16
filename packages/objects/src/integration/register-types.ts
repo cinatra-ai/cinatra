@@ -471,65 +471,6 @@ function registerEmailObjectTypes(): void {
       return contactId ? `${runId}:${contactId}` : runId;
     },
   });
-
-  // 6. recipient — a run-scoped delivery-target SNAPSHOT (cinatra#1454). NEVER a
-  // person/contact: `contactKey`/`contactId` are connector-scoped soft
-  // provenance only, no CRM writeback. The @cinatra-ai/email-artifacts pack
-  // claims this type [record] with `projection: "none"` + `sensitivity:
-  // "sensitive"` (addresses are kept out of the derived index by the claim; the
-  // row still carries `email` for delivery + fallback identity). Mandatory
-  // retry-safe identity (cinatra#1454): (runId + provider-scoped contactKey),
-  // normalized-email fallback — a retry within the same run updates the snapshot
-  // in place; no run frame yields no identity (HITL rather than a global merge).
-  objectTypeRegistry.register({
-    type: "@cinatra-ai/email:recipient",
-    // Type-driven disposition (epic #1785) — SECURITY-CRITICAL. Relocated from
-    // the @cinatra-ai/email-artifacts pack claim: projection MUST stay 'none' so
-    // recipient email addresses (sensitivity: 'sensitive') are NEVER projected
-    // into the derived Graphiti index. The type-driven projector regression test
-    // pins recipient rows to a terminal skip; the inventory-parity test pins this
-    // payload equal to the pack manifest.
-    dispositions: {
-      projection: "none",
-      pinnable: false,
-      snapshotPolicy: "none",
-      sensitivity: "sensitive",
-      mutability: "record",
-    },
-    category: "report",
-    schema: z.object({
-      runId: z.string().min(1),
-      connectorId: z.string().optional(),
-      contactKey: z.string().optional(),
-      // `.trim().min(1)` normalizes and rejects a whitespace-only address — the
-      // normalized-email fallback identity below must never collapse to an empty
-      // contact key.
-      email: z.string().trim().min(1),
-      campaignId: z.string().optional(),
-      confirmed: z.boolean().optional(),
-    }),
-    lifecycle: {
-      sources: ["agent", "import"],
-      mutableBy: ["agent"],
-    },
-    renderers: {
-      listRow: GenericObjectListRow,
-      card: GenericObjectCard,
-      detail: GenericObjectDetail,
-    },
-    identityKey: (data) => {
-      const d = data as Record<string, unknown>;
-      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
-      if (!runId) return null;
-      const contactKey =
-        typeof d.contactKey === "string" && d.contactKey.length > 0 ? d.contactKey : null;
-      if (contactKey) return `${runId}:${contactKey}`;
-      // Normalize FIRST, then require a non-empty result — a whitespace-only
-      // email must yield no identity (HITL) rather than a bare `${runId}:`.
-      const email = typeof d.email === "string" ? d.email.trim().toLowerCase() : "";
-      return email.length > 0 ? `${runId}:${email}` : null;
-    },
-  });
 }
 
 // ---------------------------------------------------------------------------
