@@ -70,6 +70,16 @@
 // — gained exactly that element's opening tag before the island and its closing
 // tag after it, and no other byte. The 16 entries that draw no island are
 // byte-identical to what was committed.
+//
+// SEVEN ENTRIES WERE REGENERATED ON PURPOSE (the site widget's island). Off a
+// cookie session the island is framed only with its server-minted credential,
+// and the widget's answers in this matrix carry none, so the seven
+// `site_widget/*` readings that draw the island (pending, pending-no-comment,
+// pending-with-suggestions, restricted and the three settled readings with an
+// outcome) now draw the target region empty. The regeneration diff moves
+// exactly those seven entries, and in each only the island region: the frame
+// and its loading skeleton are gone and the region keeps its box. Every other
+// entry is byte-identical to its earlier capture.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -282,6 +292,9 @@ describe("review card render parity across the resolve envelope", () => {
     // its host marker are normalized away, exactly as the §IX suite in
     // `review-gate-card.test.tsx` normalizes them for the pending card. What
     // remains is the reading itself, and it must be byte-identical.
+    // THE ISLAND REGION is compared by its place and checked per host below:
+    // a cookie host frames the island by its ref, and the widget frames it only
+    // with its credential, which this matrix's answers do not carry.
     const readingOf = (html: string): string => {
       const holder = document.createElement("div");
       holder.innerHTML = html;
@@ -289,25 +302,36 @@ describe("review card render parity across the resolve envelope", () => {
       if (!root) return "";
       root.removeAttribute("class");
       root.removeAttribute("data-lifecycle-card-host");
+      for (const island of root.querySelectorAll('[data-conformance-id="review-target-island"]')) {
+        island.replaceWith(document.createElement("review-target-island"));
+      }
       return root.innerHTML;
+    };
+    const framesIsland = (html: string): boolean => {
+      const holder = document.createElement("div");
+      holder.innerHTML = html;
+      return holder.querySelector('[data-conformance-id="review-target-island"] iframe') !== null;
     };
 
     for (const outcome of ["approved", "rejected"] as const) {
       const drawn: Record<string, string> = {};
+      const framed: Record<string, boolean> = {};
       for (const host of HOSTS) {
-        drawn[host] = readingOf(
-          await renderCase(host, {
-            state: "settled",
-            outcome,
-            decidedByName: "Ada Lovelace",
-          }),
-        );
+        const html = await renderCase(host, {
+          state: "settled",
+          outcome,
+          decidedByName: "Ada Lovelace",
+        });
+        drawn[host] = readingOf(html);
+        framed[host] = framesIsland(html);
       }
       for (const host of HOSTS) {
         expect(drawn[host], `${host} draws its own settled card`).toBe(
           drawn.chat_thread,
         );
         expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);
+        expect(drawn[host]).toContain("<review-target-island></review-target-island>");
+        expect(framed[host], `${host} frames the island`).toBe(host !== "site_widget");
         // RE-PINNED (cinatra#2934, fix leg 12). The card used to carry the
         // decider's name on every host; the drawing gives the settled state one
         // marker and no card naming who decided (Lifecycle cards §XIII.1,
