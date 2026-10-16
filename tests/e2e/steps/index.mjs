@@ -164,3 +164,6 @@ export { SIGN_IN_WINDOW_BOUNDS, WINDOW_OPEN_BOUND_MS, WINDOW_RETURN_BOUND_MS, si
 // matches, held unsent until they are released, so the short-lived state their
 // answers would end stays on the page.
 export { HOLD_BOUNDS, HOLD_BOUND_MS, HOLD_MATCH_BOUND_MS, HOLD_METHODS, holdResponse, releaseResponse } from "./hold-response.mjs";
+// pressKey: one key of a closed list pressed on the control that has the focus,
+// with the focused control read before and after.
+export { PRESS_KEYS, pressKey } from "./press-key.mjs";

@@ -6,23 +6,32 @@
  * caching by name, a once-registered idle-error listener, the throw-if-missing
  * default resolver vs the opt-in fail-open resolver, and name validation.
  */
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const constructed: Array<{ config: unknown; listeners: Record<string, number> }> = [];
+type FakeHandler = (...args: unknown[]) => void;
+
+const constructed: Array<{
+  config: unknown;
+  listeners: Record<string, number>;
+  handlers: Record<string, FakeHandler[]>;
+}> = [];
 
 vi.mock("pg", () => {
   class FakePool {
     config: unknown;
     listeners: Record<string, number> = {};
+    handlers: Record<string, FakeHandler[]> = {};
     constructor(config: unknown) {
       this.config = config;
-      constructed.push({ config, listeners: this.listeners });
+      constructed.push({ config, listeners: this.listeners, handlers: this.handlers });
     }
     listenerCount(event: string): number {
       return this.listeners[event] ?? 0;
     }
-    on(event: string): this {
+    on(event: string, handler?: FakeHandler): this {
       this.listeners[event] = (this.listeners[event] ?? 0) + 1;
+      if (handler) (this.handlers[event] ??= []).push(handler);
       return this;
     }
   }
@@ -158,5 +167,68 @@ describe("shared async runner factory capture", () => {
     expect(replacementFactory).not.toHaveBeenCalled();
     expect(constructed).toHaveLength(before);
     vi.resetModules();
+  });
+});
+
+describe("a backend kill on a checked-out client (cinatra#2894)", () => {
+  // pg-pool removes its own idle 'error' listener from a client while the
+  // client is checked out. A backend kill, a server restart or a network cut
+  // then emits 'error' on a client that may have no listener at all; an
+  // EventEmitter throws on that, and in the app it is an uncaught exception
+  // that ends the process. The fake client is a plain EventEmitter so the
+  // test reads exactly that throw.
+  const KILL_MESSAGE = "terminating connection due to administrator command";
+
+  // Plays the pool's 'connect' event: pg-pool emits it once for each NEW
+  // client, before the first checkout of that client.
+  function connectNewClient(): EventEmitter {
+    const client = new EventEmitter();
+    for (const handler of constructed[0].handlers.connect ?? []) handler(client);
+    return client;
+  }
+
+  it("handles the client's error instead of throwing it", () => {
+    getPooledDb({ name: "checked-out" });
+    const client = connectNewClient();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => client.emit("error", new Error(KILL_MESSAGE))).not.toThrow();
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("logs the pool name and the error message, never the connection string", () => {
+    getPooledDb({ name: "checked-out" });
+    const client = connectNewClient();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      client.emit("error", new Error(KILL_MESSAGE));
+      expect(logged).toHaveBeenCalledTimes(1);
+      const line = logged.mock.calls[0].map(String).join(" ");
+      expect(line).toContain("[checked-out]");
+      expect(line).toContain(KILL_MESSAGE);
+      expect(line).not.toContain("postgres://");
+      expect(line).not.toContain("user:pass");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("adds one listener per new client, never one per checkout or per call", () => {
+    getPooledDb({ name: "reused" });
+    getPooledDb({ name: "reused" });
+    expect(constructed).toHaveLength(1);
+    expect(constructed[0].listeners.connect).toBe(1);
+    const client = connectNewClient();
+    expect(client.listenerCount("error")).toBe(1);
+    // Five checkouts and releases of the same client: whatever the pool
+    // emits for them must not add another listener.
+    for (let i = 0; i < 5; i += 1) {
+      for (const event of ["acquire", "release"]) {
+        for (const handler of constructed[0].handlers[event] ?? []) handler(client);
+      }
+    }
+    expect(client.listenerCount("error")).toBe(1);
   });
 });

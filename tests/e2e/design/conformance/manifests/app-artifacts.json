@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-artifacts.html",
-  "contentHash": "sha256:c6cad4b9f61f50ecccb3185913afa0f400a41ca6f06327ab57fcbcda68f1e563",
+  "contentHash": "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
   "surfaces": [
     {
       "id": "artifacts-facet",
@@ -43,6 +43,12 @@
         "kind:artifact",
         "loading"
       ]
+    },
+    {
+      "id": "artifacts-row-icons",
+      "fields": [],
+      "actions": [],
+      "states": []
     },
     {
       "id": "artifacts-library-empty",
@@ -150,6 +156,31 @@
       "states": [
         "error",
         "loading"
+      ]
+    },
+    {
+      "id": "review-policy",
+      "fields": [],
+      "actions": [
+        {
+          "action": "retract-bound",
+          "outcome": "bound-removed"
+        },
+        {
+          "action": "save-bound",
+          "outcome": "bound-saved"
+        }
+      ],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "gate-volume",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
       ]
     },
     {
@@ -382,6 +413,88 @@
       ],
       "actions": [],
       "states": []
+    },
+    {
+      "id": "workspace-dashboards-landing",
+      "fields": [
+        {
+          "field": "name",
+          "source": "identity.displayName"
+        },
+        {
+          "field": "everyone-grant",
+          "source": "referenceLink.visibleToEveryone"
+        }
+      ],
+      "actions": [
+        {
+          "action": "open-add-picker",
+          "outcome": "add-picker-open"
+        },
+        {
+          "action": "open-dashboard",
+          "outcome": "dashboard-canonical"
+        },
+        {
+          "action": "remove-listing",
+          "outcome": "listing-removed"
+        }
+      ],
+      "states": [
+        "kind:artifact"
+      ]
+    },
+    {
+      "id": "workspace-dashboards-add-popup",
+      "fields": [],
+      "actions": [
+        {
+          "action": "create-dashboard",
+          "outcome": "dashboard-created"
+        },
+        {
+          "action": "add-listing",
+          "outcome": "listing-added"
+        },
+        {
+          "action": "add-catalog-dashboard",
+          "outcome": "catalog-dashboard-added"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "workspace-dashboards-everyone-grant",
+      "fields": [
+        {
+          "field": "everyone-grant",
+          "source": "referenceLink.visibleToEveryone"
+        }
+      ],
+      "actions": [
+        {
+          "action": "unset-everyone-grant",
+          "outcome": "everyone-grant-revoked"
+        },
+        {
+          "action": "set-everyone-grant",
+          "outcome": "everyone-grant-set"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "workspace-dashboards-viewer-reading",
+      "fields": [
+        {
+          "field": "entries",
+          "source": "referenceListing.viewerFiltered"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
     },
     {
       "id": "artifacts-axes-state",

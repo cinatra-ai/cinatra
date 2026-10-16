@@ -77,7 +77,7 @@ vi.mock("../run-window-actions", () => ({
 
 import { sendRunWindowTurn } from "../run-window-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { ReviewGateCard } from "../review-gate-card";
+import { ReviewGateCard, ReviewTargetFrame } from "../review-gate-card";
 
 afterEach(() => {
   cleanup();
@@ -489,5 +489,187 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
       expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
     );
     expect(headers(container)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3441 — ONE bordered target card: the header over the island
+// ---------------------------------------------------------------------------
+//
+// specs/app-artifact-review.html §IV draws a target as ONE container: "Every
+// target opens with a header that names what is under review and fixes it in
+// place … Beneath the header sits the representation slot". Its markup is one
+// bordered, rounded box whose header carries the rule that separates it from the
+// work, with nothing wrapped around the work. Measured on a real run
+// (cinatra#3441): the representation sat inside two extra bordered boxes — the
+// header as its own card, the island as a second card, the island document's
+// panel as a third. A gate that pins ONE target now draws the header and the
+// island inside ONE panel on every host, and neither half draws a frame of its
+// own. The header stays the card's and outside the frame that can fail (#3141
+// item 7), so it survives the skeleton and the recovery panel as before.
+
+describe("cinatra#3441 — a one-target gate draws ONE bordered panel: its header over its island", () => {
+  const PENDING: LifecycleCardState = { state: "pending", canDecide: true, canComment: true };
+  const panels = (root: ParentNode) => root.querySelectorAll("[data-review-target-frame]");
+  const islandIn = (root: ParentNode) =>
+    root.querySelector('[data-conformance-id="review-target-island"]') as HTMLElement | null;
+
+  for (const host of ["run_card", "chat_thread", "page_gate_region"] as const) {
+    it(`${host}: one panel holds the header, then the island, and neither draws a frame of its own`, async () => {
+      mockResolve(PENDING, { targetHeaders: [HEADER_ONE] });
+      const { container } = renderOn(host);
+      await waitFor(() => expect(islandIn(container)).not.toBeNull());
+
+      expect(panels(container)).toHaveLength(1);
+      const panel = panels(container)[0] as HTMLElement;
+      // §IV's one frame — "border:1px solid var(--line); border-radius:8px" —
+      // drawn by the panel.
+      expect(panel.classList.contains("border")).toBe(true);
+      expect(panel.classList.contains("border-line")).toBe(true);
+      expect(panel.classList.contains("rounded-control")).toBe(true);
+      // … and the rest of §IV's container: it clips the work to its rounded
+      // corners ("overflow:hidden") and paints the target's surface
+      // ("background:var(--surface-strong)"). Every class of the frame is pinned.
+      expect(panel.classList.contains("overflow-hidden")).toBe(true);
+      expect(panel.classList.contains("bg-surface-strong")).toBe(true);
+      expect(panel.className).toBe("overflow-hidden rounded-control border border-line bg-surface-strong");
+
+      const header = panel.querySelector('[data-conformance-id="review-target-header"]') as HTMLElement;
+      const island = islandIn(panel)!;
+      expect(header).not.toBeNull();
+      // Two children of the one panel, in the drawing's order, nothing between.
+      expect(header.parentElement).toBe(panel);
+      expect(island.parentElement).toBe(panel);
+      expect(header.nextElementSibling).toBe(island);
+      expect(panel.children).toHaveLength(2);
+
+      // The header draws only the rule that separates it from the work
+      // ("border-bottom:1px solid var(--line)") …
+      expect(header.classList.contains("border-b")).toBe(true);
+      expect(header.classList.contains("border-line")).toBe(true);
+      expect(header.classList.contains("border")).toBe(false);
+      expect(header.classList.contains("rounded-control")).toBe(false);
+      // … inside the padding the header has always drawn ("padding:11px 14px" in
+      // the drawing, the shipped `px-4 py-3`). Every class of the header is pinned.
+      expect(header.classList.contains("px-4")).toBe(true);
+      expect(header.classList.contains("py-3")).toBe(true);
+      expect(header.className).toBe("border-b border-line px-4 py-3");
+      // … and the island draws no border and no rounding of its own.
+      expect(island.classList.contains("border")).toBe(false);
+      expect(island.classList.contains("rounded-control")).toBe(false);
+      // It keeps what it needs inside the panel: the box its skeleton and its
+      // recovery panel are laid over, the clip, and the target's surface.
+      expect(island.className).toBe("relative overflow-hidden bg-surface-strong");
+    });
+  }
+
+  it("the SETTLED reading keeps the one panel: the header the decision was taken on, over the work", async () => {
+    mockResolve({ state: "settled", outcome: "approved" }, { targetHeaders: [HEADER_ONE] });
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(islandIn(container)).not.toBeNull());
+    expect(panels(container)).toHaveLength(1);
+    const panel = panels(container)[0] as HTMLElement;
+    expect(panel.children).toHaveLength(2);
+    expect(panel.children[0]!.getAttribute("data-conformance-id")).toBe("review-target-header");
+    expect(panel.children[1]!.getAttribute("data-conformance-id")).toBe("review-target-island");
+  });
+
+  it("past the 12-second bound the header is still drawn in the panel, outside the island that failed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve(PENDING, { targetHeaders: [HEADER_ONE] });
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(islandIn(container)).not.toBeNull());
+    await act(async () => {
+      vi.advanceTimersByTime(12_500);
+    });
+    const island = islandIn(container)!;
+    expect(island.getAttribute("data-island-load-state")).toBe("timed-out");
+    expect(panels(container)).toHaveLength(1);
+    const header = panels(container)[0]!.querySelector('[data-conformance-id="review-target-header"]');
+    expect(header).not.toBeNull();
+    expect(header!.textContent).toContain(HEADER_ONE.title);
+    expect(island.contains(header!)).toBe(false);
+  });
+
+  it("an answer that carried no header draws no panel: the island keeps its own frame, as before", async () => {
+    mockResolve(PENDING);
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(islandIn(container)).not.toBeNull());
+    expect(panels(container)).toHaveLength(0);
+    expect(islandIn(container)!.classList.contains("border")).toBe(true);
+    expect(islandIn(container)!.classList.contains("rounded-control")).toBe(true);
+  });
+
+  it("a gate opened before one review per artifact that pins several keeps today's reading (cinatra#3356)", async () => {
+    mockResolve(PENDING, { targetHeaders: [HEADER_ONE, HEADER_TWO] });
+    const { container } = renderOn("run_card");
+    await waitFor(() => expect(islandIn(container)).not.toBeNull());
+    expect(panels(container)).toHaveLength(0);
+    expect(headers(container)).toHaveLength(2);
+    for (const h of headers(container)) expect(h.classList.contains("rounded-control")).toBe(true);
+    expect(islandIn(container)!.classList.contains("rounded-control")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3441 — the island is never mounted again when the header count moves
+// ---------------------------------------------------------------------------
+//
+// The one panel stands round an answer that carries exactly ONE header, and a
+// later answer for the SAME gate may carry another number: a header read that
+// failed answers none, and a gate that still pins several may lose one it can
+// no longer read. The island is a live frame — its load state, its bound, the
+// height its document reported, the focus inside it and, on the widget, an
+// address that is spent the moment it paints — so a re-render that moves the
+// header count across one keeps the SAME island and the SAME iframe: only the
+// classes round them change.
+
+describe("cinatra#3441 — the island keeps its element when the header count crosses one", () => {
+  const SRC = "/lifecycle/review-island?ref=ref-3441";
+  const frameWith = (targetHeaders: readonly (typeof HEADER_ONE)[] | null) => (
+    <LifecycleCardSurfaceProvider host="run_card">
+      <ReviewTargetFrame
+        headers={targetHeaders}
+        islandSrc={SRC}
+        islandCredentialed={false}
+        onRetryResolve={() => undefined}
+      />
+    </LifecycleCardSurfaceProvider>
+  );
+  const islandIn = (root: ParentNode) =>
+    root.querySelector('[data-conformance-id="review-target-island"]') as HTMLElement;
+
+  it("one header, then none, then several, then one again: the same island and the same iframe throughout", () => {
+    const { container, rerender } = render(frameWith([HEADER_ONE]));
+    const island = islandIn(container);
+    const iframe = island.querySelector("iframe");
+    expect(iframe).not.toBeNull();
+    expect(island.parentElement!.hasAttribute("data-review-target-frame")).toBe(true);
+
+    for (const next of [null, [HEADER_ONE, HEADER_TWO], [HEADER_ONE]]) {
+      rerender(frameWith(next));
+      expect(islandIn(container)).toBe(island);
+      expect(island.querySelector("iframe")).toBe(iframe);
+    }
+    expect(island.parentElement!.hasAttribute("data-review-target-frame")).toBe(true);
+  });
+
+  it("an answer without exactly one header draws no box round the island: the element stands and draws nothing", () => {
+    for (const targetHeaders of [null, [HEADER_ONE, HEADER_TWO]]) {
+      const { container, unmount } = render(frameWith(targetHeaders));
+      const island = islandIn(container);
+      const holder = island.parentElement!;
+      expect(holder.hasAttribute("data-review-target-frame")).toBe(false);
+      // `display: contents`: the header(s) and the island sit in the card's own
+      // column exactly as they did, each in its own frame.
+      expect(holder.className).toBe("contents");
+      expect(island.className).toBe(
+        "relative overflow-hidden rounded-control border border-line bg-surface-strong",
+      );
+      expect(holder.querySelectorAll('[data-conformance-id="review-target-header"]')).toHaveLength(
+        targetHeaders ? targetHeaders.length : 0,
+      );
+      unmount();
+    }
   });
 });

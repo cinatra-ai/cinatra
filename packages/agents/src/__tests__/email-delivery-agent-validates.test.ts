@@ -2,12 +2,14 @@
  * email-delivery-agent OAS — send-confirmation gated shape (cinatra#1961).
  *
  * Per the owner ruling 2026-07-22 (groganz), EVERY campaign send pauses at a
- * confirmation gate. The flow is start → prepare → approval_gate → send →
- * delivery_summary → end: a read-only prepare step summarizes the pending send from the real
- * campaign data, an InputMessageNode approval gate surfaces that summary, and
- * the send node (the unchanged #1946 primitive path) runs ONLY after the
- * operator approves. Trigger/wait components remain absent (TriggerWaitNode is
- * not a pyagentspec component).
+ * confirmation gate. The flow is start → prepare → approval_gate →
+ * file_recipients → send → delivery_summary → end: a read-only prepare step
+ * summarizes the pending send from the real campaign data, an InputMessageNode
+ * approval gate surfaces that summary, file_recipients files one recipient
+ * record per confirmed recipient only after the operator approves (cinatra#3089;
+ * a refused record ends the run before the send), and the send node (the
+ * unchanged #1946 primitive path) runs after it. Trigger/wait components
+ * remain absent (TriggerWaitNode is not a pyagentspec component).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -37,7 +39,7 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
     expect(errors).toEqual([]);
   });
 
-  it("control flow is start → prepare → approval_gate → send → delivery_summary → end", () => {
+  it("control flow is start → prepare → approval_gate → file_recipients → send → delivery_summary → end", () => {
     const edges = (oas.control_flow_connections as Array<{
       from_node: { $component_ref: string };
       to_node: { $component_ref: string };
@@ -45,39 +47,54 @@ describe("email-delivery-agent OAS — send-confirmation gated shape", () => {
     expect(edges).toEqual([
       "start->prepare",
       "prepare->approval_gate",
-      "approval_gate->send",
+      "approval_gate->file_recipients",
+      "file_recipients->send",
       "send->delivery_summary",
       "delivery_summary->end",
     ]);
   });
 
-  it("nodes is exactly [start, prepare, approval_gate, send, delivery_summary, end]", () => {
+  it("nodes is exactly [start, prepare, approval_gate, file_recipients, send, delivery_summary, end]", () => {
     const nodes = (oas.nodes as Array<{ $component_ref: string }>).map(
       (n) => n.$component_ref,
     );
-    expect(nodes).toEqual(["start", "prepare", "approval_gate", "send", "delivery_summary", "end"]);
+    expect(nodes).toEqual([
+      "start",
+      "prepare",
+      "approval_gate",
+      "file_recipients",
+      "send",
+      "delivery_summary",
+      "end",
+    ]);
     const refs = Object.keys(oas.$referenced_components as Record<string, unknown>);
     expect(refs.sort()).toEqual([
       "approval_gate",
       "delivery_summary",
       "end",
+      "file_recipients",
       "prepare",
       "send",
       "start",
     ]);
   });
 
-  it("RESUME CANNOT SKIP THE GATE: the only control-flow edge into `send` is from approval_gate", () => {
+  it("RESUME CANNOT SKIP THE GATE: the only control-flow edge into `send` is from file_recipients, and the only one into file_recipients is from approval_gate", () => {
     // The owner ruling requires that the send never runs without an approval.
-    // Structurally that means the gate is the sole predecessor of `send` — no
-    // start->send / prepare->send bypass edge exists, so a resume lands at the
+    // Structurally that means the only road to `send` runs through the gate:
+    // file_recipients is the sole predecessor of `send` and the gate is the
+    // sole predecessor of file_recipients (cinatra#3089: the records are filed
+    // only after the approval) — no start->send / prepare->send /
+    // prepare->file_recipients bypass edge exists, so a resume lands at the
     // gate and can only proceed through it.
     const edges = oas.control_flow_connections as Array<{
       from_node: { $component_ref: string };
       to_node: { $component_ref: string };
     }>;
     const intoSend = edges.filter((e) => e.to_node.$component_ref === "send");
-    expect(intoSend.map((e) => e.from_node.$component_ref)).toEqual(["approval_gate"]);
+    expect(intoSend.map((e) => e.from_node.$component_ref)).toEqual(["file_recipients"]);
+    const intoFiling = edges.filter((e) => e.to_node.$component_ref === "file_recipients");
+    expect(intoFiling.map((e) => e.from_node.$component_ref)).toEqual(["approval_gate"]);
   });
 
   it("approval_gate is an InputMessageNode approval gate (requiresApproval + surfaceGateInputs + self-namespaced renderer)", () => {

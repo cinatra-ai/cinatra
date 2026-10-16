@@ -86,13 +86,17 @@ export async function POST(req: Request): Promise<Response> {
     // renderer carries the token back to /api/context-finalize, which
     // recomputes the same payload and refuses a drifted write.
     //
-    // BEST-EFFORT HERE, FAIL-CLOSED THERE. The per-slot contract above is
-    // exactly as it landed and does not depend on the planner, so a manifest
-    // that cannot be planned (an OAS that went unreadable, a resolver fault on
-    // a sibling slot) still serves this slot's gate. It simply serves no token,
-    // and finalize REQUIRES one, so the selection is refused there rather than
-    // written against an allocation nobody could compute.
-    let gate: GateAllocation | null = null;
+    // A FAILED PLANNING IS THIS ROUTE'S OWN REFUSAL (cinatra#4146). Finalize
+    // REQUIRES the token, so a gate served without one (an OAS that went
+    // unreadable, a resolver fault on a sibling slot) could only end in
+    // finalize's `allocation_token_required`, a refusal that names the caller
+    // for a fault that happened here, while this route counted a success. The
+    // failure is answered here instead, under its own stable code, and the
+    // catch below logs it with the run and slot ids and counts it as a
+    // rejection. The status is finalize's own for the same fault (409
+    // `allocation_unavailable`): the allocation cannot be computed against the
+    // world as it is, and the same request sent again does not change that.
+    let gate: GateAllocation;
     try {
       gate = await planAllocationForGate({
         actor: ctx.actor,
@@ -100,12 +104,17 @@ export async function POST(req: Request): Promise<Response> {
         trustedSlotPackageName: ctx.trustedSlotPackageName,
         projectId: ctx.projectId,
       });
-    } catch {
-      gate = null;
+    } catch (err) {
+      throw new ContextRouteError(
+        409,
+        "allocation_planning_failed",
+        `the manifest-wide allocation for this gate could not be planned: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
-    const plannedRefs = gate
-      ? (allocationForSlot(gate.allocation, parsed.data.slotId)?.refs ?? [])
-      : [];
+    const plannedRefs =
+      allocationForSlot(gate.allocation, parsed.data.slotId)?.refs ?? [];
     // #1197: debug-level lifecycle trace + per-kind ok counter.
     recordContextRouteSuccess({
       kind: "resolve",
@@ -130,14 +139,11 @@ export async function POST(req: Request): Promise<Response> {
       // manifest-wide plan. The shipped workflow carries BOTH: the token on
       // each finalize, and the planned set to the renderer and the autonomous
       // submission, because the pool above is wider than the allocation and a
-      // choice taken from it is a choice finalize refuses. Both are absent when
-      // the manifest could not be planned, never a guessed value.
-      ...(gate
-        ? {
-            allocationToken: gate.token,
-            plannedRefs,
-          }
-        : {}),
+      // choice taken from it is a choice finalize refuses. Both are ALWAYS
+      // present: a manifest that could not be planned is refused above
+      // (cinatra#4146), never answered with a missing or a guessed value.
+      allocationToken: gate.token,
+      plannedRefs,
     });
   } catch (err) {
     if (err instanceof ContextRouteError) {

@@ -432,12 +432,15 @@ describe("SchemaConfigConnectorSetup — the disconnect confirmation as §II dra
     for (const token of ["border-b", "border-line-strong", "pb-[9px]", "mb-[10px]"]) {
       expect(tokens, `the title carries ${token}`).toContain(token);
     }
-    expect(title.parentElement).toBe(description.parentElement);
-    expect(title.nextElementSibling).toBe(description);
+    // cinatra#4123: the title and the text each stand in their own size
+    // wrapper, the two wrappers side by side in the one plain block.
+    const block = title.parentElement!.parentElement!;
+    expect(description.parentElement!.parentElement).toBe(block);
+    expect(title.parentElement!.nextElementSibling).toBe(description.parentElement);
     // No other line: no etched rule after the text (above the buttons), none
     // on the text block, the description or the button row.
     expect(dialog.querySelectorAll('.divider-etched-after, .divider-etched, [data-slot="alert-dialog-header"]')).toHaveLength(0);
-    for (const element of [title.parentElement!, description, footer]) {
+    for (const element of [block, title.parentElement!, description.parentElement!, description, footer]) {
       expect(classesOf(element).filter((token) => /^border(-[trblxy])?$/.test(token))).toEqual([]);
     }
     expect(tokenIn(".cinatra", "--line-strong")).toBe("#15213a");
@@ -508,5 +511,60 @@ describe("SchemaConfigConnectorSetup — the disconnect confirmation as §II dra
     );
     expect(cancel.textContent?.trim()).toBe("Cancel");
     expect(confirm.textContent?.trim()).toBe("Disconnect");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4123 — the confirmation's two type sizes, quoted from the same
+// drawing (specs/app-connectors.html §II, "Example — disconnect ·
+// confirmation", design main 8a5d5013):
+//
+//   the title   "font-size: 15px"
+//   the text    "font-size: 13px; color: var(--muted); line-height: 1.55"
+//
+// The sizes are the named roles --text-confirm-title and --text-confirm-body,
+// in BOTH token tables. The app lint bans a bracket size (text-[15px]) and the
+// app's plain tailwind-merge reads an unknown text-* token as a colour, so a
+// role token handed to the shared title's cn() would drop the title's colour
+// or lose to the primitive's text-lg. The role therefore stands on a plain
+// wrapper, and the title and the text take it through text-[length:inherit],
+// which tailwind-merge reads as a size: the primitive's text-lg and text-sm
+// are gone from the rendered class list.
+// ---------------------------------------------------------------------------
+
+const THEME = readFileSync(join(process.cwd(), "packages/design/src/theme.css"), "utf8");
+
+describe("SchemaConfigConnectorSetup — the confirmation's 15px title and 13px text (cinatra#4123)", () => {
+  for (const [table, text] of [
+    ["src/app/globals.css", GLOBALS],
+    ["packages/design/src/theme.css", THEME],
+  ] as const) {
+    it(`${table} names the drawing's sizes as roles: --text-confirm-title 15px, --text-confirm-body 13px`, () => {
+      expect(text).toContain("--text-confirm-title: 15px;");
+      expect(text).toContain("--text-confirm-body: 13px;");
+    });
+  }
+
+  it('"font-size: 15px": the title takes the --text-confirm-title role and the shared text-lg gives way', async () => {
+    const { title } = await openDisconnectConfirm();
+    expect(classesOf(title.parentElement!)).toEqual(["text-confirm-title"]);
+    const tokens = classesOf(title);
+    expect(tokens).toContain("text-[length:inherit]");
+    expect(tokens.filter((token) => /^text-(xs|sm|base|lg|xl|\d?xl|\[)/.test(token))).toEqual(["text-[length:inherit]"]);
+    // The colour and the title's own line height survive the merge.
+    for (const token of ["text-foreground", "leading-normal", "italic", "font-extrabold"]) {
+      expect(tokens, `the title keeps ${token}`).toContain(token);
+    }
+  });
+
+  it('"font-size: 13px; color: var(--muted); line-height: 1.55": the text takes the --text-confirm-body role and the shared text-sm gives way', async () => {
+    const { description } = await openDisconnectConfirm();
+    expect(classesOf(description.parentElement!)).toEqual(["text-confirm-body"]);
+    const tokens = classesOf(description);
+    expect(tokens).toContain("text-[length:inherit]");
+    expect(tokens).not.toContain("text-sm");
+    for (const token of ["text-muted-foreground", "leading-[1.55]"]) {
+      expect(tokens, `the text keeps ${token}`).toContain(token);
+    }
   });
 });

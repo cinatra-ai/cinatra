@@ -90,7 +90,105 @@ export function defaultRepoSyncDeps() {
     readdir: (p) => readdirSync(p),
     mkdirp: (p) => mkdirSync(p, { recursive: true }),
     unlink: (p) => rmSync(p, { force: true }),
+    removeTree: (p) => rmSync(p, { recursive: true, force: true }),
+    sleep: (ms) => sleepSync(ms),
   };
+}
+
+// Synchronous wait (the whole sync is synchronous): blocks this thread only.
+export function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// ---------------------------------------------------------------------------
+// Bounded retry for the git calls that talk to the remote (clone and fetch).
+//
+// A CI runner's DNS or connection can drop for a moment ("Could not resolve
+// host: github.com"); one such drop used to fail the whole job. Only a
+// TRANSIENT network failure is retried, at most NETWORK_RETRY_DELAYS_MS.length
+// more times with these waits between attempts. Every other failure fails on
+// its first attempt exactly as before — above all an unreachable pin ("not our
+// ref"), the bump-the-lock signal, which must stay loud even when git also
+// prints "the remote end hung up unexpectedly" beside it.
+// ---------------------------------------------------------------------------
+
+export const NETWORK_RETRY_DELAYS_MS = Object.freeze([2000, 8000]);
+
+// Checked FIRST: a failure that names one of these is never transient, whatever
+// else its output says.
+export const DEFINITIVE_GIT_FAILURE_PATTERNS = Object.freeze([
+  /not our ref/i,
+  /unadvertised object/i,
+  /couldn't find remote ref/i,
+  /not found in upstream/i,
+  /Repository not found/i,
+  /Authentication failed/i,
+  /could not read Username/i,
+  /returned error: 4(?!29)\d\d/i,
+  /HTTP 4(?!29)\d\d/i,
+]);
+
+// The transient network failures, each with the reason a retry line names; the
+// first match names the reason (an HTTP answer before the "RPC failed" around it).
+export const TRANSIENT_GIT_NETWORK_PATTERNS = Object.freeze([
+  Object.freeze({ reason: "could not resolve host", pattern: /Could not resolve host/i }),
+  Object.freeze({ reason: "failed to connect", pattern: /Failed to connect to/i }),
+  Object.freeze({ reason: "connection reset", pattern: /Connection reset/i }),
+  Object.freeze({ reason: "connection timed out", pattern: /Connection timed out|Operation timed out/i }),
+  Object.freeze({ reason: "early EOF", pattern: /early EOF/i }),
+  Object.freeze({ reason: "remote end hung up", pattern: /the remote end hung up unexpectedly/i }),
+  Object.freeze({ reason: "HTTP 5xx", pattern: /returned error: 5\d\d|HTTP 5\d\d/i }),
+  Object.freeze({ reason: "HTTP 429", pattern: /returned error: 429|HTTP 429/i }),
+  Object.freeze({ reason: "RPC failed", pattern: /RPC failed/i }),
+]);
+
+/**
+ * The reason a failed git call is a transient network failure, or null when it
+ * is not one. Reads the error's captured stderr and its message (execFileSync
+ * puts the stderr into both).
+ */
+export function transientGitNetworkReason(err) {
+  if (err === null || err === undefined) return null;
+  const text = `${String(err.stderr ?? "")}\n${String(err.message ?? "")}`;
+  if (DEFINITIVE_GIT_FAILURE_PATTERNS.some((re) => re.test(text))) return null;
+  const hit = TRANSIENT_GIT_NETWORK_PATTERNS.find(({ pattern }) => pattern.test(text));
+  return hit ? hit.reason : null;
+}
+
+/**
+ * Run one network git call with the bounded retry. `beforeRetry` runs after a
+ * transient failure and before the next attempt (the clone uses it to remove
+ * what the failed attempt left); when it answers false the call is not retried
+ * and that failure's error is thrown. The last error is thrown unchanged.
+ */
+export function withNetworkRetry({ run, what, pkgName, deps, log, beforeRetry }) {
+  const sleep = deps.sleep ?? sleepSync;
+  const attempts = NETWORK_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return run();
+    } catch (err) {
+      const reason = transientGitNetworkReason(err);
+      if (reason === null) throw err;
+      if (attempt >= attempts) {
+        log(`  ${pkgName}: ${what} failed ${attempts} times on a transient network error (${reason}) — giving up.`);
+        throw err;
+      }
+      if (beforeRetry && beforeRetry() === false) {
+        log(
+          `  ${pkgName}: ${what} failed on a transient network error (${reason}); not retried — ` +
+            `what the failed attempt left could not be told apart from what was there before.`,
+        );
+        throw err;
+      }
+      const waitMs = NETWORK_RETRY_DELAYS_MS[attempt - 1];
+      log(
+        `  ${pkgName}: ${what} failed on a transient network error (${reason}); ` +
+          `attempt ${attempt + 1} of ${attempts} in ${waitMs / 1000} s.`,
+      );
+      sleep(waitMs);
+    }
+  }
 }
 
 // Runtime-written published-marker debris (cinatra#1136). Older app releases'
@@ -209,7 +307,15 @@ export function syncOneRepo({
     } catch {
       present = false;
     }
-    if (!present) git(["fetch", "origin", pin], dest);
+    if (!present) {
+      withNetworkRetry({
+        run: () => git(["fetch", "origin", pin], dest),
+        what: `git fetch of the pinned commit ${pin.slice(0, 12)}`,
+        pkgName,
+        deps,
+        log,
+      });
+    }
     git(["checkout", "--detach", pin], dest);
     const head = git(["rev-parse", "HEAD"], dest).trim();
     if (head !== pin) {
@@ -250,7 +356,47 @@ export function syncOneRepo({
         : `  ${pkgName}: cloning ${redactGitUrl(url)} (${branch}) -> ${dest}`,
     );
     deps.mkdirp(path.dirname(dest));
-    git(["clone", "--branch", branch, "--single-branch", "--", url, dest], path.dirname(dest));
+    // A failed clone attempt may leave a partial destination. Before the next
+    // attempt remove ONLY what this call created: the whole destination when it
+    // was absent, else the entries that were not in the empty directory before.
+    // When those entries cannot be read (before the call or after the attempt)
+    // nothing is removed and the call is not retried: it fails closed.
+    const destExisted = exists;
+    let entriesBefore = new Set();
+    let baselineRead = true;
+    if (destExisted) {
+      try {
+        entriesBefore = new Set(deps.readdir(dest));
+      } catch {
+        baselineRead = false;
+      }
+    }
+    const removeTree = deps.removeTree ?? ((p) => rmSync(p, { recursive: true, force: true }));
+    withNetworkRetry({
+      run: () => git(["clone", "--branch", branch, "--single-branch", "--", url, dest], path.dirname(dest)),
+      what: "git clone",
+      pkgName,
+      deps,
+      log,
+      beforeRetry: () => {
+        if (!deps.exists(dest)) return true;
+        if (!destExisted) {
+          removeTree(dest);
+          return true;
+        }
+        if (!baselineRead) return false;
+        let entriesNow;
+        try {
+          entriesNow = deps.readdir(dest);
+        } catch {
+          return false;
+        }
+        for (const name of entriesNow) {
+          if (!entriesBefore.has(name)) removeTree(path.join(dest, name));
+        }
+        return true;
+      },
+    });
     if (sha) {
       ensurePinnedCommit();
       return { pkgName, action: "cloned", changed: true, pinnedSha: sha };
@@ -422,7 +568,7 @@ export function syncOneRepo({
   }
 
   const headBefore = git(["rev-parse", "HEAD"], dest).trim();
-  git(["fetch", "origin", branch], dest);
+  withNetworkRetry({ run: () => git(["fetch", "origin", branch], dest), what: "git fetch", pkgName, deps, log });
   if (force) {
     git(["reset", "--hard", `origin/${branch}`], dest);
     return { pkgName, action: "force-reset" };
