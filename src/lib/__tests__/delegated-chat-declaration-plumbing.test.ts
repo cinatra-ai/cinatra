@@ -1,9 +1,12 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterAll, afterEach, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   registerExtensionMcpTool,
   listExtensionMcpTools,
   _resetExtensionMcpForTests,
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+  type CapturedHostPrimitive,
 } from "@/lib/extension-mcp-registry";
 import {
   planExtensionToolDiscovery,
@@ -17,6 +20,22 @@ import {
   resolveVersionKeyedMcpTool,
   __resetVersionKeyedServingForTests,
 } from "@/lib/extension-version-keyed-serving";
+import * as auditModule from "@/lib/authz/audit";
+import * as augmentModule from "@/lib/authz/inventory-augment";
+import * as extensionRegistryModule from "@/lib/extension-mcp-registry";
+import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
+import { mcpRequestContextStorage, type McpRequestContext } from "@cinatra-ai/mcp-server";
+import type { ExtensionMcpToolConfig } from "@cinatra-ai/sdk-extensions/mcp-contract";
+
+// The host's primitive map, replaced for the retained-version self-invoker
+// cases at the foot of this file: `buildHostSelfPrimitiveHandlers` returns the
+// map those cases build through the real union plan, the real replay builder
+// and the real recording server. Every other case reads `mcp-server.ts` as
+// source text only. The replacement is lifted after the file's cases.
+const selfInvoker = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }));
+vi.mock("@/lib/mcp-server", () => ({
+  buildHostSelfPrimitiveHandlers: async () => selfInvoker.handlers,
+}));
 
 // ---------------------------------------------------------------------------
 // The typed delegated-chat declaration, HOP BY HOP (cinatra#2771).
@@ -55,6 +74,15 @@ afterEach(() => {
 beforeEach(() => {
   __resetVersionKeyedServingForTests();
 });
+afterAll(() => {
+  __resetHostSelfPrimitiveHandlers();
+  vi.doUnmock("@/lib/mcp-server");
+  vi.resetModules();
+});
+
+// The two input fields an outward declaration names for the stored item and
+// its revision.
+const SUBJECT_FIELDS = { artifactId: "itemId", representationRevisionId: "revisionId" };
 
 describe("hop 1a — the DEFAULT extension MCP registry", () => {
   it("carries a declared class through registration", () => {
@@ -87,6 +115,15 @@ describe("hop 1a — the DEFAULT extension MCP registry", () => {
     });
     expect(listExtensionMcpTools()[0].delegatedChat).toBe("none");
   });
+
+  it("keeps an outward declaration on the registry entry, the very object the registration wrote, and adds none", () => {
+    const outward = { subject: { ...SUBJECT_FIELDS } };
+    registerExtensionMcpTool(PKG, { name: "example_outward_tool", handler, outward });
+    registerExtensionMcpTool(PKG, { name: "acme_thing_list", handler });
+    const byName = new Map(listExtensionMcpTools().map((t) => [t.name, t]));
+    expect(byName.get("example_outward_tool")?.outward).toBe(outward);
+    expect(Object.prototype.hasOwnProperty.call(byName.get("acme_thing_list"), "outward")).toBe(false);
+  });
 });
 
 describe("hop 1b — the VERSION-KEYED retention sink (a pinned non-default sibling)", () => {
@@ -108,6 +145,17 @@ describe("hop 1b — the VERSION-KEYED retention sink (a pinned non-default sibl
 
     const malformed = resolveVersionKeyedMcpTool(PKG, "2.0.0", "acme_other_list");
     expect(malformed.kind === "serve" && malformed.value.delegatedChat).toBe("none");
+  });
+
+  it("keeps an outward declaration on the retained tool, the very object the registration wrote", () => {
+    const outward = {};
+    const sink = beginVersionKeyedRegistration(PKG, "2.0.0");
+    sink.retainMcpTool({ name: "example_outward_tool", handler, packageName: PKG, outward });
+    sink.commit();
+
+    const retained = resolveVersionKeyedMcpTool(PKG, "2.0.0", "example_outward_tool");
+    expect(retained.kind).toBe("serve");
+    expect(retained.kind === "serve" && retained.value.outward).toBe(outward);
   });
 });
 
@@ -134,6 +182,21 @@ describe("hop 2 — VERSIONED DISCOVERY (the hand-copied DiscoveryDefaultTool li
     const second = plan.entries[1];
     expect(second.mode === "default" && second.tool.delegatedChat).toBeUndefined();
   });
+
+  it("the default replay keeps the outward declaration unchanged, and adds none", async () => {
+    const outward = { subject: { ...SUBJECT_FIELDS } };
+    const defaults: DiscoveryDefaultTool[] = [
+      { name: "example_outward_tool", packageName: PKG, handler, outward },
+      { name: "acme_plain_list", packageName: PKG, handler },
+    ];
+    const plan = await planExtensionToolDiscovery(defaults, noIdentityDeps);
+    expect(plan.entries).toHaveLength(2);
+    const [first, second] = plan.entries;
+    expect(first.mode).toBe("default");
+    expect(first.tool.outward).toBe(outward);
+    expect(second.mode).toBe("default");
+    expect(Object.prototype.hasOwnProperty.call(second.tool, "outward")).toBe(false);
+  });
 });
 
 describe("hop 4 — CALL-TIME LOOKUP: the self-invoker's retained union plan", () => {
@@ -154,6 +217,38 @@ describe("hop 4 — CALL-TIME LOOKUP: the self-invoker's retained union plan", (
     const byName = new Map(plan.register.map((e) => [e.name, e]));
     expect(byName.get("acme_v_only")?.delegatedChat).toBe("none");
     expect(byName.get("acme_v_plain")?.delegatedChat).toBeUndefined();
+  });
+
+  it("carries the retained registration's outward declaration into the register list, subject preserved", () => {
+    const sink = beginVersionKeyedRegistration(PKG, "2.0.0");
+    sink.retainMcpTool({
+      name: "example_outward_tool",
+      handler,
+      packageName: PKG,
+      outward: { subject: { ...SUBJECT_FIELDS } },
+    });
+    sink.commit();
+
+    const plan = planSelfInvokerRetainedUnion(listServableVersionKeyedMcpTools(), {
+      hostClaimedNames: new Set<string>(),
+      extensionClaimedNames: new Set<string>(),
+    });
+    const entry = plan.register.find((e) => e.name === "example_outward_tool");
+    expect(entry?.outward).toEqual({ subject: SUBJECT_FIELDS });
+  });
+
+  it("writes no outward declaration into the register entry of a retained registration that states none", () => {
+    const sink = beginVersionKeyedRegistration(PKG, "2.0.0");
+    sink.retainMcpTool({ name: "acme_v_plain", handler, packageName: PKG });
+    sink.commit();
+
+    const plan = planSelfInvokerRetainedUnion(listServableVersionKeyedMcpTools(), {
+      hostClaimedNames: new Set<string>(),
+      extensionClaimedNames: new Set<string>(),
+    });
+    const entry = plan.register.find((e) => e.name === "acme_v_plain");
+    expect(entry).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(entry, "outward")).toBe(false);
   });
 });
 
@@ -191,5 +286,147 @@ describe("hop 3 — the REPLAY's freshly constructed registerTool config", () =>
     // module declared, so both read it with the policy's own reader — which is
     // what the shared seam guarantees.
     expect(source).toContain("createSelfPrimitiveRecordingServer(handlers)");
+  });
+
+  it("the retained-version self-invoker replay names the outward declaration next to the delegated-chat one", () => {
+    expect(source).toContain("{ delegatedChat: entry.delegatedChat, outward: entry.outward }");
+  });
+
+  it("the default self-invoker replay passes the registry entry as it stands", () => {
+    expect(source).toContain("buildReplayedExtensionToolConfig(tool.name, tool, {");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RETAINED-VERSION SELF-INVOKER ROAD, END TO END (cinatra#3745).
+//
+// A pinned non-default version's registration goes through the retention
+// sink, the servable listing, the self-invoker's retained union plan, the real
+// replay builder with the provenance the self-invoker build writes, and the
+// real recording server. `callHostPrimitive` then decides over the captured
+// entry with the real `enforceMcpBoundary`; only the audit writer, the
+// classification reader and the extension-registry reader are test doubles,
+// restored after each case. On an agent run's frame a tool whose registration
+// declares outward waits for the person's recorded decision, and a tool that
+// declares nothing is served by the boundary's other rules.
+// ---------------------------------------------------------------------------
+describe("the retained-version self-invoker road holds a declared outward tool on a run's frame", () => {
+  const TOOL = "example_outward_tool";
+  const VERSION = "2.0.0";
+  const REASON = "outward_effect_requires_recorded_decision";
+  const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
+  const runMemberFrame = (): McpRequestContext =>
+    ({ orgId: "org-1", userId: "user-1", runId: "run-1" }) as McpRequestContext;
+
+  let auditSpy: ReturnType<typeof vi.spyOn>;
+  let classificationSpy: ReturnType<typeof vi.spyOn>;
+  let extensionSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    selfInvoker.handlers.clear();
+    __resetHostSelfPrimitiveHandlers();
+    const realLookup = augmentModule.lookupPrimitiveClassification;
+    auditSpy = vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
+    classificationSpy = vi
+      .spyOn(augmentModule, "lookupPrimitiveClassification")
+      .mockImplementation((name: string) => (name === TOOL ? { ...FIXTURE_CLASSIFICATION } : realLookup(name)));
+    extensionSpy = vi.spyOn(extensionRegistryModule, "getEffectiveExtensionMcpTool").mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    auditSpy.mockRestore();
+    classificationSpy.mockRestore();
+    extensionSpy.mockRestore();
+    vi.restoreAllMocks();
+    selfInvoker.handlers.clear();
+    __resetHostSelfPrimitiveHandlers();
+  });
+
+  /**
+   * Retain one registration at a pinned non-default version, plan the
+   * self-invoker's retained union, and capture the union entry through the real
+   * replay builder and the real recording server with the provenance the
+   * self-invoker build writes. The captured map becomes the host's primitive
+   * map. Returns the captured entry and the record of the registration's
+   * handler calls.
+   */
+  function captureRetained(outward?: ExtensionMcpToolConfig["outward"]) {
+    const handled: string[] = [];
+    const sink = beginVersionKeyedRegistration(PKG, VERSION);
+    sink.retainMcpTool({
+      name: TOOL,
+      packageName: PKG,
+      handler: async () => {
+        handled.push(TOOL);
+        return { served: true };
+      },
+      ...(outward === undefined ? {} : { outward }),
+    });
+    sink.commit();
+
+    const union = planSelfInvokerRetainedUnion(listServableVersionKeyedMcpTools(), {
+      hostClaimedNames: new Set<string>(),
+      extensionClaimedNames: new Set<string>(),
+    });
+    const entry = union.register.find((e) => e.name === TOOL);
+    if (!entry) throw new Error(`"${TOOL}" is not in the retained union`);
+
+    const handlers = new Map<string, CapturedHostPrimitive>();
+    const recording = createSelfPrimitiveRecordingServer(handlers);
+    (recording.registerTool as (...a: unknown[]) => unknown)(
+      entry.name,
+      buildReplayedExtensionToolConfig(
+        entry.name,
+        { delegatedChat: entry.delegatedChat, outward: entry.outward },
+        {
+          ownerPackage: entry.packageName,
+          resolvedVersion: entry.version,
+          dispatchTarget: {
+            kind: "extension-versioned",
+            packageName: entry.packageName,
+            version: entry.version,
+            name: entry.name.toLowerCase(),
+          },
+        },
+      ),
+      // Serves the retained registration at its own pinned version.
+      async (input: unknown) => {
+        const retained = resolveVersionKeyedMcpTool(entry.packageName, entry.version, entry.name);
+        if (retained.kind !== "serve") throw new Error(`"${entry.name}" is not served at ${entry.version}`);
+        return { structuredContent: await retained.value.handler(input) };
+      },
+    );
+    for (const [name, captured] of handlers) selfInvoker.handlers.set(name, captured);
+    __resetHostSelfPrimitiveHandlers();
+    const captured = handlers.get(TOOL);
+    if (!captured) throw new Error(`"${TOOL}" is not captured`);
+    return { captured, handled };
+  }
+
+  it("plans `outward: {}` as outward and refuses the call on a run's frame with the named reason, without invoking the handler", async () => {
+    const { captured, handled } = captureRetained({});
+    expect(captured.planned.declaredOutward).toEqual({ subject: null });
+    await expect(
+      mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
+    ).rejects.toThrow(REASON);
+    expect(handled).toEqual([]);
+  });
+
+  it("plans a declared subject as exactly that subject and refuses the call on a run's frame with the named reason", async () => {
+    const { captured, handled } = captureRetained({ subject: { ...SUBJECT_FIELDS } });
+    expect(captured.planned.declaredOutward).toEqual({ subject: SUBJECT_FIELDS });
+    await expect(
+      mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
+    ).rejects.toThrow(REASON);
+    expect(handled).toEqual([]);
+  });
+
+  it("serves a retained registration without the declaration on a run's frame", async () => {
+    const { captured, handled } = captureRetained();
+    expect(captured.planned.declaredOutward).toBeNull();
+    await expect(
+      mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
+    ).resolves.toEqual({ served: true });
+    expect(handled).toEqual([TOOL]);
   });
 });

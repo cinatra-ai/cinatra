@@ -103,7 +103,7 @@ import "server-only";
 
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
-import type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
+import type { DelegatedChatToolClass, HostMcpToolRegistration } from "@cinatra-ai/sdk-extensions";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import {
   resolveVersionKeyedMcpTool,
@@ -701,6 +701,8 @@ export type DiscoveryDefaultTool = {
   handler: (input: unknown) => unknown | Promise<unknown>;
   /** The registration's typed delegated-chat declaration. Narrow-only. */
   delegatedChat?: DelegatedChatToolClass;
+  /** The registration's outward declaration (cinatra#3745), as the registration wrote it. */
+  outward?: HostMcpToolRegistration["outward"];
   /**
    * The EXACT version of the record that produced this registration
    * (cinatra#2817 slice 1), or `null`/absent when the host cannot state one.
@@ -933,6 +935,8 @@ export type SelfInvokerRetainedUnionPlan = {
     packageName: string;
     version: string;
     delegatedChat?: DelegatedChatToolClass;
+    /** The retained registration's outward declaration (cinatra#3745), as it wrote it. */
+    outward?: HostMcpToolRegistration["outward"];
   }>;
   /** Effective-set entries for the names actually registered (merge/upsert semantics). */
   effective: Array<{ name: string; packageName: string }>;
@@ -988,6 +992,8 @@ export function planSelfInvokerRetainedUnion(
       packageName: r.packageName,
       version: r.version,
       delegatedChat: r.tool.delegatedChat,
+      // The retained registration's outward declaration, only when it states one.
+      ...(r.tool.outward !== undefined ? { outward: r.tool.outward } : {}),
     });
     effective.push({ name, packageName: r.packageName });
   }
