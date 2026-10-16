@@ -39,13 +39,15 @@ ${AG_UI_EVENT_TYPES.join(", ")}
 
 ## Event stream URL
 
-\`{CINATRA_BASE_URL}/api/a2a?taskId={runId}\` — SSE stream; events carry an \`ag-ui\` channel header.
+\`{CINATRA_BASE_URL}/api/agents/runs/{runId}/stream\` — the per-run SSE stream (a GET that answers
+\`text/event-stream\`). It answers only a caller who may read the run. \`/api/a2a\` is not this stream:
+it is the A2A JSON-RPC endpoint (POST), and it reads a task id from the JSON-RPC body, never from the URL.
 
 ## Ordering guarantees
 
 Events are emitted in causal order per run. RUN_STARTED is always first; RUN_FINISHED or
-RUN_ERROR is always last. Reconnect by re-issuing the same SSE request — the server replays
-from the last delivered event for the given taskId.
+RUN_ERROR is always last. Reconnect by re-issuing the same GET with a \`Last-Event-ID\` header:
+the server resumes after that event.
 `;
 
 const A2A_GUIDE = `# A2A Agent Card Index — Cinatra MCP Server
@@ -64,7 +66,8 @@ The two path segments are derived from the agent's packageName (\`@vendor/slug\`
 ## Supported JSON-RPC methods
 
 - \`message/send\` — start a run
-- \`message/sendStreaming\` — start a run with SSE event stream
+- \`message/stream\` — start a run with SSE event stream
+- \`tasks/resubscribe\` — re-attach to the SSE stream of a task that is still running
 - \`tasks/get\` — fetch task state
 - \`tasks/cancel\` — cancel a running task
 
@@ -88,7 +91,7 @@ export function formatA2uiSurfaceRef(
         r.hitlScreens.map((s) => `- ${s}`).join("\n"),
     )
     .join("\n\n");
-  return `# A2UI Surface Reference — Cinatra MCP Server\n\nSpec: https://a2ui.org\n\nThe \`a2uiSurfaceId\` field on agent JSON nodes identifies the HITL surface a client must render when an agent enters \`pending_approval\` state.\n\n${sections}\n`;
+  return `# A2UI Surface Reference — Cinatra MCP Server\n\nSpec: https://a2ui.org\n\nWhen a run waits on a person (\`pending_approval\`), the \`INTERRUPT\` event on the run's stream names the HITL surface a client must render: its \`xRenderer\` field is the surface key. The surfaces each agent declares are listed below.\n\n${sections}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +142,7 @@ export function buildAgentManifest(template: AgentTemplateRecord): AgentManifest
     protocols: {
       a2a,
       agUi: {
-        eventStreamUrl: "/api/a2a?taskId={runId}",
+        eventStreamUrl: "/api/agents/runs/{runId}/stream",
         eventTypes: AG_UI_EVENT_TYPES,
       },
       a2ui: { surfaceIds: surfaces },

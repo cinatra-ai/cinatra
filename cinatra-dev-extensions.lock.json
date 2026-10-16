@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "f5a5dba5f0f409b49a8a0eb00750bce7358b0eeb"
+      "resolvedSha": "19cb2cd1f9f6b3430d0d21f14b6fffa62d893771"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -400,7 +400,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "4c6f4098513e46e482638320dfb318ef412adcea"
+      "resolvedSha": "c96d773ae2b4fac1d9cb32e1133e4b374f2d2e15"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",

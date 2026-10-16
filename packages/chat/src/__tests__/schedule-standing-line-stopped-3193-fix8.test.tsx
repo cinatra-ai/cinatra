@@ -31,7 +31,7 @@
  * THE REAL ROAD, AND A REAL PRESS. Like its fix-leg-7 sibling this file drives
  * the WHOLE conversation column — the real composer, the real card, resolved
  * through the real refetch seam — and it does not hand the card a stopped body
- * to begin with: it presses Cancel schedule, confirms the strip, answers the
+ * to begin with: it presses Cancel schedule, confirms the dialog, answers the
  * real decision endpoint, and lets the card re-resolve the way a landed
  * decision really makes it. What a reader sees after the press is what is
  * measured.
@@ -270,7 +270,7 @@ async function mountFiredRecurringTurn() {
   return result;
 }
 
-/** Press Cancel schedule and confirm the strip — the reader's own two acts. */
+/** Press Cancel schedule and confirm it in the shared dialog — the reader's own two acts. */
 async function stopTheSchedule(container: HTMLElement): Promise<void> {
   const cancel = await waitFor(() => {
     const el = container.querySelector('[data-action="cancel-trigger-schedule"]');
@@ -278,11 +278,13 @@ async function stopTheSchedule(container: HTMLElement): Promise<void> {
     return el;
   });
   fireEvent.click(cancel);
+  // Section VI.1 (cinatra#3280): the confirmation is the shared modal
+  // AlertDialog, portalled to the document body, so it is read there.
   const confirm = await waitFor(() => {
-    const strip = container.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
-    if (strip === null) throw new Error("the ask-first strip never drew");
-    const el = strip.querySelector('[data-action="confirm-destructive"]');
-    if (el === null) throw new Error("the strip drew no confirm");
+    const dialog = document.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
+    if (dialog === null) throw new Error("the shared confirmation dialog never drew");
+    const el = dialog.querySelector('[data-action="cancel-schedule"]');
+    if (el === null) throw new Error("the dialog drew no Cancel schedule");
     return el;
   });
   fireEvent.click(confirm);

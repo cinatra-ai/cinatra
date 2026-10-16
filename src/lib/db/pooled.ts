@@ -126,6 +126,8 @@ function assertSameOwner(name: string, fp: string): void {
  * Behavior preserved from the hand-rolled sites:
  *   - lazy first-use creation (no connection at module import),
  *   - exactly-once idle-error listener registration,
+ *   - one client-error listener per client, so a checked-out client's error
+ *     never ends the process (cinatra#2894),
  *   - dev-only `globalThis` cache (keyed by `name`) for HMR reuse.
  *
  * In production the pool is module-scoped (`localInstances`); in non-production
@@ -168,6 +170,22 @@ export function getPooledDb(options: GetPooledDbOptions): Pool {
       console.error(`[${name}] pg pool idle client error:`, err.message);
     });
   }
+  // A CHECKED-OUT client has no listener of the pool's (cinatra#2894): pg-pool
+  // removes its own idle 'error' listener at checkout and adds it back at
+  // release. A backend kill, a server restart or a network cut while a client
+  // is checked out then emits 'error' on a client nobody listens to, and
+  // Node.js turns that into an uncaught exception that ends the process. pg has
+  // already failed the client's queries with that error and marked the client
+  // unusable, so the pool discards it when it is released; this listener only
+  // keeps the event from ending the process. It is attached ONCE per client,
+  // at the pool's 'connect' (emitted for each new client), so checkouts add
+  // nothing. It logs the pool name and the message only, never the
+  // connection string.
+  pool.on("connect", (client) => {
+    client.on("error", (err: Error) => {
+      console.error(`[${name}] pg pool client error:`, err.message);
+    });
+  });
 
   localInstances.set(name, pool);
   if (process.env.NODE_ENV !== "production") {
