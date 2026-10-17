@@ -118,11 +118,9 @@
       "topLevel": 3,
       "imports": [
         "date-fns",
-        "next/link",
         "packages/agents/src/list-picker-actions",
         "react",
         "src/components/ui/badge",
-        "src/components/ui/button",
         "src/components/ui/card",
         "src/components/ui/input",
         "src/lib/cinatra-toast"

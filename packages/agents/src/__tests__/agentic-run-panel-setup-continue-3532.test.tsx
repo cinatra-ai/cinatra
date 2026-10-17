@@ -383,3 +383,119 @@ describe("AgenticRunPanel — a setup field whose renderer draws no control (cin
     expect(entry!.drawsOwnSubmit).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#3562 — A RENDERER THAT REPORTS ITS VALUE UNSENDABLE HOLDS THE
+// CONTINUE DRAWN FOR ITS GATE, on the setup road and mid-run alike.
+// ---------------------------------------------------------------------------
+
+/**
+ * A pack-shaped list step that takes several picks: two boxes, nothing ticked
+ * when it opens, and it reports through `onValidityChange` whether anything is
+ * ticked. A string-typed input receives the ticks as JSON; any other input
+ * receives the object itself.
+ */
+const TICKING_RENDERER_ID = "@cinatra-test/pack-agent:ticking";
+/** The same, on a gate this panel classifies as mid-run (`:output`). */
+const MID_RUN_TICKING_RENDERER_ID = "@cinatra-test/pack-agent-ticking:output";
+
+function TickingRenderer({ schema, onChange, onValidityChange }: FieldRendererProps) {
+  const [ticked, setTicked] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    onValidityChange?.(ticked.length > 0);
+  }, [onValidityChange, ticked]);
+  const toggle = (id: string) => {
+    const next = ticked.includes(id) ? ticked.filter((t) => t !== id) : [...ticked, id];
+    setTicked(next);
+    const picks = { type: "list", listIds: next, listNames: next.map((t) => `View ${t}`) };
+    void onChange(schema.type === "string" ? JSON.stringify(picks) : picks);
+  };
+  return (
+    <div>
+      {["one", "two"].map((id) => (
+        <Input
+          key={id}
+          type="checkbox"
+          aria-label={`View ${id}`}
+          checked={ticked.includes(id)}
+          onChange={() => toggle(id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+describe("AgenticRunPanel — a renderer that reports its value unsendable (cinatra#3562)", () => {
+  beforeEach(() => {
+    for (const id of [TICKING_RENDERER_ID, MID_RUN_TICKING_RENDERER_ID]) {
+      fieldRendererRegistry.register({
+        id,
+        priority: 100,
+        condition: (_fieldName, schema) =>
+          (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+        renderer: TickingRenderer,
+      });
+    }
+  });
+
+  it("holds the setup field's Continue while nothing is ticked and sends every tick once one is", async () => {
+    await setGate(TICKING_RENDERER_ID, "accountScope", { type: "string" });
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(productContinue()!);
+    await waitFor(() =>
+      expect(hitlActions.approveReviewTask).toHaveBeenCalledWith(
+        "setup-run-3532",
+        {
+          accountScope: JSON.stringify({
+            type: "list",
+            listIds: ["two", "one"],
+            listNames: ["View two", "View one"],
+          }),
+        },
+        "accountScope",
+      ),
+    );
+  });
+
+  it("holds a mid-run gate's Continue while nothing is ticked and resumes with every tick", async () => {
+    await setGate(MID_RUN_TICKING_RENDERER_ID, "accountScope", { type: "object" });
+    const view = await renderPanel();
+
+    await view.findByRole("checkbox", { name: "View one" });
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(productContinue()!);
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+
+    fireEvent.click(view.getByRole("checkbox", { name: "View two" }));
+    fireEvent.click(view.getByRole("checkbox", { name: "View one" }));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe("setup-run-3532");
+    expect(payload).toMatchObject({
+      type: "list",
+      listIds: ["two", "one"],
+      listNames: ["View two", "View one"],
+      approved: true,
+    });
+  });
+});
