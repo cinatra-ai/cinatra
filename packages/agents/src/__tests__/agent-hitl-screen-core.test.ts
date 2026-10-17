@@ -18,6 +18,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+const projection = vi.hoisted(() => vi.fn());
+vi.mock("../hitl-render-input-projection.server", () => ({ projectHitlRenderInputs: projection }));
 const deriveRunHitlContext = vi.fn();
 vi.mock("../hitl-context", () => ({
   deriveRunHitlContext: (run: unknown) => deriveRunHitlContext(run),
@@ -147,5 +149,23 @@ describe("which run is asking", () => {
   it("refuses a derivation that THREW, rather than letting it escape", async () => {
     deriveRunHitlContext.mockRejectedValue(new Error("the interrupt log is gone"));
     expect((await agentHitlScreenStateForRun(RUN)).state).toBe("none");
+  });
+});
+
+describe("the verified reader's optional presentation", () => {
+  it("passes the same authorized viewer into the projection without changing gate values", async () => {
+    deriveRunHitlContext.mockResolvedValue(GATE);
+    const who = { actor: { actorType: "human" as const, source: "ui" as const, userId: "reader" }, roleHints: { actorOrganizationId: "org" } };
+    projection.mockResolvedValue({ siteHost: "blog.acme.example" });
+    const state = await agentHitlScreenStateForRun(RUN, who);
+    expect(projection).toHaveBeenCalledWith(RUN, expect.objectContaining({ currentValues: GATE.currentValues }), who);
+    expect(state.state === "asking" && state.gate.renderInputs).toEqual({ siteHost: "blog.acme.example" });
+    expect(state.state === "asking" && state.gate.currentValues).toEqual(GATE.currentValues);
+  });
+  it("an actorless internal/submit read carries no metadata and preserves its gate", async () => {
+    projection.mockClear(); deriveRunHitlContext.mockResolvedValue(GATE);
+    const state = await agentHitlScreenStateForRun(RUN);
+    expect(state.state).toBe("asking"); expect(projection).not.toHaveBeenCalled();
+    expect(state.state === "asking" && state.gate.renderInputs).toBeUndefined();
   });
 });
