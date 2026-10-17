@@ -28,10 +28,15 @@
  *   - CrmList[] is mapped 1:1 to AvailableListSummary[], with `memberCount`
  *     + `lastUpdated` set to null (the provider doesn't surface them)
  *     and `memberType` derived from `CrmList.objectType`;
- *   - Capability ABSENT (connector not installed/active) degrades to `[]`;
- *   - Upstream failures (no Twenty row, no bearer, network errors) degrade
- *     to `[]` rather than 500-ing the picker UI.
+ *   - Capability ABSENT (connector not installed/active) degrades to `[]`,
+ *     logged with fixed words;
+ *   - Upstream failures (no Twenty row, no bearer, network errors) are
+ *     rejected with a fixed-word error (cinatra#4159), so the renderer shows its load-error toast
+ *     instead of the empty state; only the error's class and code are logged,
+ *     and the rejection carries NO `cause` (the framework's server error log
+ *     prints the cause chain, so a kept cause would log the upstream answer).
  */
+import { inspect } from "node:util";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // --- mocks (must hoist BEFORE the source-under-test import) ---
@@ -217,6 +222,19 @@ describe("fetchAvailableLists — run-access gate (cinatra#3050)", () => {
 });
 
 describe("fetchAvailableLists", () => {
+  // The error the twenty-connector throws on an unauthenticated MCP call
+  // (src/twenty-mcp-call.ts: TwentyMcpError(response.status, "upstream HTTP <status>", body)).
+  class TwentyMcpError extends Error {
+    readonly code: number;
+    readonly data?: unknown;
+    constructor(code: number, message: string, data?: unknown) {
+      super(message);
+      this.name = "TwentyMcpError";
+      this.code = code;
+      this.data = data;
+    }
+  }
+
   it("calls searchLists with objectType:'contact' — list scope unchanged", async () => {
     searchMock.mockResolvedValueOnce([]);
 
@@ -252,10 +270,51 @@ describe("fetchAvailableLists", () => {
     ]);
   });
 
-  it("degrades to [] when the reader throws (no CRM provider / no Twenty row / upstream unreachable)", async () => {
-    searchMock.mockRejectedValueOnce(new Error("Twenty workspace row not configured"));
+  it("rejects on a refused search instead of reading it as no lists, logging only its class and code (cinatra#4159)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    searchMock.mockRejectedValueOnce(new TwentyMcpError(401, "upstream HTTP 401", "body-must-not-be-logged"));
 
-    expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
+    const refused = await fetchAvailableLists(RUN_ID).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toBe("the CRM list search failed");
+    expect((refused as Error).cause).toBeUndefined();
+    expect(String(refused)).not.toContain("upstream HTTP 401");
+    expect(String(refused)).not.toContain("body-must-not-be-logged");
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line).toContain("[list-picker] the CRM list search failed (TwentyMcpError, code 401)");
+    expect(line).not.toContain("upstream HTTP 401");
+    expect(line).not.toContain("body-must-not-be-logged");
+    warn.mockRestore();
+  });
+
+  it("keeps no trace of the upstream error in the rejection a server error log would print (cinatra#4159)", async () => {
+    // The framework's server error log prints a thrown error with its cause
+    // chain (util.inspect walks `cause`), so the rejection must carry neither
+    // a cause nor the upstream message or data anywhere an inspection reaches.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    searchMock.mockRejectedValueOnce(new TwentyMcpError(401, "upstream HTTP 401", "body-must-not-be-logged"));
+
+    const refused = await fetchAvailableLists(RUN_ID).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect(Object.prototype.hasOwnProperty.call(refused, "cause")).toBe(false);
+    const printed = inspect(refused, { depth: 10 });
+    expect(printed).toContain("the CRM list search failed");
+    expect(printed).not.toContain("TwentyMcpError");
+    expect(printed).not.toContain("upstream HTTP 401");
+    expect(printed).not.toContain("body-must-not-be-logged");
+    for (const logged of warn.mock.calls.flat().map((a) => inspect(a, { depth: 10 }))) {
+      expect(logged).not.toContain("upstream HTTP 401");
+      expect(logged).not.toContain("body-must-not-be-logged");
+    }
+    warn.mockRestore();
   });
 
   it("returns an empty array when the reader returns no lists", async () => {
@@ -264,10 +323,15 @@ describe("fetchAvailableLists", () => {
     expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
   });
 
-  it("degrades to [] when the crm-list-reader capability is ABSENT (connector not installed/active)", async () => {
+  it("degrades to [] when the crm-list-reader capability is ABSENT (connector not installed/active), and says so", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.mocked(resolveCrmListReader).mockReturnValueOnce(null);
 
     expect(await fetchAvailableLists(RUN_ID)).toEqual([]);
     expect(searchMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[list-picker] no crm-list-reader capability is registered; the picker offers no lists",
+    );
+    warn.mockRestore();
   });
 });

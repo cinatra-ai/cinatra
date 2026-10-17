@@ -91,6 +91,20 @@ async function requireRunReadAccess(runId: unknown): Promise<void> {
   await readAgentRunById(runId, actor, roleHints);
 }
 
+/** The class name of a thrown value (its `name`, set explicitly by the CRM
+ *  error classes), never its message. */
+function errorClassOf(err: unknown): string {
+  if (err instanceof Error) return err.name || "Error";
+  return typeof err;
+}
+
+/** ", code <n>" for an error that carries a numeric code (an HTTP status or a
+ *  JSON-RPC code), else "". */
+function errorCodeOf(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "number" && Number.isFinite(code) ? `, code ${code}` : "";
+}
+
 /**
  * @param runId - the `agent_run` this step belongs to, threaded by the
  *   renderer from `context.runId` (the shared field-renderer contract).
@@ -102,10 +116,14 @@ export async function fetchAvailableLists(
   await requireRunReadAccess(runId);
 
   // Capability absent (crm-connector not installed/active — it is
-  // acquirable-on-demand, not required) degrades to "no lists available",
-  // exactly like the error path below.
+  // acquirable-on-demand, not required) degrades to "no lists available".
+  // It is logged with fixed words, so a reading can tell an absent reader
+  // from a CRM that holds no list (cinatra#4159).
   const reader = resolveCrmListReader();
-  if (!reader) return [];
+  if (!reader) {
+    console.warn("[list-picker] no crm-list-reader capability is registered; the picker offers no lists");
+    return [];
+  }
 
   let lists;
   try {
@@ -121,11 +139,20 @@ export async function fetchAvailableLists(
     // (packages/sdk-extensions/src/crm-list-reader-contract.ts), so it carries
     // no actor; per-actor list scoping is a separate change.
     lists = await reader.searchLists({ query: "", objectType: "contact" });
-  } catch {
+  } catch (err) {
     // No CRM provider registered, no Twenty row yet, no bearer attached, or
-    // upstream unreachable — degrade to "no lists available" rather than
-    // 500-ing the picker UI.
-    return [];
+    // upstream unreachable. A refused search is NOT an empty CRM (cinatra#4159):
+    // it is logged with fixed words and rethrown, so the renderer shows its
+    // "Could not load lists." toast instead of the empty state. SECRET
+    // BOUNDARY: only the error's class name and numeric code are logged, never
+    // its message or data, which may quote an upstream answer. The error the
+    // browser receives carries fixed words too, and it carries NO `cause`: the
+    // framework's server error log prints an error's cause chain, so keeping the
+    // original as `cause` would put its message and data in the server log.
+    console.warn(
+      `[list-picker] the CRM list search failed (${errorClassOf(err)}${errorCodeOf(err)}); the picker shows the load error`,
+    );
+    throw new Error("the CRM list search failed");
   }
 
   return lists.map((l) => ({
