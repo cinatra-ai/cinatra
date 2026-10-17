@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "865aa5982476665c6355ebede711b5c13b506786"
+      "resolvedSha": "11b180b0a3ff30be8f0ed8abf7e5147813f0497b"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
@@ -430,7 +430,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "c7b85d455884f71d62d4429fd15c2c57aa7c03ed"
+      "resolvedSha": "91f4801d4c304b079d5be44bc2938df6c3c57de4"
     },
     {
       "packageName": "@cinatra-ai/wordpress-widget-chat-skill",
