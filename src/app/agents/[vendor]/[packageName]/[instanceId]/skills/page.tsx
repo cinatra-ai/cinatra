@@ -21,14 +21,21 @@ import { PageContent } from "@/components/page-content";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { resolveAgentInstanceMetadata } from "@/lib/agent-instance-tab-title";
+import { readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 
 // THE TAB MIRRORS THE TRAIL (cinatra#2934, fix leg 9). The static title this
 // route used to export was re-applied over the mirrored one on every live-poll
 // re-render, so the derivation moved to the server, behind one helper every
 // id-bearing route under the run shares.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { vendor, packageName, instanceId } = await params;
-  return resolveAgentInstanceMetadata({ vendor, packageName, instanceId, subRoute: "skills" });
+  const { vendor, packageName, instanceId: instanceIdSegment } = await params;
+  return resolveAgentInstanceMetadata({
+    vendor,
+    packageName,
+    // cinatra#3080 - the helper is handed the id, read back once here.
+    instanceId: readAgentInstanceIdFromSegment(instanceIdSegment),
+    subRoute: "skills",
+  });
 }
 
 // Selection-source → run-visible ledger label (cinatra#2067 item 6). A ledger
@@ -88,7 +95,12 @@ export default async function AgentPackageInstanceSkillsPage({
   launchScope,
   scopeTitle,
 }: Props & ScopeProps) {
-  const { instanceId } = await params;
+  const { instanceId: instanceIdSegment } = await params;
+  // cinatra#3080 - the router hands this segment over still percent-encoded.
+  // A repair run's id carries a colon, so the raw segment is no run's id and
+  // the screen answered 404 for a run that was right there. Every ordinary run
+  // id is a uuid and reads back byte-identical.
+  const instanceId = readAgentInstanceIdFromSegment(instanceIdSegment);
   // The base decides nothing here (see `ScopeProps`); the vantage decides the
   // trail's head, exactly as it does on the run page.
   void scopeBase;

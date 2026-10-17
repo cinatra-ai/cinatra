@@ -47,6 +47,7 @@ import {
   agentInstancePathname,
   resolveAgentInstanceMetadata,
 } from "@/lib/agent-instance-tab-title";
+import { readAgentInstanceIdFromSegment } from "@/lib/agent-url";
 
 import {
   loadPinnedCapturePair,
@@ -95,11 +96,12 @@ export const dynamic = "force-dynamic";
 // trail above the page read "Agents > <the run> > Review". It now derives its
 // title from the same trail every id-bearing route under the run derives from.
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const { vendor, packageName, instanceId } = await params;
+  const { vendor, packageName, instanceId: instanceIdSegment } = await params;
   return resolveAgentInstanceMetadata({
     vendor,
     packageName,
-    instanceId,
+    // cinatra#3080 - the helper is handed the id, read back once here.
+    instanceId: readAgentInstanceIdFromSegment(instanceIdSegment),
     subRoute: "review",
   });
 }
@@ -198,14 +200,19 @@ export default async function AgentRunReviewPage({
     reviewTaskId: rawTaskId,
   } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
-  const runId = decodeURIComponent(rawInstanceId);
+  // cinatra#3080 - read back through the one reader the whole route family
+  // uses, so a malformed segment answers this page's own missing-run answer
+  // rather than raising out of the route.
+  const runId = readAgentInstanceIdFromSegment(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
   // The RUN's own crumb path — the prefix a contribution targets. Built by the
   // same helper the tab title builds its path with, so the two cannot drift.
+  // That helper encodes the id into the path itself, so it is handed the run's
+  // id, never the still-encoded segment (cinatra#3080).
   const runCrumbPrefix = agentInstancePathname({
     vendor,
     packageName,
-    instanceId: rawInstanceId,
+    instanceId: runId,
   });
   const sp = (await searchParams) ?? {};
   const isVerificationView = sp.view === "verification";
@@ -243,7 +250,10 @@ export default async function AgentRunReviewPage({
   const sendReaderToTheRun = async () => {
     const runAddress = await reviewAddressRedirect({
       agentId: `${vendor}/${packageName}`,
-      rawInstanceId,
+      // The run's home is built by the builder that now encodes the id into its
+      // segment itself (cinatra#3080), so it is handed the run's id, read back
+      // once above; the still-encoded segment would be encoded twice.
+      rawInstanceId: runId,
       rawTaskId,
       runId,
       verificationView: isVerificationView,
