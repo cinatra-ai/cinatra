@@ -145,7 +145,8 @@ export async function fetchAvailableLists(
     // No CRM provider registered, no Twenty row yet, no bearer attached, or
     // upstream unreachable. A refused search is NOT an empty CRM (cinatra#4159):
     // it is logged with fixed words and rethrown, so the renderer shows its
-    // "Could not load lists." toast instead of the empty state. SECRET
+    // "Could not load lists." toast once, and it still draws the empty-state
+    // card below it (its list stays empty). SECRET
     // BOUNDARY: only the error's class name and numeric code are logged, never
     // its message or data, which may quote an upstream answer. The error the
     // browser receives carries fixed words too, and it carries NO `cause`: the

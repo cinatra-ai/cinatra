@@ -32,7 +32,8 @@
  *     logged with fixed words;
  *   - Upstream failures (no Twenty row, no bearer, network errors) are
  *     rejected with a fixed-word error (cinatra#4159), so the renderer shows its load-error toast
- *     instead of the empty state; only the error's class and code are logged,
+ *     once, and still draws the empty-state card below it; only the error's
+ *     class and code are logged,
  *     and the rejection carries NO `cause` (the framework's server error log
  *     prints the cause chain, so a kept cause would log the upstream answer).
  */
