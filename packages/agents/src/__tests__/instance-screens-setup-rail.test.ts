@@ -289,8 +289,11 @@ describe("the setup run page draws the run surface, not a single column", () => 
     );
     expect(SETUP_BRANCH).not.toContain("<RunScheduleTab");
     // And `/trigger` reached WITHOUT a run still draws the form on its own,
-    // because there is no run whose steps could be named.
-    expect(TRIGGER_SCREEN).toContain("scheduleFormSurface\n        )}");
+    // because there is no run whose steps could be named: no rail, only the
+    // page chrome that owns its one prompt window (cinatra#3487).
+    expect(TRIGGER_SCREEN).toContain(
+      "<RunPageChrome>{scheduleFormSurface}</RunPageChrome>\n        )}",
+    );
     // The steps exist only for a run.
     expect(SETUP_BRANCH).toContain("const setupSteps: SetupRailStep[] = run");
     expect(SETUP_BRANCH).toContain("    : [];");

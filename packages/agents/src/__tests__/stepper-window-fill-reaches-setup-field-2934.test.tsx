@@ -210,7 +210,14 @@ describe("the step-by-step screen's setup field shows what the window placed (ci
       acted: false,
     });
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-    render(<OrchestratorStepperPanel {...baseProps()} />);
+    // THE PAGE OWNS THE WINDOW (cinatra#3487): the screen registers with the run
+    // page's chrome, which is what draws the window the fill is typed into.
+    const { RunPageChrome } = await import("../run-page-chrome");
+    render(
+      <RunPageChrome>
+        <OrchestratorStepperPanel {...baseProps()} />
+      </RunPageChrome>,
+    );
 
     await waitFor(() => expect(document.querySelector("#field-idea")).not.toBeNull());
     await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());

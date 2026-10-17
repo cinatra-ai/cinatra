@@ -1386,6 +1386,30 @@ export type RunMomentCard = {
   kind: string | null;
   /** The server-minted reference that card is addressed by. */
   ref: string | null;
+  /**
+   * THE RUN'S REVIEW SLOT, off the SAME row (cinatra#3080).
+   *
+   * The row already carries it — `reviewGate.ref` is what the run panel's own
+   * seed is handed and what `parseRunReviewSlot` reads — and a container that
+   * decides whether to take the run's panel out of the picture has to know
+   * whether that panel is drawing a review. Read here rather than asked for
+   * again: this is the same response, parsed once more, so no surface pays a
+   * second request for an answer it already has.
+   */
+  reviewRef: string | null;
+  /**
+   * AND WHETHER ONE IS STILL ON ITS WAY (convergence finding, cinatra#3080).
+   *
+   * The same field of the same row: the route mints the ref only once the gate
+   * row exists, and `awaiting` is what "holds the placeholder up between
+   * `completed` and the gate row existing". A container's watch ENDS at the
+   * terminal status (`RUN_MOMENT_WATCH_ENDS`), so the ref may never be read at
+   * all on the async road — the run finishes, the sweeper opens the review a
+   * moment later, and nothing asks this row again. Reading the run's OWN
+   * "a review is still owed here" off the same answer is what keeps that road
+   * from falling back into the defect.
+   */
+  reviewAwaiting: boolean;
 };
 
 export const RUN_MOMENT_UNREAD: RunMomentCard = Object.freeze({
@@ -1393,6 +1417,8 @@ export const RUN_MOMENT_UNREAD: RunMomentCard = Object.freeze({
   moment: null,
   kind: null,
   ref: null,
+  reviewRef: null,
+  reviewAwaiting: false,
 });
 
 /**
@@ -1413,6 +1439,7 @@ export function parseRunMomentCard(data: unknown): RunMomentCard | null {
     status?: unknown;
     lifecycleMoment?: unknown;
     lifecycleCard?: { kind?: unknown; ref?: unknown } | null;
+    reviewGate?: { ref?: unknown; awaiting?: unknown } | null;
   };
   const text = (value: unknown): string | null =>
     typeof value === "string" && value.length > 0 ? value : null;
@@ -1427,6 +1454,8 @@ export function parseRunMomentCard(data: unknown): RunMomentCard | null {
     moment: text(row.lifecycleMoment),
     kind: text(row.lifecycleCard?.kind),
     ref: text(row.lifecycleCard?.ref),
+    reviewRef: text(row.reviewGate?.ref),
+    reviewAwaiting: row.reviewGate?.awaiting === true,
   };
 }
 
@@ -1472,6 +1501,51 @@ export function isConversationMomentCardKind(kind: unknown): boolean {
 export function runMomentCardIsOpen(card: RunMomentCard): boolean {
   if (card.moment === null || card.ref === null) return false;
   return CONVERSATION_MOMENT_CARDS[card.moment] === card.kind;
+}
+
+/**
+ * IS THIS RUN'S PANEL DRAWING A REVIEW? (cinatra#3080.)
+ *
+ * The run panel swaps its progress reading for the review screen in the one
+ * slot on exactly this reading: the run has FINISHED and its row names a review
+ * gate (`agentic-run-panel.tsx`'s `inPlaceReviewRef`, cinatra#2997). This is
+ * that same rule, asked of the row a conversation has already read, so the
+ * container and the panel cannot come to two answers about one run.
+ *
+ * WHY A CONTAINER ASKS IT. Inside a conversation the run's panel is the ONLY
+ * mount of that run's review — the injected `artifact_review_gate` part is
+ * suppressed for a turn that draws the run card
+ * (`one-review-card-per-run-per-turn`) — so a container that takes the panel
+ * out of the picture takes the decision with it. Fails closed: an unread run
+ * answers `false` and the container behaves exactly as it did before.
+ *
+ * TWO READINGS MORE, BOTH THE PANEL'S OWN (convergence findings, cinatra#3080).
+ *
+ * THE HOST ANSWERS THE SAME ON EVERY HOST (cinatra#3051): the site widget's
+ * run card draws the completed run's review in its own slot under the widget's
+ * broker declaration, exactly as a cookie host's does, so the widget is no
+ * exception any more. A container that answered `false` there would take a
+ * settled turn's panel out of the wrapper while that panel holds the one review
+ * the reader owes an answer to. The host stays in the signature because the
+ * container asks with the host it is drawn under; it changes nothing here.
+ *
+ * AND THE STILL-OWED REVIEW, because on the async road the run FINISHES before
+ * its gate row exists and this container stops looking at the terminal status
+ * (`RUN_MOMENT_WATCH_ENDS`): the ref is null in the last answer this container
+ * ever reads, while the panel's own slot reader goes on until it finds it and
+ * then draws the review inside a wrapper nothing will ever open again.
+ * `awaiting` is the route's own name for that window - "what holds the
+ * placeholder up between `completed` and the gate row existing" - off the same
+ * response, so this stays one reading rather than two.
+ */
+export function runMomentCardDrawsAReview(
+  card: RunMomentCard,
+  ambientHost: LifecycleCardHost | null,
+): boolean {
+  void ambientHost;
+  return (
+    card.status === "completed" && (card.reviewRef !== null || card.reviewAwaiting)
+  );
 }
 
 /**
