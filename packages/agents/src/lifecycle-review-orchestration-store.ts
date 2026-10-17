@@ -555,9 +555,81 @@ async function settleAlreadyLinkedEvent(row: ProducedEventRow): Promise<void> {
 
 export type OrchestrateOutcome =
   | "gate-created"
+  /** A template-declared gate of the same run already pins this exact revision;
+   * the event was linked to it and no automatic gate was opened (cinatra#4225). */
+  | "gate-reused"
   | "no-gate"
   | "not-classifiable"
   | "already-processed";
+
+/** The review-task prefix of a template-declared review gate: `wayflow-<taskId>`,
+ * and `wayflow-<taskId>#<n>` for its per-artifact legs (execution.ts). */
+const DECLARED_REVIEW_TASK_PREFIX = "wayflow-";
+
+/**
+ * The template-declared review gate that already reviews this event's EXACT
+ * revision, or null (cinatra#4225).
+ *
+ * A declared gate is minted by the run's own review step and pins the revisions
+ * it reviews. Opening an automatic gate over a revision such a gate pins makes
+ * the person review the same revision twice: one Approve resolves the declared
+ * gate and the run then waits on the automatic one. So the produced path reuses
+ * the declared gate instead. The match is strict: the SAME run and org, a
+ * `wayflow-` task id, and a pin on the exact artifact AND representation
+ * revision. A pending or a resolved declared gate both count — either way the
+ * revision has its review. Anything else returns null and the automatic gate
+ * opens exactly as before.
+ */
+async function findDeclaredGateForPair(row: ProducedEventRow): Promise<string | null> {
+  if (!row.producerRunId) return null;
+  const gates = await db
+    .select({
+      id: artifactReviewGates.id,
+      orgId: artifactReviewGates.orgId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+      pinnedTargets: artifactReviewGates.pinnedTargets,
+    })
+    .from(artifactReviewGates)
+    .where(and(eq(artifactReviewGates.runId, row.producerRunId), eq(artifactReviewGates.orgId, row.orgId)))
+    .orderBy(asc(artifactReviewGates.createdAt));
+  for (const gate of gates) {
+    if (gate.orgId !== row.orgId) continue;
+    if (typeof gate.reviewTaskId !== "string" || !gate.reviewTaskId.startsWith(DECLARED_REVIEW_TASK_PREFIX)) continue;
+    const pins: unknown[] = Array.isArray(gate.pinnedTargets) ? gate.pinnedTargets : [];
+    const pinsPair = pins.some((t) => {
+      if (typeof t !== "object" || t === null) return false;
+      const pin = t as { artifactId?: unknown; representationRevisionId?: unknown };
+      return pin.artifactId === row.artifactId && pin.representationRevisionId === row.representationRevisionId;
+    });
+    if (pinsPair) return gate.id;
+  }
+  return null;
+}
+
+/**
+ * Link a produced event to the declared gate that already reviews its revision,
+ * in the automatic road's own order: park (checkpointed) -> link -> mark. No
+ * notification and no suggestions: the declared gate is not new, and its own
+ * road already announced it.
+ */
+async function reuseDeclaredGate(
+  row: ProducedEventRow,
+  plan: Extract<ReviewOrchestrationPlan, { action: "create-gate" }>,
+  gateId: string,
+): Promise<void> {
+  if (plan.continuationMode === "checkpointed" && plan.park) {
+    await maybeParkCheckpoint(plan.park, {
+      runId: row.producerRunId ?? orphanRunId(row.eventId),
+      eventId: row.eventId,
+      policyDecisionId: gateId,
+    });
+  }
+  await db
+    .update(artifactProducedOutbox)
+    .set({ continuationAddress: gateId })
+    .where(and(eq(artifactProducedOutbox.eventId, row.eventId), isNull(artifactProducedOutbox.continuationAddress)));
+  await markProducedEventProcessed(row.eventId);
+}
 
 /**
  * Orchestrate ONE produced event: resolve context, plan the REVIEW checkpoint,
@@ -734,6 +806,14 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
     return "no-gate";
   }
 
+  // A template-declared gate of this run already reviews this exact revision:
+  // reuse it rather than open a second review of the same revision (cinatra#4225).
+  const declaredGateId = await findDeclaredGateForPair(row);
+  if (declaredGateId) {
+    await reuseDeclaredGate(row, plan, declaredGateId);
+    return "gate-reused";
+  }
+
   // create-gate. The producing run is the gate's run when known; a run-less
   // agent_produced event falls back to a synthetic, ops-visible id.
   const runId = row.producerRunId ?? orphanRunId(row.eventId);
@@ -891,7 +971,7 @@ async function produceSuggestionsForPinnedTargets(
 
 function tallyOutcome(outcome: OrchestrateOutcome, summary: ReviewOrchestrationSweepSummary): void {
   if (outcome === "gate-created") summary.gatesCreated += 1;
-  else if (outcome === "no-gate" || outcome === "already-processed") summary.noGate += 1;
+  else if (outcome === "no-gate" || outcome === "already-processed" || outcome === "gate-reused") summary.noGate += 1;
   else summary.notClassifiable += 1;
 }
 
@@ -1271,6 +1351,14 @@ async function orchestrateProducedBatch(
     const plan = planReviewForEvent(toAxes(row), context.ctx);
     if (plan.action === "no-gate") {
       await markProducedEventProcessed(row.eventId);
+      summary.noGate += 1;
+      continue;
+    }
+    // A declared gate already reviews this revision (cinatra#4225): link it there
+    // and keep it OUT of the sealed membership, so no automatic gate pins it.
+    const declaredGateId = await findDeclaredGateForPair(row);
+    if (declaredGateId) {
+      await reuseDeclaredGate(row, plan, declaredGateId);
       summary.noGate += 1;
       continue;
     }
