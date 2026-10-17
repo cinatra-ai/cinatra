@@ -36,6 +36,7 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import { ensureArtifactTypesRegisteredWithStore } from "@/lib/artifacts/ensure-artifact-registry";
 import {
   listInstalledMeaningTypesAcceptingMime,
+  type ClaimBackedMeaningType,
   type InstalledMeaningType,
 } from "@/lib/artifacts/installed-type-picker";
 import { resolveActiveInstallForActor } from "@/lib/extension-install-resolution";
@@ -161,10 +162,18 @@ export async function listInstalledTypesForArtifact(
   // anchor-refused pack still never reaches the offer.
   await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
-  const raw = listInstalledMeaningTypesAcceptingMime(
-    mime,
-    objectType ? { excludeTypeId: objectType } : undefined,
+  // THE CLAIM-BACKED MEANING TYPES (cinatra#3319): a host-registered type an
+  // artifact-safe claim of this organisation admits, which neither registry
+  // channel lists. Read through the ONE claim arbitration the writer and the
+  // byte-serve reader use, after the gates and the warm above.
+  const { readClaimBackedMeaningTypesForOrg } = await import(
+    "@/lib/artifacts/resolve-bound-artifact-type"
   );
+  const claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
+  const raw = listInstalledMeaningTypesAcceptingMime(mime, {
+    ...(objectType ? { excludeTypeId: objectType } : {}),
+    claimBacked,
+  });
   // Per-actor extension-access gate: drop candidates whose defining extension
   // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down),
   // and matcher-channel members not org-writable (== the A6 resolver's gate).
@@ -253,10 +262,16 @@ export async function assertUploadMeaning(input: {
   // refused here as "not installed".
   await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
-  const raw = listInstalledMeaningTypesAcceptingMime(
-    mime,
-    objectType ? { excludeTypeId: objectType } : undefined,
+  // The same claim-backed population the candidate LIST offered (cinatra#3319),
+  // so the validation gate decides against what the picker drew.
+  const { readClaimBackedMeaningTypesForOrg } = await import(
+    "@/lib/artifacts/resolve-bound-artifact-type"
   );
+  const claimBacked = await readClaimBackedMeaningTypesForOrg(orgId);
+  const raw = listInstalledMeaningTypesAcceptingMime(mime, {
+    ...(objectType ? { excludeTypeId: objectType } : {}),
+    claimBacked,
+  });
   const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
   if (!candidates.some((c) => c.extension === input.extension)) {
     // THE CONVERGING RE-CONFIRMATION, and the reason it lives HERE rather than
@@ -273,13 +288,14 @@ export async function assertUploadMeaning(input: {
     // `invalid-type` it always answered. No meaning assertion is written — the
     // call that retyped the row wrote the person's, and a second identical
     // assertion would stack a duplicate for a choice already recorded.
-    if (objectType && (await extensionDefinesType(input.extension, objectType))) {
+    if (objectType && (await extensionDefinesType(input.extension, objectType, claimBacked))) {
       const completed = await promoteOnConfirmedMeaning({
         orgId,
         artifactId: input.artifactId,
         extension: input.extension,
         principalId: actor.principalId ?? null,
         userId: session?.user?.id ?? null,
+        claimBacked,
       });
       if (completed?.promoted) {
         revalidatePath("/artifacts");
@@ -327,6 +343,7 @@ export async function assertUploadMeaning(input: {
     extension: input.extension,
     principalId: actor.principalId ?? null,
     userId: session?.user?.id ?? null,
+    claimBacked,
   });
 
   revalidatePath("/artifacts");
@@ -339,14 +356,23 @@ export async function assertUploadMeaning(input: {
  * The one question the converging re-confirmation asks: it is what separates
  * "this row is already in the type this extension defines" (the interrupted
  * promotion's own row) from "this extension has nothing to do with this row".
+ *
+ * A CLAIM-BACKED type (cinatra#3319) is host-registered, so the registry names
+ * no package for it; the organisation's artifact-safe claim winner does. The
+ * claim-backed entry for exactly (extension, type) therefore answers yes too.
  */
-async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+async function extensionDefinesType(
+  extension: string,
+  objectType: string,
+  claimBacked: readonly ClaimBackedMeaningType[],
+): Promise<boolean> {
   try {
     const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    if (objectTypeRegistry.getRegisteringPackage(objectType) === extension) return true;
   } catch {
-    return false;
+    // The registry is unavailable: only the claim-backed reading can answer.
   }
+  return claimBacked.some((e) => e.extension === extension && e.objectTypeId === objectType);
 }
 
 /**
@@ -367,6 +393,9 @@ async function promoteOnConfirmedMeaning(input: {
   extension: string;
   principalId: string | null;
   userId: string | null;
+  /** The organisation's claim-backed meaning types (cinatra#3319), as the
+   *  candidate gate read them. */
+  claimBacked: readonly ClaimBackedMeaningType[];
 }): Promise<Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null> {
   if (!input.userId) return null;
   try {
@@ -399,16 +428,28 @@ async function promoteOnConfirmedMeaning(input: {
       .getTypesForPackage(input.extension)
       .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
       .filter((t) => t.def?.isArtifact != null);
+    // A CLAIM-BACKED OWN TYPE (cinatra#3319). A pack whose type the host
+    // registers (no `isArtifact`, no package) owns no registered artifact type,
+    // yet the organisation's artifact-safe claim winner names its one type and
+    // the accepts of that version's manifest. Read only when the registry
+    // half is empty, so a pack with its own registered type is unchanged.
+    const claimEntry =
+      owned.length === 0
+        ? input.claimBacked.find((e) => e.extension === input.extension)
+        : undefined;
     const entryPlan = planPromotionEntry({
-      ownedRegisteredTypes: owned.map((t) => t.typeId),
+      ownedRegisteredTypes: claimEntry ? [claimEntry.objectTypeId] : owned.map((t) => t.typeId),
       shipsDisplayForUnregisteredType: semanticRendererRegistry
         .listByPackage(input.extension)
         .some((d) => objectTypeRegistry.getRegisteringPackage(d.objectTypeId) === null),
     });
     if (entryPlan.kind === "not-applicable") return null;
     if (entryPlan.kind === "refuse") return { promoted: false, reason: entryPlan.reason };
-    const ownType = owned.find((t) => t.typeId === entryPlan.typeId)!;
-    const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
+    const ownType = { typeId: entryPlan.typeId };
+    const acceptsMimes: readonly string[] = claimEntry
+      ? claimEntry.acceptMimes
+      : (owned.find((t) => t.typeId === entryPlan.typeId)!.def?.isArtifact?.accepts?.file
+          ?.mimeTypes ?? []);
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
     // the matcher itself resolved it from — never a default invented here. A

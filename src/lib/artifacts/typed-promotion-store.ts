@@ -14,6 +14,7 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { listActiveAssertions, type AssertionRecord } from "./semantic-assertion-store";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { buildArtifactWriterWitnessOpIfAbsent } from "./artifact-writer-witness";
 
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
@@ -186,6 +187,85 @@ export function readPersonAssertion(input: {
   );
 }
 
+/**
+ * THE PROMOTION'S INTENT, as the retype's own change-event key (cinatra#3319).
+ *
+ * The retype and the append are two transactions, and the binding reconcile the
+ * retype queues may archive the person's own assertion before a re-run reaches
+ * the converging branch. The retype's change event commits in the same
+ * statement as the type change, so a key that names the source the plan read —
+ * this extension, this target type, the base version and the base revision —
+ * survives the interruption. It is only ever recomputed and compared by
+ * equality, never parsed.
+ */
+export function promotionRetypeKey(input: {
+  artifactId: string;
+  extension: string;
+  toType: string;
+  baseVersion: number;
+  sourceRevisionId: string;
+}): string {
+  return `typed-promotion:${input.artifactId}:${input.extension}:${input.toType}:v${input.baseVersion}:${input.sourceRevisionId}`;
+}
+
+/**
+ * Did THIS promotion's retype land on the row as it stands now?
+ *
+ * One equality-only read of the retype's change event: the key the road
+ * recorded for the row's current head and base version, an `update` from
+ * `rowVersion - 1` to `rowVersion` (the canonical writer moves `version` by one
+ * against its compare-and-set), by the acting user, not tombstoned.
+ *
+ * WHAT IT DOES NOT PROVE: who wrote the event. The key and the actor fields are
+ * the caller's, so any host writer holding an org-write authority for this org
+ * could stamp the same ones. It is a convention among host writers, recorded
+ * and read back, never an exclusivity proof.
+ *
+ * ASYNCHRONOUS, on `@/lib/postgres-async`: the one caller is the converging
+ * branch, which has an `await` to give.
+ */
+export async function readPromotionRetypeEvent(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+  toType: string;
+  rowVersion: number;
+  sourceRevisionId: string;
+  actorUserId: string;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const baseVersion = input.rowVersion - 1;
+  const [res] = await runPostgresQueriesAsync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT 1 AS present FROM "${s}"."object_change_event"
+WHERE idempotency_key = $1 AND org_id = $2 AND object_id = $3 AND object_type = $4
+  AND operation = 'update' AND base_version = $5 AND result_version = $6
+  AND actor_kind = 'user' AND actor_id = $7 AND tombstoned_at IS NULL
+LIMIT 1`,
+        values: [
+          promotionRetypeKey({
+            artifactId: input.artifactId,
+            extension: input.extension,
+            toType: input.toType,
+            baseVersion,
+            sourceRevisionId: input.sourceRevisionId,
+          }),
+          input.orgId,
+          input.artifactId,
+          input.toType,
+          baseVersion,
+          input.rowVersion,
+          input.actorUserId,
+        ],
+      },
+    ],
+  });
+  return (res?.rows?.length ?? 0) > 0;
+}
+
 export type PromoteMatchedArtifactTypeResult =
   | {
       ok: true;
@@ -246,6 +326,12 @@ export async function promoteMatchedArtifactType(input: {
    * the same compare-and-set; nothing else does.
    */
   retype?: TypedPromotionRetype;
+  /**
+   * A test seam, awaited right before the converging branch's append. Same
+   * posture as `retype`: a test substitutes it to commit a concurrent edit
+   * between the branch's read and its append; no production caller passes it.
+   */
+  beforeConvergingAppend?: () => Promise<void>;
 }): Promise<PromoteMatchedArtifactTypeResult> {
   const row = readPromotableRow({ orgId: input.orgId, artifactId: input.artifactId });
   const matcher =
@@ -295,9 +381,24 @@ export async function promoteMatchedArtifactType(input: {
       // read as if it stood on its own here, which is an asymmetry and not a
       // second rule.
       input.confirmed &&
-      (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
-      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
+      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime) &&
+      // THE THIRD AUTHORITY, read last (cinatra#3319): this promotion's own
+      // retype event for the row's current head. The binding reconcile the
+      // retype queued may already have archived the person's assertion, so an
+      // interrupted promotion on the person's road would otherwise strand.
+      (personAsserted ||
+        (matcher !== null && matcher.confidence >= matcher.threshold) ||
+        (await readPromotionRetypeEvent({
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          extension: input.extension,
+          toType: input.ownType.typeId,
+          rowVersion: row.version,
+          sourceRevisionId: row.latestRevision.representationRevisionId,
+          actorUserId: input.actor.userId,
+        })))
     ) {
+      await input.beforeConvergingAppend?.();
       const landed = appendPromotionRevision({
         orgId: input.orgId,
         artifactId: input.artifactId,
@@ -306,9 +407,23 @@ export async function promoteMatchedArtifactType(input: {
         form: row.latestRevision.form,
         createdBy: input.createdBy ?? null,
         mime: row.latestRevision.mime,
+        // The snapshot this branch decided on, re-checked under the append's
+        // own lock: an edit that committed since the read refuses the append.
+        expectHead: {
+          type: input.ownType.typeId,
+          version: row.version,
+          headRepresentationId: row.latestRevision.representationRevisionId,
+        },
       });
+      if (landed.moved) return { ok: false, reason: "row-moved" };
       if (landed.revision !== null) {
-        return { ok: true, ...landed, toType: input.ownType.typeId, retyped: false };
+        return {
+          ok: true,
+          representationRevisionId: landed.representationRevisionId,
+          revision: landed.revision,
+          toType: input.ownType.typeId,
+          retyped: false,
+        };
       }
     }
     return { ok: false, reason: plan.reason };
@@ -324,6 +439,15 @@ export async function promoteMatchedArtifactType(input: {
     data: row!.data,
     toType: plan.toType,
     expectedVersion: plan.expectedVersion,
+    // The promotion's intent, recorded in the retype's own change event: the
+    // converging branch reads it back when an interruption strands the append.
+    idempotencyKey: promotionRetypeKey({
+      artifactId: input.artifactId,
+      extension: input.extension,
+      toType: plan.toType,
+      baseVersion: plan.expectedVersion,
+      sourceRevisionId: plan.baseRevisionId,
+    }),
     actor: input.actor,
     authority: input.authority,
   });
@@ -356,6 +480,8 @@ export type TypedPromotionRetype = (input: {
   data: unknown;
   toType: string;
   expectedVersion: number;
+  /** The change event's key: `promotionRetypeKey` of this promotion. */
+  idempotencyKey: string;
   actor: { userId: string; orgId: string };
   authority: OrgWriteAuthority;
 }) => Promise<{ ok: true } | { ok: false; reason: "row-moved" | "not-authorized" }>;
@@ -388,6 +514,7 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
         actor: { actorId: input.actor.userId, actorKind: "user", orgId: input.actor.orgId },
         historyEffect: "reversible-internal",
         expectedBaseVersion: input.expectedVersion,
+        idempotencyKey: input.idempotencyKey,
         authority: input.authority,
       },
     );
@@ -423,6 +550,15 @@ const canonicalRetype: TypedPromotionRetype = async (input) => {
  *
  * Pure so the one-transaction composition is fixture-provable, the same shape
  * the other host writers' witness proofs take.
+ *
+ * `expectHead` (cinatra#3319) is the snapshot the converging branch decided on.
+ * With it, the transaction re-checks that snapshot right after taking the lock
+ * — the row's type and version and its head revision — and a moved row makes
+ * the check a division by zero, which aborts the transaction before the
+ * revision and the witness. An edit save takes the same per-artifact lock, so it
+ * either committed before the check (which then refuses) or waits for this
+ * commit (and its own compare-and-set then refuses it). Without `expectHead`
+ * the list is the three queries it always was.
  */
 export function buildPromotionAppendQueries(
   schema: string,
@@ -435,29 +571,61 @@ export function buildPromotionAppendQueries(
     createdBy: string | null;
     toType: string;
     mime?: string | null;
+    expectHead?: { type: string; version: number; headRepresentationId: string };
   },
 ): Array<{ text: string; values: unknown[] }> {
   const s = schema.replaceAll('"', '""');
+  const lock = { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] };
+  const append = buildPromotionRepresentationAppend(schema, {
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    representationRevisionId: input.representationRevisionId,
+    sharedResourceId: input.sharedResourceId,
+    form: input.form,
+    createdBy: input.createdBy,
+  });
+  const witness = buildArtifactWriterWitnessOpIfAbsent(s, {
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    representationRevisionId: input.representationRevisionId,
+    actor: input.createdBy,
+    // Provenance detail only — the witness is the EXISTENCE of the row, never
+    // its payload.
+    detail: { road: "typed-promotion", toType: input.toType, mime: input.mime ?? null },
+  });
+  if (!input.expectHead) return [lock, append, witness];
   return [
-    { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
-    buildPromotionRepresentationAppend(schema, {
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      representationRevisionId: input.representationRevisionId,
-      sharedResourceId: input.sharedResourceId,
-      form: input.form,
-      createdBy: input.createdBy,
-    }),
-    buildArtifactWriterWitnessOpIfAbsent(s, {
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      representationRevisionId: input.representationRevisionId,
-      actor: input.createdBy,
-      // Provenance detail only — the witness is the EXISTENCE of the row, never
-      // its payload.
-      detail: { road: "typed-promotion", toType: input.toType, mime: input.mime ?? null },
-    }),
+    lock,
+    {
+      text: `SELECT 1 / COUNT(*)::int AS head_unmoved FROM "${s}"."objects" o
+WHERE o.id = $1 AND o.org_id = $2 AND o.deleted_at IS NULL
+  AND o.type = $3 AND o.version = $4
+  AND (SELECT id FROM "${s}"."representation" WHERE org_id = $2 AND artifact_id = $1 ORDER BY revision DESC LIMIT 1) = $5`,
+      values: [
+        input.artifactId,
+        input.orgId,
+        input.expectHead.type,
+        input.expectHead.version,
+        input.expectHead.headRepresentationId,
+      ],
+    },
+    append,
+    witness,
   ];
+}
+
+/** Postgres' code for the head re-check's refusal. */
+const DIVISION_BY_ZERO = "22012";
+
+/** Read the way `representation-store.ts` reads its own `1 / COUNT(*)` guard:
+ *  the driver's code, else the message the sync/async bridges preserve. */
+function isDivisionByZero(error: unknown): boolean {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string") return code === DIVISION_BY_ZERO;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("division by zero");
 }
 
 function appendPromotionRevision(input: {
@@ -469,30 +637,45 @@ function appendPromotionRevision(input: {
   createdBy: string | null;
   /** The shared content's MIME, for the witness's provenance detail. */
   mime?: string | null;
-}): { representationRevisionId: string; revision: number | null } {
+  /** The snapshot to re-check under the lock; see `buildPromotionAppendQueries`. */
+  expectHead?: { type: string; version: number; headRepresentationId: string };
+}): { representationRevisionId: string; revision: number | null; moved: boolean } {
   ensurePostgresSchema();
   const representationRevisionId = promotionRevisionId({
     artifactId: input.artifactId,
     sharedResourceId: input.sharedResourceId,
     toType: input.toType,
   });
-  const results = runPostgresQueriesSync({
-    connectionString: conn(),
-    transaction: true,
-    queries: buildPromotionAppendQueries(postgresSchema, {
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      representationRevisionId,
-      sharedResourceId: input.sharedResourceId,
-      form: input.form,
-      createdBy: input.createdBy,
-      toType: input.toType,
-      mime: input.mime ?? null,
-    }),
-  });
-  const appended = results?.[1]?.rows?.[0] as { revision?: unknown } | undefined;
+  let results: Array<{ rows?: unknown[] }>;
+  try {
+    results = runPostgresQueriesSync({
+      connectionString: conn(),
+      transaction: true,
+      queries: buildPromotionAppendQueries(postgresSchema, {
+        orgId: input.orgId,
+        artifactId: input.artifactId,
+        representationRevisionId,
+        sharedResourceId: input.sharedResourceId,
+        form: input.form,
+        createdBy: input.createdBy,
+        toType: input.toType,
+        mime: input.mime ?? null,
+        expectHead: input.expectHead,
+      }),
+    });
+  } catch (error) {
+    if (input.expectHead && isDivisionByZero(error)) {
+      return { representationRevisionId, revision: null, moved: true };
+    }
+    throw error;
+  }
+  // The insert sits after the re-check when there is one.
+  const appended = results?.[input.expectHead ? 2 : 1]?.rows?.[0] as
+    | { revision?: unknown }
+    | undefined;
   return {
     representationRevisionId,
     revision: appended ? Number(appended.revision) : null,
+    moved: false,
   };
 }

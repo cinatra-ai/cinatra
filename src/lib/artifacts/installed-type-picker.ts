@@ -16,8 +16,8 @@ import { humanizeTypeLocalPart } from "./type-definitions-inventory";
 // user MAY assert what the file MEANS. The picker admits installed,
 // file-accepting MEANING SURFACES whose declared MIME set includes the DETECTED
 // MIME — a user-sourced MEANING assertion, never a re-type (the format base is
-// fixed; a PDF stays a PDF). The candidates come from TWO installed sources,
-// UNIONED (cinatra#1892 A4-seam, over A3 cinatra#1891):
+// fixed; a PDF stays a PDF). The candidates come from THREE installed sources,
+// UNIONED (cinatra#1892 A4-seam, over A3 cinatra#1891; the third cinatra#3319):
 //
 //   (1) OBJECT-TYPE channel — own-namespace artifact types
 //       (`objectTypeRegistry.listArtifacts()`) whose `accepts.file.mimeTypes`
@@ -33,8 +33,12 @@ import { humanizeTypeLocalPart } from "./type-definitions-inventory";
 //       the auto-matcher does above threshold — SAME assertion target
 //       (`assertSemanticType({ extension: packageName, assertedBy:"user" })`),
 //       consistent with the epic's auto-above-threshold / chip-below model.
+//   (3) CLAIM-BACKED channel (cinatra#3319) — a host-registered type the org's
+//       claim arbitration admits for a pack that mints no own artifact type and
+//       declares no matchers (`readClaimBackedMeaningTypesForOrg`), keyed by the
+//       CLAIMING extension. Passed in by the caller; lowest precedence.
 //
-// Both share the wildcard-aware `mimeAcceptedByAccepts` matcher and the
+// All three share the wildcard-aware `mimeAcceptedByAccepts` matcher and the
 // universal-floor exclusion (a `*/*` catch-all is the retired default-artifact
 // floor, never a meaning). A row with no defining package (object-type channel)
 // is excluded — a meaning assertion is keyed on the extension. The UNION is
@@ -48,20 +52,20 @@ import { humanizeTypeLocalPart } from "./type-definitions-inventory";
 // ---------------------------------------------------------------------------
 
 /** One picker option: an installed file-accepting meaning surface accepting the
- *  MIME — either an own-namespace object type or a matcher-manifest pack. */
+ *  MIME — an own-namespace object type, a matcher-manifest pack or a claim-backed type. */
 export type InstalledMeaningType = {
   /** The `@scope/package:local-id` object type id, or `null` for a
    *  matcher-manifest (package-keyed) meaning surface that mints no type. */
   objectTypeId: string | null;
   /** The extension package a user meaning assertion is written against
-   *  (`assertSemanticType({ extension })`) — the DEFINING extension for an
-   *  object-type candidate, the PACKAGE NAME for a matcher-manifest candidate. */
+   *  (`assertSemanticType({ extension })`) — the DEFINING extension (object type),
+   *  the PACKAGE NAME (matcher manifest) or the CLAIMING extension (claim-backed). */
   extension: string;
   /** Humanized primary label — the type local part ("Contract") for an
-   *  object-type candidate, the humanized package ("Brand Voice") for a
-   *  matcher-manifest candidate. */
+   *  object-type or claim-backed candidate, the humanized package ("Brand Voice")
+   *  for a matcher-manifest candidate. */
   displayName: string;
-  /** Humanized defining-package / pack label ("Legal", "Brand Voice"). */
+  /** Humanized defining, claiming or pack label ("Legal", "Brand Voice"). */
   extensionLabel: string;
 };
 
@@ -80,6 +84,15 @@ export type RegisteredArtifactMeaningType = {
 export type MatcherChannelMeaningType = {
   packageName: string;
   fileMimeTypes: readonly string[];
+};
+
+/** One claim-backed meaning surface (cinatra#3319): the claimed host type, the
+ *  claiming extension, and the accepts of the winner's own manifest version.
+ *  Injectable so selection is unit-testable without the claim store. */
+export type ClaimBackedMeaningType = {
+  objectTypeId: string;
+  extension: string;
+  acceptMimes: readonly string[];
 };
 
 function isUniversalAcceptEntry(accept: string): boolean {
@@ -158,6 +171,36 @@ export function selectMatcherChannelMeaningTypesAcceptingMime(
 }
 
 /**
+ * PURE core: select the CLAIM-BACKED meaning surfaces (cinatra#3319) whose
+ * accepts admit the detected MIME. The object-type channel's rules: the
+ * universal catch-all floor and a caller-supplied `excludeTypeId` are dropped.
+ * Keyed by the CLAIMING extension, labelled by the claimed type's local part.
+ */
+export function selectClaimBackedMeaningTypesAcceptingMime(
+  entries: readonly ClaimBackedMeaningType[],
+  mime: string,
+  opts?: { excludeTypeId?: string },
+): InstalledMeaningType[] {
+  const normalized = normalizeMime(mime);
+  if (normalized.length === 0) return [];
+  const out: InstalledMeaningType[] = [];
+  for (const e of entries) {
+    if (opts?.excludeTypeId && e.objectTypeId === opts.excludeTypeId) continue;
+    const accepts = e.acceptMimes;
+    if (!Array.isArray(accepts) || accepts.length === 0) continue;
+    if (accepts.some(isUniversalAcceptEntry)) continue;
+    if (!mimeAcceptedByAccepts(accepts, normalized)) continue;
+    out.push({
+      objectTypeId: e.objectTypeId,
+      extension: e.extension,
+      displayName: humanizeTypeLocalPart(e.objectTypeId),
+      extensionLabel: artifactKindLabelFor(e.extension),
+    });
+  }
+  return sortMeaningTypes(out);
+}
+
+/**
  * PURE core: the UNION of object-type + matcher-manifest meaning candidates,
  * DEDUPED BY `extension`. A pack that appears in both channels (defines an
  * own-namespace artifact type AND declares matchers) is listed ONCE, preferring
@@ -166,17 +209,23 @@ export function selectMatcherChannelMeaningTypesAcceptingMime(
  * name (then extension) for a stable surface.
  *
  * `excludeExtension` (the artifact's own base-type DEFINING extension) drops
- * EVERY candidate for that extension across BOTH channels — not just the exact
+ * EVERY candidate for that extension across ALL channels — not just the exact
  * base type id. A meaning assertion is keyed on the EXTENSION, so a MIME-
  * compatible SIBLING type from the base's own defining extension
  * (`@acme/legal:nda` when the base is `@acme/legal:contract`) or that extension's
  * matcher candidate would assert the SAME extension as the base's namespace owner
  * — a no-op the picker must not offer (codex seam-verdict finding 5).
+ *
+ * `claimBackedCandidates` (cinatra#3319) are added LAST, so they have the
+ * lowest precedence, under the same dedup and `excludeExtension` skip.
  */
 export function unionMeaningTypesAcceptingMime(
   objectTypeCandidates: readonly InstalledMeaningType[],
   matcherChannelCandidates: readonly InstalledMeaningType[],
-  opts?: { excludeExtension?: string },
+  opts?: {
+    excludeExtension?: string;
+    claimBackedCandidates?: readonly InstalledMeaningType[];
+  },
 ): InstalledMeaningType[] {
   const byExtension = new Map<string, InstalledMeaningType>();
   // Object-type candidates first — they win the dedup (concrete type id).
@@ -188,12 +237,16 @@ export function unionMeaningTypesAcceptingMime(
     if (opts?.excludeExtension && c.extension === opts.excludeExtension) continue;
     if (!byExtension.has(c.extension)) byExtension.set(c.extension, c);
   }
+  for (const c of opts?.claimBackedCandidates ?? []) {
+    if (opts?.excludeExtension && c.extension === opts.excludeExtension) continue;
+    if (!byExtension.has(c.extension)) byExtension.set(c.extension, c);
+  }
   return sortMeaningTypes([...byExtension.values()]);
 }
 
 /** Stable surface order: alphabetical by display name, then by extension (a
  *  matcher candidate has no objectTypeId, so extension is the stable secondary
- *  key across both channels). */
+ *  key across every channel). */
 function sortMeaningTypes(types: InstalledMeaningType[]): InstalledMeaningType[] {
   return types.sort(
     (a, b) =>
@@ -211,11 +264,12 @@ function sortMeaningTypes(types: InstalledMeaningType[]): InstalledMeaningType[]
  * base type: it excludes both the object-type candidate WITH that id AND a
  * matcher-channel candidate whose package is that type's DEFINING extension
  * (re-asserting the format base as a meaning is a no-op the picker must not
- * offer).
+ * offer). `claimBacked` (cinatra#3319) is the caller's
+ * `readClaimBackedMeaningTypesForOrg` read; without it the result is unchanged.
  */
 export function listInstalledMeaningTypesAcceptingMime(
   mime: string,
-  opts?: { excludeTypeId?: string },
+  opts?: { excludeTypeId?: string; claimBacked?: readonly ClaimBackedMeaningType[] },
 ): InstalledMeaningType[] {
   const artifactTypes: RegisteredArtifactMeaningType[] = objectTypeRegistry
     .listArtifacts()
@@ -231,9 +285,12 @@ export function listInstalledMeaningTypesAcceptingMime(
   );
   // The base type's DEFINING extension — exclude EVERY union candidate for that
   // extension (object-type sibling OR matcher candidate), since asserting it
-  // would re-assert the base's own namespace owner (a no-op).
-  const excludeExtension = opts?.excludeTypeId
-    ? objectTypeRegistry.getRegisteringPackage(opts.excludeTypeId) ?? undefined
+  // would re-assert the base's own namespace owner (a no-op). A host-registered
+  // base has no registering package; its claiming extension stands in.
+  const excludeTypeId = opts?.excludeTypeId;
+  const excludeExtension = excludeTypeId
+    ? objectTypeRegistry.getRegisteringPackage(excludeTypeId) ??
+      opts?.claimBacked?.find((e) => e.objectTypeId === excludeTypeId)?.extension
     : undefined;
   const channel: MatcherChannelMeaningType[] = matcherManifestRegistry
     .list()
@@ -245,9 +302,14 @@ export function listInstalledMeaningTypesAcceptingMime(
     channel,
     mime,
   );
+  const claimBackedCandidates = opts?.claimBacked
+    ? selectClaimBackedMeaningTypesAcceptingMime(opts.claimBacked, mime, opts)
+    : undefined;
   return unionMeaningTypesAcceptingMime(
     objectTypeCandidates,
     matcherChannelCandidates,
-    excludeExtension ? { excludeExtension } : undefined,
+    excludeExtension || claimBackedCandidates
+      ? { excludeExtension, claimBackedCandidates }
+      : undefined,
   );
 }
