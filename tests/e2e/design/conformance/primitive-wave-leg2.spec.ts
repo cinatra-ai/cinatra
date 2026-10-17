@@ -946,4 +946,96 @@ for (const { name: palette, theme } of PALETTES) {
       });
     });
   });
+
+  test.describe(`Select long-list viewport — ${palette} — specs/app-components.html#Select`, () => {
+    test("uses the shared ScrollArea overlay on the actual overflowing viewport", async ({ page }) => {
+      await open(page, theme);
+      await page.locator(seam("select-long-list")).getByRole("combobox").click();
+      const listbox = page.getByRole("listbox");
+      const viewport = listbox.locator("[data-radix-select-viewport]");
+      await expect(listbox.getByRole("option")).toHaveCount(48);
+      await expect.poll(() => viewport.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      await expect(viewport).toHaveAttribute("data-radix-scroll-area-viewport", "");
+      expect(await style(viewport, "scrollbar-width")).toBe("none");
+      expect(await viewport.evaluate((el) => getComputedStyle(el, "::-webkit-scrollbar").display)).toBe("none");
+      const scrollbar = listbox.locator('[data-slot="scroll-area-scrollbar"]');
+      await expect(scrollbar).toHaveCount(0);
+      // Keep this scrollbar check independent of the selected option. Radix
+      // scroll controls reveal the active option when they mount; focus the
+      // existing listbox before direct scrolling so that is not an item.
+      await listbox.focus();
+      await expect(listbox).toBeFocused();
+      // Resolve the stable token before scrolling. The shared scroll treatment
+      // hides after its normal debounce/delay, so observe all transient drawing
+      // pins together rather than spending that interval on separate RPCs.
+      const expectedThumbColor = await computedColor(page, await token(page, "--border"));
+      const drawing = await viewport.evaluate(async (el) => {
+        el.scrollTop = el.scrollHeight;
+        // Preserve the existing two-frame layout/scroll-control settling.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const content = el.closest('[role="listbox"]');
+        const visible = (node: Element | null | undefined) => {
+          if (!node) return false;
+          const rect = node.getBoundingClientRect();
+          const visibility = getComputedStyle(node).visibility;
+          return rect.width > 0 && rect.height > 0 && visibility !== "hidden" && visibility !== "collapse";
+        };
+        let bar = content?.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
+        let thumb = bar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
+        // ResizeObserver schedules a frame and the shared thumb size update is
+        // debounced before React mounts its real Presence. Wait on that actual
+        // geometry, within this same evaluation and below the normal hide delay.
+        const readinessDeadline = performance.now() + 200;
+        while ((!visible(bar) || !visible(thumb)) && performance.now() < readinessDeadline) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          bar = content?.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
+          thumb = bar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
+        }
+        const lastItem = Array.from(el.querySelectorAll('[role="option"]'))
+          .find((option) => option.textContent?.trim() === "List item 48");
+        const itemRect = lastItem?.getBoundingClientRect();
+        const viewportRect = el.getBoundingClientRect();
+        const barStyle = bar ? getComputedStyle(bar) : null;
+        return {
+          bottom: Math.round(el.scrollHeight - el.clientHeight - el.scrollTop),
+          barVisible: visible(bar),
+          barWidth: bar?.getBoundingClientRect().width ?? null,
+          barPosition: barStyle?.position ?? null,
+          barBackground: barStyle?.backgroundColor ?? null,
+          thumbVisible: visible(thumb),
+          thumbBackground: thumb ? getComputedStyle(thumb).backgroundColor : null,
+          barState: bar?.getAttribute("data-state") ?? null,
+          lastItemInViewport: !!itemRect && itemRect.bottom > Math.max(viewportRect.top, 0)
+            && itemRect.top < Math.min(viewportRect.bottom, window.innerHeight)
+            && itemRect.right > Math.max(viewportRect.left, 0)
+            && itemRect.left < Math.min(viewportRect.right, window.innerWidth),
+        };
+      });
+      expect(drawing.bottom).toBe(0);
+      expect(drawing.barVisible).toBe(true);
+      expect(drawing.barWidth).toBe(6);
+      expect(drawing.barPosition).toBe("absolute");
+      expect(drawing.barBackground).not.toBeNull();
+      expect(alphaOf(drawing.barBackground!)).toBe(0);
+      expect(drawing.thumbVisible).toBe(true);
+      expect(drawing.thumbBackground).toBe(expectedThumbColor);
+      expect(drawing.barState).toBe("visible");
+      expect(drawing.lastItemInViewport).toBe(true);
+    });
+
+    test("retains keyboard selection and restores trigger focus", async ({ page }) => {
+      await open(page, theme);
+      const trigger = page.locator(seam("select-long-list")).getByRole("combobox");
+      await trigger.focus();
+      await trigger.press("ArrowDown");
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await page.keyboard.press("End");
+      await expect(page.getByRole("option", { name: "List item 48" })).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+      await expect(trigger).toContainText("List item 48");
+      await expect(trigger).toBeFocused();
+    });
+  });
 }
