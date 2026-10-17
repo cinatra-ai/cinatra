@@ -1,7 +1,7 @@
 {
   "generatedBy": "scripts/build-postgres-sync-inventory.mjs",
   "note": "DO NOT EDIT BY HAND. Re-run `pnpm sync:inventory`. Per-file classification + justification lives in src/lib/postgres-sync-inventory.ts.",
-  "totalCallSites": 407,
+  "totalCallSites": 408,
   "callers": [
     {
       "file": "packages/extensions/src/permissions-store.ts",
@@ -145,7 +145,7 @@
     },
     {
       "file": "src/lib/artifacts/run-context-selections-store.ts",
-      "calls": 8
+      "calls": 9
     },
     {
       "file": "src/lib/artifacts/semantic-assertion-store.ts",

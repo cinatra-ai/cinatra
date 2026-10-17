@@ -273,6 +273,11 @@ export default defineConfig({
         root,
         "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts",
       ),
+      // ChatMessagesView uses this leaf; it must precede the barrel prefix.
+      "@cinatra-ai/agent-ui-protocol/renderable-views/chart": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/chart.ts",
+      ),
       "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
         root,
         "packages/agent-ui-protocol/src/renderable-views/index.ts",
@@ -323,6 +328,17 @@ export default defineConfig({
       "@cinatra-ai/objects/register-artifact-extensions": path.join(
         root,
         "packages/objects/src/integration/register-artifact-extensions.ts",
+      ),
+      // src/lib/artifacts/run-context-selections-store.ts (reached via the @/lib
+      // alias) imports ./ensure-artifact-registry, which imports
+      // src/lib/register-all-object-types.ts, which imports
+      // @cinatra-ai/objects/register-object-types. Its package.json export maps
+      // it to src/integration/register-types.ts, a NESTED target the bare dir
+      // alias below cannot resolve — the same class as
+      // register-artifact-extensions above. Must precede the bare alias.
+      "@cinatra-ai/objects/register-object-types": path.join(
+        root,
+        "packages/objects/src/integration/register-types.ts",
       ),
       // crm-connector's mcp/module.ts imports from this subpath; tests
       // that transitively pull crm-connector (via @cinatra-ai/agents barrel
