@@ -200,7 +200,7 @@
     {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
-      "resolvedSha": "8bcda3e0cca0fc56667c116bfade3a64121dd6b1"
+      "resolvedSha": "a5eb814aedde4e5e8321a222e08de8b20430fb83"
     },
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
@@ -215,7 +215,7 @@
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "4b6e83d17fcc96ea311be2d1e0fac0ca314e2400"
+      "resolvedSha": "dddb203f6100037bb1f33c7a8cd77514378f73c2"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
@@ -400,7 +400,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "a7bfa1499a6709bed831599083b13b06fa7b3166"
+      "resolvedSha": "c96d773ae2b4fac1d9cb32e1133e4b374f2d2e15"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",

@@ -19,8 +19,11 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { objectTypeRegistry } from "../registry";
+import { matcherManifestRegistry, objectTypeRegistry } from "../registry";
+import { semanticRendererRegistry } from "../artifact-renderer-registry";
 import { registerAllObjectTypes } from "../integration/register-types";
+import { registerParsedArtifactManifest } from "../integration/register-artifact-extensions";
+import { parseSemanticArtifactManifest } from "../semantic-manifest";
 import type { TypeDispositions } from "../types";
 
 // React-free renderer slots — keep the registration pure TS (same harness as
@@ -57,13 +60,6 @@ const INVENTORY: Record<string, Record<string, TypeDispositions>> = {
       pinnable: false,
       snapshotPolicy: "metadata",
       sensitivity: "normal",
-      mutability: "record",
-    },
-    "@cinatra-ai/email:recipient": {
-      projection: "none",
-      pinnable: false,
-      snapshotPolicy: "none",
-      sensitivity: "sensitive",
       mutability: "record",
     },
   },
@@ -104,10 +100,33 @@ describe("type-driven disposition inventory parity (epic #1785 merge gate)", () 
   );
 
   it("SECURITY: @cinatra-ai/email:recipient stays projection:'none' + sensitivity:'sensitive'", () => {
-    const def = objectTypeRegistry.resolve("@cinatra-ai/email:recipient");
-    expect(def).not.toBeNull();
-    expect(def!.dispositions?.projection).toBe("none");
-    expect(def!.dispositions?.sensitivity).toBe("sensitive");
+    // cinatra#3089: the host no longer registers the recipient type; the email
+    // pack's own claim governs it (cinatra#3970). The pinned claim of the
+    // materialized pack is registered through the claim-governed road and the
+    // resolved definition is read. An absent pack fails this case, never skips it.
+    const root = fileURLToPath(new URL("../../../../", import.meta.url));
+    const manifestPath = `${root}extensions/cinatra-ai/email-artifacts/package.json`;
+    expect(existsSync(manifestPath), `the materialized email pack must be present at ${manifestPath}`).toBe(true);
+    const pkg = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      name: string;
+      cinatra?: { artifact?: unknown };
+    };
+    const parsed = parseSemanticArtifactManifest(pkg.cinatra?.artifact);
+    expect(parsed.ok, "the email pack's artifact manifest must parse").toBe(true);
+    if (!parsed.ok) return;
+    try {
+      registerParsedArtifactManifest(parsed.manifest, pkg.name);
+      const def = objectTypeRegistry.resolve("@cinatra-ai/email:recipient");
+      expect(def).not.toBeNull();
+      expect(objectTypeRegistry.definerOf("@cinatra-ai/email:recipient")).toBe(pkg.name);
+      expect(def!.dispositions?.projection).toBe("none");
+      expect(def!.dispositions?.sensitivity).toBe("sensitive");
+      expect(def!.identityKey?.({ runId: "run-1", contactKey: "contact:c1" })).toBe("run-1:contact:c1");
+    } finally {
+      objectTypeRegistry.removeByPackage(pkg.name);
+      semanticRendererRegistry.removeByPackage(pkg.name);
+      matcherManifestRegistry.removeByPackage(pkg.name);
+    }
   });
 
   it("cross-checks the dev-extension manifests when present (catches manifest-side drift)", () => {
