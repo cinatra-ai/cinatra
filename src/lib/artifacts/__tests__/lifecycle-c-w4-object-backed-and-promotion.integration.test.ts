@@ -29,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import * as zod from "zod";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import type { TypedPromotionRetype } from "@/lib/artifacts/typed-promotion-store";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -68,6 +69,8 @@ let snapshotMod: typeof import("@/lib/artifacts/object-content-snapshot");
 let bindingMod: typeof import("@/lib/objects/binding-write-path");
 let contractMod: typeof import("@/lib/artifacts/object-backed-contract");
 let promotionStore: typeof import("@/lib/artifacts/typed-promotion-store");
+let promotionPlan: typeof import("@/lib/artifacts/typed-promotion");
+let representationStore: typeof import("@/lib/artifacts/representation-store");
 let producedEvent: typeof import("@/lib/lifecycle/lifecycle-produced-event");
 let registry: typeof import("@cinatra-ai/objects/registry");
 
@@ -258,6 +261,8 @@ beforeAll(async () => {
   bindingMod = await import("@/lib/objects/binding-write-path");
   contractMod = await import("@/lib/artifacts/object-backed-contract");
   promotionStore = await import("@/lib/artifacts/typed-promotion-store");
+  promotionPlan = await import("@/lib/artifacts/typed-promotion");
+  representationStore = await import("@/lib/artifacts/representation-store");
   producedEvent = await import("@/lib/lifecycle/lifecycle-produced-event");
   registry = await import("@cinatra-ai/objects/registry");
 }, 120_000);
@@ -669,4 +674,268 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(out).toEqual({ ok: false, reason: "not-confirmed" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
   });
+});
+
+describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the promotion intent survives the binding reconcile (real DB)", () => {
+  const BASE_TYPE = "@cinatra-ai/text-artifact:text";
+  const INTERRUPTED = "3319: interrupted after the retype committed";
+
+  /** One wrong field on the retype's change event, for the forged-shape cases. */
+  type Forge = { operation?: string; actorKind?: string; baseVersionOffset?: number };
+
+  /**
+   * THE RETYPE, then a stop. The canonical writer's compare-and-set and its
+   * change event commit in ONE statement, so this port does the same — the type
+   * change, `version + 1`, and the event carrying the key it is given — and then
+   * throws: the state an interruption between the road's two transactions
+   * leaves. A port given no key writes a random one, which is the writer's own
+   * default (`canonical-writer.ts`, `options.idempotencyKey ?? newIdempotencyKey()`).
+   */
+  function interruptingRetype(forge: Forge = {}) {
+    return async (input: {
+      orgId: string;
+      artifactId: string;
+      toType: string;
+      expectedVersion: number;
+      idempotencyKey?: string;
+      actor: { userId: string; orgId: string };
+    }): Promise<{ ok: false; reason: "row-moved" }> => {
+      const res = sql(
+        `WITH updated AS (
+           UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
+           WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+           RETURNING id, type, version, org_id
+         )
+         INSERT INTO "${S()}"."object_change_event"
+           (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+            base_version, result_version, actor_id, actor_kind, org_id, idempotency_key, event_checksum)
+         SELECT $5::text, $6::text, 1, updated.id, updated.type, $7::text, 'reversible-internal',
+                $8::int, updated.version, $9::text, $10::text, updated.org_id, $11::text, $12::text
+         FROM updated
+         RETURNING id`,
+        [
+          input.artifactId,
+          input.orgId,
+          input.toType,
+          input.expectedVersion,
+          nextId("evt-3319"),
+          nextId("cs-3319"),
+          forge.operation ?? "update",
+          input.expectedVersion + (forge.baseVersionOffset ?? 0),
+          input.actor.userId,
+          forge.actorKind ?? "user",
+          input.idempotencyKey ?? nextId("random-key-3319"),
+          nextId("checksum-3319"),
+        ],
+      );
+      if ((res?.rows?.length ?? 0) === 0) return { ok: false, reason: "row-moved" };
+      throw new Error(INTERRUPTED);
+    };
+  }
+
+  function promote(p: {
+    objectId: string;
+    ownType: string;
+    actor: { userId: string; orgId: string };
+    retype?: TypedPromotionRetype;
+    beforeConvergingAppend?: () => Promise<void>;
+  }) {
+    return promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: p.objectId,
+      extension: EXT,
+      ownType: { typeId: p.ownType, acceptsMimes: ["text/markdown"] },
+      // The person's road only: the pack declares no matcher machinery.
+      threshold: null,
+      confirmed: true,
+      createdBy: p.actor.userId,
+      principal: p.actor.userId,
+      actor: p.actor,
+      authority: AUTHORITY,
+      retype: p.retype ?? RETYPE,
+      beforeConvergingAppend: p.beforeConvergingAppend,
+    });
+  }
+
+  /** A markdown upload, the person's own assertion and an active dedicated
+   *  claim for the target type, promoted by the person and interrupted after
+   *  the retype committed. */
+  async function seedInterruptedPromotion(label: string, forge: Forge = {}) {
+    const ownType = `@cinatra-ai/campaigns:draft-3319-${label}`;
+    const actor = { userId: `user-3319-${label}`, orgId: ORG };
+    const objectId = nextId(`obj-3319-${label}`);
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: actor.userId });
+    seedDedicatedClaim({ id: nextId(`claim-3319-${label}`), type: ownType, ext: EXT });
+    await expect(
+      promote({ objectId, ownType, actor, retype: interruptingRetype(forge) }),
+    ).rejects.toThrow(INTERRUPTED);
+    // The retype landed; the append never ran.
+    expect(typeOf(objectId)).toBe(ownType);
+    expect(representationsOf(objectId)).toHaveLength(1);
+    return { ownType, actor, objectId, seeded };
+  }
+
+  function personAssertionsOf(objectId: string): string[] {
+    return (
+      (sql(
+        `SELECT eligibility FROM "${S()}"."semantic_assertion"
+         WHERE org_id=$1 AND artifact_id=$2 AND asserted_by='user'`,
+        [ORG, objectId],
+      ).rows ?? []) as Array<{ eligibility: string }>
+    ).map((r) => r.eligibility);
+  }
+
+  /** The binding reconcile the retype queues, run for real: it archives the
+   *  winner extension's classic assertion, the person's own. */
+  function reconcile(objectId: string) {
+    bindingMod.reconcileArtifactBinding({ orgId: ORG, artifactId: objectId });
+    expect(personAssertionsOf(objectId)).toEqual(["archived"]);
+  }
+
+  function witnessCount(objectId: string, representationRevisionId: string): number {
+    return (
+      sql(
+        `SELECT 1 FROM "${S()}"."artifact_audit"
+         WHERE org_id=$1 AND artifact_id=$2 AND representation_revision_id=$3 AND action='create'`,
+        [ORG, objectId, representationRevisionId],
+      ).rows ?? []
+    ).length;
+  }
+
+  /** A second markdown resource, for an edit save over the same row. */
+  function seedEditResource(): string {
+    const resourceId = nextId("res-edit-3319");
+    const blobId = nextId("blob-edit-3319");
+    sql(
+      `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
+       VALUES ($1,$2,'blob',$3,'text/markdown',10,NULL, jsonb_build_object('storageKey','k','blobId',$4::text))`,
+      [resourceId, ORG, nextId("sub-edit-3319"), blobId],
+    );
+    sql(
+      `INSERT INTO "${S()}"."artifact_blobs"
+         (id, org_id, storage_backend, storage_key, sha256, size_bytes, mime_detected, created_by)
+       VALUES ($1,$2,'local-disk',$3,$4,10,'text/markdown',NULL)`,
+      [blobId, ORG, nextId("key-edit-3319"), nextId("sha-edit-3319")],
+    );
+    return resourceId;
+  }
+
+  /** An edit save through the expected-base road, on the seeded revision. */
+  async function appendEdit(objectId: string, baseRevisionId: string, userId: string) {
+    const edit = await representationStore.appendRepresentationWithExpectedBase({
+      orgId: ORG,
+      artifactId: objectId,
+      baseRevisionId,
+      resourceId: seedEditResource(),
+      form: "file",
+      createdBy: userId,
+    });
+    expect(edit.kind).toBe("appended");
+    if (edit.kind !== "appended") throw new Error("the edit save did not append");
+    return edit.record.id;
+  }
+
+  it("3319 T8 the person who promoted completes an interrupted promotion after the reconcile archived their assertion", async () => {
+    const { ownType, actor, objectId, seeded } = await seedInterruptedPromotion("t8");
+    reconcile(objectId);
+
+    // Another person has no event of their own on the row.
+    const other = { userId: "user-3319-t8-other", orgId: ORG };
+    expect(await promote({ objectId, ownType, actor: other })).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+
+    const out = await promote({ objectId, ownType, actor });
+    expect(out).toMatchObject({ ok: true, retyped: false, revision: 2, toType: ownType });
+    if (!out.ok) return;
+    const after = representationsOf(objectId);
+    expect(after).toHaveLength(2);
+    expect(after[1]!.id).toBe(out.representationRevisionId);
+    // The promotion shares the seeded revision's content.
+    expect(after[1]!.resource_id).toBe(seeded.resourceId);
+    expect(witnessCount(objectId, out.representationRevisionId)).toBe(1);
+  });
+
+  it("3319 T9 an edit appended after the reconcile is not promoted by the old intent", async () => {
+    const { ownType, actor, objectId, seeded } = await seedInterruptedPromotion("t9");
+    reconcile(objectId);
+    // An edit save moves the head; the row's version does not move.
+    const editId = await appendEdit(objectId, seeded.revisionId, actor.userId);
+
+    expect(await promote({ objectId, ownType, actor })).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId).map((r) => r.id)).toEqual([seeded.revisionId, editId]);
+  });
+
+  const FORGED: Array<{ label: string; field: string; forge: Forge }> = [
+    { label: "t10-actor-kind", field: "actor_kind 'agent'", forge: { actorKind: "agent" } },
+    { label: "t10-operation", field: "operation 'create'", forge: { operation: "create" } },
+    {
+      label: "t10-base-version",
+      field: "base_version two below the row's version",
+      forge: { baseVersionOffset: -1 },
+    },
+  ];
+  for (const forged of FORGED) {
+    it(`3319 T10 a retype event with the right key and ${forged.field} does not converge`, async () => {
+      const { ownType, actor, objectId } = await seedInterruptedPromotion(forged.label, forged.forge);
+      // The one event on the row carries the forged field.
+      const events = (sql(
+        `SELECT operation, actor_kind, base_version, result_version FROM "${S()}"."object_change_event"
+         WHERE org_id=$1 AND object_id=$2`,
+        [ORG, objectId],
+      ).rows ?? []) as Array<{ operation: string; actor_kind: string; base_version: number; result_version: number }>;
+      expect(events).toHaveLength(1);
+      expect(Number(events[0]!.result_version)).toBe(2);
+      reconcile(objectId);
+
+      expect(await promote({ objectId, ownType, actor })).toEqual({
+        ok: false,
+        reason: "already-promoted",
+      });
+      expect(representationsOf(objectId)).toHaveLength(1);
+    });
+  }
+
+  for (const phase of ["pre-reconciliation", "post-reconciliation"] as const) {
+    it(`3319 T11 an edit that commits between the converging read and its append refuses the append (${phase})`, async () => {
+      const label = phase === "pre-reconciliation" ? "t11-pre" : "t11-post";
+      const { ownType, actor, objectId, seeded } = await seedInterruptedPromotion(label);
+      // Pre-reconciliation the authority is the person's still-active assertion;
+      // post-reconciliation it is the retype's own event.
+      if (phase === "post-reconciliation") reconcile(objectId);
+      else expect(personAssertionsOf(objectId)).toEqual(["eligible"]);
+
+      let editId: string | null = null;
+      const out = await promote({
+        objectId,
+        ownType,
+        actor,
+        // THE BARRIER: the edit commits after the branch's read and before its
+        // append transaction takes the lock.
+        beforeConvergingAppend: async () => {
+          editId = await appendEdit(objectId, seeded.revisionId, actor.userId);
+        },
+      });
+      expect(out).toEqual({ ok: false, reason: "row-moved" });
+      expect(editId).not.toBeNull();
+
+      const promotionId = promotionPlan.promotionRevisionId({
+        artifactId: objectId,
+        sharedResourceId: seeded.resourceId,
+        toType: ownType,
+      });
+      const ids = representationsOf(objectId).map((r) => r.id);
+      // The head is the edit, and the promotion wrote neither its revision nor
+      // its witness.
+      expect(ids).toEqual([seeded.revisionId, editId]);
+      expect(ids).not.toContain(promotionId);
+      expect(witnessCount(objectId, promotionId)).toBe(0);
+    });
+  }
 });
