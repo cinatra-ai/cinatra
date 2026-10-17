@@ -33,6 +33,13 @@ vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(),
 }));
 
+// The load-error toast the renderer shows when the loader rejects (cinatra#4159).
+const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }));
+vi.mock("@/lib/cinatra-toast", () => ({
+  toast: { error: toastErrorMock, success: vi.fn(), info: vi.fn(), warning: vi.fn() },
+  cinatraToast: vi.fn(),
+}));
+
 import { ListPickerRenderer } from "../list-picker-renderer";
 import * as actions from "../list-picker-actions";
 import type { FieldRendererProps } from "../field-renderer-registry";
@@ -190,6 +197,17 @@ describe("ListPickerRenderer", () => {
     await waitFor(() =>
       expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
     );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the 'Could not load lists.' toast when the loader rejects (cinatra#4159)", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockRejectedValueOnce(
+      Object.assign(new Error("upstream HTTP 401"), { name: "TwentyMcpError", code: 401 }),
+    );
+    render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Could not load lists."));
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
   });
 
   it("renders mixed-memberType lists with the same affordances and onChange payload shape as contact-typed lists", async () => {
