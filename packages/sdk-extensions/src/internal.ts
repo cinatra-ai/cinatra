@@ -51,3 +51,7 @@ export { CRM_LIST_READER_CAPABILITY_ID } from "./crm-list-reader-contract";
 export { EMAIL_SENDER_IDENTITIES_CAPABILITY_ID } from "./email-sender-identities-contract";
 export { APPOINTMENT_SCHEDULES_CAPABILITY_ID } from "./appointment-schedules-contract";
 export { NANGO_SYSTEM_CAPABILITY } from "./nango-system-contract";
+
+
+
+export const ARTIFACT_ACTION_CHECK_CAPABILITY = "artifact-action-check/v1";

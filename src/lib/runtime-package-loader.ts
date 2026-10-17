@@ -1,3 +1,4 @@
+import { recordLoadedExtensionIdentity, type LoadedExtensionIdentity } from "@/lib/extension-capabilities-registry";
 import "server-only";
 
 // The PROD half of "dual loaders, single activation": the host wrapper around
@@ -567,6 +568,7 @@ export async function loadRuntimePackageExtensions(
   // re-publishes for anything the pass changed).
   await refreshPreResolvedEdgeMaps();
 
+  const loadedActionIdentities = new Map<string, LoadedExtensionIdentity>();
   const activationResults = await runRuntimePackageActivation(dataRoot, {
     fs: realStoreFs,
     records: orderedActivatable,
@@ -603,7 +605,18 @@ export async function loadRuntimePackageExtensions(
       // THROUGH THE SANCTIONED SEAM (it re-checks containment on the realpaths —
       // the check above stays, so the serverEntry-shaped refusal message is the
       // one a mis-linked entry still gets).
-      return importFileFromPackageDirRealpathBound(realAbs, realStore);
+      const anchor = anchorByIdentity.get(identityKey(rec.packageName, rec.version));
+      const namespace = await importFileFromPackageDirRealpathBound(realAbs, realStore);
+      if (!anchor || !await verifyMaterializedPackageIntegrity(rec as PackageStoreRecordV2, {
+        trustedIntegrity: anchor.integrity, trustedContentHash: anchor.contentHash })) {
+        throw new Error("action_namespace_bytes_changed_during_import");
+      }
+      // Legacy/digest-unbound installs retain ordinary registration but cannot own CHECK.
+      if (anchor.installId && anchor.digest && rec.version) {
+        loadedActionIdentities.set(identityKey(rec.packageName, rec.version), recordLoadedExtensionIdentity({ packageName: rec.packageName,
+          version: rec.version, installId: anchor.installId, digest: anchor.digest }));
+      }
+      return namespace;
     },
     // `record.envOverrides` is the RAW `cinatra.envOverrides` pass-through
     // (cinatra#982); `resolution` is deliberately omitted for a materialized
@@ -645,14 +658,14 @@ export async function loadRuntimePackageExtensions(
           grantedPorts,
           { envOverrides: record.envOverrides },
           sink,
-          { installId, version: record.version ?? null, isDefault: false },
+          { installId, version: record.version ?? null, isDefault: false, loadedActionIdentity: loadedActionIdentities.get(identityKey(record.packageName, record.version)) },
         );
       }
       return createExtensionHostContext(
         packageName,
         grantedPorts,
         { envOverrides: record.envOverrides },
-        { installId, version: record.version ?? null, isDefault: true },
+        { installId, version: record.version ?? null, isDefault: true, loadedActionIdentity: loadedActionIdentities.get(identityKey(record.packageName, record.version)) },
       );
     },
     // Per-record settle (cinatra#1392 Gap 1 / S8): commit a fully-successful

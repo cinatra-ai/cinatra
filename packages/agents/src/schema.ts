@@ -1629,3 +1629,19 @@ export const agentRunTokens = cinatraSchema.table("agent_run_tokens", {
   runId:     text("run_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// #3745: immutable per-dispatch source identity. No mutable template fallback.
+export const agentRunOutwardActionPolicies = cinatraSchema.table("agent_run_outward_action_policies", {
+  runId: text("run_id").primaryKey(), orgId: text("org_id").notNull(),
+  executionAttemptId: text("execution_attempt_id").notNull(),
+  policy: jsonb("policy").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+// A durable burned gate is never removed by gate/run deletion. No CASCADE and
+// no stored argument/parallel approval. Remote effect failure does not refund it.
+export const artifactReviewActionConsumptions = cinatraSchema.table("artifact_review_action_consumptions", {
+  gateId: text("gate_id").primaryKey(), runId: text("run_id").notNull(), orgId: text("org_id").notNull(),
+  stepId: text("step_id").notNull(), toolIdentity: jsonb("tool_identity").notNull(),
+  executedSourceSha256: text("executed_source_sha256").notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull().defaultNow(),
+});

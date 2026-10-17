@@ -38,8 +38,28 @@ const TOOL = "example_outward_tool";
 
 const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
 
+// cinatra#3745: a run's frame carries the executed-run source the host's loader
+// verified, and the step's declared tools are read before the boundary decides;
+// the run store answers that source as current and the step as declaring nothing.
+vi.mock("@cinatra-ai/agents/store", () => ({
+  isRunExecutedSourceCurrent: async () => true,
+  readRunStepToolPolicy: async () => ({}),
+  assertRunStepToolAllowed: () => ({ kind: "undeclared" }),
+  parseRunStepToolPolicy: (policy: unknown) => policy,
+  withRunActionPolicyTransaction: async () => {
+    throw new Error("no person-gate consumption in these cases");
+  },
+}));
+const executedSource = {
+  contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+  sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+};
+
 const runMemberFrame = (): McpRequestContext =>
-  ({ orgId: "org-1", userId: "user-1", runId: "run-1" }) as McpRequestContext;
+  ({
+    orgId: "org-1", userId: "user-1", runId: "run-1",
+    verifiedStepId: "step-1", verifiedExecutedSource: executedSource,
+  }) as McpRequestContext;
 
 type ToolResult = { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
 

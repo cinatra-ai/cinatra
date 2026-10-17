@@ -62,6 +62,8 @@ import datetime as _datetime
 import hashlib
 import hmac
 import inspect
+from types import MappingProxyType
+from collections.abc import Mapping
 import json
 import os
 import re
@@ -99,6 +101,8 @@ except Exception:  # pragma: no cover — host-side typecheck fallback
 
 #: Stores the fasta2a context_id for the task currently executing in this
 #: asyncio task / coroutine chain. Reset to "" between tasks.
+_WAYFLOW_EXECUTED_SOURCE: contextvars.ContextVar[Optional[Mapping[str, str]]] = contextvars.ContextVar("_WAYFLOW_EXECUTED_SOURCE", default=None)
+
 _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_WAYFLOW_CONTEXT_ID", default=""
 )
@@ -861,23 +865,30 @@ def _patch_api_call_step_bridge_token() -> None:
                     if str(_hname).lower() in (
                         "x-cinatra-step-node",
                         "x-cinatra-step-attestation",
+                        "x-cinatra-executed-source",
+                        "x-cinatra-declaration-source",
+                        "x-cinatra-raw-source",
                     ):
                         del request["headers"][_hname]
                 _step_id = getattr(self, "id", "") or ""
-                if attest_key and _ctx_id and _step_id:
+                _loaded = _WAYFLOW_EXECUTED_SOURCE.get()
+                if attest_key and _ctx_id and _step_id and _loaded and "\n" not in _ctx_id + _step_id and "\r" not in _ctx_id + _step_id:
                     _step_expiry = (
                         int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
                     )
                     _step_sig = hmac.new(
                         attest_key.encode("utf-8"),
-                        f"s1\n{_ctx_id}\n{_step_id}\n{_step_expiry}".encode(
+                        f"s2\n{_ctx_id}\n{_step_id}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_step_expiry}".encode(
                             "utf-8"
                         ),
                         hashlib.sha256,
                     ).hexdigest()
+                    request["headers"]["X-Cinatra-Raw-Source"] = _loaded["sourceSha256"]
+                    request["headers"]["X-Cinatra-Executed-Source"] = _loaded["executedSourceSha256"]
+                    request["headers"]["X-Cinatra-Declaration-Source"] = _loaded["declarationSourceSha256"]
                     request["headers"]["X-Cinatra-Step-Node"] = _step_id
                     request["headers"]["X-Cinatra-Step-Attestation"] = (
-                        f"s1:{_step_expiry}:{_step_sig}"
+                        f"s2:{_step_expiry}:{_step_sig}"
                     )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
@@ -1198,6 +1209,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         # turns it into a real try/finally reset alongside the run token.)
         _ctx_token = None
         _rt_token = None
+        _source_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1235,6 +1247,10 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+            # This assistant is the one executing THIS task, including retained
+            # old mounts during reload/resume. Never read active registry here.
+            _binding = getattr(self.assistant, "_cinatra_executed_source", None)
+            _source_token = _WAYFLOW_EXECUTED_SOURCE.set(_binding if isinstance(_binding, MappingProxyType) else None)
 
             # cinatra#1194 — template-version-per-run: what executes is no
             # longer byte-identical to the published spec for agents with
@@ -1458,6 +1474,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # coroutine chain. Reset ONLY when set (load_task may raise first) —
             # this is the real try/finally reset the prior dead _ctx_token
             # capture never performed. Reset the run token first (LIFO wrt set).
+            if _source_token is not None:
+                _WAYFLOW_EXECUTED_SOURCE.reset(_source_token)
             if _rt_token is not None:
                 _WAYFLOW_RUN_TOKEN.reset(_rt_token)
             if _ctx_token is not None:
@@ -3341,6 +3359,7 @@ class MountedAgent:
         "composed_oas",
         "composed_sha256",
         "context_injection",
+        "selected_source_binding",
     )
 
     def __init__(
@@ -3355,6 +3374,7 @@ class MountedAgent:
         composed_oas: Optional[Dict[str, Any]] = None,
         composed_sha256: Optional[str] = None,
         context_injection: Optional[List[Dict[str, Any]]] = None,
+        selected_source_binding: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -3365,6 +3385,7 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        self.selected_source_binding = selected_source_binding
         # cinatra#1194 — mount-time context-subflow injection sidecar. When the
         # loader injected declared slots, `composed_oas` holds the PRE-
         # placeholder-substitution composed document (what actually executes,
@@ -4050,6 +4071,17 @@ def _mount_one_sync(
 
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+    source_binding = MappingProxyType({
+        "sourceSha256": fingerprint,
+        "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
+        "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "declarationSource": raw_text,
+    })
+    # Frozen host-only selection snapshot; a failed attachment
+    # refuses the mount rather than minting step-only authority.
+    setattr(agent, "_cinatra_executed_source", source_binding)
+    if getattr(agent, "_cinatra_executed_source", None) is not source_binding:
+        raise ValueError("executed_source_sidecar_unavailable")
 
     if injection_report:
         # Per-run template-version logging needs the injection info at
@@ -4090,6 +4122,7 @@ def _mount_one_sync(
         composed_oas=composed_oas,
         composed_sha256=composed_sha256,
         context_injection=injection_report or None,
+        selected_source_binding=source_binding,
     )
 
 
@@ -4614,6 +4647,9 @@ def _build_composed_oas_handler(
                 "injectedSlots": agent.context_injection or [],
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
+                # Host selects before dispatch; callback HMAC proves which
+                # assistant actually executed. No substituted secrets exposed.
+                "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )
 
