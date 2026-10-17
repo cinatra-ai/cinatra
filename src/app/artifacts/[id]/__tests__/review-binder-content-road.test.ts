@@ -131,3 +131,79 @@ describe("the review binder's content road", () => {
     }
   });
 });
+
+// cinatra#4129 — THE PINNED IDS TRAVEL AS EXACT PATH SEGMENTS. The session
+// preview and download addresses carry the pinned artifact and revision ids to
+// the version routes, which read them back out of the path.
+describe("the pinned revision's session addresses carry each id as one exact path segment", () => {
+  function buildWith(artifactId: string, revisionId: string) {
+    const { buildProps } = bindArtifactReviewPorts({ orgId: ORG, actor });
+    return buildProps({
+      artifact: { ...artifact, artifactId } as ArtifactSummary,
+      representationRevisionId: revisionId,
+      mime: MARKDOWN,
+      propsApiVersion: 1,
+      member: { mime: MARKDOWN, form: "file" },
+    });
+  }
+
+  it("encodes an id that would otherwise address another path, and reads a plain id exactly as before", async () => {
+    readPinnedSubstance.mockResolvedValue({ class: "text", text: "ok" });
+    const odd = await buildWith("art/../x", "rev?a#b%c é");
+    expect(odd.urls).toEqual({
+      preview: "/api/artifacts/art%2F..%2Fx/versions/rev%3Fa%23b%25c%20%C3%A9/preview",
+      download: "/api/artifacts/art%2F..%2Fx/versions/rev%3Fa%23b%25c%20%C3%A9/content",
+    });
+    const plain = await buildWith(ARTIFACT, REVISION);
+    expect(plain.urls).toEqual({
+      preview: `/api/artifacts/${ARTIFACT}/versions/${REVISION}/preview`,
+      download: `/api/artifacts/${ARTIFACT}/versions/${REVISION}/content`,
+    });
+  });
+
+  it("hands out NO address for an id that is not well-formed text, never a rewritten one", async () => {
+    readPinnedSubstance.mockResolvedValue({ class: "text", text: "ok" });
+    const props = await buildWith(ARTIFACT, "rev-\uD800-a");
+    expect(props.urls).toEqual({ preview: null, download: null });
+  });
+
+  // A DOT SEGMENT IS REMOVED BY URL RESOLUTION and an empty id is no segment at
+  // all, so neither can address its pinned revision: each gets NO address. The
+  // addresses that ARE handed out are read back through URL resolution, the
+  // way the browser resolves a link, as the very ids that were pinned.
+  it("hands out NO address for an empty id or a dot segment, in either place", async () => {
+    readPinnedSubstance.mockResolvedValue({ class: "text", text: "ok" });
+    for (const [artifactId, revisionId] of [
+      [ARTIFACT, "."],
+      [ARTIFACT, ".."],
+      [ARTIFACT, ""],
+      [".", REVISION],
+      ["..", REVISION],
+    ]) {
+      const props = await buildWith(artifactId!, revisionId!);
+      expect(props.urls).toEqual({ preview: null, download: null });
+    }
+  });
+
+  it("every address handed out resolves to the very ids that were pinned", async () => {
+    readPinnedSubstance.mockResolvedValue({ class: "text", text: "ok" });
+    for (const [artifactId, revisionId] of [
+      ["art/../x", "rev?a#b%c é"],
+      [ARTIFACT, "..."],
+      [ARTIFACT, "%2e%2e"],
+      [".a", "a."],
+    ]) {
+      const props = await buildWith(artifactId!, revisionId!);
+      for (const [leaf, url] of [
+        ["preview", props.urls?.preview],
+        ["content", props.urls?.download],
+      ]) {
+        const segments = new URL(url as string, "https://app.example").pathname.split("/");
+        expect(segments).toHaveLength(7);
+        expect(decodeURIComponent(segments[3]!)).toBe(artifactId);
+        expect(decodeURIComponent(segments[5]!)).toBe(revisionId);
+        expect(segments[6]).toBe(leaf);
+      }
+    }
+  });
+});
