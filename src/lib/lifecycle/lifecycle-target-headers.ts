@@ -57,6 +57,7 @@ import {
   LIFECYCLE_TARGET_HEADERS_MAX,
   LIFECYCLE_TARGET_HEADER_FACTS_MAX,
   LIFECYCLE_TARGET_HEADER_MAX_TEXT,
+  projectReviewTargetHeaderRevision,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
   type LifecycleTargetHeader,
@@ -74,6 +75,13 @@ import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
+type ReviewTargetHeadersInput = {
+  viewType: LifecycleDataPartViewType;
+  ref: string;
+  state: LifecycleCardState;
+  actorCtx: ReviewActorContext;
+};
+
 /**
  * The header(s) for the pinned target(s) of ONE review gate, or `null` when this
  * answer cannot name them.
@@ -83,19 +91,51 @@ import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports"
  * target under, and every other state — `absent` above all — leaves here with
  * nothing, which is what the card already draws for an answer composed before
  * this field existed.
+ *
+ * The headers ALONE never say how many targets the gate pins: a target this
+ * reader cannot read is skipped, and the list stops at
+ * {@link LIFECYCLE_TARGET_HEADERS_MAX}. A reading that needs the headers to be
+ * the whole pinned set reads {@link readReviewTargetHeadersReading} instead.
  */
-export async function readReviewTargetHeaders(input: {
-  viewType: LifecycleDataPartViewType;
-  ref: string;
-  state: LifecycleCardState;
-  actorCtx: ReviewActorContext;
-}): Promise<LifecycleTargetHeader[] | null> {
+export async function readReviewTargetHeaders(
+  input: ReviewTargetHeadersInput,
+): Promise<LifecycleTargetHeader[] | null> {
+  return (await readReviewTargetHeadersReading(input)).headers;
+}
+
+/**
+ * The headers, and whether they ARE the gate's whole pinned set.
+ *
+ * `pinnedCount` is the number of targets the gate pins (0 when no gate was
+ * read). `complete` is true only when every pinned target produced a header:
+ * none was skipped as unreadable, tombstoned or denied, and none was cut by the
+ * {@link LIFECYCLE_TARGET_HEADERS_MAX} bound. Every reading that treats the
+ * headers as the gate's targets — one island per header, one address per
+ * header, one panel for the one header — takes that reading only when
+ * `complete` is true; any other answer keeps the gate's one aggregate island,
+ * which renders every pinned target the reader may read.
+ */
+export type ReviewTargetHeadersReading = {
+  headers: LifecycleTargetHeader[] | null;
+  pinnedCount: number;
+  complete: boolean;
+};
+
+const NO_HEADERS: ReviewTargetHeadersReading = Object.freeze({
+  headers: null,
+  pinnedCount: 0,
+  complete: false,
+});
+
+export async function readReviewTargetHeadersReading(
+  input: ReviewTargetHeadersInput,
+): Promise<ReviewTargetHeadersReading> {
   const { viewType, ref, state, actorCtx } = input;
   // Only the review kind has a target, and only the three states that draw one
   // may carry its header. `absent` carries nothing beside itself.
-  if (viewType !== "artifact_review_gate") return null;
+  if (viewType !== "artifact_review_gate") return NO_HEADERS;
   if (state.state !== "pending" && state.state !== "restricted" && state.state !== "settled") {
-    return null;
+    return NO_HEADERS;
   }
   // A SETTLED STATE WITH NO RECOGNIZED OUTCOME PRESENTS NO TARGET, so it may
   // carry no header either. The card is explicit about it — a gate resolved
@@ -105,12 +145,13 @@ export async function readReviewTargetHeaders(input: {
   // decided. Composing a header for that answer would put the target's title,
   // type and row facts on a response whose own surface has refused to show
   // them; the answer stops where the drawing stops.
-  if (state.state === "settled" && state.outcome === undefined) return null;
+  if (state.state === "settled" && state.outcome === undefined) return NO_HEADERS;
   try {
     const payload = decodeLifecycleGateRef(ref);
-    if (!payload) return null;
+    if (!payload) return NO_HEADERS;
     const gate = await readReviewGate(payload.runId, payload.reviewTaskId);
-    if (!gate || gate.pinnedTargets.length === 0) return null;
+    if (!gate || gate.pinnedTargets.length === 0) return NO_HEADERS;
+    const pinnedCount = gate.pinnedTargets.length;
 
     const actor = buildActorContextFromPrimitive(
       actorCtx.actor,
@@ -130,6 +171,10 @@ export async function readReviewTargetHeaders(input: {
       ((level === "team" && memberTeams.has(id)) ||
         (level === "organization" && id === actor.organizationId));
     const headers: LifecycleTargetHeader[] = [];
+    // Every header's revision is the pinned id EXACTLY, or the reading is not
+    // the whole pinned set (cinatra#4129): a header whose id the projection
+    // module cut, substituted or refused names its target and nothing more.
+    let allExact = true;
     for (const target of gate.pinnedTargets) {
       // WHICH READING, AND WHY THE TWO ARE NOT INTERCHANGEABLE. Both carry the
       // same authorization — the same actor-scoped ownership filter and the same
@@ -160,6 +205,8 @@ export async function readReviewTargetHeaders(input: {
               orgId: actorCtx.orgId,
               actor,
             });
+      // A target this reader cannot read names nothing, and the reading is
+      // then not the whole pinned set (`complete` below).
       if (read.kind !== "ok") continue;
       const artifact = read.artifact;
       // THE SCOPES ARE NAMED (cinatra#3443): the meta line names each scope by
@@ -181,13 +228,15 @@ export async function readReviewTargetHeaders(input: {
         mayName("organization", artifact.organizationId)
           ? await readOwnerDisplayName("organization", artifact.organizationId ?? "")
           : null;
+      const revision = projectReviewTargetHeaderRevision(target.representationRevisionId);
+      if (!revision.exact) allExact = false;
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
         typeLabel: artifact.objectType
           ? clamp(artifactKindLabelFor(artifact.objectType), "Artifact")
           : "Artifact",
         objectType: (artifact.objectType ?? "").slice(0, LIFECYCLE_TARGET_HEADER_MAX_TEXT),
-        revisionId: clamp(target.representationRevisionId, "—"),
+        revisionId: revision.revisionId,
         // Worded by the SURFACE MODEL, not here: the card owns no artifact
         // vocabulary, and the island's own header reads the same function, so
         // the two cannot word the same fact differently.
@@ -204,10 +253,17 @@ export async function readReviewTargetHeaders(input: {
       });
       if (headers.length === LIFECYCLE_TARGET_HEADERS_MAX) break;
     }
-    return headers.length > 0 ? headers : null;
+    // COMPLETE ONLY WHEN EVERY PIN IS REPRESENTED, EACH BY ITS EXACT ID: a
+    // skipped target and the bound both leave fewer headers than pins, and an
+    // empty, dot-segment, ill-formed or cut revision id is not its pin's id.
+    return {
+      headers: headers.length > 0 ? headers : null,
+      pinnedCount,
+      complete: headers.length === pinnedCount && allExact,
+    };
   } catch {
     // The reading is lost, never the card.
-    return null;
+    return NO_HEADERS;
   }
 }
 

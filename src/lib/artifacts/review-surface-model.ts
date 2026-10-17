@@ -512,14 +512,6 @@ export type ReviewSurfaceModel =
       permissions: Promise<ReviewDecisionPermissions>;
     };
 
-/** The key a target's pinned captures are stored under on the surface model. */
-export function pinnedCaptureKey(target: {
-  artifactId: string;
-  representationRevisionId: string;
-}): string {
-  return `${target.artifactId}:${target.representationRevisionId}`;
-}
-
 // ---------------------------------------------------------------------------
 // The decision submit OUTCOME the client renders after a submit (§IV/V). Maps
 // the #1807 decision core's typed result to the surface's visible states.

@@ -288,7 +288,11 @@ function mockAnswers(
         state: answer.state,
         body: null,
         ...(answer.islandSrc !== null ? { islandSrc: answer.islandSrc } : {}),
-        ...(answer.targetHeaders ? { targetHeaders: answer.targetHeaders } : {}),
+        // Beside its headers the route says whether they are the gate's whole
+        // pinned set; every gate here pins only the targets it names.
+        ...(answer.targetHeaders
+          ? { targetHeaders: answer.targetHeaders, targetHeadersComplete: true }
+          : {}),
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );

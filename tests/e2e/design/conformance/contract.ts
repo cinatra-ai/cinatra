@@ -98,7 +98,10 @@ import {
 // The PRODUCT's own readings, read here so the driver's expectation is derived
 // the way the shipped composer derives it and never restated by the test.
 import { artifactKindLabelFor } from "../../../../src/lib/artifacts/artifact-kind-label";
-import { reviewRevisionMarker } from "../../../../src/lib/artifacts/review-surface-model";
+import {
+  projectReviewTargetHeaderRevision,
+  reviewTargetRevisionMarker,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { reviewTargetRowFacts } from "../../../../src/lib/artifacts/review-target-row-facts";
 import {
   ARTIFACT_KIND_DISPLAY_ROWS,
@@ -645,30 +648,27 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //   • It asserts §IV per kind against the SHIPPED CHAIN: the title, the type tag
 //     (attribute AND visible text, both derived by the product's own
 //     `artifactKindLabelFor` from the row's type id), the type id on the meta line,
-//     the pinned revision (addressed by the exact id, read as the elided marker
-//     the shipped `reviewRevisionMarker` rule produces) with its pinned marker,
+//     the pinned revision (addressed by the revision the header carries, read
+//     as the elided marker the shipped `reviewTargetRevisionMarker` produces)
+//     with its pinned marker,
 //     each authorized row fact as the product's own `reviewTargetRowFacts`
 //     composes it from the stored row, and the inertness — no control, no link,
 //     no revision picker anywhere inside it.
 //
 //     THE FIXTURE SEEDS THE ARTIFACT, NOT THE READING. A row carries only what a
-//     stored artifact row carries; both readings the header draws over it are
-//     composed by the two product functions the server-side composer calls. That
-//     is what keeps this a driver and not an echo test: a fixture that named a
-//     finished fact could assert a line the shipped composer cannot produce, and
-//     the assertion would pass on the component printing its own props back.
+//     stored artifact row carries; every reading the header draws over it is
+//     composed by the product's own functions: `artifactKindLabelFor`,
+//     `reviewTargetRowFacts`, and the section's header projection and revision
+//     marker. That is what keeps this a driver and not an echo test: a fixture
+//     that named a finished fact could assert a line the shipped composer cannot
+//     produce, and the assertion would pass on the component printing its own
+//     props back.
 //
 //   • It does NOT assert the plural ORDERING of several pinned targets. Every
 //     surface of this wave pins one target: the mixed-kind gate draws the same
 //     artifact at the same revision under two content forms, and target
 //     normalization (src/lib/artifacts/artifact-review-target.ts) treats that as
 //     one target, so seeding two would seed a gate the product does not compose.
-//     Reported with it: `ReviewTargetHeaders` keys its list on
-//     `${revisionId}:${objectType}` alone (packages/agents/src/review-gate-card.tsx),
-//     which omits the artifact id that is part of a target's identity, so two
-//     distinct artifacts sharing a type and a revision string would collide.
-//     That is a product change, not a drivers-wave change; it is on the wave's
-//     readiness list with the ordering reading that would exercise it.
 //
 //   • TWO DRAWN READINGS IT REPORTS RATHER THAN ASSERTS, because the shipped
 //     composer has no reading for them: the scope pair's CASING (the drawing
@@ -757,18 +757,21 @@ export function reviewTargetHeaderDriver(
         await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
         // "… the pinned representation revision (shown as a mono revision id
-        // with a pinned marker) …". Addressed by the EXACT revision the gate
-        // pinned, so a card drawing a different revision cannot resolve at all,
-        // while the VISIBLE reading is the elided one the product draws — the
-        // shipped truncation rule (`reviewRevisionMarker`), not the full id,
-        // which for an id past the bound is not what the header prints at all.
+        // with a pinned marker) …". Both readings are derived through the
+        // projection section the product draws with: the revision the header
+        // carries is the section's header projection of the pinned id, so a
+        // card drawing a different revision cannot resolve at all, and the
+        // VISIBLE reading is the section's own marker over it
+        // (`reviewTargetRevisionMarker`), not the full id, which for an id past
+        // the marker's bound is not what the header prints at all.
+        const marker = reviewTargetRevisionMarker(
+          projectReviewTargetHeaderRevision(seed.revisionId).revisionId,
+        );
         const revision = header.locator(
-          `[data-review-target-revision="${seed.revisionId}"]`,
+          `[data-review-target-revision="${marker.full}"]`,
         );
         await expect(revision).toHaveCount(1);
-        await expect(revision).toHaveText(
-          `revision ${reviewRevisionMarker(seed.revisionId).short}`,
-        );
+        await expect(revision).toHaveText(`revision ${marker.short}`);
         await expect(header).toContainText("· pinned");
         // "… and the read-only row facts the host authorized". The expected
         // line is composed from the row by the PRODUCT's own
