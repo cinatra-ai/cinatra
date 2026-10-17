@@ -184,7 +184,7 @@ jobs:
         with:
           repository: cinatra-ai/wordpress-assistant-connector
           path: .wp-drupal-contract
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Enforced copy matches the canonical v1 auth-init schema
@@ -521,7 +521,7 @@ jobs:
             "$RUNNER_TEMP/uat-compose-logs"
       - name: Upload the resource snapshot
         if: ${{ always() && needs.changed-paths.outputs.run_uat == 'true' && steps.leak_scan.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: uat-resource-snapshot-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/uat-diagnostics
@@ -529,7 +529,7 @@ jobs:
           retention-days: 14
       - name: Upload the docker compose logs
         if: ${{ failure() && needs.changed-paths.outputs.run_uat == 'true' && steps.leak_scan.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: uat-compose-logs-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/uat-compose-logs
@@ -771,7 +771,7 @@ jobs:
             "$RUNNER_TEMP/uat-compose-logs"
       - name: Upload the resource snapshot
         if: ${{ always() && steps.leak_scan.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: uat-resource-snapshot-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/uat-diagnostics
@@ -779,7 +779,7 @@ jobs:
           retention-days: 14
       - name: Upload the docker compose logs
         if: ${{ failure() && steps.leak_scan.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: uat-compose-logs-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/uat-compose-logs
@@ -806,7 +806,7 @@ jobs:
       actions: read # read this run's own job log
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
       - name: Every minted value renders masked in this run's public job log
