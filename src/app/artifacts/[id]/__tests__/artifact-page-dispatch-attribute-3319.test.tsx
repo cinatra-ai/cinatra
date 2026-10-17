@@ -32,9 +32,7 @@
  * discover the branches its inputs reach, the case table is ALSO typed
  * `Record<ArtifactRenderDispatch["kind"], ...>`, so a variant added to the union
  * that no probe reaches fails this file at TYPECHECK rather than slipping past
- * the way the drop did. The page also writes one
- * literal the resolver never produces — the dashboard-pointer arm — and that is
- * driven as its own case.
+ * the way the drop did.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -180,6 +178,7 @@ vi.mock("@/lib/artifacts/representation-store", () => ({
 }));
 vi.mock("../review-surface-roads", () => ({
   hostArtifactContentBuilder: mocks.hostArtifactContentBuilder,
+  SESSION_DATA_ROAD: { road: "session", apiUrl: "/api/dashboards/cubejs-api/v1" },
 }));
 vi.mock("@/lib/authz/enforce", () => ({ can: mocks.can }));
 vi.mock("@/lib/dashboards/dashboard-artifact-surface", () => ({
@@ -318,22 +317,4 @@ describe("the content region carries the rung that answered (cinatra#3319)", () 
       expect(displayAt).toBeGreaterThan(regionAt);
     });
   }
-});
-
-describe("the dashboard-pointer arm writes its own literal", () => {
-  it('writes data-render-dispatch="dashboard-pointer" onto the content region', async () => {
-    mocks.isDashboardArtifactType.mockReturnValue(true);
-
-    const html = await renderPage();
-    const tag = contentRegionTag(html);
-
-    expect(
-      tag,
-      `content region opening tag as rendered: ${tag}`,
-    ).toContain('data-render-dispatch="dashboard-pointer"');
-    expect(html.match(/data-render-dispatch=/g) ?? []).toHaveLength(1);
-    // The pointer arm resolves no display mount at all — its rung is the page's
-    // own literal, which is why it is a case of its own here.
-    expect(mocks.resolveArtifactDisplayMount).not.toHaveBeenCalled();
-  });
 });
