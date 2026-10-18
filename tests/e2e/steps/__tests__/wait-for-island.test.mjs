@@ -88,6 +88,50 @@ for (const backend of BACKENDS) {
       });
     });
 
+    // A gate that pins several targets draws one island per target (cinatra#4129):
+    // the frame is taken only when EVERY island has loaded, never on the first one.
+    it("takes the frame only when every island of a gate drawn as pairs has loaded", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const seen = [];
+        const shutter = async (info) => {
+          seen.push(
+            await page.evaluate(() =>
+              Array.from(document.querySelectorAll('[data-conformance-id="review-target-island"]'), (island) =>
+                island.getAttribute("data-island-load-state"),
+              ),
+            ),
+          );
+          return `frames/${info.step}-${seen.length}.png`;
+        };
+        const result = await wait(page, app, "/island/pairs", { bound: LONG, record, shutter });
+        expect(result).toMatchObject({ state: "loaded", settled: true });
+        expect(seen, "the frame was taken while a later island still loaded").toEqual([["loaded", "loaded"]]);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^waitForIsland: settled after \d+ ms \(state loaded\) \(all 2 islands\); frame frames\/waitForIsland-1\.png$/);
+      });
+    });
+
+    it("runs to the bound when a later island of a gate drawn as pairs never loads", async () => {
+      await scene(backend, {}, async ({ app, page, record, lines }) => {
+        const { shots, shutter } = shutterDouble();
+        const result = await wait(page, app, "/island/pairs-stall", { bound: SHORT, record, shutter });
+        expect(result).toMatchObject({ state: "loading", settled: false });
+        expect(result.elapsedMs).toBeGreaterThanOrEqual(SHORT);
+        expect(shots).toHaveLength(1);
+        expect(shots[0]).toMatchObject({ state: "loading", settled: false });
+        expect(lines[0]).toMatch(/^waitForIsland: ran out after \d+ ms \(state loading\) \(the first of 2 islands not loaded\); frame /);
+      });
+    });
+
+    it("reads a pair that frames nothing, and never settles over its failed state", async () => {
+      await scene(backend, {}, async ({ app, page, record }) => {
+        const { shots, shutter } = shutterDouble();
+        const result = await wait(page, app, "/island/pairs-refused", { bound: SHORT, record, shutter });
+        expect(result).toMatchObject({ state: "timed-out", settled: false });
+        expect(shots).toHaveLength(1);
+      });
+    });
+
     it("refuses by name when the shutter fails, and keeps only the error class", async () => {
       await scene(backend, {}, async ({ app, page, record, lines }) => {
         const shutter = async () => {

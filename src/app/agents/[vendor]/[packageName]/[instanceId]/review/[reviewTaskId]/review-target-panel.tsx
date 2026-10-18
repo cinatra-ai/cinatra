@@ -79,8 +79,10 @@ export function ReviewTargetPanel({
    * target: the immutable header over the representation, inside one border.
    * Inside a gate that pins ONE target that frame is the CARD's, drawn round the
    * header and the island that holds this document, so a border here too would
-   * be the nested body card the drawing does not draw. Every other caller —
-   * the island of a gate that still pins several targets — keeps the frame. */
+   * be the nested body card the drawing does not draw, and so it is inside each
+   * frame of a gate the card draws as pairs, which names its one target
+   * (cinatra#4129). Every other caller — an island document that still draws
+   * several targets — keeps the frame. */
   framed?: boolean;
 }): ReactNode {
   const { props, mount } = prepared;
