@@ -41,7 +41,7 @@ import type {
   KnownCapabilityId,
   ResolvedCapabilityProvider,
 } from "./capability-contract-map";
-import type { DelegatedChatToolClass } from "./mcp-connector-contract";
+import type { DelegatedChatToolClass, ExtensionToolOutwardDeclaration } from "./mcp-connector-contract";
 
 /**
  * Opaque scoped DB handle. Least-privilege; most extensions never need it.
@@ -343,6 +343,13 @@ export type HostMcpToolRegistration = {
    * older minor simply never sets it, and an absent declaration is neutral.
    */
   delegatedChat?: DelegatedChatToolClass;
+  /**
+   * The `ctx.mcp.registerTool` registration path's outward declaration
+   * (cinatra#3745): the same type and meaning as `ExtensionMcpToolConfig.outward`.
+   * Optional; a declaration can only add this tool to what the host holds,
+   * never remove it.
+   */
+  outward?: ExtensionToolOutwardDeclaration;
 };
 
 /** MCP tool registration + self-client + external-server registry. */

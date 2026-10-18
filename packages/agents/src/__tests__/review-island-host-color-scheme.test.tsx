@@ -134,7 +134,9 @@ const srcIn = (container: HTMLElement): string => {
 
 /** The address the card frames the island at, on one host. */
 async function islandSrcOn(host: LifecycleCardHost): Promise<string> {
-  mockResolve();
+  // Off a cookie session the island is framed only with its credential, so the
+  // widget's answer carries one; every other host's answer carries none.
+  mockResolve(host === "site_widget" ? served("grant-host") : null);
   const { container } = mountCard(host);
   await settle();
   const src = srcIn(container);
@@ -352,7 +354,7 @@ describe("a repaint never replays a spent island grant", () => {
 
 describe("the current frame receives the palette without a remount", () => {
   it.each(HOSTS)("posts once per change and on each load on %s", async (host) => {
-    mockResolve();
+    mockResolve(host === "site_widget" ? served("grant-host") : null);
     paintHost("light");
     const { container } = mountCard(host);
     await settle();

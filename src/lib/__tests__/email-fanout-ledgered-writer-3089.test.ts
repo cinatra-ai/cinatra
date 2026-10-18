@@ -33,13 +33,11 @@ import {
   materializeEmailFanout,
   emailBodyExternalId,
   EMAIL_BODY_TYPE_ID,
-  EMAIL_RECIPIENT_TYPE_ID,
   type EmailFanoutArgs,
-  type EmailFanoutSaveFn,
 } from "../trigger-email-send-use-cases";
 
 const EXT = "@cinatra-ai/email-artifacts";
-const ALL_TYPES = new Set([EMAIL_BODY_TYPE_ID, EMAIL_RECIPIENT_TYPE_ID]);
+const ALL_TYPES = new Set([EMAIL_BODY_TYPE_ID]);
 const DECLARED_BODY_KEYS = new Set(["runId", "campaignId", "subject", "bodyMarkdown", "contactId"]);
 
 const actor: PrimitiveActorContext = {
@@ -61,30 +59,14 @@ type BodyWrite = {
 };
 
 /**
- * The objects store the RECIPIENT half still writes through (and where the
- * historical raw body rows of earlier sends live), plus a ledger-keyed body
- * writer: one artifact per (run, outputId, extension, content hash); a
- * finalized mid-run row of the same run + extension + content hash (the
- * drafting step's own filing) is reused before any claim.
+ * The objects store where the historical raw body rows of earlier sends live,
+ * plus a ledger-keyed body writer: one artifact per (run, outputId, extension,
+ * content hash); a finalized mid-run row of the same run + extension + content
+ * hash (the drafting step's own filing) is reused before any claim.
  */
 function makeFixture() {
   const rows = new Map<string, { id: string; type: string; data: Record<string, unknown> }>();
   const associations = new Map<string, { from: string; to: string }>();
-  const saveCalls: Array<{ typeHint: string; rawData: Record<string, unknown> }> = [];
-  let seq = 0;
-  const save: EmailFanoutSaveFn = async ({ rawData, typeHint }) => {
-    saveCalls.push({ typeHint, rawData });
-    const key = `${typeHint}::external:${String(rawData.externalId ?? "").toLowerCase()}`;
-    const existing = rows.get(key);
-    if (existing) {
-      existing.data = rawData;
-      return { objectId: existing.id, type: typeHint, isNew: false, wasMerged: true };
-    }
-    seq += 1;
-    const row = { id: `obj-${seq}`, type: typeHint, data: rawData };
-    rows.set(key, row);
-    return { objectId: row.id, type: typeHint, isNew: true, wasMerged: false };
-  };
 
   const ledger = new Map<string, { artifactId: string; path: string }>();
   const midRun = new Map<string, { artifactId: string }>();
@@ -110,8 +92,6 @@ function makeFixture() {
   return {
     rows,
     associations,
-    saveCalls,
-    save,
     ledger,
     midRun,
     bodyWrites,
@@ -138,7 +118,6 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
   it("A1 a fan-out over N draft items writes N body revisions through the ledgered writer on the fan-out's own path, each keyed by the message identity and the content hash", async () => {
     const fx = makeFixture();
     const result = await materializeEmailFanout(input, {
-      save: fx.save,
       writeBody: fx.writeBody,
       registeredTypes: ALL_TYPES,
     });
@@ -154,21 +133,17 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       `run-1|${emailBodyExternalId("run-1", "d2")}|${EXT}|${sha256("Body two")}`,
     ]);
     expect([...fx.ledger.values()].every((r) => r.path === "email_fanout")).toBe(true);
-    // No body goes through the raw objects save any more.
-    expect(fx.saveCalls.filter((c) => c.typeHint === EMAIL_BODY_TYPE_ID)).toHaveLength(0);
     expect(result.bodies.map((b) => b.objectId)).toEqual(["art-1", "art-2"]);
     expect(result.bodies.every((b) => b.isNew)).toBe(true);
     expect(result.bodies.map((b) => b.externalId)).toEqual([
       emailBodyExternalId("run-1", "d1"),
       emailBodyExternalId("run-1", "d2"),
     ]);
-    // The recipient half is left exactly as it was: one raw record per recipient.
-    expect(fx.saveCalls.filter((c) => c.typeHint === EMAIL_RECIPIENT_TYPE_ID)).toHaveLength(2);
   });
 
   it("A3 a retried fan-out over the same drafts writes nothing new and returns the same artifact ids", async () => {
     const fx = makeFixture();
-    const deps = { save: fx.save, writeBody: fx.writeBody, registeredTypes: ALL_TYPES };
+    const deps = { writeBody: fx.writeBody, registeredTypes: ALL_TYPES };
     const first = await materializeEmailFanout(input, deps);
     const second = await materializeEmailFanout(input, deps);
 
@@ -183,7 +158,7 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
     const fx = makeFixture();
     // The drafting step filed d1's body mid-run (same run, extension, bytes).
     fx.midRun.set(`run-1|${EXT}|${sha256("Body one")}`, { artifactId: "prefiled-1" });
-    const deps = { save: fx.save, writeBody: fx.writeBody, registeredTypes: ALL_TYPES };
+    const deps = { writeBody: fx.writeBody, registeredTypes: ALL_TYPES };
 
     const first = await materializeEmailFanout(input, deps);
     const second = await materializeEmailFanout(input, deps);
@@ -198,7 +173,6 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
   it("C1 the body text lands under bodyMarkdown and no undeclared body key is written", async () => {
     const fx = makeFixture();
     await materializeEmailFanout(input, {
-      save: fx.save,
       writeBody: fx.writeBody,
       registeredTypes: ALL_TYPES,
     });
@@ -235,7 +209,6 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
     });
     const emitEmailFanout = (args: EmailFanoutArgs) =>
       materializeEmailFanout(args, {
-        save: fx.save,
         writeBody: refusingWriter,
         registeredTypes: ALL_TYPES,
       });
@@ -286,7 +259,6 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       getObjectByRef: (async (ref: string) => bundles[ref] ?? null) as never,
       emitEmailFanout: (args: EmailFanoutArgs) =>
         materializeEmailFanout(args, {
-          save: fx.save,
           writeBody: async () => {
             throw new Error("ledger unreachable");
           },
@@ -328,7 +300,6 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
     const assocBefore = structuredClone([...fx.associations.entries()]);
 
     await materializeEmailFanout(input, {
-      save: fx.save,
       writeBody: fx.writeBody,
       registeredTypes: ALL_TYPES,
     });
@@ -338,7 +309,6 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       rowsBefore.filter(([k]) => k === oldKey),
     );
     expect([...fx.associations.entries()]).toEqual(assocBefore);
-    expect(fx.saveCalls.filter((c) => c.typeHint === EMAIL_BODY_TYPE_ID)).toHaveLength(0);
     expect(fx.bodyWrites.map((w) => w.outputId)).toEqual([
       emailBodyExternalId("run-1", "d1"),
       emailBodyExternalId("run-1", "d2"),
