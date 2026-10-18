@@ -42,6 +42,8 @@ import {
 } from "./primitive-wave-fixtures";
 import { PrimitiveWaveLeg2ConformanceFixtures } from "./primitive-wave-leg2-fixtures";
 import { ScopeAssignmentSkillsConformanceFixture } from "./scope-assignment-skills-fixture";
+import { ComponentSurfaceConformanceFixtures } from "./component-surface-fixtures";
+import { AgentCardAccentHoverFixture } from "./agent-card-accent-hover-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -466,6 +468,22 @@ export default function ConformanceHarnessPage() {
           </CardHeader>
           <CardContent>
             <ScopeAssignmentSkillsConformanceFixture />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Component surfaces (app-components)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ComponentSurfaceConformanceFixtures />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Agent card accent hover (surface: agent-card-accent-hover)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AgentCardAccentHoverFixture />
           </CardContent>
         </Card>
       </PageContent>

@@ -280,6 +280,12 @@ export const RUN_PAGE_RAIL_INERT_ROW_CLASS = "cursor-default";
 export type RunStepSelectionHandle = {
   selected: RunStepSelection;
   select: (next: RunStepSelection) => void;
+  /** The Skills question was answered on this page, before the refresh lands (cinatra#3285). */
+  skillsReleased?: boolean;
+  /** Only the owed input elected by a successful Skills release is reached before refresh. */
+  releasedInputStep?: RunStepSelection | null;
+  /** The chip row's one call on a successful decision. */
+  releaseSkills?: () => void;
 };
 
 const RunStepSelectionContext = createContext<RunStepSelectionHandle | null>(null);

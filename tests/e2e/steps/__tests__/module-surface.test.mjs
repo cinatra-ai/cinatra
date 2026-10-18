@@ -124,6 +124,9 @@ BOUND_NAMES.sort();
 STEP_NAMES.push("holdResponse", "releaseResponse");
 BOUND_NAMES.push("HOLD_BOUND_MS", "HOLD_MATCH_BOUND_MS");
 BOUND_NAMES.sort();
+// pressKey: its step joins the list in this one place. It takes the bounds of
+// press, listed above already.
+STEP_NAMES.push("pressKey");
 
 describe("the steps module", () => {
   it("offers the six steps, the once-only budget and the refusal", () => {
@@ -177,6 +180,12 @@ describe("the steps module", () => {
     expect(child.status, `a plain Node process could not load the module: ${child.stderr.split("\n")[0]}`).toBe(0);
     const names = child.stdout.split(",");
     for (const name of STEP_NAMES) expect(names).toContain(name);
+  });
+
+  it("names the keys pressKey takes: the arrows, Home, End, Tab, Enter and Space", () => {
+    const steps = theSteps("pressKey");
+    expect(steps.PRESS_KEYS).toEqual(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Tab", "Enter", "Space"]);
+    expect(Object.isFrozen(steps.PRESS_KEYS)).toBe(true);
   });
 
   it("imports nothing but Node's builtins and its own files", () => {

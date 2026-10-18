@@ -41,6 +41,7 @@ import {
   type RunRecommendationHoldState,
   type RunRecommendationSettledCandidate,
 } from "./run-recommendation-actions";
+import { useRunStepSelection } from "./run-step-rail-extra-entry";
 import {
   forgetDrawnRecommendationReading,
   hydrateDrawnRecommendationReadingFromStorage,
@@ -856,6 +857,8 @@ export function RunRecommendationChipRow({
   // above. `null` outside a `LifecycleCardSurfaceProvider`, which on a shipped
   // host cannot happen — `RecommendationHoldCard` refuses to draw without one.
   const lifecycleHost = useLifecycleCardHost();
+  // The run frame's selection, told of a successful decision so its rail moves at once (cinatra#3285); `null` off the run page.
+  const railSelection = useRunStepSelection();
   // THE CHAT TRANSCRIPT'S EVIDENCE ANCHOR (S9b, cinatra#2794), on the card's OWN
   // root. Under §V the ROW IS THE CARD, so that root is this row's outermost
   // element — the same element carrying the kind/host/state declaration above,
@@ -1192,6 +1195,7 @@ export function RunRecommendationChipRow({
         }
         onOutcome?.({ ok: true, dispatched: res.dispatched });
         onDecided?.();
+        railSelection?.releaseSkills?.();
         router.refresh();
       });
       return;
@@ -1236,6 +1240,7 @@ export function RunRecommendationChipRow({
       }
       onOutcome?.({ ok: true, dispatched: res.dispatched });
       onDecided?.();
+      railSelection?.releaseSkills?.();
       router.refresh();
     });
   };

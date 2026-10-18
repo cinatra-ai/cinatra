@@ -17,10 +17,6 @@
       "count": 1,
       "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
     },
-    "packages/objects/src/integration/register-types.ts :: type :: @cinatra-ai/email:recipient": {
-      "count": 1,
-      "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
-    },
     "packages/objects/src/integration/register-types.ts :: type :: @cinatra-ai/email:sender-identity": {
       "count": 1,
       "owner": "the claiming artifact extension of each id (@cinatra-ai/email-artifacts, @cinatra-ai/linkedin-artifacts, @cinatra-ai/drupal-artifacts)"
@@ -106,10 +102,6 @@
       "owner": "@cinatra-ai/email-test-delivery-agent"
     },
     "src/lib/trigger-email-send-use-cases.ts :: type :: @cinatra-ai/email:body": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "src/lib/trigger-email-send-use-cases.ts :: type :: @cinatra-ai/email:recipient": {
       "count": 1,
       "owner": "@cinatra-ai/email-delivery-agent"
     }
@@ -798,7 +790,7 @@
       "owner": "@cinatra-ai/email-test-delivery-agent"
     },
     "src/lib/trigger-email-send-use-cases.ts": {
-      "count": 28,
+      "count": 25,
       "owner": "@cinatra-ai/email-delivery-agent"
     },
     "src/lib/wizard-config-handler-campaign.ts": {

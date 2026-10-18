@@ -121,6 +121,7 @@ import {
   HYDRATION_REPORT_PATH,
   STEP_MARK,
   USERNAME_ROUTE,
+  keyInFixtureGroup,
   pressSearchEntry,
   typeInSearchField,
 } from "./fixture-app.mjs";
@@ -136,6 +137,8 @@ export class TimeoutError extends Error {
 }
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+/** The keys pressKey presses (its PRESS_KEYS), which the keyboard takes besides Backspace and Escape. */
+const PRESS_KEY_NAMES = Object.freeze(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Tab", "Enter", "Space"]);
 const viaJson = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const DESTROYED = "Execution context was destroyed, most likely because of a navigation";
 const ERROR_PAGE = "chrome-error://chromewebdata/";
@@ -1897,7 +1900,19 @@ export class PageDouble {
   //     key; the double types the whole text at once and reports it once;
   //   - Backspace deletes what the selection holds, or the last character of
   //     the text when the caret is at its end; Escape closes the open lists of
-  //     the shared select (see pressEscape); no other key is pressed here;
+  //     the shared select (see pressEscape);
+  //   - pressKey: a press, and the locator's focus, give the element its
+  //     document's own focus too, so `document.activeElement` follows as in a
+  //     browser; the arrows, Home, End, Tab, Enter and Space are pressed as a
+  //     cancelable keydown on the element that has the focus (or the body), and
+  //     every key the keyboard presses runs the page's own key handler (see
+  //     keyInFixtureGroup in fixture-app.mjs); when it took none of them, Tab
+  //     moves the focus to the next shown, enabled element of the sequential
+  //     order (a negative tabindex left out; a positive one is not ordered and
+  //     throws) or to nothing past the last, Enter takes a focused button, link
+  //     or button-like input, and Space a focused button, checkbox, radio or
+  //     button-like input, as the locator's click takes it; the arrows, Home and
+  //     End have no default here; no other key is pressed here;
   //   - text typed into a window's box, and a press on a window's send control,
   //     run the page's own handlers for them: the same two functions the page's
   //     inline script runs in a browser (see fixture-app-windows.mjs).
@@ -1931,6 +1946,9 @@ export class PageDouble {
   #focus(element) {
     const focusable = element.matches("a[href], button, input, select, textarea, [tabindex]") || PageDouble.#takesText(element);
     this.#focused = focusable ? element : null;
+    // The document's own focus follows, as a browser's does.
+    if (focusable) element.focus();
+    else element.ownerDocument.activeElement?.blur?.();
     // A press in a frame moves the page's focus into that frame; a press in the page itself out of any.
     this.#top.#inFrame = this.#owner === null ? null : this;
   }
@@ -1988,12 +2006,62 @@ export class PageDouble {
     this.#typed(element);
   }
 
+  /** The element that has the focus in `document`, through open shadow roots; null for the body or nothing. */
+  static #activeIn(document) {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    return active && active !== document.body && active !== document.documentElement ? active : null;
+  }
+
+  /** pressKey's keys: a keydown on the focused element, the page's own key handler, then the browser's default. */
+  #pressNamedKey(key) {
+    const document = this.#dom.window.document;
+    const window = document.defaultView;
+    const target = PageDouble.#activeIn(document) ?? document.body;
+    const named = key === "Space" ? " " : key;
+    const event = new window.KeyboardEvent("keydown", { key: named, code: key, bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+    const taken = keyInFixtureGroup(target, named);
+    if (!taken && !event.defaultPrevented) {
+      if (key === "Tab") this.#tabFrom(PageDouble.#activeIn(document));
+      else if (key === "Enter" && target.matches("button, a[href], input[type='submit'], input[type='button'], input[type='reset'], input[type='image']")) this.#press(target, []);
+      else if (key === "Space" && target.matches("button, input[type='checkbox'], input[type='radio'], input[type='submit'], input[type='button'], input[type='reset']")) this.#press(target, []);
+    }
+    if (this.#dom.window.document === document) this.#focused = PageDouble.#activeIn(document);
+  }
+
+  /** Tab: the focus to the next element of the sequential focus order, or to nothing past the last. */
+  #tabFrom(current) {
+    const document = this.#dom.window.document;
+    const order = Array.from(document.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")).filter((element) => {
+      const index = element.getAttribute("tabindex");
+      if (index !== null && Number(index) > 0) throw new Error("the page double does not order a positive tabindex");
+      if (index !== null && Number(index) < 0) return false;
+      if (element.localName === "input" && element.type === "hidden") return false;
+      return !element.disabled && isVisible(element);
+    });
+    // The next one after the focused element in document order, also when that element is out of the order (a negative tabindex).
+    const following = document.defaultView.Node.DOCUMENT_POSITION_FOLLOWING;
+    const next = (current ? order.find((element) => element !== current && (current.compareDocumentPosition(element) & following) !== 0) : order[0]) ?? null;
+    if (next) next.focus();
+    else document.activeElement?.blur?.();
+  }
+
   #pressKey(key) {
+    if (PRESS_KEY_NAMES.includes(key)) {
+      this.#pressNamedKey(key);
+      return;
+    }
+    if (key !== "Escape" && key !== "Backspace") throw new Error(`the page double presses Backspace, Escape and pressKey's keys only, not ${key}`);
+    // Every key the keyboard presses reaches the page's own key handler, as the page's script hears every keydown.
+    {
+      const document = this.#dom.window.document;
+      keyInFixtureGroup(PageDouble.#activeIn(document) ?? document.body, key);
+    }
     if (key === "Escape") {
       pressEscape(this.#dom.window.document);
       return;
     }
-    if (key !== "Backspace") throw new Error(`the page double presses Backspace and Escape only, not ${key}`);
     const element = this.#typingTarget();
     if (!element) return;
     const window = element.ownerDocument.defaultView;
@@ -2109,6 +2177,13 @@ class LocatorDouble {
     this.#page.acted();
     this.#page.focus(element);
     this.#page.press(element, modifiers);
+  }
+
+  /** Playwright's focus: the element takes the focus, and nothing is pressed. */
+  async focus({ timeout = 30_000 } = {}) {
+    const element = await this.#one(timeout, `locator.focus: Timeout ${timeout}ms exceeded.`);
+    this.#page.acted();
+    this.#page.focus(element);
   }
 
   #matches() {

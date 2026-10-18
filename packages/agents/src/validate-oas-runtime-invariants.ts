@@ -108,6 +108,7 @@
 import type { ReviewFinding } from "./validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
+  collectArtifactImageNodesFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
   ARTIFACT_MATERIALIZE_TOOL,
   AGENTS_PASSTHROUGH_URL_MARKER,
@@ -1780,6 +1781,7 @@ export function scanOasForArtifactParityFindings(
   const materializeResult = collectArtifactMaterializeNodesFromOasDocument(parsed, {
     produces,
   });
+  const imageResult = collectArtifactImageNodesFromOasDocument(parsed, { produces });
 
   // (a) Advisory mirror of the grammar errors the compile/publish gate
   // HARD-BLOCKS (oas-compiler step 10b/10c). WARNING here — Layer 3 is advisory.
@@ -1801,6 +1803,7 @@ export function scanOasForArtifactParityFindings(
     const covered = new Set<string>();
     for (const b of bindingResult.bindings) covered.add(b.binding.extension);
     for (const n of materializeResult.nodes) covered.add(n.extension);
+    for (const n of imageResult.nodes) covered.add(n.extension);
     for (const ext of produces) {
       if (covered.has(ext)) continue;
       findings.push({
@@ -1809,8 +1812,9 @@ export function scanOasForArtifactParityFindings(
         message:
           `package.json cinatra.produces declares "${ext}" but the OAS has no runnable ` +
           `materialization edge for it. Add an EndNode output binding ` +
-          `(outputs[].cinatra.artifact with extension "${ext}") or an artifact_materialize ` +
-          `passthrough ApiNode targeting "${ext}". Until migrated, the declared artifact is ` +
+          `(outputs[].cinatra.artifact with extension "${ext}"), an artifact_materialize ` +
+          `passthrough ApiNode targeting "${ext}", or an artifact_image_generate passthrough ` +
+          `step filing "${ext}". Until migrated, the declared artifact is ` +
           `never persisted at run completion. (Advisory now; the publish contract flips this ` +
           `to a republish BLOCK once the fleet migration completes — cinatra#924.)`,
         source: "deterministic",

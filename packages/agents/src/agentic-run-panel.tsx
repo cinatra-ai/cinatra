@@ -46,9 +46,13 @@ import {
   LifecycleCardSurfaceProvider,
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
+  lifecycleRequestCredential,
+  parseRunReviewSlot,
   useComposerFocusStore,
   useComposerTarget,
   useLifecycleCardHost,
+  useLifecycleCardAuth,
+  useLifecycleCardDeclarationRefused,
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
@@ -521,6 +525,8 @@ export function AgenticRunPanel({
   // this panel is being drawn INSIDE a conversation transcript that mounts the
   // HITL screen card itself — see that mount below for what it decides.
   const ambientLifecycleHost = useLifecycleCardHost();
+  const ambientLifecycleAuth = useLifecycleCardAuth();
+  const ambientDeclarationRefused = useLifecycleCardDeclarationRefused();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
   // (SSE owns status/error); they retain their initial values and serve as the
@@ -680,7 +686,13 @@ export function AgenticRunPanel({
   // fields; retiring it — and the second model with it — belongs to #2934,
   // which ships the fill mechanism that replaces it. Removing it here would
   // take the fill away before its replacement exists.
-  const runWindow = useRunWindowConversation({ runId, surface: "run-page" });
+  //
+  // THE RUN WINDOW IS COOKIE-BOUND (#3051): its history and its turns are server
+  // actions that answer for the first-party session. A broker host (the site
+  // widget) and a refused declaration therefore name no run to it, here or to
+  // the review card below, so no run-window read or turn leaves such a host.
+  const runWindowRunId = ambientLifecycleAuth === null && !ambientDeclarationRefused ? runId : null;
+  const runWindow = useRunWindowConversation({ runId: runWindowRunId, surface: "run-page" });
   const convIdRef = useRef(0);
   // Parent-side apply handler — merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
@@ -905,10 +917,10 @@ export function AgenticRunPanel({
   // drift into two answers about the same run.
   //
   // WHICH CREDENTIAL IT ASKS WITH is the caller's to say. The run page is
-  // first-party and same-origin, so it takes the default reader. A surface that
-  // asks with something else — the embedded widget, which holds a broker
-  // credential and must never send an ambient cookie — passes its own, exactly
-  // as it already does for the seed.
+  // first-party and same-origin, so it takes the default reader. The exported
+  // widget panel derives its default reader from its broker declaration. A
+  // caller may supply its own reader under a valid declaration; a refused
+  // declaration must never reach either reader.
   // -------------------------------------------------------------------------
   // Prefer SSE-delivered interruptContext when the stream is enabled;
   // fall back to polling-derived hitlContext otherwise (the poll endpoint
@@ -928,9 +940,30 @@ export function AgenticRunPanel({
       ? mapInterruptToHitlContext(streamResult.interruptContext)
       : hitlContext;
 
-  const fallbackSlotReader = useMemo(
-    () => defaultRunReviewSlotReader(runId),
-    [runId],
+  const reviewSlotReader = useCallback<RunReviewSlotReader>(
+    async (signal) => {
+      if (ambientDeclarationRefused) return null;
+      // A broker declaration with no widget user token now reads nothing,
+      // through a supplied reader or the default one.
+      const broker =
+        ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
+          ? lifecycleRequestCredential(ambientLifecycleAuth)
+          : undefined;
+      if (broker === null) return null;
+      if (readReviewSlot) return readReviewSlot(signal);
+      if (broker) {
+        const response = await fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
+          cache: "no-store",
+          headers: broker.headers,
+          credentials: broker.credentials,
+          signal,
+        });
+        if (!response.ok) return null;
+        return parseRunReviewSlot(await response.json());
+      }
+      return defaultRunReviewSlotReader(runId)(signal);
+    },
+    [runId, readReviewSlot, ambientDeclarationRefused, ambientLifecycleHost, ambientLifecycleAuth],
   );
   const {
     slot: reviewSlot,
@@ -941,7 +974,7 @@ export function AgenticRunPanel({
     runId,
     status,
     initial: initialReviewGate,
-    read: readReviewSlot ?? fallbackSlotReader,
+    read: reviewSlotReader,
     // The panel's own tick, as the reader's liveness evidence (cinatra#3007,
     // fix leg 6). Two mounts of this panel on one run measured 962 s apart on
     // the same park because one of them had spent its five consecutive
@@ -1562,10 +1595,11 @@ export function AgenticRunPanel({
   // non-ok response, rejected fetch) still leave the run state untouched, but
   // they no longer leave the reader with nothing to act on.
   const refetchDerivedContext = useCallback(async () => {
+    if (ambientDeclarationRefused) return;
     let outcome: HitlDerivationOutcome;
     try {
-      if (taskId) {
-        // A2A transport path
+      if (taskId && ambientLifecycleHost !== "site_widget") {
+        // A2A transport path: only a first-party panel may use its cookie action.
         const snapshot = await getAgentBuilderTask(taskId);
         if (!snapshot || !("cinatraStatus" in snapshot)) {
           // The action answered with `{ error }` (unauthorized / not found —
@@ -1623,9 +1657,17 @@ export function AgenticRunPanel({
         }
       } else {
         // Fallback path for runs with no a2a_task_id.
+        const broker =
+          ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
+            ? lifecycleRequestCredential(ambientLifecycleAuth)
+            : undefined;
+        // No widget user token now: no tokenless poll.
+        if (broker === null) return;
         const response = await fetch(
           `/api/agents/runs/${encodeURIComponent(runId)}`,
-          { cache: "no-store" },
+          broker
+            ? { cache: "no-store", headers: broker.headers, credentials: broker.credentials }
+            : { cache: "no-store" },
         );
         if (!response.ok) {
           outcome = {
@@ -1675,7 +1717,7 @@ export function AgenticRunPanel({
       };
     }
     setDerivation((prev) => reduceHitlDerivation(prev, outcome));
-  }, [runId, taskId, streamEnabled]);
+  }, [runId, taskId, streamEnabled, ambientLifecycleHost, ambientLifecycleAuth, ambientDeclarationRefused]);
 
   // AND THE TICK FIRES WHILE THE RUN HAS NOT FINISHED BY EITHER READING
   // (cinatra#3007, fix leg 9). See `runSurfaceKeepsPolling`: the two readings
@@ -1683,7 +1725,7 @@ export function AgenticRunPanel({
   // the only carrier of the row that the park's whole reading depends on.
   const keepPolling = runSurfaceKeepsPolling({ pollStatus, status });
   useEffect(() => {
-    if (!keepPolling) return;
+    if (!keepPolling || ambientDeclarationRefused) return;
     // The cadence is EXACTLY the one this tick shipped with. Only the firing
     // guard above is widened; a surface that was already ticking ticks no
     // faster, so nothing here is a new class of load.
@@ -1697,7 +1739,7 @@ export function AgenticRunPanel({
       void refetchDerivedContext();
     }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [keepPolling, isPollLive, refetchDerivedContext]);
+  }, [keepPolling, isPollLive, refetchDerivedContext, ambientDeclarationRefused]);
 
   // The recovery state's explicit re-check. Runs the same refetch the tick
   // runs, and additionally DROPS the just-submitted suppression: that guard
@@ -2281,16 +2323,10 @@ export function AgenticRunPanel({
   // is about ("once the agent is done and the output generated"); a parked
   // marked gate draws from its own ref, whatever the rest of the run is doing.
   //
-  // AND THE SLOT'S REVIEW IS WITHHELD ON THE SITE WIDGET, which is a containment
-  // rather than a rule about the widget. The card's host declaration here is
-  // `run_card`, a COOKIE-session host: the runtime refuses a broker credential
-  // on it, so a card mounted inside a widget frame resolves and decides with the
-  // frame's ambient cookie instead of the reader's own credential. That is a
-  // PRE-EXISTING property of the marked-gate mount at the base of this branch,
-  // and it is left exactly as it was; what this change must not do is carry the
-  // COMPLETED-run review down the same wrong wall for the first time. The widget
-  // keeps the terminal rendering it has today, and this branch's own evidence
-  // already records the widget's run panel as blocked pending that work.
+  // The widget's review stays in this run-card slot (#3051). Its nested card
+  // must inherit the ambient widget provider so resolve and decide retain the
+  // broker credential with cookies omitted. The widget flag remains necessary
+  // below for the existing rail-refresh exclusion.
   const widgetHostedPanel = ambientLifecycleHost === "site_widget";
   //
   // AND A RUN PARKED ON ITS PRODUCED OUTPUT'S REVIEW DRAWS IT HERE (cinatra#3046),
@@ -2316,7 +2352,7 @@ export function AgenticRunPanel({
     ? null
     : markedReviewGate
       ? reviewGateCardRef
-      : (status === "completed" || parkedOnProducedReview) && !widgetHostedPanel
+      : (status === "completed" || parkedOnProducedReview)
         ? reviewSlot.ref
         : null;
   // AND THE ROW'S OWN PARK HOLDS THE BOX UP, not only a guess with a budget on
@@ -2333,8 +2369,7 @@ export function AgenticRunPanel({
     (status === "queued" ||
       status === "running" ||
       onlyTheAnsweredQuestionOnFile ||
-      ((reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview) &&
-        !widgetHostedPanel));
+      (reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview));
   //
   // ONE HAND-OVER, KEYED ON THE GATE'S REFERENCE (cinatra#3007, fix leg 20).
   // "One run detail, twice, in the same column under the same rail: first the
@@ -2517,27 +2552,17 @@ export function AgenticRunPanel({
   // open a match and pull the tags below into the run page's owner set. The
   // shape is therefore NAMED here and never quoted.
   //
-  // SITE_WIDGET IS NOT WIDENED HERE, and the honest reason is SCOPE rather than
-  // the credential wall. cinatra#3484 is about the card a reader meets in the
-  // chat thread, and the branch above is its whole answer; the widget arm is
-  // left exactly as it stands. The wall is recorded all the same, because it
-  // rules out the OTHER shape anyone reaching for the widget would try: a
-  // `site_widget` declaration MINTED here without an `auth` prop is refused by
-  // the runtime's fail-closed credential rule (`lifecycle-card-runtime.tsx`)
-  // and would draw no card DOM at all. INHERITING an embed's own well-formed
-  // widget declaration — the way the branch above inherits the transcript's —
-  // would carry that auth along and would draw, so the widget arm is an open
-  // question this change does not answer and NOT one the wall closes.
-  // `runCardOwnsLifecycleCopy` already treats both conversation hosts alike,
-  // which is where that question belongs; it is tracked apart from this fix.
-  //
+  // The site widget inherits its own declaration too (#3051). Re-declaring
+  // run_card here would shadow the broker with a cookie-session provider;
+  // re-declaring site_widget without its auth would instead refuse the card.
   // The review screen's ONE mount. cinatra#2566's account
   // of it is unchanged and still applies: the display-only REDIRECT card that
   // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
   // thread and the review page's gate region mount, and the reviewer decides in
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
-  const conversationHostedReview = ambientLifecycleHost === "chat_thread";
+  const conversationHostedReview =
+    ambientLifecycleHost === "chat_thread" || ambientLifecycleHost === "site_widget" || ambientDeclarationRefused;
   const reviewScreenNode: ReactNode = reviewRefInTheBox ? (
     conversationHostedReview ? (
       <ReviewGateCard
@@ -2547,8 +2572,10 @@ export function AgenticRunPanel({
           ref: reviewRefInTheBox,
         }}
         // §VI — the gate's conversational prompt window keeps its exchange with
-        // the RUN (cinatra#3141 item 1).
-        runId={runId}
+        // the RUN (cinatra#3141 item 1). On a broker host the run is not named
+        // (`runWindowRunId`), so the card mounts neither the prompt window nor
+        // the settled exchange there: both are cookie-bound (#3051).
+        runId={runWindowRunId}
       />
     ) : (
       <LifecycleCardSurfaceProvider host="run_card">

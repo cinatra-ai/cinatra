@@ -218,6 +218,9 @@ const LifecycleCardFrameContext = createContext<LifecycleCardFrame | null>(null)
  * affordance on it draws nothing and issues no request rather than guessing.
  */
 const LifecycleCardCookieSessionContext = createContext<boolean>(false);
+// A refused declaration is distinct from no provider: a nested cookie host
+// must not recover the identity that an enclosing broker declaration refused.
+const LifecycleCardDeclarationRefusedContext = createContext<boolean>(false);
 
 /**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
@@ -268,10 +271,14 @@ export function LifecycleCardSurfaceProvider({
   // declaration (the inline run panel's `run_card`) stays inside the thread it
   // is drawn in (cinatra#3481).
   const outerInsideConversation = useContext(InsideConversationContext);
+  const outerDeclarationRefused = useContext(LifecycleCardDeclarationRefusedContext);
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
-  const credentialOk = cookieHost
+  // A broker declaration is checked for its SHAPE here; whether it holds a
+  // widget user token is asked at each request (`lifecycleRequestCredential`),
+  // because the embed's tokens arrive and leave without a re-render (#3051).
+  const credentialOk = !outerDeclarationRefused && (cookieHost
     ? auth === undefined
-    : auth !== undefined && auth.credentials === "omit";
+    : auth !== undefined && auth.credentials === "omit");
   // Both fields must be present and non-empty; a half-declared frame is no
   // frame, so the island falls back to the first-party wall rather than being
   // asked to resolve half a binding.
@@ -296,7 +303,9 @@ export function LifecycleCardSurfaceProvider({
             <InsideConversationContext.Provider
               value={outerInsideConversation || (credentialOk && host === "chat_thread")}
             >
-              {children}
+              <LifecycleCardDeclarationRefusedContext.Provider value={!credentialOk}>
+                {children}
+              </LifecycleCardDeclarationRefusedContext.Provider>
             </InsideConversationContext.Provider>
           </LifecycleCardCookieSessionContext.Provider>
         </LifecycleCardFrameContext.Provider>
@@ -315,6 +324,11 @@ export function LifecycleCardSurfaceProvider({
  */
 export function useCookieSessionSurface(): boolean {
   return useContext(LifecycleCardCookieSessionContext);
+}
+
+/** A malformed enclosing declaration stays refused across nested providers. */
+export function useLifecycleCardDeclarationRefused(): boolean {
+  return useContext(LifecycleCardDeclarationRefusedContext);
 }
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {
@@ -982,6 +996,30 @@ export function useLifecycleCardAuth(): LifecycleCardAuth | null {
   return useContext(LifecycleCardAuthContext);
 }
 
+/** The header the lifecycle routes select their widget branch on. */
+const WIDGET_USER_TOKEN_HEADER = "x-cinatra-widget-user-token";
+
+/**
+ * The credential ONE lifecycle request is sent with, built when the request
+ * is — or `null`: send nothing (#3051). A cookie host declares no auth and keeps
+ * the same-origin request. A broker declaration must carry a non-empty widget
+ * user token in what its callback returns NOW. The embed reads its tokens from
+ * a closure and answers `{}` while it holds none, so this is a request-time
+ * check: the declaration itself stays valid while its tokens come and go.
+ */
+export function lifecycleRequestCredential(
+  auth: LifecycleCardAuth | null,
+): { headers: Record<string, string>; credentials: RequestCredentials } | null {
+  if (auth === null) return { headers: {}, credentials: "same-origin" };
+  const headers = auth.headers();
+  const token = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === WIDGET_USER_TOKEN_HEADER,
+  )?.[1];
+  return typeof token === "string" && token.trim() !== ""
+    ? { headers, credentials: auth.credentials }
+    : null;
+}
+
 /**
  * The host's embedding context, or `null` on a first-party host. Read by the
  * review card when it addresses the §III island, so the server can re-derive
@@ -1162,11 +1200,14 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
       // under the new one during the window before the effect cleanup aborts it.
       const requestIdentity = identity;
       try {
+        // A broker declaration with no widget user token now sends nothing.
+        const credential = lifecycleRequestCredential(auth);
+        if (credential === null) return;
         const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...(auth?.headers() ?? {}) },
+          headers: { "Content-Type": "application/json", ...credential.headers },
           body: JSON.stringify({ viewType, ref }),
-          credentials: auth?.credentials ?? "same-origin",
+          credentials: credential.credentials,
           signal,
         });
         if (!response.ok) return;
@@ -1933,11 +1974,15 @@ async function reviewTicketStillPending(
   signal: AbortSignal,
 ): Promise<"pending" | "withdrawn" | "indeterminate"> {
   try {
+    // A broker declaration with no widget user token now is an invalid
+    // credential: the answer a 401 gives below, without sending the request.
+    const credential = lifecycleRequestCredential(auth);
+    if (credential === null) return "withdrawn";
     const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(auth?.headers() ?? {}) },
+      headers: { "Content-Type": "application/json", ...credential.headers },
       body: JSON.stringify({ viewType: "artifact_review_gate", ref }),
-      credentials: auth?.credentials ?? "same-origin",
+      credentials: credential.credentials,
       signal,
     });
     // Credential invalidation is authoritative even without a protocol body:
