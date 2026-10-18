@@ -11,13 +11,6 @@
       "src/components/ui/select.tsx",
       "src/components/ui/separator.tsx",
       "src/components/ui/textarea.tsx"
-    ],
-    "wordpress-mcp-connector": [
-      "src/components/ui/badge.tsx",
-      "src/components/ui/button.tsx",
-      "src/components/ui/input-group.tsx",
-      "src/components/ui/input.tsx",
-      "src/components/ui/textarea.tsx"
     ]
   }
 }
