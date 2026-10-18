@@ -722,6 +722,71 @@ describe("bridge run-token selection for MCP OBO minting", () => {
     expect(actorArg.oboCeiling).toEqual(VICTIM_RUN.oboCeiling);
   });
 
+  it("cinatra#4220: the run row's connector-instance binding rides the actor token as its pin and the toolbox context", async () => {
+    const binding = { connectorKey: "wordpress", instanceId: "wp-1" };
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue({ ...VICTIM_RUN, connectorInstanceBinding: binding });
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(res.status).toBe(200);
+    const tool = await invokeOverride();
+    expect(tool).not.toBeNull();
+    expect(buildLlmMcpServerToolForAgentRunMock).toHaveBeenCalledTimes(1);
+    const actorArg = (
+      buildLlmMcpServerToolForAgentRunMock.mock.calls[0] as unknown[]
+    )[1] as { connectorInstancePin?: unknown };
+    expect(actorArg.connectorInstancePin).toEqual(binding);
+    const dispatchArg = (
+      runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0] as unknown[]
+    )[0] as { toolboxBuildContext?: unknown };
+    expect(dispatchArg.toolboxBuildContext).toEqual({
+      surface: "agent_run",
+      connectorInstancePin: binding,
+    });
+  });
+
+  it("cinatra#4220: a run with NO binding mints an actor with no pin key and a surface-only context", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue({ ...VICTIM_RUN, connectorInstanceBinding: null });
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(res.status).toBe(200);
+    await invokeOverride();
+    expect(buildLlmMcpServerToolForAgentRunMock).toHaveBeenCalledTimes(1);
+    const actorArg = (
+      buildLlmMcpServerToolForAgentRunMock.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    expect("connectorInstancePin" in actorArg).toBe(false);
+    const dispatchArg = (
+      runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0] as unknown[]
+    )[0] as { toolboxBuildContext?: unknown };
+    expect(dispatchArg.toolboxBuildContext).toEqual({ surface: "agent_run" });
+  });
+
+  it("cinatra#4220: a request-body connectorInstancePin adds NO pin (the pin comes only from the run row)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH(
+        { user: "hi", connectorInstancePin: { connectorKey: "wordpress", instanceId: "wp-forged" } },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
+    );
+    expect(res.status).toBe(200);
+    await invokeOverride();
+    expect(buildLlmMcpServerToolForAgentRunMock).toHaveBeenCalledTimes(1);
+    const actorArg = (
+      buildLlmMcpServerToolForAgentRunMock.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    expect("connectorInstancePin" in actorArg).toBe(false);
+    const dispatchArg = (
+      runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0] as unknown[]
+    )[0] as { toolboxBuildContext?: unknown };
+    expect(dispatchArg.toolboxBuildContext).toEqual({ surface: "agent_run" });
+  });
+
   it("W1: persisted ceiling MISSING on the run → fail closed (no OBO mint)", async () => {
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     // A run whose backfill was missed / anchor was corrupt → obo_ceiling NULL.

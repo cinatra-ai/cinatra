@@ -4792,6 +4792,29 @@ async function runAgentBuilderExecutionJobInner(
       //
       // The dispatcher-signed `cinatra_run_binding` that used to ride here is
       // RETIRED with the legacy llm-bridge selection precedence it fed.
+      // cinatra#4220 — the run's connector-instance binding, HOST-DERIVED here
+      // once from the run row's start input `instanceId` and authorized by the
+      // per-instance use gate for the run's own user and org. The llm-bridge
+      // signs it into the run's MCP actor token as its pin. No instanceId, no
+      // starting user, or an id no connector knows: no binding, behavior
+      // unchanged. A deny throws into the catch below, which fails the run with
+      // the gate's reason before anything is sent to the runtime.
+      const startInstanceId = run.inputParams?.instanceId;
+      if (typeof startInstanceId === "string" && startInstanceId.length > 0 && run.runBy) {
+        const { deriveAgentRunConnectorInstanceBinding } = await import(
+          "@/lib/connector-instance-write-authority"
+        );
+        const binding = await deriveAgentRunConnectorInstanceBinding({
+          runId,
+          runBy: run.runBy,
+          orgId: run.orgId,
+          inputParams: run.inputParams,
+        });
+        if (binding) {
+          const { setAgentRunConnectorInstanceBinding } = await import("./run-token-store");
+          await setAgentRunConnectorInstanceBinding(runId, binding);
+        }
+      }
       const runToken = mintRunToken();
       await setAgentRunTokenHash(runId, runToken.tokenHash);
       const initialMessagePayload = buildWayflowInitialMessagePayload({
