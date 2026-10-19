@@ -55,6 +55,29 @@ describe("setAgentRunConnectorInstanceBinding — write-once binding", () => {
     expect(stmt.params).toContain("run-1");
   });
 
+  it("the WHERE clause itself carries the equal-value branch, bound to the same binding value", async () => {
+    const { setAgentRunConnectorInstanceBinding } = await import("../run-token-store");
+    await setAgentRunConnectorInstanceBinding("run-1", { connectorKey: "wordpress", instanceId: "wp-1" });
+
+    expect(captured).toHaveLength(1);
+    const stmt = captured[0];
+    const lower = stmt.sql.toLowerCase();
+    // Read ONLY the predicate: the SET clause also says
+    // `"connector_instance_binding" = $n`, so it must not satisfy this test.
+    const whereAt = lower.indexOf(" where ");
+    expect(whereAt).toBeGreaterThan(-1);
+    const setPart = lower.slice(0, whereAt);
+    const wherePart = lower.slice(whereAt);
+    expect(setPart).toMatch(/\bset\b/);
+    // The is-null branch AND the equal-value branch, joined by OR.
+    expect(wherePart).toMatch(/"connector_instance_binding"\s+is\s+null\s+or\s+(?:"cinatra"\.)?(?:"agent_runs"\.)?"connector_instance_binding"\s*=\s*\$\d+/);
+    const eqMatch = wherePart.match(/or\s+(?:"cinatra"\.)?(?:"agent_runs"\.)?"connector_instance_binding"\s*=\s*\$(\d+)/);
+    expect(eqMatch).not.toBeNull();
+    // That equal-value placeholder binds the SAME serialized binding the SET writes,
+    // so an idempotent same-binding retry matches the row instead of failing.
+    expect(stmt.params[Number(eqMatch![1]) - 1]).toBe(BINDING_JSON);
+  });
+
   it("throws 'already bound' when no row is updated", async () => {
     state.updateRows = 0;
     const { setAgentRunConnectorInstanceBinding } = await import("../run-token-store");

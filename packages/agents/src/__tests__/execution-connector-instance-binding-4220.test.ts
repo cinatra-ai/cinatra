@@ -6,6 +6,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * BEFORE anything is sent to the runtime. A refused binding fails the run with
  * the gate's reason and sends nothing; no binding leaves dispatch unchanged.
  *
+ * The REAL createExternalA2AClient runs: the only stub is undici's fetch behind
+ * it, so the suite observes the runtime contact itself (the agent-card request
+ * the factory makes at once), not a mocked factory.
+ *
  * Every store/db-reading seam the queued→running WayFlow leg reaches is mocked,
  * so the real runAgentBuilderExecutionJob runs with no database.
  */
@@ -134,12 +138,21 @@ vi.mock("../run-token-store", () => ({
   readAgentRunTokenHashById: vi.fn(async () => null),
 }));
 
-const sendTaskSpy = vi.hoisted(() => vi.fn(async () => ({}) as unknown));
+// Every request the dispatch makes to the runtime goes through undici's fetch
+// (the WayFlow dispatcher wraps it); the real A2A client factory calls it first
+// for the agent card. Rejecting it ends the leg at the first contact.
+const fetchSpy = vi.hoisted(() => vi.fn(async (...args: unknown[]): Promise<Response> => {
+  void args;
+  throw new Error("runtime-contacted (test stop)");
+}));
+vi.mock("undici", async (orig) => ({
+  ...(await orig<typeof import("undici")>()),
+  fetch: fetchSpy,
+}));
 vi.mock("@cinatra-ai/a2a", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
-    createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskSpy })),
     resolveRunIdByWayflowTaskId: vi.fn(async () => null),
     resolveLatestWayflowGateTaskId: vi.fn(async () => "task-1"),
     rememberLatestWayflowGateTask: vi.fn(async () => undefined),
@@ -152,9 +165,8 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 import { runAgentBuilderExecutionJob } from "../execution";
 
 const RUN_ID = "run-4220";
-// sendTask ends the leg here: the dispatch catch fails the run with this text.
-// What happens AFTER the send is not what this suite pins.
-const SENT = "sent-to-runtime (test stop)";
+// The first runtime contact ends the leg: the dispatch catch fails the run.
+// What happens AFTER that contact is not what this suite pins.
 
 function makeRun(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -208,17 +220,16 @@ describe("cinatra#4220 — dispatch derives the run's connector-instance binding
     vi.clearAllMocks();
     storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
     holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
-    sendTaskSpy.mockRejectedValue(new Error(SENT));
   });
 
-  it("(c) no binding: nothing is recorded and the run is sent once", async () => {
+  it("(c) no binding: nothing is recorded and the runtime is contacted", async () => {
     storeMock.readAgentRunById.mockResolvedValue(makeRun({ inputParams: { instanceId: "wp-1" } }));
     deriveSpy.mockResolvedValue(null);
 
     await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-c");
 
     expect(setBindingSpy).not.toHaveBeenCalled();
-    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalled();
   });
 
   it("(a) derives from the run row's own start input and records it before the send", async () => {
@@ -233,17 +244,21 @@ describe("cinatra#4220 — dispatch derives the run's connector-instance binding
     expect(deriveSpy).toHaveBeenCalledWith({ runId: RUN_ID, runBy: "user-1", orgId: "org-1", inputParams });
     expect(setBindingSpy).toHaveBeenCalledTimes(1);
     expect(setBindingSpy).toHaveBeenCalledWith(RUN_ID, binding);
-    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
-    expect(setBindingSpy.mock.invocationCallOrder[0]).toBeLessThan(sendTaskSpy.mock.invocationCallOrder[0]);
+    expect(fetchSpy).toHaveBeenCalled();
+    // The first runtime contact is the agent-card request, and it comes AFTER
+    // the binding is recorded.
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("http://wayflow.test");
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("agent-card");
+    expect(setBindingSpy.mock.invocationCallOrder[0]).toBeLessThan(fetchSpy.mock.invocationCallOrder[0]);
   });
 
-  it("(b) a refused binding fails the run with the gate's reason and sends nothing", async () => {
+  it("(b) a refused binding fails the run with the gate's reason and contacts nothing (no agent-card request)", async () => {
     storeMock.readAgentRunById.mockResolvedValue(makeRun({ inputParams: { instanceId: "wp-other" } }));
     deriveSpy.mockRejectedValue(new Error("connector instance write denied: instance_org_mismatch"));
 
     await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-b");
 
-    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(setBindingSpy).not.toHaveBeenCalled();
     const failed = failedCalls();
     expect(failed).toHaveLength(1);
