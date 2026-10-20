@@ -758,8 +758,13 @@ function makeMcp(
     // so the per-request plan can bind it to the version actually serving. A
     // legacy/dev ctx carries none; that registration is then unversioned, and
     // version-bound admission refuses it rather than guessing.
-    registerTool: (tool) =>
-      registerExtensionMcpTool(packageName, { ...tool, handler: bindArtifactGuardedMcpHandler(tool.name, tool.handler, identity?.loadedActionIdentity) }, { resolvedVersion: identity?.version ?? null }),
+    //
+    // The registration is copied ONCE, so the plan and the guarded leaf read the
+    // same `outward` declaration (cinatra#3745).
+    registerTool: (tool) => {
+      const registration = { ...tool };
+      return registerExtensionMcpTool(packageName, { ...registration, handler: bindArtifactGuardedMcpHandler(registration.name, registration.handler, identity?.loadedActionIdentity, registration) }, { resolvedVersion: identity?.version ?? null });
+    },
     callPrimitive: makeCallPrimitive(packageName, identity),
     listExternalServers: async () => {
       const { listEnabledGlobalExternalMcpServers } = await import("@/lib/external-mcp-registry");
@@ -1571,7 +1576,12 @@ export function createNonDefaultVersionHostContext(
   const mcp: ExtensionHostContext["mcp"] = granted.has("mcp")
     ? {
         ...base.mcp,
-        registerTool: (tool) => sink.retainMcpTool({ ...tool, packageName, handler: bindArtifactGuardedMcpHandler(tool.name, tool.handler, identity?.loadedActionIdentity) }),
+        // One copy, so the retained entry and its guarded leaf read the same
+        // `outward` declaration: THIS version's (cinatra#3745).
+        registerTool: (tool) => {
+          const registration = { ...tool };
+          sink.retainMcpTool({ ...registration, packageName, handler: bindArtifactGuardedMcpHandler(registration.name, registration.handler, identity?.loadedActionIdentity, registration) });
+        },
         // cinatra#1392 S8: a retained (edge-bound-served) handler of this
         // non-default version may itself call host primitives at DISPATCH time.
         // The probe base's callPrimitive throws unconditionally; with a sink
@@ -1903,12 +1913,16 @@ export async function prepareDeclaredRunToolArguments(toolName: string, args: un
  * Inner extension/instance calls keep their existing scoped auth spine. */
 export async function withGuardedRunActionInvocation<T>(input: {
   action: ArtifactActionIdentity; arguments: unknown;
+  /** The executed registration's own outward declaration. It can only hold. */
+  declaresOutward?: boolean;
 }, effect: (frozenArguments: ActionJson) => Promise<T>): Promise<T> {
   const frame = mcpRequestContextStorage.getStore();
   if (!frame?.runId) return effect(input.arguments as ActionJson);
-  // The tool's planned outward declaration (cinatra#3745), read from the
-  // dispatch bridge's frame before any await: it can only hold this call.
-  const declaresOutward = isDeclaredOutwardRunFrame(frame);
+  // The outward declaration (cinatra#3745), read before any await: the planned
+  // entry's, from the dispatch bridge's frame, or the declaration of the
+  // registration that actually executes. A bridge can serve a retained version
+  // under another version's planned entry, so either one holds the call.
+  const declaresOutward = isDeclaredOutwardRunFrame(frame) || input.declaresOutward === true;
   // Capture the selected owner/tool before any asynchronous policy lookup.
   const action = immutableActionJson(input.action) as unknown as ArtifactActionIdentity;
   const args = await prepareDeclaredRunToolArguments(action.toolName, input.arguments);
@@ -1959,16 +1973,29 @@ async function withActionOwner<T>(action: ArtifactActionIdentity, effect: () => 
 }
 
 import { isDeclaredOutwardRunFrame, markGuardedRunDispatch, markGuardedRunLeaf } from "./extension-capabilities-registry";
+import { readDeclaredOutward } from "@cinatra-ai/mcp-server/capability-plan";
+/** A registration's outward declaration. No registration (a legacy binding)
+ * declares nothing; a registration that cannot be read reads as outward. */
+function registrationDeclaresOutward(registration: unknown): boolean {
+  if (registration === undefined) return false;
+  if (typeof registration !== "object" || registration === null) return true;
+  try { return readDeclaredOutward(registration) !== null; } catch { return true; }
+}
 /** Bind the exact loader-selected owner to the actual registered handler. No
  * later registry/package-name lookup can replace this captured effect. */
 export function bindArtifactGuardedMcpHandler<T>(toolName: string,
   handler: (input: unknown) => T | Promise<T>, identity?: LoadedExtensionIdentity,
+  registration?: unknown,
 ): (input: unknown) => Promise<T> {
+  // THIS registration's outward declaration, read once at binding (cinatra#3745).
+  // The leaf is the version that executes, so its own declaration holds the call
+  // whatever planned entry a dispatch bridge served it under.
+  const declaresOutward = registrationDeclaresOutward(registration);
   const wrapped = markGuardedRunDispatch(async (input: unknown) => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     if (!mcpRequestContextStorage.getStore()?.runId) return handler(input);
     if (!identity || !isLoadedExtensionIdentityCurrent(identity)) throw new Error("action_loaded_identity_missing_or_stale");
-    return withGuardedRunActionInvocation({ action: { ...identity, toolName, wrapper: "primitive" }, arguments: input },
+    return withGuardedRunActionInvocation({ action: { ...identity, toolName, wrapper: "primitive" }, arguments: input, declaresOutward },
       (frozenInput) => Promise.resolve(handler(frozenInput)));
   });
   markGuardedRunLeaf(wrapped);

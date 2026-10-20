@@ -295,7 +295,10 @@ export async function callHostPrimitive(
       const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
       const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
       input = await prepareDeclaredRunToolArguments(primitiveName, input);
-      // The outward declaration of the captured primitive's planned entry.
+      // The outward declaration of the captured primitive's planned entry. The
+      // union is keyed by name, so the bridge may serve a caller-pinned retained
+      // version instead: that version's guarded leaf adds its OWN declaration
+      // (bindArtifactGuardedMcpHandler), so this reading can only add a hold.
       const declaresOutward = captured.planned.declaredOutward !== null;
       // A guarded leaf decides itself; the frame it runs in carries the
       // planned declaration (cinatra#3745).
