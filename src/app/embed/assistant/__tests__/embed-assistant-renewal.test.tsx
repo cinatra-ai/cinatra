@@ -29,7 +29,9 @@
  *   (x)   the same for the parity seed: a seed that answers after the chain
  *         was armed still seeds the column and settles the history;
  *   (xi)  a sign-in that answers after a newer sign-in took over cannot
- *         replace the newer pair.
+ *         replace the newer pair;
+ *   (xii) a sign-in again after a refused renewal waits for its own restore:
+ *         the column never mounts with the previous sign-in's transcript.
  *
  * Only the edges are doubled: the bridge (the parent page), the sign-in popup
  * and the renew call (the network), the capability negotiation, the transcript
@@ -485,5 +487,42 @@ describe("EmbedAssistantClient — the renewal chain, wired (cinatra#4217)", () 
     await wait(RENEW_AT_MS);
     expect(renewFrameCredential).toHaveBeenCalledTimes(1);
     expect(renewFrameCredential.mock.calls[0][1], "the chain renews B's pair").toEqual(pair(3));
+  });
+
+  it("(xii) sign-in again after a refused renewal waits for its own restore", async () => {
+    await render();
+    await deliverContext("t-1");
+    const oldTranscript = [{ id: "old", role: "user", content: "the old transcript" }];
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(1) });
+    negotiate.mockResolvedValueOnce({ ok: true });
+    fetchThreadMessages.mockResolvedValueOnce(oldTranscript);
+    await clickSignIn();
+    expect(shown()).toBe("active");
+    expect(columnSeeds[0], "control: the first sign-in seeds its own transcript").toEqual(oldTranscript);
+
+    renewFrameCredential.mockResolvedValueOnce({ ok: false, reason: "renew_failed" });
+    await wait(RENEW_AT_MS);
+    expect(phase(), "the refused renewal returns to the sign-in card").toBe("signin");
+    const seedsBefore = columnSeeds.length;
+
+    runFrameSignIn.mockResolvedValueOnce({ ok: true, credential: pair(2) });
+    negotiate.mockResolvedValueOnce({ ok: true });
+    const freshRestore = deferred<unknown[] | null>();
+    fetchThreadMessages.mockReturnValueOnce(freshRestore.promise);
+    await clickSignIn();
+    expect(phase()).toBe("active");
+    expect(shown(), "the second sign-in waits for its own restore").toBe("waiting");
+    expect(columnSeeds.length, "no column mounts with the old transcript").toBe(seedsBefore);
+
+    const newTranscript = [{ id: "new", role: "user", content: "the new transcript" }];
+    await act(async () => {
+      freshRestore.resolve(newTranscript);
+      await drain();
+    });
+    expect(shown(), "the new restore settled the history: the column mounts").toBe("active");
+    const secondMount = columnSeeds.slice(seedsBefore);
+    expect(secondMount[0], "seeded with the new transcript").toEqual(newTranscript);
+    expect(secondMount, "the old transcript never seeds it").not.toContainEqual(oldTranscript);
+    expect(fetchThreadMessages.mock.calls.map((c) => c[0])).toEqual(["t-1", "t-1"]);
   });
 });

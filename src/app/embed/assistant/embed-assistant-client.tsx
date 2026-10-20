@@ -201,7 +201,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // So the conversation waits: the frame keeps its neutral waiting card for the
   // one round trip, and the column is mounted ONCE, already seeded. `false` only
   // between reaching `active` and the read answering (or failing) — both of
-  // which settle it.
+  // which settle it. A new sign-in sets it back to `false` (cinatra#4217).
   const [historySettled, setHistorySettled] = useState(false);
 
   // Session context (PUBLIC SELECTORS) and the CREDENTIAL, held ONLY here —
@@ -491,6 +491,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     signInTicketRef.current += 1;
     const ticket = signInTicketRef.current;
     const isCurrent = () => renewalRef.current === renewal && signInTicketRef.current === ticket;
+    // A sign-in again (after a refused renewal or a new context) waits for its
+    // OWN restore: the history the previous sign-in settled, and the transcript
+    // it restored or seeded, must not mount the column at once. Every road to
+    // `active` starts here, so this is the one place to forget them.
+    setHistorySettled(false);
+    setRestoredMessages(undefined);
+    setSeededMessages(undefined);
     setPhase({ kind: "authorizing" });
     void (async () => {
       const result = await runFrameSignIn({
