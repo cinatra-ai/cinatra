@@ -193,7 +193,10 @@ function reviewSlotReader(
   const request = seedRequest(credential, runId);
   if (!request) return undefined;
   return async (signal) => {
-    const res = await fetch(request.url, { ...request.init, signal });
+    // cinatra#4217: the frame renews its credential while it stays open, so the
+    // headers are built again for every look, never kept from the first one.
+    const current = seedRequest(credential, runId) ?? request;
+    const res = await fetch(current.url, { ...current.init, signal });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       reviewGate?: {

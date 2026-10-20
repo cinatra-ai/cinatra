@@ -215,7 +215,12 @@ describe("newly registered stores — writer-set lockstep", () => {
       // parent Better Auth session is DEFINITELY gone, keyed on that one token's
       // hash — the same shape as the expired-row delete beside it. Deliberately
       // re-pinned.
-      "src/lib/widget-user-auth.ts": 12,
+      // 12 -> 15 (cinatra#4217): renewUserWidgetToken's ONE statement claims the
+      // presented token (DELETE FROM ... RETURNING), writes the spent bearer back
+      // for its grace window and writes its successor (two INSERT INTO ...
+      // SELECT ... FROM claimed) — one statement, three verbs. Deliberately
+      // re-pinned.
+      "src/lib/widget-user-auth.ts": 15,
       // 8 -> 9 on main (the suggestion-decision CAS write); kept as main has it.
       // 9 -> 10 (cinatra#2650): bindThreadContainerIfUnbound's ONE conditional
       // set-once UPDATE that records a thread's container at its first persist.
@@ -273,6 +278,7 @@ describe("newly registered stores — writer-set lockstep", () => {
       "loadActiveTransaction",
       "recordDisplayedScopesForTransaction",
       "redeemUserAuthCode",
+      "renewUserWidgetToken",
     ]);
     expect(registryWriters("src/lib/widget-user-auth.ts")).toEqual(detected);
   });

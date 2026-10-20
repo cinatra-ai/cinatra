@@ -15,9 +15,13 @@ import path from "node:path";
 const rows: Array<Record<string, unknown>> = [];
 const getActiveConnectSiteById = vi.fn();
 const widgetAuthSessionIsLive = vi.fn();
+// cinatra#4217 r5 — the default answers every read with `rows`; the renewal
+// cases below swap in a store that reads the statement itself.
+const defaultRunQuery = (_input: unknown): unknown => [{ rows }];
+let runQuery = defaultRunQuery;
 
 vi.mock("@/lib/postgres-sync", () => ({
-  runPostgresQueriesSync: () => [{ rows }],
+  runPostgresQueriesSync: (input: unknown) => runQuery(input),
   quotePostgresIdentifier: (s: string) => `"${s}"`,
 }));
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
@@ -63,6 +67,7 @@ const SITE_ROW = {
 describe("readLiveWidgetCapturePrincipal", () => {
   beforeEach(() => {
     rows.length = 0;
+    runQuery = defaultRunQuery;
     getActiveConnectSiteById.mockReset();
     getActiveConnectSiteById.mockReturnValue({ ...SITE_ROW });
     widgetAuthSessionIsLive.mockReset();
@@ -261,5 +266,63 @@ describe("readLiveWidgetCapturePrincipal", () => {
         `"${reason}"`,
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 r5 — a renewal leaves its spent row beside its successor: the same
+// jti and identical claims, the spent one expiring first and possibly lingering
+// expired until it is consumed or swept. This store answers the reader's own
+// statement the way Postgres would: every row with the jti in the order they
+// were written, ordered by expiry ONLY when the statement says so, then LIMIT 1.
+// The spent row is written FIRST, so a statement without the ordering reads it.
+// Any other statement shape is refused and recorded.
+// ---------------------------------------------------------------------------
+type JtiRow = Record<string, unknown> & { jti: string; expires_at_ms: number };
+function jtiStore(stored: JtiRow[]) {
+  const unread: string[] = [];
+  const run = (input: unknown) => {
+    const q = (input as { queries: Array<{ text: string; values?: unknown[] }> }).queries[0];
+    const m = q.text.match(/ WHERE jti = \$1( ORDER BY expires_at DESC)? LIMIT 1$/);
+    if (!m) {
+      unread.push(q.text);
+      throw new Error("jti store: unsupported statement");
+    }
+    let found = stored.filter((r) => r.jti === q.values?.[0]);
+    if (m[1]) found = [...found].sort((a, b) => b.expires_at_ms - a.expires_at_ms);
+    return [{ rows: found.slice(0, 1) }];
+  };
+  return { run, unread };
+}
+
+describe("cinatra#4217 — a renewal's spent row beside its live successor", () => {
+  beforeEach(() => {
+    rows.length = 0;
+    getActiveConnectSiteById.mockReset();
+    getActiveConnectSiteById.mockReturnValue({ ...SITE_ROW });
+    widgetAuthSessionIsLive.mockReset();
+    widgetAuthSessionIsLive.mockReturnValue(true);
+  });
+
+  // RED AT MAIN: the read had no ORDER BY, so it took the first row written for
+  // the jti, the expired spent bearer, and refused a capture whose successor is
+  // live.
+  it("reads the live successor, never the expired spent row that lingers", () => {
+    const store = jtiStore([
+      { ...TOKEN_ROW, not_expired: false, jti: "jti-1", expires_at_ms: 1_000 },
+      { ...TOKEN_ROW, jti: "jti-1", expires_at_ms: 2_000 },
+    ]);
+    runQuery = store.run;
+    const principal = readLiveWidgetCapturePrincipal("jti-1");
+    expect(store.unread, "the store read the reader's statement").toEqual([]);
+    expect(principal, "the live successor answers").not.toBeNull();
+    expect(principal?.userId).toBe("user-1");
+  });
+
+  it("control: with only the expired spent row the capture is refused", () => {
+    const store = jtiStore([{ ...TOKEN_ROW, not_expired: false, jti: "jti-1", expires_at_ms: 1_000 }]);
+    runQuery = store.run;
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+    expect(store.unread).toEqual([]);
   });
 });

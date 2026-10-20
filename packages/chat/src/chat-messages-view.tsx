@@ -371,7 +371,10 @@ function AgentRunTurnSlot({
     // exactly the reading it drew before this rule existed.
     if (!request) return null;
     return async (signal) => {
-      const response = await fetch(request.url, { ...request.init, signal });
+      // cinatra#4217: the frame renews its credential while it stays open, so the
+      // headers are built again for every look, never kept from the first one.
+      const current = runSeedRequest(credential, runId) ?? request;
+      const response = await fetch(current.url, { ...current.init, signal });
       if (!response.ok) return null;
       return parseRunMomentCard(await response.json());
     };
