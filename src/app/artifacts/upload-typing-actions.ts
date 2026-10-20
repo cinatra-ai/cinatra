@@ -52,6 +52,10 @@ import {
 } from "@/lib/notifications";
 import { resolveRecipientToUserIds } from "@cinatra-ai/notifications/server";
 import { loadMarketplaceBrowse } from "@/lib/marketplace-browse";
+import {
+  narrowMeaningOfferToOffered,
+  type PickerMeaningOffer,
+} from "@/lib/artifacts/picker-meaning-offer";
 
 /**
  * Apply the per-actor extension-ACCESS gate to raw §VI.1 picker candidates. The
@@ -123,6 +127,109 @@ async function filterCandidatesByActorAccess(
   return candidates.filter((c) => accessible.has(c.extension));
 }
 
+/**
+ * THE PRESENTED BASE MEANING (spec §VI.1 "Derived meaning & suggestion chips",
+ * cinatra#3319). The candidate list keeps the extension that defines the row's
+ * CURRENT type off the picker (`excludeTypeId`), because re-asserting that
+ * extension is normally a no-op. It is not a no-op when the row PRESENTS exactly
+ * that extension's live matcher draft: as its auto-surfaced meaning (a draft at
+ * or above the pack's threshold) or as a suggestion (a draft that did not
+ * auto-surface). The drawing says the picker then opens pre-selected on it or
+ * draws it as a suggestion chip, and that confirming it writes a user-sourced
+ * meaning.
+ *
+ * Of the given extensions, this answers the admitted picker candidates of those
+ * for which ALL of these hold:
+ *   - the extension defines the row's current type (`extensionDefinesType`, the
+ *     same question the converging road asks: the extension the base exclusion
+ *     removed, and no other);
+ *   - it is an installed type whose `accepts` admit the file's MIME now (the
+ *     same list, read without the base exclusion — the drawing's admission
+ *     rule);
+ *   - this actor passes the same per-actor access gate as every candidate.
+ * The caller also requires the row's presentation reading to present the
+ * extension (its pre-selection or one of its suggestions). The list and the
+ * confirmation both decide through this one function, so what the picker offers
+ * is what the confirmation accepts.
+ */
+async function presentedBaseCandidates(input: {
+  extensions: readonly string[];
+  mime: string;
+  objectType: string | null | undefined;
+  actor: ActorContext;
+  orgId: string;
+}): Promise<InstalledMeaningType[]> {
+  const { objectType } = input;
+  if (!objectType || input.extensions.length === 0) return [];
+  const definers = new Set<string>();
+  for (const extension of new Set(input.extensions)) {
+    if (await extensionDefinesType(extension, objectType)) definers.add(extension);
+  }
+  if (definers.size === 0) return [];
+  const admitted = listInstalledMeaningTypesAcceptingMime(input.mime).filter((t) =>
+    definers.has(t.extension),
+  );
+  return filterCandidatesByActorAccess(admitted, input.actor, input.orgId);
+}
+
+/** The offered types with the presented base meaning added, in the picker's
+ *  stable order (alphabetical by display name, then extension). */
+function withPresentedBase(
+  types: InstalledMeaningType[],
+  base: readonly InstalledMeaningType[],
+): InstalledMeaningType[] {
+  const added = base.filter((b) => !types.some((t) => t.extension === b.extension));
+  if (added.length === 0) return types;
+  return [...types, ...added].sort(
+    (a, b) =>
+      a.displayName.localeCompare(b.displayName) || a.extension.localeCompare(b.extension),
+  );
+}
+
+/**
+ * The confirmation's half of {@link presentedBaseCandidates}: does this request
+ * confirm the row's presented base meaning? Asked FIRST when the candidate gate
+ * refused the extension, before the converging road, so a presented meaning
+ * never reaches the promotion road. The definer, MIME and access checks come
+ * first; only then is the row's ONE presentation reading taken (the same
+ * `resolveArtifactPresentationReading` the list's deferred reading uses), and
+ * its pre-selection or one of its suggestions must name exactly this extension.
+ * Any failure answers false, so the base road decides.
+ */
+async function confirmsPresentedBaseMeaning(input: {
+  artifactId: string;
+  extension: string;
+  mime: string;
+  objectType: string;
+  actor: ActorContext;
+  orgId: string;
+}): Promise<boolean> {
+  try {
+    const admitted = await presentedBaseCandidates({
+      extensions: [input.extension],
+      mime: input.mime,
+      objectType: input.objectType,
+      actor: input.actor,
+      orgId: input.orgId,
+    });
+    if (admitted.length === 0) return false;
+    const { resolveArtifactPresentationReading } = await import(
+      "@/lib/objects/presentation-identity"
+    );
+    const { offer } = resolveArtifactPresentationReading({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      baseType: input.objectType,
+    });
+    return (
+      offer.preselect === input.extension ||
+      offer.suggestions.some((s) => s.extension === input.extension)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export type ArtifactMarketplacePack = {
   packageName: string;
   version: string;
@@ -131,7 +238,16 @@ export type ArtifactMarketplacePack = {
 };
 
 export type ListTypesResult =
-  | { ok: true; types: InstalledMeaningType[]; mime: string }
+  | {
+      ok: true;
+      types: InstalledMeaningType[];
+      mime: string;
+      /** The row's derived meaning narrowed to `types` (§VI.1, cinatra#3319):
+       *  the extension the picker opens pre-selected on and the suggestion
+       *  chips. Absent when nothing is offered or the detail read answered
+       *  none; the picker then opens with nothing selected and no chip. */
+      meaning?: PickerMeaningOffer;
+    }
   | { ok: false; reason: "auth-required" | "not-found" | "denied" };
 
 /**
@@ -150,7 +266,12 @@ export async function listInstalledTypesForArtifact(
   const orgId = session?.session?.activeOrganizationId ?? null;
   const actor = await getActorContext();
   if (!orgId || !actor) return { ok: false, reason: "auth-required" };
-  const read = readArtifactForDetail({ orgId, actor, artifactId });
+  // `withMeaningOffer` (cinatra#3319): the detail read runs the row's gates now
+  // and DEFERS its one presentation reading to `readPresentation()`, which this
+  // action calls only after the registry warm below. So the gates still come
+  // before any store scan, the warm runs once per request, and the offer and
+  // the candidate list are decided over the same registry.
+  const read = readArtifactForDetail({ orgId, actor, artifactId, withMeaningOffer: true });
   if (read.kind === "not-found") return { ok: false, reason: "not-found" };
   if (read.kind === "denied") return { ok: false, reason: "denied" };
   // The picker reads the in-process object-type registry, and the ordinary read
@@ -169,7 +290,46 @@ export async function listInstalledTypesForArtifact(
   // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down),
   // and matcher-channel members not org-writable (== the A6 resolver's gate).
   const types = await filterCandidatesByActorAccess(raw, actor, orgId);
-  return { ok: true, types, mime };
+  // THE DERIVED MEANING (§VI.1, cinatra#3319): a matcher draft at or above its
+  // pack's threshold opens the picker pre-selected on it; a draft that did not
+  // auto-surface is a suggestion chip. It is the detail read's one presentation
+  // reading, taken here, after the warm above, and narrowed to the offered
+  // types: the types above (installed, accepting this file's MIME, not the
+  // row's base type, addressable by this actor), plus the row's base-defining
+  // extension when the reading presents exactly it (pre-selection or
+  // suggestion) and it passes the same MIME and access checks
+  // (`presentedBaseCandidates`). The confirmation gate decides through the same
+  // function and refuses any other extension.
+  const meaningOffer = read.readPresentation?.().meaningOffer;
+  if (!meaningOffer) return { ok: true, types, mime };
+  const presentedOutside = [
+    ...new Set(
+      [
+        ...(meaningOffer.preselect ? [meaningOffer.preselect] : []),
+        ...meaningOffer.suggestions.map((s) => s.extension),
+      ].filter((extension) => !types.some((t) => t.extension === extension)),
+    ),
+  ];
+  const offered =
+    presentedOutside.length === 0
+      ? types
+      : withPresentedBase(
+          types,
+          await presentedBaseCandidates({
+            extensions: presentedOutside,
+            mime,
+            objectType,
+            actor,
+            orgId,
+          }),
+        );
+  if (offered.length === 0) return { ok: true, types: offered, mime };
+  return {
+    ok: true,
+    types: offered,
+    mime,
+    meaning: narrowMeaningOfferToOffered(meaningOffer, offered),
+  };
 }
 
 export type AssertMeaningResult =
@@ -259,6 +419,43 @@ export async function assertUploadMeaning(input: {
   );
   const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
   if (!candidates.some((c) => c.extension === input.extension)) {
+    // THE PRESENTED BASE MEANING (§VI.1, cinatra#3319), decided FIRST. The row
+    // presents this extension's live matcher draft (its auto-surfaced meaning or
+    // a suggestion chip), so the picker offered it, and confirming it records the
+    // person's user-sourced meaning. It is decided BEFORE the converging road,
+    // and it never calls the promotion road: a presented extension has an active
+    // matcher draft, so no user assertion of it stands, and an interrupted
+    // promotion (which wrote the person's assertion before it promoted) is
+    // therefore never presented. The converging road below would only append a
+    // revision for a promotion that never happened.
+    if (
+      objectType &&
+      (await confirmsPresentedBaseMeaning({
+        artifactId: input.artifactId,
+        extension: input.extension,
+        mime,
+        objectType,
+        actor,
+        orgId,
+      }))
+    ) {
+      const presented = assertSemanticType({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        assertedBy: "user",
+        principal: actor.principalId ?? null,
+      });
+      if (presented.blockedByPrecedence) {
+        return {
+          ok: false,
+          reason: "blocked",
+          message: "A higher-ranked meaning already applies to this artifact.",
+        };
+      }
+      revalidatePath("/artifacts");
+      return { ok: true };
+    }
     // THE CONVERGING RE-CONFIRMATION, and the reason it lives HERE rather than
     // behind the candidate gate: the candidate list EXCLUDES every candidate of
     // the extension that defines the row's CURRENT type, so a row an earlier

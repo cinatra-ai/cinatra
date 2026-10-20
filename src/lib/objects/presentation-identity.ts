@@ -202,11 +202,24 @@ export function resolveArtifactPresentationIdentities(input: {
   orgId: string;
   rows: ReadonlyArray<{ id: string; type: string }>;
 }): Map<string, PresentationIdentity> {
+  return resolvePresentationBatch(input).identities;
+}
+
+/** The batched resolution plus the active assertions it read, so a caller that
+ * needs a draft's confidence (the picker's suggestion chips, cinatra#3319) reads
+ * the SAME rows the tiers were decided on — never a second, divergent query. */
+function resolvePresentationBatch(input: {
+  orgId: string;
+  rows: ReadonlyArray<{ id: string; type: string }>;
+}): {
+  identities: Map<string, PresentationIdentity>;
+  assertionsByArtifact: Map<string, PresentationAssertion[]>;
+} {
   const out = new Map<string, PresentationIdentity>();
-  if (input.rows.length === 0) return out;
+  const assertionsByArtifact = new Map<string, PresentationAssertion[]>();
+  if (input.rows.length === 0) return { identities: out, assertionsByArtifact };
   ensurePostgresSchema();
 
-  const assertionsByArtifact = new Map<string, PresentationAssertion[]>();
   try {
     const r = runPostgresQueriesSync({
       connectionString: getPostgresConnectionString(),
@@ -253,7 +266,7 @@ ORDER BY artifact_id, asserted_at, extension`,
       }),
     );
   }
-  return out;
+  return { identities: out, assertionsByArtifact };
 }
 
 /** Singular convenience wrapper over the batched resolver. Never throws — falls
@@ -274,6 +287,77 @@ export function resolveArtifactPresentationIdentity(input: {
       suggestions: [],
     }
   );
+}
+
+/** The type picker's derived meaning for one row (spec
+ * `specs/app-artifacts.html` §VI.1 "Derived meaning & suggestion chips",
+ * cinatra#3319), decided by the SAME presentation tiers the row is drawn with:
+ *   - `preselect` — the extension the picker opens pre-selected on: the tier-2
+ *     matcher draft at or above its pack's threshold that auto-surfaced as the
+ *     row's presented identity; `null` when no draft auto-surfaced (below
+ *     threshold, a tie at the top, the org toggle set, or a higher tier won).
+ *   - `suggestions` — every live matcher draft that did NOT auto-surface, each
+ *     with its highest draft confidence (`null` when the draft carries none),
+ *     in the resolver's deterministic order. The pre-selected extension is never
+ *     also a suggestion. */
+export type ArtifactMeaningOffer = {
+  preselect: string | null;
+  suggestions: Array<{ extension: string; confidence: number | null }>;
+};
+
+/** ONE reading of one row's presentation for a caller that also needs the
+ * picker's derived meaning (the detail read the picker's candidate list makes,
+ * cinatra#3319). It runs the batched resolution ONCE — one `semantic_assertion`
+ * read — and derives both answers from it, so the meaning offer can never
+ * disagree with the presentation the same read returns, and the picker's road
+ * never adds a second blocking read of the sync bridge.
+ *
+ * `presentation` is exactly what {@link resolveArtifactPresentationIdentity}
+ * answers for the same input, with the same failure behaviour: a read error
+ * fails closed to the base identity (and so to an empty offer). */
+export function resolveArtifactPresentationReading(input: {
+  orgId: string;
+  artifactId: string;
+  baseType: string;
+}): { presentation: PresentationIdentity; offer: ArtifactMeaningOffer } {
+  const { identities, assertionsByArtifact } = resolvePresentationBatch({
+    orgId: input.orgId,
+    rows: [{ id: input.artifactId, type: input.baseType }],
+  });
+  // The same fallback as the singular wrapper above.
+  const presentation: PresentationIdentity = identities.get(input.artifactId) ?? {
+    identity: resolveEffectiveIdentity(input.baseType),
+    tier: "claim-backed",
+    suggestions: [],
+  };
+  return {
+    presentation,
+    offer: meaningOfferOf(presentation, assertionsByArtifact.get(input.artifactId) ?? []),
+  };
+}
+
+/** The offer, derived from a resolved presentation and the active assertions
+ * it was decided on. Pure. */
+function meaningOfferOf(
+  pi: PresentationIdentity,
+  assertions: readonly PresentationAssertion[],
+): ArtifactMeaningOffer {
+  const preselect =
+    pi.tier === "matcher" && pi.identity.kind === "extension" ? pi.identity.extension : null;
+  const drafts = assertions.filter(
+    (a) => a.assertedBy === "matcher" && a.eligibility === "draft",
+  );
+  const suggestions = pi.suggestions
+    .filter((extension) => extension !== preselect)
+    .map((extension) => {
+      let confidence: number | null = null;
+      for (const d of drafts) {
+        if (d.extension !== extension || d.confidence == null) continue;
+        if (confidence === null || d.confidence > confidence) confidence = d.confidence;
+      }
+      return { extension, confidence };
+    });
+  return { preselect, suggestions };
 }
 
 export type { EffectiveIdentity };
