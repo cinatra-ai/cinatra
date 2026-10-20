@@ -66,11 +66,12 @@
 // No drawing text, no drawing path, no revision: the report is about this
 // repository's own recorded claims, and the drawings are not public.
 //
-// IT IS RED TODAY, and that is the point: the recorded owner anchors do not
-// resolve at the pin the contract names. It is landed warn-first — its context
-// is not required until a separate pull request adds it — so the state is
-// visible without blocking, and it stays red until the anchor content itself
-// moves.
+// IT IS STILL RED TODAY, and that is the point: all five recorded owner anchors
+// resolve at the pin the contract names, and the four that remain unresolved
+// are capture-origin controls that no governed drawing draws. It is landed
+// warn-first — its context is not required until a separate pull request adds
+// it — so the state is visible without blocking, and it stays red until the
+// anchor content itself moves.
 //
 // Usage:
 //   node scripts/ci/design-anchor-resolution.mjs
