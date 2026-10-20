@@ -584,14 +584,16 @@ const ROW_HISTORY_READ_LIMIT = 500;
  *                 the row's history holds no event that retyped it INTO its
  *                 current type. The row never was a promotion, so there is
  *                 nothing to complete: the meaning is already recorded.
- *   "unproven"  — the assertion stands, but the history could not be read, or
- *                 the read was full without that event. Whether a promotion was
- *                 interrupted cannot be told, so nothing is written.
+ *   "unproven"  — the assertion could not be read, or it stands but the history
+ *                 could not be read, or the read was full without that event.
+ *                 Whether a promotion was interrupted cannot be told, so nothing
+ *                 is written. A failed assertion read must not converge: the
+ *                 store reads the assertion again on its own, and a read that
+ *                 recovers there would append the revision this check exists to
+ *                 refuse.
  *   "converge"  — the base road decides: no such assertion stands, or a retype
  *                 into the current type is on record (the row an interrupted
- *                 promotion leaves). A failed assertion read also answers this:
- *                 the store reads the same assertion through the same reader and
- *                 refuses on the same failure.
+ *                 promotion leaves).
  *
  * The retype is the one write a promotion makes through the canonical
  * history-aware writer, which records its change event in the same statement
@@ -615,7 +617,7 @@ async function readRowOwnConfirmation(input: {
       principal: input.principal,
     });
   } catch {
-    return "converge";
+    return "unproven";
   }
   if (!asserted) return "converge";
   try {

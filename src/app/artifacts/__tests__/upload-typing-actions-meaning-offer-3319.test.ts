@@ -56,6 +56,11 @@
  *   A18   — a claim-backed row type presenting its claiming pack: offered,
  *           pre-selected, confirmed once with no promotion step.
  *
+ * Pre-review 9:
+ *   A21   — the person's assertion read fails once: the stale confirmation is
+ *           refused and writes nothing, so a store read that recovers cannot
+ *           append a revision.
+ *
  *   pnpm exec vitest run src/app/artifacts/__tests__/upload-typing-actions-meaning-offer-3319.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -924,6 +929,40 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toMatchObject({
       ok: false,
       reason: "invalid-type",
+    });
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(appends).toEqual([]);
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+  });
+
+  it("A21: when the person's assertion cannot be read, the stale confirmation writes nothing and is refused, even if the store's own read recovers", async () => {
+    const state = turningNativeBelowRow();
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toEqual({
+      ok: true,
+    });
+    expect(state.personAsserted).toBe(true);
+
+    // The action's read fails ONCE. The store would read the assertion again on
+    // its own; that read recovers (the double answers from the row's state), so
+    // reaching the store would append a revision for a promotion that never
+    // happened.
+    readPersonAssertion.mockImplementationOnce(() => {
+      throw new Error("assertion read unavailable");
+    });
+    expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toEqual({
+      ok: false,
+      reason: "invalid-type",
+      message:
+        "That type is not an installed type that accepts this file — refresh and pick again.",
+    });
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(appends).toEqual([]);
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+
+    // Once the read recovers, the confirmation is answered as already recorded.
+    expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toEqual({
+      ok: true,
     });
     expect(assertSemanticType).toHaveBeenCalledTimes(1);
     expect(appends).toEqual([]);
