@@ -471,6 +471,33 @@ export async function assertUploadMeaning(input: {
     // call that retyped the row wrote the person's, and a second identical
     // assertion would stack a duplicate for a choice already recorded.
     if (objectType && (await extensionDefinesType(input.extension, objectType))) {
+      // THE ROW-OWN CONFIRMATION COUNTS ONCE (cinatra#3319). The presented arm
+      // above writes the person's assertion on a row that was NATIVELY of this
+      // type, and that write ends the presentation, so a second, stale picker of
+      // the same row arrives here. The store would accept that assertion as the
+      // person's road and append a promotion revision for a promotion that never
+      // happened. An interrupted promotion holds the same assertion, so the
+      // assertion alone cannot tell them apart: the row's own history can, because
+      // only a promotion's retype moved the row INTO this type.
+      const standing = await readRowOwnConfirmation({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        objectType,
+        principal: actor.principalId ?? null,
+      });
+      if (standing === "recorded") {
+        revalidatePath("/artifacts");
+        return { ok: true };
+      }
+      if (standing === "unproven") {
+        return {
+          ok: false,
+          reason: "invalid-type",
+          message:
+            "That type is not an installed type that accepts this file — refresh and pick again.",
+        };
+      }
       const completed = await promoteOnConfirmedMeaning({
         orgId,
         artifactId: input.artifactId,
@@ -544,6 +571,78 @@ async function extensionDefinesType(extension: string, objectType: string): Prom
   } catch {
     return false;
   }
+}
+
+/** The most change events the row-own check reads (the history reader's cap). */
+const ROW_HISTORY_READ_LIMIT = 500;
+
+/**
+ * Does a confirmation of this extension already stand on a row that was
+ * NATIVELY of the type the extension defines (cinatra#3319)?
+ *
+ *   "recorded"  — the acting person's own assertion of the extension stands, and
+ *                 the row's history holds no event that retyped it INTO its
+ *                 current type. The row never was a promotion, so there is
+ *                 nothing to complete: the meaning is already recorded.
+ *   "unproven"  — the assertion stands, but the history could not be read, or
+ *                 the read was full without that event. Whether a promotion was
+ *                 interrupted cannot be told, so nothing is written.
+ *   "converge"  — the base road decides: no such assertion stands, or a retype
+ *                 into the current type is on record (the row an interrupted
+ *                 promotion leaves). A failed assertion read also answers this:
+ *                 the store reads the same assertion through the same reader and
+ *                 refuses on the same failure.
+ *
+ * The retype is the one write a promotion makes through the canonical
+ * history-aware writer, which records its change event in the same statement
+ * (`typed-promotion-store.ts` `canonicalRetype`). Its before snapshot is the row
+ * as it stood, so it carries the old `type`.
+ */
+async function readRowOwnConfirmation(input: {
+  orgId: string;
+  artifactId: string;
+  extension: string;
+  objectType: string;
+  principal: string | null;
+}): Promise<"recorded" | "unproven" | "converge"> {
+  let asserted: boolean;
+  try {
+    const { readPersonAssertion } = await import("@/lib/artifacts/typed-promotion-store");
+    asserted = readPersonAssertion({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      extension: input.extension,
+      principal: input.principal,
+    });
+  } catch {
+    return "converge";
+  }
+  if (!asserted) return "converge";
+  try {
+    const { listEventsForObject } = await import("@/lib/object-history/eligibility");
+    const events = listEventsForObject(input.artifactId, {
+      orgId: input.orgId,
+      limit: ROW_HISTORY_READ_LIMIT,
+    });
+    if (events.some((event) => retypedInto(event, input.objectType))) return "converge";
+    return events.length >= ROW_HISTORY_READ_LIMIT ? "unproven" : "recorded";
+  } catch {
+    return "unproven";
+  }
+}
+
+/** A change event that moved the row from another type INTO `objectType`. */
+function retypedInto(
+  event: {
+    objectType: string;
+    beforeSnapshot: { payload: Record<string, unknown> } | null;
+    afterSnapshot: { payload: Record<string, unknown> } | null;
+  },
+  objectType: string,
+): boolean {
+  const before = event.beforeSnapshot?.payload?.type;
+  const after = event.afterSnapshot?.payload?.type ?? event.objectType;
+  return typeof before === "string" && before !== objectType && after === objectType;
 }
 
 /**

@@ -115,8 +115,16 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 const promoteMatchedArtifactType = vi.fn();
 /** Every append the promotion-store double records (revision 6). */
 const appends: unknown[] = [];
+/** The person's own assertion, as the store's reader answers it (A19). */
+const readPersonAssertion = vi.fn((_input?: unknown) => false);
 vi.mock("@/lib/artifacts/typed-promotion-store", () => ({
   promoteMatchedArtifactType: (...a: unknown[]) => promoteMatchedArtifactType(...a),
+  readPersonAssertion: (input: unknown) => readPersonAssertion(input),
+}));
+/** The row's change events, newest first, as the history reader answers them. */
+const listEventsForObject = vi.fn((_id?: string, _o?: unknown): unknown[] => []);
+vi.mock("@/lib/object-history/eligibility", () => ({
+  listEventsForObject: (id: string, o: unknown) => listEventsForObject(id, o),
 }));
 vi.mock("@/lib/org-write/authority", () => ({
   verifySessionAuthority: vi.fn(async () => ({ kind: "org-write" })),
@@ -187,6 +195,8 @@ beforeEach(() => {
   // inherits another's store state, reading or claims.
   promoteMatchedArtifactType.mockReset();
   appends.length = 0;
+  readPersonAssertion.mockImplementation(() => false);
+  listEventsForObject.mockImplementation(() => []);
   readClaimBackedMeaningTypesForOrg.mockImplementation(async () => []);
   host.resolveArtifactPresentationReading.mockReset();
 });
@@ -424,7 +434,25 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
   const INTERRUPTED: PromotionState = { revisionPresent: false, personAsserted: true, matcherAtThreshold: false };
   /** The promotion revision landed: refused. */
   const COMPLETE: PromotionState = { revisionPresent: true, personAsserted: false, matcherAtThreshold: false };
+  /** The row's change events: created as the base type, then (only for an
+   *  interrupted promotion) the retype into the pack's own type, newest first. */
+  const created = (type: string) => ({
+    objectType: type,
+    operation: "create",
+    beforeSnapshot: null,
+    afterSnapshot: { payload: { type } },
+  });
+  const RETYPED = {
+    objectType: OWN_TYPE,
+    operation: "update",
+    beforeSnapshot: { payload: { type: MARKDOWN } },
+    afterSnapshot: { payload: { type: OWN_TYPE } },
+  };
   function promotionStore(state: PromotionState): void {
+    readPersonAssertion.mockImplementation(() => state.personAsserted);
+    listEventsForObject.mockImplementation(() =>
+      state === INTERRUPTED ? [RETYPED, created(MARKDOWN)] : [created(OWN_TYPE)],
+    );
     promoteMatchedArtifactType.mockImplementation(async (input: { confirmed?: boolean }) => {
       if (
         !state.revisionPresent &&
@@ -802,6 +830,104 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     expect(assertSemanticType).toHaveBeenCalledWith(exactUserWrite(PACK));
     expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
     expect(appends).toEqual([]);
+  });
+
+  /** The reading `presentedBaseRow` configured, taken without leaving a call. */
+  function presentedReading(reading: typeof host.resolveArtifactPresentationReading): unknown {
+    const value = reading({} as never);
+    reading.mockClear();
+    return value;
+  }
+  /** A natively typed, below-threshold row whose double TURNS: the first
+   *  confirmation's write leaves the person's assertion standing and ends the
+   *  presentation (the draft is archived; the person's meaning is tier 1). */
+  function turningNativeBelowRow() {
+    presentedBaseRow(
+      {
+        tier: "claim-backed",
+        preselect: null,
+        suggestions: [
+          { extension: PACK, confidence: 0.5 },
+          { extension: POST, confidence: 0.4 },
+        ],
+      },
+      { promotion: NATIVE_BELOW },
+    );
+    const state: PromotionState = { ...NATIVE_BELOW };
+    promotionStore(state);
+    assertSemanticType.mockImplementation(() => {
+      state.personAsserted = true;
+      return { blockedByPrecedence: false };
+    });
+    // Before the write the row presents the pack's draft as a chip; after it,
+    // the person's meaning stands and the pack is presented no more.
+    const chip = presentedReading(host.resolveArtifactPresentationReading);
+    host.resolveArtifactPresentationReading.mockImplementation(() =>
+      state.personAsserted
+        ? {
+            presentation: {
+              identity: { kind: "extension", extension: PACK },
+              tier: "classic",
+              suggestions: [POST],
+            },
+            offer: { preselect: null, suggestions: [{ extension: POST, confidence: 0.4 }] },
+          }
+        : chip,
+    );
+    return state;
+  }
+
+  it("A19: a second, stale confirmation of the same extension on a natively typed row below threshold writes nothing and appends no revision", async () => {
+    const state = turningNativeBelowRow();
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    const first = await assertUploadMeaning({ artifactId: "a-3319", extension: PACK });
+    expect(first).toEqual({ ok: true });
+    expect(state.personAsserted).toBe(true);
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+
+    // The stale picker confirms the same extension again.
+    const second = await assertUploadMeaning({ artifactId: "a-3319", extension: PACK });
+    expect(second).toEqual({ ok: true });
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(appends).toEqual([]);
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    // The check read THIS person's assertion and the row's own history.
+    expect(readPersonAssertion).toHaveBeenCalledWith({
+      orgId: "org-1",
+      artifactId: "a-3319",
+      extension: PACK,
+      principal: "u1",
+    });
+    expect(listEventsForObject).toHaveBeenCalledWith("a-3319", { orgId: "org-1", limit: 500 });
+  });
+
+  it("A20: when the row's history cannot prove a native type (read failed, or full without the retype), the stale confirmation writes nothing and is refused", async () => {
+    turningNativeBelowRow();
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toEqual({
+      ok: true,
+    });
+    listEventsForObject.mockImplementation(() => {
+      throw new Error("history unavailable");
+    });
+    expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toMatchObject({
+      ok: false,
+      reason: "invalid-type",
+    });
+    const unrelatedEdit = {
+      objectType: OWN_TYPE,
+      operation: "update",
+      beforeSnapshot: { payload: { type: OWN_TYPE } },
+      afterSnapshot: { payload: { type: OWN_TYPE } },
+    };
+    listEventsForObject.mockImplementation(() => Array.from({ length: 500 }, () => unrelatedEdit));
+    expect(await assertUploadMeaning({ artifactId: "a-3319", extension: PACK })).toMatchObject({
+      ok: false,
+      reason: "invalid-type",
+    });
+    expect(assertSemanticType).toHaveBeenCalledTimes(1);
+    expect(appends).toEqual([]);
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
   });
 
   it("A8: a FAILED warm is not retried within the request, so the list and the offer agree (green at base)", async () => {
