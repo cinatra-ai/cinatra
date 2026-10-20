@@ -2666,7 +2666,15 @@ describe("renewUserWidgetToken — the frame's token renewal (cinatra#4217)", ()
       Math.floor(MAX / TTL),
     );
     advance(Math.ceil((cap - nowMs) / 1000) - GRACE);
-    const keys = new Set(tokenStore.keys());
+    // Like with like: the refused renewal still verifies the bearer, and that
+    // verification runs the module's expiry sweep, which removes rows that had
+    // already expired (the previous renewal's spent grace row). Snapshot only
+    // the rows that sweep keeps (expires_at >= now): every one of them must
+    // survive, and no row may be added.
+    const keys = new Set(
+      [...tokenStore.entries()].filter(([, r]) => r.expires_at_ms >= nowMs).map(([k]) => k),
+    );
+    expect(keys.has(__testing.sha256Hex(token)), "control: the presented bearer is in the snapshot").toBe(true);
     expect(renew(token), "the session's last grace window is not renewable").toEqual({
       ok: false,
       reason: "not_renewable",
