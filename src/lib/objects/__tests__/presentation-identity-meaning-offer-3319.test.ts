@@ -5,6 +5,11 @@
 // `resolveArtifactPresentationReading` answers the row's presentation AND the
 // picker's offer from ONE batched read (H11 counts the reads).
 //
+// Round 11 (the class fold): the reading says whether it is the row's own
+// answer. `complete` is false when the assertion read (H12) or the matcher-pack
+// install read (H13) failed and was degraded to an empty offer, and true for a
+// clean read, also when the install gate genuinely denies the pack (H14).
+//
 // The drawing states the rule against "the pack's threshold" and names no
 // number; the threshold is the pack's channel `matcherConfidenceThreshold`
 // (default 0.7, packages/objects/src/registry.ts DEFAULT_MATCHER_CONFIDENCE_THRESHOLD).
@@ -51,7 +56,7 @@ function registerMatcherPack(ext: string, threshold = 0.7): void {
   });
 }
 
-function prime(rows: Row[] | Error, installRows: Row[] = []): void {
+function prime(rows: Row[] | Error, installRows: Row[] | Error = []): void {
   runPostgresQueriesSync.mockImplementation((input: { queries: Array<{ text: string }> }) => {
     const text = input.queries[0]?.text ?? "";
     if (text.includes("semantic_assertion")) {
@@ -59,6 +64,7 @@ function prime(rows: Row[] | Error, installRows: Row[] = []): void {
       return [{ rows, rowCount: rows.length }];
     }
     if (text.includes("installed_extension")) {
+      if (installRows instanceof Error) throw installRows;
       return [{ rows: installRows, rowCount: installRows.length }];
     }
     throw new Error(`unexpected query: ${text}`);
@@ -78,6 +84,7 @@ function draft(extension: string, confidence: number | null, asserted_at = "2026
 }
 
 type Reading = {
+  complete?: boolean;
   presentation: {
     identity: { kind: string; extension?: string };
     tier: string;
@@ -208,6 +215,33 @@ describe("cinatra#3319 — resolveArtifactPresentationReading (§VI.1 threshold 
     const r = reading();
     expect(r.presentation.tier).toBe("claim-backed");
     expect(r.offer).toEqual({ preselect: null, suggestions: [] });
+  });
+
+  it("H12: a failed semantic_assertion read is told apart from the row's own empty offer (complete: false)", () => {
+    registerMatcherPack(IDEA, 0.7);
+    prime(new Error("read down"));
+    const r = reading();
+    expect(r.offer).toEqual({ preselect: null, suggestions: [] });
+    expect(r.complete).toBe(false);
+  });
+
+  it("H13: a failed install read degrades the draft to not live, and the reading says it is incomplete", () => {
+    registerMatcherPack(IDEA, 0.7);
+    prime([draft(IDEA, 0.9)], new Error("install status down"));
+    const r = reading();
+    expect(r.offer).toEqual({ preselect: null, suggestions: [] });
+    expect(r.complete).toBe(false);
+  });
+
+  it("H14: a clean read is complete, also when the install gate genuinely denies the pack", () => {
+    registerMatcherPack(IDEA, 0.7);
+    prime([draft(IDEA, 0.9)]);
+    expect(reading()).toMatchObject({ complete: true, offer: { preselect: IDEA } });
+    prime([draft(IDEA, 0.9)], [{ package_name: IDEA, status: "archived", organization_id: ORG }]);
+    expect(reading()).toMatchObject({
+      complete: true,
+      offer: { preselect: null, suggestions: [] },
+    });
   });
 
   it("H11: ONE read answers both: one semantic_assertion query, and the presentation equals the row's own", () => {

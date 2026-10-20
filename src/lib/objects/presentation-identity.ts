@@ -105,6 +105,7 @@ function matcherThresholdFor(extension: string): number | null {
 function buildMatcherLiveExtensionSet(
   orgId: string,
   packageNames: readonly string[],
+  onReadError: () => void = () => {},
 ): Set<string> {
   const live = new Set<string>();
   if (packageNames.length === 0) return live;
@@ -132,7 +133,9 @@ WHERE kind = 'artifact' AND package_name = ANY($1::text[])`,
     }
   } catch {
     // fail-closed: cannot read install status ⇒ no matcher pack is live (a draft
-    // never auto-surfaces on an unreadable gate).
+    // never auto-surfaces on an unreadable gate). The caller is told, so a
+    // reading built on it can say it is incomplete.
+    onReadError();
     return live;
   }
   for (const pkg of packageNames) {
@@ -157,6 +160,7 @@ WHERE kind = 'artifact' AND package_name = ANY($1::text[])`,
 function buildPolicy(
   orgId: string,
   matcherPackagesInBatch: readonly string[],
+  onReadError?: () => void,
 ): PresentationIdentityPolicy {
   const liveExtensions = buildLiveExtensionSet();
   // Matcher-pack liveness is decided SOLELY by the org-scoped install gate, so it
@@ -169,7 +173,7 @@ function buildPolicy(
   // implementation-round #1). For a matcher-ONLY pack the delete is a no-op (it
   // registers no type), so the gate is the sole authority regardless.
   for (const pkg of matcherPackagesInBatch) liveExtensions.delete(pkg);
-  for (const pkg of buildMatcherLiveExtensionSet(orgId, matcherPackagesInBatch)) {
+  for (const pkg of buildMatcherLiveExtensionSet(orgId, matcherPackagesInBatch, onReadError)) {
     liveExtensions.add(pkg);
   }
   const autoSurfaceDisabled = isArtifactAutoSurfaceDisabled(orgId);
@@ -207,18 +211,22 @@ export function resolveArtifactPresentationIdentities(input: {
 
 /** The batched resolution plus the active assertions it read, so a caller that
  * needs a draft's confidence (the picker's suggestion chips, cinatra#3319) reads
- * the SAME rows the tiers were decided on — never a second, divergent query. */
+ * the SAME rows the tiers were decided on — never a second, divergent query.
+ * `complete` is false when a read the resolution depends on failed and was
+ * degraded to "nothing" (the assertion read, the matcher-pack install read). */
 function resolvePresentationBatch(input: {
   orgId: string;
   rows: ReadonlyArray<{ id: string; type: string }>;
 }): {
   identities: Map<string, PresentationIdentity>;
   assertionsByArtifact: Map<string, PresentationAssertion[]>;
+  complete: boolean;
 } {
   const out = new Map<string, PresentationIdentity>();
   const assertionsByArtifact = new Map<string, PresentationAssertion[]>();
-  if (input.rows.length === 0) return { identities: out, assertionsByArtifact };
+  if (input.rows.length === 0) return { identities: out, assertionsByArtifact, complete: true };
   ensurePostgresSchema();
+  let complete = true;
 
   try {
     const r = runPostgresQueriesSync({
@@ -242,6 +250,8 @@ ORDER BY artifact_id, asserted_at, extension`,
     }
   } catch {
     // fail-closed: no assertions ⇒ every row falls through to base identity.
+    // The empty set is not the row's own answer, so the reading says so.
+    complete = false;
   }
 
   // The channel-registered matcher packs ACTUALLY referenced by this batch's
@@ -255,7 +265,9 @@ ORDER BY artifact_id, asserted_at, extension`,
     }
   }
 
-  const policy = buildPolicy(input.orgId, [...matcherPackagesInBatch]);
+  const policy = buildPolicy(input.orgId, [...matcherPackagesInBatch], () => {
+    complete = false;
+  });
   for (const row of input.rows) {
     out.set(
       row.id,
@@ -266,7 +278,7 @@ ORDER BY artifact_id, asserted_at, extension`,
       }),
     );
   }
-  return { identities: out, assertionsByArtifact };
+  return { identities: out, assertionsByArtifact, complete };
 }
 
 /** Singular convenience wrapper over the batched resolver. Never throws — falls
@@ -314,13 +326,18 @@ export type ArtifactMeaningOffer = {
  *
  * `presentation` is exactly what {@link resolveArtifactPresentationIdentity}
  * answers for the same input, with the same failure behaviour: a read error
- * fails closed to the base identity (and so to an empty offer). */
+ * fails closed to the base identity (and so to an empty offer).
+ *
+ * `complete` tells that degraded answer apart from the row's own: it is false
+ * when the assertion read or the matcher-pack install read failed, so an empty
+ * offer may hide a presented meaning. A caller that decides a WRITE on the
+ * offer (the picker's confirmation) must refuse an incomplete reading. */
 export function resolveArtifactPresentationReading(input: {
   orgId: string;
   artifactId: string;
   baseType: string;
-}): { presentation: PresentationIdentity; offer: ArtifactMeaningOffer } {
-  const { identities, assertionsByArtifact } = resolvePresentationBatch({
+}): { presentation: PresentationIdentity; offer: ArtifactMeaningOffer; complete: boolean } {
+  const { identities, assertionsByArtifact, complete } = resolvePresentationBatch({
     orgId: input.orgId,
     rows: [{ id: input.artifactId, type: input.baseType }],
   });
@@ -333,6 +350,7 @@ export function resolveArtifactPresentationReading(input: {
   return {
     presentation,
     offer: meaningOfferOf(presentation, assertionsByArtifact.get(input.artifactId) ?? []),
+    complete,
   };
 }
 

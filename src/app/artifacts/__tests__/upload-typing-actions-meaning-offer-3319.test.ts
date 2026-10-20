@@ -61,6 +61,20 @@
  *           refused and writes nothing, so a store read that recovers cannot
  *           append a revision.
  *
+ * Round 11 (the class fold): EVERY read of the presented-base verification
+ * fails closed. On the NATIVE row (where the store WOULD append), each read
+ * that fails (F*) and each verification that denies (D*) refuses the
+ * confirmation; nothing is written and no revision is appended:
+ *   F1/D1 — the definer read; F2/D2 — the MIME list; F3/D3(A13) — the access
+ *   gate; F4 — the presentation reading throws; F5 — the reading degraded a
+ *   failed read (`complete: false`); D5 — a complete reading that does not
+ *   present the pack; F6/D6 — the row's history (the converging road now needs
+ *   the retype on record, with or without the person's assertion).
+ *   A13 now runs on NATIVE. G3 (green at base): a retype on record still
+ *   converges without the person's assertion.
+ *   The double's COMPLETE row carries its promotion's retype, as a completed
+ *   promotion does.
+ *
  *   pnpm exec vitest run src/app/artifacts/__tests__/upload-typing-actions-meaning-offer-3319.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -439,8 +453,9 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
   const INTERRUPTED: PromotionState = { revisionPresent: false, personAsserted: true, matcherAtThreshold: false };
   /** The promotion revision landed: refused. */
   const COMPLETE: PromotionState = { revisionPresent: true, personAsserted: false, matcherAtThreshold: false };
-  /** The row's change events: created as the base type, then (only for an
-   *  interrupted promotion) the retype into the pack's own type, newest first. */
+  /** The row's change events: created as the base type, then (for a promotion,
+   *  interrupted or completed) the retype into the pack's own type, newest
+   *  first. A natively typed row was created in the pack's own type. */
   const created = (type: string) => ({
     objectType: type,
     operation: "create",
@@ -456,7 +471,9 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
   function promotionStore(state: PromotionState): void {
     readPersonAssertion.mockImplementation(() => state.personAsserted);
     listEventsForObject.mockImplementation(() =>
-      state === INTERRUPTED ? [RETYPED, created(MARKDOWN)] : [created(OWN_TYPE)],
+      state === INTERRUPTED || state === COMPLETE
+        ? [RETYPED, created(MARKDOWN)]
+        : [created(OWN_TYPE)],
     );
     promoteMatchedArtifactType.mockImplementation(async (input: { confirmed?: boolean }) => {
       if (
@@ -582,6 +599,7 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
         suggestions: reading.suggestions.map((x) => x.extension),
       },
       offer,
+      complete: true,
     });
     return row;
   }
@@ -685,7 +703,8 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
   });
 
   it("A13: the presented base meaning refused by the access gate's matcher arm is neither offered nor confirmable", async () => {
-    presentedBaseRow(undefined, { promotion: COMPLETE });
+    // NATIVE: the store WOULD append, so the refusal is the action's own.
+    presentedBaseRow(undefined, { promotion: NATIVE });
     isArtifactExtensionWriteAllowed.mockImplementation(async (extension: string) => extension !== PACK);
     const { listInstalledTypesForArtifact, assertUploadMeaning } = await import(
       "../upload-typing-actions"
@@ -704,6 +723,7 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     expect(confirmed).toMatchObject({ ok: false, reason: "invalid-type" });
     expect(assertSemanticType).not.toHaveBeenCalled();
     expect(appends).toEqual([]);
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
     // The confirmation asked the same gate for the pack, and refused before any
     // presentation reading.
     expect(gateCallsFor(PACK)).toEqual([
@@ -876,6 +896,7 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
               suggestions: [POST],
             },
             offer: { preselect: null, suggestions: [{ extension: POST, confidence: 0.4 }] },
+            complete: true,
           }
         : chip,
     );
@@ -967,6 +988,171 @@ describe("cinatra#3319 — listInstalledTypesForArtifact answers the derived mea
     expect(assertSemanticType).toHaveBeenCalledTimes(1);
     expect(appends).toEqual([]);
     expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+  });
+
+  // THE CLASS FOLD (round 11). Every case runs on the NATIVE row, where the
+  // store double WOULD append a promotion revision: a failed read (F*) or a
+  // denied verification (D*) on the presented-base path refuses the
+  // confirmation, and nothing is written or appended.
+  const REFUSED = {
+    ok: false,
+    reason: "invalid-type",
+    message:
+      "That type is not an installed type that accepts this file — refresh and pick again.",
+  };
+  function expectNothingWritten(): void {
+    expect(assertSemanticType).not.toHaveBeenCalled();
+    expect(promoteMatchedArtifactType).not.toHaveBeenCalled();
+    expect(appends).toEqual([]);
+  }
+  async function confirmPack(): Promise<unknown> {
+    const { assertUploadMeaning } = await import("../upload-typing-actions");
+    return assertUploadMeaning({ artifactId: "a-3319", extension: PACK });
+  }
+  /** A COMPLETE reading of the row that does not present the pack: its draft is
+   *  not live for this org (the install gate denied it), so it is neither the
+   *  pre-selection nor a suggestion. */
+  const NOT_PRESENTED = {
+    presentation: {
+      identity: { kind: "extension", extension: POST },
+      tier: "classic",
+      suggestions: [POST],
+    },
+    offer: { preselect: null, suggestions: [{ extension: POST, confidence: 0.4 }] },
+    complete: true,
+  };
+
+  it("F1: the definer read of the presented-base check fails: refused, even when a later read recovers", async () => {
+    presentedBaseRow();
+    const spy = vi
+      .spyOn(objectTypeRegistry, "getRegisteringPackage")
+      .mockImplementationOnce(() => {
+        throw new Error("registry read unavailable");
+      });
+    try {
+      expect(await confirmPack()).toEqual(REFUSED);
+    } finally {
+      spy.mockRestore();
+    }
+    expectNothingWritten();
+  });
+
+  it("D1: the definer check denies the pack and a later read admits it: refused, nothing appended", async () => {
+    presentedBaseRow();
+    const spy = vi
+      .spyOn(objectTypeRegistry, "getRegisteringPackage")
+      .mockImplementationOnce(() => "@acme/other-pack");
+    try {
+      expect(await confirmPack()).toEqual(REFUSED);
+    } finally {
+      spy.mockRestore();
+    }
+    expectNothingWritten();
+  });
+
+  it("F2: the MIME list read of the presented-base check fails: refused", async () => {
+    presentedBaseRow();
+    listInstalledMeaningTypesAcceptingMime.mockImplementation(
+      (_mime: string, o?: { excludeTypeId?: string }) => {
+        if (o?.excludeTypeId === OWN_TYPE) return TYPES;
+        throw new Error("type list unavailable");
+      },
+    );
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+  });
+
+  it("D2: no installed type of the pack accepts the file any more: refused, nothing appended", async () => {
+    presentedBaseRow();
+    listInstalledMeaningTypesAcceptingMime.mockImplementation(() => TYPES);
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+  });
+
+  it("F3: the access gate's read fails for the pack: refused", async () => {
+    presentedBaseRow();
+    isArtifactExtensionWriteAllowed.mockImplementation(async (extension: string) => {
+      if (extension === PACK) throw new Error("install status unavailable");
+      return true;
+    });
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+    expect(hostReads()).toBe(0);
+  });
+
+  it("F4: the presentation reading throws (schema or module failure): refused", async () => {
+    presentedBaseRow();
+    host.resolveArtifactPresentationReading.mockImplementation(() => {
+      throw new Error("schema init failed");
+    });
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+    expect(host.resolveArtifactPresentationReading).toHaveBeenCalledTimes(1);
+  });
+
+  it("F5: a reading that degraded a failed assertion or install read to an empty offer is refused, never read as 'not presented'", async () => {
+    presentedBaseRow();
+    host.resolveArtifactPresentationReading.mockReturnValue({
+      presentation: {
+        identity: { kind: "base", typeId: OWN_TYPE },
+        tier: "claim-backed",
+        suggestions: [],
+      },
+      offer: { preselect: null, suggestions: [] },
+      complete: false,
+    });
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+  });
+
+  it("D5: a complete reading that does not present the pack (its draft not live here) does not converge on a row never promoted", async () => {
+    presentedBaseRow();
+    host.resolveArtifactPresentationReading.mockReturnValue(NOT_PRESENTED);
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+    // The row's own history was asked, and holds no retype into the type.
+    expect(listEventsForObject).toHaveBeenCalledWith("a-3319", { orgId: "org-1", limit: 500 });
+  });
+
+  it("F6: with no assertion of the person, a failed history read is refused, never converged", async () => {
+    presentedBaseRow();
+    host.resolveArtifactPresentationReading.mockReturnValue(NOT_PRESENTED);
+    listEventsForObject.mockImplementation(() => {
+      throw new Error("history unavailable");
+    });
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+  });
+
+  it("D6: with no assertion of the person, a history read full without the retype is refused", async () => {
+    presentedBaseRow();
+    host.resolveArtifactPresentationReading.mockReturnValue(NOT_PRESENTED);
+    const unrelatedEdit = {
+      objectType: OWN_TYPE,
+      operation: "update",
+      beforeSnapshot: { payload: { type: OWN_TYPE } },
+      afterSnapshot: { payload: { type: OWN_TYPE } },
+    };
+    listEventsForObject.mockImplementation(() => Array.from({ length: 500 }, () => unrelatedEdit));
+    expect(await confirmPack()).toEqual(REFUSED);
+    expectNothingWritten();
+  });
+
+  it("G3: a retype on record still converges without the person's own assertion (green at base)", async () => {
+    presentedBaseRow();
+    host.resolveArtifactPresentationReading.mockReturnValue(NOT_PRESENTED);
+    listEventsForObject.mockImplementation(() => [RETYPED, created(MARKDOWN)]);
+    expect(await confirmPack()).toEqual({
+      ok: true,
+      promotion: {
+        promoted: true,
+        toType: OWN_TYPE,
+        representationRevisionId: "rep_converged",
+        revision: 2,
+      },
+    });
+    expect(appends).toHaveLength(1);
+    expect(assertSemanticType).not.toHaveBeenCalled();
   });
 
   it("A8: a FAILED warm is not retried within the request, so the list and the offer agree (green at base)", async () => {

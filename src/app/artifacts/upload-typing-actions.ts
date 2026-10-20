@@ -159,17 +159,40 @@ async function presentedBaseCandidates(input: {
   actor: ActorContext;
   orgId: string;
 }): Promise<InstalledMeaningType[]> {
+  return (await screenPresentedBase(input, extensionDefinesType)).accessible;
+}
+
+/**
+ * The checks of {@link presentedBaseCandidates}, with each stage's answer kept:
+ * `admitted` are the definers' installed types that accept the MIME, and
+ * `accessible` are those this actor passes the access gate for. The list reads
+ * the definer leniently (a failed read is "not a definer"); the confirmation
+ * passes a definer read that throws, so a failed read is never an answer.
+ */
+async function screenPresentedBase(
+  input: {
+    extensions: readonly string[];
+    mime: string;
+    objectType: string | null | undefined;
+    actor: ActorContext;
+    orgId: string;
+  },
+  definesType: (extension: string, objectType: string) => Promise<boolean>,
+): Promise<{ admitted: InstalledMeaningType[]; accessible: InstalledMeaningType[] }> {
   const { objectType } = input;
-  if (!objectType || input.extensions.length === 0) return [];
+  if (!objectType || input.extensions.length === 0) return { admitted: [], accessible: [] };
   const definers = new Set<string>();
   for (const extension of new Set(input.extensions)) {
-    if (await extensionDefinesType(extension, objectType)) definers.add(extension);
+    if (await definesType(extension, objectType)) definers.add(extension);
   }
-  if (definers.size === 0) return [];
+  if (definers.size === 0) return { admitted: [], accessible: [] };
   const admitted = listInstalledMeaningTypesAcceptingMime(input.mime).filter((t) =>
     definers.has(t.extension),
   );
-  return filterCandidatesByActorAccess(admitted, input.actor, input.orgId);
+  return {
+    admitted,
+    accessible: await filterCandidatesByActorAccess(admitted, input.actor, input.orgId),
+  };
 }
 
 /** The offered types with the presented base meaning added, in the picker's
@@ -194,7 +217,17 @@ function withPresentedBase(
  * first; only then is the row's ONE presentation reading taken (the same
  * `resolveArtifactPresentationReading` the list's deferred reading uses), and
  * its pre-selection or one of its suggestions must name exactly this extension.
- * Any failure answers false, so the base road decides.
+ *
+ *   "presented" — the reading presents exactly this extension.
+ *   "absent"    — every read answered, and the extension is not a presented
+ *                 base meaning: it defines no such type, no installed type of it
+ *                 accepts the file, or the complete reading does not present it.
+ *                 The converging road decides, and it needs the row's own proof.
+ *   "refused"   — a read failed (thrown, or a reading that degraded a failed
+ *                 read to an empty offer), or the access gate denied this actor
+ *                 the extension. The confirmation is refused: a failed or denied
+ *                 verification must never fall through to the converging road,
+ *                 whose store can append a revision on the matcher alone.
  */
 async function confirmsPresentedBaseMeaning(input: {
   artifactId: string;
@@ -203,32 +236,46 @@ async function confirmsPresentedBaseMeaning(input: {
   objectType: string;
   actor: ActorContext;
   orgId: string;
-}): Promise<boolean> {
+}): Promise<"presented" | "absent" | "refused"> {
   try {
-    const admitted = await presentedBaseCandidates({
-      extensions: [input.extension],
-      mime: input.mime,
-      objectType: input.objectType,
-      actor: input.actor,
-      orgId: input.orgId,
-    });
-    if (admitted.length === 0) return false;
+    const { admitted, accessible } = await screenPresentedBase(
+      {
+        extensions: [input.extension],
+        mime: input.mime,
+        objectType: input.objectType,
+        actor: input.actor,
+        orgId: input.orgId,
+      },
+      readExtensionDefinesType,
+    );
+    if (admitted.length === 0) return "absent";
+    if (accessible.length === 0) return "refused";
     const { resolveArtifactPresentationReading } = await import(
       "@/lib/objects/presentation-identity"
     );
-    const { offer } = resolveArtifactPresentationReading({
+    const reading = resolveArtifactPresentationReading({
       orgId: input.orgId,
       artifactId: input.artifactId,
       baseType: input.objectType,
     });
-    return (
+    if (reading.complete !== true) return "refused";
+    const { offer } = reading;
+    const presents =
       offer.preselect === input.extension ||
-      offer.suggestions.some((s) => s.extension === input.extension)
-    );
+      offer.suggestions.some((s) => s.extension === input.extension);
+    return presents ? "presented" : "absent";
   } catch {
-    return false;
+    return "refused";
   }
 }
+
+/** The one refusal a confirmation answers when its type cannot be accepted. */
+const INVALID_TYPE_REFUSAL = {
+  ok: false,
+  reason: "invalid-type",
+  message:
+    "That type is not an installed type that accepts this file — refresh and pick again.",
+} as const;
 
 export type ArtifactMarketplacePack = {
   packageName: string;
@@ -428,17 +475,20 @@ export async function assertUploadMeaning(input: {
     // promotion (which wrote the person's assertion before it promoted) is
     // therefore never presented. The converging road below would only append a
     // revision for a promotion that never happened.
-    if (
-      objectType &&
-      (await confirmsPresentedBaseMeaning({
-        artifactId: input.artifactId,
-        extension: input.extension,
-        mime,
-        objectType,
-        actor,
-        orgId,
-      }))
-    ) {
+    const presentedBase = objectType
+      ? await confirmsPresentedBaseMeaning({
+          artifactId: input.artifactId,
+          extension: input.extension,
+          mime,
+          objectType,
+          actor,
+          orgId,
+        })
+      : "absent";
+    // A failed or denied verification refuses the confirmation here: it never
+    // reaches the converging road below.
+    if (presentedBase === "refused") return { ...INVALID_TYPE_REFUSAL };
+    if (presentedBase === "presented") {
       const presented = assertSemanticType({
         orgId,
         artifactId: input.artifactId,
@@ -478,7 +528,10 @@ export async function assertUploadMeaning(input: {
       // person's road and append a promotion revision for a promotion that never
       // happened. An interrupted promotion holds the same assertion, so the
       // assertion alone cannot tell them apart: the row's own history can, because
-      // only a promotion's retype moved the row INTO this type.
+      // only a promotion's retype moved the row INTO this type. Without that
+      // retype on record the road is never taken, whether or not an assertion
+      // stands: on a row that was never promoted the store could append on the
+      // matcher's association alone.
       const standing = await readRowOwnConfirmation({
         orgId,
         artifactId: input.artifactId,
@@ -490,14 +543,7 @@ export async function assertUploadMeaning(input: {
         revalidatePath("/artifacts");
         return { ok: true };
       }
-      if (standing === "unproven") {
-        return {
-          ok: false,
-          reason: "invalid-type",
-          message:
-            "That type is not an installed type that accepts this file — refresh and pick again.",
-        };
-      }
+      if (standing === "unproven") return { ...INVALID_TYPE_REFUSAL };
       const completed = await promoteOnConfirmedMeaning({
         orgId,
         artifactId: input.artifactId,
@@ -510,12 +556,7 @@ export async function assertUploadMeaning(input: {
         return { ok: true, promotion: completed };
       }
     }
-    return {
-      ok: false,
-      reason: "invalid-type",
-      message:
-        "That type is not an installed type that accepts this file — refresh and pick again.",
-    };
+    return { ...INVALID_TYPE_REFUSAL };
   }
   const result = assertSemanticType({
     orgId,
@@ -566,11 +607,17 @@ export async function assertUploadMeaning(input: {
  */
 async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    return await readExtensionDefinesType(extension, objectType);
   } catch {
     return false;
   }
+}
+
+/** {@link extensionDefinesType} without the fallback: a failed read throws, so
+ *  the confirmation can refuse it instead of reading it as "not a definer". */
+async function readExtensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+  const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+  return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
 }
 
 /** The most change events the row-own check reads (the history reader's cap). */
@@ -584,16 +631,18 @@ const ROW_HISTORY_READ_LIMIT = 500;
  *                 the row's history holds no event that retyped it INTO its
  *                 current type. The row never was a promotion, so there is
  *                 nothing to complete: the meaning is already recorded.
- *   "unproven"  — the assertion could not be read, or it stands but the history
- *                 could not be read, or the read was full without that event.
- *                 Whether a promotion was interrupted cannot be told, so nothing
- *                 is written. A failed assertion read must not converge: the
- *                 store reads the assertion again on its own, and a read that
- *                 recovers there would append the revision this check exists to
- *                 refuse.
- *   "converge"  — the base road decides: no such assertion stands, or a retype
- *                 into the current type is on record (the row an interrupted
- *                 promotion leaves).
+ *   "unproven"  — the assertion could not be read, or the history could not be
+ *                 read, or the read was full without that event, or no such
+ *                 assertion stands and no retype is on record. Whether a
+ *                 promotion was interrupted cannot be told, or the row never was
+ *                 one, so nothing is written. A failed assertion read must not
+ *                 converge: the store reads the assertion again on its own, and a
+ *                 read that recovers there would append the revision this check
+ *                 exists to refuse. A missing assertion must not converge on its
+ *                 own either: the store would then append on the matcher's
+ *                 association alone, on a row that was never promoted.
+ *   "converge"  — a retype into the current type is on record (the row an
+ *                 interrupted promotion leaves): the base road decides.
  *
  * The retype is the one write a promotion makes through the canonical
  * history-aware writer, which records its change event in the same statement
@@ -619,7 +668,6 @@ async function readRowOwnConfirmation(input: {
   } catch {
     return "unproven";
   }
-  if (!asserted) return "converge";
   try {
     const { listEventsForObject } = await import("@/lib/object-history/eligibility");
     const events = listEventsForObject(input.artifactId, {
@@ -627,7 +675,8 @@ async function readRowOwnConfirmation(input: {
       limit: ROW_HISTORY_READ_LIMIT,
     });
     if (events.some((event) => retypedInto(event, input.objectType))) return "converge";
-    return events.length >= ROW_HISTORY_READ_LIMIT ? "unproven" : "recorded";
+    if (events.length >= ROW_HISTORY_READ_LIMIT) return "unproven";
+    return asserted ? "recorded" : "unproven";
   } catch {
     return "unproven";
   }
