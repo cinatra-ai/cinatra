@@ -19,6 +19,9 @@
 // scripts/audit/lib/anchor-contract.mjs — the same third digest input the
 // acceptance gate recomputes, so a requirement that changed is a requirement
 // this check re-reads.
+// Eleven decided passive capture markers are accounted for separately: they
+// stay capture requirements, but make no claim about a drawn part. Every owner
+// anchor and every other capture selector still goes through the drawing check.
 //
 // WHERE THE DRAWINGS COME FROM. A checked-out copy named by
 // DESIGN_DRAWINGS_DIR, or the authenticated reader design-pin-freshness uses,
@@ -58,6 +61,8 @@
 //
 // WHAT IT PRINTS. Kind names, origins, the selectors it was given, and which
 // GOVERNED DRAWING (by its position in the pin's own set) resolved each one.
+// Passive capture markers are explicitly reported as capture requirements,
+// never as resolved drawing anchors.
 // No drawing text, no drawing path, no revision: the report is about this
 // repository's own recorded claims, and the drawings are not public.
 //
@@ -73,7 +78,7 @@
 //   node scripts/ci/design-anchor-resolution.mjs --print-unresolved
 //
 // Exit codes:
-//   0  every recorded anchor resolves, or the finding only warns for this event
+//   0  every drawn anchor resolves, or the finding only warns for this event
 //   1  a recorded anchor resolves in no governed drawing, under a red event
 //   2  the gate could not run honestly (no drawings, a missing drawing, a
 //      refused selector form, an unreadable pin or contract)
@@ -290,6 +295,56 @@ export function resolvesIn(index, selector) {
 // The recorded anchors
 // ---------------------------------------------------------------------------
 
+// These eleven selectors identify where a capture reads, not a drawn part.
+// Their capture requirements remain in the recorder and in the anchor digest.
+// A visible card, field or control is never classified by a prefix: only the
+// decided marker forms, originating in the capture requirements, belong here.
+const PASSIVE_CAPTURE_HOOKS = new Map([
+  [".cw-frame", "the widget's host frame"],
+  ["[data-conversation-list]", "the transcript container"],
+  ['[data-embed-assistant][data-phase="active"]', "the widget's active root"],
+  ['[data-lifecycle-card-host="chat_thread"]', "the card's chat host"],
+  ['[data-lifecycle-card-host="page_gate_region"]', "the card's review-page host"],
+  ['[data-lifecycle-card-host="run_card"]', "the card's run host"],
+  ['[data-lifecycle-card-host="site_widget"]', "the card's widget host"],
+  ["[data-lifecycle-card-state]", "the card's state marker"],
+  ['[data-lifecycle-card="agent_hitl_screen"]', "the input card's kind marker"],
+  ['[data-lifecycle-card="artifact_review_gate"]', "the review card's kind marker"],
+  ['[data-lifecycle-card="recommendation_hold"]', "the skills card's kind marker"],
+]);
+
+/** Read the existing serialized selector/scope/expect/within/tier format.
+ * Spaces inside quoted attribute literals belong to the selector, not to the
+ * following fields. An empty within value is the canonical double space.
+ * Malformed metadata refuses rather than silently losing a capture obligation.
+ */
+function captureAssertionOf(entry) {
+  const refuse = () => {
+    throw new UnsupportedSelectorError("a serialized capture requirement is malformed");
+  };
+  if (typeof entry !== "string" || /[\u0000-\u001f\u007f]/.test(entry)) refuse();
+  let quote = null;
+  let boundary = -1;
+  for (let i = 0; i < entry.length; i += 1) {
+    const char = entry[i];
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === " ") {
+      boundary = i;
+      break;
+    }
+  }
+  if (quote !== null || boundary <= 0) refuse();
+  const selector = entry.slice(0, boundary);
+  const tail = /^(frame|root|page) (present|absent) (.*) (canonical|audit)$/.exec(entry.slice(boundary + 1));
+  if (tail === null) refuse();
+  const [, scope, expect, within, tier] = tail;
+  if (within !== "") parseAnchorSelector(within);
+  return { selector, scope, expect, within, tier };
+}
+
 /**
  * Every anchor this repository RECORDS: the owner anchors the contract carries,
  * and the capture requirements recomputed live from the recorder. The capture
@@ -306,17 +361,23 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
     }
   }
   if (captureAnchors) {
-    const seen = new Set();
+    const bySelector = new Map();
     for (const [host, cells] of Object.entries(captureAnchors)) {
       for (const [cell, entries] of Object.entries(cells)) {
         for (const entry of entries) {
-          if (typeof entry !== "string" || entry.startsWith("composition-only")) continue;
-          const selector = entry.split(" ")[0];
+          if (typeof entry === "string" && entry.startsWith("composition-only ") && entry.length > "composition-only ".length) continue;
+          const { selector, ...assertion } = captureAssertionOf(entry);
           const kind = cell === "*" ? host : cell.split("|")[0];
           const key = `${kind}::${selector}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          anchors.push({ kind, origin: "capture", selector });
+          let anchor = bySelector.get(key);
+          if (!anchor) {
+            anchor = { kind, origin: "capture", selector, captureAssertions: [] };
+            bySelector.set(key, anchor);
+            anchors.push(anchor);
+          }
+          // Keep every observation: a later positive claim cannot disappear
+          // behind an earlier absence, or behind another host/state's claim.
+          anchor.captureAssertions.push({ host, cell, ...assertion });
         }
       }
     }
@@ -329,7 +390,10 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve every anchor against the drawings the pin governs. `governed` is in
+ * Resolve every drawn anchor against the drawings the pin governs. Passive
+ * capture markers are accounted for separately; they are not resolved drawing
+ * anchors and are never removed from the recorder's capture requirements.
+ * `governed` is in
  * the pin's own path order — the reported position is that order's, never the
  * path itself. `others` are drawings the pin does NOT govern: an anchor found
  * only there is UNRESOLVED, and the report says so in those words, because that
@@ -344,7 +408,13 @@ export function checkAnchorResolution({ pin, anchors, governed, others = [], sib
   const governedIndexes = governed.map((d) => drawingIndexOf(d.text));
   const otherIndexes = others.map((d) => drawingIndexOf(d.text));
   const results = [];
+  const captureHooks = [];
   for (const anchor of anchors) {
+    const capturePurpose = anchor.origin === "capture" ? PASSIVE_CAPTURE_HOOKS.get(anchor.selector) : null;
+    if (capturePurpose) {
+      captureHooks.push({ ...anchor, capturePurpose });
+      continue;
+    }
     try {
       parseAnchorSelector(anchor.selector);
     } catch (err) {
@@ -373,6 +443,7 @@ export function checkAnchorResolution({ pin, anchors, governed, others = [], sib
     governedCount: governed.length,
     siblingsKnown,
     results,
+    captureHooks,
     unresolved: results.filter((r) => r.status === "unresolved"),
     refused: results.filter((r) => r.status === "refused"),
   };
@@ -380,7 +451,10 @@ export function checkAnchorResolution({ pin, anchors, governed, others = [], sib
 
 /** The report. Kinds, origins, selectors, positions — no drawing text. */
 export function formatReport(report) {
-  const lines = [`pin "${report.pinId}" — ${report.results.length} recorded anchor(s)`];
+  const captureHooks = report.captureHooks ?? [];
+  const lines = [
+    `pin "${report.pinId}" — ${report.results.length} drawing anchor(s); ${captureHooks.length} capture requirement(s)`,
+  ];
   const byKind = new Map();
   for (const r of report.results) {
     if (!byKind.has(r.kind)) byKind.set(r.kind, []);
@@ -402,6 +476,9 @@ export function formatReport(report) {
                 : "UNRESOLVED — no governed drawing draws it";
       lines.push(`    ${r.selector}  [${r.origin}]  ${where}`);
     }
+  }
+  for (const hook of captureHooks) {
+    lines.push(`  ${hook.kind}: ${hook.selector}  [capture]  capture requirement — not a drawn part (${hook.capturePurpose})`);
   }
   return lines.join("\n");
 }
@@ -623,7 +700,7 @@ export async function runCli({
   }
 
   if (merged.unresolved.length === 0) {
-    log("ok: every recorded anchor resolves in a drawing its pin governs.");
+    log("ok: every drawing anchor resolves in a drawing its pin governs; passive capture requirements are accounted for separately.");
     return 0;
   }
   if (verdict.warn) {
