@@ -321,13 +321,21 @@ jobs:
           # template's own rendering again, so the three now compare the
           # template this job builds. A future drift of that kind belongs in
           # the fixture as well, never in an assertion or a deselection.
+          #
+          # `test_bridge_declared_failure_no_retry` joins them (cinatra#4220).
+          # It drives the pinned wayflowcore's REAL ApiCallStep, patched by the
+          # loader, with only the network replaced, and proves a model step
+          # that answered a failure is requested once instead of WayFlow's
+          # three tries. Only the pin's own retry loop can show that, so it
+          # runs here; it sets its own environment and opens no connection.
           docker exec -w /app wayflow-mount-guard python -c 'import wayflowcore'
           docker exec -e CINATRA_AGENTS_DIR=/agents wayflow-mount-guard \
             python -m pytest -q \
             tests/test_input_message_gate_reconcile.py \
             tests/test_repo_agents_load.py \
             tests/test_gate_mount_both_paths.py \
-            tests/test_context_subflow_injection.py
+            tests/test_context_subflow_injection.py \
+            tests/test_bridge_declared_failure_no_retry.py
 
       - name: Runtime logs
         if: always()

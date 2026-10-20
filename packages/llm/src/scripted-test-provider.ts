@@ -1133,7 +1133,9 @@ const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
  * SHAPE the caller declared or the run fails one frame later on a parse error
  * instead of a 503. Every string leaf carries `UAT_SENTINEL`, so a scripted
  * value is recognisable wherever it surfaces and can never be mistaken for a
- * model's own words.
+ * model's own words. ONE exception: the `code` of a top-level `error` output is
+ * the empty string, because a non-empty one is a step's failure answer and the
+ * bridge ends the step failed on it.
  *
  * This is NOT a JSON-Schema implementation, and callers must not read it as
  * one. EXACTLY these keywords are honored, checked IN THIS ORDER — the first
@@ -1208,6 +1210,15 @@ function scriptedValueForSchema(
       const out: Record<string, unknown> = {};
       for (const name of names) {
         out[name] = scriptedValueForSchema(properties[name], name, depth + 1);
+      }
+      // A step's top-level `error` output is how it answers a FAILURE: the
+      // bridge ends the step failed on a non-empty `error.code` the step does
+      // not list as completed (`src/app/api/llm-bridge/route.ts`,
+      // readDeclaredStepFailure). A scripted step stands in for a SUCCESSFUL
+      // model answer, so its error code is the empty string — never the
+      // sentinel, which would fail every scripted run of such a step.
+      if (depth === 1 && propertyName === "error" && typeof out.code === "string") {
+        out.code = "";
       }
       return out;
     }
