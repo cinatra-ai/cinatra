@@ -11,6 +11,8 @@
  *
  * Only that one leaf changes: the error's other members, an `error` member
  * nested below the top level, and a `code` outside `error` keep the sentinel.
+ * "Top-level" is logical: a `oneOf` / `anyOf` / `allOf` wrapper around the root
+ * or around the `error` member adds no level.
  */
 import { describe, it, expect } from "vitest";
 
@@ -70,5 +72,50 @@ describe("runScriptedBridgeCompletion and a step's error output", () => {
     expect(String(out.code)).toContain(UAT_SENTINEL);
     const nested = (out.page as { error: { code: unknown } }).error;
     expect(String(nested.code)).toContain(UAT_SENTINEL);
+  });
+
+  // A union wrapper adds no level to the answer: an `error` member of a root
+  // union, or an `error` object wrapped in a union, is still top-level.
+  it("answers an empty code in an error output of a root union", () => {
+    for (const union of ["oneOf", "anyOf", "allOf"]) {
+      const out = answer({
+        [union]: [
+          {
+            type: "object",
+            required: ["title", "error"],
+            properties: { title: { type: "string" }, error: ERROR_OUTPUT },
+          },
+        ],
+      });
+      expect(out.error).toEqual({ code: "", message: `${UAT_SENTINEL}: scripted message` });
+      expect(String(out.title)).toContain(UAT_SENTINEL);
+    }
+  });
+
+  it("answers an empty code in a union-wrapped error object, and keeps the sentinel below it", () => {
+    const out = answer({
+      anyOf: [
+        {
+          type: "object",
+          required: ["error", "page", "pages"],
+          properties: {
+            error: { oneOf: [{ allOf: [ERROR_OUTPUT] }, { type: "null" }] },
+            page: {
+              anyOf: [{ type: "object", required: ["error"], properties: { error: ERROR_OUTPUT } }],
+            },
+            pages: {
+              type: "array",
+              items: { type: "object", required: ["error"], properties: { error: ERROR_OUTPUT } },
+            },
+          },
+        },
+      ],
+    });
+    expect(out.error).toEqual({ code: "", message: `${UAT_SENTINEL}: scripted message` });
+    // A genuinely nested `error` keeps the sentinel, union-wrapped or not.
+    const nested = (out.page as { error: { code: unknown } }).error;
+    expect(String(nested.code)).toContain(UAT_SENTINEL);
+    const item = (out.pages as Array<{ error: { code: unknown } }>)[0].error;
+    expect(String(item.code)).toContain(UAT_SENTINEL);
   });
 });

@@ -1135,7 +1135,10 @@ const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
  * value is recognisable wherever it surfaces and can never be mistaken for a
  * model's own words. ONE exception: the `code` of a top-level `error` output is
  * the empty string, because a non-empty one is a step's failure answer and the
- * bridge ends the step failed on it.
+ * bridge ends the step failed on it. "Top-level" is the answer's LOGICAL shape:
+ * a `oneOf` / `anyOf` / `allOf` wrapper (around the root or around the `error`
+ * member) adds no object level, so `objectDepth` counts only the objects and
+ * arrays entered, apart from the recursion `depth` the cap reads.
  *
  * This is NOT a JSON-Schema implementation, and callers must not read it as
  * one. EXACTLY these keywords are honored, checked IN THIS ORDER — the first
@@ -1171,6 +1174,7 @@ function scriptedValueForSchema(
   schema: unknown,
   propertyName: string,
   depth: number,
+  objectDepth: number,
 ): unknown {
   const node = (schema ?? {}) as Record<string, unknown>;
   const scriptedString = `${UAT_SENTINEL}: scripted ${propertyName}`;
@@ -1189,7 +1193,9 @@ function scriptedValueForSchema(
   if (union) {
     const members = node[union] as unknown[];
     if (members.length > 0) {
-      return scriptedValueForSchema(members[0], propertyName, depth + 1);
+      // A wrapper is not a level of the answer: the member stands where the
+      // union stands, so it keeps the union's object depth.
+      return scriptedValueForSchema(members[0], propertyName, depth + 1, objectDepth);
     }
   }
 
@@ -1209,7 +1215,7 @@ function scriptedValueForSchema(
       const names = required ?? Object.keys(properties);
       const out: Record<string, unknown> = {};
       for (const name of names) {
-        out[name] = scriptedValueForSchema(properties[name], name, depth + 1);
+        out[name] = scriptedValueForSchema(properties[name], name, depth + 1, objectDepth + 1);
       }
       // A step's top-level `error` output is how it answers a FAILURE: the
       // bridge ends the step failed on a non-empty `error.code` the step does
@@ -1217,7 +1223,9 @@ function scriptedValueForSchema(
       // readDeclaredStepFailure). A scripted step stands in for a SUCCESSFUL
       // model answer, so its error code is the empty string — never the
       // sentinel, which would fail every scripted run of such a step.
-      if (depth === 1 && propertyName === "error" && typeof out.code === "string") {
+      // `objectDepth === 1` is a member of the root object, whatever union
+      // wrappers stand around the root or around the member.
+      if (objectDepth === 1 && propertyName === "error" && typeof out.code === "string") {
         out.code = "";
       }
       return out;
@@ -1226,7 +1234,9 @@ function scriptedValueForSchema(
       // ONE element, ALWAYS: enough for a consumer that iterates, small enough
       // that a scripted payload never grows unbounded — and `minItems` is not
       // consulted, so a schema demanding more is not satisfied.
-      return [scriptedValueForSchema(node.items, `${propertyName} item`, depth + 1)];
+      return [
+        scriptedValueForSchema(node.items, `${propertyName} item`, depth + 1, objectDepth + 1),
+      ];
     case "number":
     case "integer":
       return 0;
@@ -1276,7 +1286,7 @@ export function runScriptedBridgeCompletion(
   }
   const instructions = (input.user ?? "").slice(0, 120);
   const text = input.outputSchema
-    ? JSON.stringify(scriptedValueForSchema(input.outputSchema, "output", 0))
+    ? JSON.stringify(scriptedValueForSchema(input.outputSchema, "output", 0, 0))
     : `${UAT_SENTINEL}: deterministic bridge reply. You said: "${instructions}".`;
   return {
     text,
