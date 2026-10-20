@@ -73,8 +73,11 @@ export async function POST(request: Request): Promise<Response> {
 
   let body: RenewBody;
   try {
-    const parsed = await request.json();
-    if (!parsed || typeof parsed !== "object") {
+    const parsed: unknown = await request.json();
+    // A plain JSON object only. An array is an object to `typeof` and would
+    // otherwise pass here and spend the shared limiter's quota below before the
+    // binding refused it; every malformed body is refused BEFORE the limiter.
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       emitWidgetAuthAudit("renew_failure", { ip, ua, reason: "invalid_body" });
       return NextResponse.json(INVALID_GRANT, { status: 400 });
     }

@@ -216,6 +216,49 @@ describe("the renewal's rate limit (cinatra#4217)", () => {
   });
 });
 
+// cinatra#4217 — a malformed body is refused BEFORE the limiter.
+// RED BEFORE THE CURE: the object guard read `typeof parsed !== "object"`, and a
+// JSON array is an object to `typeof`, so `[]` passed it, spent the shared
+// limiter's quota and went on to the binding.
+describe("a malformed body (cinatra#4217)", () => {
+  function rawRequest(raw: string) {
+    return new Request(`${SELF}${RENEW_PATH}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: SELF,
+        "Sec-Fetch-Site": "same-origin",
+        "X-Cinatra-Widget-User-Token": CURRENT,
+      },
+      body: raw,
+    });
+  }
+
+  it.each([
+    ["an empty JSON array", "[]"],
+    ["an array that holds the selectors", JSON.stringify([SELECTORS])],
+    ["a JSON string", JSON.stringify("wordpress")],
+    ["a JSON number", "42"],
+    ["JSON null", "null"],
+    ["text that is not JSON", "not json"],
+  ])("%s is refused with 400 and spends no limiter quota", async (label, raw) => {
+    const res = await frameRenew(rawRequest(raw));
+    expect(res.status, label).toBe(400);
+    expect(await res.json(), label).toEqual({ error: "invalid_grant" });
+    expect(allowConnectTokenRequest, `${label}: the limiter is not charged`).not.toHaveBeenCalled();
+    expect(deriveFrameBinding, `${label}: the binding is not derived`).not.toHaveBeenCalled();
+    expect(renewUserWidgetToken, `${label}: nothing is renewed`).not.toHaveBeenCalled();
+    expect(mintWidgetStreamToken, `${label}: nothing is minted`).not.toHaveBeenCalled();
+    expect(
+      emitWidgetAuthAudit.mock.calls.some(
+        ([event, fields]) =>
+          event === "renew_failure" && (fields as { reason?: string }).reason === "invalid_body",
+      ),
+      `${label}: the refusal is audited as an invalid body`,
+    ).toBe(true);
+  });
+});
+
 // cinatra#4217 r4 — forensics. RED BEFORE r4: renew_success named no person, so
 // an investigation could not follow one sign-in's renewals in the audit trail.
 describe("the renewal's audit (cinatra#4217)", () => {
