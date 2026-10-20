@@ -1117,7 +1117,7 @@ export function runRecommendationOfferedSetSchemaQueries(schemaName: string): Qu
   ];
 }
 
-/** Bootstrap twin of reserved core__0112; no data backfill grants authority. */
+/** Bootstrap twin of reserved core__0115; no data backfill grants authority. */
 export function outwardActionPolicySchemaQueries(schemaName: string): QueryInput[] {
   const q = schemaName.replaceAll('"', '""');
   return [{ text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_outward_action_policies" (

@@ -12,9 +12,9 @@ import { describe, expect, it } from "vitest";
 import { getTableConfig } from "drizzle-orm/pg-core";
 
 import { agentRunOutwardActionPolicies, artifactReviewActionConsumptions } from "../schema";
-import { down, outwardActionPolicyDdlSql, up } from "../../../../migrations/core/core__0112_agent-run-outward-action-policy.mjs";
+import { down, outwardActionPolicyDdlSql, up } from "../../../../migrations/core/core__0115_agent-run-outward-action-policy.mjs";
 
-const core0112 = { outwardActionPolicyDdlSql, up, down };
+const core0115 = { outwardActionPolicyDdlSql, up, down };
 
 function columnsOf(table: Parameters<typeof getTableConfig>[0]) {
   const config = getTableConfig(table);
@@ -29,7 +29,7 @@ function columnsOf(table: Parameters<typeof getTableConfig>[0]) {
 
 /** The column lines of one `CREATE TABLE IF NOT EXISTS <name> (...)` of the migration. */
 function ddlColumns(name: string): string[] {
-  const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\(([^;]*?)\\n\\s*\\);`).exec(core0112.outwardActionPolicyDdlSql);
+  const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\(([^;]*?)\\n\\s*\\);`).exec(core0115.outwardActionPolicyDdlSql);
   if (!match) throw new Error(`the migration creates no table ${name}`);
   return match[1]!.split(",").map((c) => c.trim().replace(/\s+/g, " ")).filter(Boolean).sort();
 }
@@ -47,7 +47,7 @@ describe("the one-time consumption of a person's approval", () => {
 
   it("references neither the run nor the gate, so deleting either never removes a burned gate", () => {
     expect(columnsOf(artifactReviewActionConsumptions).foreignKeys).toBe(0);
-    expect(core0112.outwardActionPolicyDdlSql).not.toMatch(/REFERENCES|CASCADE/i);
+    expect(core0115.outwardActionPolicyDdlSql).not.toMatch(/REFERENCES|CASCADE/i);
   });
 
   it("keys the run's outward-action policy by the run", () => {
@@ -78,8 +78,8 @@ describe("the one-time consumption of a person's approval", () => {
 
   it("applies its statements once through the migration runner, and refuses an automatic downgrade", () => {
     const applied: string[] = [];
-    core0112.up({ sql: (text: string) => applied.push(text) });
-    expect(applied).toEqual([core0112.outwardActionPolicyDdlSql]);
-    expect(() => core0112.down()).toThrow("outward_action_policy_downgrade_requires_preserved_consumptions");
+    core0115.up({ sql: (text: string) => applied.push(text) });
+    expect(applied).toEqual([core0115.outwardActionPolicyDdlSql]);
+    expect(() => core0115.down()).toThrow("outward_action_policy_downgrade_requires_preserved_consumptions");
   });
 });

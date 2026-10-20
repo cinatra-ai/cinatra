@@ -3,7 +3,7 @@ import { getTableConfig } from "drizzle-orm/pg-core";
 vi.mock("server-only",()=>({}));
 import { agentRunOutwardActionPolicies, artifactReviewActionConsumptions } from "@cinatra-ai/agents/schema";
 import { outwardActionPolicySchemaQueries } from "../artifacts/artifact-review-gate-schema";
-import { outwardActionPolicyDdlSql, up, down } from "../../../migrations/core/core__0112_agent-run-outward-action-policy.mjs";
+import { outwardActionPolicyDdlSql, up, down } from "../../../migrations/core/core__0115_agent-run-outward-action-policy.mjs";
 const normalize=(s:string)=>s.replaceAll('"tenant".','').replaceAll('"','').replace(/\s+/g," ").trim().replace(/;$/,"");
 describe("migration/bootstrap/schema immutable source and burned gate parity",()=>{
  it("uses the exact same table/column contracts on an installed and fresh bootstrap road",()=>{
