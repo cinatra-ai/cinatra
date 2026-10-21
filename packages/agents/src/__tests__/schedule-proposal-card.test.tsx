@@ -1487,7 +1487,9 @@ describe("a settled card's Save changes answers only to its own edits", () => {
             scheduleCopy: "Once, on 21 August at 9:00 AM",
             schedule: {
               kind: "scheduled",
-              runAt: `2026-08-21T09:0${resolves}`,
+              // A future instant: a Save changes of a past one is refused on the
+              // field before any decision is posted (cinatra#3189).
+              runAt: `2099-08-21T09:0${resolves}`,
               timezone: "Europe/Berlin",
             },
           }),

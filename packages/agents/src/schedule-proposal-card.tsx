@@ -154,6 +154,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -214,6 +215,11 @@ import {
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import {
+  // THE ONE RULE FOR A SCHEDULE'S TIME (cinatra#3189), shared with the
+  // scheduling step: judged at the press, the server's own check still last.
+  SCHEDULE_TIME_MESSAGES,
+  validateScheduleTime,
+  type ScheduleTimeField,
   MONTH_LABELS,
   NTH_LABELS,
   WEEKDAY_LABELS,
@@ -223,6 +229,24 @@ import {
   // (cinatra#2934), from the leaf both sides already share — so this card draws
   // the words the write guard answers with and no second wording exists.
 } from "./trigger-recurrence";
+
+/** A refused press's error state: the field it is drawn on and its sentence. */
+type ScheduleFieldError = { field: ScheduleTimeField; message: string };
+
+/**
+ * THE ROWS, JUDGED AT THE PRESS (cinatra#3189). Design `specs/app-components.html`,
+ * "Standard scheduling step": "a validation failure — a past instant, or a
+ * recurring schedule with no time chosen — surfaces inline on the field (the
+ * error state)". Read with the clock of the press, never on render, so rows
+ * that were valid when drawn and have since passed are refused too. `null`
+ * when the rows may go to the server.
+ */
+function scheduleFieldError(schedule: ProposedSchedule): ScheduleFieldError | null {
+  const verdict = validateScheduleTime(schedule, Date.now());
+  return verdict.ok
+    ? null
+    : { field: verdict.field, message: SCHEDULE_TIME_MESSAGES[verdict.reason] };
+}
 
 /**
  * A FILL THE WINDOW UNDER THIS CARD PLACED (cinatra#2934, the armed-trigger
@@ -908,6 +932,7 @@ function ProposalPhase({
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
   const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<ScheduleFieldError | null>(null);
 
   // §IV: a reader who may see the proposal but not confirm it gets a DRAWN card
   // with a disabled floor and the reason on screen — never a dropped one. The
@@ -928,6 +953,11 @@ function ProposalPhase({
 
   const confirm = async () => {
     setRefusal(null);
+    // A PAST OR MISSING TIME NEVER LEAVES THE CARD (cinatra#3189): the field
+    // says why and nothing is decided.
+    const invalid = scheduleFieldError(draft);
+    setFieldError(invalid);
+    if (invalid) return;
     setPending(true);
     // TWO SUBJECTS, TWO ROADS, ONE CONTROL (cinatra#3044).
     //
@@ -962,7 +992,11 @@ function ProposalPhase({
       <ScheduleOptionRows
         schedule={draft}
         editable={canConfirm}
-        onChange={setDraft}
+        fieldError={fieldError}
+        onChange={(next) => {
+          setFieldError(null);
+          setDraft(next);
+        }}
         durationCopy={body.durationCopy}
       />
 
@@ -1020,6 +1054,7 @@ function ExpiredPhase({
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
   const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<ScheduleFieldError | null>(null);
 
   // THE SAME FLOOR AS THE LIVE CARD. "An expired card **stays visible**, still
   // editable, with **Confirm** to set the schedule again" (§7.2 step 2). The window
@@ -1029,6 +1064,11 @@ function ExpiredPhase({
   // control doing one thing.
   const repropose = async () => {
     setRefusal(null);
+    // A PAST OR MISSING TIME NEVER LEAVES THE CARD (cinatra#3189): the field
+    // says why and nothing is decided.
+    const invalid = scheduleFieldError(draft);
+    setFieldError(invalid);
+    if (invalid) return;
     setPending(true);
     const outcome = await onRepropose(draft);
     setPending(false);
@@ -1049,7 +1089,11 @@ function ExpiredPhase({
       <ScheduleOptionRows
         schedule={draft}
         editable
-        onChange={setDraft}
+        fieldError={fieldError}
+        onChange={(next) => {
+          setFieldError(null);
+          setDraft(next);
+        }}
         durationCopy={durationCopy}
       />
       <div
@@ -1111,6 +1155,7 @@ function SettledPhase({
   const [confirming, setConfirming] = useState<null | "cancel">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [fieldError, setFieldError] = useState<ScheduleFieldError | null>(null);
   // NO HOST-DEPENDENT REGION IS LEFT ON THIS CARD (cinatra#3174 fix leg 3).
   // The read-only summary box and the held-steps tree went with PR #2939, Run
   // now with cinatra#2972, and Cancel schedule is now drawn wherever the
@@ -1165,6 +1210,7 @@ function SettledPhase({
     if (appliedFill.current === armedFill) return;
     appliedFill.current = armedFill;
     setSaved(false);
+    setFieldError(null);
     setDraft((prev) => applyArmedScheduleFill(prev, armedFill.values));
   }, [armedFill, body.canSave]);
 
@@ -1257,6 +1303,11 @@ function SettledPhase({
   const save = async () => {
     setRefusal(null);
     setSaved(false);
+    // A PAST OR MISSING TIME NEVER LEAVES THE CARD (cinatra#3189): the field
+    // says why and nothing is decided.
+    const invalid = scheduleFieldError(draft);
+    setFieldError(invalid);
+    if (invalid) return;
     setPending("save");
     const outcome = await onDecide("save", draft);
     setPending(null);
@@ -1339,8 +1390,10 @@ function SettledPhase({
         // already the predicate that separates them, so it is what decides
         // whether the rows carry controls.
         readOnly={frozen}
+        fieldError={frozen ? null : fieldError}
         onChange={(next) => {
           setSaved(false);
+          setFieldError(null);
           setDraft(next);
         }}
         durationCopy={durationCopy}
@@ -1491,6 +1544,7 @@ function ScheduleOptionRows({
   schedule,
   editable,
   readOnly = false,
+  fieldError = null,
   onChange,
   durationCopy,
 }: {
@@ -1521,11 +1575,21 @@ function ScheduleOptionRows({
    * nothing on the card to press.
    */
   readOnly?: boolean;
+  /**
+   * A REFUSED PRESS, DRAWN ON ITS FIELD (cinatra#3189): the input carries
+   * `aria-invalid` and names the sentence beneath it. Set by the phase that
+   * owns the press and cleared by the next change to the rows. The floor's
+   * refusal line stays the server's.
+   */
+  fieldError?: ScheduleFieldError | null;
   onChange: (next: ProposedSchedule) => void;
   durationCopy: string | null;
 }): ReactElement {
   const kind = schedule.kind;
   const live = editable && !readOnly;
+  const fieldErrorId = useId();
+  const runAtError = fieldError?.field === "run-at" ? fieldError : null;
+  const timeError = fieldError?.field === "recurring-time" ? fieldError : null;
   const pick = (next: ProposedSchedule) => {
     if (live) onChange(next);
   };
@@ -1582,16 +1646,29 @@ function ScheduleOptionRows({
                 {schedule.kind === "scheduled" ? readableRunAt(schedule.runAt) : ""}
               </ReadOnlyValue>
             ) : (
-              <Input
-                type="datetime-local"
-                data-field="schedule-run-at"
-                className="w-56"
-                disabled={!editable}
-                value={schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
-                onChange={(e) =>
-                  pick({ kind: "scheduled", runAt: e.target.value, timezone })
-                }
-              />
+              <>
+                <Input
+                  type="datetime-local"
+                  data-field="schedule-run-at"
+                  className="w-56"
+                  disabled={!editable}
+                  aria-invalid={runAtError ? true : undefined}
+                  aria-describedby={runAtError ? fieldErrorId : undefined}
+                  value={schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
+                  onChange={(e) =>
+                    pick({ kind: "scheduled", runAt: e.target.value, timezone })
+                  }
+                />
+                {runAtError ? (
+                  <p
+                    data-conformance-id="schedule-field-error"
+                    id={fieldErrorId}
+                    className="text-sm text-destructive"
+                  >
+                    {runAtError.message}
+                  </p>
+                ) : null}
+              </>
             )}
           </Field>
           <Field label="Timezone">
@@ -1767,7 +1844,13 @@ function ScheduleOptionRows({
               value={String(recurring.hour)}
               onValueChange={(v) => updateRecurring({ hour: Number(v) })}
             >
-              <SelectTrigger data-field="recurring-hour" aria-label="Hour" className="w-20">
+              <SelectTrigger
+                data-field="recurring-hour"
+                aria-label="Hour"
+                aria-invalid={timeError ? true : undefined}
+                aria-describedby={timeError ? fieldErrorId : undefined}
+                className="w-20"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1784,7 +1867,13 @@ function ScheduleOptionRows({
               value={String(recurring.minute)}
               onValueChange={(v) => updateRecurring({ minute: Number(v) })}
             >
-              <SelectTrigger data-field="recurring-minute" aria-label="Minute" className="w-20">
+              <SelectTrigger
+                data-field="recurring-minute"
+                aria-label="Minute"
+                aria-invalid={timeError ? true : undefined}
+                aria-describedby={timeError ? fieldErrorId : undefined}
+                className="w-20"
+              >
                 <SelectValue />
               </SelectTrigger>
               {/* EVERY MINUTE, NOT EVERY FIFTH (cinatra#3278). The options were
@@ -1806,6 +1895,15 @@ function ScheduleOptionRows({
               </>
             )}
           </div>
+          {timeError ? (
+            <p
+              data-conformance-id="schedule-field-error"
+              id={fieldErrorId}
+              className="text-sm text-destructive"
+            >
+              {timeError.message}
+            </p>
+          ) : null}
 
           <Field label="Timezone">
             {readOnly ? (

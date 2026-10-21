@@ -31,6 +31,11 @@ import { readAgentTemplateById, readAgentTemplateByPackageName } from "./store";
 // THE SAME NARROW ALIAS `agent_run` applies to a package name, imported rather
 // than re-implemented so a proposal and a run resolve one name the same way.
 import { aliasPackageNameToCanonicalScope } from "./package-name-alias";
+// The wall-clock reading is shared with the client (cinatra#3189): it lives in
+// the tier-neutral `trigger-recurrence` leaf, where the scheduling step and the
+// schedule card judge a press with it, and is re-exported here for the service.
+import { naiveDatetimeToUtcMs } from "./trigger-recurrence";
+export { naiveDatetimeToUtcMs } from "./trigger-recurrence";
 
 // ---------------------------------------------------------------------------
 // PROPOSE
@@ -327,54 +332,3 @@ export async function reproposeExpiredSchedule(
     prior.nonce,
   );
 }
-
-/**
- * Interpret a timezone-naive "YYYY-MM-DDTHH:MM" wall clock in an IANA zone.
- *
- * The same derivation `trigger-service.ts` uses, and it has to be: a proposal
- * validated here and armed there must agree on what "09:00 in Europe/Berlin"
- * is. `new Date(naive)` would read the string in the SERVER's zone (UTC), which
- * is the bug this exists to avoid.
- *
- * KNOWN LIMIT, INHERITED DELIBERATELY (codex round-2 finding). The offset is
- * inferred at a single reference instant and not round-tripped, so the two DST
- * edge cases are imprecise: a wall clock inside a spring-forward GAP (a time
- * that does not exist) maps to a nearby real instant rather than being refused,
- * and a fall-back AMBIGUOUS time resolves to one of its two instants without an
- * explicit policy. This is the SHIPPED behaviour of the scheduling form, and
- * making the conversational path stricter would be worse, not better: the
- * proposal and the form would then disagree about what a confirmed schedule
- * means, which is the one thing §VI's "confirm what you see" cannot survive.
- * Closing it is a change to BOTH, on its own issue.
- */
-export function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
-  const padded = naive.length === 16 ? `${naive}:00` : naive;
-  const asUtcMs = new Date(`${padded}Z`).getTime();
-  if (Number.isNaN(asUtcMs)) return NaN;
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).formatToParts(new Date(asUtcMs));
-  } catch {
-    // An unknown IANA zone. NaN, so both the propose check and the install
-    // translation refuse rather than silently scheduling in UTC.
-    return NaN;
-  }
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const rawHour = get("hour");
-  const tzHour = rawHour === "24" ? "00" : rawHour;
-  const inTzMs = new Date(
-    `${get("year")}-${get("month")}-${get("day")}T${tzHour}:${get("minute")}:${get("second")}Z`,
-  ).getTime();
-  if (Number.isNaN(inTzMs)) return NaN;
-  return asUtcMs + (asUtcMs - inTzMs);
-}
-

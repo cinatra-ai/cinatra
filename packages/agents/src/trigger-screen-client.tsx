@@ -57,6 +57,11 @@ import {
   WEEKDAY_LABELS,
   type RecurringConfig,
   type RecurringFrequency,
+  // THE ONE RULE FOR A SCHEDULE'S TIME (cinatra#3189), shared with the
+  // schedule card: judged at Continue, the server's own check still last.
+  SCHEDULE_TIME_MESSAGES,
+  validateScheduleTime,
+  type ScheduleTimeInput,
 } from "./trigger-recurrence";
 
 /**
@@ -94,7 +99,8 @@ const formSchema = z.discriminatedUnion("triggerType", [
   }),
   z.object({
     triggerType: z.literal("scheduled"),
-    scheduledAt: z.string().min(1, "Pick a date/time"),
+    // The same no-time reading the shared rule gives, in its own sentence.
+    scheduledAt: z.string().min(1, SCHEDULE_TIME_MESSAGES.no_time),
     timezone: z.string().min(1),
   }),
   z.object({
@@ -377,6 +383,28 @@ export function scheduleContinueLanding(triggerType: string): ContinueLanding {
     : "run-page";
 }
 
+/**
+ * THE FORM'S VALUES AS THE SCHEDULE THEY ARM (cinatra#3189), for the shared
+ * time rule. A one-off is its naive Run at in the zone the field holds; a
+ * recurring schedule is the builder's selections; anything else is handed on
+ * as the kind it is, which the rule refuses.
+ */
+function scheduleOfFormValues(
+  values: FormValues,
+  recurring: RecurringConfig,
+): ScheduleTimeInput {
+  switch (values.triggerType) {
+    case "immediate":
+      return { kind: "immediate" };
+    case "scheduled":
+      return { kind: "scheduled", runAt: values.scheduledAt, timezone: values.timezone };
+    case "recurring":
+      return { kind: "recurring", selection: recurring, timezone: values.timezone };
+    default:
+      return { kind: (values as { triggerType: unknown }).triggerType } as unknown as ScheduleTimeInput;
+  }
+}
+
 export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const readOnly = props.readOnly === true;
   const router = useRouter();
@@ -418,6 +446,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     handleSubmit,
     watch,
     setValue,
+    setError,
+    clearErrors,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -472,6 +502,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
       onValueChange={(v) => {
         setValue("timezone", v);
         setValue("triggerType", selects);
+        // The zone is half of a one-off's instant: a new one clears its error.
+        if (selects === "scheduled") clearErrors("scheduledAt" as never);
       }}
     />
   );
@@ -491,6 +523,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const scheduledMinute = scheduledTimeOfDay.slice(3, 5);
 
   function setScheduledAt(day: string, timeOfDay: string) {
+    // A change to the field clears its error (cinatra#3189).
+    clearErrors("scheduledAt" as never);
     setTimeOfDayDraft(timeOfDay);
     setValue("triggerType", "scheduled");
     (setValue as (field: string, value: string) => void)(
@@ -542,21 +576,30 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const applyScheduleValues = useCallback(
     (values: Record<string, unknown>) => {
       const sv = setValue as (field: string, value: string) => void;
+      // A FILL IS A CHANGE TO THE FIELDS (cinatra#3189). What the assistant
+      // writes clears the time rule's error exactly as the person's own change
+      // does, on both roads, so a refused press is never left drawn, and
+      // announced, over a value that has since replaced it.
+      let wrote = false;
       if (typeof values.triggerType === "string") {
         setValue("triggerType", values.triggerType as FormValues["triggerType"]);
+        wrote = true;
       }
       if (typeof values.scheduledAt === "string") {
         // Normalize to YYYY-MM-DDTHH:mm (strip seconds/timezone that may be appended).
         const normalized = values.scheduledAt.replace(" ", "T").substring(0, 16);
         sv("scheduledAt", normalized);
+        wrote = true;
       }
       if (typeof values.timezone === "string") {
         sv("timezone", values.timezone);
+        wrote = true;
       }
       if (typeof values.cronExpression === "string") {
         sv("cronExpression", values.cronExpression);
         const parsed = parseCronToRecurring(values.cronExpression);
         if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+        wrote = true;
       }
       // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
       // (`updateRecurring`): the selections move and the cron is rebuilt from
@@ -574,9 +617,11 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         // A repeat described without naming the kind IS the recurring row; a
         // message that named one keeps the one it named.
         if (typeof values.triggerType !== "string") setValue("triggerType", "recurring");
+        wrote = true;
       }
+      if (wrote) clearErrors(["scheduledAt", "cronExpression"] as never);
     },
-    [setValue],
+    [setValue, clearErrors],
   );
   useEffect(() => {
     if (!props.embeddedAsRenderer || !aiSuggestions) return;
@@ -631,6 +676,17 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
     // asks.
     if (readOnly) return;
     setServerError(null);
+    // A PAST OR MISSING TIME IS REFUSED ON THE FIELD, BEFORE EITHER ROAD
+    // (cinatra#3189), in the zone the field holds; the server still answers a
+    // press that passes here, on `serverError`.
+    const verdict = validateScheduleTime(scheduleOfFormValues(values, recurring), Date.now());
+    if (!verdict.ok) {
+      setError((verdict.field === "run-at" ? "scheduledAt" : "cronExpression") as never, {
+        type: "validate",
+        message: SCHEDULE_TIME_MESSAGES[verdict.reason],
+      });
+      return;
+    }
     // HITL renderer path: defer to the parent's onChange via props.onSubmit.
     // The WayFlow persist node owns storage via trigger_config_set, so we
     // skip the standalone setRunTrigger + redirect side-effects here. This
@@ -678,6 +734,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   };
 
   const errorBag = errors as Record<string, { message?: string } | undefined>;
+  // The Run at's error sentence while it is drawn (cinatra#3189): the day
+  // button and the Hour and Minute comboboxes all name it.
+  const scheduledAtErrorId = errorBag.scheduledAt?.message ? "scheduledAt-error" : undefined;
 
   // When mounted as a HITL field renderer (embeddedAsRenderer === true), the
   // parent HitlApprovalCard already wraps in Card + CardContent. Skip our own
@@ -770,6 +829,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       <DatePicker
                         id="scheduledAt"
                         className="w-44"
+                        invalid={Boolean(errorBag.scheduledAt?.message)}
+                        aria-describedby={scheduledAtErrorId}
                         value={scheduledDay}
                         onValueChange={(day) => setScheduledAt(day, scheduledTimeOfDay)}
                       />
@@ -777,7 +838,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         value={scheduledHour}
                         onValueChange={(v) => setScheduledAt(scheduledDay, `${v}:${scheduledMinute}`)}
                       >
-                        <SelectTrigger aria-label="Hour" className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger
+                          aria-label="Hour"
+                          aria-invalid={scheduledAtErrorId ? true : undefined}
+                          aria-describedby={scheduledAtErrorId}
+                          className="w-20"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
                           {RUN_AT_HOURS.map((h) => (
                             <SelectItem key={h} value={h}>{h}</SelectItem>
@@ -789,7 +857,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         value={scheduledMinute}
                         onValueChange={(v) => setScheduledAt(scheduledDay, `${scheduledHour}:${v}`)}
                       >
-                        <SelectTrigger aria-label="Minute" className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger
+                          aria-label="Minute"
+                          aria-invalid={scheduledAtErrorId ? true : undefined}
+                          aria-describedby={scheduledAtErrorId}
+                          className="w-20"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
                           {RUN_AT_MINUTES.map((m) => (
                             <SelectItem key={m} value={m}>{m}</SelectItem>
@@ -804,7 +879,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       } catch { return null; }
                     })()}
                     {errorBag.scheduledAt?.message && (
-                      <p className="text-sm text-destructive">{errorBag.scheduledAt.message}</p>
+                      <p id="scheduledAt-error" className="text-sm text-destructive">
+                        {errorBag.scheduledAt.message}
+                      </p>
                     )}
                   </div>
                   <div className="flex flex-col gap-1">
