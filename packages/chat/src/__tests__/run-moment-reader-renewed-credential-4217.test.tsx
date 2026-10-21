@@ -121,6 +121,81 @@ function runTurn(): UiMessage[] {
   ];
 }
 
+/** The run, parked at the schedule moment with its own card reference. */
+const CARD_REF = "sched-run-ref-4217";
+const RUN_AT_SCHEDULE = {
+  status: "pending_trigger",
+  error: null,
+  messages: [],
+  lifecycleMoment: "schedule",
+  lifecycleCard: { kind: "trigger_schedule_proposal", ref: CARD_REF },
+};
+/** The run, after "Run right after setup": the moment is closed again. */
+const RUN_PAST_SCHEDULE = {
+  status: "running",
+  error: null,
+  messages: [],
+  lifecycleMoment: null,
+  lifecycleCard: null,
+};
+
+/** The resolver's pending answer for the schedule card (§VI). */
+function scheduleEnvelope() {
+  return {
+    kind: "trigger_schedule_proposal",
+    state: { state: "pending", canDecide: true, canComment: true },
+    body: {
+      phase: "proposal",
+      version: 1,
+      agentName: "Blog Draft Writer",
+      schedule: { kind: "immediate" },
+      durationCopy: null,
+      canConfirm: true,
+      restrictedReason: null,
+      runPending: true,
+    },
+  };
+}
+
+/** The resolver's answer once the one-off has fired: settled, nothing to press. */
+function firedEnvelope() {
+  return {
+    kind: "trigger_schedule_proposal",
+    state: { state: "settled" },
+    body: {
+      phase: "settled",
+      version: 1,
+      agentName: "Blog Draft Writer",
+      runId: RUN_ID,
+      triggerType: "immediate",
+      schedule: { kind: "immediate" },
+      scheduleCopy: "Runs right after setup",
+      timezone: "UTC",
+      gatedSteps: [],
+      released: true,
+      arming: false,
+      canSave: false,
+      canCancel: false,
+    },
+  };
+}
+
+/** The same turn, as a reloaded conversation carries it: with the moment part. */
+function runTurnCarryingPart(): UiMessage[] {
+  const [user, assistant] = runTurn() as unknown as [
+    UiMessage,
+    { parts: Array<Record<string, unknown>> } & UiMessage,
+  ];
+  assistant.parts[0] = {
+    ...assistant.parts[0],
+    views: [{ viewType: "trigger_schedule_proposal", schemaVersion: 1, ref: CARD_REF }],
+  };
+  return [user, assistant as unknown as UiMessage];
+}
+
+const CARD = '[data-lifecycle-card="trigger_schedule_proposal"]';
+const RUN_PROGRESS = "[data-inline-run-card]";
+
 function userTokenOf(init: RequestInit): string | undefined {
   const raw = (init.headers ?? {}) as Record<string, string>;
   for (const [k, v] of Object.entries(raw)) {
@@ -130,6 +205,37 @@ function userTokenOf(init: RequestInit): string | undefined {
 }
 
 let stub: { calls: Array<{ url: string; init: RequestInit }>; restore: () => void } | null = null;
+
+/**
+ * THE SERVER'S SIDE OF A RENEWAL: a user token the frame has renewed away from
+ * is SPENT, and the run route refuses it. Installed over the harness stub, so
+ * every other route answers exactly as the harness does; the refused look is
+ * still recorded, so a test can read which token it carried.
+ */
+function refuseSpentTokensOnTheRunRoute(spent: ReadonlySet<string>) {
+  const inner = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("/api/agents/runs/") && spent.has(userTokenOf(init ?? {}) ?? "")) {
+      stub?.calls.push({ url, init: init ?? {} });
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return inner(input, init);
+  }) as unknown as typeof fetch;
+}
+
+/** The frame's header callback, renewing: same declaration, a token that moves. */
+function renewingHeaders(token: () => string) {
+  vi.spyOn(WIDGET_LIFECYCLE_SURFACE.auth, "headers").mockImplementation(() => ({
+    Authorization: "Bearer cit_site",
+    "X-Cinatra-Widget-User-Token": token(),
+    "X-Cinatra-Widget-Assistant": "wordpress",
+    "X-Cinatra-Widget-Origin": "https://blog.example.com",
+  }));
+}
 
 afterEach(() => {
   cleanup();
@@ -177,4 +283,103 @@ describe("the run's moment reader on the widget (cinatra#4217)", () => {
       expect(call.init.credentials).toBe("omit");
     }
   });
+
+  // cinatra#4217 (R76 MUST-FIX 1): what the renewed look CHANGES ON SCREEN. The
+  // token assertion above proves the header; these two prove the drawing. The
+  // server refuses the spent token, exactly as the renewal leaves it, so a
+  // reader that kept its first headers learns nothing after the renewal and
+  // the slot stays on its old reading.
+  it("after a renewal the open page still swaps the run-progress reading for the schedule card", async () => {
+    let userToken = "cwu_first";
+    const spent = new Set<string>();
+    renewingHeaders(() => userToken);
+    let runReading: Record<string, unknown> = RUN_WORKING;
+    stub = installWidgetServiceStub({
+      lifecycle: () => scheduleEnvelope(),
+      runSeed: () => runReading,
+    });
+    refuseSpentTokensOnTheRunRoute(spent);
+    const { container } = await mountSurface("widget", { messages: runTurn() });
+
+    // Before the renewal: the run works, its own reading holds the slot.
+    await waitFor(() => {
+      if (!container.querySelector(RUN_PROGRESS)) throw new Error("the working run drew no reading");
+    });
+    expect(container.querySelector(CARD)).toBeNull();
+    await waitFor(() => {
+      if (!stub!.calls.some((c) => c.url === RUN_URL)) throw new Error("no first look yet");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The frame renews; the first token is spent. Then the run parks.
+    userToken = "cwu_renewed";
+    spent.add("cwu_first");
+    runReading = RUN_AT_SCHEDULE;
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(
+      () => {
+        if (!container.querySelector(CARD)) {
+          throw new Error("after the renewal the open page never drew the schedule card");
+        }
+      },
+      { timeout: 10_000 },
+    );
+    expect(container.querySelectorAll(CARD).length).toBe(1);
+    // ONE reading in the slot: the progress card stood down for the moment.
+    await waitFor(() => {
+      if (container.querySelector(RUN_PROGRESS)) throw new Error("the run-progress card is still stacked");
+    });
+  }, 30_000);
+
+  it("after a renewal the open page still brings the run-progress reading back when the run leaves the schedule", async () => {
+    let userToken = "cwu_first";
+    const spent = new Set<string>();
+    renewingHeaders(() => userToken);
+    let runReading: Record<string, unknown> = RUN_AT_SCHEDULE;
+    let cardReading: Record<string, unknown> = scheduleEnvelope();
+    stub = installWidgetServiceStub({
+      lifecycle: () => cardReading,
+      runSeed: () => runReading,
+    });
+    refuseSpentTokensOnTheRunRoute(spent);
+    const { container } = await mountSurface("widget", { messages: runTurnCarryingPart() });
+
+    // Before the renewal: the run stands at the schedule, the card is its reading.
+    await waitFor(() => {
+      if (!container.querySelector(CARD)) throw new Error("no schedule card drawn");
+    });
+    await waitFor(() => {
+      if (container.querySelector(RUN_PROGRESS)) throw new Error("a run-progress card is stacked");
+    });
+
+    // The frame renews; the first token is spent. Then the run moves on.
+    userToken = "cwu_renewed";
+    spent.add("cwu_first");
+    runReading = RUN_PAST_SCHEDULE;
+    cardReading = firedEnvelope();
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(
+      () => {
+        if (!container.querySelector(RUN_PROGRESS)) {
+          throw new Error("after the renewal the run's own reading never came back");
+        }
+      },
+      { timeout: 10_000 },
+    );
+    // The card stays, as its own settled reading.
+    await waitFor(
+      () => {
+        const card = container.querySelector(CARD);
+        if (!card) throw new Error("the card was withdrawn when the run moved on");
+        if (card.getAttribute("data-lifecycle-card-phase") !== "settled") {
+          throw new Error("the card did not settle into its reading");
+        }
+      },
+      { timeout: 10_000 },
+    );
+    expect(container.querySelectorAll(CARD).length).toBe(1);
+    expect(container.querySelectorAll(RUN_PROGRESS).length).toBe(1);
+  }, 30_000);
 });
