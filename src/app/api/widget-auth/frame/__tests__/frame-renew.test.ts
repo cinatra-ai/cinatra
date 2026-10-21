@@ -277,3 +277,105 @@ describe("the renewal's audit (cinatra#4217)", () => {
     expect(Object.keys(fields)).not.toContain("jti");
   });
 });
+
+// cinatra#4217 — every refusal branch of the route, each with its own audit
+// reason, and none of them hands out a bearer.
+describe("the route's other refusals (cinatra#4217)", () => {
+  async function expectRefused(res: Response, status: number, reason: string): Promise<unknown> {
+    expect(res.status, reason).toBe(status);
+    const text = await res.text();
+    expect(text, `${reason}: no bearer in the answer`).not.toMatch(/cwu_|cit_|cnx_/);
+    expect(
+      emitWidgetAuthAudit.mock.calls.some(
+        ([event, fields]) =>
+          event === "renew_failure" && (fields as { reason?: string }).reason === reason,
+      ),
+      `${reason}: audited with its reason`,
+    ).toBe(true);
+    expect(
+      emitWidgetAuthAudit.mock.calls.some(([event]) => event === "renew_success"),
+      `${reason}: no success is audited`,
+    ).toBe(false);
+    return JSON.parse(text);
+  }
+
+  it.each([
+    ["an Origin that is not this instance", { Origin: "https://wp.example.test" }],
+    ["a Sec-Fetch-Site that is not same-origin", { "Sec-Fetch-Site": "cross-site" }],
+  ])("%s is refused with 401 before anything is read or charged", async (_label, headers) => {
+    const res = await frameRenew(
+      frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT, ...headers }),
+    );
+    expect(await expectRefused(res, 401, "not_same_origin")).toEqual({ error: "Unauthorized" });
+    expect(allowConnectTokenRequest).not.toHaveBeenCalled();
+    expect(deriveFrameBinding).not.toHaveBeenCalled();
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+    expect(mintWidgetStreamToken).not.toHaveBeenCalled();
+  });
+
+  it("a binding the server cannot derive is refused with 400, and nothing is renewed", async () => {
+    deriveFrameBinding.mockReturnValue({ ok: false, reason: "site_unresolved" });
+    const res = await frameRenew(frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT }));
+    expect(await expectRefused(res, 400, "site_unresolved")).toEqual({ error: "invalid_grant" });
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+    expect(mintWidgetStreamToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an agent that does not resolve", "some-other-agent", "wordpress"],
+    ["an agent whose connector key differs from the binding's", AGENT_SLUG, "drupal"],
+  ])("%s is refused with 400, and nothing is renewed", async (_label, agentSlug, instancesConfigKey) => {
+    deriveFrameBinding.mockReturnValue({
+      ok: true,
+      binding: { site: SITE, instanceId: "inst-1", agentSlug, instancesConfigKey },
+    });
+    const res = await frameRenew(frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT }));
+    expect(await expectRefused(res, 400, "unknown_agent")).toEqual({ error: "invalid_grant" });
+    expect(renewUserWidgetToken).not.toHaveBeenCalled();
+    expect(mintWidgetStreamToken).not.toHaveBeenCalled();
+  });
+
+  it("a transport mint that fails after the renewal refuses the whole renewal and hands out neither token", async () => {
+    mintWidgetStreamToken.mockReturnValue(null);
+    const res = await frameRenew(frameRequest(SELECTORS, { "X-Cinatra-Widget-User-Token": CURRENT }));
+    expect(await expectRefused(res, 400, "transport_mint_failed")).toEqual({ error: "invalid_grant" });
+    expect(renewUserWidgetToken, "the user token was renewed first").toHaveBeenCalledTimes(1);
+  });
+});
+
+// cinatra#4217 — the per-address bucket is keyed on the hop the platform
+// appended to X-Forwarded-For (the LAST one). RED BEFORE: the route keyed it on
+// the FIRST hop, which the caller writes, so a forged hop could fill another
+// address's bucket and a rotated one escaped the caller's own.
+describe("a forged X-Forwarded-For hop (cinatra#4217)", () => {
+  const CLIENT = "2001:db8::9";
+  const VICTIM = "2001:db8::5";
+
+  it("two requests with different forged first hops from one client charge one address", async () => {
+    for (const forged of ["2001:db8::a1", "2001:db8::a2, 2001:db8::a3"]) {
+      const res = await frameRenew(
+        frameRequest(SELECTORS, {
+          "X-Cinatra-Widget-User-Token": CURRENT,
+          "X-Forwarded-For": `${forged}, ${CLIENT}`,
+        }),
+      );
+      expect(res.status).toBe(200);
+    }
+    const ips = allowConnectTokenRequest.mock.calls.map((c) => (c[0] as { ip: string }).ip);
+    expect(ips).toEqual([CLIENT, CLIENT]);
+  });
+
+  it("a forged hop naming another address never charges that address", async () => {
+    allowConnectTokenRequest.mockReturnValue(false);
+    const res = await frameRenew(
+      frameRequest(SELECTORS, {
+        "X-Cinatra-Widget-User-Token": CURRENT,
+        "X-Forwarded-For": `${VICTIM}, ${CLIENT}`,
+      }),
+    );
+    expect(res.status).toBe(429);
+    const ips = allowConnectTokenRequest.mock.calls.map((c) => (c[0] as { ip: string }).ip);
+    expect(ips).toEqual([CLIENT]);
+    expect(JSON.stringify(emitWidgetAuthAudit.mock.calls)).not.toContain(VICTIM);
+  });
+});

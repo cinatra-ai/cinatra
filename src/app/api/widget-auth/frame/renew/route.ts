@@ -5,6 +5,7 @@ import { renewUserWidgetToken } from "@/lib/widget-user-auth";
 import { deriveFrameBinding, resolveFrameRequestOrigin } from "@/lib/widget-frame-auth";
 import { mintWidgetStreamToken } from "@/lib/widget-token-broker";
 import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
+import { rateLimitClientAddress } from "@/lib/rate-limit-client-address";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { sha256Base64Url } from "@/lib/connect-provisioning";
 
@@ -45,18 +46,12 @@ type RenewBody = {
 const INVALID_GRANT = { error: "invalid_grant" } as const;
 const USER_TOKEN_HEADER = "x-cinatra-widget-user-token";
 
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ip = clientIp(request);
+  const ip = rateLimitClientAddress(request);
   const ua = request.headers.get("user-agent");
 
   const frameOrigin = resolveFrameRequestOrigin(request);
@@ -90,18 +85,16 @@ export async function POST(request: Request): Promise<Response> {
   const assistant = str(body.assistant);
   const instanceId = str(body.instanceId);
 
-  // Rate limit on the SAME buckets as the sign-in (../token): per IP, and per
-  // presented token keyed on its hash, never the plaintext. An exhausted bucket
-  // answers 429 and renews nothing; the frame retries while its pair still has
-  // life and signs in again only when it cannot renew in time. The IP bucket is
-  // shared with sign-ins (30 a minute, connect-rate-limit.ts): at one renewal
-  // per frame every 210 s it is full at about 105 open frames behind one
-  // address. KNOWN LIMIT: the address is the first X-Forwarded-For hop, and
-  // a caller can set that header, so anyone can fill a victim address's bucket
-  // with about 30 junk requests a minute and refuse that address's renewals
-  // and sign-ins for as long as the flood lasts. Keying the bucket on a trusted
-  // proxy hop or the socket address, and a separate renewal bucket, are
-  // follow-ups.
+  // Rate limit on the SAME buckets as the sign-in (../token): per address, and
+  // per presented token keyed on its hash, never the plaintext. An exhausted
+  // bucket answers 429 and renews nothing; the frame retries while its pair
+  // still has life and signs in again only when it cannot renew in time. The
+  // address bucket is shared with sign-ins (30 a minute, connect-rate-limit.ts):
+  // at one renewal per frame every 210 s it is full at about 105 open frames
+  // behind one address; a separate renewal bucket is a follow-up. The address
+  // is the hop the platform's proxy appended to X-Forwarded-For
+  // (rateLimitClientAddress), so a hop the caller forged neither fills another
+  // address's bucket nor escapes the caller's own.
   if (!allowConnectTokenRequest({ ip, codeKey: sha256Base64Url(token) })) {
     emitWidgetAuthAudit("renew_failure", { ip, ua, client: assistant, reason: "rate_limited" });
     return NextResponse.json(INVALID_GRANT, { status: 429 });

@@ -2901,4 +2901,46 @@ describe("renewUserWidgetToken — the frame's token renewal (cinatra#4217)", ()
       expect(new Map(tokenStore), `${label}: nothing is changed`).toEqual(before);
     }
   });
+
+  // cinatra#4217 — the advertised life is a positive finite number of seconds,
+  // or 0. The statement's expires_in comes back from the driver as text or a
+  // number; a value that does not read as a positive finite number (a NULL, a
+  // non-number, an infinity, zero or a negative from a clock step) is advertised
+  // as 0, so the frame renews at once instead of waiting on a bogus life.
+  it("an expires_in that is not a positive finite number is advertised as 0", () => {
+    const realImpl = runPostgresQueriesSyncMock.getMockImplementation()!;
+    const answer = (value: unknown) =>
+      runPostgresQueriesSyncMock.mockImplementation(
+        (input: { queries: { text: string; values?: unknown[] }[] }) => {
+          const out = realImpl(input) as Array<{ rows?: Array<Record<string, unknown>> }>;
+          if (input.queries.some((q) => q.text.startsWith("WITH claimed AS (DELETE FROM"))) {
+            const row = out[0]?.rows?.[0];
+            if (row) row.expires_in = value;
+          }
+          return out;
+        },
+      );
+    try {
+      for (const [value, advertised] of [
+        ["120", 120],
+        [120, 120],
+        [null, 0],
+        [undefined, 0],
+        ["not a number", 0],
+        [Number.NaN, 0],
+        [Number.POSITIVE_INFINITY, 0],
+        ["Infinity", 0],
+        [0, 0],
+        [-5, 0],
+      ] as Array<[unknown, number]>) {
+        answer(value);
+        const r = renew(signIn());
+        expect(r.ok, `expires_in=${String(value)}: still renewed`).toBe(true);
+        if (!r.ok) continue;
+        expect(r.expiresIn, `expires_in=${String(value)}`).toBe(advertised);
+      }
+    } finally {
+      runPostgresQueriesSyncMock.mockImplementation(realImpl);
+    }
+  });
 });
