@@ -95,3 +95,21 @@ describe("dev-extensions clone-back lock (pinned CI universe)", () => {
     }
   });
 });
+
+// Companion commits whose fixes the application relies on. A re-pin of one of
+// these packages is a deliberate change: move the expected commit together
+// with its lock entry.
+const PINNED_FIXES: Record<string, string> = {
+  // The Twenty connector reads the event-stream response frame that answers
+  // its own request, so the list picker can read the CRM lists.
+  "@cinatra-ai/twenty-connector": "d8f3451f38b6201fd7f8e5895a8b92fb29955bcf",
+};
+
+describe("dev-extensions clone-back lock (pinned fixes)", () => {
+  it("pins each companion package to the commit that carries its fix", () => {
+    const pins = new Map(readDevLock().map((p) => [p.packageName, p.resolvedSha]));
+    for (const [packageName, sha] of Object.entries(PINNED_FIXES)) {
+      expect(pins.get(packageName), `${packageName} resolvedSha`).toBe(sha);
+    }
+  });
+});

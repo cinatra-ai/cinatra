@@ -13,8 +13,8 @@
       "id": "app-components",
       "file": "app-components.json",
       "source": "published",
-      "manifestSha256": "a5361f3e5226906f0c5dd6133730c5eeb1ac09f6d62ef731d895e559ebbf390f",
-      "specContentHash": "sha256:393635e517b43856e0512f26235dc4b508b6ec2675295c6cdc59ac7b6315270b"
+      "manifestSha256": "e4da7a2b79d3f8013d916aaeae68a72684e6319023b12b2b7a8cbfce655c06a6",
+      "specContentHash": "sha256:69de7e0523392ef3d8e8cdc8d969b7448f36d9858fbc82040ffb5e7810d72f6d"
     },
     {
       "id": "app-extensions",
