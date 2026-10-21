@@ -1182,3 +1182,95 @@ describe("self-rendering-extensions border gate — the statements of an empty f
     );
   });
 });
+
+// cinatra#3471: a package directory is named by the tree, not by the census,
+// so its name may be a key of Object.prototype. `__proto__` must stay an own
+// key of the copies map (a plain assignment would call the prototype setter
+// and drop the copy from Object.keys, pairsOf and the written floor);
+// `constructor` and `prototype` must be read like any other name.
+describe("self-rendering-extensions border gate — a package named like an Object.prototype key", () => {
+  const MAGIC = ["__proto__", "constructor", "prototype"];
+  const COPY = "src/components/ui/button.tsx";
+  const magicPkg = (dir, kind, extra = {}) => ({ dir, kind, files: { [COPY]: BUTTON_COPY }, ...extra });
+  const floorOf = (dir) => Object.fromEntries([[dir, [COPY]]]);
+
+  it("the census keeps an undeclared artifact directory named __proto__ as an own copy key", () => {
+    const tree = makeTree(
+      [{ dir: "demo-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }, magicPkg("__proto__", "artifact", { undeclared: true })],
+      {},
+    );
+    const census = gate.scanBorder({ extRoot: tree.extRoot });
+    expect(census.refusals).toEqual([]);
+    expect(Object.getPrototypeOf(census.copies)).toBe(Object.prototype);
+    expect(Object.hasOwn(census.copies, "__proto__")).toBe(true);
+    expect(Object.keys(census.copies)).toEqual(["__proto__"]);
+    expect(gate.pairsOf(census.copies)).toEqual([`__proto__ :: ${COPY}`]);
+    expect(JSON.parse(JSON.stringify(census.copies))).toHaveProperty(["__proto__"]);
+    expect(gate.diffUnlisted({}, census.copies)).toEqual([`__proto__ :: ${COPY}`]);
+  });
+
+  for (const dir of MAGIC) {
+    for (const kind of ["artifact", "connector"]) {
+      it(`${kind} ${dir}: an undeclared copy that the floor does not record FAILS (a)`, () => {
+        const tree = makeTree(
+          [{ dir: "demo-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }, magicPkg(dir, kind, { undeclared: true })],
+          {},
+        );
+        const { status, stderr } = runGate(tree);
+        expect(status).toBe(1);
+        expect(stderr).toContain(`+ ${dir} :: ${COPY}`);
+      });
+
+      it(`${kind} ${dir}: --write-baseline refuses the growth and leaves the floor byte-identical`, () => {
+        const tree = makeTree(
+          [{ dir: "demo-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }, magicPkg(dir, kind, { undeclared: true })],
+          {},
+        );
+        const before = readFileSync(tree.baselinePath, "utf8");
+        const { status, stderr } = runGate(tree, ["--write-baseline"]);
+        expect(status).toBe(1);
+        expect(stderr).toContain(`+ ${dir} :: ${COPY}`);
+        expect(readFileSync(tree.baselinePath, "utf8")).toBe(before);
+      });
+
+      it(`${kind} ${dir}: a floor that records the copy passes, and --write-baseline keeps it as an own key`, () => {
+        const tree = makeTree(
+          [{ dir: "demo-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }, magicPkg(dir, kind, { undeclared: true })],
+          floorOf(dir),
+        );
+        expect(runGate(tree).status).toBe(0);
+        const { status } = runGate(tree, ["--write-baseline"]);
+        expect(status).toBe(0);
+        const written = JSON.parse(readFileSync(tree.baselinePath, "utf8")).copies;
+        expect(Object.hasOwn(written, dir)).toBe(true);
+        expect(gate.pairsOf(written)).toEqual([`${dir} :: ${COPY}`]);
+        expect(runGate(tree).status).toBe(0);
+      });
+    }
+  }
+
+  for (const dir of ["constructor", "prototype"]) {
+    it(`a DECLARED connector named ${dir} with an unlisted copy FAILS (a), and its stale floor entry FAILS (b)`, () => {
+      const tree = makeTree([magicPkg(dir, "connector")], {});
+      const unlisted = runGate(tree);
+      expect(unlisted.status).toBe(1);
+      expect(unlisted.stderr).toContain(`+ ${dir} :: ${COPY}`);
+      const census = gate.scanBorder({ extRoot: tree.extRoot });
+      expect(census.refusals).toEqual([]);
+      expect(Object.keys(census.copies)).toEqual([dir]);
+
+      const gone = makeTree([{ dir, kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }], floorOf(dir));
+      const stale = runGate(gone);
+      expect(stale.status).toBe(1);
+      expect(stale.stderr).toContain(`- ${dir} :: ${COPY}`);
+    });
+  }
+
+  it("refuses a DECLARED name __proto__ as a name it cannot map to a directory", () => {
+    const tree = makeTree([], {}, { declared: { "@cinatra-ai/__proto__": {} } });
+    mkdirSync(join(tree.extRoot, "cinatra-ai"), { recursive: true });
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("REFUSED: @cinatra-ai/__proto__ is not a package name this census can map to a directory");
+  });
+});

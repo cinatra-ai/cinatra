@@ -394,13 +394,19 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
   const unreadableIn = (pkg) => (rel, err) =>
     refusals.push(`${REFUSED} ${pkg.name}/${rel}: unreadable (${codeOf(err)})`);
 
-  const copies = {};
+  // The map is built from [name, files] entries: a directory name is the
+  // tree's, not the census's, so it may be `__proto__`. A plain assignment of
+  // that key would call the prototype setter and drop the copy from
+  // Object.keys, pairsOf and the written floor; Object.fromEntries defines
+  // every name as an own key of a plain object.
+  const copyEntries = [];
   for (const pkg of packages) {
     const uiDir = join(pkg.dir, PRIMITIVE_DIR);
     if (!io.existsSync(uiDir)) continue;
     const files = walkFiles(uiDir, pkg.dir, { skipDirs: ALWAYS_SKIP_DIRS, io, unreadable: unreadableIn(pkg) }).sort();
-    if (files.length > 0) copies[pkg.name] = files;
+    if (files.length > 0) copyEntries.push([pkg.name, files]);
   }
+  const copies = Object.fromEntries(copyEntries);
 
   const coupling = [];
   for (const pkg of packages) {
