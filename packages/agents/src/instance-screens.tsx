@@ -2759,10 +2759,12 @@ export async function SetupScreen({
           // different panel — which is exactly why the width is declared here
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
-          {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487).
-              The screens inside register what they are and what they lend; the
-              chrome draws the window below them, in this same column. */}
-          <RunPageChrome>
+          {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487),
+              AND IT WRAPS THE DETAIL COLUMN, never the whole two-column
+              contract: the chrome draws its window after its children, so
+              wrapped around the contract it would land beneath BOTH columns.
+              The rail frame below draws the chrome inside its own detail
+              column; the branch without a frame wraps its detail column here. */}
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
@@ -3571,12 +3573,13 @@ export async function SetupScreen({
                   {railNode ? (
                     <div className="flex shrink-0 flex-col gap-2 pt-1">{railNode}</div>
                   ) : null}
-                  <div className="flex min-w-0 flex-1 flex-col gap-4">{runDetailFallback}</div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">
+                    <RunPageChrome>{runDetailFallback}</RunPageChrome>
+                  </div>
                 </>
               );
             })()}
           </div>
-          </RunPageChrome>
           <RunStartedRuns rows={startedRuns} />
           </AgentPanelBody>
         ) : (
