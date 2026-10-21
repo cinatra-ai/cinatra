@@ -723,6 +723,9 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   };
 
   const errorBag = errors as Record<string, { message?: string } | undefined>;
+  // The Run at's error sentence while it is drawn (cinatra#3189): the day
+  // button and the Hour and Minute comboboxes all name it.
+  const scheduledAtErrorId = errorBag.scheduledAt?.message ? "scheduledAt-error" : undefined;
 
   // When mounted as a HITL field renderer (embeddedAsRenderer === true), the
   // parent HitlApprovalCard already wraps in Card + CardContent. Skip our own
@@ -815,10 +818,8 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                       <DatePicker
                         id="scheduledAt"
                         className="w-44"
-                        aria-invalid={errorBag.scheduledAt?.message ? true : undefined}
-                        aria-describedby={
-                          errorBag.scheduledAt?.message ? "scheduledAt-error" : undefined
-                        }
+                        invalid={Boolean(errorBag.scheduledAt?.message)}
+                        aria-describedby={scheduledAtErrorId}
                         value={scheduledDay}
                         onValueChange={(day) => setScheduledAt(day, scheduledTimeOfDay)}
                       />
@@ -826,7 +827,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         value={scheduledHour}
                         onValueChange={(v) => setScheduledAt(scheduledDay, `${v}:${scheduledMinute}`)}
                       >
-                        <SelectTrigger aria-label="Hour" className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger
+                          aria-label="Hour"
+                          aria-invalid={scheduledAtErrorId ? true : undefined}
+                          aria-describedby={scheduledAtErrorId}
+                          className="w-20"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
                           {RUN_AT_HOURS.map((h) => (
                             <SelectItem key={h} value={h}>{h}</SelectItem>
@@ -838,7 +846,14 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
                         value={scheduledMinute}
                         onValueChange={(v) => setScheduledAt(scheduledDay, `${scheduledHour}:${v}`)}
                       >
-                        <SelectTrigger aria-label="Minute" className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectTrigger
+                          aria-label="Minute"
+                          aria-invalid={scheduledAtErrorId ? true : undefined}
+                          aria-describedby={scheduledAtErrorId}
+                          className="w-20"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
                           {RUN_AT_MINUTES.map((m) => (
                             <SelectItem key={m} value={m}>{m}</SelectItem>

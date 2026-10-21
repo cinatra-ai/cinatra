@@ -6,7 +6,10 @@
 // Design `specs/app-components.html`, "Standard scheduling step": "a
 // validation failure — a past instant, or a recurring schedule with no time
 // chosen — surfaces inline on the field (the error state)", and the error
-// state "adds aria-invalid to the input". The check is the shared
+// state "adds aria-invalid to the input". The Run at is a day button and the
+// Hour and Minute comboboxes: a button's role takes no aria-invalid, so the
+// comboboxes carry it, the day button is marked `data-invalid`, and all three
+// name the sentence. The check is the shared
 // `validateScheduleTime`, run when Continue is pressed, in the zone the field
 // holds; the server's own check still answers a press that passes here.
 //
@@ -101,6 +104,33 @@ function runAtTrigger(): HTMLElement {
   return el;
 }
 
+/** The Run at's error state: the day button marked, the time comboboxes
+ *  invalid, and all three naming the one sentence. */
+function expectErrorState() {
+  const id = runAtTrigger().getAttribute("aria-describedby");
+  expect(id).toBe("scheduledAt-error");
+  expect(runAtTrigger().hasAttribute("data-invalid")).toBe(true);
+  expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
+  for (const name of ["Hour", "Minute"]) {
+    const box = screen.getByRole("combobox", { name });
+    expect(box.getAttribute("aria-invalid"), name).toBe("true");
+    expect(box.getAttribute("aria-describedby"), name).toBe(id);
+  }
+}
+
+/** No error state on any part of the Run at. */
+function expectNoErrorState() {
+  expect(runAtTrigger().hasAttribute("data-invalid")).toBe(false);
+  expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
+  expect(runAtTrigger().hasAttribute("aria-describedby")).toBe(false);
+  for (const name of ["Hour", "Minute"]) {
+    const box = screen.queryByRole("combobox", { name });
+    if (box === null) continue;
+    expect(box.hasAttribute("aria-invalid"), name).toBe(false);
+    expect(box.hasAttribute("aria-describedby"), name).toBe(false);
+  }
+}
+
 /** The sentence the field names as its description, or null. */
 function tiedMessage(): string | null {
   const id = runAtTrigger().getAttribute("aria-describedby");
@@ -142,9 +172,9 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
   it("refuses a past instant on the field and arms nothing", async () => {
     // 08:00 in Berlin is an hour ago.
     const { onSubmit } = renderForm(road, { statedSchedule: oneOff("2026-07-14T08:00") });
-    expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
+    expectNoErrorState();
     await pressContinue();
-    await waitFor(() => expect(runAtTrigger().getAttribute("aria-invalid")).toBe("true"));
+    await waitFor(() => expectErrorState());
     expect(tiedMessage()).toBe("Choose a time in the future.");
     expect(armingCalls(road, onSubmit)).toBe(0);
     expect(routerState.refresh).not.toHaveBeenCalled();
@@ -154,7 +184,7 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
   it("refuses an instant exactly at now", async () => {
     const { onSubmit } = renderForm(road, { statedSchedule: oneOff("2026-07-14T09:00") });
     await pressContinue();
-    await waitFor(() => expect(runAtTrigger().getAttribute("aria-invalid")).toBe("true"));
+    await waitFor(() => expectErrorState());
     expect(tiedMessage()).toBe("Choose a time in the future.");
     expect(armingCalls(road, onSubmit)).toBe(0);
   });
@@ -164,7 +194,7 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
     fireEvent.click(screen.getByText("Schedule for later"));
     await waitFor(() => expect(document.getElementById("scheduledAt")).not.toBeNull());
     await pressContinue();
-    await waitFor(() => expect(runAtTrigger().getAttribute("aria-invalid")).toBe("true"));
+    await waitFor(() => expectErrorState());
     expect(tiedMessage()).toBe("Choose a time.");
     expect(armingCalls(road, onSubmit)).toBe(0);
   });
@@ -173,8 +203,7 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
     const { onSubmit } = renderForm(road, { statedSchedule: oneOff("2026-07-14T10:00") });
     await pressContinue();
     await waitFor(() => expect(armingCalls(road, onSubmit)).toBe(1));
-    expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
-    expect(runAtTrigger().hasAttribute("aria-describedby")).toBe(false);
+    expectNoErrorState();
     if (road === "standalone") {
       expect(vi.mocked(setRunTrigger)).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -198,7 +227,7 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
     });
     await pressContinue();
     await waitFor(() => expect(armingCalls(road, onSubmit)).toBe(1));
-    expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
+    expectNoErrorState();
   });
 
   it("passes Run right after setup and a recurring schedule untouched", async () => {
@@ -233,7 +262,7 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
   it("clears the error when the reader changes the field", async () => {
     renderForm(road, { statedSchedule: oneOff("2026-07-14T08:00") });
     await pressContinue();
-    await waitFor(() => expect(runAtTrigger().getAttribute("aria-invalid")).toBe("true"));
+    await waitFor(() => expectErrorState());
     // Open the day picker and choose the next day.
     fireEvent.click(runAtTrigger());
     const day = await waitFor(() => {
@@ -242,7 +271,7 @@ describe.each<Road>(["standalone", "embedded"])("Continue on the %s road", (road
       return el as HTMLElement;
     });
     fireEvent.click(day);
-    await waitFor(() => expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false));
+    await waitFor(() => expectNoErrorState());
     expect(tiedMessage()).toBeNull();
   });
 });
@@ -259,7 +288,7 @@ describe("the server still answers a press the client passes", () => {
       expect(screen.getByText("Scheduled time must be in the future")).toBeTruthy(),
     );
     expect(vi.mocked(setRunTrigger)).toHaveBeenCalledTimes(1);
-    expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
+    expectNoErrorState();
   });
 
   it("shows the parent's refusal on the embedded road", async () => {
@@ -284,6 +313,6 @@ describe("the read-only reading", () => {
       fireEvent.submit(form!);
     });
     expect(vi.mocked(setRunTrigger)).not.toHaveBeenCalled();
-    expect(runAtTrigger().hasAttribute("aria-invalid")).toBe(false);
+    expectNoErrorState();
   });
 });

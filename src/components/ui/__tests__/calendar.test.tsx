@@ -131,39 +131,45 @@ describe("the arrows walk the month", () => {
 
 
 describe("the date picker's trigger carries the field's error state (cinatra#3189)", () => {
-  // The scheduling step draws a past or missing Run at on the field itself:
-  // the trigger is the field, so it is the one element that says it is
-  // invalid and names the sentence that says why. Passthrough only.
+  // The scheduling step draws a past or missing Run at on the field itself.
+  // The trigger is a button, and a button's role takes no aria-invalid: it
+  // carries the error state as `data-invalid` and names the sentence that says
+  // why with aria-describedby. The invalid state itself is announced by the
+  // Hour and Minute comboboxes beside it.
   const trigger = () => {
     const el = document.querySelector<HTMLButtonElement>('[data-slot="date-picker-trigger"]');
     if (el === null) throw new Error("no date picker trigger");
     return el;
   };
 
-  it("forwards aria-invalid and aria-describedby to the trigger button", () => {
+  it("marks the trigger invalid and names the sentence, with no aria-invalid on the button", () => {
     render(
       <>
-        <DatePicker id="when" value="2027-03-10" aria-invalid aria-describedby="when-error" />
+        <DatePicker id="when" value="2027-03-10" invalid aria-describedby="when-error" />
         <p id="when-error">Choose a time in the future.</p>
       </>,
     );
     expect(trigger().getAttribute("id")).toBe("when");
-    expect(trigger().getAttribute("aria-invalid")).toBe("true");
+    expect(trigger().hasAttribute("data-invalid")).toBe(true);
     expect(trigger().getAttribute("aria-describedby")).toBe("when-error");
-    expect(document.querySelectorAll("[aria-invalid]")).toHaveLength(1);
+    expect(document.querySelectorAll("[aria-invalid]")).toHaveLength(0);
+    expect(document.querySelectorAll("[data-invalid]")).toHaveLength(1);
     expect(document.querySelectorAll("[aria-describedby]")).toHaveLength(1);
   });
 
   it("draws no error state without the props, exactly as before", () => {
     render(<DatePicker id="when" value="2027-03-10" />);
-    expect(trigger().hasAttribute("aria-invalid")).toBe(false);
+    expect(trigger().hasAttribute("data-invalid")).toBe(false);
     expect(trigger().hasAttribute("aria-describedby")).toBe(false);
-    expect(document.querySelectorAll("[aria-invalid], [aria-describedby]")).toHaveLength(0);
+    expect(
+      document.querySelectorAll("[aria-invalid], [aria-describedby], [data-invalid]"),
+    ).toHaveLength(0);
   });
 
-  it("leaves aria-invalid off when it is passed false", () => {
-    render(<DatePicker id="when" value="2027-03-10" aria-invalid={false} />);
-    expect(trigger().getAttribute("aria-invalid")).not.toBe("true");
+  it("draws no error state when invalid is false", () => {
+    render(<DatePicker id="when" value="2027-03-10" invalid={false} />);
+    expect(trigger().hasAttribute("data-invalid")).toBe(false);
+    expect(trigger().hasAttribute("aria-invalid")).toBe(false);
   });
 
   it("keeps opening the calendar and reporting the day with the props set", () => {
@@ -173,7 +179,7 @@ describe("the date picker's trigger carries the field's error state (cinatra#318
         id="when"
         value="2027-03-10"
         today="2027-03-05"
-        aria-invalid
+        invalid
         aria-describedby="when-error"
         onValueChange={onValueChange}
       />,
@@ -181,6 +187,7 @@ describe("the date picker's trigger carries the field's error state (cinatra#318
     fireEvent.click(trigger());
     const day = document.querySelector<HTMLElement>('[data-day="2027-03-12"]');
     expect(day).not.toBeNull();
+    expect(day!.hasAttribute("data-invalid")).toBe(false);
     expect(day!.hasAttribute("aria-invalid")).toBe(false);
     fireEvent.click(day!);
     expect(onValueChange).toHaveBeenCalledWith("2027-03-12");

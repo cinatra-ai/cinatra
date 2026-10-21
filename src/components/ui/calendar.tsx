@@ -309,9 +309,11 @@ export type DatePickerProps = {
   disabled?: boolean
   today?: string
   className?: string
-  /** Forwarded to the trigger button only: the field's error state
-   *  (cinatra#3189). */
-  "aria-invalid"?: React.AriaAttributes["aria-invalid"]
+  /** The field's error state (cinatra#3189), drawn on the trigger button as
+   *  `data-invalid`. A button's role takes no aria-invalid; the control
+   *  beside it that does announces the state, and the sentence is tied with
+   *  `aria-describedby`. */
+  invalid?: boolean
   "aria-describedby"?: string
 }
 
@@ -329,7 +331,7 @@ export function DatePicker({
   disabled,
   today,
   className,
-  "aria-invalid": ariaInvalid,
+  invalid,
   "aria-describedby": ariaDescribedBy,
 }: DatePickerProps) {
   const [open, setOpen] = React.useState(false)
@@ -342,7 +344,7 @@ export function DatePicker({
           type="button"
           id={id}
           disabled={disabled}
-          aria-invalid={ariaInvalid}
+          data-invalid={invalid ? "" : undefined}
           aria-describedby={ariaDescribedBy}
           data-slot="date-picker-trigger"
           className={cn(
