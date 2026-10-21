@@ -11,10 +11,12 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync } from "node:fs";
+import * as realFs from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as gate from "../self-rendering-extensions-border-gate.mjs";
 import {
   FLOOR_BASE_VAR,
   FLOOR_FILE,
@@ -39,19 +41,33 @@ afterEach(() => {
 
 /**
  * Build a synthetic extension tree.
- * `packages` = [{ dir, kind, files: { "<relpath>": "<contents>" } }]
+ * `packages` = [{ dir, kind, files: { "<relpath>": "<contents>" }, manifest?, undeclared? }]
  * `baseline` = { "<dir>": ["src/components/ui/button.tsx", ...] } | null
+ * `<base>/package.json` declares (cinatra.devExtensions) exactly the packages it
+ * makes, unless `opts.declared` gives the devExtensions value itself or
+ * `opts.extraDeclared` adds names. A package's `manifest` (a string) replaces
+ * its package.json text; `undeclared: true` leaves it out of the declared set.
  */
-function makeTree(packages, baseline) {
+function makeTree(packages, baseline, opts = {}) {
   const base = mkdtempSync(join(tmpdir(), "cinatra-border-gate-"));
   temps.push(base);
   const extRoot = join(base, "extensions");
+  const declared =
+    "declared" in opts
+      ? opts.declared
+      : Object.fromEntries(
+          [
+            ...packages.filter((p) => !p.undeclared).map((p) => `@cinatra-ai/${p.dir}`),
+            ...(opts.extraDeclared ?? []),
+          ].map((n) => [n, {}]),
+        );
+  writeFileSync(join(base, "package.json"), JSON.stringify({ name: "fixture-root", cinatra: { devExtensions: declared } }, null, 2));
   for (const pkg of packages) {
     const pkgDir = join(extRoot, "cinatra-ai", pkg.dir);
     mkdirSync(pkgDir, { recursive: true });
     writeFileSync(
       join(pkgDir, "package.json"),
-      JSON.stringify({ name: `@cinatra-ai/${pkg.dir}`, cinatra: { kind: pkg.kind } }, null, 2),
+      pkg.manifest ?? JSON.stringify({ name: `@cinatra-ai/${pkg.dir}`, cinatra: { kind: pkg.kind } }, null, 2),
     );
     for (const [rel, contents] of Object.entries(pkg.files ?? {})) {
       const dest = join(pkgDir, rel);
@@ -64,10 +80,10 @@ function makeTree(packages, baseline) {
     baselinePath,
     JSON.stringify({ note: "synthetic test baseline", copies: baseline ?? {} }, null, 2) + "\n",
   );
-  return { extRoot, baselinePath };
+  return { base, extRoot, baselinePath };
 }
 
-function runGate({ extRoot, baselinePath }, args = []) {
+function runGate({ base, extRoot, baselinePath }, args = []) {
   const res = spawnSync(process.execPath, [GATE, ...args], {
     encoding: "utf8",
     // A synthetic floor is never compared with the real base branch: the
@@ -76,6 +92,7 @@ function runGate({ extRoot, baselinePath }, args = []) {
       ...envWithoutBase(process.env),
       SELF_RENDERING_BORDER_EXT_ROOT: extRoot,
       SELF_RENDERING_BORDER_BASELINE: baselinePath,
+      SELF_RENDERING_BORDER_DECLARED_ROOT: base,
     },
   });
   return { status: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
@@ -426,5 +443,402 @@ describe("self-rendering-extensions border gate — floor compared with the base
     });
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  });
+});
+
+// cinatra#3471: with the floor empty there is no baselined pair left to go
+// stale, so the census itself must refuse anything it cannot read. Each case
+// below pins one refusal branch of the gate (class (e) of its header).
+describe("self-rendering-extensions border gate — nothing unread at an empty floor", () => {
+  const CONNECTOR = { dir: "demo-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } };
+  const failing = (code, path) => Object.assign(new Error(`${code}: ${path}`), { code });
+
+  it("the committed floor is empty", () => {
+    const committed = JSON.parse(readFileSync(join(REPO_ROOT, FLOOR_FILE), "utf8"));
+    expect(committed.copies).toEqual({});
+  });
+
+  it("refuses a declared package with no directory, by name", () => {
+    const tree = makeTree([CONNECTOR], {}, { extraDeclared: ["@cinatra-ai/ghost-connector"] });
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain(
+      "[self-rendering-border] REFUSED: @cinatra-ai/ghost-connector is declared but extensions/cinatra-ai/ghost-connector/package.json is missing",
+    );
+  });
+
+  it("refuses a declared package whose package.json is malformed JSON, by name", () => {
+    const tree = makeTree([{ ...CONNECTOR, manifest: "{ not json" }], {});
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("REFUSED: @cinatra-ai/demo-connector: package.json cannot be read (");
+  });
+
+  it("refuses a declared package whose package.json is JSON but not an object", () => {
+    for (const manifest of ["null", "[]", '"x"']) {
+      const tree = makeTree([{ ...CONNECTOR, manifest }], {});
+      const { status, stderr } = runGate(tree);
+      expect(status, manifest).toBe(1);
+      expect(stderr, manifest).toContain("REFUSED: @cinatra-ai/demo-connector: package.json cannot be read (not a JSON object)");
+    }
+  });
+
+  it("refuses a declared package with no cinatra.kind, by name", () => {
+    for (const manifest of [{ name: "@cinatra-ai/demo-connector" }, { name: "@cinatra-ai/demo-connector", cinatra: {} }, { name: "@cinatra-ai/demo-connector", cinatra: "connector" }]) {
+      const tree = makeTree([{ ...CONNECTOR, manifest: JSON.stringify(manifest) }], {});
+      const { status, stderr } = runGate(tree);
+      expect(status, JSON.stringify(manifest)).toBe(1);
+      expect(stderr).toContain("REFUSED: @cinatra-ai/demo-connector has no cinatra.kind");
+    }
+  });
+
+  it("refuses a declared package whose cinatra.kind is not a string", () => {
+    for (const kind of [7, { x: 1 }, null, ["connector"]]) {
+      const tree = makeTree([{ ...CONNECTOR, manifest: JSON.stringify({ name: "@cinatra-ai/demo-connector", cinatra: { kind } }) }], {});
+      const { status, stderr } = runGate(tree);
+      expect(status, JSON.stringify(kind)).toBe(1);
+      expect(stderr).toContain("REFUSED: @cinatra-ai/demo-connector has no cinatra.kind");
+    }
+  });
+
+  it("refuses a declared package whose package.json names another package, naming both", () => {
+    const tree = makeTree([{ ...CONNECTOR, manifest: JSON.stringify({ name: "@cinatra-ai/other-connector", cinatra: { kind: "connector" } }) }], {});
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain(
+      'REFUSED: @cinatra-ai/demo-connector is declared but extensions/cinatra-ai/demo-connector/package.json names "@cinatra-ai/other-connector"',
+    );
+  });
+
+  it("refuses an empty, absent or unreadable declared set", () => {
+    const declaredValues = [{}, null, [], { "@other-scope/x": {} }, "@cinatra-ai/demo-connector"];
+    for (const declared of declaredValues) {
+      const tree = makeTree([CONNECTOR], {}, { declared });
+      const { status, stderr } = runGate(tree);
+      expect(status, JSON.stringify(declared)).toBe(1);
+      expect(stderr).toContain(
+        "[self-rendering-border] REFUSED: the declared extension set (package.json cinatra.devExtensions) is empty or unreadable — an empty census would pass vacuously",
+      );
+    }
+    // No root package.json at all, and one that is not JSON.
+    const tree = makeTree([CONNECTOR], {});
+    rmSync(join(tree.base, "package.json"));
+    expect(runGate(tree).stderr).toContain("cinatra.devExtensions) is empty or unreadable");
+    writeFileSync(join(tree.base, "package.json"), "{ broken");
+    const broken = runGate(tree);
+    expect(broken.status).toBe(1);
+    expect(broken.stderr).toContain("cinatra.devExtensions) is empty or unreadable");
+  });
+
+  it("refuses a declared name outside the scope or one it cannot map to a directory", () => {
+    const tree = makeTree([CONNECTOR], {}, { extraDeclared: ["@other-scope/x-connector", "@cinatra-ai/Bad_Name"] });
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("REFUSED: @other-scope/x-connector is declared outside the @cinatra-ai scope this census reads");
+    expect(stderr).toContain("REFUSED: @cinatra-ai/Bad_Name is not a package name this census can map to a directory");
+  });
+
+  it("refuses a missing extension scope directory when packages are declared", () => {
+    const tree = makeTree([], {}, { declared: { "@cinatra-ai/demo-connector": {} } });
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain(`REFUSED: the extension scope directory ${join(tree.extRoot, "cinatra-ai")} is missing`);
+  });
+
+  it("refuses a dangling symlink inside a connector's source, naming <package>/<rel>", () => {
+    const tree = makeTree([CONNECTOR], {});
+    symlinkSync(join("no", "such", "target.ts"), join(tree.extRoot, "cinatra-ai", "demo-connector", "src", "dangling.ts"));
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("REFUSED: demo-connector/src/dangling.ts: unreadable (ENOENT)");
+  });
+
+  it("refuses a baseline without copies, and every other bad shape, by name", () => {
+    const shapes = [{ note: "x" }, { copies: [] }, { copies: null }, { copies: { "demo-connector": "src/components/ui/a.tsx" } }, { copies: { "demo-connector": [1] } }, []];
+    for (const shape of shapes) {
+      const tree = makeTree([CONNECTOR], {});
+      writeFileSync(tree.baselinePath, JSON.stringify(shape));
+      const { status, stderr } = runGate(tree);
+      expect(status, JSON.stringify(shape)).toBe(1);
+      expect(stderr).toContain('"copies" is missing or not an object of string arrays');
+    }
+    const tree = makeTree([CONNECTOR], {});
+    writeFileSync(tree.baselinePath, "{ broken");
+    const broken = runGate(tree);
+    expect(broken.status).toBe(1);
+    expect(broken.stderr).toContain("not readable JSON");
+  });
+
+  it("still scans an UNDECLARED self-rendering directory under the scope", () => {
+    const tree = makeTree(
+      [CONNECTOR, { dir: "stale-connector", kind: "connector", undeclared: true, files: { "src/components/ui/button.tsx": BUTTON_COPY } }],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("+ stale-connector :: src/components/ui/button.tsx");
+  });
+
+  it("prints EVERY refusal before the (a)-(c) lines, and does not stop at the first", () => {
+    const tree = makeTree(
+      [
+        { dir: "copy-connector", kind: "connector", files: { "src/components/ui/button.tsx": BUTTON_COPY } },
+        { ...CONNECTOR, manifest: JSON.stringify({ name: "@cinatra-ai/demo-connector" }) },
+      ],
+      {},
+      { extraDeclared: ["@cinatra-ai/ghost-connector"] },
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    const ghost = stderr.indexOf("REFUSED: @cinatra-ai/ghost-connector is declared");
+    const kindless = stderr.indexOf("REFUSED: @cinatra-ai/demo-connector has no cinatra.kind");
+    const classA = stderr.indexOf("(a) UNLISTED primitive copy");
+    expect(ghost).toBeGreaterThan(-1);
+    expect(kindless).toBeGreaterThan(-1);
+    expect(classA).toBeGreaterThan(-1);
+    expect(Math.max(ghost, kindless)).toBeLessThan(classA);
+    expect(stderr).toContain("+ copy-connector :: src/components/ui/button.tsx");
+  });
+
+  it("--write-baseline on a tree missing a declared package refuses and leaves the baseline byte-identical", () => {
+    const tree = makeTree([CONNECTOR], { "demo-connector": ["src/components/ui/button.tsx"] }, { extraDeclared: ["@cinatra-ai/ghost-connector"] });
+    const before = readFileSync(tree.baselinePath, "utf8");
+    const { status, stderr } = runGate(tree, ["--write-baseline"]);
+    expect(status).toBe(1);
+    expect(stderr).toContain("REFUSED: @cinatra-ai/ghost-connector is declared");
+    expect(readFileSync(tree.baselinePath, "utf8")).toBe(before);
+  });
+
+  it("--write-baseline over a badly shaped baseline refuses and leaves it byte-identical", () => {
+    const tree = makeTree([CONNECTOR], {});
+    writeFileSync(tree.baselinePath, JSON.stringify({ copies: [] }));
+    const before = readFileSync(tree.baselinePath, "utf8");
+    const { status, stderr } = runGate(tree, ["--write-baseline"]);
+    expect(status).toBe(1);
+    expect(stderr).toContain('"copies" is missing or not an object of string arrays');
+    expect(readFileSync(tree.baselinePath, "utf8")).toBe(before);
+  });
+
+  it("--write-baseline on a fully read tree writes the shrunk floor", () => {
+    const tree = makeTree([CONNECTOR], { "demo-connector": ["src/components/ui/button.tsx"] });
+    const { status } = runGate(tree, ["--write-baseline"]);
+    expect(status).toBe(0);
+    expect(JSON.parse(readFileSync(tree.baselinePath, "utf8")).copies).toEqual({});
+    expect(runGate(tree).status).toBe(0);
+  });
+
+  // In process, through the census's file-system seam: as root in CI chmod
+  // denies no read, so the readdir and the read branches need an injected io.
+  const ioWith = (overrides) => ({
+    readdirSync: realFs.readdirSync,
+    statSync: realFs.statSync,
+    readFileSync: realFs.readFileSync,
+    existsSync: realFs.existsSync,
+    ...overrides,
+  });
+
+  it("scanBorder refuses a directory it cannot list (readdir EACCES), and the real io has no refusal", () => {
+    const tree = makeTree([CONNECTOR], {});
+    const srcDir = join(tree.extRoot, "cinatra-ai", "demo-connector", "src");
+    const io = ioWith({
+      readdirSync: (p, o) => {
+        if (p === srcDir) throw failing("EACCES", p);
+        return realFs.readdirSync(p, o);
+      },
+    });
+    const denied = gate.scanBorder({ extRoot: tree.extRoot, declaredRoot: tree.base, io });
+    expect(denied.refusals).toContain("[self-rendering-border] REFUSED: demo-connector/src: unreadable (EACCES)");
+    const real = gate.scanBorder({ extRoot: tree.extRoot, declaredRoot: tree.base });
+    expect(real.refusals).toEqual([]);
+    expect(real.packages.map((p) => p.name)).toEqual(["demo-connector"]);
+  });
+
+  it("scanBorder refuses a source file it cannot read (EIO); the coupling is not read as clean", () => {
+    const tree = makeTree(
+      [{ ...CONNECTOR, files: { "src/index.ts": 'import { Button } from "@/components/ui/button";\nexport { Button };\n' } }],
+      {},
+    );
+    const file = join(tree.extRoot, "cinatra-ai", "demo-connector", "src", "index.ts");
+    const io = ioWith({
+      readFileSync: (p, o) => {
+        if (p === file) throw failing("EIO", p);
+        return realFs.readFileSync(p, o);
+      },
+    });
+    const census = gate.scanBorder({ extRoot: tree.extRoot, declaredRoot: tree.base, io });
+    expect(census.refusals).toContain("[self-rendering-border] REFUSED: demo-connector/src/index.ts: unreadable (EIO)");
+    expect(gate.scanBorder({ extRoot: tree.extRoot, declaredRoot: tree.base }).coupling).toEqual([
+      { package: "demo-connector", file: "src/index.ts", specifier: "@/components/ui/button" },
+    ]);
+  });
+
+  it("scanBorder refuses a manifest it cannot read for a reason other than malformed JSON", () => {
+    const tree = makeTree([CONNECTOR], {});
+    const manifest = join(tree.extRoot, "cinatra-ai", "demo-connector", "package.json");
+    const io = ioWith({
+      readFileSync: (p, o) => {
+        if (p === manifest) throw failing("EACCES", p);
+        return realFs.readFileSync(p, o);
+      },
+    });
+    const census = gate.scanBorder({ extRoot: tree.extRoot, declaredRoot: tree.base, io });
+    expect(census.refusals).toContain("[self-rendering-border] REFUSED: @cinatra-ai/demo-connector: package.json cannot be read (EACCES)");
+    expect(census.packages).toEqual([]);
+  });
+
+  it("scanBorder refuses a scope directory it cannot list, and a stat it cannot take", () => {
+    const tree = makeTree([CONNECTOR], {});
+    const scopeDir = join(tree.extRoot, "cinatra-ai");
+    const scope = gate.scanBorder({
+      extRoot: tree.extRoot,
+      declaredRoot: tree.base,
+      io: ioWith({
+        readdirSync: (p, o) => {
+          if (p === scopeDir) throw failing("EACCES", p);
+          return realFs.readdirSync(p, o);
+        },
+      }),
+    });
+    expect(scope.refusals).toContain(`[self-rendering-border] REFUSED: ${scopeDir}: unreadable (EACCES)`);
+    symlinkSync("index.ts", join(scopeDir, "demo-connector", "src", "alias.ts"));
+    const aliased = join(scopeDir, "demo-connector", "src", "alias.ts");
+    const stat = gate.scanBorder({
+      extRoot: tree.extRoot,
+      declaredRoot: tree.base,
+      io: ioWith({
+        statSync: (p, o) => {
+          if (p === aliased) throw failing("ELOOP", p);
+          return realFs.statSync(p, o);
+        },
+      }),
+    });
+    expect(stat.refusals).toContain("[self-rendering-border] REFUSED: demo-connector/src/alias.ts: unreadable (ELOOP)");
+    expect(gate.scanBorder({ extRoot: tree.extRoot, declaredRoot: tree.base }).refusals).toEqual([]);
+  });
+
+  it("the single-purpose exported reads throw on a refusal instead of reading the tree as clean", () => {
+    const tree = makeTree([], {});
+    // These read the module's own declared set; a synthetic scope with none of
+    // its packages is refused, never returned as an empty, clean result.
+    expect(() => gate.scanPrimitiveCopies(tree.extRoot)).toThrow(/REFUSED/);
+    expect(() => gate.scanDirectCoupling(tree.extRoot)).toThrow(/REFUSED/);
+    expect(() => gate.listSelfRenderingPackages(tree.extRoot)).toThrow(/REFUSED/);
+  });
+
+  it("parseFloor accepts an empty floor and string arrays only", () => {
+    expect(gate.parseFloor('{"copies":{}}', "f")).toEqual({});
+    expect(gate.parseFloor('{"copies":{"a":["src/components/ui/x.tsx"]}}', "f")).toEqual({ a: ["src/components/ui/x.tsx"] });
+    for (const bad of ['{"note":1}', '{"copies":[]}', '{"copies":null}', '{"copies":{"a":"x"}}', '{"copies":{"a":[1]}}', "[]", "null"]) {
+      expect(() => gate.parseFloor(bad, "f"), bad).toThrow('REFUSED: f: "copies" is missing or not an object of string arrays');
+    }
+  });
+});
+
+describe("self-rendering-extensions border gate — a badly shaped floor fails the base guard closed", () => {
+  const fixtures = [];
+  afterEach(() => {
+    while (fixtures.length) fixtures.pop().cleanup();
+  });
+  const BAD_SHAPES = [{ note: "no copies" }, { copies: [] }, { copies: null }, { copies: { demo: "src/components/ui/a.tsx" } }, { copies: { demo: [1] } }];
+
+  it("a BASE floor of a bad shape is unreadable, never an empty floor", () => {
+    for (const shape of BAD_SHAPES) {
+      const f = makeFloorRepo({ base: { [FLOOR_FILE]: shape }, head: { [FLOOR_FILE]: { note: "fixture", copies: {} } } });
+      fixtures.push(f);
+      const r = checkFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+      expect(r.ok, JSON.stringify(shape)).toBe(false);
+      expect(r.status).toBe("unreadable");
+      expect(r.lines[0]).toMatch(/is not a readable floor/);
+      expect(r.lines[0]).toContain('"copies" is missing or not an object of string arrays');
+    }
+  });
+
+  it("a HEAD floor of a bad shape, read by default, fails closed on a pull request's run and on no pull request", () => {
+    for (const shape of BAD_SHAPES) {
+      const f = makeFloorRepo({ base: { [FLOOR_FILE]: { note: "fixture", copies: {} } }, head: { [FLOOR_FILE]: shape } });
+      fixtures.push(f);
+      for (const env of [PULL_REQUEST_RUN, NO_PULL_REQUEST_RUN]) {
+        const r = checkFloorAgainstBase({ repoRoot: f.root, env });
+        expect(r.ok, JSON.stringify(shape)).toBe(false);
+        expect(r.lines[0]).toContain('"copies" is missing or not an object of string arrays');
+      }
+    }
+  });
+});
+
+// cinatra#3471: once the floor is empty, the statements that described it as
+// holding copies are history. Each file's text is normalized (comment markers
+// dropped, lines joined, whitespace collapsed), so a claim split across
+// comment lines is still found, and every new sentence is asserted by name.
+describe("self-rendering-extensions border gate — the statements of an empty floor", () => {
+  const normalize = (text) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/\/\*+|\*+\//g, " ").replace(/^\s*\*(?!\*)/, " ").replace(/^\s*\/\/+/, " "))
+      .join(" ")
+      .replace(/\s+/g, " ");
+  const normalized = (rel) => normalize(readFileSync(join(REPO_ROOT, rel), "utf8"));
+  const FILES = {
+    gate: "scripts/extensions/self-rendering-extensions-border-gate.mjs",
+    bundle: "packages/sdk-extensions/src/artifact-client-bundle.ts",
+    contractTest: "packages/sdk-extensions/src/__tests__/design-primitives-contract.test.ts",
+    contractDoc: "docs/internals/contracts/host-shared-primitives-contract.md",
+    vendor: "scripts/extensions/vendor-extension-primitives.mjs",
+    baseline: FLOOR_FILE,
+  };
+  const OLD_CLAIMS = [
+    "records as byte copies",
+    "border floor records",
+    "border floor also records",
+    "baseline ALSO lists",
+    "appear in the border floor",
+    "No package is migrated",
+    "Today fifteen connector packages",
+    "still carry are recorded",
+    "The floor empties as packages move",
+    "A package keeps its own copy",
+  ];
+  const ANCHORS = [
+    ["H1", "gate", "Connector and artifact packages held BYTE COPIES of those primitives under src/components/ui/ until the run-time-shared road of #3471 replaced them; the last copies (email-artifacts) went with #3471, and the floor is empty."],
+    ["H1", "gate", "The gate now refuses any copy outright and refuses any declared package it cannot read."],
+    ["H2", "bundle", "exactly the exports of the seventeen product components under src/components/ui/ that connector and artifact packages copied before the migration of #3471: alert, alert-dialog, badge, button, card, checkbox, dialog, field, input-group, input, label, paginated-table, pagination, select, separator, table, textarea."],
+    ["H2", "bundle", "The list is frozen by the contract version, not by the border floor, which is empty."],
+    ["H3", "bundle", "Before the migration the border floor also recorded external-link.tsx, link.tsx and text-link.tsx. Those are NOT product primitives: they are the extensions' OWN components, and no such file exists under src/components/ui/, so the host cannot and does not serve them."],
+    ["H4", "contractTest", 'it("names an export of every frozen primitive anchor"'],
+    ["H4", "contractTest", "PRIMITIVE_ANCHORS: the seventeen product components of the frozen list"],
+    ["H4", "contractTest", "external-link / link / text-link are not in PRIMITIVE_ANCHORS"],
+    ["H5", "contractDoc", "Exactly the exports of the seventeen product components under src/components/ui/ that connector and artifact packages copied before the migration of #3471."],
+    ["H6", "contractDoc", "Before the migration the border floor also recorded external-link.tsx, link.tsx and text-link.tsx. Those are not product primitives: they are the extensions' own components, and no such file exists under src/components/ui/, so the host cannot serve them. A connector or artifact package keeps such a component in its own source outside src/components/ui/ (the border gate refuses any file there); they never enter this contract."],
+    ["H7", "contractDoc", "Remove the package's pairs from the border floor and move its dev-lock pin. (Only a kind:agent package also has a VENDOR_MANIFEST entry to drop; see #3470.)"],
+    ["H8", "contractDoc", "## What this slice did not do"],
+    ["H8", "contractDoc", "Migrated since: #3509, #3510 and #3471; the border floor is empty."],
+    ["H9", "vendor", "The copies those packages carried were recorded by the shrink-only baseline of scripts/extensions/self-rendering-extensions-border-gate.mjs until #3471 emptied it; that gate now refuses any copy in either kind outright."],
+    ["H10", "baseline", "The floor emptied with #3471 and stays empty: a design-primitive copy under src/components/ui/ of a synced kind:connector / kind:artifact package fails the gate."],
+  ];
+
+  it("holds only while the committed floor is empty", () => {
+    expect(JSON.parse(readFileSync(join(REPO_ROOT, FLOOR_FILE), "utf8")).copies).toEqual({});
+  });
+
+  for (const [key, rel] of Object.entries(FILES)) {
+    it(`${key}: no statement still describes the floor as holding copies`, () => {
+      const text = normalized(rel);
+      for (const claim of OLD_CLAIMS) expect(text.includes(claim), `${rel} still says "${claim}"`).toBe(false);
+    });
+  }
+
+  for (const [h, key, anchor] of ANCHORS) {
+    it(`${h}: ${FILES[key]} carries its new sentence`, () => {
+      expect(normalized(FILES[key])).toContain(anchor.replace(/\s+/g, " "));
+    });
+  }
+
+  it("the normalization finds a claim split over comment lines", () => {
+    expect(normalize("/**\n * that the border floor\n * records as byte copies\n */\n")).toContain(
+      "border floor records as byte copies",
+    );
+    expect(normalize("// The copies those packages still carry\n// are recorded by the baseline\n")).toContain(
+      "still carry are recorded",
+    );
   });
 });
