@@ -801,6 +801,39 @@ export async function bindRunStepToolPolicy(input: {
     }
   });
 }
+/** A resumed run dispatches under a FRESH attempt (a stopped run's queued->running
+ * claim mints one). This carries the run's ONE bound graph forward to that attempt
+ * before the dispatch. It never selects or replaces a graph. It refuses a binding
+ * that another attempt holds than the one the run carried before this dispatch, so a
+ * stale or foreign attempt cannot move it. An unbound run stays unbound, and its
+ * source checks keep refusing its callbacks. */
+export async function rebindRunStepToolPolicyForResume(input: {
+  orgId: string; runId: string; priorExecutionAttemptId: string | null;
+  executionAttemptId: string; authority: OrgWriteAuthority;
+}): Promise<void> {
+  await withRunActionPolicyTransaction(input, async (tx) => {
+    const [run] = await tx.select().from(agentRuns).where(and(eq(agentRuns.id, input.runId),
+      eq(agentRuns.orgId, input.orgId))).for("update");
+    if (!run || run.status !== "running" || !input.executionAttemptId ||
+        run.executionAttemptId !== input.executionAttemptId) {
+      throw new RunStepToolPolicyRefusal("step_tool_dispatch_binding_mismatch");
+    }
+    const [bound] = await tx.select().from(agentRunOutwardActionPolicies)
+      .where(eq(agentRunOutwardActionPolicies.runId, input.runId)).for("update");
+    if (!bound) return;
+    const policy = parseRunStepToolPolicy(bound.policy);
+    if (bound.orgId !== input.orgId || !input.priorExecutionAttemptId ||
+        input.priorExecutionAttemptId === input.executionAttemptId ||
+        bound.executionAttemptId !== input.priorExecutionAttemptId || run.a2aContextId !== policy.contextId) {
+      throw new RunStepToolPolicyRefusal("step_tool_dispatch_rebind_refused");
+    }
+    const moved = await tx.update(agentRunOutwardActionPolicies).set({ executionAttemptId: input.executionAttemptId })
+      .where(and(eq(agentRunOutwardActionPolicies.runId, input.runId), eq(agentRunOutwardActionPolicies.orgId, input.orgId),
+        eq(agentRunOutwardActionPolicies.executionAttemptId, input.priorExecutionAttemptId)))
+      .returning({ runId: agentRunOutwardActionPolicies.runId });
+    if (moved.length !== 1) throw new RunStepToolPolicyRefusal("step_tool_dispatch_rebind_refused");
+  });
+}
 export async function readRunStepToolPolicy(runId: string, orgId: string): Promise<RunStepToolPolicy> {
   const [bound] = await db.select({ policy: agentRunOutwardActionPolicies.policy })
     .from(agentRunOutwardActionPolicies).where(and(eq(agentRunOutwardActionPolicies.runId, runId),
