@@ -37,8 +37,11 @@
 //       package.json, name or known cinatra.kind cannot be read, an empty or
 //       unreadable declared set, a missing scope directory, and a file or
 //       directory of a self-rendering package that cannot be read are each
-//       REFUSED by name. With an empty floor there is no baselined pair left to
-//       go stale, so without (e) a tree the gate never read would pass.
+//       REFUSED by name. An undeclared directory under the scope that holds a
+//       package.json is read the same way: a listing, a package.json or a kind
+//       it cannot read is REFUSED by its path. With an empty floor there is no
+//       baselined pair left to go stale, so without (e) a tree the gate never
+//       read would pass.
 //
 // kind:agent packages are OUT OF SCOPE here — the agent border has its own gate
 // (cinatra-ai/cinatra#3470).
@@ -57,8 +60,9 @@
 // gives with CINATRA_INVENTORY_EXT_ROOT):
 //   SELF_RENDERING_BORDER_EXT_ROOT=<dir holding <scope>/<package>/>
 //   SELF_RENDERING_BORDER_BASELINE=<baseline json>
-//   SELF_RENDERING_BORDER_DECLARED_ROOT=<dir holding the package.json whose
-//     cinatra.devExtensions is the declared set>
+// The declared set is read from the package.json BESIDE the extension tree
+// (the repository root for the real tree). It is never set on its own, so no
+// variable can narrow the declaration universe independently of the tree.
 
 import {
   readFileSync,
@@ -81,7 +85,9 @@ const EXT_ROOT =
 const BASELINE_PATH =
   process.env.SELF_RENDERING_BORDER_BASELINE ||
   join(__dirname, "self-rendering-extensions-border.baseline.json");
-const DECLARED_ROOT = process.env.SELF_RENDERING_BORDER_DECLARED_ROOT || REPO_ROOT;
+
+/** The directory whose package.json declares the set of an extension tree: the one beside it. */
+const declaredRootOf = (extRoot) => dirname(resolve(extRoot));
 
 /** Every file-system call of the census goes through this seam (tests inject one). */
 const DEFAULT_IO = Object.freeze({ readdirSync, statSync, readFileSync, existsSync });
@@ -289,10 +295,11 @@ function readManifest(manifestPath, io) {
  * The census: every declared package is read or refused by name, every
  * self-rendering package is walked for copies and for direct reaches, and
  * every file-system call goes through `io`. Undeclared directories under the
- * scope are still scanned, as before. Returns
- * `{ packages, copies, coupling, refusals }`.
+ * scope are still scanned, and read with the same allow-list. The declared
+ * set defaults to the one beside `extRoot`; only an in-process caller passes
+ * `declaredRoot`. Returns `{ packages, copies, coupling, refusals }`.
  */
-export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = DECLARED_ROOT, io = DEFAULT_IO } = {}) {
+export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(extRoot), io = DEFAULT_IO } = {}) {
   const refusals = [];
   const declared = readDeclaredSet(declaredRoot, io, refusals);
   const scopeDir = join(extRoot, SCOPE_DIR);
@@ -348,17 +355,39 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = DECLARED_ROOT, i
   }
 
   // Undeclared directories under the scope (a stale clone-back leftover, a
-  // synthetic tree) are still scanned, as before the declared set existed.
+  // synthetic tree) are still scanned, as before the declared set existed, and
+  // read with the same allow-list as a declared package: only an entry whose
+  // listing holds no package.json (a plain file included) is not a package.
+  // A listing, a package.json or a kind the census cannot read is refused by
+  // the directory's path, never skipped.
   for (const dir of onDisk) {
     if (declaredDirs.has(dir)) continue;
     const pkgDir = join(scopeDir, dir);
-    const manifestPath = join(pkgDir, "package.json");
-    if (!io.existsSync(manifestPath)) continue;
-    const read = readManifest(manifestPath, io);
-    if (read.error) continue;
+    const where = `extensions/${SCOPE_DIR}/${dir}`;
+    let entries;
+    try {
+      entries = [...io.readdirSync(pkgDir)].map(String);
+    } catch (err) {
+      if (err?.code === "ENOTDIR") continue;
+      refusals.push(`${REFUSED} ${where} is not declared and cannot be listed (${codeOf(err)})`);
+      continue;
+    }
+    if (!entries.includes("package.json")) continue;
+    const read = readManifest(join(pkgDir, "package.json"), io);
+    if (read.error) {
+      refusals.push(`${REFUSED} ${where} is not declared and its package.json cannot be read (${read.error})`);
+      continue;
+    }
     const kind = isPlainObject(read.manifest.cinatra) ? read.manifest.cinatra.kind : undefined;
-    if (!SELF_RENDERING_KINDS.has(kind)) continue;
-    packages.push({ name: dir, dir: pkgDir, kind });
+    if (typeof kind !== "string") {
+      refusals.push(`${REFUSED} ${where} is not declared and has no cinatra.kind`);
+      continue;
+    }
+    if (!KNOWN_KINDS.has(kind)) {
+      refusals.push(`${REFUSED} ${where} is not declared and has an unknown cinatra.kind ${JSON.stringify(kind)}`);
+      continue;
+    }
+    if (SELF_RENDERING_KINDS.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
   }
   packages.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 

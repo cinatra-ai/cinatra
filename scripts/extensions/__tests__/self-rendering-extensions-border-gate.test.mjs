@@ -8,6 +8,8 @@
 // synthetic root with SELF_RENDERING_BORDER_EXT_ROOT and at a synthetic
 // baseline with SELF_RENDERING_BORDER_BASELINE (the same injectable-root shape
 // `CINATRA_INVENTORY_EXT_ROOT` gives scripts/extensions/inventory.mjs).
+// The declared set is the package.json beside the synthetic extension root,
+// as the repository root's is beside the real one.
 
 import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -83,7 +85,7 @@ function makeTree(packages, baseline, opts = {}) {
   return { base, extRoot, baselinePath };
 }
 
-function runGate({ base, extRoot, baselinePath }, args = [], extraEnv = {}) {
+function runGate({ extRoot, baselinePath }, args = [], extraEnv = {}) {
   const res = spawnSync(process.execPath, [GATE, ...args], {
     encoding: "utf8",
     // A synthetic floor is never compared with the real base branch: the
@@ -92,7 +94,6 @@ function runGate({ base, extRoot, baselinePath }, args = [], extraEnv = {}) {
       ...envWithoutBase(process.env),
       SELF_RENDERING_BORDER_EXT_ROOT: extRoot,
       SELF_RENDERING_BORDER_BASELINE: baselinePath,
-      SELF_RENDERING_BORDER_DECLARED_ROOT: base,
       ...extraEnv,
     },
   });
@@ -746,8 +747,8 @@ describe("self-rendering-extensions border gate — nothing unread at an empty f
 
   it("the single-purpose exported reads throw on a refusal instead of reading the tree as clean", () => {
     const tree = makeTree([], {});
-    // These read the module's own declared set; a synthetic scope with none of
-    // its packages is refused, never returned as an empty, clean result.
+    // These read the declared set beside the synthetic tree, which is empty;
+    // the census is refused, never returned as an empty, clean result.
     expect(() => gate.scanPrimitiveCopies(tree.extRoot)).toThrow(/REFUSED/);
     expect(() => gate.scanDirectCoupling(tree.extRoot)).toThrow(/REFUSED/);
     expect(() => gate.listSelfRenderingPackages(tree.extRoot)).toThrow(/REFUSED/);
