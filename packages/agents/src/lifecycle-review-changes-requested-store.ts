@@ -49,6 +49,7 @@ import { readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
 import { findDeclaredGateForPair } from "./lifecycle-declared-review-gate";
 import {
+  DeclaredGateLinkRefusedError,
   recordChangesRequested,
   readRepair,
   readRepairBySuccessorGateId,
@@ -286,13 +287,16 @@ export async function recordReviewSurfaceChangesRequested(
   // THE LINK MAY NOT HAVE RUN YET. The sweep links a produced event to its
   // declared gate asynchronously, so a reviewer can comment while the event is
   // still pending with no address. That comment is not demoted to a note: when
-  // the event is still pending and the sweep's own answer
-  // (`findDeclaredGateForPair`, the one function the link reads) is THIS gate,
-  // the change request is filed against this gate now, and the later link writes
-  // the same gate onto the event. One writer each: this composer writes the
-  // gate's resolution and the repair row in their one transaction; the sweep
-  // alone writes the event's link. A processed event with no address, or one
-  // the sweep would link elsewhere, stays a plain note.
+  // the event is still pending and its declared gate
+  // (`findDeclaredGateForPair`) is THIS gate, the change request links the
+  // event to this gate itself, in the transaction that resolves the gate and
+  // writes the repair row (`declaredEventLink` below). That transaction holds
+  // the event's row lock, and the sweep decides an unlinked event's gate only
+  // under the same lock, so the two never disagree: an event the sweep already
+  // linked elsewhere or gated automatically refuses the change request (a plain
+  // note), and an event this commit linked is found linked by the sweep. The
+  // check here is only the early answer; the locked one inside the transaction
+  // decides.
   //
   // Each gate of a per-artifact review step pins exactly one target and takes
   // its own change request; a sibling gate still pending does not demote it
@@ -357,8 +361,10 @@ export async function recordReviewSurfaceChangesRequested(
       currentBaseRevisionId,
       lineageId,
       decidedBy: input.decidedBy ?? null,
+      ...(declared ? { declaredEventLink: { eventId } } : {}),
     });
   } catch (err) {
+    if (err instanceof DeclaredGateLinkRefusedError) return notEligible("no produced event names this gate");
     // The entry point THROWS a gate CAS conflict (the gate is not pending — a
     // different decision resolved it under the reviewer). Fold it into the typed
     // failure the surface maps to its BLOCKED state; the transaction rolled back,

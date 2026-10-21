@@ -753,8 +753,10 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     const artifactId = `art-${randomUUID()}`;
     const rev = `rev-${randomUUID()}`;
     await seedRepairCapableProducer(runId);
-    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval' WHERE id=$1`, [runId]);
-    const reviewTaskId = `wayflow-${randomUUID()}`;
+    // The run waits at the declared step's pause: its paused task is the gate's task.
+    const task = randomUUID();
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval', a2a_task_id=$2 WHERE id=$1`, [runId, task]);
+    const reviewTaskId = `wayflow-${task}`;
     const wf = await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,
@@ -826,16 +828,18 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     const artifactId = `art-${randomUUID()}`;
     const rev = `rev-${randomUUID()}`;
     await seedRepairCapableProducer(runId);
+    // The run waits at the declared step's pause: its paused task is the gate's task.
+    const task = randomUUID();
     await pool(
       `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval', lifecycle_moment='review',
-         lifecycle_card_kind='review', lifecycle_card_ref='card-1' WHERE id=$1`,
-      [runId],
+         lifecycle_card_kind='review', lifecycle_card_ref='card-1', a2a_task_id=$2 WHERE id=$1`,
+      [runId, task],
     );
     await pool(
       `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
       [ORG],
     );
-    const reviewTaskId = `wayflow-${randomUUID()}`;
+    const reviewTaskId = `wayflow-${task}`;
     const wf = await gateStore.emitArtifactReviewGate({
       runId,
       orgId: ORG,

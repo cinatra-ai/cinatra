@@ -136,6 +136,12 @@ vi.mock("../wayflow-url", () => ({
 vi.mock("../wayflow-run-token-carrier", () => ({
   mintResumeRunTokenMetadata: vi.fn(async () => ({})),
 }));
+// cinatra#4245: the resume re-reads its pause in the store before it writes and
+// sends; this suite has no store, and its pause has no change request.
+vi.mock("../lifecycle-declared-review-gate", async (orig) => ({
+  ...(await orig<typeof import("../lifecycle-declared-review-gate")>()),
+  resumeStillAllowed: vi.fn(async () => true),
+}));
 vi.mock("../compiler", () => ({ compileWorkflow: vi.fn() }));
 vi.mock("../verdaccio/client", () => ({
   deleteAgentPackageVersion: vi.fn(),

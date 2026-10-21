@@ -56,6 +56,8 @@ const ORG = "org-2047-d1";
  * UNAFFECTED by this suite's `TEST_SCHEMA` swap for the lifecycle tables). */
 const MEMBER_USER = "user-2047-d1-member";
 const OUTSIDER_USER = "user-2047-d1-outsider";
+/** cinatra#4245 — a member who loses the membership after a change request. */
+const LEAVER_USER = "user-2047-d1-leaver";
 /** The MANIFEST-declared form of the capability (an extension that implements its
  * own repair) — the shape `installAgentFromPackage` now compiles onto the row. */
 const MANIFEST_REPAIR_CAPABLE = JSON.stringify({ repairCapable: true });
@@ -243,10 +245,10 @@ afterAll(async () => {
   const authAdmin = new Client({ connectionString: DB_URL });
   await authAdmin.connect();
   await authAdmin
-    .query(`DELETE FROM public."member" WHERE "userId" = ANY($1)`, [[MEMBER_USER, OUTSIDER_USER]])
+    .query(`DELETE FROM public."member" WHERE "userId" = ANY($1)`, [[MEMBER_USER, OUTSIDER_USER, LEAVER_USER]])
     .catch(() => {});
   await authAdmin
-    .query(`DELETE FROM public."user" WHERE id = ANY($1)`, [[MEMBER_USER, OUTSIDER_USER]])
+    .query(`DELETE FROM public."user" WHERE id = ANY($1)`, [[MEMBER_USER, OUTSIDER_USER, LEAVER_USER]])
     .catch(() => {});
   await authAdmin.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
   await authAdmin.end().catch(() => {});
@@ -670,5 +672,69 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
     expect(summary.repairsDispatched).toBe(0);
     expect(summary.repairsEscalated).toBe(0);
     process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "on";
+  });
+
+  it("DECLARED GATE, LOST MEMBERSHIP: a producer who leaves the organization after the change request is stopped and escalated, never dispatched (cinatra#4245)", async () => {
+    const authAdmin = new Client({ connectionString: DB_URL });
+    await authAdmin.connect();
+    await authAdmin.query(
+      `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+       VALUES ($1, $1, $2, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+      [LEAVER_USER, `${LEAVER_USER}@2047-d1.test`],
+    );
+    await authAdmin.query(
+      `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+       VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+      [`m-2047-d1-leaver-${ORG}`, ORG, LEAVER_USER],
+    );
+    try {
+      const templateId = await seedTemplate(`@cinatra-ai/declared-${randomUUID()}-agent`, MANIFEST_REPAIR_CAPABLE);
+      const producerRunId = await seedRun(templateId, LEAVER_USER);
+      const task = randomUUID();
+      await pool(
+        `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='pending_approval', a2a_task_id=$2 WHERE id=$1`,
+        [producerRunId, task],
+      );
+      const ev = await produce({ producerRunId });
+      const reviewTaskId = `wayflow-${task}`;
+      const gate = await gateStore.emitArtifactReviewGate({
+        runId: producerRunId,
+        orgId: ORG,
+        reviewTaskId,
+        targets: [{ artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId }],
+        expiresAt: null,
+      });
+      await orch.sweepReviewOrchestration({ limit: 50 });
+
+      const cr = await crStore.recordReviewSurfaceChangesRequested({
+        runId: producerRunId,
+        reviewTaskId,
+        baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+        currentBaseRevisionId: ev.representationRevisionId,
+        feedback: "tighten the headline",
+      });
+      expect(cr.ok).toBe(true);
+      if (!cr.ok) return;
+      expect(gate.gateId).toBeTruthy();
+
+      // The membership ends after the change request committed, before the drain.
+      await authAdmin.query(`DELETE FROM public."member" WHERE "userId" = $1`, [LEAVER_USER]);
+
+      const summary = await dispatchStore.dispatchPendingProducerRepairs();
+      expect(summary.dispatched).toBe(0);
+      const row = await repairRow(cr.repairId);
+      expect(row!.status).toBe("escalated");
+      expect(
+        dispatchStore.dispatchEscalationReason({ status: row!.status, changeSummary: row!.change_summary }),
+      ).toContain("no longer a verified member");
+      const st = await pool(`SELECT status FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [producerRunId]);
+      expect((st.rows[0] as { status: string }).status).toBe("stopped");
+      const child = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [
+        dispatchStore.repairRunId(cr.repairId),
+      ]);
+      expect(child.rows.length).toBe(0);
+    } finally {
+      await authAdmin.end().catch(() => {});
+    }
   });
 });

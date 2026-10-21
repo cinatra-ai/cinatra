@@ -40,7 +40,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import {
@@ -52,6 +52,7 @@ import {
   lifecycleBatchDisposition,
 } from "./schema";
 import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import { lockProducedEventLink } from "./lifecycle-declared-review-gate";
 import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
@@ -135,6 +136,24 @@ export interface RecordChangesRequestedInput {
    * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
    * the host cannot name an actor (a worker-driven record). */
   decidedBy?: string | null;
+  /** cinatra#4245 — a change request on a review step the flow DECLARES itself
+   * (a `wayflow-` gate) is bound to the produced event of its revision. The
+   * event's row is locked in this record's transaction: it must already name
+   * this gate, or still be unlinked with this gate as its declared gate and no
+   * other gate pinning its revision, in which case it is linked to this gate in
+   * the same commit. Anything else refuses with `DeclaredGateLinkRefusedError`
+   * and nothing is written. */
+  declaredEventLink?: { eventId: string };
+}
+
+/** The produced event of a declared gate's revision does not belong to that
+ * gate (it names another gate, was processed without one, or another gate pins
+ * its revision): the change request is refused and its transaction rolled back. */
+export class DeclaredGateLinkRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeclaredGateLinkRefusedError";
+  }
 }
 
 export type RecordChangesRequestedResult =
@@ -228,6 +247,34 @@ export async function recordChangesRequested(
   const fingerprint = changesRequestedFingerprint(request);
 
   const persisted = await db.transaction(async (tx) => {
+    // cinatra#4245 — BIND THE EVENT FIRST, under its row lock. The orchestration
+    // sweep decides an unlinked event's gate under the same lock, so either it
+    // linked (or gated) the event before this point and the check below refuses,
+    // or this commit links the event to the declared gate and the sweep later
+    // finds it linked. A later repair finalize re-points exactly this link.
+    if (input.declaredEventLink) {
+      const link = await lockProducedEventLink(tx, input.declaredEventLink.eventId);
+      if (link.kind === "settled" && link.continuationAddress === request.gateId) {
+        // already this gate's event
+      } else if (
+        link.kind === "unlinked" &&
+        link.declaredGateId === request.gateId &&
+        !link.otherGatePinsRevision
+      ) {
+        await tx
+          .update(artifactProducedOutbox)
+          .set({ continuationAddress: request.gateId })
+          .where(
+            and(
+              eq(artifactProducedOutbox.eventId, input.declaredEventLink.eventId),
+              isNull(artifactProducedOutbox.continuationAddress),
+            ),
+          );
+      } else {
+        throw new DeclaredGateLinkRefusedError("the produced event of this revision does not belong to this declared gate");
+      }
+    }
+
     // CLOSE the review attempt: CAS the base gate pending → resolved with the
     // 'changes_requested' terminal disposition. A gate already resolved by THIS
     // decision (matching fingerprint) is idempotent; a different terminal state is

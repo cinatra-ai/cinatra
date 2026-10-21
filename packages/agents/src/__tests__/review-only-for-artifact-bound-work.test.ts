@@ -66,11 +66,16 @@ const { dbMock } = vi.hoisted(() => {
         from: () => chain,
         where: () => chain,
         orderBy: () => chain,
+        for: () => chain,
         limit: () => Promise.resolve(picked),
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
           Promise.resolve(picked).then(res, rej),
       };
       return chain;
+    },
+    // cinatra#4245: the link decision runs in a transaction on the event row.
+    transaction(fn: (tx: unknown) => Promise<unknown>) {
+      return fn(dbMock);
     },
     update() {
       const chain: Record<string, unknown> = {

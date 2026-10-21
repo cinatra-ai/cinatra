@@ -2132,6 +2132,20 @@ async function handleAgentBuilderRunResume(
       if (!packageName) {
         return { error: `template.packageName is null for templateId=${template.id}; cannot route WayFlow resume` };
       }
+      // cinatra#4245 — a change request ENDS the pause: once a reviewer asked
+      // for changes on a gate of this pause, nothing resumes the run past it
+      // (the repair stops it instead). The same rule the resume worker reads,
+      // checked against the store NOW — before the first write here, again
+      // before the run credential is minted, and again right before the send —
+      // so a change request that commits while this resume is under way stops
+      // it before anything reaches the paused task.
+      const { resumeStillAllowed } = await import("../lifecycle-declared-review-gate");
+      const pausedTaskId = run.a2aTaskId;
+      const pauseFence = () => resumeStillAllowed({ id: run.id, orgId: run.orgId, expectedTaskId: pausedTaskId });
+      const pauseEnded = {
+        error: "Run can no longer be resumed at this pause: changes were requested on its review, or it moved on.",
+      };
+      if (!(await pauseFence())) return pauseEnded;
       // vendor-namespaced routing via resolveWayflowUrl. Throws on
       // malformed packageName or unset WAYFLOW_BASE_URL — surfaced as MCP error.
       let wayflowUrl: string;
@@ -2209,7 +2223,9 @@ async function handleAgentBuilderRunResume(
       // carry run identity into the resumed leg. Metadata (not text) because
       // `resumeText` reaches the gate's InputMessageNode VERBATIM.
       const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+      if (!(await pauseFence())) return pauseEnded;
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      if (!(await pauseFence())) return pauseEnded;
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
         message: {

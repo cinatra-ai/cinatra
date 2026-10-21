@@ -495,18 +495,24 @@ export async function stopRunPausedAtDeclaredGate(row: {
     await clearRunLifecycleMoment(gate.runId, authority);
     return "stopped";
   };
-  const readStatus = async (): Promise<string | null> => {
+  const pause = declaredPauseOf(gate.reviewTaskId);
+  // cinatra#4245 — THE STOP IS BOUND TO THE EXACT PAUSE. `pending_approval` alone
+  // does not say WHICH pause the run waits at: a run that went on and now waits
+  // at a later, ordinary HITL step reads the same status. The run waits at this
+  // gate's pause only while its paused task IS that pause's task.
+  const readRun = async (): Promise<{ status: string | null; atPause: boolean }> => {
     const [run] = await db
-      .select({ status: agentRuns.status })
+      .select({ status: agentRuns.status, a2aTaskId: agentRuns.a2aTaskId })
       .from(agentRuns)
       .where(and(eq(agentRuns.id, gate.runId), eq(agentRuns.orgId, row.orgId)))
       .limit(1);
-    return run?.status ?? null;
+    const atPause = typeof run?.a2aTaskId === "string" && `${DECLARED_REVIEW_TASK_PREFIX}${run.a2aTaskId}` === pause;
+    return { status: run?.status ?? null, atPause };
   };
-  const status = await readStatus();
-  if (status === "stopped") return stopped();
-  if (status !== "pending_approval") return "not-paused";
-  const pause = declaredPauseOf(gate.reviewTaskId);
+  const readStatus = async (): Promise<string | null> => (await readRun()).status;
+  const first = await readRun();
+  if (first.status === "stopped") return stopped();
+  if (first.status !== "pending_approval" || !first.atPause) return "not-paused";
   const runGates = await db
     .select({
       id: artifactReviewGates.id,
@@ -523,6 +529,9 @@ export async function stopRunPausedAtDeclaredGate(row: {
     return later || other.status === "pending";
   });
   if (waitsElsewhere) return "not-paused";
+  // Re-read right before the stop, so a run that moved on meanwhile is left alone.
+  const now = await readRun();
+  if (now.status !== "pending_approval" || !now.atPause) return now.status === "stopped" ? stopped() : "not-paused";
   try {
     await advanceAgentRun({
       run: { id: gate.runId, orgId: row.orgId, status: "pending_approval" },

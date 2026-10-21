@@ -51,6 +51,7 @@ const dbFake = {
       from: () => chain,
       where(condition: SQL) { where = condition; return chain; },
       orderBy: () => chain,
+      for: () => chain,
       async limit(cap: number) { return rows().slice(0, cap); },
       then(resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) {
         return Promise.resolve(rows()).then(resolve, reject);
@@ -79,6 +80,11 @@ const dbFake = {
 vi.mock("../db", () => ({ db: {
   select: (columns: Record<string, unknown>) => dbFake.select(columns),
   update: () => dbFake.update(),
+  // cinatra#4245: the link decision runs in a transaction on the event row.
+  transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({
+    select: (columns: Record<string, unknown>) => dbFake.select(columns),
+    update: () => dbFake.update(),
+  }),
 }, agentBuilderPool: {} }));
 
 const emit = vi.fn(async (input: GateInput) => {

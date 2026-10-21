@@ -8,7 +8,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ports = vi.hoisted(() => ({
   gates: [] as Array<{ id: string; runId: string; orgId: string; reviewTaskId: string; status: string;
     pinnedTargets?: unknown[]; createdAt?: Date }>,
-  run: null as null | { id: string; orgId: string; templateId: string; runBy: string | null; status: string },
+  run: null as null | { id: string; orgId: string; templateId: string; runBy: string | null; status: string;
+    a2aTaskId?: string | null },
   repairs: [] as Array<Record<string, unknown>>,
   repairCapable: true,
   event: null as null | Record<string, unknown>,
@@ -164,7 +165,9 @@ function arrangeEligible(): void {
   ports.gates = [{ id: GATE, runId: RUN, orgId: ORG, reviewTaskId: TASK, status: "pending" }];
   ports.event = { eventId: "event-1", orgId: ORG, artifactId: TARGET.artifactId, representationRevisionId: TARGET.representationRevisionId,
     producerRunId: RUN, producerAgentId: null, continuationMode: "async_effects_gated", continuationAddress: GATE };
-  ports.run = { id: RUN, orgId: ORG, templateId: "template-producing", runBy: "human-member", status: "pending_approval" };
+  // The run waits at the declared step's pause: its paused task is the gate's task.
+  ports.run = { id: RUN, orgId: ORG, templateId: "template-producing", runBy: "human-member", status: "pending_approval",
+    a2aTaskId: TASK.slice("wayflow-".length) };
   ports.repairCapable = true;
 }
 
