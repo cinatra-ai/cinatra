@@ -398,7 +398,9 @@ function renderInRunFrame(node: React.ReactElement) {
           surface: null,
         },
       ]}
-      detail={<RunPageChrome>{node}</RunPageChrome>}
+      // NO CHROME OF THE TEST'S OWN: the frame draws the production one in its
+      // detail column, so this reading fails if the frame stops owning it.
+      detail={node}
       initialSelection="detail"
     />,
   );

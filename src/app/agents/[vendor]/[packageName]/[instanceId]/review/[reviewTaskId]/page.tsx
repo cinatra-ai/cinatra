@@ -471,7 +471,6 @@ export default async function AgentRunReviewPage({
 
   return (
     <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
-      <RunPageChrome>
       <div className="flex items-start gap-6" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
@@ -492,7 +491,12 @@ export default async function AgentRunReviewPage({
           back to nothing rather than to a second composition — there is only one
           drawing of a review, and an instance that cannot mint refs is a
           configuration fault to fix, not a reason to fork the surface. */
+          // THE PAGE'S CHROME WRAPS THE DETAIL COLUMN'S CONTENT, never the whole
+          // two-column frame (cinatra#3487): its window is drawn after its children,
+          // so it lands under the decision bar, in the same column, on every branch
+          // -- including a run with no gate step, which draws no rail frame of its own.
           const detailNode = (
+            <RunPageChrome>
             <LifecycleCardSurfaceProvider host="page_gate_region">
               {/* THE GATE REGION CARRIES THE REVIEW CARD AND THE RUN'S OWN
                   PARKED QUESTION — AND NOT THE SKILLS ROW (cinatra#3047, the
@@ -534,6 +538,7 @@ export default async function AgentRunReviewPage({
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>
+            </RunPageChrome>
           );
           // THE TWO COLUMNS, AND THE GATE STEPS THAT HEAD THEM. Which steps
           // this run has, which numeral each carries and which of them can be
@@ -552,7 +557,6 @@ export default async function AgentRunReviewPage({
           );
         })()}
       </div>
-      </RunPageChrome>
 
       {/* §VI's conversational prompt window IS THE GATE'S, and the gate is the
           card (cinatra#3141 item 1). It used to be mounted here, at page level
