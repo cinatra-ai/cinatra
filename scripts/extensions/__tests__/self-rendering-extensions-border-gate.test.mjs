@@ -501,6 +501,31 @@ describe("self-rendering-extensions border gate — nothing unread at an empty f
     }
   });
 
+  it("refuses a declared package whose cinatra.kind is a string no extension kind has, case variants and empty included", () => {
+    for (const kind of ["Connector", "ARTIFACT", "widget", "", " connector"]) {
+      const tree = makeTree([{ ...CONNECTOR, manifest: JSON.stringify({ name: "@cinatra-ai/demo-connector", cinatra: { kind } }) }], {});
+      const { status, stderr } = runGate(tree);
+      expect(status, JSON.stringify(kind)).toBe(1);
+      expect(stderr, JSON.stringify(kind)).toContain(
+        `REFUSED: @cinatra-ai/demo-connector has an unknown cinatra.kind ${JSON.stringify(kind)}`,
+      );
+    }
+  });
+
+  it("reads every canonical extension kind, and only those, as known", () => {
+    const canonical = readFileSync(join(REPO_ROOT, "packages", "extensions", "src", "canonical-types.ts"), "utf8");
+    const m = /export const EXTENSION_KINDS = \[([^\]]*)\] as const;/.exec(canonical);
+    expect(m, "EXTENSION_KINDS in packages/extensions/src/canonical-types.ts").not.toBeNull();
+    const kinds = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort();
+    expect([...gate.KNOWN_KINDS].sort()).toEqual(kinds);
+    // A declared package of every known kind that is not self-rendering is read and passes.
+    const others = kinds.filter((k) => !gate.SELF_RENDERING_KINDS.has(k));
+    const tree = makeTree(others.map((kind) => ({ dir: `demo-${kind}`, kind, files: { "src/components/ui/button.tsx": BUTTON_COPY } })), {});
+    const { status, stderr } = runGate(tree);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+  });
+
   it("refuses a declared package whose package.json names another package, naming both", () => {
     const tree = makeTree([{ ...CONNECTOR, manifest: JSON.stringify({ name: "@cinatra-ai/other-connector", cinatra: { kind: "connector" } }) }], {});
     const { status, stderr } = runGate(tree);

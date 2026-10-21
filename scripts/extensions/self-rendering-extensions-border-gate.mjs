@@ -34,7 +34,7 @@
 //       shared guard, scripts/audit/lib/floor-base-guard.mjs);
 //   (e) NOTHING UNREAD — the census reads every package the root package.json
 //       declares (cinatra.devExtensions). A declared package whose directory,
-//       package.json, name or string cinatra.kind cannot be read, an empty or
+//       package.json, name or known cinatra.kind cannot be read, an empty or
 //       unreadable declared set, a missing scope directory, and a file or
 //       directory of a self-rendering package that cannot be read are each
 //       REFUSED by name. With an empty floor there is no baselined pair left to
@@ -100,6 +100,14 @@ const SCOPE_DIR = "cinatra-ai";
 
 /** The kinds that render their own screens inside the product (decision 407). */
 export const SELF_RENDERING_KINDS = new Set(["connector", "artifact"]);
+
+/**
+ * Every kind an extension may declare: EXTENSION_KINDS of
+ * packages/extensions/src/canonical-types.ts (a test pins the two lists
+ * equal). A declared package with any other kind, a case variant or a typo
+ * included, is refused, never read as out of scope.
+ */
+export const KNOWN_KINDS = new Set(["agent", "connector", "artifact", "skill", "workflow"]);
 
 /** The primitive-copy directory, relative to a package root. */
 export const PRIMITIVE_DIR = "src/components/ui";
@@ -330,6 +338,10 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = DECLARED_ROOT, i
     const kind = isPlainObject(read.manifest.cinatra) ? read.manifest.cinatra.kind : undefined;
     if (typeof kind !== "string") {
       refusals.push(`${REFUSED} ${name} has no cinatra.kind`);
+      continue;
+    }
+    if (!KNOWN_KINDS.has(kind)) {
+      refusals.push(`${REFUSED} ${name} has an unknown cinatra.kind ${JSON.stringify(kind)}`);
       continue;
     }
     if (SELF_RENDERING_KINDS.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
