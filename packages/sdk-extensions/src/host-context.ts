@@ -166,6 +166,11 @@ export type HostNangoPort = {
 // `ctx.nango satisfies AbiScopedNangoPort<"^2.2">` to opt in.
 // ---------------------------------------------------------------------------
 
+/** Host-only addressing id of the artifact action-check capability. It is not
+ * re-exported from the public root and not from ./internal, which holds the
+ * fenced constants only. */
+export const ARTIFACT_ACTION_CHECK_CAPABILITY = "artifact-action-check/v1";
+
 /** The five render-time getters HostNangoPort ADDED in ABI 2.2.0 (optional on the
  * base port). At a declared `>= 2.2` floor these become required (minimum-minor). */
 export const NANGO_ABI_2_2_ADDED_METHODS = [

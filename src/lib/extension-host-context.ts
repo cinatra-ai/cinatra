@@ -1651,9 +1651,7 @@ export function createNonDefaultVersionHostContext(
 import { resolveVersionKeyedCapabilityProviders } from "@/lib/extension-version-keyed-serving";
 import { createHash } from "node:crypto";
 import type { ActionJson, ArtifactActionIdentity, ArtifactActionCheckInput, ArtifactActionCheckProvider } from "@cinatra-ai/sdk-extensions";
-import type { ARTIFACT_ACTION_CHECK_CAPABILITY as ArtifactActionCheckCapabilityId } from "@cinatra-ai/sdk-extensions/artifact-action-check-contract";
-// The host-only capability id, typed against the SDK contract so it cannot drift.
-const ARTIFACT_ACTION_CHECK_CAPABILITY: typeof ArtifactActionCheckCapabilityId = "artifact-action-check/v1";
+import { ARTIFACT_ACTION_CHECK_CAPABILITY } from "@cinatra-ai/sdk-extensions/host-context";
 import { isLoadedExtensionIdentityCurrent, capabilityProviderLoadedIdentity } from "@/lib/extension-capabilities-registry";
 import { readDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 
