@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./internal": "./src/internal.ts",
+    "./artifact-action-check-contract": "./src/artifact-action-check-contract.ts",
     "./host-context": "./src/host-context.ts",
     "./test-host-context": {
       "types": "./src/test-host-context.d.mts",

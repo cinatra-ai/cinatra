@@ -17,7 +17,7 @@ import {
 } from "../artifact-action-check-contract";
 import type { CapabilityContractMap } from "../capability-contract-map";
 import { parseVerifiedExecutedRunSource as parseFromIndex } from "../index";
-import { ARTIFACT_ACTION_CHECK_CAPABILITY as CAPABILITY_FROM_INTERNAL } from "../internal";
+import * as internal from "../internal";
 
 const SOURCE = {
   contextId: "ctx",
@@ -29,9 +29,9 @@ const SOURCE = {
 };
 
 describe("the artifact action-check contract", () => {
-  it("names one versioned capability, the same from the contract and from the internal map", () => {
+  it("names one versioned capability, kept off the public root and the fenced internal subpath", () => {
     expect(ARTIFACT_ACTION_CHECK_CAPABILITY).toBe("artifact-action-check/v1");
-    expect(CAPABILITY_FROM_INTERNAL).toBe(ARTIFACT_ACTION_CHECK_CAPABILITY);
+    expect(Object.keys(internal)).not.toContain("ARTIFACT_ACTION_CHECK_CAPABILITY");
   });
 
   it("types the capability's provider as the action checker in the capability map", () => {
