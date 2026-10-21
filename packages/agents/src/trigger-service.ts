@@ -51,6 +51,9 @@ import {
   buildCron,
   SAVE_SCHEDULE_REFUSALS,
   mayChangeRunSchedule,
+  // THE ONE WALL-CLOCK READING (cinatra#3189): the instant armed here is the
+  // instant the scheduling step and the schedule card checked, DST included.
+  naiveDatetimeToUtcMs,
   type RecurringConfig,
 } from "./trigger-recurrence";
 // cinatra#2981 — the ONE serialization this service, **Cancel schedule** and the
@@ -245,16 +248,6 @@ export type DeleteTriggerForActorResult =
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a timezone-naive "YYYY-MM-DDTHH:MM" (or "YYYY-MM-DDTHH:MM:SS")
- * string — as produced by an HTML datetime-local input — to a UTC epoch ms
- * value, interpreting the wall-clock time in the given IANA timezone.
- *
- * Why not `new Date(naive)`? Node.js parses naive strings in local time
- * (UTC on servers), ignoring the user-selected timezone. This helper uses
- * the Intl.DateTimeFormat API (no external dependency) to resolve the
- * offset at the exact moment, handling DST transitions correctly.
- */
-/**
  * `cron-parser` module shapes the recurring-trigger validator accepts.
  * See the resolution note at the call site in {@link setRunTriggerForActor}.
  */
@@ -275,44 +268,6 @@ function resolveCronParser(mod: CronParserModule): CronParser | null {
     }
   }
   return null;
-}
-
-function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
-  // Normalise to full seconds precision.
-  const padded = naive.length === 16 ? naive + ":00" : naive;
-  // Treat the string as UTC to get a reference epoch.
-  const asUtcMs = new Date(padded + "Z").getTime();
-  if (Number.isNaN(asUtcMs)) return NaN;
-  // Re-format that reference epoch in the target timezone to find its
-  // wall-clock representation there.
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(asUtcMs));
-  const get = (type: string) => parts.find((p) => p.type === type)!.value;
-  const tzYear = get("year");
-  const tzMonth = get("month");
-  const tzDay = get("day");
-  const rawHour = get("hour");
-  // hour12: false can return "24" for midnight — normalise to "00".
-  const tzHour = rawHour === "24" ? "00" : rawHour;
-  const tzMinute = get("minute");
-  const tzSecond = get("second");
-  // Treat the reformatted parts as UTC to get the timezone's interpretation
-  // of the reference epoch.
-  const inTzMs = new Date(
-    `${tzYear}-${tzMonth}-${tzDay}T${tzHour}:${tzMinute}:${tzSecond}Z`,
-  ).getTime();
-  // The offset is the difference; adding it back converts the naive input
-  // (interpreted as that timezone) to a true UTC epoch.
-  const offsetMs = asUtcMs - inTzMs;
-  return asUtcMs + offsetMs;
 }
 
 function isOwnerOrAdmin(
@@ -740,6 +695,8 @@ export async function setRunTriggerForActor(
     }
     // Interpret the naive datetime-local string in the user's selected
     // timezone rather than the server's local time (UTC on Node servers).
+    // NaN, and refused here, for a date that is not on the calendar, a time
+    // inside a spring-forward gap and a zone the platform does not know.
     const ts = naiveDatetimeToUtcMs(args.scheduledAt, tz);
     if (Number.isNaN(ts)) {
       return { ok: false, error: "scheduledAt is not a valid ISO datetime" };

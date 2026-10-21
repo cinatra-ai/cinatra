@@ -146,6 +146,191 @@ describe("a one-off's Run at", () => {
   });
 });
 
+// THE CALENDAR AND THE ZONE'S CHANGES (cinatra#3189, review findings 1 and 2).
+// Berlin leaves CET (+1) for CEST (+2) at 01:00Z on 2027-03-28 (02:00 local
+// becomes 03:00) and returns at 01:00Z on 2027-10-31 (03:00 local becomes
+// 02:00). Los Angeles leaves PST (-8) for PDT (-7) at 10:00Z on 2027-03-14 and
+// returns at 09:00Z on 2027-11-07. Every instant below is after NOW.
+const utc = (iso: string) => Date.parse(iso);
+
+describe("a wall clock that does not exist: the spring-forward gap", () => {
+  it("is not an instant in Berlin, from the first minute of the gap to the last", () => {
+    for (const runAt of ["2027-03-28T02:00", "2027-03-28T02:30", "2027-03-28T02:59"]) {
+      expect(naiveDatetimeToUtcMs(runAt, "Europe/Berlin"), runAt).toBeNaN();
+    }
+  });
+
+  it("is not an instant in Los Angeles", () => {
+    expect(naiveDatetimeToUtcMs("2027-03-14T02:30", "America/Los_Angeles")).toBeNaN();
+  });
+
+  it("is refused on the field, never moved to a nearby real time", () => {
+    expect(validateScheduleTime(scheduled("2027-03-28T02:30"))).toEqual(PAST_RUN_AT);
+    expect(
+      validateScheduleTime(scheduled("2027-03-14T02:30", "America/Los_Angeles")),
+    ).toEqual(PAST_RUN_AT);
+  });
+
+  it("is a gap only in the zone that has it: 02:30 that day is a real time in UTC and Tokyo", () => {
+    expect(naiveDatetimeToUtcMs("2027-03-28T02:30", "UTC")).toBe(utc("2027-03-28T02:30:00Z"));
+    expect(naiveDatetimeToUtcMs("2027-03-28T02:30", "Asia/Tokyo")).toBe(
+      utc("2027-03-27T17:30:00Z"),
+    );
+  });
+});
+
+describe("the times beside the spring-forward gap are accepted at their real instants", () => {
+  it("reads the minute before, the hour before and the minute after the gap in Berlin", () => {
+    expect(naiveDatetimeToUtcMs("2027-03-28T01:59", "Europe/Berlin")).toBe(
+      utc("2027-03-28T00:59:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-03-28T01:30", "Europe/Berlin")).toBe(
+      utc("2027-03-28T00:30:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-03-28T03:00", "Europe/Berlin")).toBe(
+      utc("2027-03-28T01:00:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-03-28T00:00", "Europe/Berlin")).toBe(
+      utc("2027-03-27T23:00:00Z"),
+    );
+  });
+
+  it("reads the day before and the day after the change with each day's own offset", () => {
+    expect(naiveDatetimeToUtcMs("2027-03-27T09:00", "Europe/Berlin")).toBe(
+      utc("2027-03-27T08:00:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-03-29T09:00", "Europe/Berlin")).toBe(
+      utc("2027-03-29T07:00:00Z"),
+    );
+  });
+
+  it("reads the minute before and the minute after the gap in Los Angeles", () => {
+    expect(naiveDatetimeToUtcMs("2027-03-14T01:59", "America/Los_Angeles")).toBe(
+      utc("2027-03-14T09:59:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-03-14T03:00", "America/Los_Angeles")).toBe(
+      utc("2027-03-14T10:00:00Z"),
+    );
+  });
+
+  it("does not refuse a genuinely future time on the change's night", () => {
+    // 23:45Z on the 27th: Berlin's 01:30 that night is 00:30Z, 45 minutes ahead.
+    const now = utc("2027-03-27T23:45:00Z");
+    expect(validateScheduleTime(scheduled("2027-03-28T01:30"), now)).toEqual({ ok: true });
+    expect(validateScheduleTime(scheduled("2027-03-28T03:00"), now)).toEqual({ ok: true });
+    // And the minute that has gone is still refused.
+    expect(validateScheduleTime(scheduled("2027-03-28T00:44"), now)).toEqual(PAST_RUN_AT);
+  });
+});
+
+describe("a wall clock that occurs twice: the fall-back fold", () => {
+  it("resolves to the EARLIER of its two instants in Berlin (CEST, before the change)", () => {
+    expect(naiveDatetimeToUtcMs("2027-10-31T02:00", "Europe/Berlin")).toBe(
+      utc("2027-10-31T00:00:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-10-31T02:30", "Europe/Berlin")).toBe(
+      utc("2027-10-31T00:30:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-10-31T02:59", "Europe/Berlin")).toBe(
+      utc("2027-10-31T00:59:00Z"),
+    );
+  });
+
+  it("resolves to the EARLIER of its two instants in Los Angeles (PDT, before the change)", () => {
+    expect(naiveDatetimeToUtcMs("2027-11-07T01:30", "America/Los_Angeles")).toBe(
+      utc("2027-11-07T08:30:00Z"),
+    );
+  });
+
+  it("is judged at that earlier instant: after it, the fold's time is past", () => {
+    // 01:00Z is between the two 02:30s (00:30Z and 01:30Z); the earlier has gone.
+    const between = utc("2027-10-31T01:00:00Z");
+    expect(validateScheduleTime(scheduled("2027-10-31T02:30"), between)).toEqual(PAST_RUN_AT);
+    expect(validateScheduleTime(scheduled("2027-10-31T02:30"), between - 31 * 60_000)).toEqual({
+      ok: true,
+    });
+  });
+
+  it("reads the times beside the fold at their one real instant", () => {
+    expect(naiveDatetimeToUtcMs("2027-10-31T01:59", "Europe/Berlin")).toBe(
+      utc("2027-10-30T23:59:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-10-31T03:00", "Europe/Berlin")).toBe(
+      utc("2027-10-31T02:00:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-11-07T00:59", "America/Los_Angeles")).toBe(
+      utc("2027-11-07T07:59:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-11-07T02:00", "America/Los_Angeles")).toBe(
+      utc("2027-11-07T10:00:00Z"),
+    );
+  });
+});
+
+describe("a date that is not on the calendar is refused, never rolled over", () => {
+  const IMPOSSIBLE = [
+    "2027-02-30T09:00", // February has no 30th
+    "2027-02-29T09:00", // 2027 is not a leap year
+    "2100-02-29T09:00", // nor is 2100
+    "2027-04-31T09:00", // April has 30 days
+    "2027-06-31T09:00",
+    "2027-09-31T09:00",
+    "2027-11-31T09:00",
+    "2027-13-01T09:00", // there is no 13th month
+    "2027-00-10T09:00", // nor a month 0
+    "2027-01-00T09:00", // nor a day 0
+    "2027-01-32T09:00",
+    "2027-01-01T24:00", // 24:00 is the next day, not a time of this one
+    "2027-01-01T09:60",
+    "2027-01-01T09:00:60",
+  ];
+
+  it("is no instant", () => {
+    for (const runAt of IMPOSSIBLE) {
+      expect(naiveDatetimeToUtcMs(runAt, "Europe/Berlin"), runAt).toBeNaN();
+      expect(naiveDatetimeToUtcMs(runAt, "UTC"), runAt).toBeNaN();
+    }
+  });
+
+  it("is refused on the field", () => {
+    for (const runAt of IMPOSSIBLE) {
+      expect(validateScheduleTime(scheduled(runAt)), runAt).toEqual(PAST_RUN_AT);
+    }
+  });
+
+  it("accepts the real dates beside them", () => {
+    expect(naiveDatetimeToUtcMs("2028-02-29T09:00", "Europe/Berlin")).toBe(
+      utc("2028-02-29T08:00:00Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2000-02-29T09:00", "UTC")).toBe(utc("2000-02-29T09:00:00Z"));
+    expect(naiveDatetimeToUtcMs("2027-02-28T23:59", "UTC")).toBe(utc("2027-02-28T23:59:00Z"));
+    expect(naiveDatetimeToUtcMs("2027-04-30T09:00", "UTC")).toBe(utc("2027-04-30T09:00:00Z"));
+    expect(naiveDatetimeToUtcMs("2027-12-31T23:59:59", "UTC")).toBe(
+      utc("2027-12-31T23:59:59Z"),
+    );
+    expect(naiveDatetimeToUtcMs("2027-01-01T00:00", "UTC")).toBe(utc("2027-01-01T00:00:00Z"));
+    expect(validateScheduleTime(scheduled("2028-02-29T09:00"))).toEqual({ ok: true });
+  });
+
+  it("refuses what is not a wall clock, and an unknown zone, as no instant", () => {
+    for (const naive of ["", "2027-03-01", "2027-03-01T09:00Z", "2027-03-01T09:00+02:00"]) {
+      expect(naiveDatetimeToUtcMs(naive, "Europe/Berlin"), naive).toBeNaN();
+    }
+    expect(naiveDatetimeToUtcMs("2027-03-01T09:00", "Mars/Olympus_Mons")).toBeNaN();
+    expect(naiveDatetimeToUtcMs("2027-03-01T09:00", "")).toBeNaN();
+  });
+});
+
+describe("the trigger service arms with this one reading", () => {
+  it("imports it and keeps no copy of its own", () => {
+    const source = readFileSync(resolve(__dirname, "../trigger-service.ts"), "utf8");
+    expect(source).not.toMatch(/function\s+naiveDatetimeToUtcMs\s*\(/);
+    expect(source).toMatch(
+      /import\s*\{[^}]*\bnaiveDatetimeToUtcMs\b[^}]*\}\s*from\s*"\.\/trigger-recurrence"/,
+    );
+  });
+});
+
 describe("a recurring schedule's At", () => {
   const AT_9 = { hour: 9, minute: 0 };
 
@@ -156,15 +341,32 @@ describe("a recurring schedule's At", () => {
   });
 
   it("refuses an hour that is NaN, -1, 24, 9.5, missing or not a number as no time chosen", () => {
-    for (const hour of [Number.NaN, -1, 24, 9.5, undefined, "9", Number.POSITIVE_INFINITY]) {
+    for (const hour of [
+      Number.NaN,
+      -1,
+      24,
+      9.5,
+      undefined,
+      "9",
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]) {
       expect(validateScheduleTime(recurring({ hour, minute: 0 })), String(hour)).toEqual(
         NO_TIME_RECURRING,
       );
     }
   });
 
-  it("refuses a minute that is 60, -1, NaN, fractional or missing as no time chosen", () => {
-    for (const minute of [60, -1, Number.NaN, 0.5, undefined]) {
+  it("refuses a minute that is 60, -1, NaN, ±Infinity, fractional or missing as no time chosen", () => {
+    for (const minute of [
+      60,
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0.5,
+      undefined,
+    ]) {
       expect(validateScheduleTime(recurring({ hour: 9, minute })), String(minute)).toEqual(
         NO_TIME_RECURRING,
       );

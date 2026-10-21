@@ -576,21 +576,30 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   const applyScheduleValues = useCallback(
     (values: Record<string, unknown>) => {
       const sv = setValue as (field: string, value: string) => void;
+      // A FILL IS A CHANGE TO THE FIELDS (cinatra#3189). What the assistant
+      // writes clears the time rule's error exactly as the person's own change
+      // does, on both roads, so a refused press is never left drawn, and
+      // announced, over a value that has since replaced it.
+      let wrote = false;
       if (typeof values.triggerType === "string") {
         setValue("triggerType", values.triggerType as FormValues["triggerType"]);
+        wrote = true;
       }
       if (typeof values.scheduledAt === "string") {
         // Normalize to YYYY-MM-DDTHH:mm (strip seconds/timezone that may be appended).
         const normalized = values.scheduledAt.replace(" ", "T").substring(0, 16);
         sv("scheduledAt", normalized);
+        wrote = true;
       }
       if (typeof values.timezone === "string") {
         sv("timezone", values.timezone);
+        wrote = true;
       }
       if (typeof values.cronExpression === "string") {
         sv("cronExpression", values.cronExpression);
         const parsed = parseCronToRecurring(values.cronExpression);
         if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+        wrote = true;
       }
       // THE REPEAT ROWS THEMSELVES. The same write the form's own controls make
       // (`updateRecurring`): the selections move and the cron is rebuilt from
@@ -608,9 +617,11 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
         // A repeat described without naming the kind IS the recurring row; a
         // message that named one keeps the one it named.
         if (typeof values.triggerType !== "string") setValue("triggerType", "recurring");
+        wrote = true;
       }
+      if (wrote) clearErrors(["scheduledAt", "cronExpression"] as never);
     },
-    [setValue],
+    [setValue, clearErrors],
   );
   useEffect(() => {
     if (!props.embeddedAsRenderer || !aiSuggestions) return;

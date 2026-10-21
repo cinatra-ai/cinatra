@@ -722,36 +722,88 @@ export function frozenScheduleReason(input: {
 // THE SCHEDULE'S TIME, CHECKED WHERE IT IS PRESSED (cinatra#3189). The
 // scheduling step and the schedule card read one rule from this tier-neutral
 // leaf. `naiveDatetimeToUtcMs` moved here from the server's propose leaf, which
-// re-exports it, so a press is judged with the zone reading the server proposes
-// with. Advisory: the trigger service still checks the instant it arms.
+// re-exports it, and the trigger service arms with it too, so a press is judged
+// with the zone reading the server proposes and arms with. Advisory: the
+// trigger service still checks the instant it arms.
 // ---------------------------------------------------------------------------
+
+/** A naive wall clock as the scheduling roads write it: date, hour and minute,
+ *  with optional seconds and milliseconds. No zone, no offset. */
+const NAIVE_WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/;
+
+const DAY_MS = 86_400_000;
+
+/**
+ * The wall clock's fields read as if they were UTC, or NaN when they do not
+ * name a real calendar moment. `Date` NORMALIZES what it is given
+ * ("2027-02-30" becomes March 2, hour 24 the next day), so every field is read
+ * back and compared: a value that does not survive the round trip is refused,
+ * never rolled into a different day.
+ */
+function wallClockAsUtcMs(naive: string): number {
+  const m = NAIVE_WALL_CLOCK.exec(naive);
+  if (m === null) return NaN;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = m[6] === undefined ? 0 : Number(m[6]);
+  const millis = m[7] === undefined ? 0 : Number(m[7].slice(0, 3).padEnd(3, "0"));
+  if (hour > 23 || minute > 59 || second > 59) return NaN;
+  const at = new Date(0);
+  // setUTCFullYear, not Date.UTC: Date.UTC reads a year 0-99 as 1900-1999.
+  at.setUTCFullYear(year, month - 1, day);
+  at.setUTCHours(hour, minute, second, millis);
+  const ms = at.getTime();
+  if (
+    Number.isNaN(ms) ||
+    at.getUTCFullYear() !== year ||
+    at.getUTCMonth() !== month - 1 ||
+    at.getUTCDate() !== day
+  ) {
+    return NaN;
+  }
+  return ms;
+}
 
 /**
  * Interpret a timezone-naive "YYYY-MM-DDTHH:MM" wall clock in an IANA zone.
  *
- * The same derivation `trigger-service.ts` uses, and it has to be: a proposal
- * validated here and armed there must agree on what "09:00 in Europe/Berlin"
- * is. `new Date(naive)` would read the string in the SERVER's zone (UTC), which
- * is the bug this exists to avoid.
+ * The one derivation `trigger-service.ts` arms with and the scheduling step and
+ * the schedule card check with, and it has to be one: a proposal validated here
+ * and armed there must agree on what "09:00 in Europe/Berlin" is.
+ * `new Date(naive)` would read the string in the SERVER's zone (UTC), which is
+ * the bug this exists to avoid.
  *
- * KNOWN LIMIT, INHERITED DELIBERATELY (a review finding). The offset is
- * inferred at a single reference instant and not round-tripped, so the two DST
- * edge cases are imprecise: a wall clock inside a spring-forward GAP (a time
- * that does not exist) maps to a nearby real instant rather than being refused,
- * and a fall-back AMBIGUOUS time resolves to one of its two instants without an
- * explicit policy. This is the SHIPPED behaviour of the scheduling form, and
- * making the conversational path stricter would be worse, not better: the
- * proposal and the form would then disagree about what a confirmed schedule
- * means, which is the one thing §VI's "confirm what you see" cannot survive.
- * Closing it is a change to BOTH, on its own issue.
+ * THE OFFSET IS TAKEN PER INSTANT, NOT ONCE (cinatra#3189, a review finding).
+ * The zone's offset is read on the day before, at, and on the day after the
+ * wall clock; each distinct offset gives one candidate instant, and a
+ * candidate counts only when the zone, read AT that instant, shows exactly
+ * the wall clock asked for. So:
+ *
+ *   - a clock that occurs once resolves to that one instant, on either side of
+ *     a change ("01:30" in Berlin on the spring-forward day is 00:30Z);
+ *   - a clock inside a spring-forward GAP occurs never, so no candidate
+ *     survives and the result is NaN: it does not exist, so it is refused,
+ *     never moved to a nearby real time;
+ *   - a clock inside a fall-back FOLD occurs twice, and resolves by ONE rule:
+ *     THE EARLIER INSTANT, the first time the clock shows it (the offset in
+ *     force before the change, as `Temporal`'s "compatible" reading does).
+ *
+ * NaN also for a wall clock that is not a real calendar moment (see
+ * `wallClockAsUtcMs`) and for a zone the platform does not know, so every
+ * caller refuses rather than silently scheduling something else.
  */
 export function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
-  const padded = naive.length === 16 ? `${naive}:00` : naive;
-  const asUtcMs = new Date(`${padded}Z`).getTime();
-  if (Number.isNaN(asUtcMs)) return NaN;
-  let parts: Intl.DateTimeFormatPart[];
+  if (typeof naive !== "string" || typeof timezone !== "string" || timezone.length === 0) {
+    return NaN;
+  }
+  const wallMs = wallClockAsUtcMs(naive);
+  if (Number.isNaN(wallMs)) return NaN;
+  let format: Intl.DateTimeFormat;
   try {
-    parts = new Intl.DateTimeFormat("en-US", {
+    format = new Intl.DateTimeFormat("en-US", {
       timeZone: timezone,
       year: "numeric",
       month: "2-digit",
@@ -759,21 +811,42 @@ export function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
-      hour12: false,
-    }).formatToParts(new Date(asUtcMs));
+      hourCycle: "h23",
+    });
   } catch {
     // An unknown IANA zone. NaN, so both the propose check and the install
     // translation refuse rather than silently scheduling in UTC.
     return NaN;
   }
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const rawHour = get("hour");
-  const tzHour = rawHour === "24" ? "00" : rawHour;
-  const inTzMs = new Date(
-    `${get("year")}-${get("month")}-${get("day")}T${tzHour}:${get("minute")}:${get("second")}Z`,
-  ).getTime();
-  if (Number.isNaN(inTzMs)) return NaN;
-  return asUtcMs + (asUtcMs - inTzMs);
+  // The zone's offset (east positive) in force at a real instant, to the second;
+  // NaN when the zone cannot be read there, so that probe adds no candidate.
+  const offsetAt = (instantMs: number): number => {
+    const whole = Math.floor(instantMs / 1000) * 1000;
+    let parts: Intl.DateTimeFormatPart[];
+    try {
+      parts = format.formatToParts(new Date(whole));
+    } catch {
+      return NaN;
+    }
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    const hour = get("hour");
+    const shown = new Date(0);
+    shown.setUTCFullYear(get("year"), get("month") - 1, get("day"));
+    shown.setUTCHours(hour === 24 ? 0 : hour, get("minute"), get("second"), 0);
+    return shown.getTime() - whole;
+  };
+  const offsets = new Set<number>();
+  for (const probe of [wallMs - DAY_MS, wallMs, wallMs + DAY_MS]) {
+    const offset = offsetAt(probe);
+    if (Number.isFinite(offset)) offsets.add(offset);
+  }
+  let earliest = NaN;
+  for (const offset of offsets) {
+    const candidate = wallMs - offset;
+    if (offsetAt(candidate) !== offset) continue;
+    if (Number.isNaN(earliest) || candidate < earliest) earliest = candidate;
+  }
+  return earliest;
 }
 
 /** Why a schedule's time cannot be armed as it stands. */
@@ -828,7 +901,10 @@ function isClockPart(value: unknown, max: number): boolean {
  *
  *   - `scheduled`, `runAt` empty or not the wire's shape → `no_time`.
  *   - `scheduled`, the wall clock does not resolve in the zone (an unknown or
- *     missing zone, an impossible clock) → `past_time`: it cannot be armed.
+ *     missing zone, an impossible date or clock such as 2027-02-30 or 24:00, a
+ *     time inside a spring-forward gap that the zone never shows) →
+ *     `past_time`: it cannot be armed. A time inside a fall-back fold is the
+ *     earlier of its two instants (`naiveDatetimeToUtcMs`).
  *   - `scheduled`, the instant is at or before `now` → `past_time`. An instant
  *     EQUAL to `now` is refused; `now + 1 ms` passes.
  *   - `recurring`, hour or minute missing, fractional or out of range →
