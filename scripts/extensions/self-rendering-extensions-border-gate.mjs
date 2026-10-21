@@ -515,7 +515,7 @@ function writeBaselineFile(copies) {
       {
         note:
           "Self-rendering extensions border floor (cinatra-ai/cinatra#3471, epic #2926 — " +
-          "decision 407 of 2026-09-13: connectors render the setup page themselves, artifacts " +
+          "the border decision of 2026-09-13: connectors render the setup page themselves, artifacts " +
           "render the artifact view themselves, and the host shares its primitives with " +
           "extension bundles at run time). The floor emptied with #3471 and stays empty: a " +
           "design-primitive copy under src/components/ui/ of a synced kind:connector / " +
