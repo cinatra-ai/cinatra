@@ -37,75 +37,6 @@ import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ScheduleProposalCard } from "../schedule-proposal-card";
 import { SAVE_SCHEDULE_REFUSALS, frozenScheduleReason } from "../trigger-recurrence";
 
-// jsdom shims — the app's Select (Radix) and the Combobox's popover and list
-// call layout APIs jsdom omits. Test-environment only.
-if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    writable: true,
-    value: (query: string) =>
-      ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addListener: () => {},
-        removeListener: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-        dispatchEvent: () => false,
-      }) as unknown as MediaQueryList,
-  });
-}
-if (typeof Element !== "undefined") {
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = function scrollIntoView() {};
-  }
-  if (!Element.prototype.hasPointerCapture) {
-    Element.prototype.hasPointerCapture = function hasPointerCapture() {
-      return false;
-    };
-  }
-  if (!Element.prototype.setPointerCapture) {
-    Element.prototype.setPointerCapture = function setPointerCapture() {};
-  }
-  if (!Element.prototype.releasePointerCapture) {
-    Element.prototype.releasePointerCapture = function releasePointerCapture() {};
-  }
-}
-if (!("ResizeObserver" in globalThis)) {
-  class ResizeObserverStub {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  Object.defineProperty(globalThis, "ResizeObserver", {
-    configurable: true,
-    writable: true,
-    value: ResizeObserverStub,
-  });
-}
-
-// THE TIMEZONE FIELDS ARE THE SHARED TIMEZONE SELECT (cinatra#3189), no longer
-// free text inputs. A zone is picked the way a person picks it — open the list,
-// type, press the row — and the zone the field holds is read off the value the
-// trigger draws.
-function pickZone(container: Element, field: string, zone: string): void {
-  fireEvent.click(container.querySelector(`[data-field="${field}"]`)!);
-  const search = document.querySelector('[data-slot="command-input"]');
-  if (!search) throw new Error(`the ${field} list did not open`);
-  fireEvent.change(search, { target: { value: zone } });
-  const row = Array.from(document.querySelectorAll('[data-slot="command-item"]')).find(
-    (item) => (item.textContent ?? "").trim() === zone,
-  );
-  if (!row) throw new Error(`${zone} is not offered by ${field}`);
-  fireEvent.click(row);
-}
-
-function drawnZone(container: Element, field: string): string | null | undefined {
-  return container.querySelector(`[data-field="${field}"] [data-slot="combobox-value"]`)
-    ?.textContent;
-}
-
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -385,7 +316,9 @@ describe("point 2 — a fired recurring schedule stays editable", () => {
     const sent: Record<string, unknown>[] = [];
     const { container } = mount(BODIES.recurringFired, "run_card", (p) => sent.push(p));
     await waitFor(() => expect(rows(container)).not.toBeNull());
-    pickZone(container, "recurring-timezone", "Europe/Lisbon");
+    fireEvent.change(container.querySelector('[data-field="recurring-timezone"]')!, {
+      target: { value: "Europe/Lisbon" },
+    });
     await waitFor(() => expect(disabled(save(container))).toBe(false));
     fireEvent.click(save(container)!);
     await waitFor(() => expect(sent.length).toBe(1));
