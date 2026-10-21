@@ -8,12 +8,12 @@
 // border between core and self-rendering extensions clean".
 //
 // WHY A GATE. A self-rendering extension draws its own screens inside the
-// product, so it needs the product's design primitives. Today fifteen connector
-// packages (plus four more connectors and one artifact package the vendoring
-// manifest never listed) hold BYTE COPIES of those primitives under
-// `src/components/ui/`: a change to a primitive in the product forces a release
-// of every copying package. The run-time-shared road (slice 2 of #3471)
-// replaces the copies. Until then this gate pins the border from both sides:
+// product, so it needs the product's design primitives. Connector and artifact
+// packages held BYTE COPIES of those primitives under src/components/ui/ until
+// the run-time-shared road of #3471 replaced them; the last copies
+// (email-artifacts) went with #3471, and the floor is empty. The gate now
+// refuses any copy outright and refuses any declared package it cannot read.
+// It pins the border from both sides:
 //
 //   (a) NO NEW COPY — a file under `src/components/ui/` in a kind:connector or
 //       kind:artifact package whose (package, path) pair is not in the
@@ -505,13 +505,13 @@ function writeBaselineFile(copies) {
           "Self-rendering extensions border floor (cinatra-ai/cinatra#3471, epic #2926 — " +
           "decision 407 of 2026-09-13: connectors render the setup page themselves, artifacts " +
           "render the artifact view themselves, and the host shares its primitives with " +
-          "extension bundles at run time). Each entry is a design-primitive BYTE COPY a synced " +
-          "kind:connector / kind:artifact package still carries under src/components/ui/. " +
+          "extension bundles at run time). The floor emptied with #3471 and stays empty: a " +
+          "design-primitive copy under src/components/ui/ of a synced kind:connector / " +
+          "kind:artifact package fails the gate. " +
           "SHRINK-ONLY: a new copy fails the gate immediately; a removed one makes this file " +
           "stale until it is ratcheted down with " +
           "`node scripts/extensions/self-rendering-extensions-border-gate.mjs --write-baseline` " +
-          "(which refuses to write a baseline that grows). The floor empties as packages move " +
-          "to the run-time-shared primitives (slice 2 of #3471).",
+          "(which refuses to write a baseline that grows).",
         copies: sorted,
       },
       null,
