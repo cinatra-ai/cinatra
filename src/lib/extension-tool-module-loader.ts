@@ -224,7 +224,11 @@ export async function loadDeclaredToolModuleWithIdentity(
   deps: ExtensionToolModuleLoaderDeps = {},
 ): Promise<{ namespace: unknown; identity?: LoadedExtensionIdentity }> {
   const selection = deps.resolvePackageRoot
-    ? await deps.resolvePackageRoot(input).then(root => root === null ? null : { root, verify: async () => true } as SelectedPackage)
+    ? await deps.resolvePackageRoot({
+        packageName: input.packageName,
+        packageVersion: input.packageVersion,
+        orgId: input.orgId,
+      }).then(root => root === null ? null : { root, verify: async () => true } as SelectedPackage)
     : await defaultPackageSelection({
     packageName: input.packageName,
     packageVersion: input.packageVersion,
