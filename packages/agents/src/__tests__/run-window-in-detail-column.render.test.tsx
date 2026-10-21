@@ -38,6 +38,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 
 import { RunSurfaceRail, RunSurfaceRailRow } from "../run-surface-rail";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { RunPageChrome } from "../run-page-chrome";
 
 /**
  * IS A BOX DRAWN AT ALL. Every reading of the window opens its sentence the
@@ -343,9 +344,21 @@ const SURFACES: Surface[] = [
  */
 const COLUMN_SURFACES = SURFACES.filter((s) => s.surface !== "armed-trigger");
 
-/** The run detail column, as the run surface's own frame draws it. */
+/**
+ * The run detail column, as the run surface's own frame draws it — with the run
+ * page's CHROME inside it (cinatra#3487).
+ *
+ * The chrome is the one module that mounts a prompt window now, and it is drawn
+ * where the screens are drawn: inside the detail column. So the drawing's clause
+ * this suite reads — "below the scheduler, in the same column" — is measured
+ * exactly as before; what changed is who mounts the window, not where it lands.
+ */
 function renderInDetailColumn(node: React.ReactElement) {
-  return render(<div data-run-detail-column="">{node}</div>);
+  return render(
+    <div data-run-detail-column="">
+      <RunPageChrome>{node}</RunPageChrome>
+    </div>,
+  );
 }
 
 /**
@@ -385,7 +398,7 @@ function renderInRunFrame(node: React.ReactElement) {
           surface: null,
         },
       ]}
-      detail={node}
+      detail={<RunPageChrome>{node}</RunPageChrome>}
       initialSelection="detail"
     />,
   );
