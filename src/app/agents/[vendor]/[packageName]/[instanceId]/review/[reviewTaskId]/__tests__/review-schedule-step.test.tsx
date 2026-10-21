@@ -77,7 +77,29 @@ const SETTLED = {
   canCancel: true,
 };
 
-function mockResolve() {
+// A SPENT ONE-OFF, as the resolver reads it (cinatra#3189, clause R7): a run
+// set to Schedule for later whose moment came and whose gate opened. It is the
+// body the review page's `scheduleSettled` reading is true for — the same
+// trigger row `shouldFreezeFiredOneOffSchedule` answers from — and the server
+// grants nothing on it any more.
+const FIRED_ONE_OFF = {
+  ...SETTLED,
+  schedule: {
+    kind: "scheduled" as const,
+    runAt: "2020-03-04T09:00",
+    timezone: "Europe/Berlin",
+  },
+  triggerType: "scheduled" as const,
+  scheduleCopy: "Once, at 2020-03-04 09:00",
+  released: true,
+  canSave: false,
+  canCancel: false,
+};
+
+function mockResolve(
+  body: typeof SETTLED | typeof FIRED_ONE_OFF = SETTLED,
+  firedOnce = false,
+) {
   globalThis.fetch = vi.fn(
     async () =>
       new Response(
@@ -85,7 +107,10 @@ function mockResolve() {
           kind: "trigger_schedule_proposal",
           // A settled state carries no decision axis — the union is strict.
           state: { state: "settled" },
-          body: SETTLED,
+          body,
+          // The firing reading rides the answer beside the body, as the
+          // resolver sends it (cinatra#3174).
+          ...(firedOnce ? { firedOnce: true } : {}),
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -94,7 +119,7 @@ function mockResolve() {
 
 /** The page's composition: the rail on the left, the gate region on the right,
  *  and the schedule step owning both columns when the run carries a schedule. */
-function renderSurface(scheduleSettled = false) {
+function renderSurface(scheduleSettled: boolean) {
   return render(
     <div className="flex items-start gap-6" data-run-detail-contract="">
       <ReviewRunSurface
@@ -125,7 +150,7 @@ const reviewCard = (c: HTMLElement) => c.querySelector('[data-testid="review-gat
 describe("the schedule step and the review card never appear together", () => {
   it("opens on the review card — the reviewer came here to decide it", () => {
     mockResolve();
-    const { container } = renderSurface();
+    const { container } = renderSurface(false);
 
     expect(reviewCard(container)).not.toBeNull();
     expect(scheduleForm(container)).toBeNull();
@@ -140,7 +165,7 @@ describe("the schedule step and the review card never appear together", () => {
 
   it("selecting the schedule entry shows the form — in the region, and not the review card", async () => {
     mockResolve();
-    const { container } = renderSurface();
+    const { container } = renderSurface(false);
 
     fireEvent.click(container.querySelector('[data-action="open-schedule-step"]')!);
     await waitFor(() => expect(scheduleForm(container)).not.toBeNull());
@@ -154,7 +179,7 @@ describe("the schedule step and the review card never appear together", () => {
 
   it("selecting the review entry brings the card back and takes the form away", async () => {
     mockResolve();
-    const { container } = renderSurface();
+    const { container } = renderSurface(false);
 
     fireEvent.click(container.querySelector('[data-action="open-schedule-step"]')!);
     await waitFor(() => expect(scheduleForm(container)).not.toBeNull());
@@ -182,7 +207,7 @@ describe("a spent one-off's schedule entry settles on the review page's rail", (
     c.querySelector<HTMLElement>('[data-conformance-id="schedule-rail-step"]');
 
   it("draws the settled row when the page says the run's schedule is spent", () => {
-    mockResolve();
+    mockResolve(FIRED_ONE_OFF, true);
     const { container } = renderSurface(true);
 
     const row = scheduleRow(container);
@@ -193,13 +218,55 @@ describe("a spent one-off's schedule entry settles on the review page's rail", (
   });
 
   it("a settled entry can still be selected — it opens the read-only history", async () => {
-    mockResolve();
+    // The spent one-off the reading is true for. An editable schedule here
+    // would draw its floor, Save changes and Cancel schedule, and pickers in
+    // its rows, and fail every read-only line below.
+    mockResolve(FIRED_ONE_OFF, true);
     const { container } = renderSurface(true);
 
     fireEvent.click(container.querySelector('[data-action="open-schedule-step"]')!);
-    await waitFor(() => expect(scheduleForm(container)).not.toBeNull());
-    expect(scheduleRow(container)!.getAttribute("data-schedule-step-selected")).toBe("true");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
+    );
+    const row = scheduleRow(container)!;
+    expect(row.getAttribute("data-schedule-step-selected")).toBe("true");
+    expect(row.getAttribute("data-run-surface-rail-settled")).toBe("true");
+    expect(row.getAttribute("data-schedule-step-settled")).toBe("true");
     expect(reviewCard(container)).toBeNull();
+
+    // READ-ONLY: the history of a schedule that is over, with nothing to press.
+    const form = scheduleForm(container)!;
+    expect(container.querySelector("[data-schedule-reading]")!.getAttribute("data-schedule-reading")).toBe(
+      "fired-one-off",
+    );
+    expect(form.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
+    expect(form.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
+    expect(form.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
+    const rows = form.querySelector('[data-conformance-id="schedule-option-rows"]')!;
+    expect(
+      Array.from(
+        rows.querySelectorAll("button, input, select, textarea, [role='button'], [role='combobox']"),
+      ).map((el) => el.tagName.toLowerCase()),
+    ).toEqual([]);
+  });
+
+  it("the page must state the reading — a mount that omits it does not compile", () => {
+    // `scheduleSettled` is REQUIRED. A mount that leaves it out — here with a
+    // schedule ref, the case where a forgotten reading would draw a spent
+    // schedule as live — is a type error, and this directive fails the root
+    // typecheck the moment the prop turns optional again.
+    const omitted = (
+      // @ts-expect-error -- scheduleSettled is required (cinatra#3189)
+      <ReviewRunSurface
+        runId="run-777"
+        recommendationEntry="none"
+        recommendationStepOpens={false}
+        scheduleCardRef="schedule-ref-1"
+        rail={null}
+        detail={null}
+      />
+    );
+    expect(omitted.props.scheduleSettled).toBeUndefined();
   });
 
   it("leaves the row unsettled when the page says the schedule is not spent", () => {

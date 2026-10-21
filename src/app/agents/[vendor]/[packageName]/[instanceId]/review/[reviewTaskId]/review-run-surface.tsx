@@ -61,7 +61,7 @@ export function ReviewRunSurface({
   recommendationEntry,
   recommendationStepOpens,
   scheduleCardRef,
-  scheduleSettled = false,
+  scheduleSettled,
   rail,
   detail,
 }: {
@@ -85,9 +85,10 @@ export function ReviewRunSurface({
   /** HAS THIS RUN'S OWN SCHEDULE BEEN SPENT? (cinatra#3189) The page answers it
    *  from the run's stored trigger row with `shouldFreezeFiredOneOffSchedule`,
    *  the run page's own reading, so the schedule entry settles on this rail
-   *  exactly where it settles on the run page's. A mount that passes no
-   *  reading draws the entry unsettled, as the row's own default does. */
-  scheduleSettled?: boolean;
+   *  exactly where it settles on the run page's. REQUIRED, with no default:
+   *  every mount states its reading, so a page that forgets to pass it does
+   *  not compile rather than quietly drawing a spent schedule as live. */
+  scheduleSettled: boolean;
   /** The REST of the rail: this page's own step rows (`ReviewRunSteps`). */
   rail: ReactNode;
   /** The gate region as the page composes it — the review card and the run's
