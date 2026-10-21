@@ -41,7 +41,7 @@ import {
   resolveTimezoneField,
 } from "./trigger-timezone";
 import { TimezoneField } from "./timezone-field";
-import { RecurrenceFrequencySelectors } from "./schedule-recurrence-selectors";
+import { RecurrenceFrequencySelectors } from "./schedule-proposal-card";
 import { declaredDurationEstimate } from "./duration-declared";
 // THE SCHEDULE DEFAULT IS THE RUNNER'S, NOT THIS FORM'S (cinatra#2936).
 // `scheduleScreenSelection` applies `scheduleDefaultForLaunch` — the decision
