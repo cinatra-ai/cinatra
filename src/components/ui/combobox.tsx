@@ -54,6 +54,7 @@ function Combobox({
   contentClassName,
   "aria-labelledby": ariaLabelledBy,
   "aria-label": ariaLabel,
+  "data-field": dataField,
 }: {
   id?: string
   value?: string
@@ -67,6 +68,9 @@ function Combobox({
   contentClassName?: string
   "aria-labelledby"?: string
   "aria-label"?: string
+  /** A caller's field name, stamped on the trigger — the element that carries
+   *  `disabled` and the drawn value (cinatra#3189). Nothing else passes through. */
+  "data-field"?: string
 }) {
   const [open, setOpen] = React.useState(false)
   // THE SEAM IS WHICHEVER EDGE THE TWO HALVES MEET ON.
@@ -127,6 +131,7 @@ function Combobox({
           aria-haspopup="dialog"
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
+          data-field={dataField}
           disabled={disabled}
           // ARROW KEYS OPEN THE CLOSED CONTROL.
           //

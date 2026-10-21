@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 //
-// THE SCHEDULE CARD'S FREQUENCY SELECTORS (cinatra#3189).
+// THE SCHEDULE CARD'S OWN TIMEZONE SELECT AND ITS FREQUENCY SELECTORS
+// (cinatra#3189).
 //
-// Components, the standard scheduling step: the recurring row carries "a day-of-month or nth-weekday choice for monthly,
+// Components, the standard scheduling step: "its own Timezone select", and the
+// recurring row carries "a day-of-month or nth-weekday choice for monthly,
 // quarterly and yearly; a quarter anchor; a month". The conversational card
-// drew weekday toggles only,
+// drew both Timezone fields as free text inputs and drew weekday toggles only,
 // so a monthly, quarterly or yearly proposal could be neither read nor
 // corrected on the card. These read the card the person sees.
 //
@@ -24,7 +26,8 @@ import type {
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { ScheduleProposalCard } from "../schedule-proposal-card";
 
-// jsdom shims — the app's Select (Radix) calls layout APIs jsdom omits. Test-environment only.
+// jsdom shims — the app's Select (Radix) and the Combobox's popover and list
+// call layout APIs jsdom omits. Test-environment only.
 if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -201,6 +204,92 @@ const SHARED_FIELDS = [
 function sharedFieldsDrawn(rows: HTMLElement): string[] {
   return SHARED_FIELDS.filter((f) => rows.querySelector(`[data-field="${f}"]`) !== null);
 }
+
+// ---------------------------------------------------------------------------
+// P3 — its own Timezone select
+// ---------------------------------------------------------------------------
+
+describe("the card's Timezone fields are the shared Timezone select (cinatra#3189 P3)", () => {
+  it("draws the scheduled row's zone as a combobox, not a text input", async () => {
+    const { rows } = await renderCard(PENDING, proposal(SCHEDULED));
+    const control = rows.querySelector('[data-field="schedule-timezone"]');
+    expect(control).not.toBeNull();
+    expect(control!.tagName).toBe("BUTTON");
+    expect(control!.getAttribute("role")).toBe("combobox");
+    expect(control!.querySelector('[data-slot="combobox-value"]')?.textContent).toBe(
+      "Europe/Berlin",
+    );
+    expect(rows.querySelector('input[type="text"]')).toBeNull();
+  });
+
+  it("draws the recurring row's zone as a combobox, not a text input", async () => {
+    const { rows } = await renderCard(PENDING, proposal(recurringSchedule()));
+    const control = rows.querySelector('[data-field="recurring-timezone"]');
+    expect(control).not.toBeNull();
+    expect(control!.tagName).toBe("BUTTON");
+    expect(control!.getAttribute("role")).toBe("combobox");
+    expect(control!.querySelector('[data-slot="combobox-value"]')?.textContent).toBe(
+      "Europe/Berlin",
+    );
+    expect(rows.querySelector('input[type="text"]')).toBeNull();
+  });
+
+  it("a zone picked from the list is the zone Confirm sends", async () => {
+    const { rows, fetchMock, container } = await renderCard(PENDING, proposal(recurringSchedule()));
+    fireEvent.click(rows.querySelector('[data-field="recurring-timezone"]')!);
+    const search = document.querySelector('[data-slot="command-input"]');
+    expect(search).not.toBeNull();
+    fireEvent.change(search as HTMLInputElement, { target: { value: "Lisbon" } });
+    const option = document.querySelector('[data-slot="command-item"][data-value="Europe/Lisbon"]');
+    expect(option).not.toBeNull();
+    fireEvent.click(option!);
+    await waitFor(() =>
+      expect(
+        rows.querySelector('[data-field="recurring-timezone"] [data-slot="combobox-value"]')
+          ?.textContent,
+      ).toBe("Europe/Lisbon"),
+    );
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    await waitFor(() => expect(decisions(fetchMock).length).toBeGreaterThan(0));
+    expect(
+      decisions(fetchMock).some(
+        (d) => (d.schedule as { timezone?: string } | undefined)?.timezone === "Europe/Lisbon",
+      ),
+    ).toBe(true);
+  });
+
+  it("a reader who may not act sees the select drawn and refusing, and its list does not open", async () => {
+    const { rows } = await renderCard({ state: "settled" } as LifecycleCardState, settled(recurringSchedule(), { canSave: false }));
+    const control = rows.querySelector('[data-field="recurring-timezone"]') as HTMLButtonElement | null;
+    expect(control).not.toBeNull();
+    expect(control!.disabled).toBe(true);
+    fireEvent.click(control!);
+    expect(document.querySelector('[data-slot="command-list"]')).toBeNull();
+  });
+
+  it("a reader who may not act sees the scheduled row's select drawn and refusing too", async () => {
+    const { rows } = await renderCard(
+      { state: "settled" } as LifecycleCardState,
+      settled(SCHEDULED, { triggerType: "scheduled", scheduleCopy: "Once", canSave: false, canCancel: false }),
+    );
+    const control = rows.querySelector('[data-field="schedule-timezone"]') as HTMLButtonElement | null;
+    expect(control).not.toBeNull();
+    expect(control!.getAttribute("role")).toBe("combobox");
+    expect(control!.disabled).toBe(true);
+  });
+
+  it("a schedule that is over draws the zone as text, with no control", async () => {
+    const { rows } = await renderCard(
+      { state: "settled" } as LifecycleCardState,
+      settled(recurringSchedule(), { canSave: false, canCancel: false, stopped: true }),
+    );
+    expect(rows.querySelector('[data-field="recurring-timezone"]')).toBeNull();
+    expect(rows.querySelector('[role="combobox"]')).toBeNull();
+    expect(rows.querySelector('[data-readonly-field="recurring-timezone"]')?.textContent).toBe(
+      "Europe/Berlin",
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // P6 — the frequency-dependent selectors

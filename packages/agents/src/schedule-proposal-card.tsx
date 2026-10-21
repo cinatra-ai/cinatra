@@ -154,6 +154,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -213,6 +214,8 @@ import {
   useReportScheduleReading,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
+import { TimezoneField } from "./timezone-field";
+import { readSupportedTimezones, resolveTimezoneField } from "./trigger-timezone";
 import {
   MONTH_LABELS,
   NTH_LABELS,
@@ -1534,6 +1537,20 @@ function ScheduleOptionRows({
     schedule.kind === "immediate" ? browserTimezone() : schedule.timezone;
   const updateRecurring = (patch: Partial<RecurringSelection>) =>
     pick({ kind: "recurring", selection: { ...recurring, ...patch }, timezone });
+  // ITS OWN TIMEZONE SELECT (cinatra#3189): the in-flow step's control and its
+  // one resolution, so the value drawn is always a member of the list beneath
+  // it. The ids are this card's own — a thread can hold several cards.
+  const timezoneControlId = useId();
+  const supportedTimezones = useMemo(() => readSupportedTimezones(), []);
+  const timezoneField = useMemo(
+    () =>
+      resolveTimezoneField({
+        bound: timezone,
+        browserTimezone: browserTimezone(),
+        supported: supportedTimezones,
+      }),
+    [timezone, supportedTimezones],
+  );
 
   return (
     <div
@@ -1598,17 +1615,16 @@ function ScheduleOptionRows({
             {readOnly ? (
               <ReadOnlyValue field="schedule-timezone">{timezone}</ReadOnlyValue>
             ) : (
-              <Input
-                type="text"
-                data-field="schedule-timezone"
-                className="w-56"
+              <TimezoneField
+                id={`${timezoneControlId}-scheduled`}
+                dataField="schedule-timezone"
                 disabled={!editable}
-                value={timezone}
-                onChange={(e) =>
+                field={timezoneField}
+                onValueChange={(v) =>
                   pick({
                     kind: "scheduled",
                     runAt: schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt(),
-                    timezone: e.target.value,
+                    timezone: v,
                   })
                 }
               />
@@ -1811,17 +1827,16 @@ function ScheduleOptionRows({
             {readOnly ? (
               <ReadOnlyValue field="recurring-timezone">{timezone}</ReadOnlyValue>
             ) : (
-              <Input
-                type="text"
-                data-field="recurring-timezone"
-                className="w-56"
+              <TimezoneField
+                id={`${timezoneControlId}-recurring`}
+                dataField="recurring-timezone"
                 disabled={!editable}
-                value={timezone}
-                onChange={(e) =>
+                field={timezoneField}
+                onValueChange={(v) =>
                   pick({
                     kind: "recurring",
                     selection: recurring,
-                    timezone: e.target.value,
+                    timezone: v,
                   })
                 }
               />
